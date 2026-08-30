@@ -23,6 +23,16 @@ const scope = {
 	environment: EnvironmentName.make('test'),
 	releaseId: ReleaseId.make('release-1')
 };
+const modelCatalogResponse = () =>
+	Promise.resolve<FacilityResult<AIResponse>>({
+		_tag: 'Success',
+		value: {
+			output: {
+				defaultModel: 'test-model',
+				options: [{ id: 'test-model', contextLength: 128_000 }]
+			}
+		}
+	});
 
 const definition = workspace({
 	name: 'hr',
@@ -50,11 +60,7 @@ const definition = workspace({
 	skills: [],
 	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks'],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:usage-metering-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:usage-metering-fixture'
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-usage' });
 const bundle = makeBundle(definition, manifest, {});
@@ -156,9 +162,7 @@ const makeDatabase = (
 						rows: [
 							{
 								task_id: turnId,
-								conversation_id: conversationId,
-								turn_id: turnId,
-								agent_name: 'web'
+								conversation_id: conversationId
 							}
 						],
 						affectedRows: 1
@@ -242,10 +246,7 @@ const makeDatabase = (
 								id: `${turnId}:message`,
 								content: {
 									id: turnId,
-									status: 'queued',
-									parent_agent_id: conversationId.startsWith('agent:')
-										? 'conversation-parent'
-										: null,
+									status: 'running',
 									parts: [],
 									subject,
 									agent_name: 'web',
@@ -286,14 +287,19 @@ const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 	call: () => Promise.resolve({ _tag: 'Success', value: {} })
 };
 
-const turnInvocation = (conversationId: string, _message: string): Invocation => ({
+const turnInvocation = (conversationId: string, message: string): Invocation => ({
 	_tag: 'Command',
 	protocolVersion: PROTOCOL_VERSION,
 	id: InvocationId.make(`agent-usage-${conversationId}`),
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
-	command: 'agents.run',
-	input: { subject, conversationId },
+	command: 'agents.enqueue',
+	input: {
+		agent: 'web',
+		conversationId,
+		turnId: `agent-usage-${conversationId}:turn`,
+		message
+	},
 	headers: { authorization: ['Bearer test-session'] }
 });
 
@@ -314,7 +320,8 @@ describe('agent turn usage', () => {
 	it('folds every round of a turn into one figure and rolls it onto the session', async () => {
 		let round = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				round += 1;
 				const value: AIResponse =
 					round === 1
@@ -391,11 +398,13 @@ describe('agent turn usage', () => {
 
 	it('counts a turn its host priced at nothing as unreported, not as free', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () =>
-				Promise.resolve<FacilityResult<AIResponse>>({
+			call: (_metadata, request) =>
+				request._tag === 'Models'
+					? modelCatalogResponse()
+					: Promise.resolve<FacilityResult<AIResponse>>({
 					_tag: 'Success',
 					value: { output: { text: 'Hello.' } }
-				})
+					})
 		};
 		const statements: Array<Statement> = [];
 		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
@@ -421,11 +430,13 @@ describe('agent turn usage', () => {
 
 	it('preserves a child agent parent link so its spend can be traced through the hierarchy', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () =>
-				Promise.resolve<FacilityResult<AIResponse>>({
+			call: (_metadata, request) =>
+				request._tag === 'Models'
+					? modelCatalogResponse()
+					: Promise.resolve<FacilityResult<AIResponse>>({
 					_tag: 'Success',
 					value: { output: { text: 'Done.' }, usage: { totalTokens: 40, costUsd: 0.0001 } }
-				})
+					})
 		};
 		const statements: Array<Statement> = [];
 		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
@@ -434,8 +445,6 @@ describe('agent turn usage', () => {
 			facilities,
 			new AbortController().signal
 		);
-		const settled = turnRewrites(statements).at(-1);
-		expect(settled?.parent_agent_id).toBe('conversation-parent');
 		// Execution rewrites the already-admitted child turn instead of appending replacement rows.
 		expect(turnRewrites(statements)).not.toHaveLength(0);
 	});
@@ -612,7 +621,8 @@ describe('agent turn usage', () => {
 		// billed to a row that already exists — so the loop's rounds must never collide.
 		const effectIds: Array<string> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: (metadata) => {
+			call: (metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				effectIds.push(String(metadata.effectId));
 				const value: AIResponse =
 					effectIds.length === 1

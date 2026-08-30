@@ -1,11 +1,13 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
-import { Clock, Context, Effect, Layer, Schema } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { sha256Text } from '@norbital-ai/std/reckon/hash';
+import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
+import { ApprovalState, EffectId } from '@norbital-ai/bolt-protocol';
 import { and, asc, desc, eq, exists, isNull, notExists } from 'drizzle-orm';
 import { compileModelTable } from '#lib/authoring/model-introspection.js';
 import { defineModel } from '#lib/authoring/models-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
+import { canonicalJson } from '#lib/canonical-json.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import {
 	aliased,
@@ -19,8 +21,7 @@ import {
 	jsonTextEquals
 } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
-import type * as Identity from '#lib/runtime/identity/identity.js';
-import * as SyncWake from '#lib/runtime/sync/wake.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
 
 const {
 	approval_request: approvalRequestTable,
@@ -56,49 +57,6 @@ type ApprovalNotification = Readonly<{
 	readonly payload: Schema.Json;
 }>;
 
-export const ApprovalState = Schema.TaggedUnion({
-	Pending: {
-		requestId: Schema.NonEmptyString,
-		step: Schema.Number.check(Schema.isInt()),
-		operation: Schema.Json
-	},
-	Approved: {
-		requestId: Schema.NonEmptyString,
-		decidedBy: Schema.NonEmptyString,
-		superseded: Schema.optionalKey(Schema.Literal(true)),
-		reason: Schema.optionalKey(Schema.NonEmptyString),
-		operation: Schema.optionalKey(Schema.Json)
-	},
-	// The two terminal refusals carry the operation for the same reason `Approved` does: the record
-	// was already written when the request was opened, and it is still locked. Without the operation
-	// there is no way back to the row, so the lock outlived every decision that was not an approval —
-	// and since a workspace's liveness predicate is `approval_id is null`, a rejected record
-	// stayed invisible and could not be deleted either.
-	Rejected: {
-		requestId: Schema.NonEmptyString,
-		decidedBy: Schema.NonEmptyString,
-		reason: Schema.String,
-		operation: Schema.optionalKey(Schema.Json)
-	},
-	ChangesRequested: {
-		requestId: Schema.NonEmptyString,
-		decidedBy: Schema.NonEmptyString,
-		reason: Schema.NonEmptyString,
-		operation: Schema.optionalKey(Schema.Json)
-	},
-	Conflicted: {
-		requestId: Schema.NonEmptyString,
-		reason: Schema.NonEmptyString,
-		operation: Schema.optionalKey(Schema.Json)
-	},
-	Withdrawn: {
-		requestId: Schema.NonEmptyString,
-		withdrawnBy: Schema.NonEmptyString,
-		operation: Schema.optionalKey(Schema.Json)
-	}
-});
-export type ApprovalState = typeof ApprovalState.Type;
-
 /** The `approval_request.status` vocabulary authored reports filter on. */
 /**
  * An epoch instant as the ISO-8601 text a row stores.
@@ -126,7 +84,7 @@ export const ApprovalTimelineEvent = Schema.Struct({
 // repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module row type during declaration emit.
 export interface ApprovalTimelineEvent extends Schema.Schema.Type<typeof ApprovalTimelineEvent> {}
 
-const ApprovalConfiguration = Schema.Struct({
+const ResolvedApprovalConfiguration = Schema.Struct({
 	id: Schema.NonEmptyString,
 	steps: Schema.Array(
 		Schema.Struct({
@@ -136,10 +94,34 @@ const ApprovalConfiguration = Schema.Struct({
 	).check(Schema.isNonEmpty()),
 	superceded_by: Schema.Array(Schema.NonEmptyString)
 });
+const isResolvedApprovalConfiguration = Schema.is(ResolvedApprovalConfiguration);
+
+/** Stable structural identity for approval configurations authored with different key order. */
+export const approvalFingerprint = (value: Schema.Json | undefined): string =>
+	value === undefined ? 'default' : canonicalJson(value);
+
+/**
+ * Structural identity of the concrete route a reviewer will actually follow.
+ *
+ * Configuration and stage ids identify the policy coordinate that produced a route; they are not
+ * part of the route itself. The preparation review retains those coordinates independently, so a
+ * changed policy still conflicts a pending approval without rejecting one graph that shares a route.
+ */
+export const approvalRouteFingerprint = (value: Schema.Json | undefined): string => {
+	if (!isResolvedApprovalConfiguration(value)) return approvalFingerprint(value);
+	return approvalFingerprint({
+		steps: value.steps.map((step) => ({ approvers: step.approvers })),
+		superceded_by: value.superceded_by
+	});
+};
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /** The `JsonObject` predicate, built once: it is consulted for every operation value crossing the seam. */
 const isJsonObject = Schema.is(JsonObject);
+const jsonObjectEquivalent = Schema.toEquivalence(JsonObject);
+/** The requestor schema predicate, built once for reviewer-safe approval projections. */
+const isSubject = Schema.is(Identity.Subject);
+const subjectEquivalent = Schema.toEquivalence(Identity.Subject);
 
 /** Carries approval conflict through the typed approvals failure channel without losing diagnostic context. */
 export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()(
@@ -243,14 +225,148 @@ type ApprovalCapabilities = Readonly<{
 	readonly canWithdraw: boolean;
 }>;
 
+type ApprovalRoot = Readonly<{
+	readonly collection: string;
+	readonly id: string;
+	readonly action: 'create' | 'update' | 'delete';
+}>;
+
+type ApprovedGate = Readonly<{
+	readonly requestId: string;
+	/** Exact digest supplied by `resume`; a re-prepared graph must reproduce it byte-for-byte. */
+	readonly expectedReview: string;
+}>;
+
+/**
+ * The engine's complete coupling to approvals at the end of PREPARE.
+ *
+ * One plan is one mutation root, even when `storedGraph` contains descendants or hook-issued writes.
+ * A batch calls `gate` independently for each root, so held roots are excised while unrelated roots
+ * can commit. The engine remains the only owner of graph execution.
+ */
+type ApprovalGatePlan = Readonly<{
+	readonly effectId: EffectId;
+	readonly subject: Identity.Subject;
+	readonly root: ApprovalRoot;
+	readonly storedGraph: Schema.Json;
+	readonly proposedValues?: Readonly<Record<string, Schema.Json>>;
+	readonly approval: Schema.Json | undefined;
+	readonly review: Schema.Json | undefined;
+	readonly approved?: ApprovedGate;
+}>;
+
+type ApprovalGateDecision =
+	| Readonly<{ readonly _tag: 'Proceed'; readonly governingRequest?: string }>
+	| Readonly<{ readonly _tag: 'Hold'; readonly requestId: string }>;
+
+/** The payload a resume dispatcher feeds back through the collection engine's public mutate path. */
+type ApprovalResume = Readonly<{
+	readonly requestId: string;
+	readonly subject: Identity.Subject;
+	readonly storedGraph: Schema.Json;
+	readonly approved: true;
+	readonly expectedReview: string;
+}>;
+
+type ApprovalDiscard = Readonly<{
+	readonly requestId: string;
+	readonly root: ApprovalRoot;
+	readonly resolution: 'rejected' | 'changes_requested' | 'withdrawn';
+	readonly browserMutation?: Schema.Json;
+}>;
+
+const StoredApprovalGraph = Schema.Struct({
+	version: Schema.Literal(1),
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	action: Schema.Literals(['create', 'update', 'delete']),
+	browserMutation: Schema.optionalKey(Schema.Json)
+});
+
+/** A retry of the same root/effect rejoins the same durable request. */
+export const approvalRequestId = (root: ApprovalRoot, effectId: EffectId): string =>
+	deriveRecordId(`${root.collection}:${root.id}:${effectId}`);
+
+/** Hashes the exact JSON bytes reviewed by the requestor, including snapshot strings verbatim. */
+export const approvalReviewDigest = (review: Schema.Json | undefined): string =>
+	`sha256:${sha256Text(JSON.stringify(review ?? null))}`;
+
+const maskSnapshot = (
+	invocation: AccessControl.Invocation,
+	subject: Identity.Subject,
+	collection: string,
+	snapshot: string
+): string => {
+	try {
+		const decoded: unknown = JSON.parse(snapshot);
+		if (Array.isArray(decoded)) {
+			return JSON.stringify(
+				decoded.map((entry) =>
+					isJsonObject(entry) ? invocation.mask(subject, 'read', collection, entry) : {}
+				)
+			);
+		}
+		return JSON.stringify(
+			isJsonObject(decoded) ? invocation.mask(subject, 'read', collection, decoded) : {}
+		);
+	} catch {
+		// A malformed prepared snapshot cannot be allowed to carry arbitrary bytes into the reviewer
+		// surface. The original digest still makes resume fail when the engine re-prepares it.
+		return '{}';
+	}
+};
+
+/** Masks every stored row-shaped review snapshot under the requestor's frozen read grant. */
+export const maskApprovalReview = (
+	review: Schema.Json | undefined,
+	invocation: AccessControl.Invocation,
+	subject: Identity.Subject
+): Schema.Json | undefined => {
+	// `Schema.is` under this effect release does not narrow a union operand well enough for a spread,
+	// so the object is decoded once and the typed record is what the rest of the function touches.
+	const source = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(review));
+	if (source === undefined) return review;
+	const rows = Array.isArray(source['rows'])
+		? source['rows'].map((value) => {
+				const entry = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(value));
+				if (entry === undefined) return value;
+				const collection = entry['collection'];
+				const snapshot = entry['snapshot'];
+				return typeof collection === 'string' && typeof snapshot === 'string'
+					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
+					: value;
+			})
+		: source['rows'];
+	const relationships = Array.isArray(source['relationships'])
+		? source['relationships'].map((value) => {
+				const entry = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(value));
+				if (entry === undefined) return value;
+				const collection = entry['childCollection'];
+				const snapshot = entry['snapshot'];
+				return typeof collection === 'string' && typeof snapshot === 'string'
+					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
+					: value;
+			})
+		: source['relationships'];
+	return {
+		...source,
+		...(rows === undefined ? {} : { rows }),
+		...(relationships === undefined ? {} : { relationships })
+	};
+};
+
 export type Interface = Readonly<{
-	readonly request: (
+	readonly gate: (
+		plan: ApprovalGatePlan
+	) => Effect.Effect<ApprovalGateDecision, Database.FacilityError | ApprovalConflict>;
+	readonly resume: (
 		effectId: EffectId,
-		subject: Identity.Subject,
-		requestId: string,
-		operation: Schema.Json,
-		lock?: ApprovalRecordLock
-	) => Effect.Effect<ApprovalState, Database.FacilityError | ApprovalConflict>;
+		requestId: string
+	) => Effect.Effect<ApprovalResume, Database.FacilityError | ApprovalConflict>;
+	readonly discard: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<ApprovalDiscard, Database.FacilityError | ApprovalConflict>;
 	readonly decide: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -275,6 +391,7 @@ export type Interface = Readonly<{
 		requestId: string,
 		reason: string
 	) => Effect.Effect<ApprovalState, ApprovalConflict | Database.FacilityError>;
+	/** Reviewer-safe durable state; engine-only graph, subject and digest are available only internally. */
 	readonly status: (
 		effectId: EffectId,
 		requestId: string
@@ -285,11 +402,6 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		requestId: string
 	) => Effect.Effect<ApprovalCapabilities, Database.FacilityError | ApprovalConflict>;
-	readonly pendingForRecord: (
-		effectId: EffectId,
-		collection: string,
-		id: string
-	) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
 	readonly timeline: (
 		effectId: EffectId,
 		requestId: string
@@ -297,7 +409,6 @@ export type Interface = Readonly<{
 		ReadonlyArray<ApprovalTimelineEvent>,
 		Database.FacilityError | ApprovalConflict
 	>;
-	readonly authorizeResume: (state: ApprovalState) => Effect.Effect<void, ApprovalConflict>;
 }>;
 
 /** Identifies the approvals service in Effect's context so dependency wiring remains explicit and type checked. */
@@ -309,7 +420,6 @@ export const layer = Layer.effect(
 		const database = yield* Database.Service;
 		const access = yield* AccessControl.Service;
 		const queue = yield* TaskQueue.Service;
-		const wake = yield* SyncWake.Service;
 		/** Resolves only the concrete configuration embedded when the flow was selected. */
 		const approvalConfigurations = {
 			resolve: (state: ApprovalState) => {
@@ -321,7 +431,7 @@ export const layer = Layer.effect(
 				)
 					return undefined;
 				const embedded = Reflect.get(state.operation, 'approval');
-				if (Schema.is(ApprovalConfiguration)(embedded)) return embedded;
+				if (isResolvedApprovalConfiguration(embedded)) return embedded;
 				return undefined;
 			}
 		};
@@ -335,7 +445,10 @@ export const layer = Layer.effect(
 				)
 			);
 		});
-		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
+		const rawStatus = Effect.fn('Approvals.rawStatus')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
 			const result = yield* executeBuilt(
 				effectId,
 				database,
@@ -349,6 +462,41 @@ export const layer = Layer.effect(
 			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
 			if (state === undefined) return undefined;
 			return yield* decodeState(requestId, state);
+		});
+		const publicState = (state: ApprovalState): ApprovalState => {
+			// Decoded once so the projection below spreads a typed record rather than a `Json` union.
+			const stored = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(state.operation));
+			if (stored === undefined) return state;
+			const requestor = isSubject(stored['subject']) ? stored['subject'] : undefined;
+			const collection =
+				typeof stored['collection'] === 'string' ? stored['collection'] : undefined;
+			const policy = requestor === undefined ? undefined : access.invocation();
+			const review =
+				requestor === undefined || policy === undefined
+					? stored['review']
+					: maskApprovalReview(stored['review'], policy, requestor);
+			const values =
+				requestor === undefined ||
+				policy === undefined ||
+				collection === undefined ||
+				!isJsonObject(stored['values'])
+					? stored['values']
+					: policy.mask(requestor, 'read', collection, stored['values']);
+			const operation: Schema.Json = Object.fromEntries(
+				Object.entries({
+					...stored,
+					...(review === undefined ? {} : { review }),
+					...(values === undefined ? {} : { values })
+				}).filter(
+					([field]) => field !== 'storedGraph' && field !== 'subject' && field !== 'reviewDigest'
+				)
+			);
+			return { ...state, operation };
+		};
+		/** Reviewer-facing status masks snapshots and never carries engine-only resume material. */
+		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
+			const state = yield* rawStatus(effectId, requestId);
+			return state === undefined ? undefined : publicState(state);
 		});
 		/**
 		 * The decision entitlement for this exact durable step.
@@ -424,7 +572,7 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			requestId: string
 		) {
-			const current = yield* status(effectId, requestId);
+			const current = yield* rawStatus(effectId, requestId);
 			if (current?._tag !== 'Pending')
 				return { canDecide: false, canSupersede: false, canWithdraw: false };
 			return {
@@ -591,7 +739,7 @@ export const layer = Layer.effect(
 								kind: aliased(bound(auditKind), 'kind'),
 								subject_id: aliased(bound(actor), 'subject_id'),
 								request_id: aliased(bound(requestId), 'request_id'),
-								payload: updated.state
+								payload: aliased(jsonb(publicState(next)), 'payload')
 							})
 							.from(updated)
 					)
@@ -692,7 +840,7 @@ export const layer = Layer.effect(
 			requestId: string,
 			reason: string
 		) {
-			const current = yield* status(effectId, requestId);
+			const current = yield* rawStatus(effectId, requestId);
 			if (current?._tag !== 'Approved')
 				return yield* new ApprovalConflict({
 					requestId,
@@ -730,7 +878,7 @@ export const layer = Layer.effect(
 								kind: aliased(bound('approval_conflicted'), 'kind'),
 								subject_id: aliased(bound(current.decidedBy), 'subject_id'),
 								request_id: aliased(bound(requestId), 'request_id'),
-								payload: updatedState.state
+								payload: aliased(jsonb(publicState(next)), 'payload')
 							})
 							.from(updatedState)
 					)
@@ -806,178 +954,353 @@ export const layer = Layer.effect(
 					requestId,
 					reason: 'approval conflict lost a competing state transition'
 				});
-			const changed = ['approval_request', ...(collection === undefined ? [] : [collection])];
-			yield* wake.announce(EffectId.make(`${effectId}:approval-conflict-wake`), changed);
 			return next;
 		});
-		return Service.of({
-			request: Effect.fn('Approvals.request')(
-				function* (effectId, subject, requestId, operation, lock) {
-					const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
-					if (
-						operationObject._tag === 'None' ||
-						!Schema.is(ApprovalConfiguration)(operationObject.value['approval'])
-					)
-						return yield* new ApprovalConflict({
-							requestId,
-							reason: 'approval requests require one concrete embedded approval flow'
-						});
-					const durableOperation = operationObject.value;
-					const state: ApprovalState = {
-						_tag: 'Pending',
-						requestId,
-						step: 0,
-						operation: durableOperation
-					};
-					const projection = yield* projectionOf(state);
-					const requestorId = deriveRecordId(`${requestId}:${subject.userId}`);
-					const locked =
-						lock === undefined
-							? undefined
-							: (() => {
-									const target = compileModelTable(lock.collection, defineModel({}));
-									return composer.$with('locked').as(
-										composer
-											.update(target)
-											.set({ approval_id: requestId })
-											.where(
-												and(
-													eq(target.id, lock.id),
-													isNull(target.approval_id),
-													notExists(
-														composer
-															.select({ id: approvalStateTable.id })
-															.from(approvalStateTable)
-															.where(eq(approvalStateTable.request_id, requestId))
-													)
-												)
+		const persistRequest = Effect.fn('Approvals.persistRequest')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			requestId: string,
+			operation: Schema.Json,
+			lock?: ApprovalRecordLock
+		) {
+			const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
+			if (
+				operationObject._tag === 'None' ||
+				!isResolvedApprovalConfiguration(operationObject.value['approval'])
+			)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approval requests require one concrete embedded approval flow'
+				});
+			const durableOperation = operationObject.value;
+			const state: ApprovalState = {
+				_tag: 'Pending',
+				requestId,
+				step: 0,
+				operation: durableOperation
+			};
+			const projection = yield* projectionOf(state);
+			const requestorId = deriveRecordId(`${requestId}:${subject.userId}`);
+			const locked =
+				lock === undefined
+					? undefined
+					: (() => {
+							const target = compileModelTable(lock.collection, defineModel({}));
+							return composer.$with('locked').as(
+								composer
+									.update(target)
+									.set({ approval_id: requestId })
+									.where(
+										and(
+											eq(target.id, lock.id),
+											isNull(target.approval_id),
+											notExists(
+												composer
+													.select({ id: approvalStateTable.id })
+													.from(approvalStateTable)
+													.where(eq(approvalStateTable.request_id, requestId))
 											)
-											.returning({ id: target.id })
-									);
-								})();
-					const insertedState = composer.$with('inserted').as(
-						(lock === undefined || locked === undefined
-							? composer.insert(approvalStateTable).values({
-									request_id: requestId,
-									tenant_id: subject.tenantId,
-									state
+										)
+									)
+									.returning({ id: target.id })
+							);
+						})();
+			const insertedState = composer.$with('inserted').as(
+				(lock === undefined || locked === undefined
+					? composer.insert(approvalStateTable).values({
+							request_id: requestId,
+							tenant_id: subject.tenantId,
+							state
+						})
+					: composer.insert(approvalStateTable).select(
+							composer
+								.select({
+									request_id: aliased(bound(requestId), 'request_id'),
+									tenant_id: aliased(bound(subject.tenantId), 'tenant_id'),
+									state: aliased(jsonb(state), 'state')
 								})
-							: composer.insert(approvalStateTable).select(
-									composer
-										.select({
-											request_id: aliased(bound(requestId), 'request_id'),
-											tenant_id: aliased(bound(subject.tenantId), 'tenant_id'),
-											state: aliased(jsonb(state), 'state')
-										})
-										.from(locked)
-								)
+								.from(locked)
 						)
-							.onConflictDoNothing({ target: approvalStateTable.request_id })
-							.returning({ state: approvalStateTable.state })
-					);
-					const audited = composer.$with('audited').as(
+				)
+					.onConflictDoNothing({ target: approvalStateTable.request_id })
+					.returning({ state: approvalStateTable.state })
+			);
+			const audited = composer.$with('audited').as(
+				composer
+					.insert(auditTable)
+					.select(
 						composer
-							.insert(auditTable)
-							.select(
-								composer
-									.select({
-										kind: aliased(bound('approval_requested'), 'kind'),
-										subject_id: aliased(bound(subject.userId), 'subject_id'),
-										request_id: aliased(bound(requestId), 'request_id'),
-										payload: insertedState.state
-									})
-									.from(insertedState)
-							)
-							.returning({ sequence: auditTable.sequence })
-					);
-					const projected = composer.$with('projected').as(
-						composer
-							.insert(approvalRequestTable)
-							.select(
-								composer
-									.select({
-										id: aliased(bound(requestId), 'id'),
-										collection_name: aliased(bound(projection.collectionName), 'collection_name'),
-										record_id: aliased(bound(projection.recordId), 'record_id'),
-										action: aliased(bound(projection.action), 'action'),
-										status: aliased(bound(projection.status), 'status'),
-										steps: aliased(jsonb(projection.steps), 'steps'),
-										approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
-										superseder_teams: aliased(
-											jsonb(projection.supersederTeams),
-											'superseder_teams'
-										),
-										proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
-										closed_at: aliased(bound(projection.closedAt), 'closed_at'),
-										closed_by: aliased(bound(projection.closedBy), 'closed_by')
-									})
-									.from(insertedState)
-							)
-							.onConflictDoUpdate({
-								target: approvalRequestTable.id,
-								set: {
-									status: excluded(approvalRequestTable.status),
-									steps: excluded(approvalRequestTable.steps),
-									approver_teams: excluded(approvalRequestTable.approver_teams),
-									superseder_teams: excluded(approvalRequestTable.superseder_teams),
-									proposed_values: excluded(approvalRequestTable.proposed_values),
-									closed_at: excluded(approvalRequestTable.closed_at),
-									closed_by: excluded(approvalRequestTable.closed_by),
-									updated_at: dbNow()
-								}
+							.select({
+								kind: aliased(bound('approval_requested'), 'kind'),
+								subject_id: aliased(bound(subject.userId), 'subject_id'),
+								request_id: aliased(bound(requestId), 'request_id'),
+								payload: aliased(jsonb(publicState(state)), 'payload')
 							})
-							.returning({ id: approvalRequestTable.id })
-					);
-					const requestorProjected = composer.$with('requestor_projected').as(
+							.from(insertedState)
+					)
+					.returning({ sequence: auditTable.sequence })
+			);
+			const projected = composer.$with('projected').as(
+				composer
+					.insert(approvalRequestTable)
+					.select(
 						composer
-							.insert(requestorTable)
-							.select(
-								composer
-									.select({
-										id: aliased(bound(requestorId), 'id'),
-										approval_request_id: aliased(bound(requestId), 'approval_request_id'),
-										user_id: aliased(bound(subject.userId), 'user_id')
-									})
-									.from(insertedState)
-									.innerJoin(projected, always())
-							)
-							.onConflictDoNothing({ target: requestorTable.id })
-							.returning({ id: requestorTable.id })
-					);
-					const requestQuery =
-						locked === undefined
-							? composer
-									.with(insertedState, audited, projected, requestorProjected)
-									.select({ state: insertedState.state })
-									.from(insertedState)
-							: composer
-									.with(locked, insertedState, audited, projected, requestorProjected)
-									.select({ state: insertedState.state })
-									.from(insertedState);
-					const inserted = yield* executeBuilt(effectId, database, requestQuery);
-					if (inserted.rows.length > 0) {
-						const collections = [
-							'approval_request',
-							'requestor',
-							...(lock === undefined ? [] : [lock.collection])
-						];
-						yield* wake.announce(EffectId.make(`${effectId}:approval-request-wake`), collections);
-						return state;
-					}
-					if (lock !== undefined)
-						return yield* new ApprovalConflict({
+							.select({
+								id: aliased(bound(requestId), 'id'),
+								collection_name: aliased(bound(projection.collectionName), 'collection_name'),
+								record_id: aliased(bound(projection.recordId), 'record_id'),
+								action: aliased(bound(projection.action), 'action'),
+								status: aliased(bound(projection.status), 'status'),
+								steps: aliased(jsonb(projection.steps), 'steps'),
+								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
+								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
+								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
+								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
+								closed_by: aliased(bound(projection.closedBy), 'closed_by')
+							})
+							.from(insertedState)
+					)
+					.onConflictDoUpdate({
+						target: approvalRequestTable.id,
+						set: {
+							status: excluded(approvalRequestTable.status),
+							steps: excluded(approvalRequestTable.steps),
+							approver_teams: excluded(approvalRequestTable.approver_teams),
+							superseder_teams: excluded(approvalRequestTable.superseder_teams),
+							proposed_values: excluded(approvalRequestTable.proposed_values),
+							closed_at: excluded(approvalRequestTable.closed_at),
+							closed_by: excluded(approvalRequestTable.closed_by),
+							updated_at: dbNow()
+						}
+					})
+					.returning({ id: approvalRequestTable.id })
+			);
+			const requestorProjected = composer.$with('requestor_projected').as(
+				composer
+					.insert(requestorTable)
+					.select(
+						composer
+							.select({
+								id: aliased(bound(requestorId), 'id'),
+								approval_request_id: aliased(bound(requestId), 'approval_request_id'),
+								user_id: aliased(bound(subject.userId), 'user_id')
+							})
+							.from(insertedState)
+							.innerJoin(projected, always())
+					)
+					.onConflictDoNothing({ target: requestorTable.id })
+					.returning({ id: requestorTable.id })
+			);
+			const requestQuery =
+				locked === undefined
+					? composer
+							.with(insertedState, audited, projected, requestorProjected)
+							.select({ state: insertedState.state })
+							.from(insertedState)
+					: composer
+							.with(locked, insertedState, audited, projected, requestorProjected)
+							.select({ state: insertedState.state })
+							.from(insertedState);
+			const inserted = yield* executeBuilt(effectId, database, requestQuery);
+			if (inserted.rows.length > 0) {
+				return state;
+			}
+			const existing = yield* rawStatus(effectId, requestId);
+			if (
+				existing !== undefined &&
+				isJsonObject(existing.operation) &&
+				jsonObjectEquivalent(existing.operation, durableOperation)
+			)
+				return existing;
+			if (existing !== undefined)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'deterministic approval request id is already bound to another operation'
+				});
+			if (lock !== undefined)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: `${lock.collection} ${lock.id} could not be locked for approval`
+				});
+			return yield* new ApprovalConflict({
+				requestId,
+				reason: 'approval request conflicted without a durable state'
+			});
+		});
+		const resume = Effect.fn('Approvals.resume')(function* (effectId: EffectId, requestId: string) {
+			const current = yield* rawStatus(effectId, requestId);
+			if (current?._tag !== 'Approved')
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approval has not been approved'
+				});
+			const operation = isJsonObject(current.operation) ? current.operation : undefined;
+			const storedGraph = operation?.['storedGraph'];
+			const expectedReview = operation?.['reviewDigest'];
+			const storedSubject = operation?.['subject'];
+			const subject = isSubject(storedSubject) ? storedSubject : undefined;
+			if (storedGraph === undefined || typeof expectedReview !== 'string' || subject === undefined)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approved request does not contain a resumable engine plan'
+				});
+			return { requestId, subject, storedGraph, approved: true as const, expectedReview };
+		});
+		const discard = Effect.fn('Approvals.discard')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
+			const current = yield* rawStatus(effectId, requestId);
+			if (
+				current?._tag !== 'Rejected' &&
+				current?._tag !== 'ChangesRequested' &&
+				current?._tag !== 'Withdrawn'
+			)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approval was not refused'
+				});
+			const operation = isJsonObject(current.operation) ? current.operation : undefined;
+			const stored = yield* Schema.decodeUnknownEffect(StoredApprovalGraph)(
+				operation?.['storedGraph']
+			).pipe(
+				Effect.mapError(
+					() =>
+						new ApprovalConflict({
 							requestId,
-							reason: `${lock.collection} ${lock.id} could not be locked for approval`
-						});
-					const existing = yield* status(effectId, requestId);
-					if (existing === undefined)
-						return yield* new ApprovalConflict({
-							requestId,
-							reason: 'approval request conflicted without a durable state'
-						});
-					return existing;
-				}
-			),
+							reason: 'refused request does not contain a discardable engine plan'
+						})
+				)
+			);
+			if (
+				operation?.['collection'] !== stored.collection ||
+				operation?.['id'] !== stored.id ||
+				operation?.['action'] !== stored.action
+			)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'refused request engine plan governs a different mutation root'
+				});
+			return {
+				requestId,
+				root: {
+					collection: stored.collection,
+					id: stored.id,
+					action: stored.action
+				},
+				resolution:
+					current._tag === 'Rejected'
+						? ('rejected' as const)
+						: current._tag === 'ChangesRequested'
+							? ('changes_requested' as const)
+							: ('withdrawn' as const),
+				...(stored.browserMutation === undefined ? {} : { browserMutation: stored.browserMutation })
+			};
+		});
+		const gate = Effect.fn('Approvals.gate')(function* (plan: ApprovalGatePlan) {
+			if (plan.approval === undefined) {
+				if (plan.approved !== undefined)
+					return yield* new ApprovalConflict({
+						requestId: plan.approved.requestId,
+						reason: 'the reviewed mutation no longer resolves to an approval route'
+					});
+				return { _tag: 'Proceed' as const };
+			}
+			if (!isResolvedApprovalConfiguration(plan.approval)) {
+				const requestId = plan.approved?.requestId ?? approvalRequestId(plan.root, plan.effectId);
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approval gate requires one concrete resolved approval flow'
+				});
+			}
+			if (plan.approved !== undefined) {
+				const current = yield* rawStatus(plan.effectId, plan.approved.requestId);
+				if (current?._tag !== 'Approved')
+					return yield* new ApprovalConflict({
+						requestId: plan.approved.requestId,
+						reason: 'approval has not been approved'
+					});
+				const operation = isJsonObject(current.operation) ? current.operation : undefined;
+				const storedSubject = operation?.['subject'];
+				if (
+					operation?.['collection'] !== plan.root.collection ||
+					operation?.['id'] !== plan.root.id ||
+					operation?.['action'] !== plan.root.action ||
+					!isSubject(storedSubject) ||
+					!subjectEquivalent(storedSubject, plan.subject)
+				)
+					return yield* new ApprovalConflict({
+						requestId: plan.approved.requestId,
+						reason: 'approved request governs a different mutation root'
+					});
+				const storedDigest = operation['reviewDigest'];
+				const preparedDigest = approvalReviewDigest(plan.review);
+				if (
+					typeof storedDigest !== 'string' ||
+					storedDigest !== plan.approved.expectedReview ||
+					preparedDigest !== plan.approved.expectedReview
+				)
+					return yield* new ApprovalConflict({
+						requestId: plan.approved.requestId,
+						reason: 'the reviewed mutation graph changed while approval was pending'
+					});
+				return { _tag: 'Proceed' as const, governingRequest: plan.approved.requestId };
+			}
+
+			const requestId = approvalRequestId(plan.root, plan.effectId);
+			const pending = yield* pendingForRecord(
+				EffectId.make(`${plan.effectId}:approval-root-lock`),
+				plan.root.collection,
+				plan.root.id
+			);
+			if (pending !== undefined && pending.requestId !== requestId)
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: `${plan.root.collection} ${plan.root.id} is held by another approval request`
+				});
+			const reviewDigest = approvalReviewDigest(plan.review);
+			const policy = access.invocation();
+			const maskedReview = maskApprovalReview(plan.review, policy, plan.subject);
+			const maskedProposedValues = policy.mask(
+				plan.subject,
+				'read',
+				plan.root.collection,
+				plan.proposedValues ?? {}
+			);
+			const operation: Schema.Json = {
+				collection: plan.root.collection,
+				id: plan.root.id,
+				action: plan.root.action,
+				// The inbox projection is a reviewer-facing snapshot too. The engine input remains whole in
+				// `storedGraph`, which is consumed only by `resume` and never projected to approvers.
+				values: maskedProposedValues,
+				subject: plan.subject,
+				approval: plan.approval,
+				mode: 'declarative',
+				storedGraph: plan.storedGraph,
+				...(maskedReview === undefined ? {} : { review: maskedReview }),
+				reviewDigest
+			};
+			const state = yield* persistRequest(
+				plan.effectId,
+				plan.subject,
+				requestId,
+				operation,
+				plan.root.action === 'create'
+					? undefined
+					: { collection: plan.root.collection, id: plan.root.id }
+			);
+			if (state._tag !== 'Pending')
+				return yield* new ApprovalConflict({
+					requestId,
+					reason: 'approval gate rejoined a request that is no longer pending'
+				});
+			return { _tag: 'Hold' as const, requestId };
+		});
+		return Service.of({
+			gate,
+			resume,
+			discard,
 			decide: Effect.fn('Approvals.decide')(function* (
 				effectId,
 				subject,
@@ -985,7 +1308,7 @@ export const layer = Layer.effect(
 				decision,
 				reason = ''
 			) {
-				const current = yield* status(effectId, state.requestId);
+				const current = yield* rawStatus(effectId, state.requestId);
 				if (current === undefined)
 					return yield* new ApprovalConflict({
 						requestId: state.requestId,
@@ -1070,15 +1393,10 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval decision lost a competing update'
 					});
-				const changed = [
-					'approval_request',
-					...(notification === undefined ? [] : ['bolt_notifications'])
-				];
-				yield* wake.announce(EffectId.make(`${effectId}:approval-decision-wake`), changed);
-				return next;
+				return publicState(next);
 			}),
 			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {
-				const current = yield* status(effectId, state.requestId);
+				const current = yield* rawStatus(effectId, state.requestId);
 				if (current?._tag !== 'Pending')
 					return yield* new ApprovalConflict({
 						requestId: state.requestId,
@@ -1116,23 +1434,12 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval withdrawal lost a competing update'
 					});
-				yield* wake.announce(EffectId.make(`${effectId}:approval-withdraw-wake`), [
-					'approval_request'
-				]);
-				return next;
+				return publicState(next);
 			}),
 			conflict,
 			status,
 			capabilities,
-			pendingForRecord,
-			timeline,
-			authorizeResume: Effect.fn('Approvals.authorizeResume')(function* (state) {
-				if (state._tag !== 'Approved')
-					return yield* new ApprovalConflict({
-						requestId: state.requestId,
-						reason: 'approval has not been approved'
-					});
-			})
+			timeline
 		});
 	})
 );

@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { approveBy } from '../../src/authoring/approval-flow.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import {
 	describePolicy,
 	policyRuntimeFunctionsFor
@@ -18,6 +19,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
 /** Exercises authored lifecycle policy; administrator status bypasses its approval gates. */
 const policySubject = { ...adminSubject, admin: false };
@@ -31,6 +33,46 @@ const objectAt = (context: unknown, key: string): Readonly<Record<string, unknow
 		? (value as Readonly<Record<string, unknown>>)
 		: {};
 };
+
+/**
+ * The two fixture collections as a schema, so the hooks below are typed the way a compiled
+ * workspace's are: `CollectionHooks` reads handler contexts off `tables`, making `input`,
+ * `existing`, `previous`, `record` and `api.db.<collection>` inferred rather than reflected.
+ *
+ * `status` and the `versions` columns are optional in the insert because a hook may derive them —
+ * the honest statement of what a create must carry.
+ */
+interface LifecycleSchema {
+	readonly tables: {
+		readonly records: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly title: string;
+				readonly status: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly title: string;
+				readonly status?: string;
+			};
+		};
+		readonly versions: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly label: string;
+				readonly supersedes_id: string | null;
+				readonly closed_by: string | null;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly label: string;
+				readonly supersedes_id?: string | null;
+				readonly closed_by?: string | null;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
 
 const lifecyclePolicy = describePolicy('writer', {
 	description: 'Every write is authorized and then routed over its prepared record.',
@@ -119,65 +161,55 @@ const writerSubject = Subject.make({
 	teamPath: ['Writers'],
 	policies: []
 });
-const authored = {
-	...emptyAuthoredRuntime,
-	policyAuthorizations: functions.authorizations,
-	approvalFlows: functions.approvalFlows,
-	hooks: {
-		records: {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Derive the server-owned status before policy decisions.',
-						handler: (context: unknown) => {
-							const input = objectAt(context, 'input');
-							const existing = Reflect.get(context as object, 'existing');
-							if (existing === undefined) {
-								events.push(`create.before:${String(input['title'])}`);
-								return { ...input, status: 'created-prepared' };
-							}
-							events.push(`update.before:${String(input['title'])}`);
-							return { ...input, status: 'updated-prepared' };
-						}
-					},
-					after: {
-						description: 'Observe only a settled stored mutation.',
-						handler: (context: unknown) => {
-							const record = objectAt(context, 'record');
-							const previousValue = Reflect.get(context as object, 'previous');
-							if (previousValue === undefined) {
-								events.push(`create.after:${String(record['status'])}`);
-								return;
-							}
-							const previous = objectAt(context, 'previous');
-							const changes = objectAt(context, 'changes');
-							events.push(
-								`update.after:${String(record['status'])}:${String(previous['status'])}:${String(changes['status'])}`
-							);
-						}
+const recordHooks: CollectionHooks<LifecycleSchema, 'records'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Derive the server-owned status before policy decisions.',
+				handler: (context) => {
+					if (context.existing === undefined) {
+						events.push(`create.before:${context.input.title}`);
+						return { ...context.input, status: 'created-prepared' };
 					}
+					events.push(`update.before:${context.input.title}`);
+					return { ...context.input, status: 'updated-prepared' };
 				}
 			},
-			delete: {
-				perRecord: {
-					before: {
-						description: 'Observe the stored row before routing its delete.',
-						handler: (context: unknown) => {
-							const existing = objectAt(context, 'existing');
-							events.push(`delete.before:${String(existing['status'])}`);
-						}
-					},
-					after: {
-						description: 'Observe the deleted row only after settlement.',
-						handler: (context: unknown) => {
-							const record = objectAt(context, 'record');
-							events.push(`delete.after:${String(record['status'])}`);
-						}
+			after: {
+				description: 'Observe only a settled stored mutation.',
+				handler: ({ record, previous, changes }) => {
+					if (previous === undefined) {
+						events.push(`create.after:${record.status}`);
+						return;
 					}
+					events.push(`update.after:${record.status}:${previous.status}:${changes.status}`);
+				}
+			}
+		}
+	},
+	delete: {
+		perRecord: {
+			before: {
+				description: 'Observe the stored row before routing its delete.',
+				handler: ({ existing }) => {
+					events.push(`delete.before:${existing.status}`);
+				}
+			},
+			after: {
+				description: 'Observe the deleted row only after settlement.',
+				handler: ({ record }) => {
+					events.push(`delete.after:${record.status}`);
 				}
 			}
 		}
 	}
+};
+
+const authored = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: functions.authorizations,
+	approvalFlows: functions.approvalFlows,
+	hooks: { records: authoredHooks(recordHooks) }
 };
 
 let harness: BoltTestRuntime | undefined;
@@ -228,11 +260,15 @@ describe('policy and hook lifecycle', () => {
 		const id = recordId('lifecycle-record');
 
 		const created = await pendingRequest(
-			service.create(harness.effectId('create'), policySubject, {
-				collection: 'records',
-				id,
-				values: { title: 'Draft' }
-			})
+			service.mutate(
+				harness.effectId('create'),
+				policySubject,
+				'records',
+				[{ id, title: 'Draft' }],
+				false,
+				0,
+				{ root: { id, action: 'create' } }
+			)
 		);
 		expect(events).toEqual([
 			'create.before:Draft',
@@ -246,11 +282,15 @@ describe('policy and hook lifecycle', () => {
 		events.length = 0;
 		decisionContexts.length = 0;
 		const updated = await pendingRequest(
-			service.update(harness.effectId('update'), policySubject, {
-				collection: 'records',
-				id,
-				values: { title: 'Final' }
-			})
+			service.mutate(
+				harness.effectId('update'),
+				policySubject,
+				'records',
+				[{ id, title: 'Final' }],
+				false,
+				0,
+				{ root: { id, action: 'update' } }
+			)
 		);
 		expect(events).toEqual([
 			'update.before:Final',
@@ -292,14 +332,21 @@ describe('policy and hook lifecycle', () => {
 
 		const failure = await harness.runtime.runPromise(
 			Effect.flip(
-				service.update(harness.effectId('masked-update'), writerSubject, {
-					collection: 'records',
-					id,
-					values: { status: 'forged' }
-				})
+				service.mutate(
+					harness.effectId('masked-update'),
+					writerSubject,
+					'records',
+					[{ id, status: 'forged' }],
+					false,
+					0,
+					{ root: { id, action: 'update' } }
+				)
 			)
 		);
-		expect(failure).toBeInstanceOf(AccessControl.AccessDenied);
+		// A batch reports its refusal under the phase that raised it and keeps the refusal itself
+		// underneath, so the grant denial is read through the wrapper rather than instead of it.
+		expect(failure).toBeInstanceOf(Collections.MutationPhaseFailure);
+		expect(unwrapMutationPhase(failure)).toBeInstanceOf(AccessControl.AccessDenied);
 		expect(events).toEqual([]);
 	});
 
@@ -354,35 +401,29 @@ describe('policy and hook lifecycle', () => {
 		const predecessorId = recordId('predecessor');
 		const successorId = recordId('successor');
 		const transitionEvents: Array<string> = [];
+		const versionHooks: CollectionHooks<LifecycleSchema, 'versions'> = {
+			mutate: {
+				perRecord: {
+					before: {
+						description: 'Closes the predecessor inside the successor graph.',
+						handler: (context) =>
+							Effect.gen(function* () {
+								if (context.existing !== undefined) return context.input;
+								const predecessor = String(context.input.supersedes_id);
+								transitionEvents.push(`prepare:${predecessor}`);
+								yield* context.api.db.versions.mutate({ id: predecessor, closed_by: successorId });
+								return context.input;
+							})
+					}
+				}
+			}
+		};
 		harness = await makeBoltTestRuntime(transitionDefinition, {
 			authored: {
 				...emptyAuthoredRuntime,
 				policyAuthorizations: transitionFunctions.authorizations,
 				approvalFlows: transitionFunctions.approvalFlows,
-				hooks: {
-					versions: {
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Closes the predecessor inside the successor graph.',
-									handler: (context: unknown, api: unknown) =>
-										Effect.gen(function* () {
-											const input = objectAt(context, 'input');
-											if (Reflect.get(context as object, 'existing') !== undefined) return input;
-											const predecessor = String(input['supersedes_id']);
-											transitionEvents.push(`prepare:${predecessor}`);
-											const database = objectAt(api, 'db');
-											const versions = objectAt(database, 'versions');
-											const mutate = Reflect.get(versions, 'mutate');
-											if (typeof mutate !== 'function') throw new Error('mutate is unavailable');
-											yield* mutate({ id: predecessor, closed_by: successorId });
-											return input;
-										})
-								}
-							}
-						}
-					}
-				}
+				hooks: { versions: authoredHooks(versionHooks) }
 			}
 		});
 		const transitionHarness = harness;
@@ -403,14 +444,13 @@ describe('policy and hook lifecycle', () => {
 						false,
 						0,
 						{
-							declarative: true,
 							root: { id: successorId, action: 'create' }
 						}
 					)
 				);
 			})
 		);
-		const pending = Collections.unwrapMutationPhase(raised);
+		const pending = unwrapMutationPhase(raised);
 		if (!(pending instanceof PendingApproval)) {
 			throw new Error(`transition was not held: ${JSON.stringify(pending)}`);
 		}

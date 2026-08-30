@@ -18,11 +18,12 @@ import {
 	type PgTableExtraConfigValue
 } from 'drizzle-orm/pg-core';
 import type * as DrizzleKitPostgres from 'drizzle-kit/api-postgres';
-import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
 import {
 	RECORD_EMBEDDING_COLUMN,
+	SEARCH_DOCUMENT_COLUMN,
 	compileModelTable,
 	describeModelColumns,
+	searchTextExpression,
 	searchableColumns
 } from '../authoring/model-introspection.js';
 import {
@@ -37,16 +38,13 @@ import type {
 	WorkspaceMigrationEntry
 } from '../authoring/workspace-schema.js';
 import { extractRelationships } from './model-fields.js';
-import { collectionIndexName } from './schema-plan.js';
-import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
 import {
-	advanceMutationCompatibilityLedger,
-	mutationSchemaDescriptor,
-	mutationSchemaFingerprint,
-	readMutationCompatibilityLedger,
-	type MutationCompatibilityLedger,
-	writeMutationCompatibilityLedger
-} from './mutation-schema-compatibility.js';
+	collectionIndexName,
+	collectionSearchDocumentIndexName,
+	collectionSearchTextTrigramIndexName
+} from './schema-plan.js';
+import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './workspace-build.js';
+import { workspaceSchemaFingerprint } from './schema-fingerprint.js';
 
 /**
  * Drizzle-driven schema migration.
@@ -218,31 +216,35 @@ const declaredIndexes = (
 		});
 
 /**
- * The GIN trigram indexes for a collection's searchable columns, as Drizzle entities.
+ * The two lexical indexes for a collection's generated search document.
  *
  * The schema plan creates these too, for a database it provisions from nothing; a database that
  * already exists only ever changes through this lineage, so an index that lived only in the plan
  * would never reach the collections whose size is the reason #44 matters. Both sides take the name
- * from `@norbital-ai/std/collection`, so whichever runs first satisfies the other.
+ * from the schema compiler, so whichever runs first satisfies the other.
  *
- * Searchability is read through `describeModelColumns` rather than off the builder here: that is the
- * one function that knows what `text({ search: true })` left behind, and a second reader of the same
- * marker is how the index and the search it exists for come to disagree.
+ * The tsvector GIN serves token and prefix matches. The expression trigram GIN serves fuzzy and
+ * language-agnostic matching over the exact same concatenated text the runtime ranks. Both are
+ * generated from the sorted model field list, so no authored index can drift from search behavior.
  */
 const searchIndexes = (
 	collectionName: string,
 	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
 	self: Readonly<Record<string, ExtraConfigColumn>>
-) =>
-	searchableColumns(describeModelColumns(columns)).map((columnName) => {
-		const column = self[columnName];
-		if (column === undefined)
-			throw new Error(`Unknown searchable column "${collectionName}.${columnName}"`);
-		return index(collectionSearchTrigramIndexName(collectionName, columnName)).using(
+): Array<PgTableExtraConfigValue> => {
+	const searchable = searchableColumns(describeModelColumns(columns));
+	if (searchable.length === 0) return [];
+	const document = self[SEARCH_DOCUMENT_COLUMN];
+	if (document === undefined)
+		throw new Error(`Missing generated search document for "${collectionName}"`);
+	return [
+		index(collectionSearchDocumentIndexName(collectionName)).using('gin', document),
+		index(collectionSearchTextTrigramIndexName(collectionName)).using(
 			'gin',
-			column.op('gin_trgm_ops')
-		);
-	});
+			sql.raw(`(${searchTextExpression(searchable)}) gin_trgm_ops`)
+		)
+	];
+};
 
 /** Exclusive-arc constraints and per-arm indexes for every logical polymorphic reference. */
 const referenceEntities = (
@@ -719,18 +721,18 @@ export const latestSnapshot = (
 		return undefined;
 	});
 
-export type ValidatedWorkspaceMigrationLineage = Readonly<{
+type ValidatedWorkspaceMigrationLineage = Readonly<{
 	readonly snapshot: WorkspaceSnapshot;
-	readonly mutationCompatibilityLedger: MutationCompatibilityLedger;
+	readonly schemaFingerprint: string;
 }>;
 
 /**
  * Proves that sync is compiling exactly the schema its author committed.
  *
  * This is the read-only half of `bolt migrate`: it runs the same Drizzle diff but never writes a
- * migration, snapshot, compatibility checkpoint, generated module, or artifact. A successful
- * result is therefore safe for sync to reuse as its schema authority; every failure tells the
- * author to run the one command that is allowed to advance that authority.
+ * migration, snapshot, generated module, or artifact. A successful result is therefore safe for
+ * sync to reuse as its schema authority; every failure tells the author to run the one command that
+ * is allowed to advance that authority.
  */
 export const validateWorkspaceMigrationLineage = (
 	input: Readonly<{
@@ -749,15 +751,6 @@ export const validateWorkspaceMigrationLineage = (
 				)
 			);
 		}
-		const mutationCompatibilityLedger = yield* readMutationCompatibilityLedger(input.workspaceRoot);
-		if (mutationCompatibilityLedger === undefined) {
-			return yield* Effect.fail(
-				new Error(
-					'Mutation compatibility lineage is missing. Run `bolt migrate` and commit the resulting lineage before `bolt sync`.'
-				)
-			);
-		}
-
 		const pending = yield* planWorkspaceMigration({
 			models: input.models,
 			relations: input.relations,
@@ -771,25 +764,8 @@ export const validateWorkspaceMigrationLineage = (
 			);
 		}
 
-		const schema = mutationSchemaDescriptor(snapshot, input.relations);
-		const fingerprint = mutationSchemaFingerprint(schema);
-		const currentCheckpoint = mutationCompatibilityLedger.checkpoints.find(
-			(checkpoint) =>
-				checkpoint.schemaFingerprint === mutationCompatibilityLedger.currentSchemaFingerprint
-		);
-		if (
-			mutationCompatibilityLedger.currentSchemaFingerprint !== fingerprint ||
-			currentCheckpoint === undefined ||
-			mutationSchemaFingerprint(currentCheckpoint.schema) !== fingerprint
-		) {
-			return yield* Effect.fail(
-				new Error(
-					'Mutation compatibility lineage does not match the latest committed schema. Run `bolt migrate` and commit the resulting lineage before `bolt sync`.'
-				)
-			);
-		}
-
-		return { snapshot, mutationCompatibilityLedger } satisfies ValidatedWorkspaceMigrationLineage;
+		const schemaFingerprint = workspaceSchemaFingerprint(snapshot, input.relations);
+		return { snapshot, schemaFingerprint } satisfies ValidatedWorkspaceMigrationLineage;
 	});
 
 /**
@@ -818,28 +794,12 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 			...(name === undefined ? {} : { name })
 		});
 		if (migration !== undefined) yield* writeMigration(migrationsRoot, migration);
-		const currentSnapshot = migration?.snapshot ?? previous;
-		if (currentSnapshot === undefined)
-			return yield* Effect.fail(
-				new Error('A workspace with authored models did not produce a mutation schema snapshot.')
-			);
-		const previousCompatibility = yield* readMutationCompatibilityLedger(root);
-		const nextCompatibility = advanceMutationCompatibilityLedger({
-			previous: previousCompatibility,
-			schema: mutationSchemaDescriptor(currentSnapshot, relations),
-			statements: migration?.statements ?? [],
-			atEpochMs: Date.now()
-		});
-		const compatibilityLedgerWritten = nextCompatibility !== previousCompatibility;
-		if (compatibilityLedgerWritten)
-			yield* writeMutationCompatibilityLedger(root, nextCompatibility);
 		return migration === undefined
-			? { migrationsRoot, statements: [], compatibilityLedgerWritten }
+			? { migrationsRoot, statements: [] }
 			: {
 					migrationsRoot,
 					tag: migration.tag,
-					statements: migration.statements,
-					compatibilityLedgerWritten
+					statements: migration.statements
 				};
 	});
 

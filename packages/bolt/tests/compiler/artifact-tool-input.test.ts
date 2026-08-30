@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { renderArtifact } from '../../src/compiler/sync.js';
+import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 /**
  * How the artifact validates a workspace tool's input.
@@ -46,11 +46,6 @@ const artifactWithOneTool = (): string =>
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-			currentSchemaFingerprint: 'sha256:fixture',
-			adapters: []
-		},
 		schemaFingerprint: 'sha256:fixture'
 	});
 

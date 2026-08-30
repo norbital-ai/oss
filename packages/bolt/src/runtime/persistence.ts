@@ -104,15 +104,6 @@ export const dbNowMinusDays = (days: number): SQL<string> =>
 /** A typed `true` predicate for a builder branch that intentionally matches every row. */
 export const always = (): SQL<boolean> => expression([fixed('true')]);
 
-/**
- * A typed `false` predicate for a builder branch that intentionally matches no row.
- *
- * The fail-closed half of `always`, and it exists so an unreachable branch of a *visibility*
- * expression has somewhere safe to go: the alternative is a nullable predicate, and the obvious
- * fallback for one of those is `true`.
- */
-export const nothing = (): SQL<boolean> => expression([fixed('false')]);
-
 /** A typed constant used only as an EXISTS/RETURNING projection. */
 export const one = (): SQL<number> => expression([fixed('1')]);
 
@@ -137,88 +128,6 @@ export const excludedWhenDistinct = <T>(discriminator: SQLWrapper, value: SQLWra
 		value,
 		fixed(' end')
 	]);
-
-/** The task lifecycle's public next-run projection. */
-export const pendingNextRun = (status: SQLWrapper, runAt: SQLWrapper): SQL<string | null> =>
-	expression([
-		fixed('case when '),
-		status,
-		fixed(" in ('pending', 'resuming') then "),
-		runAt,
-		fixed(' else null end')
-	]);
-
-/** The resume fence keeps a still-live lease and otherwise makes the same row due now. */
-export const resumedRunAt = (
-	attempts: SQLWrapper,
-	error: SQLWrapper,
-	runAt: SQLWrapper
-): SQL<string> =>
-	expression([
-		fixed('case when '),
-		attempts,
-		fixed(' > 0 and '),
-		error,
-		fixed(' is null and '),
-		runAt,
-		fixed(' > now() then '),
-		runAt,
-		fixed(' else now() end')
-	]);
-
-/** PostgreSQL's oldest transaction that may still be in flight. */
-export const commitHorizon = (): SQL<number> =>
-	expression([fixed('pg_snapshot_xmin(pg_current_snapshot())::text::bigint')]);
-
-/** Supplies a fallback for an aggregate that found no rows. */
-export const coalesce = <T>(value: SQLWrapper<T>, fallback: T): SQL<T> =>
-	expression([fixed('coalesce('), value, fixed(', '), sql.param(fallback), fixed(')')]);
-
-/** Encodes a sync cursor in the public JSON wire shape. */
-export const syncCursorJson = (xid: SQLWrapper, sequence: SQLWrapper): SQL<Schema.Json> =>
-	expression([
-		fixed("jsonb_build_object('xid', "),
-		xid,
-		fixed(", 'sequence', "),
-		sequence,
-		fixed(')')
-	]);
-
-/** A qualified dynamic column whose identifiers remain builder-escaped. */
-export const qualified = (tableAlias: string, column: string): SQL =>
-	expression([sql.identifier(tableAlias), fixed('.'), sql.identifier(column)]);
-
-/** A dynamically named table with a fixed builder-escaped alias. */
-export const dynamicTable = (table: string, tableAlias: string): SQL =>
-	expression([sql.identifier(table), fixed(' as '), sql.identifier(tableAlias)]);
-
-/**
- * Rehydrates one captured JSON row as its declared PostgreSQL composite type.
- *
- * Sync uses this as a one-row FROM source so the exact compiled access predicate can be evaluated
- * independently against an outbox row's before and after images. Both table and alias are
- * builder-escaped identifiers; the image remains an expression supplied by the typed outbox table.
- */
-export const jsonRecord = (table: string, image: SQLWrapper, tableAlias: string): SQL =>
-	expression([
-		fixed('jsonb_populate_record(null::'),
-		sql.identifier(table),
-		fixed(', '),
-		image,
-		fixed(') as '),
-		sql.identifier(tableAlias)
-	]);
-
-/** Compares a UUID primary key after an optional snapshot cursor. */
-export const uuidAfter = (column: SQLWrapper, value: string): SQL<boolean> =>
-	expression([column, fixed(' > '), sql.param(value), fixed('::uuid')]);
-
-/** Casts an identifier to text for policy correlation or protocol projection. */
-export const asText = (value: SQLWrapper): SQL<string> => expression([value, fixed('::text')]);
-
-/** Converts the dynamically selected snapshot row to one JSON object. */
-export const rowJson = (tableAlias: string): SQL<Schema.Json> =>
-	expression([fixed('to_jsonb('), sql.identifier(tableAlias), fixed(')')]);
 
 /**
  * The pgvector distance between a vector column and a probe, as an orderable expression.
@@ -252,93 +161,6 @@ export const jsonTextEquals = (column: SQLWrapper, key: string, value: string): 
 /** Binds already-encoded JSON text as a JSONB expression. */
 export const jsonb = (value: Schema.Json): SQL<Schema.Json> =>
 	expression([sql.param(JSON.stringify(value)), fixed('::jsonb')]);
-
-/** Whether a JSONB string array contains at least one member of a closed caller-supplied set. */
-export const jsonArrayContainsAny = (
-	column: SQLWrapper,
-	values: ReadonlyArray<string>
-): SQL<boolean> =>
-	values.length === 0
-		? nothing()
-		: expression([
-				column,
-				fixed(' ?| array['),
-				sql.join(
-					values.map((value) => sql.param(value)),
-					fixed(', ')
-				),
-				fixed(']::text[]')
-			]);
-
-/** Approximate uncompressed bytes one retained sync event would cost to replay over the wire. */
-export const syncReplayEventBytes = (
-	before: SQLWrapper,
-	after: SQLWrapper,
-	invalidatedCollections: SQLWrapper
-): SQL<number> =>
-	expression([
-		// `pg_column_size(jsonb)` measures PostgreSQL's stored/TOAST representation. The client compares
-		// this value with uncompressed replica bytes, so using the stored size systematically favours
-		// replay. Text length is the comparable bounded wire-size estimate for all three JSON values.
-		fixed('(coalesce(octet_length(cast('),
-		before,
-		fixed(' as text)), 0) + coalesce(octet_length(cast('),
-		after,
-		fixed(' as text)), 0) + coalesce(octet_length(cast('),
-		invalidatedCollections,
-		// Cursor, operation, collection, record id, row version and JSON envelope overhead.
-		fixed(' as text)), 0) + 192)')
-	]);
-
-/** Sums an integer cost expression, returning zero rather than null for an empty history range. */
-export const sumInteger = (value: SQLWrapper): SQL<number> =>
-	expression([fixed('coalesce(sum('), value, fixed('), 0)::bigint')]);
-
-/** Lexicographically keeps the largest durable cursor value. */
-export const greatest = <T>(left: SQLWrapper<T>, right: SQLWrapper): SQL<T> =>
-	expression([fixed('greatest('), left, fixed(', '), right, fixed(')')]);
-
-/** Advances the sync sequence with the xid, never moving either component backwards. */
-export const horizonSequence = (
-	xid: SQLWrapper,
-	sequence: SQLWrapper,
-	nextXid: SQLWrapper,
-	nextSequence: SQLWrapper
-): SQL<number> =>
-	expression([
-		fixed('case when '),
-		nextXid,
-		fixed(' > '),
-		xid,
-		fixed(' then '),
-		nextSequence,
-		fixed(' else greatest('),
-		sequence,
-		fixed(', '),
-		nextSequence,
-		fixed(') end')
-	]);
-
-/**
- * A subquery standing where a single value is expected.
- *
- * Drizzle renders a select builder without enclosing parentheses, so a subquery spliced into an
- * expression is a syntax error until something adds them. Naming that here keeps the parentheses off
- * the callers, where one omission produces SQL that fails only at execution time.
- */
-export const scalar = (query: SQLWrapper): SQL => expression([fixed('('), query, fixed(')')]);
-
-/** The value where the condition holds, and null everywhere else. */
-export const onlyWhen = <T>(condition: SQLWrapper, value: SQLWrapper<T>): SQL<T | null> =>
-	expression([fixed('case when '), condition, fixed(' then '), value, fixed(' end')]);
-
-/** Chooses the earliest non-null result of two scalar queries. */
-export const least = <T>(left: SQLWrapper<T>, right: SQLWrapper<T>): SQL<T> =>
-	expression([fixed('least('), left, fixed(', '), right, fixed(')')]);
-
-/** A one-row source for selecting over scalar subqueries without owning a real table. */
-export const singleton = (): SQL =>
-	expression([fixed('(values (1)) as '), sql.identifier('singleton')]);
 
 /** Brands custom SQL at construction so it can never enter the single-query execution path. */
 export const transactionSql = (

@@ -8,7 +8,7 @@ import type { RemoteQuery } from '@norbital-ai/std/collection';
 
 /** The queue row projected to a browser watching one durable automation run. */
 export const AutomationTaskSnapshot = Schema.Struct({
-	status: Schema.Literals(['pending', 'paused', 'resuming', 'running', 'done', 'failed']),
+	status: Schema.Literals(['pending', 'running', 'done', 'failed']),
 	attempts: Schema.Number,
 	maxAttempts: Schema.Number,
 	error: Schema.NullOr(Schema.String),
@@ -26,24 +26,22 @@ export const AutomationTaskSnapshot = Schema.Struct({
 });
 export type AutomationTaskSnapshot = Schema.Schema.Type<typeof AutomationTaskSnapshot>;
 
-export type AutomationRunSnapshot<Output = Schema.Json> = Omit<AutomationTaskSnapshot, 'result'> &
+type AutomationRunSnapshot<Output = Schema.Json> = Omit<AutomationTaskSnapshot, 'result'> &
 	Readonly<{ readonly result: Output | null }>;
 
 /**
  * A live, query-owned view of one run.
  *
- * `current`, `loading`, and `error` are the ordinary live collection-query state. The replica owns
- * propagation; this surface performs no status requests after it starts the run.
+ * `current`, `loading`, and `error` are the ordinary live collection-query state. The sync stream
+ * owns propagation; this surface performs no status requests after it starts the run.
  */
-export interface AutomationRun<Output = Schema.Json> {
+interface AutomationRun<Output = Schema.Json> {
 	readonly id: string;
 	readonly current: AutomationRunSnapshot<Output> | null | undefined;
 	readonly loading: boolean;
 	readonly error: Error | undefined;
 	// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
 	stop(): Promise<void>;
-	// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
-	resume(): Promise<void>;
 }
 
 type AutomationModule = Readonly<{
@@ -79,9 +77,6 @@ export type AutomationClientApi<Registry extends Readonly<Record<string, Automat
 		/** Stops the same durable run, retaining its input, progress and idempotency key. */
 		// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
 		readonly stop: (taskId: string) => Promise<void>;
-		/** Resumes the same stopped durable run and returns its live typed view. */
-		// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
-		readonly resume: (taskId: string) => Promise<AutomationRun<OutputOf<Registry[Name]>>>;
 		/** Active calls and durable runs started through this stable surface. */
 		readonly pending: number;
 		/** The most recently started run; its query owns progress, result, loading, and error state. */
@@ -98,26 +93,23 @@ type LifecycleRun = (taskId: string) => Effect.Effect<void, unknown>;
 /**
  * One automation run backed by an authenticated server-only collection query.
  *
- * `automation_run` is runtime state, so it never enters the browser replica. The client runtime
- * refreshes active runs through the same row- and field-masked query until they settle; this public
- * view remains an ordinary reactive `RemoteQuery` and never exposes queue internals.
+ * `automation_run` is runtime state, answered only by the authority. The client runtime refreshes
+ * active runs through the same row- and field-masked query until they settle; this public view
+ * remains an ordinary reactive `RemoteQuery` and never exposes queue internals.
  */
 class ManagedAutomationRun implements AutomationRun {
 	readonly id: string;
 	readonly #query: RemoteQuery<AutomationTaskSnapshot | null>;
 	readonly #stop: LifecycleRun;
-	readonly #resume: LifecycleRun;
 
 	constructor(
 		id: string,
 		query: RemoteQuery<AutomationTaskSnapshot | null>,
-		stop: LifecycleRun,
-		resume: LifecycleRun
+		stop: LifecycleRun
 	) {
 		this.id = id;
 		this.#query = query;
 		this.#stop = stop;
-		this.#resume = resume;
 	}
 
 	get current(): AutomationTaskSnapshot | null | undefined {
@@ -134,9 +126,6 @@ class ManagedAutomationRun implements AutomationRun {
 
 	// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
 	stop = (): Promise<void> => Effect.runPromise(this.#stop(this.id));
-
-	// repository-health:allow EFF2 -- Automation lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
-	resume = (): Promise<void> => Effect.runPromise(this.#resume(this.id));
 }
 
 /** Stable Svelte state shared by every reader of one generated automation property. */
@@ -146,14 +135,12 @@ export class AutomationExecutionState {
 	readonly #start: StartRun;
 	readonly #read: ReadRun;
 	readonly #stop: LifecycleRun;
-	readonly #resume: LifecycleRun;
 	#runs = $state.raw<ReadonlyArray<ManagedAutomationRun>>([]);
 
-	constructor(start: StartRun, read: ReadRun, stop: LifecycleRun, resume: LifecycleRun) {
+	constructor(start: StartRun, read: ReadRun, stop: LifecycleRun) {
 		this.#start = start;
 		this.#read = read;
 		this.#stop = stop;
-		this.#resume = resume;
 	}
 
 	// repository-health:allow EFF2 -- Starting a generated browser automation is intentionally Promise-shaped at the public client boundary.
@@ -183,7 +170,7 @@ export class AutomationExecutionState {
 	readonly #track = (taskId: string): ManagedAutomationRun => {
 		const existing = this.#runs.find(({ id }) => id === taskId);
 		if (existing !== undefined) return existing;
-		const run = new ManagedAutomationRun(taskId, this.#read(taskId), this.#stop, this.#resume);
+		const run = new ManagedAutomationRun(taskId, this.#read(taskId), this.#stop);
 		this.#runs = [...this.#runs, run].slice(-50);
 		this.latest = run;
 		return run;
@@ -192,13 +179,6 @@ export class AutomationExecutionState {
 	// repository-health:allow EFF2 -- Historical lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
 	stop = (taskId: string): Promise<void> =>
 		this.#runs.find(({ id }) => id === taskId)?.stop() ?? Effect.runPromise(this.#stop(taskId));
-
-	// repository-health:allow EFF2 -- Historical lifecycle actions are generated browser actions and are Promise-shaped at the public client boundary.
-	resume = (taskId: string): Promise<AutomationRun> => {
-		const existing = this.#runs.find(({ id }) => id === taskId);
-		if (existing !== undefined) return existing.resume().then(() => existing);
-		return Effect.runPromise(this.#resume(taskId)).then(() => this.#track(taskId));
-	};
 }
 
 /** Runtime-erased surface; generated declarations restore each automation's exact input/output. */
@@ -208,7 +188,6 @@ export type ErasedAutomationClientApi = Readonly<
 		Readonly<{
 			readonly run: AutomationExecutionState['run'];
 			readonly stop: AutomationExecutionState['stop'];
-			readonly resume: AutomationExecutionState['resume'];
 			readonly pending: number;
 			readonly latest: AutomationRun | undefined;
 		}>

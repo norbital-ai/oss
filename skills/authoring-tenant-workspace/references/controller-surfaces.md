@@ -32,7 +32,7 @@ If the extract is thinner than that, keep it inlined.
 
 ### 3. Declarative UI — `$derived`, never imperative wiring
 
-Live queries already re-run when the replica changes. Author templates as a function of state:
+Live queries already re-run when the sync engine pushes a change. Author templates as a function of state:
 `$state` for operator input only; `$derived` for resolved ids, query handles, label maps, charts,
 and empty states. Do **not** use `$effect` or `watch` to recreate queries or “sync” UI.
 

@@ -8,7 +8,7 @@ export function collectionFormMutationFieldNames(fields: readonly CollectionFiel
 }
 
 /** Authored values visible to a form, including generated read-only facts but never system fields. */
-export function collectionFormValueFieldNames(fields: readonly CollectionField[]): string[] {
+function collectionFormValueFieldNames(fields: readonly CollectionField[]): string[] {
 	return fields.filter((field) => !isSystemCollectionField(field.name)).map((field) => field.name);
 }
 
@@ -27,10 +27,7 @@ export function assertCollectionFormFieldRegistration(
 	const expected = collectionFormMutationFieldNames(fields);
 	const knownSet = new Set(collectionFormValueFieldNames(fields));
 	const missing = expected.filter((name) => (registrations.get(name) ?? 0) === 0);
-	const duplicate = [...registrations]
-		.filter(([, count]) => count > 1)
-		.map(([name]) => name)
-		.sort();
+	const duplicate = [...registrations].flatMap(([name, count]) => (count > 1 ? [name] : [])).sort();
 	const unknown = [...registrations.keys()].filter((name) => !knownSet.has(name)).sort();
 	if (missing.length === 0 && duplicate.length === 0 && unknown.length === 0) return;
 

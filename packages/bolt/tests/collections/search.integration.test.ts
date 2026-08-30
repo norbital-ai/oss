@@ -1,6 +1,8 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { defineModel, text } from '../../src/authoring/models-schema.js';
+import { compileModel } from '../../src/authoring/model-introspection.js';
+import { collection, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import {
 	adminSubject,
@@ -31,20 +33,23 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+/**
+ * Compiled through `compileModel`, because that is the only thing that derives a collection's
+ * lexical metadata. `search: true` on a field is what generates the document column; the
+ * `search` block it produces beside it is what the read resolver looks the column up through, and
+ * a fixture that wrote the flag by hand had the first without the second.
+ */
+const peopleModel = defineModel({
+	name: text({ search: true }).notNull(),
+	team: text({ search: true }),
+	// Not opted in: search must never reach it.
+	secret_note: text()
+});
+
 const searchable = workspace({
 	name: 'test-workspace',
 	version: '1',
-	collections: [
-		collection({
-			name: 'people',
-			fields: {
-				name: { type: 'string', required: true, indexed: false, search: true },
-				team: { type: 'string', required: false, indexed: false, search: true },
-				// Not opted in: search must never reach it.
-				secret_note: { type: 'string', required: false, indexed: false }
-			}
-		})
-	],
+	collections: [compileModel(collection({ name: 'people', fields: {} }), peopleModel)],
 	apps: [],
 	policies: [
 		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
@@ -65,16 +70,24 @@ const seed = (harness: BoltTestRuntime) =>
 	harness.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			yield* collections.create(harness.effectId('a'), adminSubject, {
-				collection: 'people',
-				id: rid('a'),
-				values: { name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }
-			});
-			yield* collections.create(harness.effectId('b'), adminSubject, {
-				collection: 'people',
-				id: rid('b'),
-				values: { name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }
-			});
+			yield* collections.mutate(
+				harness.effectId('a'),
+				adminSubject,
+				'people',
+				[{ id: rid('a'), name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }],
+				false,
+				0,
+				{ root: { id: rid('a'), action: 'create' } }
+			);
+			yield* collections.mutate(
+				harness.effectId('b'),
+				adminSubject,
+				'people',
+				[{ id: rid('b'), name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }],
+				false,
+				0,
+				{ root: { id: rid('b'), action: 'create' } }
+			);
 		})
 	);
 
@@ -86,7 +99,7 @@ const search = (harness: BoltTestRuntime, term?: string) =>
 				adminSubject,
 				{
 					collection: 'people',
-					...(term === undefined ? {} : { search: term })
+					...(term === undefined ? {} : { search: { mode: 'lexical' as const, term } })
 				}
 			);
 			return rows.map((row) =>
@@ -134,11 +147,15 @@ describe('collection search', () => {
 		harness = await makeBoltTestRuntime();
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(harness!.effectId('x'), adminSubject, {
-					collection: 'people',
-					id: rid('x'),
-					values: { name: 'Ada Lovelace' }
-				});
+				yield* (yield* Collections.Service).mutate(
+					harness!.effectId('x'),
+					adminSubject,
+					'people',
+					[{ id: rid('x'), name: 'Ada Lovelace' }],
+					false,
+					0,
+					{ root: { id: rid('x'), action: 'create' } }
+				);
 			})
 		);
 		// The default fixture opts no column in, so a term that reached here must not widen to a scan.
@@ -152,7 +169,7 @@ describe('collection search', () => {
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).count(harness!.effectId('count'), adminSubject, {
 					collection: 'people',
-					search: 'Ada'
+					search: { mode: 'lexical', term: 'Ada' }
 				});
 			})
 		);

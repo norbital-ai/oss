@@ -23,6 +23,18 @@ export class ToolNotAllowed extends Schema.TaggedError<ToolNotAllowed>()(
 	readonly message = `The tool "${this.tool}" is not allowed for the agent "${this.agent}".`;
 }
 
+/** A turn may use only a host-reported model with an explicit context length. */
+export class AgentModelUnavailable extends Schema.TaggedError<AgentModelUnavailable>()(
+	'Bolt.Agents.AgentModelUnavailable',
+	{
+		model: Schema.NonEmptyString,
+		reason: Schema.Literals(['invalid-catalog', 'not-found', 'context-missing'])
+	}
+) {
+	readonly category = 'agent-model' as const;
+	readonly message = `The model "${this.model}" is unavailable: ${this.reason}.`;
+}
+
 /** Carries typed MCP transport and protocol failures without flattening them into tool output. */
 export class McpToolError extends Schema.TaggedError<McpToolError>()('Bolt.Agents.McpToolError', {
 	server: Schema.NonEmptyString,

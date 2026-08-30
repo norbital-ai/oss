@@ -21,16 +21,24 @@ describe('collection history', () => {
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(harness!.effectId('history-create'), adminSubject, {
-					collection: 'people',
-					id: recordId,
-					values: { name: 'Ada', team: 'Research' }
-				});
-				yield* collections.update(harness!.effectId('history-update'), adminSubject, {
-					collection: 'people',
-					id: recordId,
-					values: { team: 'Platform' }
-				});
+				yield* collections.mutate(
+					harness!.effectId('history-create'),
+					adminSubject,
+					'people',
+					[{ id: recordId, name: 'Ada', team: 'Research' }],
+					false,
+					0,
+					{ root: { id: recordId, action: 'create' } }
+				);
+				yield* collections.mutate(
+					harness!.effectId('history-update'),
+					adminSubject,
+					'people',
+					[{ id: recordId, team: 'Platform' }],
+					false,
+					0,
+					{ root: { id: recordId, action: 'update' } }
+				);
 			})
 		);
 
@@ -51,6 +59,14 @@ describe('collection history', () => {
 			'2026-08-24T03:00:00.000Z'
 		] as const;
 
+		// The record itself, because history is answered through the current row: a record that is
+		// absent and one the predicate hides are deliberately the same answer, so a patch log with no
+		// row behind it reads as nothing rather than as a record somebody may no longer see.
+		await harness.database.query('insert into people (id, name, team) values ($1, $2, $3)', [
+			recordId,
+			'Ada Lovelace',
+			'Platform'
+		]);
 		await harness.database.query(
 			`insert into bolt_collection_history
 				(sequence, collection_name, record_id, operation, subject_id, snapshot, created_at)

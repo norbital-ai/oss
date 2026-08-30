@@ -59,7 +59,6 @@ describe('inter-agent messages in the transcript', () => {
 				content: {
 					id: 'turn-1',
 					status: 'completed',
-					parent_agent_id: null,
 					parts: [
 						call,
 						{

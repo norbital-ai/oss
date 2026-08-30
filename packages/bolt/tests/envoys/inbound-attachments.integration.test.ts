@@ -11,7 +11,6 @@ import type {
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
-import * as Agents from '../../src/runtime/agents/agents.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
 const definition = workspace({
@@ -39,6 +38,7 @@ const definition = workspace({
 			audience: 'authenticated',
 			policies: ['contractor'],
 			groupMessages: 'mention_or_reply',
+			delegation: 'enabled',
 			task: 'Record a contractor update.'
 		})
 	],
@@ -73,6 +73,19 @@ describe('envoy burst admission and chat documents', () => {
 		const communicationRequests: Array<CommunicationRequest> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
+				// The catalog is asked for before a turn and is not one. Answered separately, and left
+				// out of the record, because every count below is a count of turns the envoy took.
+				if (request._tag === 'Models') {
+					return {
+						_tag: 'Success',
+						value: {
+							output: {
+								defaultModel: 'test-model',
+								options: [{ id: 'test-model', contextLength: 128_000 }]
+							}
+						}
+					};
+				}
 				aiRequests.push(request);
 				return { _tag: 'Success', value: { output: { text: 'Recorded.' } } };
 			}
@@ -109,32 +122,26 @@ describe('envoy burst admission and chat documents', () => {
 						envoys.drain(harness.effectId(effectId), 'field_ops_whatsapp', conversationId)
 					)
 				);
-			const finishQueuedTurn = async (effectId: string) => {
-				const rows = await harness.database.query(
-					`select turn_id from agent_run
-					 where conversation_id = $1 and status in ('queued', 'resuming')
-					 order by position desc limit 1`,
-					[conversationId]
-				);
-				const turnId = String(rows[0]?.turn_id ?? '');
-				if (turnId.length === 0) throw new Error('expected one queued envoy turn');
-				const result = await harness.runtime.runPromise(
-					Effect.flatMap(Agents.Service, (agents) =>
-						agents.execute(harness.effectId(`${effectId}:execute`), conversationId, turnId)
-					)
-				);
-				return harness.runtime.runPromise(
+			/**
+			 * Delivers the answer of the turn `drain` has already taken.
+			 *
+			 * Inbound chat is direct execution now: `drain` admits the batch and runs the turn in the
+			 * same invocation, so there is no queued row to find and nothing left to execute. What
+			 * remains is the outbound half, which is a separate command because delivery is the
+			 * transport's beat rather than the model's.
+			 */
+			const finishQueuedTurn = (effectId: string) =>
+				harness.runtime.runPromise(
 					Effect.flatMap(Envoys.Service, (envoys) =>
 						envoys.complete(
 							harness.effectId(`${effectId}:complete`),
 							'field_ops_whatsapp',
 							conversationId,
-							result.output,
+							null,
 							null
 						)
 					)
 				);
-			};
 
 			expect((await receive('receive:first', delivery('message-1'))).status).toBe('buffered');
 			const textOnly = {

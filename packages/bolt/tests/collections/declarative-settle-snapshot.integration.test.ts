@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
-import { EffectId, InvocationId, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
+import { EffectId, InvocationId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
+import { authoredHooks } from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
@@ -12,6 +13,18 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
+
+/** The fixture as a schema, so the hooks are typed the way a compiled workspace's are. */
+interface SettleSnapshotSchema {
+	readonly tables: {
+		readonly notes: {
+			readonly $inferSelect: { readonly id: string; readonly body: string };
+			readonly $inferInsert: { readonly id?: string; readonly body: string };
+		};
+	};
+	readonly relations: Record<string, never>;
+}
 
 const definition = workspace({
 	name: 'declarative-settle-snapshot',
@@ -47,7 +60,7 @@ const definitionWithChangeAutomation = workspace({
 			name: 'on_note_updated',
 			trigger: { _tag: 'Change', collection: 'notes', event: 'updated' },
 			command: 'on_note_updated',
-			policies: ['automation-data']
+			policies: []
 		})
 	]
 });
@@ -93,19 +106,19 @@ describe('declarative settlement under a later writer', () => {
 			authored: {
 				...emptyAuthoredRuntime,
 				hooks: {
-					notes: {
+					notes: authoredHooks<SettleSnapshotSchema, 'notes'>({
 						mutate: {
 							perRecord: {
 								after: {
 									description: 'fails after the transaction is already committed',
-									handler: (context: unknown) => {
-										if (Reflect.get(context as object, 'previous') !== undefined) return;
+									handler: ({ previous }) => {
+										if (previous !== undefined) return;
 										throw new Error('settlement exploded');
 									}
 								}
 							}
 						}
-					}
+					})
 				}
 			}
 		});
@@ -120,7 +133,7 @@ describe('declarative settlement under a later writer', () => {
 						[{ body: 'already committed' }],
 						false,
 						0,
-						{ declarative: true }
+						{}
 					);
 				})
 			)
@@ -136,7 +149,7 @@ describe('declarative settlement under a later writer', () => {
 			retryable: false
 		});
 		expect((outcome.failure as Collections.MutationPhaseFailure).committed).toHaveLength(1);
-		expect(Collections.unwrapMutationPhase(outcome.failure)).toMatchObject({
+		expect(unwrapMutationPhase(outcome.failure)).toMatchObject({
 			message: 'settlement exploded'
 		});
 		expect(await harness.database.query('select body from notes')).toEqual([
@@ -148,60 +161,60 @@ describe('declarative settlement under a later writer', () => {
 		const id = recordId('settle-race-note');
 		const afterBodies: Array<string> = [];
 		const afterTransitions: Array<Readonly<Record<string, unknown>>> = [];
+		const changeBodies: Array<string> = [];
 		let armInterleave = false;
 		let interleaved = false;
 		let database: BoltTestRuntime['database'] | undefined;
 		const authored = {
 			...emptyAuthoredRuntime,
 			hooks: {
-				notes: {
+				notes: authoredHooks<SettleSnapshotSchema, 'notes'>({
 					mutate: {
 						perRecord: {
 							after: {
 								description: 'records the exact row committed by this mutation',
-								handler: (context: unknown) => {
-									if (Reflect.get(context as object, 'previous') === undefined) return;
-									const transition = context as {
-										readonly previous: Record<string, unknown>;
-										readonly changes: Record<string, unknown>;
-										readonly record: Record<string, unknown>;
-									};
-									const { record } = transition;
-									afterBodies.push(String(record['body']));
+								handler: ({ previous, changes, record }) => {
+									if (previous === undefined) return;
+									afterBodies.push(String(record.body));
 									afterTransitions.push({
-										previous: transition.previous['body'],
-										changes: transition.changes['body'],
-										record: record['body']
+										previous: previous.body,
+										changes: changes.body,
+										record: record.body
 									});
 								}
 							}
 						}
 					}
-				}
+				})
 			},
 			automations: {
 				on_note_updated: {
 					name: 'on_note_updated',
-					policies: ['automation-data'],
+					policies: [],
 					trigger: { _tag: 'Change' as const, collection: 'notes', event: 'updated' as const },
-					handler: () => undefined
+					handler: async (_api: unknown, context: unknown) => {
+						const scope =
+							typeof context === 'object' && context !== null
+								? Reflect.get(context, 'scope')
+								: undefined;
+						const incoming =
+							typeof scope === 'object' && scope !== null
+								? Reflect.get(scope, 'incoming_record')
+								: undefined;
+						if (armInterleave && typeof incoming === 'object' && incoming !== null) {
+							armInterleave = false;
+							interleaved = true;
+							await database?.query('update notes set body = $2 where id = $1', [id, 'writer B']);
+						}
+						if (typeof incoming === 'object' && incoming !== null)
+							changeBodies.push(String(Reflect.get(incoming, 'body')));
+						return undefined;
+					}
 				}
 			}
 		};
 
-		harness = await makeBoltTestRuntime(definitionWithChangeAutomation, {
-			authored,
-			transport: {
-				call: async (_metadata: unknown, request: TransportRequest) => {
-					if (armInterleave && request._tag === 'Publish') {
-						armInterleave = false;
-						interleaved = true;
-						await database?.query('update notes set body = $2 where id = $1', [id, 'writer B']);
-					}
-					return success({ delivered: 1 });
-				}
-			} as never
-		});
+		harness = await makeBoltTestRuntime(definitionWithChangeAutomation, { authored });
 		database = harness.database;
 		await database.query('insert into notes (id, body) values ($1, $2)', [id, 'original']);
 
@@ -216,7 +229,7 @@ describe('declarative settlement under a later writer', () => {
 					[{ id, body: 'writer A' }],
 					false,
 					0,
-					{ declarative: true }
+					{}
 				);
 			})
 		);
@@ -229,17 +242,9 @@ describe('declarative settlement under a later writer', () => {
 		expect(afterTransitions).toEqual([
 			{ previous: 'original', changes: 'writer A', record: 'writer A' }
 		]);
-		expect(answer.map((row) => row['body'])).toEqual(['writer A']);
-
-		const tasks = await database.query(
-			'select input from bolt_task where command = $1 order by effect_id',
-			['automations.on_note_updated']
-		);
-		const incomingBodies = tasks.map((task) => {
-			const input = task['input'] as { readonly scope?: { readonly incoming_record?: unknown } };
-			const incoming = input.scope?.incoming_record as Record<string, unknown> | undefined;
-			return String(incoming?.['body']);
-		});
-		expect(incomingBodies).toEqual(['writer A']);
+		expect(answer.records.map((row) => row['body'])).toEqual(['writer A']);
+		// The change automation runs in the settle phase with the same committed capture — the
+		// interleave that made writer B win had already happened and the event still carries A.
+		expect(changeBodies).toEqual(['writer A']);
 	}, 60_000);
 });

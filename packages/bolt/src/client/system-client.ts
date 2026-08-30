@@ -1,6 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { AgentEnqueueResult, AgentRunResult } from '#lib/runtime/agents/agent-schemas.js';
-import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
+import { AgentEnqueueResult, ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 import { WorkspaceAccessSchema } from '#lib/client/ui/settings/rows.js';
 import { AiModelCatalogSchema } from '#lib/client/ui/agent/agent-model-state.svelte.js';
 import {
@@ -9,7 +8,7 @@ import {
 	ManifestSchema
 } from '#lib/client/ui/studio/studio-state.js';
 import type { RemoteQuery, WorkspaceClientRuntime } from '#lib/client/contracts.js';
-import { stableStringify } from '#lib/client/replica/query-cache.js';
+import { stableKey } from '#lib/client/live-query/stable-key.js';
 
 const EmptyInput = Schema.Struct({});
 const AgentOpenInput = Schema.Struct({
@@ -21,18 +20,11 @@ const AgentEnqueueInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
 	message: Schema.String,
-	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef)),
+	/** Caller-selected host model; absent means the catalog default. */
+	model: Schema.optionalKey(Schema.NonEmptyString)
 });
-const AgentRunInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const AgentLaneInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
-const AgentDequeueInput = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	taskId: Schema.NonEmptyString
-});
-const AgentReorderInput = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	taskIds: Schema.Array(Schema.NonEmptyString)
-});
 const AgentDocumentBindInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	file: ChatDocumentRef
@@ -74,8 +66,6 @@ const AgentOpenResponse = Schema.Struct({
 	opened: Schema.Literal(true),
 	conversationId: Schema.NonEmptyString
 });
-const AgentDequeueResponse = Schema.Struct({ dequeued: Schema.Literal(true) });
-const AgentReorderResponse = Schema.Struct({ reordered: Schema.Literal(true) });
 const AgentInterruptResponse = Schema.Struct({ interrupted: Schema.Literal(true) });
 const AgentStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
 const AgentResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
@@ -95,7 +85,6 @@ const SchemaVerifyResponse = Schema.Struct({
 	verified: Schema.Boolean,
 	divergences: Schema.Array(Schema.String)
 });
-const SyncShapeResponse = Schema.Array(Schema.String);
 
 type CommandInput<S extends Schema.ConstraintDecoder<unknown>> = S['Type'];
 type CommandOutput<S extends Schema.ConstraintDecoder<unknown>> = S['Type'];
@@ -134,15 +123,6 @@ export type SystemClientApi = Readonly<{
 		enqueue: SystemOperation<
 			CommandInput<typeof AgentEnqueueInput>,
 			CommandOutput<typeof AgentEnqueueResult>
-		>;
-		run: SystemOperation<CommandInput<typeof AgentRunInput>, CommandOutput<typeof AgentRunResult>>;
-		dequeue: SystemOperation<
-			CommandInput<typeof AgentDequeueInput>,
-			CommandOutput<typeof AgentDequeueResponse>
-		>;
-		reorder: SystemOperation<
-			CommandInput<typeof AgentReorderInput>,
-			CommandOutput<typeof AgentReorderResponse>
 		>;
 		interrupt: SystemOperation<
 			CommandInput<typeof AgentLaneInput>,
@@ -231,9 +211,6 @@ export type SystemClientApi = Readonly<{
 			CommandOutput<typeof SecretWriteResponse>
 		>;
 	}>;
-	sync: Readonly<{
-		shape: SystemQuery<CommandInput<typeof EmptyInput>, CommandOutput<typeof SyncShapeResponse>>;
-	}>;
 	workspace: Readonly<{
 		manifest: SystemQuery<CommandInput<typeof EmptyInput>, CommandOutput<typeof ManifestSchema>>;
 		authoringManifest: SystemQuery<
@@ -288,7 +265,7 @@ const memoizedQuery = <
 	const held = new Map<string, RemoteQuery<CommandOutput<Output>>>();
 	return (input, signal) => {
 		if (signal !== undefined) return make(name, input, inputSchema, outputSchema, signal);
-		const key = stableStringify(input);
+		const key = stableKey(input);
 		const existing = held.get(key);
 		if (existing !== undefined) return existing;
 		const created = make(name, input, inputSchema, outputSchema);
@@ -305,9 +282,6 @@ export const createSystemClient = (
 	agents: {
 		open: command(runtime, 'agents.open', AgentOpenInput, AgentOpenResponse),
 		enqueue: command(runtime, 'agents.enqueue', AgentEnqueueInput, AgentEnqueueResult),
-		run: command(runtime, 'agents.run', AgentRunInput, AgentRunResult),
-		dequeue: command(runtime, 'agents.dequeue', AgentDequeueInput, AgentDequeueResponse),
-		reorder: command(runtime, 'agents.reorder', AgentReorderInput, AgentReorderResponse),
 		interrupt: command(runtime, 'agents.interrupt', AgentLaneInput, AgentInterruptResponse),
 		stop: command(runtime, 'agents.stop', AgentLaneInput, AgentStopResponse),
 		resume: command(runtime, 'agents.resume', AgentLaneInput, AgentResumeResponse),
@@ -368,7 +342,6 @@ export const createSystemClient = (
 		status: query(makeQuery, 'secrets.status', EmptyInput, EnvironmentStatusSchema),
 		write: command(runtime, 'secrets.write', SecretWriteInput, SecretWriteResponse)
 	},
-	sync: { shape: query(makeQuery, 'sync.shape', EmptyInput, SyncShapeResponse) },
 	workspace: {
 		manifest: memoizedQuery(makeQuery, 'workspace.manifest', EmptyInput, ManifestSchema),
 		authoringManifest: memoizedQuery(

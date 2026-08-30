@@ -58,19 +58,20 @@ import { Secrets } from '#lib/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '#lib/runtime/secrets/personal-secrets.js';
 import { SecretCipher } from '@norbital-ai/std/secret';
 import * as Sync from '#lib/runtime/sync/sync.js';
-import * as SyncWake from '#lib/runtime/sync/wake.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import { policyRuntimeFunctionsFor } from '#lib/authoring/policy-introspection.js';
-import { buildSchemaPlan } from '#lib/compiler/schema-plan.js';
+
+export { buildManifest } from '#lib/manifest/manifest.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const InvocationLayers = {
 	make: (
 		workspace: WorkspaceDefinition,
+		schemaPlan: BundleManifest['schemaPlan'],
 		facilities: FacilityBindings,
 		context: CallContext,
 		handlers: Readonly<Record<string, RuntimeRemoteHandler>>,
@@ -124,12 +125,9 @@ const InvocationLayers = {
 		 * exactly one runtime message, `Wake`, which is why it is bound here beside `database` rather
 		 * than reached for separately by each of those services.
 		 */
-		// Approval projections are replicated system collections, so their state transitions publish
-		// through the same durable outbox + wake path as authored collection writes.
-		const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
-		const taskQueue = TaskQueue.layer(context).pipe(
-			Layer.provide(Layer.mergeAll(database, tasks, syncWake))
-		);
+		// Approval projections are system collections, so their state transitions publish through
+		// the same capture trigger as authored collection writes — every commit enters the changelog.
+		const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)));
 		// Whether a sign-in code is random or the fixed development one follows the environment the host
 		// scoped this invocation to — the mode — and not whether a mailer happens to be bound. A mailer
 		// is expected in every environment, development included, so its absence is a misconfiguration
@@ -142,7 +140,7 @@ const InvocationLayers = {
 			Layer.provide(Layer.mergeAll(database, communication, identityHooks, taskQueue))
 		);
 		const approvals = Approvals.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncWake))
+			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
 		);
 		/**
 		 * Automations, above Collections rather than below it.
@@ -173,13 +171,12 @@ const InvocationLayers = {
 					files,
 					ai,
 					taskQueue,
-					authoredLayer,
-					syncWake
+					authoredLayer
 				)
 			)
 		);
 		const sync = Sync.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, tenantScope, access, collections, database))
+			Layer.provide(Layer.mergeAll(workspaceLayer, tenantScope, access, identity, collections, database))
 		);
 		const remotes = remoteRegistryLayer(handlers).pipe(
 			// `automations`, because a remote receives the same authored api a hook does, and that api now
@@ -188,7 +185,7 @@ const InvocationLayers = {
 			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
 		const chatDocuments = ChatDocuments.layer.pipe(
-			Layer.provide(Layer.mergeAll(database, files, syncWake))
+			Layer.provide(Layer.mergeAll(database, files))
 		);
 		const agents = Agents.layer.pipe(
 			Layer.provide(
@@ -200,7 +197,7 @@ const InvocationLayers = {
 					database,
 					chatDocuments,
 					taskQueue,
-					syncWake,
+					tasks,
 					files,
 					connector,
 					hostTools,
@@ -209,7 +206,7 @@ const InvocationLayers = {
 				)
 			)
 		);
-		const schema = WorkspaceSchema.layer.pipe(
+		const schema = WorkspaceSchema.layer(schemaPlan).pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, database))
 		);
 		// Both vaults seal through the same cipher, so there is one key, one envelope format and one
@@ -273,7 +270,7 @@ const InvocationLayers = {
 		);
 		const notifications = Notifications.layer.pipe(
 			Layer.provide(
-				Layer.mergeAll(workspaceLayer, identity, database, communication, tasks, syncWake)
+				Layer.mergeAll(workspaceLayer, identity, database, communication, tasks)
 			)
 		);
 		const hostConfig = Layer.succeed(HostConfig, hostConfigShape);
@@ -446,7 +443,6 @@ const activationLayer = (activation: Activation, facilities: FacilityBindings) =
 	const tasks = Tasks.layer(facilities.tasks, context);
 	const database = Database.layer(facilities.database, context);
 	const transport = Transport.layer(facilities.transport, context);
-	const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
 	// The database is merged into the result rather than only provided to the queue: activation now
 	// writes to the tenant itself — the `team` rows an approval step names — and not only through
 	// `bolt_schedule`. Provided-but-not-merged left `Database.Service` unavailable to the activation
@@ -456,8 +452,7 @@ const activationLayer = (activation: Activation, facilities: FacilityBindings) =
 		tasks,
 		database,
 		transport,
-		syncWake,
-		TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks, syncWake)))
+		TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)))
 	);
 };
 
@@ -516,8 +511,7 @@ const BundleActivation = {
 							 *
 							 * Here, and not earlier, because this is the first point in the sequence at which the
 							 * table is there to write to: `reconcileRelease` registers the route, forks the
-							 * database and runs `schema.migrate` — which is what creates `team`, an identity
-							 * collection `identitySchemaSteps` already puts ahead of migration — and only then
+							 * database and runs signed `schema.migrate` — which creates `team` — and only then
 							 * activates. Anything before that would be inserting into a table that does not exist
 							 * yet; anything after is a workspace already answering requests, and the approval it
 							 * cannot route is the first one somebody raises.
@@ -629,6 +623,7 @@ const remainingMillis = (deadlineEpochMs: number, nowEpochMs: number): number =>
 const BundleDispatch = {
 	run: (
 		workspace: WorkspaceDefinition,
+		manifest: BundleManifest,
 		facilities: FacilityBindings,
 		invocation: Invocation,
 		signal: AbortSignal,
@@ -645,6 +640,7 @@ const BundleDispatch = {
 			Effect.provide(
 				invocationLayer(
 					workspace,
+					manifest.schemaPlan,
 					facilities,
 					context,
 					remoteHandlers,
@@ -695,7 +691,8 @@ const BundleDispatch = {
 									...(raised.committed.length === 0 ? {} : { committed: raised.committed })
 								}
 							: undefined;
-					const error = Collections.unwrapMutationPhase(raised);
+					const error =
+						raised instanceof Collections.MutationPhaseFailure ? raised.underlying : raised;
 					if (error instanceof DispatchError && error.code === 'unauthorized')
 						return {
 							_tag: 'Failure',
@@ -838,7 +835,6 @@ const BundleDispatch = {
 								httpStatus: 409,
 								details: {
 									idempotencyKey: error.idempotencyKey,
-									deviceSequence: error.deviceSequence,
 									schemaFingerprint: error.schemaFingerprint
 								}
 							})
@@ -909,28 +905,16 @@ const run = BundleDispatch.run;
 type AuthoredRuntimeInput = Omit<AuthoredRuntime, 'policyAuthorizations' | 'approvalFlows'> &
 	Partial<Pick<AuthoredRuntime, 'policyAuthorizations' | 'approvalFlows'>>;
 
-/** Generated artifacts hand their static manifest to the runtime before its exact DDL is known. */
-type BundleManifestInput = Omit<BundleManifest, 'schemaFingerprint' | 'schemaPlan'> &
-	Partial<Pick<BundleManifest, 'schemaFingerprint' | 'schemaPlan'>>;
-
 /** Owns make bundle behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const Bundles = {
 	make: (
 		workspace: WorkspaceDefinition,
-		manifest: BundleManifestInput,
+		manifest: BundleManifest,
 		remoteHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
 		toolHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
 		authored: AuthoredRuntimeInput = emptyAuthoredRuntime
 	): BoltBundle => {
-		const schemaPlan = buildSchemaPlan(workspace);
-		const schemaFingerprint = workspace.mutationCompatibility?.currentSchemaFingerprint;
-		if (schemaFingerprint === undefined)
-			throw new TypeError('Compiled workspace is missing its mutation compatibility fingerprint.');
-		const exactManifest = BundleManifest.make({
-			...manifest,
-			schemaFingerprint,
-			schemaPlan
-		});
+		const exactManifest = BundleManifest.make(manifest);
 		const policyFunctions = policyRuntimeFunctionsFor(workspace.policies);
 		const runtime: AuthoredRuntime = {
 			...authored,
@@ -943,6 +927,7 @@ const Bundles = {
 			dispatch: (invocation, facilities, signal) =>
 				run(
 					workspace,
+					exactManifest,
 					facilities,
 					invocation,
 					signal,

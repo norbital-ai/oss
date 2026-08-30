@@ -1,25 +1,25 @@
-import { Clock, Context, Effect, Layer, Schema } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { automationSubject } from '#lib/runtime/identity/static-identity.js';
+import {
+	composer,
+	dbNow,
+	executeBuilt,
+	increment,
+	transactionBuilt
+} from '#lib/runtime/persistence.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
-import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
+import { and, eq } from 'drizzle-orm';
 
-/** Durable states in which an old guest must not cross another authored facility boundary. */
-const StoppedTaskStatus = Schema.Struct({
-	status: Schema.Literals(['paused', 'resuming'])
-});
+const { automation_run: automationRun, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
+const StoppedTaskStatus = Schema.Struct({ status: Schema.Literal('stopped') });
 
-/**
- * Refuses an authored operation after its durable automation run has been stopped.
- *
- * Stopping cannot interrupt a remote guest fiber. This error is therefore raised at the next
- * authored facility boundary, before that fiber can write another row, call a model, read an asset,
- * or enqueue more work.
- */
 export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 	'Bolt.Automations.Stopped',
 	{
@@ -29,7 +29,6 @@ export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 	}
 ) {
 	readonly category = 'automation-stopped' as const;
-	readonly retryable = false;
 
 	static before(taskId: string, operation: string): AutomationStopped {
 		return new AutomationStopped({
@@ -40,73 +39,60 @@ export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 	}
 }
 
-export type AutomationStartOptions = Readonly<{
+/** Delayed work is not a cron declaration and therefore has no durable place to wait. */
+export class AutomationDeferredUnsupported extends Schema.TaggedError<AutomationDeferredUnsupported>()(
+	'Bolt.Automations.DeferredUnsupported',
+	{ name: Schema.NonEmptyString, delayMillis: Schema.Number }
+) {}
+
+type AutomationStartOptions = Readonly<{
 	readonly afterMillis?: number | undefined;
 	readonly scope?: Readonly<Record<string, Schema.Json>> | undefined;
 	readonly taskId?: string | undefined;
 	readonly parentDepth?: number | undefined;
 }>;
 
-export type AutomationStartRequest = Readonly<{
+type AutomationStartRequest = Readonly<{
 	readonly effectId: EffectIdType;
 	readonly name: string;
 	readonly input: Schema.Json;
 	readonly options?: AutomationStartOptions;
 }>;
 
-/**
- * Starting an automation, and asking what became of one.
- *
- * There used to be a second table under this — `bolt_automation_runs`, with `effect_id`, `task_id`,
- * `state ∈ {queued, scheduled, resumed, cancelled}` and `input`. Every one of those columns shadowed
- * a column of `bolt_task`, and the shadow was written beside a facility call that nothing executed:
- * an automation run was recorded twice and performed zero times. Immediate runs now use the private
- * task row only as their durable input/lifecycle record and execute in the request that admitted
- * them. Only an explicit schedule or delay enters the timer queue.
- */
+type StartFailure =
+	| Database.FacilityError
+	| Workspace.WorkspaceLookupError
+	| InvocationBudget.NestingLimitExceeded
+	| AutomationDeferredUnsupported;
 
 export type Interface = Readonly<{
+	/** Host startup hook. Conductor calls this once for each loaded environment after a restart. */
+	readonly recover: (effectId: EffectIdType) => Effect.Effect<void, Database.FacilityError>;
 	readonly register: (name: string) => Effect.Effect<void, Workspace.WorkspaceLookupError>;
-	/**
-	 * Admits one run of a named automation.
-	 *
-	 * It takes no `Subject`, and that absence is the change. It used to take the caller's — so the
-	 * same automation ran with whatever authority whoever tripped it happened to hold, so a highly
-	 * privileged caller could accidentally lend all of its grants to the run. An
-	 * automation's authority is a property of the automation: the policies its declaration names,
-	 * minted here, at the runtime's own admission point.
-	 */
+	/** Records and returns one immediate run. The caller executes it in this same invocation. */
 	readonly start: (
 		effectId: EffectIdType,
 		name: string,
 		input: Schema.Json,
-		/** How long to wait before it becomes due. Absent means direct execution by this caller. */
 		options?: AutomationStartOptions
-	) => Effect.Effect<
-		string,
-		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
-	>;
-	/** Admits many independent starts in one database transaction and emits at most one timer wake. */
+	) => Effect.Effect<string, StartFailure>;
 	readonly startMany: (
 		effectId: EffectIdType,
 		runs: ReadonlyArray<AutomationStartRequest>
 	) => Effect.Effect<
 		ReadonlyArray<Readonly<{ readonly name: string; readonly taskId: string }>>,
-		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
+		StartFailure
 	>;
-	readonly runStep: Interface['start'];
-	/** Runs one already-admitted immediate automation body without a scheduler or wake hop. */
 	readonly execute: <E, R>(
 		effectId: EffectIdType,
 		name: string,
 		taskId: string,
-		run: (input: Schema.Json, attemptEffectId: string) => Effect.Effect<Schema.Json, E, R>
+		run: (input: Schema.Json, runEffectId: string) => Effect.Effect<Schema.Json, E, R>
 	) => Effect.Effect<
 		Schema.Json | undefined,
 		E | Database.FacilityError | Workspace.WorkspaceLookupError,
 		R
 	>;
-	/** Executes already-admitted immediate automation bodies with batched claim and settlement. */
 	readonly executeMany: <E, R>(
 		effectId: EffectIdType,
 		runs: ReadonlyArray<Readonly<{ readonly name: string; readonly taskId: string }>>,
@@ -114,14 +100,17 @@ export type Interface = Readonly<{
 			name: string,
 			taskId: string,
 			input: Schema.Json,
-			attemptEffectId: string
+			runEffectId: string
 		) => Effect.Effect<Schema.Json, E, R>
 	) => Effect.Effect<
 		ReadonlyArray<
 			Readonly<{
 				readonly name: string;
 				readonly taskId: string;
-				readonly exit: import('effect').Exit.Exit<Schema.Json, E>;
+				readonly exit: Exit.Exit<
+					Schema.Json,
+					E | Workspace.WorkspaceLookupError | Database.FacilityError
+				>;
 			}>
 		>,
 		Database.FacilityError | Workspace.WorkspaceLookupError,
@@ -131,7 +120,6 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
-	/** Replaces the current snapshot of the automation task that is presently running. */
 	readonly progress: (
 		effectId: EffectIdType,
 		taskId: string,
@@ -142,18 +130,10 @@ export type Interface = Readonly<{
 		name: string,
 		taskId: string
 	) => Effect.Effect<void, Database.FacilityError | Workspace.WorkspaceLookupError>;
-	readonly resume: Interface['stop'];
 }>;
-/** Identifies the automations service in Effect's context so dependency wiring remains explicit and type checked. */
+
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Automations');
 
-/**
- * Builds the guard for one running automation turn.
- *
- * Every observation carries a fresh effect id. Facility idempotency is keyed by effect id, so
- * reusing the turn's id would let the first `pending` answer be replayed forever and make a later
- * cancellation invisible to exactly the guard that is supposed to observe it.
- */
 export const stoppageGuard = (
 	automations: Interface,
 	turnEffectId: EffectIdType,
@@ -172,89 +152,73 @@ export const stoppageGuard = (
 	});
 };
 
+const DirectInputRow = Schema.Struct({ input: Schema.Json });
+const decodeDirectInputRow = Schema.decodeUnknownOption(DirectInputRow);
+
+/** What a finished direct run owes its ledger row. */
+type DirectSettlement =
+	| Readonly<{ readonly status: 'done'; readonly result: Schema.Json }>
+	| Readonly<{ readonly status: 'failed'; readonly error: string }>;
+
 export const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
+		const database = yield* Database.Service;
 		const queue = yield* TaskQueue.Service;
 		const workspace = yield* Workspace.Service;
 		const budget = yield* InvocationBudget.Service;
 		const tenant = yield* TenantScope.Service;
+		/** Input for request-owned runs exists only as long as the invocation that admitted it. */
+		const directInputs = new Map<
+			string,
+			Readonly<{ readonly name: string; readonly input: Schema.Json }>
+		>();
+
 		const prepareStart = Effect.fn('Automations.prepareStart')(function* (
-			request: AutomationStartRequest,
-			nowEpochMs: number
+			request: AutomationStartRequest
 		) {
 			const { effectId, name, input, options } = request;
 			const declaration = yield* workspace.automation(name);
+			const delayMillis = options?.afterMillis ?? 0;
+			if (delayMillis > 0) {
+				return yield* new AutomationDeferredUnsupported({ name, delayMillis });
+			}
 			const subject = automationSubject(declaration, tenant.tenantId);
-			// Checked before anything is written, so a chain that has gone too deep leaves no queued row
-			// behind that nothing will ever move off `pending`.
-			//
-			// This is the bound on automation recursion, and it has to be a counter rather than a
-			// deadline: an automation is durable, so it runs on a fresh invocation with a fresh deadline,
-			// and "inherit the parent's remaining time" has no meaning for work that starts after the
-			// parent has already returned. The other half of the cycle break is that an automation does
-			// not re-trigger on its own writes.
 			const depth = yield* InvocationBudget.make(
 				options?.parentDepth ?? budget.depth,
 				budget.limit
 			).nest(`automation ${name}`);
-			// `bolt_run_as` is stamped here, at the runtime's own admission point, so the handler
-			// later sees was written by this service — a caller's own `bolt_run_as` claim is overwritten,
-			// never forwarded, and what it is overwritten *with* is the automation's own declared
-			// authority rather than whoever's finger was on the trigger. `bolt_depth` rides the same payload, which is why the queue needs no depth
-			// column: the bound travels with the work rather than with the row.
-			const enqueued: Schema.Json = InvocationBudget.stampDepth(
+			const prepared: Schema.Json = InvocationBudget.stampDepth(
 				{
-					// The task boundary has one envelope for every trigger: generated client input is the
-					// handler's `context.args`, while collection events and schedules additionally carry
-					// `scope`. Spreading a struct input here put `project_id` beside `bolt_run_as`; the
-					// queued turn then decoded `args` and failed before the automation could emit progress.
 					args: input,
 					scope: options?.scope ?? {},
 					bolt_run_as: subject
 				},
 				depth
 			);
-			// The id the caller gets back is the task's effect id, which is also its idempotency key. A
-			// replayed start therefore names the row the first one wrote, rather than minting a second
-			// identity for a row that was never inserted.
-			const taskId = options?.taskId ?? `${effectId}:start`;
-			const afterMillis = options?.afterMillis;
-			const runAtEpochMs =
-				afterMillis === undefined || afterMillis <= 0 ? undefined : nowEpochMs + afterMillis;
-			return {
-				name,
-				taskId,
-				immediate: runAtEpochMs === undefined,
-				enqueue: {
-					command: `automations.${name}`,
-					input: enqueued,
-					effectId: taskId,
-					// Absent rather than `now`, so the row takes the column default and a delay of zero and
-					// no delay at all are the same row rather than two spellings of one.
-					...(runAtEpochMs === undefined ? {} : { runAtEpochMs })
-				}
-			} as const;
+			return { name, taskId: options?.taskId ?? `${effectId}:start`, input: prepared } as const;
 		});
+
 		const startMany = Effect.fn('Automations.startMany')(function* (
 			effectId: EffectIdType,
 			runs: ReadonlyArray<AutomationStartRequest>
 		) {
 			if (runs.length === 0) return [];
-			const nowEpochMs = yield* Clock.currentTimeMillis;
-			const prepared = yield* Effect.forEach(runs, (run) => prepareStart(run, nowEpochMs));
-			const immediate = prepared.filter((run) => run.immediate).map((run) => run.enqueue);
-			const delayed = prepared.filter((run) => !run.immediate).map((run) => run.enqueue);
-			if (immediate.length > 0) {
-				yield* queue.admit(EffectId.make(`${effectId}:immediate`), immediate);
-			}
-			if (delayed.length > 0) {
-				// A real delay is the one case in which a timer owns waiting. Once due, the task runner
-				// invokes the authored body directly; it does not schedule another body step.
-				yield* queue.enqueue(EffectId.make(`${effectId}:delayed`), delayed);
-			}
+			const prepared = yield* Effect.forEach(runs, prepareStart);
+			yield* transactionBuilt(
+				EffectId.make(`${effectId}:runs`),
+				database,
+				prepared.map(({ name, taskId }) =>
+					composer
+						.insert(automationRun)
+						.values({ task_id: taskId, name, status: 'running' })
+						.onConflictDoNothing({ target: automationRun.task_id })
+				)
+			);
+			for (const item of prepared) directInputs.set(item.taskId, item);
 			return prepared.map(({ name, taskId }) => ({ name, taskId }));
 		});
+
 		const start = Effect.fn('Automations.start')(function* (
 			effectId: EffectIdType,
 			name: string,
@@ -264,57 +228,221 @@ export const layer = Layer.effect(
 			const [admitted] = yield* startMany(effectId, [
 				{ effectId, name, input, ...(options === undefined ? {} : { options }) }
 			]);
-			if (admitted === undefined) return `${effectId}:start`;
-			return admitted.taskId;
+			return admitted?.taskId ?? `${effectId}:start`;
 		});
-		const executeMany: Interface['executeMany'] = (effectId, runs, run) =>
+
+		const readCronInput = Effect.fn('Automations.readCronInput')(function* (
+			effectId: EffectIdType,
+			name: string,
+			taskId: string
+		) {
+			const response = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ input: boltTask.input })
+					.from(boltTask)
+					.where(
+						and(
+							eq(boltTask.effect_id, taskId),
+							eq(boltTask.command, `automations.${name}`),
+							eq(boltTask.status, 'running')
+						)
+					)
+					.limit(1)
+			);
+			const decoded = decodeDirectInputRow(response.rows[0]);
+			return decoded._tag === 'Some' ? decoded.value.input : undefined;
+		});
+
+		const settleDirectMany = Effect.fn('Automations.settleDirectMany')(function* (
+			effectId: EffectIdType,
+			settlements: ReadonlyArray<
+				Readonly<{ readonly taskId: string; readonly outcome: DirectSettlement }>
+			>
+		) {
+			if (settlements.length === 0) return;
+			yield* transactionBuilt(
+				effectId,
+				database,
+				settlements.map(({ taskId, outcome }) =>
+					composer
+						.update(automationRun)
+						.set(
+							outcome.status === 'done'
+								? { status: 'done', result: JSON.stringify(outcome.result), error: null }
+								: { status: 'failed', result: null, error: outcome.error }
+						)
+						.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
+				)
+			);
+			for (const { taskId } of settlements) directInputs.delete(taskId);
+		});
+
+		const settleDirect = (
+			effectId: EffectIdType,
+			taskId: string,
+			outcome: DirectSettlement
+		): Effect.Effect<void, Database.FacilityError> =>
+			settleDirectMany(effectId, [{ taskId, outcome }]);
+
+		/**
+		 * One run, settled through whatever the caller hands it.
+		 *
+		 * `execute` settles immediately; `executeMany` records the settlement and writes every run's
+		 * in one statement. The ledger row per run is the point of settling — one round trip per run
+		 * is not, and a change event batched over N written records used to pay N of them, which made
+		 * the cost of a write scale with the number of rows it wrote.
+		 */
+		const executeSettlingWith = <E, R>(
+			effectId: EffectIdType,
+			name: string,
+			taskId: string,
+			run: (input: Schema.Json, runEffectId: string) => Effect.Effect<Schema.Json, E, R>,
+			settle: (
+				taskId: string,
+				outcome: DirectSettlement
+			) => Effect.Effect<void, Database.FacilityError>
+		) =>
 			Effect.gen(function* () {
-				for (const { name } of runs) yield* workspace.automation(name);
-				const nameByTaskId = new Map(runs.map(({ name, taskId }) => [taskId, name]));
-				const outcomes = yield* queue.runDirectMany(
-					effectId,
-					runs.map(({ name, taskId }) => ({ taskId, command: `automations.${name}` })),
-					(task, attemptEffectId) => {
-						const name = nameByTaskId.get(task.effectId);
-						if (name === undefined)
-							return Effect.die(new Error(`Unknown direct task ${task.effectId}`));
-						return run(name, task.effectId, task.input, attemptEffectId);
-					}
+				yield* workspace.automation(name);
+				const direct = directInputs.get(taskId);
+				const input =
+					direct?.name === name
+						? direct.input
+						: yield* readCronInput(EffectId.make(`${effectId}:cron`), name, taskId);
+				if (input === undefined) return undefined;
+				const body = Effect.acquireUseRelease(
+					queue.active(EffectId.make(`${effectId}:active`), taskId),
+					() => run(input, taskId),
+					() => queue.settled(EffectId.make(`${effectId}:settled`), taskId)
 				);
-				return outcomes.flatMap(({ task, exit }) => {
-					const name = nameByTaskId.get(task.effectId);
-					return name === undefined ? [] : [{ name, taskId: task.effectId, exit }];
+				if (direct === undefined) return yield* body;
+				return yield* Effect.matchCauseEffect(body, {
+					onFailure: (cause) =>
+						settle(taskId, { status: 'failed', error: Cause.pretty(cause) }).pipe(
+							Effect.andThen(Effect.failCause(cause))
+						),
+					onSuccess: (result) =>
+						settle(taskId, { status: 'done', result }).pipe(Effect.as(result))
 				});
 			});
+
+		const execute: Interface['execute'] = (effectId, name, taskId, run) =>
+			executeSettlingWith(effectId, name, taskId, run, (settledTaskId, outcome) =>
+				settleDirect(
+					EffectId.make(`${effectId}:${outcome.status === 'done' ? 'done' : 'failed'}`),
+					settledTaskId,
+					outcome
+				)
+			);
+
+		const executeMany: Interface['executeMany'] = (effectId, runs, run) =>
+			Effect.gen(function* () {
+				const settlements: Array<
+					Readonly<{ readonly taskId: string; readonly outcome: DirectSettlement }>
+				> = [];
+				const results = yield* Effect.forEach(
+					runs,
+					({ name, taskId }, index) =>
+						Effect.exit(
+							executeSettlingWith(
+								EffectId.make(`${effectId}:${index}`),
+								name,
+								taskId,
+								(input, runEffectId) => run(name, taskId, input, runEffectId),
+								(settledTaskId, outcome) =>
+									Effect.sync(() => {
+										settlements.push({ taskId: settledTaskId, outcome });
+									})
+							).pipe(
+								Effect.flatMap((result) =>
+									result === undefined
+										? Effect.die(new Error(`Automation ${taskId} has no invocation input`))
+										: Effect.succeed(result)
+								)
+							)
+						).pipe(Effect.map((exit) => ({ name, taskId, exit }))),
+					{ concurrency: 'unbounded' }
+				);
+				yield* settleDirectMany(EffectId.make(`${effectId}:settled`), settlements);
+				return results;
+			});
+
 		return Service.of({
+			recover: Effect.fn('Automations.recover')(function* (effectId) {
+				yield* transactionBuilt(effectId, database, [
+					composer
+						.update(automationRun)
+						.set({ status: 'failed', error: 'host restarted during run', result: null })
+						.where(eq(automationRun.status, 'running'))
+				]);
+			}),
 			register: Effect.fn('Automations.register')(function* (name) {
 				yield* workspace.automation(name);
 			}),
 			start,
 			startMany,
-			runStep: start,
-			execute: Effect.fn('Automations.execute')(function* (effectId, name, taskId, run) {
-				yield* workspace.automation(name);
-				return yield* queue.runDirect(
-					effectId,
-					taskId,
-					`automations.${name}`,
-					(task, attemptEffectId) => run(task.input, attemptEffectId)
-				);
-			}),
+			execute,
 			executeMany,
-			status: queue.status,
-			progress: queue.progress,
-			stop: Effect.fn('Automations.stop')(function* (effectId, name, taskId) {
-				// The declaration check rejects invented names before a caller-controlled string reaches
-				// the queue predicate. The exact command then scopes the id to this automation only.
-				yield* workspace.automation(name);
-				yield* queue.stop(effectId, taskId, `automations.${name}`);
-				yield* queue.interruptActive(EffectId.make(`${effectId}:interrupt`), taskId);
+			status: Effect.fn('Automations.status')(function* (effectId, taskId) {
+				const response = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							status: automationRun.status,
+							error: automationRun.error,
+							result: automationRun.result,
+							progress: automationRun.progress,
+							progressSequence: automationRun.progress_sequence,
+							progressUpdatedAt: automationRun.progress_updated_at
+						})
+						.from(automationRun)
+						.where(eq(automationRun.task_id, taskId))
+						.limit(1)
+				);
+				return response.rows[0];
 			}),
-			resume: Effect.fn('Automations.resume')(function* (effectId, name, taskId) {
+			progress: Effect.fn('Automations.progress')(function* (effectId, taskId, value) {
+				if (directInputs.has(taskId)) {
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(automationRun)
+							.set({
+								progress: JSON.stringify(value),
+								progress_sequence: increment(automationRun.progress_sequence),
+								progress_updated_at: dbNow()
+							})
+							.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
+					);
+					return;
+				}
+				yield* queue.progress(effectId, taskId, value);
+			}),
+			stop: Effect.fn('Automations.stop')(function* (effectId, name, taskId) {
 				yield* workspace.automation(name);
-				yield* queue.resumeDirect(effectId, taskId, `automations.${name}`);
+				if (directInputs.has(taskId)) {
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(automationRun)
+							.set({ status: 'stopped', error: 'stopped' })
+							.where(
+								and(
+									eq(automationRun.task_id, taskId),
+									eq(automationRun.name, name),
+									eq(automationRun.status, 'running')
+								)
+							)
+					);
+					yield* queue.interruptActive(EffectId.make(`${effectId}:interrupt`), taskId);
+					return;
+				}
+				yield* queue.stop(effectId, taskId, `automations.${name}`);
 			})
 		});
 	})

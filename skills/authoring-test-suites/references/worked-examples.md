@@ -191,31 +191,26 @@ but whose session does not` is the one case every predecessor of this gate would
 **Before:**
 
 ```ts
-it('surfaces a transport failure', async () => {
-	const client = await Effect.runPromise(createSyncClient({ sink }));
-	const result = await Effect.runPromiseExit(
-		client.apply([change(1, 'create', 'p1', { name: 'Ada' })])
-	);
-	expect(Exit.isFailure(result)).toBe(true);
+it('closes instead of dropping an apply frame when its bounded queue overflows', async () => {
+	source.emit('apply', frame);
+	source.emit('apply', { ...frame, head: { sequence: 2 } });
+	source.emit('apply', { ...frame, head: { sequence: 3 } });
+	expect(disconnected).toHaveBeenCalledOnce();
 });
 ```
 
-Green against a client that fails the batch _and_ advances its cursor past rows it never applied, or
-applies a partial batch. The thing anyone actually cares about is untested.
+Green against a driver that fires `onDisconnect` and then keeps the EventSource open, so the next
+frame still arrives. The thing anyone actually cares about is untested.
 
-**After** (`oss/packages/bolt/tests/client/replica.test.ts:159`):
+**After** (`oss/packages/bolt/tests/client/sync-drivers.test.ts`):
 
 ```ts
-await expect(
-	Effect.runPromise(client.apply([change(1, 'create', 'p1', { name: 'Ada' })]))
-).rejects.toThrow('PGlite unavailable');
-expect(client.cursor()).toEqual(ORIGIN_CURSOR); // the cursor did not advance
+expect(disconnected).toHaveBeenCalledOnce();
+expect(source.closed()).toBe(1);
 ```
 
-The rejection is now the least important of the two assertions, which is the correct ordering: the
-cursor promise is what lets a reconnect replay the batch instead of silently skipping it. The same
-shape appears at `:141`, where an out-of-order batch must be refused _before_ the sink's `apply` is
-even called (`expect(apply).not.toHaveBeenCalled()`).
+The callback is now the least important of the two assertions, which is the correct ordering: the
+close is what stops a later frame from being applied after the queue has already overflowed.
 
 The counting double in `norbital/apps/colony/tests/facilities/transport.test.ts:191` is the other
 legitimate form: `opens` is incremented inside the injected handler so the test can assert

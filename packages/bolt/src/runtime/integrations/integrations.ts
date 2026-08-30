@@ -221,8 +221,27 @@ const OUTBOX_CLAIM_LEASE_MS = 10 * 60 * 1000;
 const {
 	bolt_integrations: boltIntegrations,
 	bolt_integration_inbox: boltIntegrationInbox,
-	bolt_integration_outbox: boltIntegrationOutbox
+	bolt_integration_outbox: boltIntegrationOutbox,
+	bolt_task: boltTaskTable
 } = SYSTEM_MODEL_TABLES;
+
+/** Writes one durable task row for the runtime to pick up, keyed on its effect id. */
+const enqueueTaskRow = (
+	command: string,
+	input: Schema.Json,
+	taskEffectId: string,
+	runAtEpochMs: number | undefined
+) =>
+	composer
+		.insert(boltTaskTable)
+		.values({
+			command,
+			input: JSON.stringify(input),
+			effect_id: taskEffectId,
+			...(runAtEpochMs === undefined ? {} : { run_at: new Date(runAtEpochMs).toISOString() }),
+			status: 'running'
+		})
+		.onConflictDoNothing({ target: boltTaskTable.effect_id });
 
 const outboxClaimable = (staleBefore: ReturnType<typeof dbNowPlusSeconds>) =>
 	or(
@@ -261,8 +280,8 @@ const readDueAt = (row: Schema.Json | undefined): number | undefined => {
  *
  * Defensive per field rather than decoded as a schema, for one specific reason: `sequence` is a
  * `bigint` column and drivers disagree about whether that arrives as a number or as its decimal
- * text. A decode that insisted on one would work against PGlite and fail against node-postgres, or
- * the reverse, and the failure would present as an empty drain rather than as a type error.
+ * text. A decode that insisted on one would fail against one of the drivers the runtime supports,
+ * and the failure would present as an empty drain rather than as a type error.
  */
 const claimedDeliveries = (rows: ReadonlyArray<Schema.Json>): ReadonlyArray<ClaimedDelivery> =>
 	rows.flatMap((row) => {
@@ -343,120 +362,123 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		 * for a request and gets a response, asks for existing rows and gets a map. That is what makes
 		 * every branch of it — paging, backoff, partial failure — testable without a database.
 		 */
-		const dependencies = (
-			integrationName: string,
-			subject: Identity.Subject
-		): PullDependencies => ({
-			request: (effectId, connectorName, descriptor) =>
-				connector
-					.execute(effectId, {
-						connector: connectorName,
-						operation: INTEGRATION_HTTP_OPERATION,
-						input: descriptor
-					})
-					.pipe(
-						Effect.flatMap((response) =>
-							decodeIntegrationHttpResponse(response.output).pipe(
-								Effect.mapError((issue) => ({
-									message: `connector answered something that is not an HTTP response: ${describeCause(issue)}`,
-									retryable: false
-								}))
+		const dependencies = (integrationName: string, subject: Identity.Subject): PullDependencies => {
+			const integrationAuthoringApi = (effectId: EffectId) =>
+				makeAuthoringApi(
+					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
+				);
+			return {
+				request: (effectId, connectorName, descriptor) =>
+					connector
+						.execute(effectId, {
+							connector: connectorName,
+							operation: INTEGRATION_HTTP_OPERATION,
+							input: descriptor
+						})
+						.pipe(
+							Effect.flatMap((response) =>
+								decodeIntegrationHttpResponse(response.output).pipe(
+									Effect.mapError((issue) => ({
+										message: `connector answered something that is not an HTTP response: ${describeCause(issue)}`,
+										retryable: false
+									}))
+								)
+							),
+							// A facility failure the host marked retryable is a transport hiccup; one it did not is a
+							// refusal, and the retry policy needs to be able to tell them apart.
+							Effect.catch((error) =>
+								Schema.is(Database.FacilityError)(error)
+									? Effect.fail({ message: error.message, retryable: error.retryable })
+									: Effect.fail(error)
 							)
 						),
-						// A facility failure the host marked retryable is a transport hiccup; one it did not is a
-						// refusal, and the retry policy needs to be able to tell them apart.
-						Effect.catch((error) =>
-							Schema.is(Database.FacilityError)(error)
-								? Effect.fail({ message: error.message, retryable: error.retryable })
-								: Effect.fail(error)
+				secret: (effectId, name) =>
+					secrets.read(effectId, name).pipe(
+						Effect.mapError((error) => ({ message: describeCause(error) })),
+						Effect.flatMap((value) =>
+							value === null
+								? Effect.fail({
+										message: `${integrationName} needs the environment variable ${name}, and the vault has no value for it`
+									})
+								: Effect.succeed(value)
 						)
 					),
-			secret: (effectId, name) =>
-				secrets.read(effectId, name).pipe(
-					Effect.mapError((error) => ({ message: describeCause(error) })),
-					Effect.flatMap((value) =>
-						value === null
-							? Effect.fail({
-									message: `${integrationName} needs the environment variable ${name}, and the vault has no value for it`
-								})
-							: Effect.succeed(value)
-					)
-				),
-			existing: (effectId, collection, column, keys) =>
-				collections
-					.findMany(effectId, subject, {
-						collection,
-						predicate: { _tag: 'In', field: column, values: [...keys] },
-						// Not `keys.length`: a record may fan out into several rows sharing one identity value, and
-						// a limit sized for one row per key truncates the very rows that make a re-run an update
-						// rather than a duplicate. Bounded well above any sane fan-out so a runaway mapping still
-						// cannot pull an unbounded page into memory.
-						limit: Math.min(keys.length * MAX_FAN_OUT, MAX_EXISTING_ROWS)
-					})
-					.pipe(
-						Effect.map((rows) => {
-							const found = new Map<string, Array<string>>();
-							for (const row of rows) {
-								const decoded = Schema.decodeUnknownResult(IdentifiedJsonRow)(row);
-								if (Result.isFailure(decoded)) continue;
-								const key = Schema.decodeUnknownResult(Schema.String)(decoded.success[column]);
-								if (Result.isFailure(key)) continue;
-								const bucket = found.get(key.success);
-								if (bucket === undefined) found.set(key.success, [decoded.success.id]);
-								else bucket.push(decoded.success.id);
-							}
-							// Sorted so `before[offset]` is a stable address across runs: the derived ids do not come
-							// back from the database in any guaranteed order, and an unstable pairing would rewrite
-							// each fanned-out row into a different sibling's id on every run.
-							for (const bucket of found.values()) bucket.sort();
-							return found;
-						}),
-						Effect.mapError((error) => ({ message: describeCause(error) }))
-					),
-			remove: (effectId, collection, ids) =>
-				Effect.forEach(ids, (id) => collections.delete(effectId, subject, collection, id), {
-					discard: true
-				}).pipe(Effect.mapError((error) => ({ message: describeCause(error) }))),
-			write: (effectId, collection, id, values, mode) =>
-				(mode === 'create'
-					? collections.create(effectId, subject, { collection, id, values })
-					: collections.update(effectId, subject, { collection, id, values })
-				).pipe(Effect.mapError((error) => ({ message: describeCause(error) }))),
-			pipeline: (effectId, collection, record) => {
-				const declared = authored.pipelines[collection]?.import;
-				if (declared === undefined) return undefined;
-				// One record per call, so a pipeline that refuses a record costs that record. The `input` it
-				// receives is an array of one, which is the shape `Collections.import` already hands it.
-				const api = makeAuthoringApi(
-					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
-				);
-				return runAuthoredHandler(() => declared.handler({ input: [record], api }, api)).pipe(
-					Effect.flatMap(decodePipelineRows),
-					Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
-				);
-			},
-			resolve: (effectId, run) => {
-				// The same api a hook and an import pipeline receive, built through the same two functions, so
-				// a batch lookup queries under exactly the integration's own subject and nothing wider.
-				const api = makeAuthoringApi(
-					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
-				);
-				// `catchCause` rather than `catch`: a rejected promise or a genuine throw arrives here as a
-				// defect because `runAuthoredHandler` dies on one, and either would otherwise escape as an
-				// unhandled defect and take down a run that should have failed with a sentence naming the
-				// integration. A synchronous throw no longer needs the `suspend` it used to — the handler is
-				// invoked inside `runAuthoredHandler` now, not in its argument position.
-				return runAuthoredHandler(() => run(api)).pipe(
-					Effect.catchCause((cause) =>
-						Effect.fail({
-							message: `${integrationName} failed to resolve a batch: ${describeCause(cause)}`
+				existing: (effectId, collection, column, keys) =>
+					collections
+						.findMany(effectId, subject, {
+							collection,
+							where: { [column]: { in: [...keys] } },
+							// Not `keys.length`: a record may fan out into several rows sharing one identity value, and
+							// a limit sized for one row per key truncates the very rows that make a re-run an update
+							// rather than a duplicate. Bounded well above any sane fan-out so a runaway mapping still
+							// cannot pull an unbounded page into memory.
+							limit: Math.min(keys.length * MAX_FAN_OUT, MAX_EXISTING_ROWS)
 						})
-					)
-				);
-			},
-			sleep: (milliseconds) => Effect.sleep(milliseconds),
-			now: Clock.currentTimeMillis
-		});
+						.pipe(
+							Effect.map((rows) => {
+								const found = new Map<string, Array<string>>();
+								for (const row of rows) {
+									const decoded = Schema.decodeUnknownResult(IdentifiedJsonRow)(row);
+									if (Result.isFailure(decoded)) continue;
+									const key = Schema.decodeUnknownResult(Schema.String)(decoded.success[column]);
+									if (Result.isFailure(key)) continue;
+									const bucket = found.get(key.success);
+									if (bucket === undefined) found.set(key.success, [decoded.success.id]);
+									else bucket.push(decoded.success.id);
+								}
+								// Sorted so `before[offset]` is a stable address across runs: the derived ids do not come
+								// back from the database in any guaranteed order, and an unstable pairing would rewrite
+								// each fanned-out row into a different sibling's id on every run.
+								for (const bucket of found.values()) bucket.sort();
+								return found;
+							}),
+							Effect.mapError((error) => ({ message: describeCause(error) }))
+						),
+				remove: (effectId, collection, ids) =>
+					Effect.forEach(ids, (id) => collections.delete(effectId, subject, collection, id), {
+						discard: true
+					}).pipe(Effect.mapError((error) => ({ message: describeCause(error) }))),
+				write: (effectId, collection, id, values, mode) =>
+					collections
+						.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
+							root: { id, action: mode }
+						})
+						.pipe(
+							Effect.asVoid,
+							Effect.mapError((error) => ({ message: describeCause(error) }))
+						),
+				pipeline: (effectId, collection, record) => {
+					const declared = authored.pipelines[collection]?.import;
+					if (declared === undefined) return undefined;
+					// One record per call, so a pipeline that refuses a record costs that record. The `input` it
+					// receives is an array of one, which is the shape `Collections.import` already hands it.
+					const api = integrationAuthoringApi(effectId);
+					return runAuthoredHandler(() => declared.handler({ input: [record], api })).pipe(
+						Effect.flatMap(decodePipelineRows),
+						Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
+					);
+				},
+				resolve: (effectId, run) => {
+					// The same api a hook and an import pipeline receive, built through the same two functions, so
+					// a batch lookup queries under exactly the integration's own subject and nothing wider.
+					const api = integrationAuthoringApi(effectId);
+					// `catchCause` rather than `catch`: a rejected promise or a genuine throw arrives here as a
+					// defect because `runAuthoredHandler` dies on one, and either would otherwise escape as an
+					// unhandled defect and take down a run that should have failed with a sentence naming the
+					// integration. A synchronous throw no longer needs the `suspend` it used to — the handler is
+					// invoked inside `runAuthoredHandler` now, not in its argument position.
+					return runAuthoredHandler(() => run(api)).pipe(
+						Effect.catchCause((cause) =>
+							Effect.fail({
+								message: `${integrationName} failed to resolve a batch: ${describeCause(cause)}`
+							})
+						)
+					);
+				},
+				sleep: (milliseconds) => Effect.sleep(milliseconds),
+				now: Clock.currentTimeMillis
+			};
+		};
 
 		/**
 		 * The physical work a pushed delivery needs, which is the pull's set plus the delivery ledger.
@@ -764,13 +786,15 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							set: { enabled: true }
 						})
 				);
-				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
-					{
-						command: 'integrations.pull',
-						input: { name, cursor: null },
-						effectId: `${effectId}:pull`
-					}
-				]);
+				// The first pull is durable work the runtime wrote itself; arm the host timer for it.
+				const pullEffectId = `${effectId}:pull`;
+				const now = yield* Clock.currentTimeMillis;
+				yield* queue.wake(EffectId.make(`${pullEffectId}:wake`), now);
+				yield* executeBuilt(
+					effectId,
+					database,
+					enqueueTaskRow('integrations.pull', { name, cursor: null }, pullEffectId, undefined)
+				);
 			}),
 			/**
 			 * Runs every receive binding this integration declares, and returns what each one did.
@@ -1008,15 +1032,24 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				if (dueAt !== undefined) {
 					const taskId = `flush:${name}@${instantLabel(dueAt)}`;
 					// Keyed on the instant rather than on this invocation, so two drains that both find the
-					// same next backoff queue one task between them instead of two.
-					yield* queue.enqueue(EffectId.make(`${effectId}:next`), [
-						{
-							command: 'integrations.flush',
-							input: { name },
-							effectId: taskId,
-							runAtEpochMs: dueAt
-						}
-					]);
+					// same next backoff queue one task between them instead of two. The row is written by
+					// the runtime itself and the host timer is armed before it commits.
+					yield* queue
+						.wake(EffectId.make(`${effectId}:next-wake`), dueAt)
+						.pipe(
+							Effect.mapError(
+								(error) => new IntegrationError({ integration: name, message: error.message })
+							)
+						);
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:next`),
+						database,
+						enqueueTaskRow('integrations.flush', { name }, taskId, dueAt)
+					).pipe(
+						Effect.mapError(
+							(error) => new IntegrationError({ integration: name, message: error.message })
+						)
+					);
 				}
 				return {
 					integration: report.integration,
@@ -1040,13 +1073,14 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 						.set({ cursor: null })
 						.where(eq(boltIntegrations.name, name))
 				);
-				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
-					{
-						command: 'integrations.pull',
-						input: { name, cursor: null },
-						effectId: `${effectId}:pull`
-					}
-				]);
+				// The pull is durable work the runtime wrote itself; arm the host timer for it.
+				const now = yield* Clock.currentTimeMillis;
+				yield* queue.wake(EffectId.make(`${effectId}:pull-wake`), now);
+				yield* executeBuilt(
+					effectId,
+					database,
+					enqueueTaskRow('integrations.pull', { name, cursor: null }, `${effectId}:pull`, undefined)
+				);
 			}),
 			disable: Effect.fn('Integrations.disable')(function* (effectId, name) {
 				yield* requireIntegration(name);

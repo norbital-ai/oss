@@ -12,6 +12,7 @@
  * the failure this tool exists to prevent.
  */
 import { assess, audit, type Severity } from './index.js';
+import { computeCheckpointDelta, deltaSummary } from './analysis/delta.js';
 import { parseArgs } from 'node:util';
 
 const usage = [
@@ -20,9 +21,11 @@ const usage = [
 	'Commands:',
 	'  audit    scan one repository and print its findings (default)',
 	'  assess   scan every --root and emit one consolidated report',
+	'  delta    file and code-LOC movement per pillar: --against <git-ref> vs the working tree',
 	'',
 	'Options:',
 	'  --root <path>     repository to analyse; repeat for assess (default: cwd)',
+	'  --against <ref>   delta only: the git checkpoint to compare the working tree against',
 	'  --include-tests   include test and e2e sources in scope',
 	'  --path <path>     restrict the scan to a repository-relative path; repeatable',
 	'  --out <path>      write the consolidated report here (assess only)',
@@ -40,6 +43,7 @@ async function main(): Promise<void> {
 		options: {
 			root: { type: 'string', multiple: true },
 			path: { type: 'string', multiple: true },
+			against: { type: 'string' },
 			out: { type: 'string' },
 			format: { type: 'string' },
 			'include-tests': { type: 'boolean' },
@@ -56,12 +60,34 @@ async function main(): Promise<void> {
 		throw new Error('--format is assess-only');
 	if (command === 'audit' && (options.root?.length ?? 0) > 1)
 		throw new Error('--root may be repeated only for assess');
+	if (command !== 'delta' && options.against !== undefined)
+		throw new Error('--against is delta-only');
+	if (command === 'delta') {
+		if (options.against === undefined) throw new Error('delta requires --against <git-ref>');
+		if ((options.root?.length ?? 0) > 1) throw new Error('--root may not be repeated for delta');
+		if (options.out !== undefined) throw new Error('--out is assess-only');
+		if (options.format !== undefined) throw new Error('--format is assess-only');
+		if ((options.path?.length ?? 0) > 0) throw new Error('--path is not supported by delta');
+	}
 	const format = options.format;
 	if (format !== undefined && !['json', 'markdown', 'both'].includes(format))
 		throw new Error('--format must be json, markdown, or both');
 
 	if (command === 'help' || options.help === true) {
 		process.stdout.write(usage);
+		return;
+	}
+
+	if (command === 'delta') {
+		const delta = computeCheckpointDelta({
+			root: options.root?.[0],
+			against: options.against ?? '',
+			includeTests: options['include-tests'] ?? false
+		});
+		process.stdout.write(
+			options.json === true ? `${JSON.stringify(delta, null, 2)}\n` : `${deltaSummary(delta)}\n`
+		);
+		process.exitCode = 0;
 		return;
 	}
 

@@ -3,12 +3,16 @@ import { Effect } from 'effect';
 import { defineModel, text } from '../../src/authoring/index.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
-import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';
+import {
+	APPROVAL_REQUEST_ONGOING_INDEX_NAME,
+	buildSchemaPlan,
+	collectionIndexName
+} from '../../src/compiler/schema-plan.js';
 
 /**
- * `field.string({ indexed: true })` used to reach no DDL at all: the flag was validated at the
- * authoring boundary and then read by nothing that emits SQL, so a declared index was accepted and
- * dropped — on authored collections and on Bolt's own `approval_request` and `requestor` alike.
+ * `field.string({ indexed: true })` reaches DDL in both emitters: the flag is read by the schema
+ * plan, not only validated at the authoring boundary, so a declared index is provisioned and
+ * evolved — on authored collections and on Bolt's own `approval_request` and `requestor` alike.
  *
  * Both emitters are pinned here, because they reach different databases: the plan provisions from
  * nothing, the lineage evolves a deployed workspace, and an index in only one of them is an index
@@ -65,19 +69,20 @@ describe('declared collection indexes', () => {
 	it('guards every system-collection index so re-running the plan is a no-op', () => {
 		expect(
 			declaredIndexSql('approval_request').every((sql) =>
-				sql.startsWith('create index if not exists')
+				/^create (?:unique )?index if not exists/.test(sql)
 			)
 		).toBe(true);
 	});
 
 	/**
-	 * Bolt's own runtime collections declare `indexed: true` on the columns every approval lookup
-	 * filters by. They are merged into the plan by `withSystemCollections`, so they are the case that
-	 * proves the flag is honoured for collections no workspace authored.
+	 * Bolt's own runtime collections declare indexes on the columns every approval lookup filters by.
+	 * The compiler adds the partial unique guard that serializes ongoing ownership of a root. They are
+	 * merged into the plan by `withSystemCollections`, so both reach collections no workspace authors.
 	 */
-	it('indexes the system collections that declare it', () => {
+	it('indexes system lookups and serializes ongoing approval ownership', () => {
 		expect(declaredIndexSql('approval_request')).toEqual([
 			'create index if not exists "approval_request_approver_teams_idx" on "approval_request" using gin ("approver_teams")',
+			`create unique index if not exists "${APPROVAL_REQUEST_ONGOING_INDEX_NAME}" on "approval_request" ("collection_name", "record_id") where "status" = 'ONGOING'`,
 			'create index if not exists "approval_request_superseder_teams_idx" on "approval_request" using gin ("superseder_teams")',
 			'create index if not exists "approval_request_collection_name_idx" on "approval_request" ("collection_name")',
 			'create index if not exists "approval_request_record_id_idx" on "approval_request" ("record_id")',

@@ -1,66 +1,17 @@
 import type { ModelDeclaration } from './models-schema.js';
 import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
 import type { RemoteQuery as ClientRemoteQuery } from '@norbital-ai/std/collection';
-export type { RemoteQuery } from '@norbital-ai/std/collection';
-export type {
-	AutomationApi,
-	AutomationContext,
-	AutomationDefinition,
-	AutomationProgression,
-	AutomationTrigger
-} from './automations-schema.js';
-export {
-	describeHooks,
-	describeModel,
-	describeModelColumns,
-	compileModel
-} from './model-introspection.js';
-export {
-	approvalConfigurationId,
-	approvalStepId,
-	describeEnvoy,
-	describePolicy,
-	policyAuthorizationId,
-	policyRuntimeFunctionsFor
-} from './policy-introspection.js';
-export type { PolicyRuntimeFunction, PolicyRuntimeFunctions } from './policy-introspection.js';
+import type { TableName, TablesForModels } from './contracts-schema.js';
+export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
+export { describeHooks, compileModel } from './model-introspection.js';
+export { describeEnvoy, describePolicy } from './policy-introspection.js';
 export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
-export { agentTools, describeMcpServer, describeSkill } from './workspace-schema.js';
-export type {
-	AuthoredIntegrationBinding,
-	AuthoredIntegrationModule,
-	DescribedIntegrations,
-	IntegrationBindingInput,
-	IntegrationsModuleInput
-} from './integration-introspection.js';
-import type {
-	Api,
-	DefaultWorkspaceSchema,
-	TableName,
-	TablesForModels
-} from './contracts-schema.js';
+export { agentTools } from './workspace-schema.js';
 
-/** Owns generated registry assembly without changing the inferred authored declaration types. */
-const RuntimeAuthoring = {
-	models: <const M extends Readonly<Record<string, ModelDeclaration>>>(models: M): M => models,
-	registry: <const M extends Readonly<Record<string, ModelDeclaration>>>(
-		input: RuntimeRegistryInput<M>
-	): RuntimeRegistry<M> => ({
-		tables: input.models,
-		collection: (name, definition) => ({ name, definition })
-	}),
-	collection: <M extends Readonly<Record<string, ModelDeclaration>>>(
-		registry: RuntimeRegistry<M>,
-		name: keyof M & string,
-		definitions: ReadonlyArray<Readonly<Record<string, unknown>>>
-	) => registry.collection(name, Object.assign({}, ...definitions)),
-	workspace: <M extends Readonly<Record<string, ModelDeclaration>>, const Workspace>(
-		_registry: RuntimeRegistry<M>,
-		workspace: Workspace
-	): Workspace => workspace
-};
-
-export const defineModels = RuntimeAuthoring.models;
+/** Owns generated model registration without changing the inferred authored declaration types. */
+export const defineModels = <const M extends Readonly<Record<string, ModelDeclaration>>>(
+	models: M
+): M => models;
 
 type RelationshipColumn = import('drizzle-orm/pg-core').AnyPgColumnBuilder & {
 	readonly through: (column: import('drizzle-orm/pg-core').AnyPgColumnBuilder) => unknown;
@@ -78,7 +29,7 @@ type RelationFactories<M extends Readonly<Record<string, ModelDeclaration>>> = {
 } & Readonly<
 	Record<string, (input?: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>>
 >;
-export type RelationshipHelpers<M extends Readonly<Record<string, ModelDeclaration>>> = Readonly<{
+type RelationshipHelpers<M extends Readonly<Record<string, ModelDeclaration>>> = Readonly<{
 	readonly one: RelationFactories<M>;
 	readonly many: RelationFactories<M>;
 	/**
@@ -98,38 +49,6 @@ export type PlatformRelationshipsFor<M extends Readonly<Record<string, ModelDecl
 
 export type { TablesForModels } from './contracts-schema.js';
 
-export const platformIdentityTables: Readonly<Record<string, never>> = {};
-
-type RuntimeRegistry<M extends Readonly<Record<string, ModelDeclaration>>> = {
-	readonly tables: M;
-	readonly collection: (
-		name: keyof M & string,
-		definition: Readonly<Record<string, unknown>>
-	) => { readonly name: keyof M & string; readonly definition: Readonly<Record<string, unknown>> };
-};
-export type RuntimeRegistryInput<M extends Readonly<Record<string, ModelDeclaration>>> = Readonly<{
-	readonly models: M;
-	readonly relationships: unknown;
-	readonly customTypes?: Readonly<Record<string, unknown>>;
-	readonly platformTables?: Readonly<Record<string, unknown>>;
-}>;
-
-export const defineRuntimeRegistry = RuntimeAuthoring.registry;
-export const defineRuntimeCollection = RuntimeAuthoring.collection;
-export const defineRuntimeWorkspace = RuntimeAuthoring.workspace;
-
-export type WorkspaceAppDef = Readonly<{
-	readonly name: string;
-	readonly label?: string;
-	readonly description?: string;
-	readonly icon?: string;
-	readonly thumbnail?: string;
-	readonly banner?: string;
-	readonly group?: string;
-	readonly component?: Readonly<Record<string, WorkspaceAppDef>>;
-	readonly defaultChild?: string;
-}>;
-export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
 /**
  * A person, as much of one as a workspace may read.
  *
@@ -193,6 +112,3 @@ type HandlerSuccess<Value> = Value extends import('effect').Effect.Effect<
 >
 	? Success
 	: Awaited<Value>;
-export type InvokeClientRuntime<
-	S extends import('./contracts-schema.js').AnySchema = DefaultWorkspaceSchema
-> = Readonly<{ readonly api: Api<S> }>;

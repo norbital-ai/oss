@@ -66,11 +66,16 @@ export {
 	type HostToolProvider
 } from './facilities/providers.js';
 export {
-	makeScheduler,
 	makeTaskBinding,
-	type Scheduler,
-	type SchedulerOptions
-} from './scheduler.js';
+	ScheduleTickError,
+	runScheduleTick,
+	type ScheduleTickOptions
+} from './schedules.js';
+export {
+	makeTimekeeper,
+	type Timekeeper,
+	type TimekeeperOptions
+} from './timekeeper.js';
 export {
 	makeMemoryTransport,
 	makeTransportBinding,

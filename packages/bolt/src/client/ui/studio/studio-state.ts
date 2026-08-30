@@ -346,7 +346,11 @@ export const ManifestSchema = Schema.Struct({
 		Schema.Struct({
 			name: Schema.String,
 			transport: Schema.String,
-			audience: Schema.String
+			audience: Schema.String,
+			groupMessages: Schema.optionalKey(
+				Schema.Literals(['disabled', 'mention_or_reply', 'all'])
+			),
+			delegation: Schema.Literals(['enabled', 'disabled'])
 		})
 	),
 	integrations: Schema.Array(Schema.Struct({ name: Schema.String })),
@@ -538,6 +542,7 @@ export type StudioEnvoy = Readonly<{
 	readonly name: string;
 	readonly transport: string;
 	readonly audience: string;
+	readonly delegation: 'enabled' | 'disabled';
 	readonly sourcePath?: string | undefined;
 }>;
 
@@ -554,8 +559,9 @@ const ENVOY_FILE = /(?:^|\/)envoys\/\+([^/]+)\.ts$/;
  * tool hung beneath it — and the synthesis meant the tree always had exactly one node above the
  * things anybody wanted to read.
  *
- * The manifest now carries `transport` and `audience`, so the note that used to explain what the
- * Studio could not know is gone with the projection that made it true.
+	 * The manifest now carries `transport`, `audience` and the required delegation boundary, so the
+	 * note that used to explain what the Studio could not know is gone with the projection that made
+	 * it true.
  */
 export const workspaceEnvoys = (
 	manifest: WorkspaceManifest | undefined,
@@ -567,9 +573,9 @@ export const workspaceEnvoys = (
 			return name === undefined ? [] : [[name, path] as const];
 		})
 	);
-	return (manifest?.envoys ?? []).map(({ name, transport, audience }) => {
+	return (manifest?.envoys ?? []).map(({ name, transport, audience, delegation }) => {
 		const sourcePath = source.get(name);
-		return { name, transport, audience, sourcePath };
+		return { name, transport, audience, delegation, sourcePath };
 	});
 };
 

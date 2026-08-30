@@ -1,5 +1,6 @@
 import { Record as EffectRecord } from 'effect';
 import { compileModel } from '#lib/authoring/model-introspection.js';
+import { policySql } from '#lib/authoring/policy-sql.js';
 import { SYSTEM_COLLECTION_MODELS } from '#lib/authoring/system-models.js';
 import {
 	collection,
@@ -46,7 +47,6 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.chat_session,
 	collections.chat_message,
 	collections.agent_mailbox,
-	collections.agent_run,
 	collections.automation_run,
 	collections.bolt_notifications
 ]);
@@ -55,26 +55,6 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
 	SYSTEM_COLLECTIONS.map(({ name }) => name)
 );
-
-/**
- * The one runtime-owned collection deliberately mirrored into a browser replica.
- *
- * Identity, agent, automation, notification and approval-party records remain server-private and
- * are read through authenticated commands. Approval requests are the exception because the inbox
- * is an offline-capable workspace surface whose row predicate already limits each replica to the
- * requests its subject may see.
- */
-export const REPLICATED_SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set([
-	collections.approval_request.name
-]);
-
-/** The complete admission rule for collections crossing the server-to-browser sync boundary. */
-export const isReplicatedCollection = (
-	collection: Pick<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>, 'name' | 'sync'>
-): boolean =>
-	collection.sync !== false &&
-	(!SYSTEM_COLLECTION_NAMES.has(collection.name) ||
-		REPLICATED_SYSTEM_COLLECTION_NAMES.has(collection.name));
 
 const SYSTEM_COLLECTIONS_BY_NAME = new Map(
 	SYSTEM_COLLECTIONS.map((definition) => [definition.name, definition] as const)
@@ -85,7 +65,7 @@ const SYSTEM_COLLECTIONS_BY_NAME = new Map(
  *
  * The `requestor` join table is the only record of who that was: `approval_request` carries the
  * collection, the record, the action and the status, and no requestor column at all, so "is this
- * mine" cannot be answered from the row itself. `Approvals.request` writes exactly one `requestor`
+ * mine" cannot be answered from the row itself. `Approvals.gate` writes exactly one `requestor`
  * row per request, in the same block that projects the `approval_request` row.
  *
  * `${requestor.id}` is **not** interpolated by JavaScript here — these are single-quoted
@@ -123,7 +103,7 @@ const SUBJECT_TEAM_NAME = 'lower(${requestor.team})';
  * ever been in that column. A containment test over it would compile, run, and match nothing —
  * silently withholding from approvers the very requests they exist to decide.
  *
- * The approver names live in the durable state `Approvals.request` embeds at request time, under
+ * The approver names live in the durable state `Approvals.gate` embeds at request time, under
  * `state.operation.approval` — the whole `ApprovalConfiguration` the subject's own grant carried,
  * copied into the row so that a later release changing the grant cannot restate an in-flight
  * request. `Approvals.decide` resolves the same path (`approvalConfigurations.resolve`) before it
@@ -166,22 +146,21 @@ const SUPERSEDED_BY_SUBJECT_TEAM =
  * administrators are included because every administrator may supersede every pending flow by
  * definition; this does not grant them any authored tenant collection.
  *
- * Written against unqualified column names on purpose: the same predicate is spliced into three
- * statements that alias the table differently — `findMany` uses none, `Sync.snapshot` uses `r`,
- * `Sync.diff` correlates through `visible` — and an unqualified reference resolves to the outer row
- * in all three. Nothing inside either subquery declares a `id`, so the correlation cannot
- * be captured by them.
+ * Written against unqualified column names on purpose: the same predicate is compiled into every
+ * statement that evaluates it — the direct read path and each sync evaluation of a live query —
+ * and those statements need not alias the table the same way, while an unqualified reference
+ * resolves to the outer row in all of them. Nothing inside either subquery declares a `id`, so the
+ * correlation cannot be captured by them.
  */
-const READABLE_APPROVAL_REQUEST = Object.freeze({
-	$sql:
-		'${requestor.admin} = true or "id"::text in (' +
+const READABLE_APPROVAL_REQUEST = policySql(
+	'${requestor.admin} = true or "id"::text in (' +
 		RAISED_BY_SUBJECT +
 		') or "id"::text in (' +
 		APPROVED_BY_SUBJECT_TEAM +
 		') or "id"::text in (' +
 		SUPERSEDED_BY_SUBJECT_TEAM +
 		')'
-});
+);
 
 /**
  * Who raised a request is readable exactly when the request is — one rule, expressed once.
@@ -195,30 +174,26 @@ const READABLE_APPROVAL_REQUEST = Object.freeze({
  * legitimately read as an approver — and would silently start hiding rows the day anything writes a
  * second requestor for one request.
  */
-const READABLE_REQUESTOR = Object.freeze({
-	$sql:
-		'${requestor.admin} = true or "approval_request_id" in (' +
+const READABLE_REQUESTOR = policySql(
+	'${requestor.admin} = true or "approval_request_id" in (' +
 		RAISED_BY_SUBJECT +
 		') or "approval_request_id" in (' +
 		APPROVED_BY_SUBJECT_TEAM +
 		') or "approval_request_id" in (' +
 		SUPERSEDED_BY_SUBJECT_TEAM +
 		')'
-});
+);
 
-const OWN_CONVERSATION = Object.freeze({ $sql: '"user_id" = ${requestor.id}' });
-const OWN_CONVERSATION_MESSAGE = Object.freeze({
-	$sql:
-		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
+const OWN_CONVERSATION = policySql('"user_id" = ${requestor.id}');
+const OWN_CONVERSATION_MESSAGE = policySql(
+	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
-});
-const OWN_AGENT_MAILBOX = Object.freeze({
-	$sql:
-		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
+);
+const OWN_AGENT_MAILBOX = policySql(
+	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
-});
-const OWN_AGENT_RUN = OWN_AGENT_MAILBOX;
-const OWN_NOTIFICATION = Object.freeze({ $sql: '"recipient" = ${requestor.id}' });
+);
+const OWN_NOTIFICATION = policySql('"recipient" = ${requestor.id}');
 
 /**
  * Reading runtime state is allowed for any authenticated subject; writing never is, because the
@@ -260,9 +235,10 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	 * the identity merge removed — `db.user.findMany` against a table that does not exist. What they
 	 * actually need is an id and a display name, so that is exactly what the field mask allows.
 	 * `findMany` applies `access.mask` to every row it returns, so the address, the roles and the
-	 * teams are not merely unselected: they cannot be read through this grant at all. Replication is
-	 * unaffected — `Sync.shape` and the change stream exclude every identity collection, so a
-	 * directory is answered by a query and never mirrored into a browser.
+	 * teams are not merely unselected: they cannot be read through this grant at all. The sync path
+	 * is unaffected too — a browser receives answers to the queries it registered on `sync.connect`,
+	 * never a wholesale mirror of a collection, so a directory is answered by a query and nothing
+	 * wider.
 	 *
 	 * ## Enumerated, not derived
 	 *
@@ -327,11 +303,6 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			collection: collections.agent_mailbox.name,
 			action: 'read' as const,
 			where: OWN_AGENT_MAILBOX
-		},
-		{
-			collection: collections.agent_run.name,
-			action: 'read' as const,
-			where: OWN_AGENT_RUN
 		},
 		{
 			collection: collections.automation_run.name,

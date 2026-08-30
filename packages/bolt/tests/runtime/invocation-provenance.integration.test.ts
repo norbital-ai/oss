@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -40,10 +39,7 @@ const policySubject = { ...adminSubject, admin: false };
  * `POST /_bolt/plugin/<anything>/<command>` builds a `Plugin` invocation out of a URL and a request
  * body with no authentication anywhere, and a `Task` carries no credential by construction. Both
  * used to hand their input to the switch untouched, so the switch was a second, unauthenticated
- * command port. The identity gate closed the cases that name an identity to forge; what it could not
- * see is the larger half that carries none — `identity.endSession` revokes a session by bare token,
- * `notifications.list` reads any recipient's mail, `integrations.install` and `channels.register`
- * rewire the host.
+ * command port. The provenance gate now defaults both credential-free tags to deny.
  *
  * These tests therefore hold the *whole* switch against the gate rather than a chosen sample, and
  * read the command list out of the dispatcher's own source so a case added tomorrow is covered
@@ -207,9 +203,9 @@ describe('invocation provenance', () => {
 	// A regex that silently stops matching would make every loop below pass over an empty list, which
 	// is the shape a green suite takes when it is proving nothing.
 	it('reads the whole command switch out of the dispatcher', () => {
-		expect(SWITCH_COMMANDS.length).toBeGreaterThan(70);
-		expect(SWITCH_COMMANDS).toContain('identity.endSession');
-		expect(SWITCH_COMMANDS).toContain('notifications.list');
+		expect(SWITCH_COMMANDS.length).toBeGreaterThan(40);
+		expect(SWITCH_COMMANDS).toContain('identity.authenticate');
+		expect(SWITCH_COMMANDS).toContain('notifications.drain');
 		expect(SWITCH_COMMANDS).toContain('collections.resume');
 		expect(new Set(SWITCH_COMMANDS).size).toBe(SWITCH_COMMANDS.length);
 	});
@@ -271,7 +267,6 @@ describe('invocation provenance', () => {
 
 		for (const name of [
 			'automations.start',
-			'automations.register',
 			'automations.runStep',
 			'automations.resume',
 			'automations.stop'
@@ -288,51 +283,11 @@ describe('invocation provenance', () => {
 	});
 
 	/**
-	 * The exploit, not the refusal.
-	 *
-	 * `identity.endSession` takes a bare token and revokes it, and carries no identity for the earlier
-	 * gate to notice — so an unauthenticated `POST /_bolt/plugin/x/identity.endSession` logged out any
-	 * session whose token the caller held or guessed. The session is read back *before* the refusal is
-	 * asserted, so reverting the gate fails this on the revoked session rather than on a missing error:
-	 * the diagnostic is the exploit landing, not a message about it.
-	 */
-	it('leaves a live session usable after an unauthenticated plugin tries to revoke it', async () => {
-		harness = await makeBoltTestRuntime(testWorkspace());
-		// `admin` is the team `testWorkspace` declares holding the policy that grants `*` — the session
-		// has to be a usable one for the revocation attempt below to have anything to take away.
-		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
-
-		const outcome = await outcomeOf(
-			harness,
-			plugin('identity.endSession', { credential: 'admin-token' })
-		);
-
-		expect(
-			await harness.database.query(
-				'select count(*)::int as live from "session" where "token" = $1',
-				['admin-token']
-			)
-		).toEqual([{ live: 1 }]);
-		const still = await harness.runtime.runPromise(
-			dispatchInvocation(
-				command('identity.authenticate', 'admin-token', { credential: 'admin-token' })
-			)
-		);
-		expect(still.value).toMatchObject({
-			userId: fixtureUserId('user-admin-token'),
-			tenantId: 'test-tenant'
-		});
-		expect(outcome._tag === 'Failure' ? outcome.failure : undefined).toBeInstanceOf(
-			AccessControl.AccessDenied
-		);
-	});
-
-	/**
 	 * The durable surface the gate exists to preserve, from both sides.
 	 *
 	 * A blanket "refuse every credential-free tag" would have been simpler and would have killed this:
 	 * `Approvals.decide` enqueues `collections.resume` with `{ requestId }` and nothing else, and its
-	 * authority is the stored approval — `authorizeResume` requires `Approved`, and the write replays
+	 * authority is the stored approval — `Approvals.resume` requires `Approved`, and the write replays
 	 * under the subject recorded when the original create was authenticated. The same payload arriving
 	 * on a `Plugin` is a post, not an enqueue, and lands no row.
 	 */
@@ -344,11 +299,15 @@ describe('invocation provenance', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id,
-						values: { name: 'Ada' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id, name: 'Ada' }],
+						false,
+						0,
+						{ root: { id, action: 'create' } }
+					);
 				})
 			)
 		);
@@ -364,19 +323,23 @@ describe('invocation provenance', () => {
 			throw new Error(`expected a pending approval, got ${String(pending?._tag)}`);
 		// `Approvals.decide` is what enqueues the resume in production; it is driven here through the
 		// stored state because the Tasks facility is deliberately unavailable in this harness.
-		await harness.database.query('update bolt_approvals set state = $2 where request_id = $1', [
-			requestId,
-			{ _tag: 'Approved', requestId, decidedBy: adminSubject.userId, operation: pending.operation }
-		]);
+		// Only the discriminant and the decider move. `status` answers the *public* projection, which
+		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
+		// replays from — so writing that projection back would approve a request nothing could resume.
+		await harness.database.query(
+			`update bolt_approvals
+			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))
+			 where request_id = $1`,
+			[requestId, adminSubject.userId]
+		);
 
-		// The lock first, for the same reason the row used to come first: the failure to see when the
-		// gate is gone is the record settling. It is the lock and not the row's existence that says so
-		// now — a gated create writes its row up front and holds it, so "no row" no longer distinguishes
-		// a refused resume from an accepted one, and asserting it would have passed either way.
-		const heldAfterPlugin = await harness.database.query('select approval_id from people');
+		// A gated create stores its graph in the approval and writes no record, so the record settling
+		// is what tells a refused resume from an accepted one: nothing before, and still nothing after
+		// the post, which lands no row rather than landing one nobody approved.
+		const beforePlugin = await harness.database.query('select approval_id from people');
+		expect(beforePlugin).toEqual([]);
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
-		expect(heldAfterPlugin[0]?.['approval_id']).toEqual(expect.any(String));
-		expect(await harness.database.query('select approval_id from people')).toEqual(heldAfterPlugin);
+		expect(await harness.database.query('select approval_id from people')).toEqual([]);
 		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(
 			AccessControl.AccessDenied
 		);

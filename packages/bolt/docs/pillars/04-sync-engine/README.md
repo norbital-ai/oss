@@ -1,90 +1,127 @@
 # P4 · Sync engine
 
-The tenant database is authoritative. Each browser holds a **policy-scoped PGlite replica**
-([P5](../05-client/README.md)). Writes go up through `collections.mutate`; subscribed reads are
-local. **Collection** is the invalidation unit, not query shape.
+The tenant database is authoritative. The browser holds no replica: each live query is registered
+with the host, the host re-evaluates it on every relevant commit, and committed state is **pushed**
+to the browser. `sync.connect` and `sync.advance` are the only sync commands. **Collection** is the
+fan-out unit: one changed collection re-evaluates every subscription indexed under it.
 
-Source: `src/runtime/sync/sync.ts`, `src/runtime/sync/wake.ts`,
-Colony `src/lib/hosting/sync-distribution.ts`.
-
----
-
-## Server: outbox, poke, pull
-
-On INSERT / UPDATE / DELETE a PostgreSQL trigger (`bolt_capture_sync_change`, installed by the
-schema plan) writes `bolt_sync_outbox` in the **same transaction**, with `mutation_id` from
-`bolt.mutation_id`. Pull is commit-ordered (`pg_snapshot_xmin`), not insert-ordered.
-
-| Command             | Role                                                                                                                                                  |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sync.head`         | Outbox head cursor                                                                                                                                    |
-| `sync.pull`         | Bounded partition pull: deltas, cursor advance, mutation confirmations / rejections                                                                   |
-| `sync.distribute`   | Host batch: many authenticated pulls sharing one outbox window                                                                                        |
-| `sync.partition`    | Partition identity                                                                                                                                    |
-| `sync.shape`        | Collections this subject may read                                                                                                                     |
-| `sync.provisioning` | DDL + collection metadata for PGlite (does **not** copy the tenant database)                                                                          |
-| `sync.schema`       | Immutable facts: fingerprint, migration digest, affected collections                                                                                  |
-| `sync.compact`      | Outbox collapse + retention prune. Colony schedules it (post-seed, stream catch-up, `sync-distribution` cadence). Host-only (`SYSTEM_ONLY_COMMANDS`). |
-
-Pull response kinds: `delta`, `cursorExpired`, `rehydrateAdvised`. Recovery never carries deltas;
-the client rebuilds active windows before persisting head.
-
-After commit, `SyncWake.announce` publishes `{ collections: [...] }` on `bolt.sync`. Collection
-**names only** — not rows or cursors. The write never fails because of wake (250 ms, swallowed).
-
-Colony's SSE stream (`/api/bolt/sync/stream`) fans `ready`, `deltas`, `generation`,
-`cursor-expired`, `rehydrate-advised`, `schema-barrier`, `schema-maintenance`,
-`schema-maintenance-clear`, `partition-changed` to the replica leader. A `poke` frame exists
-in the route file but is **not** written to the browser (`onPoke: () => undefined`); the host
-uses poke only internally, then pulls. The host aggregates guest-filtered pulls via
-`sync.distribute`.
+Source: `src/runtime/sync/` (`sync.ts`, `changelog.ts`, `delta-engine.ts`, `digest.ts`,
+`resolver.ts`, `write-ledger.ts`), wire contract `bolt-protocol/src/sync.ts`. Colony implements the
+host side: `apps/colony/src/lib/hosting/sync-host.ts`, `sync-conductor.ts`, and the routes
+`/api/bolt/sync/connect` + `/api/bolt/sync/stream`.
 
 ---
 
-## Partition
+## Server: changelog, ledger, changes
 
-Visibility is computed once per partition. `Sync.partitionIdentity` hashes:
+On INSERT / UPDATE / DELETE a PostgreSQL trigger (`bolt_sync_capture`, installed by the schema
+plan) writes `bolt_sync_outbox` in the **same transaction**. The changelog is collection-granular:
+`xid, sequence, collection_name` — the trigger writes **names only**, never rows or cursors.
 
-`tenantId · environment · effectivePolicyHolder · impersonationTarget · authorityGeneration · schemaFingerprint · policySurface`
+Retention is a bounded DELETE in `changelog.ts` (`CHANGELOG_HORIZON` = 50 000 sequences, at most
+`RETENTION_BATCH` = 1 000 rows per pass, run on connect). Retention never has to be exact: a cursor
+below the oldest surviving row answers `truncated`, and a truncated reconnect re-resolves every
+query.
 
-`effectivePolicyHolder` is `actor:<userId>` when any read grant is actor-bound; otherwise
-`administrator`, `static:<policies>`, `team:<teamPath[0]>`, or `authenticated`. Inside one
-partition, visibility and permitted fields are identical → deltas computed once. Schema
-fingerprint is part of the key: a new release is a new namespace (always rebuild), never an
-in-place row rewrite.
+Every browser write is recorded in the ledger `bolt_browser_mutation` (the WriteLedger). A write
+returns `changes` — `(collection, recordId)` coordinates — which the host fans to the advance
+registry; terminal settlements that committed no collection change also reach the ledger and are
+settled through the stream.
 
-How the holder is chosen: [access](../../access/README.md#replica-partition).
+| Command         | Role                                                                                          |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `sync.connect`  | The public handshake: initial connect **and** one-entry revalidation share the request shape. |
+| `sync.advance`  | Guest evaluation of one wake: changed collections, held subscriptions, pending ledger ids.    |
+
+`sync.connect` carries `head` (optional cursor), `queries` (`key`, `input`, `digest`, `heldIds`,
+`digestOnly`), `released` keys, and `pending` write ids. `sync.advance` carries the commit's
+`changes`, the host-held `subscriptions` (opaque credentials the guest re-authenticates afresh, so
+revocation and policy drift are visible on a wake), `pending`, and an optional `writer` scope.
 
 ---
 
-## Query and mutation path
+## Host: SyncHost
 
-**Browser query.** Live query mounts a window → local read if the proof is valid; else
-`refillWindow` → server `collections.findMany` (or count / grouped) with a read cursor → install
-proof in one PGlite transaction. Window / overlay mechanics: [P5](../05-client/README.md).
+`SyncHost` (`bolt-protocol/src/sync.ts`) is the shared registry contract, implemented by Colony
+and bolt-server. The registry is guest-opinion made durable:
 
-**Server / agent / automation query.** `Collections.findMany` in the guest against the host
-`database` facility, policy SQL applied.
+- **One `SubState` per `(policyHash, queryHash)`**, plus a `byCollection` index from collection name
+  to subscriptions. Subscription ids are `sha256(policyHash ‖ queryHash)`.
+- **Per-connection pump** with backlog collapse: a backpressured connection's lane collapses to
+  full answers (`emit` returning false is the collapse signal). One commit produces one apply
+  frame.
+- **`MAX_SYNC_HELD_IDS` (20 000) is a host promise, not a guest guess**: above the ceiling a
+  SubState runs **digest-only** — no id list is held or shipped, so no positional patch is ever
+  issued and every wake is answered by a full re-resolve.
+- **`releaseId` is part of the scope key.** A release mismatch disconnects the stream, and the
+  client Machine turns that disconnect into `needsReload`.
 
-**Browser mutation.**
+The host hashes and files opaque guest facts. It never imports Bolt, resolves a subject, evaluates
+a predicate, masks a row, or constructs a patch — evaluation belongs to the guest (`sync.connect` /
+`sync.advance`) and the database.
 
-1. Journal + overlay (local durable) — P5.
-2. Push `collections.mutate` with idempotency key, base versions, schema fingerprint.
-3. Server: hooks → policy → txn → history + outbox + `bolt_browser_mutation`.
-4. Wake → host drain → SSE `deltas` / `generation` → leader apply → confirm or reject the journal entry.
-5. Overlay retires only on exact authoritative confirmation.
+---
 
-**Server-side mutation.** Same `collections.mutate` pipeline without the browser journal; outbox
-still written in the transaction.
+## Query path
 
-A stale `schemaFingerprint` is refused. The compiler emits a mutation-compatibility ledger; within
-the offline horizon the journal may adapt. Past it, the mutation is quarantined.
+- **Live reads.** A mounted live query is answered by `sync.connect` and kept current by `apply`
+  frames — the sole SSE payload (`ready` first, then `apply` only). A frame carries the head
+  cursor, patches (`from` → `to` digest fence), and write outcomes in **one** reducer event.
+- **Cursored reads (`after`) are one-shot.** `after` and `columns` are request concerns, never
+  window identity; a cursored query derives empty dependencies and is never registered live.
+- **`count` gets a fresh re-count.** A count answer holds no ids; every wake re-counts and pushes a
+  scalar.
+- **Search** is an explicit lexical (`{ mode: 'lexical', term }`) or semantic
+  (`{ mode: 'semantic', term }`) command. Semantic search performs **one embed per request**.
+  Search lives in the query input the host already holds; no separate search index is registered.
+
+---
+
+## Write path
+
+1. The browser enqueues one declarative graph into the Machine and pushes it over HTTP with the
+   connection header. Durability is `'memory'` — the tab's queue — until the authority settles it.
+2. The guest runs the one mutation pipeline (hooks → policy → transaction → history → changelog),
+   records the ledger row, and returns `changes`.
+3. The host fans `changes` into a `sync.advance` wake; the guest re-evaluates affected
+   subscriptions and the host emits one apply frame carrying patches **and** the write's outcome.
+4. Settlements are `accepted | rebased | rejected | quarantined`. Nothing is claimed saved before
+   its outcome; nothing labels an unproven result fresh.
+
+A stale `schemaFingerprint` is refused; a schema transition rebases the write (`rebased` carries
+the from/to fingerprints). `collections.resume` is the approval-release verb.
+
+---
+
+## Scheduled work
+
+The host invokes `host.schedules.discover` (guest returns inert occurrences), invokes each
+occurrence's command itself as a credential-free `Task`, then records the outcome with
+`host.schedules.settle`. There is no inline tick inside a tenant invocation.
+
+---
+
+## Invariants
+
+1. **I1 — the database is the only predicate evaluator.** Query resolution calls the one
+   authoritative collection resolver; no sync-specific evaluator exists anywhere.
+2. **I2 — dependencies over-report.** Relation and policy dependencies are derived conservatively;
+   an unknown relation falls back to every collection. Over-reporting costs re-evaluations;
+   under-reporting loses liveness.
+3. **I3 — one commit, one frame, one apply.** A commit's query changes and write settlements reach
+   the client as one reducer event.
+4. **I4 — the digest chain fences every patch.** A patch applies only when the client's current
+   digest equals the patch's `from`; otherwise the query re-resolves.
+5. **A probe is the query's own filter evaluated under the subject's read predicate** — there is no
+   separate probe evaluator. **The fallback full answer is always legal**: any subscription may be
+   answered by a full re-resolve at any time.
 
 ---
 
 ## What this is not
 
-- Not a full-database download. Website copy that still says `sync.snapshot` is stale.
-- Not local-only. Permissions and invariants stay server-authoritative.
-- Not a durable server subscription per tab or query. Server durable state is the outbox plus
-  generations — O(0) per client query.
+- Not a replica, not a local database. The browser keeps current answers in memory; nothing
+  durable is stored client-side.
+- Not local-only. Permissions and invariants stay server-authoritative on every answer.
+- Not a durable server subscription per tab or query. Server durable state is the changelog plus
+  the ledger; per-connection registry state is O(live queries), and a reconnect re-resolves.

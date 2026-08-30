@@ -104,8 +104,8 @@ authority suite reads the control store back for exactly that reason
 
 There are two exceptions and they are narrow. A callback passed _into_ the subject is an output
 port, so asserting it fired is asserting behaviour — but pair it with a state assertion, the way
-`oss/packages/bolt/tests/client/replica.test.ts:189` follows `expect(onError).toHaveBeenCalled()`
-with the cursor that must not have advanced. And an ordering or dispatch sequence can be the
+`oss/packages/bolt/tests/client/sync-drivers.test.ts` follows `expect(disconnected).toHaveBeenCalledOnce()`
+with `expect(source.closed()).toBe(1)`. And an ordering or dispatch sequence can be the
 behaviour, in which case record it and assert the recorded sequence, not the fact of a call
 (`templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:236`).
 

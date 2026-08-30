@@ -1,42 +1,39 @@
-# P5 · Client and replica
+# P5 · Client
 
-The browser holds a policy-scoped PGlite replica. Live queries answer from it when a window proof
-is valid. The server ([P4](../04-sync-engine/README.md)) stays authoritative for permissions and
-invariants.
+The browser client is a **pure Machine reducer** plus drivers. `machine.ts` holds all observable
+state — current query answers, pending writes, link status — and `step()` is the only place state
+changes. `project()` paints pending optimistic writes over the held answers. Two drivers move
+bytes: one SSE stream in, serialized HTTP control/write calls out. `runtime.ts` is wiring.
 
-Source: `src/client/runtime.ts`, `src/client/replica/*`, `src/client/ui/shell/`.
+Source: `src/client/sync/` (`machine.ts`, `client.ts`, `sse-driver.ts`, `http-driver.ts`),
+`src/client/live-query/` (`project.ts`, `stable-key.ts`), `src/client/runtime.ts`,
+`src/client/ui/shell/`.
 
 ---
 
-## Replica (shipped)
+## The Machine
 
-Bootstrap calls `sync.provisioning` + `sync.shape` and creates local tables. **No full snapshot.**
-First reads hydrate bounded authoritative windows.
+| Piece            | Job                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| **Reducer**      | `step(state, event) → [state, effects]`; pure, no timers, no transport                       |
+| **Queries**      | One entry per stable query key: input, digest, held answer, phase (`pending` / `fresh` / `failed`), subscribers |
+| **Writes**       | One entry per idempotency key: graph, phase (`queued` / `sent`), attempts                    |
+| **Link**         | `live` / `reconnecting` / `needsReload` — the Machine's own `ClientState`                     |
+| **Effects**      | `connect` (handshake or revalidation), `push` (write), each run by the client wrapper        |
 
-| Piece                | Job                                                                                      |
-| -------------------- | ---------------------------------------------------------------------------------------- |
-| **Base store (O3)**  | PGlite: one row per `(collection, record_id)` per partition, version-gated               |
-| **Overlay (O4)**     | Pending mutations projected over base; not written to O3                                 |
-| **Mutation journal** | `await mutate()` = locally durable + overlay reflected, not yet committed                |
-| **Window (O5)**      | One per canonical query; proof metadata; refill is one bounded authoritative page        |
-| **Positions (O6)**   | Durable partition cursor + per-collection generations, advanced with the rows they cover |
-| **Leader**           | One Web Locks leader per partition owns the SSE stream; followers re-read durable state  |
-| **Budget**           | OPFS (≤ 10 GiB), IndexedDB (adaptive), or server-only fallback                           |
-| **Schema barrier**   | Leader-only namespace switch; old namespace is never migrated in place                   |
+The client wrapper (`client.ts`) owns the imperative edges: one SSE stream, serialized control
+HTTP on a promise tail, a deadline-driven clock, and write pushes. **No timer asks the server what
+changed** — everything is push, retry-backoff, or an explicit mount.
 
-Moves in code: **M1** `applyDeltas`, **M2** `refillWindow`, **M3** `rebuildNamespace` /
-`rehydrateActive`, plus journal settlement (`accepted` / `rebased` / `rejected` /
-`quarantined`). Nothing labels an unproven result fresh. Nothing silently discards a pending
-mutation.
-
-The replica already holds policy-scoped rows. A local read combines `authoredWhere` and
-`userFilter` (`AND`), then applies `orderBy`, then pagination (`local-reads.ts`).
-
-Server partition identity is computed in `Sync.partitionIdentity`; see
-[P4](../04-sync-engine/README.md#partition) and [access](../../access/README.md#replica-partition).
-The browser names local storage with a second key (`ReplicaPartitionIdentity` in `leader.ts`):
-`tenant · environment · principal · authority · formatVersion`. `formatVersion` is the replica
-layout, not the tenant schema fingerprint.
+- `syncStatus` is the Machine's reactive `ClientState` (`sync-status.svelte.ts`), re-exported by
+  the generated framework. The shell reads `link` and `writes` through ordinary reactivity; every
+  Machine transition lands in the same step that applies the frame.
+- `needsReload` comes from a release-mismatch disconnect (HTTP 409/426 on the stream): the
+  running bundle is stale and the workspace reloads. `reconnecting` retries with capped backoff.
+- A patch applies only when the held digest equals the patch's `from`; a mismatched digest marks
+  the query pending and revalidates it. A full answer is always a legal fallback.
+- Retention: a released query's answer is retained for `RETAIN_MS` (30 s) so remounting is free;
+  a sent write unacknowledged for `STALE_WRITE_MS` (15 s) is retried.
 
 ---
 
@@ -44,20 +41,30 @@ layout, not the tenant schema fingerprint.
 
 ```ts
 import { client } from '$bolt/client';
-const q = client.db.employees.findMany({ where, orderBy, with, limit, after });
+const employees = client.db.employees.findMany({ where, orderBy, with, limit, after });
 await client.db.claims.mutate(graph);
+client.db.claims.pending; // numeric in-flight write count
 ```
 
+Reads: `findMany` / `findFirst` / `findGrouped` are **live** — mounted once and pushed thereafter.
+`count` is live too and re-counts on every wake. A cursored read (`after`) is **one-shot**: the
+page is answered once over the transport and never registered live.
+
+Writes: one verb `mutate` (plus `delete`) submits a declarative graph and resolves immediately
+with the optimistic row. Durability is `'memory'` — this tab's queue — and the returned handle
+exposes `settlement` / `status` / `wait`. Settlements are `accepted | rebased | rejected |
+quarantined`; nothing is claimed saved before its outcome. `project()` overlays pending graphs on
+the held answer so the UI updates same-frame.
+
 The shell (`src/client/ui/shell/`) owns workspace navigation, the agent panel, sync status, omni
-finder, and notifications. Colony's workspace shell (`workspace-shell.svelte`) opens the
-workspace in online mode at **5 s** (`continueOnline`) if bootstrap has not finished.
+finder, and notifications. Colony's workspace shell (`workspace-shell.svelte`) opens the workspace
+in online mode at **5 s** (`continueOnline`) if bootstrap has not finished.
 
 ---
 
 ## What this is not
 
-- Not a second source of truth. A broken proof yields one bounded page, never a confident partial
-  answer and never a full resync.
+- Not a replica and not a second source of truth. The browser holds current answers in memory
+  only; a failed revalidation yields `failed`, never a confident stale answer.
+- Not a poller. No timer asks the server what changed.
 - Not CRDT text or field-level merge beyond disjoint-field reconciliation.
-- Not a per-tab server subscription. Followers share the leader's PGlite and do not open a
-  second SSE stream. The leader applies deltas and refills; followers re-read durable state.

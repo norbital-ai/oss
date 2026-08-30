@@ -382,13 +382,13 @@ generated mutation.
 
 LIVE1 reports explicit poll owners, timers whose callback asks for status/data, and loops that combine
 a wait with a read. Ordinary clocks and data-processing loops are negative fixtures. LIVE2 reserves
-`EventSource` and SSE media/protocol declarations for the two exact sync-stream owners: the host sync
-route and the client replica subscriber.
+`EventSource` and SSE media/protocol declarations for the exact client sync-stream owner,
+`packages/bolt/src/client/sync/sse-driver.ts`.
 
 SQL1 recognizes transaction ownership structurally: a literal beneath a `Transaction.statements`
 property, a helper that returns only a Transaction request, or a direct call to the branded
 `transactionSql` imported from Bolt's persistence owner. A same-named local/lookalike helper is still
-raw SQL. Model/compiler tagged expressions and the policy compiler's keyed `$sql` input are the DDL
+raw SQL. Model/compiler tagged expressions and the policy compiler's explicit `policySql` input are the DDL
 bootstrap exceptions; ordinary runtime tagged SQL is not.
 
 SUP1 accepts only an exact known rule on the same line or immediately before the suppressed syntax,

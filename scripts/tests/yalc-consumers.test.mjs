@@ -183,6 +183,43 @@ test('ensurePureInstallation establishes a clean link before converting it to pu
 	}
 });
 
+test('ensurePureInstallation --force deletes leftover .yalc trees before re-adding', () => {
+	const root = fixture();
+	try {
+		const yalcStoreDirectory = path.join(root, 'tenant-substrate/packages/local/yalc');
+		writeJson(path.join(root, 'package.json'), {
+			dependencies: { '@norbital-ai/bolt': 'file:.yalc/@norbital-ai/bolt' }
+		});
+		writeJson(path.join(root, 'yalc.lock'), {
+			packages: { '@norbital-ai/bolt': { replaced: '0.0.12', pure: true } }
+		});
+		const leftover = path.join(root, '.yalc/@norbital-ai/bolt/stale.js');
+		writeJson(path.join(root, '.yalc/@norbital-ai/bolt/package.json'), {
+			yalcSignature: 'stale-stamp'
+		});
+		writeFileSync(leftover, 'stale\n');
+
+		const calls = [];
+		ensurePureInstallation({
+			consumerDirectory: root,
+			names: ['@norbital-ai/bolt'],
+			yalcBin: '/fake/yalc',
+			yalcStoreDirectory,
+			force: true,
+			run: (_command, args) => {
+				calls.push(args);
+				assert.equal(existsSync(leftover), false);
+				mkdirSync(path.join(root, '.yalc/@norbital-ai/bolt'), { recursive: true });
+			}
+		});
+		assert.deepEqual(calls, [
+			['--store-folder', yalcStoreDirectory, 'add', '--pure', '@norbital-ai/bolt']
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test('ensurePureInstallation refuses a partial --only store on a clean consumer', () => {
 	const root = fixture();
 	try {

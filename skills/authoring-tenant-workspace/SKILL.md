@@ -25,20 +25,18 @@ hand-author assembly or generated output. The sealed authoring contract is the
 | `norbital/apps/website`       | marketing/docs site           | website Vite reload or website deploy                |
 
 A tenant page loads an immutable artifact. Template and package source are never tenant HMR inputs.
-For local package/template work, stop Colony and run `pnpm --dir norbital dev --ui`; it builds OSS,
-establishes yalc links in every consumer, materializes them with pnpm, stages those builds for tenant
+For local package/template work, stop Colony and run `pnpm --dir norbital run env -- dev --ui`; it builds OSS,
+`pnpm run env -- link` establishes yalc links in every consumer, materializes them with pnpm, stages those builds for tenant
 sandboxes, syncs templates, then starts a fresh Colony bootstrap that publishes and routes the
 artifacts. Use `--template=<directory|handle>` to narrow template linking and sync.
 
 To put every consumer on the local build **without** starting Colony, run
-`pnpm --dir oss yalc:refresh`. It publishes once, runs each consumer repository's own linker, and
+`pnpm run env -- link`. It publishes once, runs each consumer repository's own linker, and
 then verifies: every managed package in every workspace must resolve through pnpm's virtual store and
 must actually import. A workspace left stale or orphaned fails the command. There is no standalone
 push — writing `.yalc/<name>` on its own reaches nothing that imports the package, and replaces
 `node_modules/<name>` with a link to a directory carrying no `node_modules`, which orphans that
 package's own dependencies.
-
-`pnpm --dir norbital publish:local` remains the Colony-side equivalent and shares the same linker.
 
 Yalc reaches a tenant build through a mount, not through its lockfile. A tenant compiles inside a
 microVM that installs `--offline --frozen-lockfile` against Colony's package store, so a linked
@@ -54,11 +52,11 @@ local pin is ever committed, which leaves the tree and the manifest disagreeing 
 `pnpm install` re-resolves the registry pin and drops the local build with no message. The run
 compares each consumer's materialised `yalcSignature` against the one the push left in `.yalc` and
 names any checkout that would compile against the published packages. If a run is interrupted during
-its install step, links can be left half-written; `pnpm --dir oss yalc:refresh` repairs them.
+its install step, links can be left half-written; `pnpm run env -- link` (from the norbital repository) repairs them.
 
 Colony source uses its own Vite HMR; restart for `.env`, dependency, bootstrap, or artifact-routing
 changes. Website source uses its own Vite HMR; after an OSS package change, run
-`pnpm --dir oss yalc:refresh` and restart the website dev server. Read
+`pnpm run env -- link` and restart the website dev server. Read
 [generated-and-build.md](references/generated-and-build.md#source-to-runtime-map) before deciding
 whether a local restart, release, deployment, or tenant rebuild is required.
 
@@ -235,10 +233,11 @@ value type.
 
 ## One client and one database vocabulary
 
-Apps import a single typed object. All reads are **live reactive queries** backed by Bolt's sync
-engine — a policy-scoped local replica of the data this device has already seen. There is no
+Apps import a single typed object. All reads are **live reactive queries** answered by Bolt's sync
+engine — the server pushes the current answer for every mounted query. There is no
 `refetch`, `invalidate`, or `revalidate`. Mutations are **optimistic**: the UI updates same-frame,
-and the server confirms or rejects asynchronously.
+and the server settles each write asynchronously (`accepted` / `rebased` / `rejected` /
+`quarantined`).
 
 ```ts
 import { client } from '$bolt/client';
@@ -249,11 +248,12 @@ client.db.claims.pending; // numeric in-flight count
 const forecast = await client.invoke.holiday_feed(input);
 ```
 
-Queries own their reactive `current`, `loading`, and `error` state. `mutate(values)` returns
-`Promise<void>`; successful completion invalidates affected live queries rather than returning a row.
-The collection's numeric `pending` property is the count of writes still in flight. Do not duplicate
+Queries own their reactive `current`, `loading`, and `error` state. `mutate(values)` resolves
+immediately with the optimistic row; the authority settles the write through the returned handle
+rather than returning a row. The collection's numeric `pending` property is the count of writes
+still in flight. Do not duplicate
 query or mutation state in a component. Use opaque `after` cursors, never offset pagination. Use
-`findGrouped` and `aggregate` only for queryable reporting; do not load wide datasets and regroup them
+`findGrouped` and `count` only for queryable reporting; do not load wide datasets and regroup them
 in memory. Server roles use the same direct `api.db.<collection>` surface and singular
 `mutate(recordOrGraph)` vocabulary, with Effects instead of browser Promises. Use the generated
 collection methods directly.
@@ -262,15 +262,15 @@ collection methods directly.
 desired state: present rows are inserted or updated, stored rows absent from the submitted relationship
 are deleted, and explicitly included relationships synchronize recursively. An omitted relationship is
 untouched. The root and every included relationship reconcile atomically, so submit a relationship only
-when replacement semantics are intended. Authorization, approvals, hooks, history, sync invalidation,
-and events all run through this one canonical mutation pipeline.
+when replacement semantics are intended. Authorization, approvals, hooks, history, changelog
+capture, and events all run through this one canonical mutation pipeline.
 
-**How it works under the hood:** every `findMany`/`findFirst` executes against the local replica —
-no network for data this device has already seen. When a mutation lands (yours or
-someone else's), the sync engine re-evaluates every live query that depends on the changed
-collections. The sync unit is the **collection**, not the query shape, so changing a sort or
-filter never creates server work against a resident collection. For the wire protocol see
-[the bolt sync source](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/runtime/sync/sync.ts).
+**How it works under the hood:** every live query is registered once with the host under its
+stable key. When a commit lands (yours or someone else's), the host re-evaluates the queries
+indexed under the changed collections — in the database, under each subscriber's own policy — and
+pushes one apply frame per commit. The fan-out unit is the **collection**. A cursored read
+(`after`) is one-shot: it is answered once and never registered. For the wire contract see
+[the bolt-protocol sync schema](https://github.com/norbital-ai/oss/blob/main/packages/bolt-protocol/src/sync.ts).
 
 ## Apps, layout, and collection surfaces
 
@@ -406,12 +406,11 @@ want something that is not in this table, it is not there; do not guess a field 
 | `apps`       | The app names **this session may see** | Deriving authority — see below                                 |
 | `envoys`     | Declared envoys, with `audience`       | Offering an envoy to the right audience                        |
 
-**`user.id` is the row key. There is no second spelling.** A field named `id` used to sit
-beside it carrying the same value, the shell filled both from the display name, and every authored
-query of the shape `where: { user_id: { eq: user.id } }` therefore sent an email's local
-part to a `uuid` column and failed as Postgres 22P02. The surface reported "could not load your
-profile", which is a plausible sentence for a parse error and sent two people looking at the wrong
-layer. One spelling now, and it is the one every other row key uses.
+**`user.id` is the row key. There is no second spelling.** A sibling field named `id` filled from
+the display name would send an email's local part to a `uuid` column in every authored query of
+the shape `where: { user_id: { eq: user.id } }`, failing as Postgres 22P02. The surface reports
+"could not load your profile", which is a plausible sentence for a parse error and sends people
+looking at the wrong layer. One spelling, and it is the one every other row key uses.
 
 **Do not publish or read a label as a key.** A `team` field is gone from this context for the same
 reason: it held the sidebar's role string — literally `'Admin'` or `'Member'` — under a name that

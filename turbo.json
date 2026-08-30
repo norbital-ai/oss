@@ -33,14 +33,12 @@
 			"dependsOn": ["^build"]
 		},
 		"test": {
-			// Dependencies' builds only. A package's own `build` was also listed, for two suites that
-			// executed their own build output: pod's runtime harness ran `build/bin/invocation/index.js`
-			// and platform-utils asserted over `build/runtime/binding.js`. Both packages are deleted and
-			// no surviving test reads a `build/` directory, so self-building before testing bought
-			// nothing and cost a race — `build` opens with `rm -rf build`, which an unordered pair turns
-			// into deleting a file a running test is executing. Restore `"build"` here the moment a
-			// suite asserts over its own emit again.
-			"dependsOn": ["^build", "^test"]
+			// The server-artifact fixture materializes each package exactly as a consumer receives it,
+			// including Bolt's own `build/` directory. Its test must therefore follow this package's build:
+			// otherwise a source export removal can leave the fixture evaluating stale emitted imports.
+			// A task dependency is ordered, so `build` finishes before `test` starts and cannot race the
+			// build's opening cleanup of the output directory.
+			"dependsOn": ["build", "^build", "^test"]
 		}
 	}
 }

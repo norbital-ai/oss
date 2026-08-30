@@ -78,13 +78,12 @@ type PathResolution = typeof pathResolutionSchema.Type;
  *
  * A path crossing a to-many relation selects one value per related record, and the caller matches
  * **existentially** — the row qualifies when any of them satisfies the operator. That is what
- * someone building `employment_employee.effective_range contains today` means, and it is what both
- * of the other two implementations of this predicate already do: the server compiles a relation
- * filter to Drizzle's `EXISTS`, and the local replica compiles one to an `EXISTS` subquery.
+ * someone building `employment_employee.effective_range contains today` means. It matches the
+ * authoritative server compiler, which translates a relation filter to Drizzle's `EXISTS`.
  *
  * An intermediate hop holding no record contributes nothing, so an unset to-one relation and an
- * empty to-many both simply fail to match — `EXISTS` over an empty set, again matching the other
- * two. A *leaf* that is null is a different thing and is kept, so `isNull` still works on a column.
+ * empty to-many both simply fail to match — `EXISTS` over an empty set, again matching the server.
+ * A *leaf* that is null is a different thing and is kept, so `isNull` still works on a column.
  *
  * The values are returned unflattened at the leaf: an array-typed column has to reach
  * `arrayContains` as the array itself, not as its elements.

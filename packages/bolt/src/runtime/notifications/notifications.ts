@@ -15,7 +15,6 @@ import {
 	one,
 	transactionBuilt
 } from '#lib/runtime/persistence.js';
-import * as SyncWake from '#lib/runtime/sync/wake.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 
 const { bolt_audit: audit, bolt_notifications: notifications } = SYSTEM_MODEL_TABLES;
@@ -54,7 +53,6 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database.Service;
 		const communication = yield* Communication.Service;
-		const wake = yield* SyncWake.Service;
 		const workspace = yield* Workspace.Service;
 		return Service.of({
 			enqueue: Effect.fn('Notifications.enqueue')(function* (effectId, notification) {
@@ -91,10 +89,6 @@ export const layer = Layer.effect(
 						)
 						.returning({ sequence: audit.sequence })
 				]);
-				if (inserted.rows.length > 0)
-					yield* wake.announce(EffectId.make(`${effectId}:notification-enqueued-wake`), [
-						'bolt_notifications'
-					]);
 			}),
 			drain: Effect.fn('Notifications.drain')(function* (effectId, notification) {
 				yield* communication.execute(effectId, {
@@ -110,9 +104,6 @@ export const layer = Layer.effect(
 						.set({ delivered_at: dbNow() })
 						.where(eq(notifications.id, notification.id))
 				);
-				yield* wake.announce(EffectId.make(`${effectId}:notification-delivered-wake`), [
-					'bolt_notifications'
-				]);
 			}),
 			markRead: Effect.fn('Notifications.markRead')(
 				function* (effectId, recipient, notificationId) {
@@ -126,9 +117,6 @@ export const layer = Layer.effect(
 								and(eq(notifications.id, notificationId), eq(notifications.recipient, recipient))
 							)
 					);
-					yield* wake.announce(EffectId.make(`${effectId}:notification-read-wake`), [
-						'bolt_notifications'
-					]);
 				}
 			),
 			list: Effect.fn('Notifications.list')(function* (effectId, recipient, unreadOnly = false) {

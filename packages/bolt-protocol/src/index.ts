@@ -1,27 +1,21 @@
 export {
 	CollectionBaseRowVersion,
-	CollectionCountWindow,
 	CollectionGroup,
 	CollectionGroupedQueryRequest,
 	CollectionGroupedQueryRequestFields,
-	CollectionGroupedWindow,
-	CollectionHydrationRow,
 	CollectionMutationBaseVersion,
-	CollectionMutationDeviceSequence,
 	CollectionMutationGraph,
 	CollectionMutationPush,
 	CollectionMutationSettlement,
 	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
-	COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS,
+	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
 	CollectionMutateRequest,
 	CollectionMutationIdempotencyKey,
-	CollectionQueryPage,
-	CollectionQueryReproducibility,
 	CollectionQueryRequest,
 	CollectionQueryRequestFields,
-	CollectionQuerySemantics,
-	CollectionReadCursor,
-	CollectionRelationshipMembership,
+	CollectionLexicalSearch,
+	CollectionSearch,
+	CollectionSemanticSearch,
 	CollectionWriteValues,
 	StoredRecord
 } from './collections.js';
@@ -29,10 +23,8 @@ export {
 export {
 	ActivationResult,
 	ARTIFACT_ASSET_DIRECTORY,
-	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_BUNDLE_FILE,
 	ARTIFACT_RELEASE_FILE,
-	ArtifactAssetIndex,
 	artifactCodeGraphRefusals,
 	ArtifactCodeChunk,
 	ArtifactCodeGraph,
@@ -56,9 +48,6 @@ export {
 	ManifestSchemaPlan,
 	ManifestSchemaStep,
 	missingFacilities,
-	ReplicaSchemaBarrier,
-	ReplicaSchemaMaintenance,
-	ReplicaSchemaMaintenanceClear,
 	RealtimeOutput,
 	Registration,
 	SyncSchemaFacts,
@@ -66,6 +55,55 @@ export {
 	tenantReleaseObjects
 } from './bundle.js';
 export type { BoltBundle } from './bundle.js';
+
+export {
+	HOST_AGENT_EXECUTE_CHILD_COMMAND,
+	HOST_RECOVER_COMMAND,
+	HOST_SCHEDULE_DISCOVER_COMMAND,
+	HOST_SCHEDULE_SETTLE_COMMAND,
+	HostAgentExecuteChildRequest,
+	HostRecoverRequest,
+	HostRecoverResponse,
+	HostScheduleDiscoverRequest,
+	HostScheduleDiscoverResponse,
+	HostScheduleOccurrence,
+	HostScheduleOutcome,
+	HostScheduleRejection,
+	HostScheduleSettleRequest,
+	HostScheduleSettleResponse
+} from './host.js';
+
+export {
+	SyncAdvanceRequest,
+	SyncAdvanceRefusal,
+	SyncAdvanceResponse,
+	SyncAdvanceSubscription,
+	SyncAdvanceUpdate,
+	SyncAnswer,
+	SyncPageAnswer,
+	SyncApplyFrame,
+	SyncApplyPatch,
+	SyncChange,
+	SyncConnectRequest,
+	SyncConnectEvaluation,
+	SyncConnectEvaluationResult,
+	SyncConnectResponse,
+	SyncConnectResult,
+	SyncCursor,
+	SyncOutcome,
+	SyncPatch,
+	SyncQueryInput,
+	SyncReadyFrame,
+	SyncSubEntry,
+	SyncWriteStatus,
+	SYNC_CONNECTION_HEADER,
+	MAX_SYNC_HELD_IDS
+} from './sync.js';
+export {
+	SyncConnectionLane,
+	SyncRegistry,
+	type SyncRegistryConnection
+} from './sync-registry.js';
 
 export {
 	addAIUsage,
@@ -101,6 +139,8 @@ export type { FacilityBinding, FacilityBindings } from './facilities.js';
 
 export { Activation, Invocation, InvocationScope, PluginTrustedContext } from './invocation.js';
 
+export { AgentEnqueueResult, ApprovalState, ChatDocumentRef } from './system.js';
+
 export {
 	EffectId,
 	EnvironmentName,
@@ -120,3 +160,22 @@ export {
 	WireError,
 	WireErrorOptions
 } from './wire.js';
+
+export {
+	makeTimekeeperCore,
+	MAX_TIMEKEEPER_TIMEOUT_MILLIS,
+	type TimekeeperCompletion,
+	type TimekeeperCore,
+	type TimekeeperEntry,
+	type TimekeeperHost,
+	type TimekeeperResolution
+} from './timekeeper-contract.js';
+
+export {
+	GATEWAY_SECRET_VARIABLE,
+	SIGNATURE_LIFETIME_MILLIS,
+	SYSTEM_SIGNATURE_HEADER,
+	SYSTEM_TIMESTAMP_HEADER,
+	systemSignaturePayload,
+	type SystemSignaturePayload
+} from './system-signature.js';

@@ -11,7 +11,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
-import { decide } from '../../src/runtime/access/access-control.js';
+import { decidePolicies } from '../../src/runtime/access/policy-compiler.js';
 import { systemSubject } from '../../src/runtime/access/system-principal.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
@@ -36,9 +36,9 @@ import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identit
  * template names `bolt.system-collections`. So the grant is merged in, evaluated, and matched by
  * nobody.
  *
- * The workspace below is shaped like `templates/field-operations`: a `field_ops_controller` policy
- * granting every action on the collections the app authors and nothing on `user`, held by
- * a team whose seeded members are ordinary people. That template's controller app runs
+ * The workspace below is shaped like `templates/field-operations`: a controller team composing
+ * policies that grant every action on the collections the app authors and nothing on `user`, whose
+ * seeded members are ordinary people. That template's controller app runs
  * `client.db.user.findMany({ columns: { id: true, name: true } })` to label the
  * `user_id` column on its Contractors tab, which is exactly the directory read the masked grant
  * exists to serve.
@@ -75,6 +75,9 @@ const command = (name: string, credential: string, input: unknown = null) =>
 const CONTROLLER_TEAM = 'Field Operations Controllers';
 const CONTRACTOR_TEAM = 'Field Operations Contractors';
 
+/** The one fingerprint the release admits a browser mutation against. */
+const MUTATION_SCHEMA_FINGERPRINT = 'sha256:system-collection-reads-fixture';
+
 /**
  * The approval the contractor's `create` grant carries, named after the team that may decide it.
  *
@@ -108,13 +111,23 @@ const fieldOpsWorkspace = workspace({
 		app({ name: 'field_ops_contractor', label: 'Field Operations Contractor' })
 	],
 	policies: [
+		/**
+		 * The one owner of `jobs read`, which both teams reach by composing it.
+		 *
+		 * A coordinate has exactly one grant across every reachable policy, so the read both roles
+		 * need cannot be restated in each of their policies. Composition is how a template gives two
+		 * roles the same view, and it is the shape the refusal message prescribes.
+		 */
+		policy({
+			name: 'field_ops_jobs',
+			effect: 'allow',
+			grants: [{ collection: 'jobs', action: 'read' }]
+		}),
 		policy({
 			name: 'field_ops_controller',
 			effect: 'allow',
 			capabilities: { apps: ['field_ops_controller'] },
 			grants: [
-				{ collection: 'jobs', action: 'read' },
-				{ collection: 'jobs', action: 'create' },
 				{ collection: 'jobs', action: 'update' },
 				{ collection: 'jobs', action: 'delete' }
 			]
@@ -122,24 +135,22 @@ const fieldOpsWorkspace = workspace({
 		/**
 		 * The party who raises an approval, and the reason there is a second policy here at all.
 		 *
-		 * `Approvals.request` embeds the configuration carried by a grant *this subject's team holds*
+		 * `Approvals.gate` embeds the configuration carried by a grant *this subject's team holds*
 		 * into the durable state, so an approval only ever names approvers because the requestor's own
 		 * policy said so. A fixture that raised one as the controller would prove nothing about the
-		 * two-sided rule.
+		 * two-sided rule — which is also why `jobs create` is owned here and not by the controller:
+		 * the gated create belongs to the party, and the controller is the side that decides it.
 		 */
 		policy({
 			name: 'field_ops_contractor',
 			effect: 'allow',
 			capabilities: { apps: ['field_ops_contractor'] },
-			grants: [
-				{ collection: 'jobs', action: 'read' },
-				{ collection: 'jobs', action: 'create', approval: jobApproval }
-			]
+			grants: [{ collection: 'jobs', action: 'create', approval: jobApproval }]
 		})
 	],
 	teams: {
-		[CONTROLLER_TEAM]: ['field_ops_controller'],
-		[CONTRACTOR_TEAM]: ['field_ops_contractor']
+		[CONTROLLER_TEAM]: ['field_ops_jobs', 'field_ops_controller'],
+		[CONTRACTOR_TEAM]: ['field_ops_jobs', 'field_ops_contractor']
 	},
 	automations: [],
 	integrations: [],
@@ -148,11 +159,7 @@ const fieldOpsWorkspace = workspace({
 	skills: [],
 	envoys: [],
 	requiredFacilities: [],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:system-collection-reads-fixture',
-		adapters: []
-	}
+	schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT
 });
 
 /** A seeded non-admin in the controller team — `foo_suan_wood@bca.gov.sg`'s standing in the seed. */
@@ -192,7 +199,7 @@ const seedBystander = async (runtime: BoltTestRuntime) => {
 	});
 };
 
-/** The subject `Approvals.request` is called as, matching the session `contractor-token` resolves to. */
+/** The subject the approval gate runs as, matching the session `contractor-token` resolves to. */
 const contractorSubject: Identity.Subject = {
 	userId: fixtureUserId('user-contractor'),
 	tenantId: 'test-tenant',
@@ -200,32 +207,35 @@ const contractorSubject: Identity.Subject = {
 	policies: []
 };
 
-const REQUEST_ID = '019f6f10-0002-7000-8000-000000000001';
+const APPROVAL_EFFECT_ID = EffectId.make('approval-system-collection-read');
+const APPROVAL_ROOT = {
+	collection: 'jobs',
+	id: '019f6f10-0003-7000-8000-000000000001',
+	action: 'create'
+} as const;
+const REQUEST_ID = Approvals.approvalRequestId(APPROVAL_ROOT, APPROVAL_EFFECT_ID);
 
 /**
  * One approval, raised the only way approvals are ever raised.
  *
- * `Approvals.request` is the sole writer of all three rows this suite reads — the `bolt_approvals`
+ * The approval gate is the sole owner of all three rows this suite reads — the `bolt_approvals`
  * state that carries the approver names, the `approval_request` projection, and the `requestor` row
  * that is the only record of who raised it. Seeding them by hand would let the fixture describe a
  * shape the runtime does not actually write, which is exactly the failure this predicate had to be
  * rewritten to avoid: `approval_request.steps` looks like it holds approvers and holds `[{step: n}]`.
  */
-const raiseApproval = (harness: BoltTestRuntime, requestId = REQUEST_ID) =>
+const raiseApproval = (harness: BoltTestRuntime) =>
 	harness.runtime.runPromise(
 		Effect.gen(function* () {
-			return yield* (yield* Approvals.Service).request(
-				EffectId.make(`approval-${requestId}`),
-				contractorSubject,
-				requestId,
-				{
-					collection: 'jobs',
-					id: '019f6f10-0003-7000-8000-000000000001',
-					action: 'create',
-					values: { title: 'Extra scaffolding' },
-					approval: jobApproval
-				}
-			);
+			return yield* (yield* Approvals.Service).gate({
+				effectId: APPROVAL_EFFECT_ID,
+				subject: contractorSubject,
+				root: APPROVAL_ROOT,
+				storedGraph: { version: 1, ...APPROVAL_ROOT },
+				proposedValues: { title: 'Extra scaffolding' },
+				approval: jobApproval,
+				review: undefined
+			});
 		})
 	);
 
@@ -241,7 +251,7 @@ const readIds = async (
 		throw new Error(
 			`expected ${collectionName} to be served to ${credential}, got ${JSON.stringify(outcome)}`
 		);
-	const rows = Reflect.get(outcome.success.value as object, 'rows');
+	const rows = outcome.success.value;
 	if (!Array.isArray(rows)) throw new Error(`expected rows from ${collectionName}`);
 	return (rows as ReadonlyArray<Record<string, unknown>>).map((row) => row[key]);
 };
@@ -257,27 +267,19 @@ const seedAdministrator = async (runtime: BoltTestRuntime) => {
 const readAs = (runtime: BoltTestRuntime, credential: string, collectionName: string) =>
 	runtime.runtime.runPromise(
 		dispatchInvocation(
-			command('collections.findMany', credential, { collection: collectionName, limit: 10 })
+			command('collections.export', credential, { collection: collectionName, limit: 10 })
 		).pipe(Effect.result)
 	);
 
-/** The server-issued O2 identity a browser must bind every durable mutation to. */
-const mutationPartition = async (runtime: BoltTestRuntime, credential: string) => {
-	const schema = await runtime.runtime.runPromise(
-		dispatchInvocation(command('sync.schema', credential, {}))
-	);
-	const fingerprint = Reflect.get(schema.value as object, 'fingerprint');
-	if (typeof fingerprint !== 'string') throw new TypeError('sync.schema returned no fingerprint');
-	const opened = await runtime.runtime.runPromise(
-		dispatchInvocation(command('sync.partition', credential, {}))
-	);
-	const partition = Reflect.get(opened.value as object, 'partition');
-	if (typeof partition !== 'object' || partition === null)
-		throw new TypeError('sync.partition returned no partition');
-	const partitionKey = Reflect.get(partition, 'key');
-	if (typeof partitionKey !== 'string') throw new TypeError('sync.partition returned no key');
-	return { fingerprint, partitionKey };
-};
+/**
+ * The coordinates a browser binds a durable mutation to.
+ *
+ * The wire is two commands now, `sync.connect` and `sync.advance`, and neither issues either of
+ * these: the fingerprint is the release's own schema fact, declared by the fixture workspace above,
+ * and the partition key is a client-chosen coordinate the journal folds into the
+ * request digest rather than a server-issued handle it resolves.
+ */
+const MUTATION_PARTITION_KEY = 'sha256:system-collection-reads-partition';
 
 /** The runtime's own collections that `SYSTEM_READ_POLICY` grants `read` on. */
 const RUNTIME_OWNED = [
@@ -312,10 +314,10 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 					`${name} was refused to a member: ${outcome.failure.reason} (${outcome.failure.action} on ${outcome.failure.resource})`
 				);
 			expect(outcome._tag).toBe('Success');
-			if (outcome._tag === 'Success')
-				expect(Reflect.get(outcome.success.value as object, 'serverOnly')).toBe(
-					name !== 'approval_request'
-				);
+			// The supported export path uses the same authorized collection read and answers rows directly.
+			if (outcome._tag === 'Success') {
+				expect(Array.isArray(outcome.success.value)).toBe(true);
+			}
 		}
 	});
 
@@ -356,7 +358,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 			const outcome = await readAs(harness, 'controller-token', collectionName);
 			if (outcome._tag !== 'Success')
 				throw new Error(`expected the directory read to be served, got ${JSON.stringify(outcome)}`);
-			const rows = Reflect.get(outcome.success.value as object, 'rows');
+			const rows = outcome.success.value;
 			expect(Array.isArray(rows)).toBe(true);
 			expect((rows as ReadonlyArray<object>).length).toBeGreaterThan(0);
 			for (const row of rows as ReadonlyArray<Record<string, unknown>>) {
@@ -378,14 +380,14 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 		const policies = withSystemCollections(fieldOpsWorkspace).policies;
 		const host = systemSubject('test-tenant');
 		for (const name of RUNTIME_OWNED) {
-			expect(decide(policies, host, 'read', name, new Set())).toEqual({
+			expect(decidePolicies(policies, host, 'read', name, new Set())).toEqual({
 				allowed: false,
 				reason: 'no matching allow policy'
 			});
 		}
 		// And what it is granted is untouched, or the assertion above would pass against a principal
 		// that had lost its authority rather than kept its limits.
-		expect(decide(policies, host, 'manage', 'schema', new Set())).toEqual({
+		expect(decidePolicies(policies, host, 'manage', 'schema', new Set())).toEqual({
 			allowed: true,
 			reason: 'explicit allow'
 		});
@@ -412,10 +414,8 @@ describe('notifications are live system collections scoped to their recipient', 
 		);
 
 		expect(await readIds(harness, 'controller-token', 'bolt_notifications')).toEqual([ownId]);
-		const mutation = await mutationPartition(harness, 'controller-token');
 		const updateNotification = (
 			idempotencyKey: string,
-			deviceSequence: number,
 			id: string,
 			baseVersion: number,
 			values: Readonly<Record<string, unknown>>
@@ -423,9 +423,8 @@ describe('notifications are live system collections scoped to their recipient', 
 			protocolVersion: 2,
 			idempotencyKey,
 			issuedAtEpochMs: Date.now(),
-			deviceSequence,
-			partitionKey: mutation.partitionKey,
-			schemaFingerprint: mutation.fingerprint,
+			partitionKey: MUTATION_PARTITION_KEY,
+			schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT,
 			graph: { action: 'update', collection: 'bolt_notifications', values: { id, ...values } },
 			baseVersions: [
 				{ row: { collection: 'bolt_notifications', recordId: id }, rowVersion: baseVersion }
@@ -437,7 +436,7 @@ describe('notifications are live system collections scoped to their recipient', 
 				command(
 					'collections.mutate',
 					'controller-token',
-					updateNotification('mark-own-notification-read', 1, ownId, 1, { read: true })
+					updateNotification('mark-own-notification-read', ownId, 1, { read: true })
 				)
 			).pipe(Effect.result)
 		);
@@ -451,7 +450,7 @@ describe('notifications are live system collections scoped to their recipient', 
 				command(
 					'collections.mutate',
 					'controller-token',
-					updateNotification('mark-other-notification-read', 2, otherId, 1, { read: true })
+					updateNotification('mark-other-notification-read', otherId, 1, { read: true })
 				)
 			).pipe(Effect.result)
 		);
@@ -464,7 +463,7 @@ describe('notifications are live system collections scoped to their recipient', 
 				command(
 					'collections.mutate',
 					'controller-token',
-					updateNotification('rewrite-own-notification-payload', 3, ownId, 2, {
+					updateNotification('rewrite-own-notification-payload', ownId, 2, {
 						payload: { text: 'Rewritten' }
 					})
 				)
@@ -572,31 +571,34 @@ describe('approval requests are scoped to their parties and approvers', () => {
 		await seedContractor(harness);
 		await seedController(harness);
 		await raiseApproval(harness);
+		const unroutedEffectId = EffectId.make('approval-unrouted');
+		const unroutedRoot = {
+			collection: 'people',
+			id: '019f6f10-0003-7000-8000-000000000002',
+			action: 'create'
+		} as const;
+		const unroutedRequestId = Approvals.approvalRequestId(unroutedRoot, unroutedEffectId);
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).request(
-					EffectId.make('approval-unrouted'),
-					contractorSubject,
-					'019f6f10-0002-7000-8000-000000000002',
-					{
-						collection: 'people',
-						id: '019f6f10-0003-7000-8000-000000000002',
-						action: 'create',
-						approval: {
-							id: 'people:create',
-							steps: [{ id: 'people:create:stage:1', approvers: ['Other Reviewers'] }],
-							superceded_by: []
-						}
-					}
-				);
+				return yield* (yield* Approvals.Service).gate({
+					effectId: unroutedEffectId,
+					subject: contractorSubject,
+					root: unroutedRoot,
+					storedGraph: { version: 1, ...unroutedRoot },
+					approval: {
+						id: 'people:create',
+						steps: [{ id: 'people:create:stage:1', approvers: ['Other Reviewers'] }],
+						superceded_by: []
+					},
+					review: undefined
+				});
 			})
 		);
 
 		expect(await readIds(harness, 'controller-token', 'approval_request')).toEqual([REQUEST_ID]);
-		expect((await readIds(harness, 'contractor-token', 'approval_request')).toSorted()).toEqual([
-			REQUEST_ID,
-			'019f6f10-0002-7000-8000-000000000002'
-		]);
+		expect((await readIds(harness, 'contractor-token', 'approval_request')).toSorted()).toEqual(
+			[REQUEST_ID, unroutedRequestId].toSorted()
+		);
 	});
 
 	/** The join table follows the request, for both readings of "may read it". */
@@ -649,7 +651,8 @@ describe('approval requests are scoped to their parties and approvers', () => {
 				(grant) => grant.collection === name && grant.action === 'read'
 			);
 			expect(grants).toHaveLength(1);
-			expect(typeof grants[0]?.where?.['$sql']).toBe('string');
+			expect(grants[0]?.where).toMatchObject({ kind: 'policy-sql' });
+			expect(typeof Reflect.get(grants[0]?.where ?? {}, 'statement')).toBe('string');
 
 			const compiled = await harness.runtime.runPromise(
 				Effect.gen(function* () {
@@ -657,11 +660,12 @@ describe('approval requests are scoped to their parties and approvers', () => {
 				})
 			);
 			expect(compiled.allowed).toBe(true);
-			expect(compiled.sql).not.toBe('true');
-			expect(compiled.sql).toContain('::jsonb');
-			expect(compiled.parameters).toContain(contractorSubject.userId);
-			expect(compiled.parameters).toContain(CONTRACTOR_TEAM);
-			expect(compiled.parameters).toContain(JSON.stringify([CONTRACTOR_TEAM.toLocaleLowerCase()]));
+			const statement = AccessControl.predicateStatement(compiled);
+			expect(statement.sql).not.toBe('true');
+			expect(statement.sql).toContain('::jsonb');
+			expect(statement.parameters).toContain(contractorSubject.userId);
+			expect(statement.parameters).toContain(CONTRACTOR_TEAM);
+			expect(statement.parameters).toContain(JSON.stringify([CONTRACTOR_TEAM.toLocaleLowerCase()]));
 		}
 	});
 });

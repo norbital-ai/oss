@@ -1,5 +1,5 @@
 import type { BoltTransport } from '#lib/client/contracts.js';
-import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
+import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 import { Effect, MutableRef } from 'effect';
 
 /**
@@ -80,27 +80,28 @@ export type WorkspaceSession = Readonly<{
 	 * The host-proven, stable identity of the signed-in principal.
 	 *
 	 * Opaque to Bolt and never an email address, bearer credential, team, role or client assertion.
-	 * Replica partitions fingerprint this value so rotating a credential can reopen the same local
-	 * database, while another person can never inherit it merely by receiving the old credential.
+	 * Another person can never inherit a session merely by receiving an old credential: the sync
+	 * connection binds this identity, not the bearer token alone.
 	 */
 	readonly principal: string;
 	/**
 	 * The authority-shaped browser scope this document is currently rendering.
 	 *
 	 * It is not an authorization input — every command is still checked by the runtime. It keeps
-	 * policy-filtered query answers and the local replica for an administrator separate from the
-	 * replicas opened while that administrator previews a team.
+	 * policy-filtered query answers for an administrator separate from the ones answered while that
+	 * administrator previews a team.
 	 */
 	readonly accessScope: string;
 	/** The signed-in operator's bearer credential, without the `Bearer ` prefix. */
 	readonly credential: string;
 	readonly transport: BoltTransport;
 	/**
-	 * Where the local replica opens its change stream.
+	 * Where the sync client opens its SSE stream.
 	 *
-	 * A URL, because an `EventSource` needs one and cannot go through the command transport. It was a
-	 * `SYNC_STREAM_PATH` constant inside the replica — one host's route compiled into the framework,
-	 * so the replica only ever learned about changes when it happened to be running inside that host.
+	 * A URL, because an `EventSource` needs one and cannot go through the command transport. The host
+	 * declares it on the session rather than a `SYNC_STREAM_PATH` constant compiled into the
+	 * framework: the client learns the route from whoever mounts it, so any host that implements the
+	 * contract can serve sync.
 	 */
 	readonly syncStreamUrl: string;
 	readonly files: WorkspaceFilesHost;
@@ -135,9 +136,9 @@ const workspaceSessions = WorkspaceSessions.make();
  * Declares the session every later read runs under.
  *
  * Called by `mountWorkspace` before the generated client is imported, because importing it builds
- * the browser runtime and that runtime's query cache is namespaced by tenant, environment, and
- * access scope. A cache namespaced from a value that arrives later is a cache shared between
- * organizations or policy scopes.
+ * the browser runtime and that runtime's sync connection and queries are bound to the tenant,
+ * environment and release it declares. A runtime bound from a value that arrives later would be a
+ * workspace shared between organizations.
  */
 export const setWorkspaceSession = (next: WorkspaceSession): void => {
 	workspaceSessions.set(next);

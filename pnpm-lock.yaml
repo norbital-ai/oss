@@ -30,6 +30,12 @@ importers:
 
   .:
     devDependencies:
+      '@norbital-ai/doctor-effect':
+        specifier: workspace:*
+        version: link:packages/doctor-effect
+      '@norbital-ai/doctor-norbital':
+        specifier: workspace:*
+        version: link:packages/doctor-norbital
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -57,12 +63,6 @@ importers:
 
   packages/bolt:
     dependencies:
-      '@electric-sql/pglite':
-        specifier: ^0.5.5
-        version: 0.5.5
-      '@electric-sql/pglite-pgvector':
-        specifier: ^0.0.6
-        version: 0.0.6(@electric-sql/pglite@0.5.5)
       '@iconify/svelte':
         specifier: 'catalog:'
         version: 5.2.2(svelte@5.56.10)
@@ -115,6 +115,12 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-rc.111
         version: 4.0.0-rc.111(effect@4.0.0-rc.111)(vitest@4.1.11(@types/node@26.2.0)(happy-dom@20.11.6)(vite@8.2.2(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0)))
+      '@electric-sql/pglite':
+        specifier: ^0.5.5
+        version: 0.5.5
+      '@electric-sql/pglite-pgvector':
+        specifier: ^0.0.6
+        version: 0.0.6(@electric-sql/pglite@0.5.5)
       '@norbital-ai/config':
         specifier: workspace:*
         version: link:../config
@@ -220,6 +226,44 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
+    devDependencies:
+      '@norbital-ai/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
+
+  packages/doctor-effect:
+    dependencies:
+      '@norbital-ai/doctor':
+        specifier: workspace:*
+        version: link:../doctor
+    devDependencies:
+      '@norbital-ai/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+  packages/doctor-norbital:
+    dependencies:
+      '@norbital-ai/doctor':
+        specifier: workspace:*
+        version: link:../doctor
+      '@norbital-ai/doctor-effect':
+        specifier: workspace:*
+        version: link:../doctor-effect
+      '@norbital-ai/std':
+        specifier: workspace:*
+        version: link:../std
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
     devDependencies:
       '@norbital-ai/config':
         specifier: workspace:*

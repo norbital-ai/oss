@@ -72,11 +72,15 @@ describe('collection import mutation rows', () => {
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(harness!.effectId('seed-existing'), adminSubject, {
-					collection: 'notes',
-					id: existingId,
-					values: { body: 'old', source: 'seed' }
-				});
+				yield* collections.mutate(
+					harness!.effectId('seed-existing'),
+					adminSubject,
+					'notes',
+					[{ id: existingId, body: 'old', source: 'seed' }],
+					false,
+					0,
+					{ root: { id: existingId, action: 'create' } }
+				);
 				const imported = yield* collections.import(
 					harness!.effectId(importEffectId),
 					adminSubject,
@@ -112,5 +116,64 @@ describe('collection import mutation rows', () => {
 			])
 		);
 		expect(result.rows).toHaveLength(2);
+	}, 30_000);
+
+	it('keeps absolute pipeline row indices across fixed 100-row mutation chunks', async () => {
+		const importEffectId = 'chunked-import';
+		const rows = Array.from({ length: 101 }, (_, index) => ({
+			body: `row ${index}`,
+			source: 'chunked-pipeline'
+		}));
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				pipelines: {
+					notes: {
+						import: {
+							description: 'Returns more than one fixed import chunk.',
+							handler: () => rows
+						}
+					}
+				}
+			}
+		});
+
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const imported = yield* collections.import(
+					harness!.effectId(importEffectId),
+					adminSubject,
+					[
+						{
+							collection: 'notes',
+							id: recordId('chunked-document'),
+							values: { document: 'fixture' }
+						}
+					]
+				);
+				const stored = yield* collections.findMany(
+					harness!.effectId('read-chunked-import'),
+					adminSubject,
+					{ collection: 'notes', limit: 200 }
+				);
+				return { imported, stored };
+			})
+		);
+
+		expect(result.imported).toBe(101);
+		expect(result.stored).toHaveLength(101);
+		expect(result.stored).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: deriveRecordId(`notes:${importEffectId}:0`),
+					body: 'row 0'
+				}),
+				expect.objectContaining({
+					id: deriveRecordId(`notes:${importEffectId}:100`),
+					body: 'row 100'
+				})
+			])
+		);
 	}, 30_000);
 });

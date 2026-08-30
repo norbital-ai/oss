@@ -141,41 +141,36 @@ Details that matter:
   correct thing to create: the name resolves, the team appears in the settings surface, and putting
   somebody in it is one assignment away.
 
-## Write-then-lock
+## Prepare, gate, commit, settle
 
-Norbital does not hold a write and apply it after approval. It writes and locks — with one
-difference between the two write paths.
+Imperative writes (including an agent's `write_collection`) and declarative
+`collections.mutate` graphs use one lifecycle:
 
-**Imperative writes** (a single `create`/`update`/`delete` — including an agent's
-`write_collection`): the hooks run and the row is written exactly as an ungated write would write
-it; then the row is stamped with `approval_id`, which is the lock. This order matters: an earlier
-design stored the _operation_ and wrote nothing, so the stored values were only what the form posted
-— a collection that derives six `not null` columns in `create.perRecord.before` produced an
-operation that could not satisfy its own schema when it was replayed, and its `after` hook never ran
-at all.
+1. **PREPARE** runs the applicable hooks and reconciles the proposed mutation graph without
+   publishing its domain values.
+2. The approval **gate** chooses `noApproval` or one concrete review flow.
+3. `noApproval` proceeds to **COMMIT**. A gated mutation creates a request and goes on **hold**.
+4. **SETTLE** follows a commit. Approval calls `collections.resume`, which commits the prepared
+   create/update/delete and settles it. Rejection or withdrawal discards the prepared mutation.
 
-**Declarative writes** (the browser's one write path, `collections.mutate` with a root and every
-relationship it explicitly owns): the graph is reconciled **before** any part of it is written — a
-declarative create is the one lockless case, because its domain row intentionally does not exist
-before approval. Rejecting it is already atomic cleanup.
-
-Both paths:
+While a request is held:
 
 1. An `approval_request` row is created with status `ONGOING` (the durable state lives in
    `bolt_approvals`; the row is its synced projection).
-2. Any further write to that row is refused as an approval conflict naming the request that holds
-   it, until the request closes.
-3. The caller is answered **202** with `{ pending: true, requestId, collection, id, action }` — not
+2. A create has **no domain row**. For an update or delete, the existing committed row may carry
+   `approval_id`; the proposed values or deletion have not been applied.
+3. A further write to a held existing row is refused as an approval conflict naming the request,
+   until the request closes.
+4. The caller is answered **202** with `{ pending: true, requestId, collection, id, action }` — not
    a refusal. A tool or a screen that reports this as an error is reporting success as a failure.
 
-So a pending row **is** in the table and will appear in queries. The convention across workspaces is
-that `approval_id IS NULL` means the row is live and approved, and a non-null value means
-it is held by an open approval. Reports and dashboards filter on that.
+The convention across workspaces is that `approval_id IS NULL` means an existing row is not held;
+a non-null value identifies the open approval holding its current committed state. This convention
+does not imply that a pending create exists: it does not have a domain row until approval commits it.
 
 There is no separate "submit for approval" action. A gated write creates the request by itself. An
-approval-gated collection is also never batched: `mutate` sends it down the one-row path, because a
-gate does not "write the batch" — it writes each row and holds each one under its own request, which
-a reviewer has to decide on separately.
+approval-gated collection is also never batched: `mutate` sends it down the one-row path so each
+prepared mutation has its own request, which a reviewer decides separately.
 
 ## Statuses and outcomes
 
@@ -184,9 +179,9 @@ a reviewer has to decide on separately.
 
 | Outcome                | What happens                                                                                                                                                                                                                                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Approved               | `collections.resume` runs. A create's `perRecord.after` runs then — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. (An admin or `superceded_by` decision is the same, flagged `superseded`.)                                                                       |
-| Rejected, or withdrawn | `collections.discard` runs. A refused create's provisional row goes — releasing its lock alone would publish exactly the write somebody just refused (declarative graphs have nothing written, so cleanup is already done). An update or delete was never applied, so the record is already what it should be and only the lock comes off. |
-| Changes requested      | Same as rejected: the request closes, the provisional write is discarded, and the requestor can resubmit.                                                                                                                                                                                                                                  |
+| Approved               | `collections.resume` commits the prepared mutation and settles it: a create inserts its row, an update applies its proposed values, and a delete removes its target. (An admin or `superceded_by` decision is the same, flagged `superseded`.)                                                                                |
+| Rejected, or withdrawn | `collections.discard` drops the prepared mutation. A create has no domain row to clean up; an update or delete never applied its proposed change, so only any hold on the existing row is released.                                                                                                                            |
+| Changes requested      | Same as rejected: the request closes, the prepared mutation is discarded, and the requestor can resubmit.                                                                                                                                                                                                                     |
 | Conflicted             | The reviewed graph could not be settled after approval (the mutation threw, or the artifact no longer matches) — a terminal refusal that failed the turnaround.                                                                                                                                                                            |
 
 The client's `approvals.process` accepts `APPROVED`, `REJECTED`, `REQUEST_FOR_CHANGE` and
@@ -210,7 +205,7 @@ at once (an empty `superceded_by` means only the flow's own approvers).
 | `bolt_approvals` (internal)            | The durable state per request: `_tag` (`Pending`/`Approved`/`Rejected`/`ChangesRequested`/`Conflicted`/`Withdrawn`), current `step` cursor, and the **operation** under review — values, the chosen configuration (its stages and `superceded_by`), everything |
 | `approval_request` (system collection) | The synced projection: `collection_name`, `record_id`, `action`, `status`, `steps` (a cursor — `[{ step: n }]` while pending, `[]` once closed), `locked_record_refs`, `proposed_values`, `closed_at`, `closed_by`                                             |
 | `requestor` (system collection)        | The join table linking an `approval_request` to the user who raised it (`approval_request_id`, `user_id`)                                                                                                                                                      |
-| `approval_id` on every collection row  | The stamp identifying the open request holding it — **this is the lock**                                                                                                                                                                                       |
+| `approval_id` on an existing row       | The stamp identifying the open request holding its current committed state; a held create has no row yet                                                                                                                                                       |
 | `team`                                 | The teams themselves; `approvers` entries are matched against `name`                                                                                                                                                                                           |
 | `user.team_id`                         | Which single team a person belongs to                                                                                                                                                                                                                          |
 

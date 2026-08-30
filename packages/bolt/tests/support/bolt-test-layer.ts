@@ -157,7 +157,6 @@ import * as Notifications from '../../src/runtime/notifications/notifications.js
 import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
-import * as SyncWake from '../../src/runtime/sync/wake.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime,
@@ -506,12 +505,7 @@ export const makeBoltTestRuntime = async (
 	const provisioned: WorkspaceDefinition = {
 		...definition,
 		migrations: [baseline, ...(definition.migrations ?? [])],
-		mutationCompatibility:
-			definition.mutationCompatibility ?? {
-				offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-				currentSchemaFingerprint: testSchemaFingerprint,
-				adapters: []
-			}
+		schemaFingerprint: definition.schemaFingerprint ?? testSchemaFingerprint
 	};
 	// Recorded, because it has just been run. Without this a `migrate` in a test would find the
 	// baseline pending and replay `CREATE TABLE` against tables that already exist.
@@ -550,11 +544,9 @@ export const makeBoltTestRuntime = async (
 			...suppliedAuthored.approvalFlows
 		}
 	});
-	// The task queue, over the database facility and the host's timer. Everything that used to enqueue
-	// through the tasks facility — automations, approvals, integrations, agents — writes a `bolt_task`
-	// row through this instead, and wakes the host through the facility bound above.
-	const wake = Layer.provideMerge(SyncWake.layer, facilities);
-	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(facilities, wake)));
+	// The task queue, over the database facility. Everything that enqueues through the tasks
+	// facility — automations, approvals, integrations, agents — writes a `bolt_task` row here.
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(facilities));
 	const foundation = Layer.provideMerge(
 		Layer.mergeAll(Identity.layer, AccessControl.layer),
 		Layer.mergeAll(workspaceLayer, facilities, taskQueue)
@@ -576,27 +568,30 @@ export const makeBoltTestRuntime = async (
 	// Automations sits above Collections rather than below it: starting one is a declaration check, a
 	// nesting check, and a row on the queue, and the authored api Collections hands a hook carries
 	// `automations.run`, so Collections is the consumer.
+	// `facilities`, because an automation start writes its queue row and its run bookkeeping through
+	// the database: `Automations.layer` resolves `Database.Service`, and under Effect v4 a
+	// `Layer.provide` that leaves a requirement unsatisfied does not fail to compile — it leaks to
+	// the top of the graph and dies there as "Service not found" at build time.
 	const automations = Automations.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget, tenantScope))
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget, tenantScope, facilities))
 	);
-	// Collections announces every committed write on the sync topic, so the wake has to be present for
 	// the write path to resolve at all. The harness binds no transport, which is the point: the
 	// announcement is `Effect.ignore`d, so a runtime with nowhere to publish still writes normally.
-	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue, wake));
+	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue, facilities));
 	const collections = Layer.provideMerge(
 		Collections.layer,
-		Layer.mergeAll(data, authoredLayer, wake, taskQueue, automations, tenantScope)
+		Layer.mergeAll(data, authoredLayer, taskQueue, facilities, automations, tenantScope)
 	);
 	// Dispatch resolves authored remotes through this registry, and the registry resolves them
 	// through Collections — so it layers over them, not alongside the facilities. No handlers are
 	// registered: a test that calls one should fail on the missing name, not a missing service.
 	const remotes = Layer.provideMerge(remoteRegistryLayer({}), collections);
-	const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(Layer.mergeAll(facilities, wake)));
+	const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(facilities));
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
 	const agents = Layer.provideMerge(
 		Agents.layer,
-		Layer.mergeAll(remotes, taskQueue, budget, wake, chatDocuments)
+		Layer.mergeAll(remotes, taskQueue, facilities, budget, chatDocuments)
 	);
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
@@ -620,7 +615,12 @@ export const makeBoltTestRuntime = async (
 		Layer.merge(agents, cipher)
 	);
 	const surfaces = Layer.provideMerge(
-		Layer.mergeAll(Envoys.layer, Integrations.layer, Notifications.layer, WorkspaceSchema.layer),
+		Layer.mergeAll(
+			Envoys.layer,
+			Integrations.layer,
+			Notifications.layer,
+			WorkspaceSchema.layer(buildSchemaPlan(definition))
+		),
 		Layer.mergeAll(
 			vault,
 			authoredLayer,
@@ -629,7 +629,6 @@ export const makeBoltTestRuntime = async (
 			automations,
 			rateLimits,
 			tenantScope,
-			wake,
 			chatDocuments
 		)
 	);

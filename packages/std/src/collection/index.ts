@@ -3,10 +3,10 @@
  * fields are searchable.
  *
  * This lives in `std` because it is the one vocabulary every layer has to agree on and no layer
- * owns. The design system types its public props with it, the compiler decides which columns get a
- * trigram index with it, and an application builds queries with it — so whichever package hosts it
- * becomes a dependency of all three. `std` is the only package that can be: it depends on nothing
- * in the workspace, and `bolt`, `ui` and `colony` already depend on it.
+ * owns. The design system types its public props with it, the compiler decides which columns feed
+ * the generated search document with it, and an application builds queries with it — so whichever
+ * package hosts it becomes a dependency of all three. `std` is the only package that can be: it
+ * depends on nothing in the workspace, and `bolt`, `ui` and `colony` already depend on it.
  *
  * The alternatives are a cycle and a lie about layering. `bolt` cannot host it because `bolt`
  * depends on `ui` (it ships the client Svelte surface under `src/client/ui/`), so `ui` importing
@@ -86,7 +86,7 @@ export interface CollectionField<TName extends string = string> {
 	 * Explicit search opt-in, authored as `text({ search: true })`.
 	 *
 	 * Search is opt-in: only a non-array text/phone/enum field carrying `search: true` gets a
-	 * trigram search index and participates in any search path — the collection search box, the
+	 * generated lexical document and participates in any search path — the collection search box, the
 	 * omni finder and @ mentions, relation pickers. Absent means the field is never searched and
 	 * never indexed, however text-like its kind.
 	 */
@@ -104,8 +104,24 @@ export interface CollectionField<TName extends string = string> {
 export const COLLECTION_SEARCH_MAX_LENGTH = 200;
 
 /**
- * Whether a field is searchable — the predicate every search path and the trigram index creation
- * agree on. Search runs over exactly the fields that got a trigram index, and both are explicit
+ * One collection search command.
+ *
+ * Both branches are explicit so callers cannot accidentally route ordinary type-ahead through the
+ * embedding path.
+ */
+export type CollectionSearch =
+	| Readonly<{
+			readonly mode: 'lexical';
+			readonly term: string;
+	  }>
+	| Readonly<{
+			readonly mode: 'semantic';
+			readonly term: string;
+	  }>;
+
+/**
+ * Whether a field is searchable — the predicate every search path and lexical document generation
+ * agree on. Search runs over exactly the fields that feed the shared indexes, and both are explicit
  * opt-ins: a non-array text/phone/enum field is only searchable when the author wrote
  * `text({ search: true })` (or the equivalent on `phone()`/`enums()`).
  *
@@ -115,18 +131,6 @@ export const COLLECTION_SEARCH_MAX_LENGTH = 200;
  */
 export function isSearchableCollectionField(field: CollectionField): boolean {
 	return !field.array && ['text', 'phone', 'enum'].includes(field.kind) && field.search === true;
-}
-
-export function collectionSearchTrigramIndexName(tableName: string, columnName: string): string {
-	const fullName = `${tableName}_${columnName}_search_trgm_idx`;
-	if (fullName.length <= 63) return fullName;
-	let hash = 2166136261;
-	for (const character of fullName) {
-		hash ^= character.codePointAt(0) ?? 0;
-		hash = Math.imul(hash, 16777619);
-	}
-	const suffix = `_${(hash >>> 0).toString(36)}_trgm_idx`;
-	return `${fullName.slice(0, 63 - suffix.length)}${suffix}`;
 }
 
 export interface CollectionRelationship {
@@ -150,8 +154,8 @@ export type CollectionWhere<_TRow extends object> = Readonly<Record<string, unkn
 export interface CollectionBaseQuery<TRow extends object> {
 	readonly with?: Record<string, unknown>;
 	readonly where?: CollectionWhere<TRow>;
-	/** Typo-tolerant search across text/phone/enum fields and direct relationship text labels. */
-	readonly search?: string;
+	/** Explicit lexical or semantic collection search. */
+	readonly search?: CollectionSearch;
 	readonly columns?: Record<string, boolean>;
 	readonly orderBy?: Partial<Record<Extract<keyof TRow, string>, 'asc' | 'desc'>>;
 	readonly bypass_secret?: string;
@@ -233,12 +237,8 @@ export interface CollectionFilterOptions {
 	readonly filters?: readonly CollectionFilter[];
 }
 
-/** Durable client-side progression of one local-first collection mutation. */
-export type CollectionMutationPushState =
-	'queued' | 'pushing' | 'awaiting-authoritative-delta' | 'quarantined';
-
 export interface CollectionMutationQuarantine {
-	readonly code: 'compatibility-horizon-expired' | 'schema-incompatible' | 'manual-review';
+	readonly code: string;
 	readonly message: string;
 	readonly atEpochMs: number;
 }
@@ -272,8 +272,9 @@ export type CollectionMutationSettlement = Readonly<
 	  }
 >;
 
+/** The authority for settlement status; Bolt's public union derives from this plus its queue phases. */
 export type CollectionMutationSettlementStatus =
-	CollectionMutationPushState | CollectionMutationSettlement['kind'] | 'unknown';
+	CollectionMutationSettlement['kind'] | 'unknown';
 
 export interface CollectionMutationSettlementHandle {
 	readonly idempotencyKey: string;
@@ -283,15 +284,15 @@ export interface CollectionMutationSettlementHandle {
 }
 
 /**
- * What browser `await mutate()` means: the graph is durable and visible locally, while settlement
- * remains explicitly asynchronous and may still be rejected or quarantined by the authority.
+ * What browser `await mutate()` means: the graph is held in tab memory and overlaid for this tab,
+ * while settlement remains explicitly asynchronous and may still be rejected or quarantined by the
+ * authority. A write in a crashed or closed tab is lost before its outcome.
  */
-export interface LocallyDurableCollectionMutationResult<TRow extends object> {
-	readonly durability: 'local';
+export interface MemoryCollectionMutationResult<TRow extends object> {
+	readonly durability: 'memory';
 	readonly pending: true;
 	readonly row: TRow | null;
 	readonly idempotencyKey: string;
-	readonly deviceSequence: number;
 	readonly settlement: CollectionMutationSettlementHandle;
 }
 
@@ -311,10 +312,10 @@ export type CollectionOperations<TCollection extends CollectionType<object, obje
 		query?: CollectionBaseQuery<CollectionRow<TCollection>>,
 		options?: CollectionFilterOptions
 	): RemoteQuery<number>;
-	// repository-health:allow EFF2 -- The public browser seam resolves at local durability; authority settlement remains on the returned handle.
+	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
 	mutate(
 		values: TCollection['mutation']
-	): Promise<LocallyDurableCollectionMutationResult<CollectionRow<TCollection>>>;
+	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
 	/** Number of in-flight writes for this collection. */
 	readonly pending: number;
 }>;

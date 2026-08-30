@@ -280,20 +280,23 @@ for (const { directory, name } of packages) {
 		writeManifest(storeManifestPath, manifest);
 	}
 
-	// Every installation's copy, stamped and rewritten whether or not this run pushed — a checkout
-	// linked before the stamp existed is otherwise indistinguishable from an up-to-date one.
-	for (const installation of installations) {
-		const installedManifestPath = path.join(
-			installation,
-			'.yalc',
-			...name.split('/'),
-			'package.json'
-		);
-		if (!existsSync(installedManifestPath)) continue;
-		writeManifest(
-			installedManifestPath,
-			consumerManifest(readManifest(installedManifestPath), signature)
-		);
+	// Stamp only installations this run actually replaced. Stamping a leftover `.yalc`
+	// tree makes the next linker treat old files as this build, and `yalc add --pure`
+	// then skips the store copy.
+	if (pushed) {
+		for (const installation of installations) {
+			const installedManifestPath = path.join(
+				installation,
+				'.yalc',
+				...name.split('/'),
+				'package.json'
+			);
+			if (!existsSync(installedManifestPath)) continue;
+			writeManifest(
+				installedManifestPath,
+				consumerManifest(readManifest(installedManifestPath), signature)
+			);
+		}
 	}
 
 	report.packages[name] = { version, signature, pushed, stale };

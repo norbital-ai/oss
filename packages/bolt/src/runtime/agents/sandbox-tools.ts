@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -18,21 +18,12 @@ const sandboxToolNames = [
 	'read_agent',
 	'message_agent',
 	'await_agent',
-	'dequeue_agent_message',
-	'reorder_agent_queue',
 	'interrupt_agent',
 	'stop_agent',
 	'resume_agent'
 ] as const;
 const SandboxToolNames = Schema.Literals([...sandboxToolNames]);
 type SandboxToolName = Schema.Schema.Type<typeof SandboxToolNames>;
-
-/**
- * The one tool that *parks* its caller rather than answering: its exact task join point waits for
- * a child session, and the turn continues under the parent's authority later. The generic turn
- * loop asks the platform layer "is this a parking call?" instead of naming tools.
- */
-export const PARKS_TOOL_NAMES: ReadonlyArray<string> = ['await_agent'];
 
 export const isSandboxTool = Schema.is(SandboxToolNames);
 
@@ -50,8 +41,7 @@ const agentIdInput = objectInput({ agentId: { type: 'string', minLength: 1 } }, 
 export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'spawn_agent',
-		description:
-			'Spawn a direct child agent and durably queue its first task. The child may spawn its own children.',
+		description: 'Spawn a direct child agent. The child may spawn its own children.',
 		command: 'platform:spawn_agent',
 		inputSchema: objectInput({ task: { type: 'string', minLength: 1 } }, ['task'])
 	},
@@ -69,7 +59,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'message_agent',
-		description: "Durably queue a message to this agent's direct parent or a direct child.",
+		description: "Pass a message to this agent's direct parent or a direct child.",
 		command: 'platform:message_agent',
 		inputSchema: objectInput(
 			{
@@ -81,7 +71,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'await_agent',
-		description: 'Wait for one exact queued task owned by a direct child agent.',
+		description: 'Run and wait for one exact task owned by a direct child agent.',
 		command: 'platform:await_agent',
 		inputSchema: objectInput(
 			{
@@ -91,38 +81,14 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 			['agentId', 'taskId']
 		)
 	},
-	{
-		name: 'dequeue_agent_message',
-		description: 'Remove one queued message from a direct child without deleting its audit record.',
-		command: 'platform:dequeue_agent_message',
-		inputSchema: objectInput(
-			{
-				agentId: { type: 'string', minLength: 1 },
-				taskId: { type: 'string', minLength: 1 }
-			},
-			['agentId', 'taskId']
-		)
-	},
-	{
-		name: 'reorder_agent_queue',
-		description: 'Replace the complete mutable queue order for a direct child agent.',
-		command: 'platform:reorder_agent_queue',
-		inputSchema: objectInput(
-			{
-				agentId: { type: 'string', minLength: 1 },
-				orderedTaskIds: { type: 'array', items: { type: 'string', minLength: 1 } }
-			},
-			['agentId', 'orderedTaskIds']
-		)
-	},
 	...(['interrupt_agent', 'stop_agent', 'resume_agent'] as const).map((name): ToolDeclaration => ({
 		name,
 		description:
 			name === 'interrupt_agent'
 				? 'Interrupt only the currently running task of a direct child agent.'
 				: name === 'stop_agent'
-					? 'Pause a direct child agent and preserve all of its queued work.'
-					: 'Resume the same paused tasks for a direct child agent.',
+					? 'Stop a direct child agent at its next facility boundary.'
+					: 'Replay one stopped task as a fresh invocation.',
 		command: `platform:${name}`,
 		inputSchema: agentIdInput
 	}))
@@ -145,8 +111,8 @@ type SandboxContext = Readonly<{
 	readonly budget: InvocationBudget.Interface;
 	readonly spawn: SandboxAction;
 	readonly admit: SandboxAction;
-	readonly dequeue: SandboxAction;
-	readonly reorder: SandboxAction;
+	/** Runs or joins one exact child task and returns only after its assistant row settles. */
+	readonly awaitTarget: SandboxAction;
 	readonly interrupt: SandboxAction;
 	readonly stop: SandboxAction;
 	readonly resume: SandboxAction;
@@ -163,10 +129,6 @@ const AwaitInput = Schema.Struct({
 	agentId: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString
 });
-const ReorderInput = Schema.Struct({
-	agentId: Schema.NonEmptyString,
-	orderedTaskIds: Schema.Array(Schema.NonEmptyString)
-});
 const NullableString = Schema.Union([Schema.String, Schema.Null]);
 const AgentRow = Schema.Struct({
 	conversation_id: Schema.String,
@@ -177,11 +139,6 @@ const AgentRow = Schema.Struct({
 });
 type AgentRow = Schema.Schema.Type<typeof AgentRow>;
 const decodeAgentRow = Schema.decodeUnknownOption(AgentRow);
-const SettledTurn = Schema.Struct({
-	status: Schema.Literals(['completed', 'failed', 'interrupted', 'dequeued']),
-	parts: Schema.Array(Schema.Json)
-});
-
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'sandbox', tool: 'invalid-input' }))
@@ -248,7 +205,7 @@ const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext
 	return decoded._tag === 'Some' ? (decoded.value.title ?? null) : null;
 });
 
-/** Coordinates one direct parent-child aperture; the database remains the only queue state. */
+/** Coordinates one direct parent-child aperture; durable transcript rows are its only state. */
 export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(function* (
 	name: SandboxToolName,
 	input: Schema.Json,
@@ -358,44 +315,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		case 'await_agent': {
 			const parsed = yield* decode(AwaitInput, input);
 			yield* related(context, parsed.agentId, 'child');
-			const result = yield* executeBuilt(
-				context.effectId,
-				context.database,
-				composer
-					.select({ content: chatMessage.content })
-					.from(chatMessage)
-					.where(
-						and(
-							eq(chatMessage.conversation_id, parsed.agentId),
-							eq(chatMessage.turn_id, parsed.taskId),
-							eq(chatMessage.role, 'assistant')
-						)
-					)
-					.limit(1)
-			);
-			const settled = result.rows.flatMap((row) => {
-				const decoded = Schema.decodeUnknownOption(Schema.Struct({ content: SettledTurn }))(row);
-				return decoded._tag === 'Some' ? [decoded.value.content] : [];
-			})[0];
-			return settled === undefined
-				? { waiting: true, agentId: parsed.agentId, taskId: parsed.taskId }
-				: {
-						waiting: false,
-						agentId: parsed.agentId,
-						taskId: parsed.taskId,
-						status: settled.status,
-						output: settled.parts
-					};
-		}
-		case 'dequeue_agent_message': {
-			const parsed = yield* decode(AwaitInput, input);
-			yield* related(context, parsed.agentId, 'child');
-			return yield* context.dequeue(context.effectId, parsed);
-		}
-		case 'reorder_agent_queue': {
-			const parsed = yield* decode(ReorderInput, input);
-			yield* related(context, parsed.agentId, 'child');
-			return yield* context.reorder(context.effectId, parsed);
+			return yield* context.awaitTarget(context.effectId, parsed);
 		}
 		case 'interrupt_agent':
 		case 'stop_agent':

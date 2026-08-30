@@ -36,8 +36,8 @@ That makes one thing possible:
 recordId, limit?)`.
 
 What history is **not** is a rollback mechanism. A rejected approval does not restore a previous
-state — it discards the provisional write (see approvals). Past versions are read-only evidence,
-not a rewind.
+state because the prepared values were never committed; it discards the prepared mutation and
+releases any existing-row hold (see approvals). Past versions are read-only evidence, not a rewind.
 
 ## Audit
 
@@ -51,14 +51,14 @@ Clients hold a local replica of the data they are allowed to see — policy-scop
 never contains rows the user could not query directly. Mutations apply optimistically against the
 replica and reconcile with the server.
 
-Approval state propagates the same way. That is why a record can visibly become locked a moment
-after it is written: the write succeeded locally, then the server's approval request and its locks
-arrived through the same sync channel.
+Approval state propagates the same way. An optimistic client mutation can reconcile to an open
+approval: a held create has no server domain row, while an existing update/delete target remains at
+its committed values and may become locked when the request arrives through the sync channel.
 
 Two consequences worth stating to a confused user:
 
-- A write that appears to succeed and then shows as pending has not failed. That is write-then-lock
-  working as designed.
+- A write that appears to succeed optimistically and then shows as pending has not failed. The
+  server prepared it and is holding it at the approval gate; its proposed values are not committed.
 - A write refused because an open approval holds a record comes back as an approval conflict naming
   the request — not as a concurrency error between two editors. A record held by an approval is
   invisible to a workspace's liveness predicate (`approval_id IS NULL`), so a "record not found"

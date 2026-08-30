@@ -169,9 +169,9 @@ const VitePlugins = {
 					return `.bolt-app { ${WORKSPACE_ENTRY_STYLESHEET_MARKER}: 1; }`;
 				// Every generated-client import must be re-exported here. This virtual module is a separate
 				// resolution boundary: an omission survives `bolt sync` and fails only when Vite builds a
-				// tenant, which is how the old replica bootstrap remained broken unnoticed.
+				// tenant.
 				if (id === clientRuntimeId)
-					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, createWorkspaceBootstrapController, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
+					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy } from '@norbital-ai/bolt/client-runtime';`;
 				if (id === applicationId) {
 					return Effect.runPromise(
 						workspaceTitleOf(workspaceRoot).pipe(

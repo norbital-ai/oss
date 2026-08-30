@@ -138,7 +138,7 @@ describe('workspace.manifest command', () => {
 	 * There is no `agent` key, and its absence is asserted by the exact-equality below. It used to be
 	 * a back-pointer whose value was the one synthesized agent, in every workspace, always.
 	 */
-	it('attributes an envoy to its transport and audience', async () => {
+	it('publishes an envoy transport, audience and delegation boundary', async () => {
 		harness = await makeBoltTestRuntime(
 			workspace({
 				name: 'envoyed',
@@ -165,6 +165,7 @@ describe('workspace.manifest command', () => {
 						audience: 'public',
 						policies: ['member'],
 						groupMessages: 'mention_or_reply',
+						delegation: 'enabled',
 						task: 'Answer support questions for this member.'
 					})
 				],
@@ -184,7 +185,8 @@ describe('workspace.manifest command', () => {
 				name: 'support',
 				transport: 'whatsapp',
 				audience: 'public',
-				groupMessages: 'mention_or_reply'
+				groupMessages: 'mention_or_reply',
+				delegation: 'enabled'
 			}
 		]);
 	});
@@ -228,6 +230,7 @@ describe('workspace.manifest command', () => {
 						transport: 'whatsapp',
 						audience: 'public',
 						policies: ['member'],
+						delegation: 'enabled',
 						task: 'Answer support questions for this member.'
 					})
 				],

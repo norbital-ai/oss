@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isSearchableCollectionField } from '@norbital-ai/std/collection';
 import { defineModel, enums, phone, text } from '../../src/authoring/index.js';
-import { collection, workspace } from '../../src/authoring/workspace-schema.js';
-import { describeModel } from '../../src/authoring/model-introspection.js';
+import { collection } from '../../src/authoring/workspace-schema.js';
+import { compileModel, describeModel } from '../../src/authoring/model-introspection.js';
 import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
 import { Effect } from 'effect';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
@@ -38,6 +38,16 @@ describe('searchable field opt-in', () => {
 		expect(fields.summary).not.toHaveProperty('search');
 		expect(fields.internal_code).not.toHaveProperty('search');
 		expect(fields.contact).not.toHaveProperty('search');
+	});
+
+	it('derives stable ranking metadata from the model and nothing else', () => {
+		const compiled = compileModel(collection({ name: 'products', fields: {} }), opted);
+		expect(compiled.search).toEqual({
+			fields: ['hotline', 'status', 'title'],
+			documentColumn: 'search_document',
+			configuration: 'simple',
+			ranking: { lexical: 'ts_rank_cd', fuzzy: 'similarity' }
+		});
 	});
 
 	/**
@@ -92,14 +102,14 @@ describe('searchable field opt-in', () => {
 	/**
 	 * The two halves of the opt-in, pinned to each other.
 	 *
-	 * Search only ever runs over the columns that got a trigram index, so the DDL and the search UI have
-	 * to agree on the same set. They reach it by different routes — the plan reads
+	 * Search only ever runs over the columns that feed the generated document and expression index,
+	 * so the DDL and the search UI have to agree on the same set. They reach it by different routes — the plan reads
 	 * `FieldDefinition.search`, which `describeModelColumns` records off the Drizzle config; the UI runs
 	 * `isSearchableCollectionField` over a catalog field, where a `kind` exists to weigh. Nothing but
-	 * this assertion stops those routes from drifting, and drift here is silent: an index over a column
-	 * search never reads, or a search box over a column with no index behind it.
+	 * this assertion stops those routes from drifting, and drift here is silent: an indexed field the
+	 * resolver never searches, or a search box over a field absent from the document.
 	 */
-	it('indexes exactly the columns the shared predicate calls searchable', async () => {
+	it('builds one stored document and two indexes from exactly the opted-in fields', async () => {
 		const source = [
 			'export default defineModel({',
 			'\ttitle: text({ search: true }).notNull(),',
@@ -128,16 +138,21 @@ describe('searchable field opt-in', () => {
 				previous: undefined
 			})
 		);
-		const indexed = (migration?.statements ?? [])
-			.flatMap((statement) => [...statement.matchAll(/"products_(?<column>.+?)_search_trgm_idx"/g)])
-			.flatMap((match) => (match.groups?.['column'] === undefined ? [] : [match.groups['column']]))
+		const ddl = (migration?.statements ?? []).join('\n');
+		const searchable = catalog.fields
+			.filter(isSearchableCollectionField)
+			.map((field) => field.name)
 			.toSorted();
-		expect(indexed).toEqual(
-			catalog.fields
-				.filter(isSearchableCollectionField)
-				.map((field) => field.name)
-				.toSorted()
-		);
-		expect(indexed).toEqual(['hotline', 'status', 'title']);
+		expect(searchable).toEqual(['hotline', 'status', 'title']);
+		expect(ddl).toContain('"search_document" tsvector');
+		expect(ddl).toContain("to_tsvector('simple'::regconfig");
+		for (const field of searchable) expect(ddl).toContain(`coalesce("${field}", '')`);
+		expect(ddl).not.toContain(`coalesce("summary", '')`);
+		expect(ddl).not.toContain(`coalesce("contact", '')`);
+		expect(ddl).toContain('"products_search_document_gin_idx"');
+		expect(ddl).toContain('"products_search_text_trgm_idx"');
+		expect(ddl).toContain('gin_trgm_ops');
+		for (const field of searchable)
+			expect(ddl).not.toContain(`"products_${field}_search_trgm_idx"`);
 	});
 });

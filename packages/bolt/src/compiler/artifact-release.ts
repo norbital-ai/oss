@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import type {
-	ArtifactAssetIndex,
 	ArtifactCodeChunk,
 	ArtifactCodeGraph,
 	FacilityName,
@@ -27,8 +26,8 @@ const jsonBytes = (value: unknown): Uint8Array =>
 /**
  * One compiler-owned partition for Rolldown's `codeSplitting.groups` and its release role.
  */
-export type ServerCodeRole = ArtifactCodeChunk['role'];
-export type ServerModulePartition = Readonly<{
+type ServerCodeRole = ArtifactCodeChunk['role'];
+type ServerModulePartition = Readonly<{
 	readonly name: string;
 	readonly role: ServerCodeRole;
 }>;
@@ -141,12 +140,12 @@ export const buildCodeGraph = (
 	return { graph, objects };
 };
 
-export type TenantReleaseInput = Readonly<{
+type TenantReleaseInput = Readonly<{
 	readonly protocolVersion: ProtocolVersion;
 	readonly artifactId: string;
 	readonly artifactVersion: string;
 	readonly requiredFacilities: ReadonlyArray<FacilityName>;
-	readonly assets: ArtifactAssetIndex;
+	readonly assets: TenantRelease['assets'];
 	readonly schema: Readonly<{
 		readonly path: string;
 		readonly bytes: Uint8Array;
@@ -162,7 +161,7 @@ export type TenantReleaseInput = Readonly<{
 	readonly toolchain: Readonly<Record<string, string>>;
 }>;
 
-export type BuiltTenantRelease = Readonly<{
+type BuiltTenantRelease = Readonly<{
 	readonly release: TenantRelease;
 	/** SHA-256 of `manifestBytes`; the immutable release id used by every pointer and publish path. */
 	readonly releaseId: string;

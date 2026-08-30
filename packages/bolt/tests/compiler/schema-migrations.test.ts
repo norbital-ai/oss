@@ -280,7 +280,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 	 * lived only in the schema plan would never reach the collections whose size is the reason it
 	 * exists.
 	 */
-	it('carries a searchable column into the lineage as a GIN trigram index', async () => {
+	it('carries searchable fields into one stored document and two GIN indexes', async () => {
 		const previous = await snapshotOf(withColumn({}));
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
@@ -295,9 +295,17 @@ describe('Bolt Drizzle-driven schema migration', () => {
 			})
 		);
 
-		expect(migration?.statements).toEqual([
-			'CREATE INDEX "jurisdictions_name_search_trgm_idx" ON "jurisdictions" USING gin ("name" gin_trgm_ops);'
-		]);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain(
+			`ADD COLUMN "search_document" tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, coalesce("name", ''))) STORED`
+		);
+		expect(ddl).toContain(
+			'CREATE INDEX "jurisdictions_search_document_gin_idx" ON "jurisdictions" USING gin ("search_document")'
+		);
+		expect(ddl).toContain('CREATE INDEX "jurisdictions_search_text_trgm_idx"');
+		expect(ddl).toContain(`coalesce("name", '')`);
+		expect(ddl).toContain('gin_trgm_ops');
+		expect(ddl).not.toContain('jurisdictions_name_search_trgm_idx');
 	});
 
 	/**
@@ -322,6 +330,27 @@ describe('Bolt Drizzle-driven schema migration', () => {
 			})
 		);
 		expect(created?.statements.join('\n')).not.toContain('gin_trgm_ops');
+		expect(created?.statements.join('\n')).not.toContain('search_document');
+	});
+
+	it('adds embedding staleness fields without removing the HNSW vector index', async () => {
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					articles: defineModel(
+						{ title: text(), body: text() },
+						{ embedding: { fields: ['title', 'body'], dimensions: 384 } }
+					)
+				},
+				relations: [],
+				previous: undefined
+			})
+		);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain('"record_embedding" vector(384)');
+		expect(ddl).toContain('"embedded_at" timestamp with time zone');
+		expect(ddl).toContain('"record_embedding_fingerprint" text');
+		expect(ddl).toContain('USING hnsw ("record_embedding" vector_cosine_ops)');
 	});
 
 	it('renders a polymorphic reference as an exclusive arc with direct foreign keys', async () => {

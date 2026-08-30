@@ -1,9 +1,9 @@
 /** The durable lifecycle states stored by the task queue for an automation run. */
-export type AutomationRunStatus = 'pending' | 'paused' | 'resuming' | 'running' | 'done' | 'failed';
+export type AutomationRunStatus = 'pending' | 'running' | 'done' | 'failed';
 
 type AutomationStatusPresentation = Readonly<{
 	readonly status: AutomationRunStatus;
-	readonly label: 'Running' | 'Stopped' | 'Resuming' | 'Completed' | 'Failed';
+	readonly label: 'Running' | 'Completed' | 'Failed';
 	readonly canStop: boolean;
 	readonly canResume: boolean;
 }>;
@@ -23,9 +23,5 @@ export const presentAutomationStatus = (
 		return { status: normalized, label: 'Completed', canStop: false, canResume: false };
 	if (normalized === 'failed')
 		return { status: normalized, label: 'Failed', canStop: false, canResume: false };
-	if (normalized === 'paused')
-		return { status: normalized, label: 'Stopped', canStop: false, canResume: true };
-	if (normalized === 'resuming')
-		return { status: normalized, label: 'Resuming', canStop: true, canResume: false };
 	return { status: normalized, label: 'Running', canStop: true, canResume: false };
 };

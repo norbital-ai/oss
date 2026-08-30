@@ -53,6 +53,7 @@ export type PlatformEnvoy = Readonly<{
 	readonly name: string;
 	readonly transport: string;
 	readonly audience: string;
+	readonly delegation: 'enabled' | 'disabled';
 }>;
 export type PlatformState = Readonly<{
 	readonly user: PlatformUser;

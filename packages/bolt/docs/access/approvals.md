@@ -1,7 +1,8 @@
 # Approvals and locking
 
 Access and approvals are one system. An approval flow is attached to a **write grant**. The
-runtime writes the row, then locks it. There is no separate "submit for approval" action.
+runtime prepares the mutation before it asks for approval; it does not publish proposed values
+while review is open. There is no separate "submit for approval" action.
 
 Subjects and teams: [access](./README.md).
 
@@ -42,32 +43,36 @@ There is no UI for editing a flow. Changing who approves is a source edit and a 
 
 ---
 
-## Write-then-lock
+## Prepare, gate, commit, settle
 
-**Imperative** (`create` / `update` / `delete`, including an agent's `write_collection`):
+Every `create` / `update` / `delete` path, including an agent's `write_collection` and a browser's
+`collections.mutate` graph, uses the same lifecycle:
 
-1. Hooks run; the row is written as an ungated write would write it.
-2. `holdForApproval` stamps `approval_id` — **this is the lock**.
+1. **PREPARE** runs the applicable hooks and reconciles the proposed mutation graph without
+   publishing its domain values.
+2. The approval **gate** chooses `noApproval` or a concrete review flow.
+3. `noApproval` proceeds to **COMMIT**. A gated mutation is put on **hold** instead.
+4. **SETTLE** runs after commit. Approving a held request calls `collections.resume`, which commits
+   the prepared mutation and settles it; rejecting or withdrawing discards it.
 
-This order is load-bearing. An earlier design stored the operation and wrote nothing, so values
-derived in `create.perRecord.before` were missing on replay and `after` never ran.
-
-**Declarative** (`collections.mutate` graph): the graph is reconciled **before** any part is
-written. A declarative create is the one lockless case — the domain row does not exist until
-approval. Rejecting it is already atomic cleanup.
+A held create has **no domain row**. A held update or delete may stamp the existing row with
+`approval_id` to prevent conflicting edits, but the proposed update values or deletion have not
+been applied.
 
 On hold:
 
 1. `bolt_approvals` row: `_tag: Pending`, embedded operation + configuration.
 2. `approval_request` projection (`status: ONGOING`) and a `requestor` link.
-3. Unless declarative create: `approval_id = requestId` on the target row.
+3. For an existing update/delete target, `approval_id = requestId` may hold the committed row. A
+   create has no target row to stamp.
 4. Caller gets **202** `{ pending: true, requestId, collection, id, action }` — success, not a
    refusal.
 
 Further writes to that row are refused as an approval conflict until the request closes. There are
 no database triggers; the runtime checks the stamp before it writes.
 
-Convention: `approval_id IS NULL` means the row is live; a non-null value means it is held.
+Convention: `approval_id IS NULL` means an existing row is not held; a non-null value identifies
+the open request holding its committed state.
 
 ---
 
@@ -75,9 +80,9 @@ Convention: `approval_id IS NULL` means the row is live; a non-null value means 
 
 | Internal           | `approval_request.status` | Outcome                                                                               |
 | ------------------ | ------------------------- | ------------------------------------------------------------------------------------- |
-| `Pending`          | `ONGOING`                 | Locked; further writes refused                                                        |
-| `Approved`         | `APPROVED`                | `collections.resume` — create's `after` hook runs now; update/delete apply            |
-| `Rejected`         | `REJECTED`                | `collections.discard` — provisional create deleted; update/delete only clear the lock |
+| `Pending`          | `ONGOING`                 | Prepared values are held; existing targets are locked against conflicting writes      |
+| `Approved`         | `APPROVED`                | `collections.resume` commits the prepared create/update/delete and settles it          |
+| `Rejected`         | `REJECTED`                | The prepared mutation is discarded; any existing-row lock is released                 |
 | `ChangesRequested` | `CHANGES_REQUESTED`       | Same as reject; requestor may resubmit                                                |
 | `Conflicted`       | `CONFLICTED`              | Reviewed graph could not apply                                                        |
 | `Withdrawn`        | `WITHDRAWN`               | Requestor closed it while pending                                                     |
@@ -108,7 +113,7 @@ approve**.
 
 | Artifact                            | Role                                                             |
 | ----------------------------------- | ---------------------------------------------------------------- |
-| `approval_id` on every row          | The lock                                                         |
+| `approval_id` on an existing row    | The open request holding its current committed state             |
 | `bolt_approvals`                    | Durable FSM + full operation (`sync: false`)                     |
 | `approval_request`                  | Synced inbox: status, steps cursor, proposed values, locked refs |
 | `requestor`                         | Who raised it                                                    |

@@ -1,7 +1,10 @@
 import { Effect, Result, type Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
-import { predicateExpression } from '../../src/runtime/access/access-control.js';
+import {
+	predicateExpression,
+	type RowPredicateExpression
+} from '../../src/runtime/access/predicate.js';
 import {
 	collectionQueryTable,
 	physicalColumnNames,
@@ -10,11 +13,11 @@ import {
 } from '../../src/compiler/relational-schema.js';
 import { resolveWritableManyRelation } from '../../src/runtime/collections/collections.js';
 import {
-	orderingExpressions,
 	planRelations,
 	readRelationalRows,
 	type PlanContext
-} from '../../src/runtime/collections/relation-query.js';
+} from '../../src/runtime/collections/read/relation-plan.js';
+import { orderingExpressions } from '../../src/runtime/collections/read/where.js';
 import { relationalComposer } from '../../src/runtime/persistence.js';
 
 /**
@@ -97,16 +100,31 @@ const relations = relationalSchema(definition, {
 });
 const composer = relationalComposer(relations);
 
-type DemoPredicate = Readonly<{ sql: string; parameters: ReadonlyArray<string> }>;
-
-const PREDICATES: Readonly<Record<string, DemoPredicate>> = {
-	employments: { sql: '"code" = $1', parameters: ['ENG'] },
-	time_entries: { sql: '"work_date" >= $1', parameters: ['2026-01-01'] },
-	leave_requests: { sql: '"from_date" >= $1', parameters: ['2026-02-02'] }
+/**
+ * Canonical policy expressions, the shape `predicateExpression` actually compiles.
+ *
+ * A predicate is no longer a rendered `{ sql, parameters }` pair: it carries structured syntax and
+ * the driver owns placeholder numbering, so these fixtures name columns, operators and values and
+ * let the compiler produce the identical `"column" op $n` text the assertions below read.
+ */
+const PREDICATES: Readonly<Record<string, RowPredicateExpression>> = {
+	employments: { kind: 'comparison', column: 'code', operator: 'eq', value: 'ENG' },
+	time_entries: {
+		kind: 'comparison',
+		column: 'work_date',
+		operator: 'gte',
+		value: '2026-01-01'
+	},
+	leave_requests: {
+		kind: 'comparison',
+		column: 'from_date',
+		operator: 'gte',
+		value: '2026-02-02'
+	}
 };
 
 const contextWith = (
-	predicates: Readonly<Record<string, DemoPredicate>>
+	predicates: Readonly<Record<string, RowPredicateExpression>>
 ): PlanContext => ({
 	definition,
 	relations,
@@ -115,8 +133,7 @@ const contextWith = (
 		allowed: true,
 		reason: 'test',
 		actorBound: false,
-		sql: predicates[collection]?.sql ?? 'true',
-		parameters: [...(predicates[collection]?.parameters ?? [])]
+		expression: predicates[collection] ?? { kind: 'constant', value: true }
 	})
 });
 
@@ -235,7 +252,7 @@ describe('relational `with`', () => {
 
 	/**
 	 * The alias scheme is load-bearing: a level's compiled `where` qualifies its columns by name, so
-	 * `relation-query.ts` has to know the alias before the statement exists. Drizzle changing it would
+	 * `read/relation-plan.ts` has to know the alias before the statement exists. Drizzle changing it would
 	 * be a hard SQL error rather than a wrong answer, and this is where it is noticed.
 	 */
 	it('aliases the root d0 and each nested level one deeper', () => {
@@ -257,10 +274,10 @@ describe('relational `with`', () => {
 	 */
 	it('evaluates a shared column name against the related table, not the outer row', () => {
 		const shared = contextWith({
-			employments: { sql: '"code" = $1', parameters: ['ENG'] },
+			employments: { kind: 'comparison', column: 'code', operator: 'eq', value: 'ENG' },
 			// `id` is a column of both collections — the exact name a bare reference could bind either
 			// way, and the one an authored `{ id: { in: … } }` scope uses most often.
-			time_entries: { sql: '"id" = $1', parameters: ['t1'] }
+			time_entries: { kind: 'comparison', column: 'id', operator: 'eq', value: 't1' }
 		});
 		const { sql } = render('employments', { employment_time_entries: true }, shared);
 		const lateral = firstLateral(sql);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { policySql } from '../../src/authoring/policy-sql.js';
 import { approvalRefusal } from '../../src/compiler/approval-checks.js';
 import { grantScopeProblems } from '../../src/runtime/access/access-control.js';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
@@ -16,9 +17,7 @@ import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.j
  * failure is restored at the release boundary instead.
  */
 
-const workspace = (
-	grants: ReadonlyArray<Readonly<Record<string, unknown>>>
-): WorkspaceDefinition =>
+const workspace = (grants: ReadonlyArray<Readonly<Record<string, unknown>>>): WorkspaceDefinition =>
 	({
 		collections: [
 			{
@@ -76,7 +75,11 @@ describe('an authored grant’s row scope', () => {
 		expect(
 			grantScopeProblems(
 				workspace([
-					{ collection: 'time_entries', action: 'read', where: { work_date: { gte: '2026-01-01' } } },
+					{
+						collection: 'time_entries',
+						action: 'read',
+						where: { work_date: { gte: '2026-01-01' } }
+					},
 					{ collection: 'time_entries', action: 'update', where: { id: { in: ['a'] } } },
 					{
 						collection: 'time_entries',
@@ -118,21 +121,25 @@ describe('an authored grant’s row scope', () => {
 	});
 
 	/**
-	 * A `$sql` fragment brings its own tables and aliases — `"team" t`, `me."id"` — so nothing here
+	 * A `policySql` predicate brings its own tables and aliases — `"team" t`, `me."id"` — so nothing here
 	 * can tell one of its identifiers from a column of the collection. Checking it would refuse
 	 * correct policies; qualifying it would rewrite SQL the author wrote. It is the author's, and
 	 * the check says so by leaving it alone.
 	 */
-	it('leaves a $sql fragment alone, and still checks the columns beside it', () => {
+	it('leaves a policySql predicate alone, and still checks structured predicates', () => {
 		const problems = grantScopeProblems(
 			workspace([
 				{
 					collection: 'time_entries',
 					action: 'read',
-					where: {
-						$sql: '"id" in (select u."id" from "user" u where u."team_id" = ${requestor.id})',
-						nonexistent: 1
-					}
+					where: policySql(
+						'"id" in (select u."id" from "user" u where u."team_id" = ${requestor.id})'
+					)
+				},
+				{
+					collection: 'time_entries',
+					action: 'read',
+					where: { nonexistent: 1 }
 				}
 			])
 		);
@@ -148,8 +155,8 @@ describe('an authored grant’s row scope', () => {
 	});
 
 	it('accepts a grant with no row scope at all', () => {
-		expect(
-			grantScopeProblems(workspace([{ collection: 'time_entries', action: 'read' }]))
-		).toEqual([]);
+		expect(grantScopeProblems(workspace([{ collection: 'time_entries', action: 'read' }]))).toEqual(
+			[]
+		);
 	});
 });

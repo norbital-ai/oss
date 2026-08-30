@@ -8,7 +8,7 @@
 	import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 	import type { HostPlugin } from '#lib/client/ui/shell/workspace-navigation.js';
 	import type { Effect } from 'effect';
-	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
+	import type { ClientState } from '#lib/client/sync/machine.js';
 
 	let {
 		title = 'Bolt',
@@ -93,8 +93,8 @@
 		isAdmin?: boolean;
 		/** Non-critical shell reads start only after the first interaction with a painted workspace. */
 		deferredQueriesReady?: boolean;
-		/** Engine-owned data freshness and mutation settlement facts; absent is explicitly unverified. */
-		syncStatus?: WorkspaceSyncStatus | undefined;
+		/** The Machine's one sync state — link, head and unsettled writes; absent is explicitly unverified. */
+		syncStatus?: ClientState | undefined;
 		/**
 		 * Admin team preview, forwarded verbatim to the shell.
 		 *
@@ -146,7 +146,7 @@
 
 <!-- Overlays render outside <Shell> so `fixed` resolves against the viewport rather than
      whichever piece of shell chrome happens to establish a containing block. -->
-<SyncStatus status={syncStatus} />
+<SyncStatus state={syncStatus} />
 
 <Shell
 	app={title}

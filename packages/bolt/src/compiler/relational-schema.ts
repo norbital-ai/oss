@@ -65,13 +65,13 @@ export const collectionQueryTable = (
  */
 
 /** The endpoints of a `many` edge, resolved against the collection that declares it. */
-export type ManyOrientation = Readonly<{
+type ManyOrientation = Readonly<{
 	readonly parentColumn: string;
 	readonly childCollection: string;
 	readonly childColumn: string;
 }>;
 
-export type RelationalSchemaOptions = Readonly<{
+type RelationalSchemaOptions = Readonly<{
 	/** Builds the query descriptor for one collection; the read path shares these instances. */
 	readonly table: (
 		collection: string,

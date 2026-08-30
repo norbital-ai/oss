@@ -116,6 +116,12 @@ const jobsModule = {
 	}
 };
 
+/** One region as a plain feed sends it — a second pure-`map` binding that never names a site. */
+const RegionRecord = Schema.Struct({
+	code: Schema.NonEmptyString,
+	name: Schema.NonEmptyString
+});
+
 /** The unchanged shape: a pure `(record) => Row`, no `resolve` anywhere near it. */
 const sitesModule = {
 	registry: {
@@ -133,7 +139,35 @@ const sitesModule = {
 	}
 };
 
-const described = describeIntegrations({ jobs: jobsModule, sites: sitesModule });
+/**
+ * A resolve-less binding that writes somewhere `sites` is not.
+ *
+ * The cost of a `resolve` is only observable as statements against the collection it would read, and
+ * a binding whose own target *is* `sites` pays for its upsert against that same table — which is a
+ * write's cost, not a lookup's. Landing this one in `regions` keeps the two apart, so the count is
+ * zero when nothing looked a foreign code up rather than a number that has to be explained.
+ */
+const regionsModule = {
+	registry: {
+		policies: ['admin'],
+		connection: dispatch,
+		receive: {
+			regions_changed: definePull({
+				pull: { schedule: '0 * * * *', method: 'GET', path: '/regions/changed' },
+				records: { field: 'regions' },
+				input: RegionRecord,
+				identity: { column: 'region_code', value: (region) => region.code },
+				map: (region) => ({ region_code: region.code, name: region.name })
+			})
+		}
+	}
+};
+
+const described = describeIntegrations({
+	jobs: jobsModule,
+	sites: sitesModule,
+	regions: regionsModule
+});
 
 const definition = workspace({
 	name: 'foreign-key-resolution',
@@ -155,6 +189,13 @@ const definition = workspace({
 				// would not be a uuid, and the insert would be refused rather than stored.
 				site_id: { type: 'uuid', required: true, indexed: true },
 				title: field.string({ required: true })
+			}
+		}),
+		collection({
+			name: 'regions',
+			fields: {
+				region_code: field.string({ required: true, indexed: true }),
+				name: field.string({ required: true })
 			}
 		})
 	],
@@ -351,12 +392,12 @@ describe('the batch costs one lookup, not one per record', () => {
 	 * with an empty answer, so the shape costs nothing to the bindings that do not use it.
 	 */
 	it('runs no lookup at all for a binding that declares no resolve', async () => {
-		const built = await build({ sites: [{ code: 'SITE-C', name: 'Charlie' }] });
+		const built = await build({ regions: [{ code: 'REGION-N', name: 'North' }] });
+		await seedSites(built);
 		built.database.forget();
-		await pull(built, 'sites.registry', 'sites_changed', 'run-1');
-		// One `select` remains: the identity read that finds which external keys already exist. That is
-		// the upsert's own lookup and it was always there; what must not appear is a second one.
-		expect(siteQueries(built)).toBe(1);
+		const report = await pull(built, 'regions.registry', 'regions_changed', 'run-1');
+		expect(absorbed(report)).toBe(1);
+		expect(siteQueries(built)).toBe(0);
 	});
 });
 

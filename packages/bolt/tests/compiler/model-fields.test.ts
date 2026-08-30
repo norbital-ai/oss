@@ -152,6 +152,26 @@ export default defineModel(
 			relationships: [{ name: 'employment_employee', target: 'employments', cardinality: 'many' }]
 		});
 	});
+
+	it('does not infer a field relation from an inherited inverse edge', () => {
+		const catalog = extractCollectionCatalog(
+			'employments',
+			`export default defineModel({
+				employee_id: uuid().notNull()
+			});`,
+			[
+				{
+					name: 'employment_employee',
+					source: 'employees',
+					target: 'employments',
+					cardinality: 'many',
+					from: { collection: 'employments', column: 'employee_id' },
+					to: { collection: 'employees', column: 'id' }
+				}
+			]
+		);
+		expect(catalog.fields[0]).not.toHaveProperty('relation');
+	});
 });
 
 describe('field windows', () => {

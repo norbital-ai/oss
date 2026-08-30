@@ -60,14 +60,7 @@
 	} = $props();
 	let browserReady = $state(false);
 	let runFailures = $state<Record<string, string>>({});
-	const AutomationRunStatusValue = Schema.Literals([
-		'pending',
-		'paused',
-		'resuming',
-		'running',
-		'done',
-		'failed'
-	]);
+	const AutomationRunStatusValue = Schema.Literals(['pending', 'running', 'done', 'failed']);
 	const AutomationProgressValue = Schema.Struct({
 		progress: Schema.Number,
 		text: Schema.NullOr(Schema.String)
@@ -129,20 +122,14 @@
 	);
 	const historyQuery = (automation: string) =>
 		historyQueries.find(({ name }) => name === automation)?.query;
-	const automationLifecycle = (
-		name: string,
-		action: 'stop' | 'resume',
-		taskId: string
-	): Effect.Effect<void> => {
+	const automationLifecycle = (name: string, taskId: string): Effect.Effect<void> => {
 		const automation = automationState(name);
 		if (automation === undefined) {
 			return Effect.sync(() => {
 				runFailures = { ...runFailures, [name]: 'The workspace automation client is unavailable.' };
 			});
 		}
-		return Effect.tryPromise(() =>
-			action === 'stop' ? automation.stop(taskId) : automation.resume(taskId).then(() => undefined)
-		).pipe(
+		return Effect.tryPromise(() => automation.stop(taskId)).pipe(
 			Effect.match({
 				onFailure: (cause) => {
 					runFailures = {
@@ -426,9 +413,7 @@
 												? 'bg-destructive/10 text-destructive'
 												: latestStatus.status === 'done'
 													? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-													: latestStatus.status === 'paused'
-														? 'bg-muted text-muted-foreground'
-														: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+													: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
 										)}>{latestStatus.label}</span
 									>
 									{#if latest?.progress !== null && latest?.progress !== undefined}
@@ -453,22 +438,10 @@
 											aria-label={`Stop latest ${automation.name} run`}
 											onclick={() =>
 												void Effect.runPromise(
-													automationLifecycle(automation.name, 'stop', run.id)
+													automationLifecycle(automation.name, run.id)
 												)}
 										>
 											Stop
-										</Button>
-									{:else if latestStatus.canResume}
-										<Button
-											size="sm"
-											variant="ghost"
-											aria-label={`Resume latest ${automation.name} run`}
-											onclick={() =>
-												void Effect.runPromise(
-													automationLifecycle(automation.name, 'resume', run.id)
-												)}
-										>
-											Resume
 										</Button>
 									{/if}
 								</Inline>
@@ -499,19 +472,12 @@
 															? 'bg-destructive/10 text-destructive'
 															: rowStatus.status === 'done'
 																? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-																: rowStatus.status === 'paused'
-																	? 'bg-muted text-muted-foreground'
-																	: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+																: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
 													)}>{rowStatus.label}</span
 												>
 												<span class="shrink-0 text-micro text-muted-foreground">
 													{automationRunTime(row.created_at)}
 												</span>
-												{#if (row.attempts ?? 0) > 1}
-													<span class="shrink-0 text-micro text-muted-foreground"
-														>· {row.attempts} attempts</span
-													>
-												{/if}
 												{#if progress !== undefined}
 													<span class="min-w-0 truncate text-micro text-muted-foreground">
 														· {Math.round(progress.progress * 100)}%{progress.text === null
@@ -531,22 +497,10 @@
 														aria-label={`Stop ${automation.name} run from ${automationRunTime(row.created_at)}`}
 														onclick={() =>
 															void Effect.runPromise(
-																automationLifecycle(automation.name, 'stop', row.task_id)
+																automationLifecycle(automation.name, row.task_id)
 															)}
 													>
 														Stop
-													</Button>
-												{:else if rowStatus.canResume}
-													<Button
-														size="sm"
-														variant="ghost"
-														aria-label={`Resume ${automation.name} run from ${automationRunTime(row.created_at)}`}
-														onclick={() =>
-															void Effect.runPromise(
-																automationLifecycle(automation.name, 'resume', row.task_id)
-															)}
-													>
-														Resume
 													</Button>
 												{/if}
 											</Inline>

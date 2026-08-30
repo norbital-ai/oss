@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Effect, Exit, Option, Result } from 'effect';
 import { refuse, AuthoredRefusal } from '../../src/authoring/refusal.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import { runAuthoredHandler } from '../../src/runtime/collections/authored.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
@@ -10,6 +11,53 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
+
+/**
+ * The fixture collection as a schema, so the hook below is typed the way a compiled workspace's
+ * is: `CollectionHooks` reads the handler context off `tables`, making `existing` and `input`
+ * inferred rather than reflected.
+ */
+interface PeopleSchema {
+	readonly tables: {
+		readonly people: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly name: string;
+				readonly team: string | null;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly name: string;
+				readonly team?: string | null;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
+const peopleHooks: CollectionHooks<PeopleSchema, 'people'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Refuses a person with no team.',
+				/**
+				 * Typed from the collection's own hooks type rather than as the runtime carrier declares
+				 * it. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) => unknown`, which
+				 * is what this suite hand-builds an `AuthoredRuntime` against — the runtime side of the
+				 * boundary. The authored side is `MutateBefore` in `authoring/contracts-schema.ts`, which
+				 * types the context from the workspace schema; `authoredHooks` is the one place the
+				 * handoff is said, so a hook written typed here is *carried* typed.
+				 */
+				handler: (context) => {
+					if (context.existing !== undefined) return context.input;
+					if (context.input['team'] == null) refuse('A person must belong to a team.');
+					return context.input;
+				}
+			}
+		}
+	}
+};
 
 /**
  * A refusal is a business rule, and the whole point of this suite is that it stops being reported as
@@ -33,9 +81,9 @@ describe('refuse, as a typed refusal rather than a defect', () => {
 			})
 		);
 		expect(Exit.isFailure(exit)).toBe(true);
-		// The synchronous case is the one that could not be caught at all before this change: the
-		// handler used to be called in `runAuthoredHandler`'s argument position, so the throw escaped
-		// before the function was entered. It is also the majority spelling in every template.
+		// The synchronous case is the sharpest one: the handler runs inside the thunk, so a throw
+		// lands in the refusal channel instead of escaping before the function is entered. It is
+		// also the majority spelling in every template.
 		expect(refusalFrom(exit)).toMatchObject({
 			_tag: 'Bolt.Authored.Refusal',
 			message: 'A payslip cannot be deleted without its payroll run.'
@@ -119,43 +167,10 @@ describe('a refusal raised from a real hook', () => {
 			authored: {
 				...emptyAuthoredRuntime,
 				hooks: {
-					people: {
-						mutate: {
-							// Nested under `perRecord` because that is where a rule authored for one record now
-							// lives: `prepare` runs once for the batch and decides nothing, and `before` runs once
-							// per record, which is the only place a refusal can come from.
-							perRecord: {
-								before: {
-									description: 'Refuses a person with no team.',
-									/**
-									 * Typed as the *runtime* carrier declares it, not as an author would write it.
-									 *
-									 * These two shapes are deliberately different and it matters which one a test is
-									 * standing in. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) =>
-									 * unknown`, because by the time the runtime holds a handler the authoring types have
-									 * already done their work at compile time. An author gets the narrow one —
-									 * `MutateBefore` in `authoring/contracts-schema.ts` types the context properly, and
-									 * `satisfies Hooks` from the generated `$types.js` is what applies it.
-									 *
-									 * This suite hand-builds an `AuthoredRuntime`, which is the runtime side, so it
-									 * conforms to the runtime shape and narrows inside. Widening the declared type to
-									 * make this line compile would be the fix in the wrong direction: it would loosen the
-									 * contract every real workspace is written against in order to suit a double.
-									 */
-									handler: (context: unknown) => {
-										const mutation = context as {
-											readonly input: Record<string, unknown>;
-											readonly existing?: Record<string, unknown>;
-										};
-										const { input } = mutation;
-										if (mutation.existing !== undefined) return input;
-										if (input['team'] == null) refuse('A person must belong to a team.');
-										return input;
-									}
-								}
-							}
-						}
-					}
+					// Nested under `perRecord` because that is where a rule authored for one record now
+					// lives: `prepare` runs once for the batch and decides nothing, and `before` runs once
+					// per record, which is the only place a refusal can come from.
+					people: authoredHooks(peopleHooks)
 				}
 			}
 		});
@@ -170,19 +185,29 @@ describe('a refusal raised from a real hook', () => {
 		const exit = await harness.runtime.runPromiseExit(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(harness.effectId('refusal-1'), adminSubject, {
-					collection: 'people',
-					id,
-					values: { name: 'Ada' }
-				});
+				yield* collections.mutate(
+					harness.effectId('refusal-1'),
+					adminSubject,
+					'people',
+					[{ id, name: 'Ada' }],
+					false,
+					0,
+					{ root: { id, action: 'create' } }
+				);
 			})
 		);
-		const refusal = refusalFrom(exit);
+		// The batched engine reports the phase it died in around the refusal — `prepare`, because a
+		// `before` hook refuses ahead of the transaction. Unwrapping restores the typed refusal,
+		// which is what a business rule is; the phase wrapper is additive and never replaces it.
+		const failure = Option.getOrUndefined(Exit.findErrorOption(exit));
+		const refusal = unwrapMutationPhase(failure);
+		expect(refusal).toBeInstanceOf(AuthoredRefusal);
 		expect(refusal).toMatchObject({
 			message: 'A person must belong to a team.',
 			collection: 'people',
 			action: 'mutate.before'
 		});
+		expect(defectFrom(exit)).toBeUndefined();
 		// The load-bearing half. A `before` hook refuses *ahead of* the write, so there is nothing to
 		// undo — and if the refusal had arrived after the insert, this row would exist and the
 		// semantic in item 2 would be untrue.
@@ -202,11 +227,15 @@ describe('a refusal raised from a real hook', () => {
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(harness.effectId('admit-1'), adminSubject, {
-					collection: 'people',
-					id,
-					values: { name: 'Grace', team: 'payroll' }
-				});
+				yield* collections.mutate(
+					harness.effectId('admit-1'),
+					adminSubject,
+					'people',
+					[{ id, name: 'Grace', team: 'payroll' }],
+					false,
+					0,
+					{ root: { id, action: 'create' } }
+				);
 			})
 		);
 		const rows = await harness.runtime.runPromise(

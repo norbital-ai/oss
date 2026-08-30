@@ -14,7 +14,7 @@ import {
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { PendingApproval } from '#lib/runtime/collections/collections.js';
-import type { WhereCompileError } from '#lib/runtime/collections/where.js';
+import type { WhereCompileError } from '#lib/runtime/collections/read/where.js';
 import { Communication } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -29,6 +29,7 @@ import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/pe
 
 const {
 	chat_session: chatSession,
+	bolt_task: boltTaskTable,
 	bolt_envoy_inbound: boltEnvoyInbound,
 	bolt_envoy_receipts: boltEnvoyReceipts,
 	bolt_envoy_registrations: boltEnvoyRegistrations
@@ -156,6 +157,7 @@ const ProcessingRecipient = Schema.Struct({
 
 type EnvoyFailure =
 	| EnvoyError
+	| Agents.AgentExecutionError
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
 	| Database.FacilityError
@@ -260,6 +262,10 @@ export const layer = Layer.effect(
 					.where(eq(chatSession.conversation_id, conversationId))
 			);
 
+		/**
+		 * Schedules the conversation's next drain as a durable task row, written by the runtime
+		 * itself, and arms the host timer for its `run_at`.
+		 */
 		const enqueueDrain = Effect.fn('Envoys.enqueueDrain')(function* (
 			effectId: EffectId,
 			envoyName: string,
@@ -268,14 +274,24 @@ export const layer = Layer.effect(
 		) {
 			const bucket = Math.floor(now / DRAIN_DEBOUNCE_MS);
 			const taskId = `envoys.drain:${conversationId}:${bucket}`;
-			yield* queue.enqueue(effectId, [
-				{
-					command: 'envoys.drain',
-					input: { envoy: envoyName, conversationId },
-					effectId: taskId,
-					runAtEpochMs: now + DRAIN_DEBOUNCE_MS
-				}
-			]);
+			const runAtEpochMs = now + DRAIN_DEBOUNCE_MS;
+			// The host timer is armed before the row commits: a crash in between costs a false alarm,
+			// never a dropped drain.
+			yield* queue.wake(EffectId.make(`${effectId}:wake`), runAtEpochMs);
+			yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.insert(boltTaskTable)
+					.values({
+						command: 'envoys.drain',
+						input: JSON.stringify({ envoy: envoyName, conversationId }),
+						effect_id: taskId,
+						run_at: new Date(runAtEpochMs).toISOString(),
+						status: 'running'
+					})
+					.onConflictDoNothing({ target: boltTaskTable.effect_id })
+			);
 		});
 
 		const recordReceipt = (
@@ -654,17 +670,11 @@ export const layer = Layer.effect(
 					invocation: row.invocation
 				}));
 				const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
-				yield* agents.enqueue(
-					effectId,
-					trigger.subject,
-					envoyName,
-					conversationId,
-					String(effectId),
-					batch
-				);
+				const turnId = String(effectId);
+				yield* agents.enqueue(effectId, trigger.subject, envoyName, conversationId, turnId, batch);
 				// Inbound chat is direct execution: admission is durable first, then this same I/O
 				// invocation drains the serial lane. No task row or scheduler wake sits between them.
-				yield* agents.run(EffectId.make(`${effectId}:run`), trigger.subject, conversationId).pipe(
+				yield* agents.execute(effectId, conversationId, turnId).pipe(
 					Effect.mapError(
 						(failure) =>
 							new EnvoyError({

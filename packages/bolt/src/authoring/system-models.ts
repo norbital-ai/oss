@@ -290,21 +290,16 @@ const scheduleModel = defineModel(
 	}
 );
 
-/** One unit of background work; the task runner is its only reader and writer. */
+/** One fired cron run, retained only for progress/result/error observability. */
 const taskModel = defineModel(
 	{
-		/** Stable queue order. Agent lanes may reorder this value without moving or copying the task. */
-		position: bigserial({ mode: 'number' }),
 		command: text().notNull(),
 		input: jsonb().notNull(),
-		/** A serial execution lane. Null keeps ordinary scheduled/background work independent. */
-		lane: text(),
-		status: text().notNull().default('pending'),
+		status: text().notNull().default('running'),
+		/** The declared occurrence this run observes. It is never a claim lease. */
 		run_at: instant().notNull().defaultNow(),
-		attempts: integer().notNull().default(0),
-		max_attempts: integer().notNull().default(12),
 		effect_id: text().notNull().unique('bolt_task_effect_id'),
-		/** Latest automation progression; null for tasks that are not automations or have not emitted. */
+		/** Latest automation progression; null until the run reports one. */
 		progress: jsonb(),
 		progress_sequence: integer().notNull().default(0),
 		progress_updated_at: instant(),
@@ -313,22 +308,11 @@ const taskModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
-		indexes: [
-			{
-				name: 'bolt_task_due',
-				columns: ['run_at', 'position'],
-				where: "status in ('pending', 'resuming', 'running')"
-			},
-			{
-				name: 'bolt_task_lane',
-				columns: ['lane', 'status', 'position']
-			}
-		]
+		sync: false
 	}
 );
 
-/** One durable agent lane. Direct invocations own execution; sync makes its state live in clients. */
+/** One conversation lifecycle fence. Direct invocations own execution. */
 const agentMailboxModel = defineModel(
 	{
 		conversation_id: text().notNull().unique(),
@@ -337,49 +321,23 @@ const agentMailboxModel = defineModel(
 	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('status')] }
 );
 
-/** Safe, sync-visible source of truth for one directly executed agent turn. */
-const agentRunModel = defineModel(
-	{
-		task_id: text().notNull().unique(),
-		conversation_id: text().notNull(),
-		turn_id: text().notNull(),
-		agent_name: text().notNull(),
-		status: text().notNull(),
-		position: bigint({ mode: 'number' }).notNull(),
-		error: text(),
-		next_run_at: instant()
-	},
-	{
-		history: false,
-		indexes: [
-			systemIndex('task_id'),
-			systemIndex('conversation_id'),
-			systemIndex('status'),
-			{ name: 'agent_run_order', columns: ['conversation_id', 'position'] }
-		]
-	}
-);
-
 /**
- * The safe, sync-visible projection of one private queue row that runs an automation.
+ * The safe, sync-visible lifecycle of one automation invocation.
  *
- * `bolt_task.input` can contain secrets and arbitrary command payloads, so the queue itself must
- * never replicate. A database trigger owns this projection from the same row instead: task state is
- * still written once, while clients receive only lifecycle, progress, error and typed result.
+ * `bolt_task.input` can contain secrets and arbitrary command payloads, so the record itself must
+ * never replicate. Direct invocations write this row themselves; a database trigger projects cron
+ * occurrences from `bolt_task`. Clients receive only lifecycle, progress, error and typed result.
  */
 const automationRunModel = defineModel(
 	{
 		task_id: text().notNull().unique(),
 		name: text().notNull(),
 		status: text().notNull(),
-		attempts: integer().notNull().default(0),
-		max_attempts: integer().notNull().default(12),
 		progress: jsonb(),
 		progress_sequence: integer().notNull().default(0),
 		progress_updated_at: instant(),
 		result: jsonb(),
-		error: text(),
-		next_run_at: instant()
+		error: text()
 	},
 	{
 		history: false,
@@ -587,6 +545,8 @@ const collectionHistoryModel = defineModel(
 		record_id: text().notNull(),
 		operation: text().notNull(),
 		subject_id: text().notNull(),
+		/** Durable invocation identity. Null only for history written before this column existed. */
+		effect_id: text(),
 		snapshot: jsonb()
 	},
 	{
@@ -691,56 +651,13 @@ const syncOutboxModel = defineModel(
 			.notNull()
 			.default(sql`pg_current_xact_id()::text::bigint`),
 		sequence: bigserial({ mode: 'number' }).unique(),
-		collection_name: text().notNull(),
-		record_id: text().notNull(),
-		operation: text().notNull(),
-		/** Original v2 journal identity, stamped transaction-locally for exact overlay retirement. */
-		mutation_id: text(),
-		/** Complete authoritative row immediately before the write, including `row_version`. */
-		before_record: jsonb(),
-		/** Complete authoritative row immediately after the write, including `row_version`. */
-		after_record: jsonb(),
-		/** Dependent collections whose visibility proof this write invalidated. */
-		invalidated_collections: jsonb()
-			.notNull()
-			.default(sql`'[]'::jsonb`)
+		collection_name: text().notNull()
 	},
 	{
 		history: false,
 		sync: false,
-		indexes: [
-			{ name: 'bolt_sync_outbox_cursor', columns: ['xid', 'sequence'], unique: true },
-			{
-				name: 'bolt_sync_outbox_record_idx',
-				columns: ['collection_name', 'record_id', 'xid', 'sequence']
-			}
-		]
+		indexes: [{ name: 'bolt_sync_outbox_cursor', columns: ['xid', 'sequence'], unique: true }]
 	}
-);
-
-/**
- * Monotonic proof counters for streamed collection visibility.
- *
- * `__authority__` is the one reserved key. It advances when a subject/holder collection changes and
- * is folded into the server-derived partition identity; every other key names a synced collection.
- */
-const syncGenerationModel = defineModel(
-	{
-		collection_name: text().notNull().unique(),
-		generation: bigint({ mode: 'number' }).notNull().default(0),
-		/** The transaction that last advanced this collection; repeated rows in it count once. */
-		last_xid: bigint({ mode: 'number' }).notNull().default(0)
-	},
-	{ history: false, sync: false }
-);
-
-const syncHorizonModel = defineModel(
-	{
-		singleton: boolean().notNull().default(true).unique(),
-		xid: bigint({ mode: 'number' }).notNull().default(0),
-		sequence: bigint({ mode: 'number' }).notNull().default(0)
-	},
-	{ history: false, sync: false }
 );
 
 const secretModel = defineModel(
@@ -800,15 +717,11 @@ const browserMutationModel = defineModel(
 		authority_id: text().notNull(),
 		command: text().notNull(),
 		idempotency_key: text().notNull(),
-		device_sequence: bigint({ mode: 'number' }).notNull(),
 		partition_key: text().notNull(),
 		schema_fingerprint: text().notNull(),
 		request_digest: text().notNull(),
 		status: text().notNull(),
 		outcome: jsonb(),
-		/** Last outbox coordinate produced by the committed graph; both null until commit. */
-		confirmed_xid: bigint({ mode: 'number' }),
-		confirmed_sequence: bigint({ mode: 'number' }),
 		issued_at: instant().notNull(),
 		lease_expires_at: instant(),
 		expires_at: instant().notNull()
@@ -829,55 +742,7 @@ const browserMutationModel = defineModel(
 				],
 				unique: true
 			},
-			{
-				name: 'bolt_browser_mutation_device_order',
-				columns: ['tenant_id', 'environment', 'principal_id', 'authority_id', 'device_sequence']
-			},
 			{ name: 'bolt_browser_mutation_expiry', columns: ['expires_at'] }
-		]
-	}
-);
-
-/**
- * Server-issued physical O2 identities accepted from offline mutation journals.
- *
- * The key itself is opaque. The remaining columns bind it to the authenticated actor/effective
- * subject/impersonation tuple that received it, while the full identity preserves the schema and
- * authority generation the old replica actually used.
- */
-const syncPartitionRegistryModel = defineModel(
-	{
-		partition_key: text().notNull(),
-		tenant_id: text().notNull(),
-		environment: text().notNull(),
-		actor_id: text().notNull(),
-		effective_subject_id: text().notNull(),
-		impersonation_binding: text().notNull().default('operator'),
-		schema_fingerprint: text().notNull(),
-		authority_generation: integer().notNull(),
-		identity: jsonb().notNull(),
-		issued_at: instant().notNull().defaultNow(),
-		last_seen_at: instant().notNull().defaultNow(),
-		expires_at: instant().notNull()
-	},
-	{
-		history: false,
-		sync: false,
-		indexes: [
-			{
-				name: 'bolt_sync_partition_registry_member',
-				columns: [
-					'partition_key',
-					'tenant_id',
-					'environment',
-					'actor_id',
-					'effective_subject_id',
-					'impersonation_binding'
-				],
-				unique: true
-			},
-			{ name: 'bolt_sync_partition_registry_partition', columns: ['partition_key'] },
-			{ name: 'bolt_sync_partition_registry_expiry', columns: ['expires_at'] }
 		]
 	}
 );
@@ -894,7 +759,6 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
 	agent_mailbox: agentMailboxModel,
-	agent_run: agentRunModel,
 	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });
@@ -915,13 +779,10 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_schema_state: schemaStateModel,
 	__drizzle_migrations: schemaMigrationModel,
 	bolt_sync_outbox: syncOutboxModel,
-	bolt_sync_horizon: syncHorizonModel,
-	bolt_sync_generation: syncGenerationModel,
 	bolt_secrets: secretModel,
 	bolt_personal_secrets: personalSecretModel,
 	bolt_workspace_identity_settings: workspaceIdentitySettingsModel,
 	bolt_browser_mutation: browserMutationModel,
-	bolt_sync_partition_registry: syncPartitionRegistryModel,
 	bolt_schedule: scheduleModel,
 	bolt_task: taskModel
 });

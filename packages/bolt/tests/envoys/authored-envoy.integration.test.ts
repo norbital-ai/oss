@@ -11,7 +11,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeEnvoy } from '../../src/authoring/policy-introspection.js';
-import { renderArtifact } from '../../src/compiler/sync.js';
+import { renderArtifact } from '../../src/compiler/workspace-build.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	listAccessibleEnvoys,
@@ -67,11 +67,6 @@ const renderInput = (envoyFiles: ReadonlyArray<string>) =>
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-			currentSchemaFingerprint: 'sha256:fixture',
-			adapters: []
-		},
 		schemaFingerprint: 'sha256:fixture'
 	}) satisfies Parameters<typeof renderArtifact>[0];
 
@@ -174,7 +169,8 @@ describe('an authored envoy declaration', () => {
 				name: 'sales_desk',
 				transport: 'telegram',
 				audience: 'public',
-				groupMessages: 'disabled'
+				groupMessages: 'disabled',
+				delegation: 'disabled'
 			}
 		]);
 
@@ -254,6 +250,20 @@ describe('an authored envoy declaration', () => {
 	 */
 	it('refuses the reserved name web', () => {
 		expect(() => envoy({ name: 'web', ...authoredModule })).toThrow(/reserved/);
+	});
+
+	it('refuses an envoy that omits its delegation boundary', () => {
+		const missingDelegation = {
+			transport: 'telegram',
+			audience: 'public',
+			policies: ['sales_rep'],
+			groupMessages: 'disabled',
+			task: 'Answer questions about quotes and accounts for this customer.'
+		} as const;
+		expect(() => describeEnvoy('sales_desk', missingDelegation)).toThrow(/valid envoy object/);
+		expect(() => envoy({ name: 'sales_desk', ...missingDelegation } as never)).toThrow(
+			/requires delegation/
+		);
 	});
 
 	/** An envoy naming no policies would hold nothing, which is never what an envoy is for. */

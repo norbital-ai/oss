@@ -4,6 +4,8 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import { approveBy } from '../../src/authoring/approval-flow.js';
 import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { AuthoredRefusal } from '../../src/authoring/refusal.js';
+import { authoredHooks } from '../../src/authoring/contracts-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
@@ -12,9 +14,29 @@ import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
 /** Exercises the authored admin-team policy, not the administrator bypass under separate test. */
 const policySubject = { ...adminSubject, admin: false };
+
+const WRITERS_TEAM = 'writers';
+
+/**
+ * Whether the caller is the restricted writer rather than the administrator.
+ *
+ * Both roles reach the same coordinates and a coordinate may have exactly one grant, so the two
+ * answers this fixture needs live inside one grant's `authorize` instead of in a second policy. The
+ * decision api carries the requestor, which is the only thing that can tell them apart.
+ */
+const isWriter = (api: unknown): boolean => {
+	const requestor =
+		typeof api === 'object' && api !== null ? Reflect.get(api, 'requestor') : undefined;
+	const team =
+		typeof requestor === 'object' && requestor !== null
+			? Reflect.get(requestor, 'team')
+			: undefined;
+	return team === WRITERS_TEAM;
+};
 
 /**
  * A three-level graph using the relationship metadata the compiler emits for authored workspaces.
@@ -23,39 +45,20 @@ const policySubject = { ...adminSubject, admin: false };
  * the endpoints and therefore the foreign key. Reconciliation must resolve that inverse rather
  * than relying on endpoints being repeated on the `many` declaration.
  */
-const relationshipWorkspace = (
-	reviewBudgets = false,
-	reviewCostEstimates = false
-) => {
+const relationshipWorkspace = (reviewBudgets = false, reviewCostEstimates = false) => {
 	const review = { flow: () => approveBy('reviewers'), superceded_by: [] };
 	const write = (reviewed: boolean) => (reviewed ? { approval: review } : {});
-	const adminData = describePolicy('admin-data', {
-		description: 'Full graph data access, with review attached to the selected write coordinates.',
+	const graphData = describePolicy('graph-data', {
+		description:
+			'The one owner of every graph coordinate, with review attached to the selected writes.',
 		grants: {
 			budgets: {
 				create: write(reviewBudgets),
 				read: {},
-				update: write(reviewBudgets),
-				delete: write(reviewBudgets)
-			},
-			cost_estimates: {
-				create: write(reviewCostEstimates),
-				read: {},
-				update: write(reviewCostEstimates),
-				delete: write(reviewCostEstimates)
-			},
-			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} },
-			mutation_audit: { create: {}, read: {} }
-		}
-	});
-	const restrictedWriter = describePolicy('restricted-writer', {
-		description: 'A writer may only update its named budget and cannot create estimates directly.',
-		grants: {
-			budgets: {
-				create: {},
-				read: {},
 				update: {
-					authorize: (context: unknown) => {
+					...write(reviewBudgets),
+					authorize: (context: unknown, api: unknown) => {
+						if (!isWriter(api)) return true;
 						const previous =
 							typeof context === 'object' && context !== null
 								? Reflect.get(context, 'previous')
@@ -66,15 +69,23 @@ const relationshipWorkspace = (
 							Reflect.get(previous, 'name') === 'Writer-owned'
 						);
 					}
+				},
+				delete: {
+					...write(reviewBudgets),
+					authorize: (_context: unknown, api: unknown) => !isWriter(api)
 				}
 			},
 			cost_estimates: {
-				create: { authorize: () => false },
+				create: {
+					...write(reviewCostEstimates),
+					authorize: (_context: unknown, api: unknown) => !isWriter(api)
+				},
 				read: {},
-				update: {},
-				delete: {}
+				update: write(reviewCostEstimates),
+				delete: write(reviewCostEstimates)
 			},
-			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} }
+			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} },
+			mutation_audit: { create: {}, read: {} }
 		}
 	});
 	return workspace({
@@ -141,9 +152,9 @@ const relationshipWorkspace = (
 			app({ name: 'approvals', label: 'Approvals' })
 		],
 		teams: {
-			admin: ['admin-data', 'admin-approval'],
+			admin: ['graph-data', 'admin-approval'],
 			reviewers: ['admin-approval'],
-			writers: ['restricted-writer']
+			writers: ['graph-data']
 		},
 		automations: [],
 		integrations: [],
@@ -153,14 +164,13 @@ const relationshipWorkspace = (
 		envoys: [],
 		requiredFacilities: [],
 		policies: [
-			adminData,
+			graphData,
 			policy({
 				name: 'admin-approval',
 				effect: 'allow',
 				actions: ['approve'],
 				capabilities: { apps: ['approvals'] }
-			}),
-			restrictedWriter
+			})
 		]
 	});
 };
@@ -212,6 +222,55 @@ const reviewerSubject = {
 	policies: []
 };
 
+/**
+ * The fixture tables as a schema, so the hooks are typed the way a compiled workspace's are.
+ *
+ * The reconciliation hooks read `input` and `existing` off the schema and never hand a subset back
+ * through a variable, so relations stay empty — a nested create graph is only ever written by the
+ * caller, not by a hook here.
+ */
+interface ReconciliationSchema {
+	readonly tables: {
+		readonly budgets: {
+			readonly $inferSelect: { readonly id: string; readonly name: string };
+			readonly $inferInsert: { readonly id?: string; readonly name: string };
+		};
+		readonly cost_estimates: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly budget_id: string;
+				readonly label: string;
+				readonly amount: number;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly budget_id: string;
+				readonly label: string;
+				readonly amount: number;
+			};
+		};
+		readonly cost_estimate_lines: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly cost_estimate_id: string;
+				readonly code: string;
+				readonly quantity: number;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly cost_estimate_id: string;
+				readonly code: string;
+				readonly quantity: number;
+			};
+		};
+		readonly mutation_audit: {
+			readonly $inferSelect: { readonly id: string; readonly body: string };
+			readonly $inferInsert: { readonly id?: string; readonly body: string };
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -262,7 +321,7 @@ const resumeRequest = (runtime: BoltTestRuntime, effectId: string, requestId: st
 const deletionHooks = (calls: Array<string>) => ({
 	...emptyAuthoredRuntime,
 	hooks: {
-		cost_estimates: {
+		cost_estimates: authoredHooks<ReconciliationSchema, 'cost_estimates'>({
 			delete: {
 				perRecord: {
 					before: {
@@ -279,8 +338,8 @@ const deletionHooks = (calls: Array<string>) => ({
 					}
 				}
 			}
-		},
-		cost_estimate_lines: {
+		}),
+		cost_estimate_lines: authoredHooks<ReconciliationSchema, 'cost_estimate_lines'>({
 			delete: {
 				perRecord: {
 					before: {
@@ -297,30 +356,27 @@ const deletionHooks = (calls: Array<string>) => ({
 					}
 				}
 			}
-		}
+		})
 	}
 });
 
 const budgetUpdateHooks = (calls: Array<string>) => ({
 	...emptyAuthoredRuntime,
 	hooks: {
-		budgets: {
+		budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
 			mutate: {
 				perRecord: {
 					before: {
 						description: 'Records approved root preparation.',
-						handler: (context: unknown) => {
-							const write = context as {
-								readonly input: Record<string, unknown>;
-								readonly existing?: Readonly<Record<string, unknown>>;
-							};
-							if (write.existing !== undefined) calls.push('budget.before');
-							return write.input;
+						handler: (context) => {
+							if (context.existing === undefined) return context.input;
+							calls.push('budget.before');
+							return context.input;
 						}
 					}
 				}
 			}
-		}
+		})
 	}
 });
 
@@ -394,7 +450,7 @@ describe('declarative relationship reconciliation', () => {
 		);
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
-			expect(Collections.unwrapMutationPhase(outcome.failure)).toMatchObject({
+			expect(unwrapMutationPhase(outcome.failure)).toMatchObject({
 				action: 'create',
 				resource: 'cost_estimates',
 				reason: expect.stringContaining('refused the prepared record')
@@ -491,7 +547,7 @@ describe('declarative relationship reconciliation', () => {
 			authored: {
 				...emptyAuthoredRuntime,
 				hooks: {
-					budgets: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
 						mutate: {
 							prepare: () => {
 								calls.push('prepare');
@@ -500,14 +556,14 @@ describe('declarative relationship reconciliation', () => {
 							perRecord: {
 								before: {
 									description: 'Records the only authored preparation pass.',
-									handler: (context: unknown) => {
+									handler: (context) => {
 										calls.push('before');
-										return (context as { readonly input: Record<string, unknown> }).input;
+										return context.input;
 									}
 								}
 							}
 						}
-					}
+					})
 				}
 			}
 		});
@@ -551,31 +607,22 @@ describe('declarative relationship reconciliation', () => {
 			authored: {
 				...emptyAuthoredRuntime,
 				hooks: {
-					budgets: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
 						mutate: {
 							perRecord: {
 								before: {
 									description: 'Stages an audit and then refuses the parent.',
-									handler: (context: unknown) =>
+									handler: ({ input, api }) =>
 										Effect.gen(function* () {
-											const typed = context as {
-												readonly api: {
-													readonly db: {
-														readonly mutation_audit: {
-															readonly mutate: (
-																input: Readonly<Record<string, unknown>>
-															) => Effect.Effect<void>;
-														};
-													};
-												};
-											};
-											yield* typed.api.db.mutation_audit.mutate({ body: 'must roll back' });
-											return yield* Effect.fail(new Error('parent preparation failed'));
+											yield* api.db.mutation_audit.mutate({ body: 'must roll back' });
+											return yield* Effect.fail(
+												new AuthoredRefusal({ message: 'parent preparation failed' })
+											);
 										})
 								}
 							}
 						}
-					}
+					})
 				}
 			}
 		});
@@ -590,7 +637,7 @@ describe('declarative relationship reconciliation', () => {
 						[{ name: 'Rejected by hook' }],
 						false,
 						0,
-						{ declarative: true }
+						{}
 					);
 				})
 			)
@@ -893,13 +940,22 @@ describe('declarative relationship reconciliation', () => {
 
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(
+				yield* (yield* Collections.Service).mutate(
 					EffectId.make('approval-edge-drift-child'),
 					policySubject,
+					'cost_estimates',
+					[
+						{
+							id: '00000000-0000-4000-8000-000000000099',
+							budget_id: budgetId,
+							label: 'Late child',
+							amount: 99
+						}
+					],
+					false,
+					0,
 					{
-						collection: 'cost_estimates',
-						id: '00000000-0000-4000-8000-000000000099',
-						values: { budget_id: budgetId, label: 'Late child', amount: 99 }
+						root: { id: '00000000-0000-4000-8000-000000000099', action: 'create' }
 					}
 				);
 			})
@@ -982,10 +1038,14 @@ describe('declarative relationship reconciliation', () => {
 		const childPending = await harness.runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).update(
+					yield* (yield* Collections.Service).mutate(
 						EffectId.make('locked-child-update'),
 						policySubject,
-						{ collection: 'cost_estimates', id: childId, values: { amount: 11 } }
+						'cost_estimates',
+						[{ id: childId, amount: 11 }],
+						false,
+						0,
+						{ root: { id: childId, action: 'update' } }
 					);
 				})
 			)
@@ -1079,7 +1139,16 @@ describe('declarative relationship reconciliation', () => {
 		expect(storedEstimates.some((row) => row['id'] === hardwareId)).toBe(false);
 	}, 60_000);
 
-	it('creates and updates named children without deleting omissions on a non-owned edge', async () => {
+	/**
+	 * Reconciling a non-owned edge is all of it or none of it.
+	 *
+	 * Omission-delete belongs to an owned edge alone, so a `many` the parent does not own cannot
+	 * read absence as "delete these" — and it does not read it as "keep these" either. A payload
+	 * that names the edge and leaves stored members out is refused, because the two readings are
+	 * indistinguishable from the caller's side and silently choosing one loses whichever the caller
+	 * meant. Omitting the *key* is a different statement and still says nothing about the children.
+	 */
+	it('refuses an omission on a non-owned edge and reconciles the full set', async () => {
 		harness = await makeBoltTestRuntime(definition);
 		await mutateBudget(harness, 'omission-create', {
 			name: 'Draft',
@@ -1096,6 +1165,7 @@ describe('declarative relationship reconciliation', () => {
 			'select id, budget_id, label, amount from cost_estimates order by label'
 		);
 		const firstId = requiredId(before[0], 'first estimate');
+		const secondId = requiredId(before[1], 'second estimate');
 
 		await mutateBudget(harness, 'omission-update', { id: budgetId, name: 'Still populated' });
 		expect(
@@ -1104,35 +1174,54 @@ describe('declarative relationship reconciliation', () => {
 			)
 		).toEqual(before);
 
+		const partial = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).mutate(
+						EffectId.make('non-owned-omission'),
+						policySubject,
+						'budgets',
+						[
+							{
+								id: budgetId,
+								budget_cost_estimates: [{ id: firstId, label: 'A revised', amount: 11 }]
+							}
+						]
+					);
+				})
+			)
+		);
+		expect(partial._tag).toBe('Failure');
+		if (partial._tag === 'Failure')
+			expect(unwrapMutationPhase(partial.failure)).toMatchObject({
+				collection: 'cost_estimates',
+				action: 'update',
+				message: expect.stringContaining('not cascade-owned')
+			});
+		expect(
+			await harness.database.query(
+				'select id, budget_id, label, amount from cost_estimates order by label'
+			)
+		).toEqual(before);
+
+		// The same write, stated in full: every stored member named, one edited and one added.
 		await mutateBudget(harness, 'non-owned-reconcile', {
 			id: budgetId,
 			budget_cost_estimates: [
 				{ id: firstId, label: 'A revised', amount: 11 },
+				{ id: secondId, label: 'B', amount: 20 },
 				{ label: 'C', amount: 30 }
 			]
-		});
-		const reconciled = await harness.database.query(
-			'select id, budget_id, label, amount from cost_estimates order by label'
-		);
-		expect(reconciled).toEqual([
-			{ id: firstId, budget_id: budgetId, label: 'A revised', amount: 11 },
-			before[1],
-			{ id: expect.any(String), budget_id: budgetId, label: 'C', amount: 30 }
-		]);
-
-		await mutateBudget(harness, 'omission-clear', {
-			id: budgetId,
-			name: 'Still non-owning',
-			budget_cost_estimates: []
 		});
 		expect(
 			await harness.database.query(
 				'select id, budget_id, label, amount from cost_estimates order by label'
 			)
-		).toEqual(reconciled);
-		expect(
-			await harness.database.query('select name from budgets where id = $1', [budgetId])
-		).toEqual([{ name: 'Still non-owning' }]);
+		).toEqual([
+			{ id: firstId, budget_id: budgetId, label: 'A revised', amount: 11 },
+			before[1],
+			{ id: expect.any(String), budget_id: budgetId, label: 'C', amount: 30 }
+		]);
 	}, 60_000);
 
 	it('does not plan descendant deletion across a non-cascade edge', async () => {
@@ -1346,19 +1435,24 @@ describe('declarative relationship reconciliation', () => {
 			})
 		});
 
-		const relationshipPlanning = harness.database.statements.filter((statement) =>
-			statement.includes('__bolt_relation_ordinal')
+		const wavePlanning = harness.database.statements.filter((statement) =>
+			statement.includes('__bolt_write_wave_kind')
 		);
-		const rowPlanning = harness.database.statements.filter((statement) =>
-			statement.includes('__bolt_graph_row_ordinal')
-		);
-		// The root edge and all eight child edges are heterogeneous requests in one UNION, not nine
-		// facility calls from inside recursive prepareNode. The root, estimates and lines likewise
-		// share one exact pre-image read rather than a read plus a snapshot query for every node.
-		expect(relationshipPlanning).toHaveLength(1);
-		expect(relationshipPlanning[0]?.match(/ union all /g)).toHaveLength(8);
-		expect(rowPlanning).toHaveLength(1);
-		expect(rowPlanning[0]?.match(/ union all /g)).toHaveLength(16);
+		// The engine's own wave read answers the root alone; the declarative graph's shared wave read
+		// answers every submitted pre-image and relationship membership in one union — the engine
+		// never re-reads a row the reading session already holds. Row pre-images (8 estimates, 8
+		// lines) and complete memberships (budget's estimates plus each estimate's lines) are the
+		// twenty-five branches of that single statement. No recursive prepareNode fallback may open
+		// another row or relation statement.
+		expect(wavePlanning).toHaveLength(2);
+		expect(wavePlanning[1]?.match(/ union all /g)).toHaveLength(24);
+		expect(
+			harness.database.statements.some(
+				(statement) =>
+					statement.includes('__bolt_graph_row_ordinal') ||
+					statement.includes('__bolt_relation_ordinal')
+			)
+		).toBe(false);
 	}, 60_000);
 
 	it('rolls back the entire graph when a new child omits a required field', async () => {

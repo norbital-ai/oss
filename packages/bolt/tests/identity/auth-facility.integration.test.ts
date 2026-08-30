@@ -1,7 +1,11 @@
 import { PGlite } from '@electric-sql/pglite';
+import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { Effect } from 'effect';
 import { AUTH_MODELS } from '../../src/authoring/system-models.js';
-import { identitySchemaSteps } from '../../src/compiler/schema-plan.js';
+import { workspace } from '../../src/authoring/workspace-schema.js';
+import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
 	DEVELOPMENT_SIGN_IN_CODE,
@@ -9,6 +13,23 @@ import {
 	type DeliverCode
 } from '../../src/runtime/identity/auth.js';
 import type { ExecuteQuery } from '../../src/runtime/identity/auth-store.js';
+
+const schemaPlan = buildSchemaPlan(
+	workspace({
+		name: 'identity-facility-test',
+		version: '1',
+		collections: [],
+		apps: [],
+		policies: [],
+		automations: [],
+		envoys: [],
+		integrations: [],
+		prompt: '',
+		tools: [],
+		skills: [],
+		requiredFacilities: []
+	})
+);
 
 /**
  * Identity is exercised against a real Postgres, driven through the same `execute` seam a host
@@ -25,23 +46,25 @@ describe('bolt-owned identity over a host facility', () => {
 		});
 
 	beforeAll(async () => {
-		database = await PGlite.create('memory://');
+		database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		execute = ({ sql, parameters }) =>
 			Effect.promise(async () => {
 				const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 				return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 			});
-		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
+		for (const statement of schemaPlan.steps) await database.exec(statement.sql);
 	});
 
 	afterAll(async () => {
 		await database.close();
 	});
 
-	it('applies its schema through the same plan idiom, and re-applies safely', async () => {
+	it('applies identity through the signed migration plan, and re-applies safely', async () => {
 		// `schema.migrate` runs on every deploy, so a statement that is not idempotent breaks the
 		// second one rather than the first.
-		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
+		for (const statement of schemaPlan.steps) await database.exec(statement.sql);
 		const tables = await database.query<{ table_name: string }>(
 			`select table_name from information_schema.tables
 			  where table_name in ('account', 'auth_config', 'session', 'team', 'user', 'verification')
@@ -163,14 +186,16 @@ describe('the code a development environment issues', () => {
 		// The flag now follows the environment the host scoped the invocation to, which is the mode.
 		// It deliberately does NOT follow whether a mailer is bound: a mailer is expected in every
 		// environment, so its absence is a misconfiguration to surface, not a mode to infer.
-		const database = await PGlite.create('memory://');
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		try {
 			const run: ExecuteQuery = ({ sql, parameters }) =>
 				Effect.promise(async () => {
 					const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 					return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 				});
-			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
+			for (const statement of schemaPlan.steps) await database.exec(statement.sql);
 			const sent: Array<string> = [];
 			const development = makeAuth({
 				execute: run,
@@ -199,9 +224,11 @@ describe('the signing secret bolt generates for itself', () => {
 		// dev host had no such extension — every sign-in failed with `function gen_random_bytes(integer)
 		// does not exist`. The earlier tests missed it because they call `makeAuth` directly and never
 		// run the statement that provisions the secret. This one runs the real SQL.
-		const database = await PGlite.create('memory://');
+		const database = await PGlite.create('memory://', {
+			extensions: { pg_trgm, btree_gist, vector }
+		});
 		try {
-			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
+			for (const statement of schemaPlan.steps) await database.exec(statement.sql);
 			const insert = `insert into "auth_config" ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from "auth_config" where "key" = 'session-secret')`;
 			await database.query(insert);
 			// Re-running must not rotate the secret: a secret that changed on every boot would

@@ -243,7 +243,7 @@ export function createMentionSources(options: MentionSourcesOptions = {}): Menti
 			const text = query.trim();
 			return Effect.tryPromise(() =>
 				findRecords(collection, {
-					search: text,
+					search: { mode: 'lexical', term: text },
 					limit: hitsPerSource
 				})
 			).pipe(

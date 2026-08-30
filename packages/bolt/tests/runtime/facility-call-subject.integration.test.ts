@@ -178,9 +178,9 @@ describe('the subject a facility call carries', () => {
 		harness.database.forget();
 
 		const response = await harness.runtime.runPromise(
-			dispatchInvocation(command('collections.findMany', 'admin-token', { collection: 'people' }))
+			dispatchInvocation(command('collections.export', 'admin-token', { collection: 'people' }))
 		);
-		expect(response.value).toMatchObject({ rows: [{ name: 'Ada' }] });
+		expect(response.value).toMatchObject([{ name: 'Ada' }]);
 
 		const calls = [...harness.database.calls];
 		expect(calls.length).toBeGreaterThan(1);
@@ -216,7 +216,7 @@ describe('the subject a facility call carries', () => {
 
 		await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.findMany', 'admin-token', {
+				command('collections.export', 'admin-token', {
 					collection: 'people',
 					subject: {
 						userId: 'user-victim',
@@ -248,11 +248,15 @@ describe('the subject a facility call carries', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id,
-						values: { name: 'Ada' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id, name: 'Ada' }],
+						false,
+						0,
+						{ root: { id, action: 'create' } }
+					);
 				})
 			)
 		);
@@ -265,10 +269,15 @@ describe('the subject a facility call carries', () => {
 		);
 		if (pending?._tag !== 'Pending')
 			throw new Error(`expected a pending approval, got ${String(pending?._tag)}`);
-		await harness.database.query('update bolt_approvals set state = $2 where request_id = $1', [
-			requestId,
-			{ _tag: 'Approved', requestId, decidedBy: adminSubject.userId, operation: pending.operation }
-		]);
+		// Only the discriminant and the decider move. `status` answers the *public* projection, which
+		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
+		// replays from — so writing that projection back would approve a request nothing could resume.
+		await harness.database.query(
+			`update bolt_approvals
+			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))
+			 where request_id = $1`,
+			[requestId, adminSubject.userId]
+		);
 		harness.database.forget();
 
 		const resumed = await runtime.runPromise(

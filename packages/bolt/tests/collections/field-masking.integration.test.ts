@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect, Exit, Option } from 'effect';
 import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
@@ -11,6 +12,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
 const definition = workspace({
 	name: 'field-masking',
@@ -26,13 +28,13 @@ const definition = workspace({
 		})
 	],
 	apps: [],
+	/**
+	 * One policy owns every `assignments` coordinate, because a coordinate may have exactly one
+	 * owner. The unmasked half of this fixture is the administrator bypass rather than a second
+	 * grant: `adminSubject` carries `admin: true`, which reaches an authored collection whole and is
+	 * how a real workspace expresses "sees everything" beside a field-masked role.
+	 */
 	policies: [
-		describePolicy('admin', {
-			description: 'May manage assignments.',
-			grants: {
-				assignments: { create: {}, read: {}, update: {}, delete: {} }
-			}
-		}),
 		describePolicy('field-worker', {
 			description: 'May work only with the public assignment fields.',
 			grants: {
@@ -44,7 +46,7 @@ const definition = workspace({
 			}
 		})
 	],
-	teams: { admin: ['admin'], 'field-worker': ['field-worker'] },
+	teams: { 'field-worker': ['field-worker'] },
 	automations: [],
 	envoys: [],
 	integrations: [],
@@ -61,6 +63,27 @@ const fieldWorker: Identity.Subject = {
 	policies: []
 };
 
+/** The fixture as a schema, so the hooks are typed the way a compiled workspace's are. */
+interface MaskingSchema {
+	readonly tables: {
+		readonly assignments: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly title: string;
+				readonly controller_note: string;
+				readonly source: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly title: string;
+				readonly controller_note?: string;
+				readonly source?: string;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -74,11 +97,15 @@ describe('authored policy field masks', () => {
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(harness!.effectId('create'), adminSubject, {
-					collection: 'assignments',
-					id,
-					values: { title: 'Inspect site', controller_note: 'Do not disclose' }
-				});
+				yield* collections.mutate(
+					harness!.effectId('create'),
+					adminSubject,
+					'assignments',
+					[{ id, title: 'Inspect site', controller_note: 'Do not disclose' }],
+					false,
+					0,
+					{ root: { id, action: 'create' } }
+				);
 			})
 		);
 
@@ -92,54 +119,56 @@ describe('authored policy field masks', () => {
 			})
 		);
 
-  expect(rows).toEqual([{ id, row_version: 1, title: 'Inspect site' }]);
+		expect(rows).toEqual([{ id, row_version: 1, title: 'Inspect site' }]);
 		expect(JSON.stringify(rows)).not.toContain('controller_note');
 		expect(JSON.stringify(rows)).not.toContain('Do not disclose');
 	});
 
 	it('checks caller fields before update hooks and permits server-derived fields', async () => {
+		const assignmentHooks: CollectionHooks<MaskingSchema, 'assignments'> = {
+			mutate: {
+				perRecord: {
+					before: {
+						description: 'Attempts to add a controller-only note.',
+						handler: (context) =>
+							context.existing === undefined
+								? context.input
+								: { ...context.input, controller_note: 'injected by hook' }
+					}
+				}
+			}
+		};
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
 				...emptyAuthoredRuntime,
-				hooks: {
-					assignments: {
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Attempts to add a controller-only note.',
-									handler: (context: unknown) => {
-										const mutation = context as {
-											readonly input: Record<string, unknown>;
-											readonly existing?: Record<string, unknown>;
-										};
-										return mutation.existing === undefined
-											? mutation.input
-											: { ...mutation.input, controller_note: 'injected by hook' };
-									}
-								}
-							}
-						}
-					}
-				}
+				hooks: { assignments: authoredHooks(assignmentHooks) }
 			}
 		});
 		const id = recordId('hooked-assignment');
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(harness!.effectId('create'), adminSubject, {
-					collection: 'assignments',
-					id,
-					values: { title: 'Original', controller_note: 'Private' }
-				});
+				yield* (yield* Collections.Service).mutate(
+					harness!.effectId('create'),
+					adminSubject,
+					'assignments',
+					[{ id, title: 'Original', controller_note: 'Private' }],
+					false,
+					0,
+					{ root: { id, action: 'create' } }
+				);
 			})
 		);
 
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).update(
+				yield* (yield* Collections.Service).mutate(
 					harness!.effectId('restricted-update'),
 					fieldWorker,
-					{ collection: 'assignments', id, values: { title: 'Changed' } }
+					'assignments',
+					[{ id, title: 'Changed' }],
+					false,
+					0,
+					{ root: { id, action: 'update' } }
 				);
 			})
 		);
@@ -152,7 +181,7 @@ describe('authored policy field masks', () => {
 					[{ id, title: 'Changed through graph' }],
 					false,
 					0,
-					{ declarative: true, root: { id, action: 'update' } }
+					{ root: { id, action: 'update' } }
 				);
 			})
 		);
@@ -177,24 +206,19 @@ describe('authored policy field masks', () => {
 			authored: {
 				...emptyAuthoredRuntime,
 				hooks: {
-					assignments: {
+					assignments: authoredHooks<MaskingSchema, 'assignments'>({
 						mutate: {
 							perRecord: {
 								before: {
 									description: 'Owns the controller-only provenance field.',
-									handler: (context: unknown) => {
-										const mutation = context as {
-											readonly input: Record<string, unknown>;
-											readonly existing?: Record<string, unknown>;
-										};
-										return mutation.existing === undefined
-											? { title: String(mutation.input['title']), source: 'server-computed' }
-											: mutation.input;
-									}
+									handler: (context) =>
+										context.existing === undefined
+											? { title: String(context.input.title), source: 'server-computed' }
+											: context.input
 								}
 							}
 						}
-					}
+					})
 				}
 			}
 		});
@@ -202,18 +226,23 @@ describe('authored policy field masks', () => {
 		const forgedId = recordId('forged-create');
 		const forged = await harness.runtime.runPromiseExit(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(
+				yield* (yield* Collections.Service).mutate(
 					harness!.effectId('forged-create'),
 					fieldWorker,
-					{
-						collection: 'assignments',
-						id: forgedId,
-						values: { title: 'Forged', source: 'caller-forged' }
-					}
+					'assignments',
+					[{ id: forgedId, title: 'Forged', source: 'caller-forged' }],
+					false,
+					0,
+					{ root: { id: forgedId, action: 'create' } }
 				);
 			})
 		);
-		expect(Option.getOrUndefined(Exit.findErrorOption(forged))).toMatchObject({
+		const refusal = Option.getOrUndefined(Exit.findErrorOption(forged));
+		// The field grant is a PREPARE refusal, so the batch reports it under its prepare phase; the
+		// grant sentence itself is the unwrapped failure underneath.
+		expect(refusal).toBeInstanceOf(Collections.MutationPhaseFailure);
+		expect(refusal).toMatchObject({ phase: 'prepare' });
+		expect(unwrapMutationPhase(refusal)).toMatchObject({
 			action: 'create',
 			resource: 'assignments',
 			reason: 'create includes fields outside the matching policy grant'
@@ -222,14 +251,14 @@ describe('authored policy field masks', () => {
 		const allowedId = recordId('allowed-create');
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(
+				yield* (yield* Collections.Service).mutate(
 					harness!.effectId('allowed-create'),
 					fieldWorker,
-					{
-						collection: 'assignments',
-						id: allowedId,
-						values: { title: 'Allowed' }
-					}
+					'assignments',
+					[{ id: allowedId, title: 'Allowed' }],
+					false,
+					0,
+					{ root: { id: allowedId, action: 'create' } }
 				);
 			})
 		);

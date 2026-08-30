@@ -1,0 +1,42 @@
+{
+	"name": "@norbital-ai/doctor-effect",
+	"version": "0.0.10",
+	"description": "Effect ownership and ceremony rules for @norbital-ai/doctor: failure, concurrency, time, logging, IO, and the run-at-the-edge laws.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"files": [
+		"build",
+		"package.json"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/doctor-effect"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/doctor-effect",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"exports": {
+		".": "./build/index.js",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor-effect",
+		"lint": "tsc -p tsconfig.json --noEmit",
+		"test": "pnpm build && node --test \"tests/**/*.test.ts\""
+	},
+	"dependencies": {
+		"@norbital-ai/doctor": "workspace:*"
+	},
+	"devDependencies": {
+		"@norbital-ai/config": "workspace:*",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:"
+	}
+}

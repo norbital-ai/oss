@@ -1,6 +1,5 @@
 import { Effect, Schema } from 'effect';
 import type { BoltTransport } from '#lib/client/contracts.js';
-import { cacheKeyFor } from '#lib/client/replica/query-cache.js';
 
 export type HttpBoltTransportOptions = Readonly<{
 	/**
@@ -55,7 +54,7 @@ const refusalMessage = (command: string, status: number, payload: unknown): stri
 };
 
 /** Carries the response controls needed by bounded retry and mutation outcome classification. */
-export class BoltHttpResponseError extends Error {
+class BoltHttpResponseError extends Error {
 	readonly status: number;
 	readonly retryAfter: string | undefined;
 	readonly payload: Schema.Json;
@@ -74,23 +73,13 @@ export class BoltHttpResponseError extends Error {
 	}
 }
 
-type PageValidator = Readonly<{ readonly etag: string; readonly value: Schema.Json }>;
-const MAX_PAGE_VALIDATORS = 128;
-
 /** Browser transport that posts Bolt commands to the endpoint the host declared. */
 export function createHttpBoltTransport(options: HttpBoltTransportOptions): BoltTransport {
 	const endpoint = options.endpoint.replace(/\/$/, '');
-	// This closure is created for one mounted, credential-bound workspace session. Keeping validators
-	// here makes an exact page reusable across remounts of that session without ever crossing into a
-	// different transport/principal, and the fixed ceiling prevents navigation from growing it forever.
-	const pages = new Map<string, PageValidator>();
 	return {
-		command: (command, input, signal) =>
+		command: (command, input, signal, headers) =>
 			Effect.runPromise(
 				Effect.gen(function* () {
-					const pageKey =
-						command === 'collections.findMany' ? cacheKeyFor(command, input) : undefined;
-					const prior = pageKey === undefined ? undefined : pages.get(pageKey);
 					const response = yield* Effect.tryPromise(() =>
 						fetch(`${endpoint}/${encodeURIComponent(command)}`, {
 							method: 'POST',
@@ -98,21 +87,12 @@ export function createHttpBoltTransport(options: HttpBoltTransportOptions): Bolt
 							headers: {
 								'content-type': 'application/json',
 								authorization: `Bearer ${options.credential}`,
-								...(prior === undefined ? {} : { 'if-none-match': prior.etag })
+								...(headers ?? {})
 							},
 							body: JSON.stringify(input),
 							signal: signal ?? null
 						})
 					);
-					if (response.status === 304) {
-						if (prior === undefined)
-							return yield* Effect.fail(
-								new Error('Bolt returned 304 without an exact authority-scoped page')
-							);
-						pages.delete(pageKey as string);
-						pages.set(pageKey as string, prior);
-						return prior.value;
-					}
 					const text = yield* Effect.tryPromise(() => response.text());
 					const payload =
 						text.trim() === ''
@@ -129,16 +109,6 @@ export function createHttpBoltTransport(options: HttpBoltTransportOptions): Bolt
 								payload
 							)
 						);
-					}
-					const etag = response.headers.get('etag');
-					if (pageKey !== undefined && etag !== null) {
-						pages.delete(pageKey);
-						pages.set(pageKey, { etag, value: payload });
-						while (pages.size > MAX_PAGE_VALIDATORS) {
-							const oldest = pages.keys().next().value as string | undefined;
-							if (oldest === undefined) break;
-							pages.delete(oldest);
-						}
 					}
 					return payload;
 				})

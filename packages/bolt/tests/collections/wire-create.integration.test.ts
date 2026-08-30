@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import {
 	EnvironmentName,
-	EffectId,
 	Invocation,
 	InvocationId,
 	PROTOCOL_VERSION,
@@ -21,23 +20,25 @@ import {
 	emptyAuthoredRuntime,
 	type AuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import { refuse } from '../../src/authoring/refusal.js';
 import { approveBy } from '../../src/authoring/approval-flow.js';
 import {
 	describePolicy,
 	policyRuntimeFunctionsFor
 } from '../../src/authoring/policy-introspection.js';
-import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	TEST_ENVIRONMENT,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
-import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
+import { seedSession } from '../support/fixture-identity.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
 /**
  * The declarative mutation as a browser actually reaches it: over `dispatchInvocation`, with a
@@ -111,34 +112,70 @@ const definition = workspace({
 });
 
 /**
+ * The fixture tables as a schema, so the hook is typed the way a compiled workspace's are.
+ *
+ * The generated `label` on `order_lines` is deliberately absent from the insert shape: the graph
+ * under test includes a child the caller must not write, and the generated column is only ever
+ * produced by the database.
+ */
+interface WireCreateSchema {
+	readonly tables: {
+		readonly orders: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly reference: string;
+				readonly status: string;
+				readonly occurred_at: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly reference: string;
+				readonly status?: string;
+				readonly occurred_at?: string;
+			};
+		};
+		readonly order_lines: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly order_id: string;
+				readonly sku: string;
+				readonly label: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly order_id: string;
+				readonly sku: string;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
+/**
  * A hook that changes the record on its way in, which is the cheap stand-in for every reason a
  * stored row differs from the submission — a default, a generated column, a derived field.
  */
-const authored = {
-	...emptyAuthoredRuntime,
-	hooks: {
-		orders: {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Stamps the status the workspace, not the caller, decides.',
-						handler: (context: unknown) => {
-							const mutation = context as {
-								readonly input: Record<string, unknown>;
-								readonly existing?: Record<string, unknown>;
-							};
-							if (mutation.existing !== undefined) return mutation.input;
-							return {
-								...mutation.input,
-								status: 'accepted',
-								occurred_at: new Date('2026-08-23T05:00:00.000Z')
-							};
-						}
-					}
+const orderHooks: CollectionHooks<WireCreateSchema, 'orders'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Stamps the status the workspace, not the caller, decides.',
+				handler: (context) => {
+					if (context.existing !== undefined) return context.input;
+					return {
+						...context.input,
+						status: 'accepted',
+						occurred_at: '2026-08-23T05:00:00.000Z'
+					};
 				}
 			}
 		}
 	}
+};
+
+const authored = {
+	...emptyAuthoredRuntime,
+	hooks: { orders: authoredHooks(orderHooks) }
 };
 
 const scope = {
@@ -165,7 +202,6 @@ let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
 	harness = undefined;
-	issuedMutationPartitionKey = '';
 });
 
 const open = async (
@@ -177,93 +213,52 @@ const open = async (
 	return runtime;
 };
 
-let issuedMutationPartitionKey = '';
+/**
+ * The coordinate a client canonicalises its push under.
+ *
+ * Client-chosen, and no longer a handle the server issued and resolves: the wire is `sync.connect`
+ * and `sync.advance`, and neither hands one out. The journal only folds it into the request digest,
+ * which is what the collision case further down turns on.
+ */
+const MUTATION_PARTITION_KEY = 'sha256:wire-create-partition';
 
+/**
+ * The schema fingerprint the write boundary refuses any push stated against an older one.
+ *
+ * It rides the compiled workspace definition, which the harness provisions, so a test states the
+ * same fact the release does rather than asking a command for it.
+ */
 const schemaFingerprint = async (runtime: BoltTestRuntime): Promise<string> => {
-	const response = await post(runtime, 'sync.schema', {});
-	const value = response.value;
-	if (typeof value !== 'object' || value === null || Array.isArray(value))
-		throw new TypeError('sync.schema did not return an object');
-	const fingerprint = Reflect.get(value, 'fingerprint');
-	if (typeof fingerprint !== 'string') throw new TypeError('sync.schema returned no fingerprint');
-	const partitionResponse = await post(runtime, 'sync.partition', {});
-	const partitionEnvelope = partitionResponse.value;
-	if (
-		typeof partitionEnvelope !== 'object' ||
-		partitionEnvelope === null ||
-		Array.isArray(partitionEnvelope)
-	)
-		throw new TypeError('sync.partition did not return an object');
-	const partition = Reflect.get(partitionEnvelope, 'partition');
-	if (typeof partition !== 'object' || partition === null || Array.isArray(partition))
-		throw new TypeError('sync.partition did not return a partition');
-	const partitionKey = Reflect.get(partition, 'key');
-	const partitionFingerprint = Reflect.get(partition, 'schemaFingerprint');
-	if (typeof partitionKey !== 'string' || partitionKey.length === 0)
-		throw new TypeError('sync.partition returned no key');
-	if (partitionFingerprint !== fingerprint)
-		throw new TypeError('sync.partition returned a different schema fingerprint');
-	issuedMutationPartitionKey = partitionKey;
+	const workspace = await runtime.runtime.runPromise(Workspace.Service);
+	const fingerprint = workspace.definition.schemaFingerprint;
+	if (typeof fingerprint !== 'string')
+		throw new TypeError('The test runtime provisioned no schema fingerprint.');
 	return fingerprint;
 };
 
-const registerHistoricalPartition = async (
+/** One complete sync handshake: registration, resolution and pending settlement in one command. */
+const syncConnect = async (
 	runtime: BoltTestRuntime,
-	schemaFingerprint: string,
-	key: string
-): Promise<string> => {
-	const [current] = await runtime.database.query(
-		`select actor_id, effective_subject_id, impersonation_binding
-		 from bolt_sync_partition_registry where partition_key = $1`,
-		[issuedMutationPartitionKey]
-	);
-	if (
-		current === undefined ||
-		typeof current['actor_id'] !== 'string' ||
-		typeof current['effective_subject_id'] !== 'string' ||
-		typeof current['impersonation_binding'] !== 'string'
-	)
-		throw new TypeError('The current physical partition has no authenticated registry binding.');
-	const binding = {
-		tenantId: scope.tenantId,
-		environment: scope.environment,
-		actorId: current['actor_id'],
-		effectiveSubjectId: current['effective_subject_id'],
-		impersonationBinding: current['impersonation_binding']
-	};
-	await runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			const collections = yield* Collections.Service;
-			yield* collections.registerBrowserMutationPartition(
-				EffectId.make(`historical-partition:${key}`),
-				binding,
-				{
-					key,
-					tenantId: scope.tenantId,
-					environment: scope.environment,
-					effectivePolicyHolder: 'administrator',
-					impersonationTarget: null,
-					authorityGeneration: 0,
-					schemaFingerprint
-				}
-			);
-			const registered = yield* collections.browserMutationPartition(
-				EffectId.make(`historical-partition:${key}:verify`),
-				binding,
-				key
-			);
-			if (registered?.schemaFingerprint !== schemaFingerprint)
-				throw new TypeError('The historical physical partition was not registered exactly.');
-		})
-	);
-	return key;
-};
+	input: Readonly<{
+		readonly pending?: ReadonlyArray<string>;
+		readonly queries?: ReadonlyArray<{
+			readonly key: string;
+			readonly input: Readonly<Record<string, unknown>>;
+		}>;
+	}> = {}
+) =>
+	post(runtime, 'sync.connect', {
+		head: { sequence: 0 },
+		queries: input.queries ?? [],
+		released: [],
+		pending: input.pending ?? []
+	});
 
 const mutationPush = (
 	fingerprint: string,
 	input: Readonly<{
 		readonly idempotencyKey: string;
-		readonly deviceSequence: number;
+		readonly seed: number;
 		readonly graph: Readonly<Record<string, unknown>>;
 		readonly baseVersions?: ReadonlyArray<Readonly<Record<string, unknown>>>;
 		readonly issuedAtEpochMs?: number;
@@ -277,7 +272,7 @@ const mutationPush = (
 			? {
 					...input.graph,
 					values: {
-						id: `00000000-0000-4000-8000-${String(input.deviceSequence).padStart(12, '0')}`,
+						id: `00000000-0000-4000-8000-${String(input.seed).padStart(12, '0')}`,
 						...values
 					}
 				}
@@ -286,8 +281,7 @@ const mutationPush = (
 		protocolVersion: 2,
 		idempotencyKey: input.idempotencyKey,
 		issuedAtEpochMs: input.issuedAtEpochMs ?? Date.now(),
-		deviceSequence: input.deviceSequence,
-		partitionKey: input.partitionKey ?? issuedMutationPartitionKey,
+		partitionKey: input.partitionKey ?? MUTATION_PARTITION_KEY,
 		schemaFingerprint: fingerprint,
 		graph,
 		baseVersions: input.baseVersions ?? []
@@ -309,7 +303,7 @@ const storedRecordsOf = (value: unknown): ReadonlyArray<Readonly<Record<string, 
 };
 
 describe('collections.mutate over the wire', () => {
-	it('issues and registers a physical partition without requiring a readable collection', async () => {
+	it('opens a sync handshake without requiring a readable collection', async () => {
 		harness = await open(emptyAuthoredRuntime, {
 			...definition,
 			policies: [
@@ -320,39 +314,34 @@ describe('collections.mutate over the wire', () => {
 				})
 			]
 		});
-		const response = await post(harness, 'sync.partition', {});
-		const envelope = response.value as Readonly<Record<string, unknown>>;
-		const identity = envelope['partition'] as Readonly<Record<string, unknown>>;
+		const response = await syncConnect(harness);
+		const value = response.value as Readonly<Record<string, unknown>>;
 
-		expect(identity['key']).toEqual(expect.stringMatching(/^sha256:/u));
-		expect(identity['schemaFingerprint']).toEqual(expect.any(String));
-		expect(envelope).toMatchObject({ mutationConfirmations: [], mutationRejections: [] });
-		expect(
-			await harness.database.query(
-				'select actor_id, effective_subject_id, impersonation_binding from bolt_sync_partition_registry'
-			)
-		).toEqual([
-			{
-				actor_id: fixtureUserId('user-admin'),
-				effective_subject_id: fixtureUserId('user-admin'),
-				impersonation_binding: 'operator'
-			}
-		]);
-	});
+		// The handshake resolves no query, so a subject holding only a create grant is not excluded
+		// from it: the head is answered and nothing is resolved that the subject could not read.
+		//
+		// The head is read back rather than written as a literal zero. `user` and `team` are synced
+		// collections and carry the capture trigger, so seeding the session that authenticates this
+		// very handshake already advances the changelog; a literal would be asserting that the
+		// fixture wrote nothing, not that the handshake answered.
+		const [changelog] = await harness.database.query(
+			'select coalesce(max(sequence), 0)::int as sequence from bolt_sync_outbox'
+		);
+		expect(Reflect.get(value, 'head')).toEqual({ sequence: changelog?.['sequence'] });
+		expect(value).toMatchObject({ results: [], outcomes: [] });
+	}, 60_000);
 
-	it('deduplicates an M4 journal push under its original key and device sequence and emits one ordinary outbox commit', async () => {
+	it('deduplicates a browser mutation push under its original key and digest and emits one ordinary outbox commit', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
-		const initialPull = await post(harness, 'sync.pull', {
-			collections: ['orders'],
-			cursor: null,
-			generations: {}
-		});
-		const initial = initialPull.value as Readonly<Record<string, unknown>>;
 		const input = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-accepted-once',
-			deviceSequence: 41,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'M4-ONCE' } }
+			seed: 41,
+			graph: {
+				action: 'create',
+				collection: 'orders',
+				values: { reference: 'BROWSER-MUTATION-ONCE' }
+			}
 		});
 
 		const first = await post(harness, 'collections.mutate', input);
@@ -364,11 +353,11 @@ describe('collections.mutate over the wire', () => {
 						'collections.mutate',
 						mutationPush(fingerprint, {
 							idempotencyKey: 'm4-accepted-once',
-							deviceSequence: 42,
+							seed: 42,
 							graph: {
 								action: 'create',
 								collection: 'orders',
-								values: { reference: 'M4-ONCE' }
+								values: { reference: 'BROWSER-MUTATION-ONCE-CHANGED' }
 							}
 						})
 					)
@@ -376,57 +365,150 @@ describe('collections.mutate over the wire', () => {
 			)
 		);
 
-		expect(first.value).toEqual(replay.value);
+		// The replay reproduces the durable outcome, which is the resolution, the key, the fingerprint
+		// and the readback — everything the ledger stores. `changes` is not stored there: it is the
+		// committing request's own echo of the rows it just wrote, and a retry that never reached the
+		// engine has none to echo. What a client learns the invalidation set from is the handshake
+		// below, which is asserted in full.
+		const { changes: _changes, ...committed } = first.value as Readonly<Record<string, unknown>>;
+		expect(replay.value).toEqual(committed);
 		expect(changedSequence._tag).toBe('Failure');
 		if (changedSequence._tag === 'Failure')
-			expect(Collections.unwrapMutationPhase(changedSequence.failure)).toBeInstanceOf(
+			expect(unwrapMutationPhase(changedSequence.failure)).toBeInstanceOf(
 				Collections.MutationIdempotencyConflict
 			);
 		expect(first.value).toMatchObject({
 			resolution: 'accepted',
 			mutationId: 'm4-accepted-once',
-			deviceSequence: 41,
 			schemaFingerprint: fingerprint
 		});
-		expect(storedRecordsOf(first.value)?.[0]?.['id']).toBe(
-			'00000000-0000-4000-8000-000000000041'
-		);
-		expect(
-			await harness.database.query(
-				"select mutation_id from bolt_sync_outbox where collection_name = 'orders' and operation = 'create'"
-			)
-		).toEqual([{ mutation_id: 'm4-accepted-once' }]);
-		const authoritative = await post(harness, 'sync.pull', {
-			collections: ['orders'],
-			cursor: initial['cursor'],
-			generations: initial['generations'],
-			pendingMutationIds: ['m4-accepted-once']
-		});
-		expect(authoritative.value).toMatchObject({
-			kind: 'delta',
-			deltas: [expect.objectContaining({ mutationId: 'm4-accepted-once' })],
-			mutationConfirmations: [
+		expect(storedRecordsOf(first.value)?.[0]?.['id']).toBe('00000000-0000-4000-8000-000000000041');
+		// The authoritative read is the sync handshake: the commit is resolved into the changelog and
+		// the journal answer, one query resolution beside the pending outcome.
+		const authoritative = await syncConnect(harness, {
+			queries: [
 				{
-					mutationId: 'm4-accepted-once',
-					cursor: expect.objectContaining({ xid: expect.any(Number), sequence: expect.any(Number) })
+					key: 'orders',
+					input: { kind: 'findMany', collection: 'orders', limit: 100 }
 				}
 			],
-			mutationRejections: []
+			pending: ['m4-accepted-once']
+		});
+		expect(authoritative.value).toMatchObject({
+			head: { sequence: expect.any(Number) },
+			results: [
+				{
+					key: 'orders',
+					changed: true,
+					answer: [expect.objectContaining({ reference: 'BROWSER-MUTATION-ONCE' })]
+				}
+			],
+			outcomes: [
+				{
+					id: 'm4-accepted-once',
+					status: { resolution: 'accepted', schemaFingerprint: fingerprint }
+				}
+			]
 		});
 		expect(
 			await harness.database.query(
-				"select device_sequence, partition_key, schema_fingerprint from bolt_browser_mutation where idempotency_key = 'm4-accepted-once'"
+				'select partition_key, schema_fingerprint from bolt_browser_mutation where idempotency_key = $1',
+				['m4-accepted-once']
 			)
 		).toEqual([
 			{
-				device_sequence: 41,
-				partition_key: issuedMutationPartitionKey,
+				partition_key: MUTATION_PARTITION_KEY,
 				schema_fingerprint: fingerprint
 			}
 		]);
 	});
 
-	it('confirms a committed write through partition status when the caller has no readable collection', async () => {
+	it('durably rejects and replays a future-issued journal push without applying it', async () => {
+		harness = await open();
+		const fingerprint = await schemaFingerprint(harness);
+		const input = mutationPush(fingerprint, {
+			idempotencyKey: 'm4-future-issued',
+			seed: 54,
+			issuedAtEpochMs: Date.now() + 6 * 60 * 1_000,
+			graph: { action: 'create', collection: 'orders', values: { reference: 'FUTURE' } }
+		});
+
+		const first = await post(harness, 'collections.mutate', input);
+		const replay = await post(harness, 'collections.mutate', input);
+
+		expect(first.value).toEqual(replay.value);
+		expect(first.value).toMatchObject({
+			resolution: 'rejected',
+			mutationId: 'm4-future-issued',
+			code: 'refused',
+			message: 'The mutation is outside the server retry horizon and cannot be applied safely.',
+			schemaFingerprint: fingerprint
+		});
+		expect(
+			await harness.database.query(
+				"select status, outcome from bolt_browser_mutation where idempotency_key = 'm4-future-issued'"
+			)
+		).toEqual([
+			{
+				status: 'terminal',
+				outcome: expect.objectContaining({ _tag: 'Rejected', code: 'refused' })
+			}
+		]);
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+	});
+
+	it('quarantines and replays an unclassified failure after acquiring the journal claim', async () => {
+		let beforeRuns = 0;
+		harness = await open({
+			...emptyAuthoredRuntime,
+			hooks: {
+				orders: {
+					mutate: {
+						perRecord: {
+							before: {
+								description: 'fails outside the authored refusal vocabulary',
+								handler: () => {
+									beforeRuns += 1;
+									return Effect.fail(new Error('mutation preparation exploded'));
+								}
+							}
+						}
+					}
+				}
+			}
+		});
+		const fingerprint = await schemaFingerprint(harness);
+		const input = mutationPush(fingerprint, {
+			idempotencyKey: 'm4-unclassified-failure',
+			seed: 55,
+			graph: { action: 'create', collection: 'orders', values: { reference: 'BROKEN' } }
+		});
+
+		const first = await post(harness, 'collections.mutate', input);
+		const replay = await post(harness, 'collections.mutate', input);
+
+		expect(first.value).toEqual(replay.value);
+		expect(first.value).toMatchObject({
+			resolution: 'quarantined',
+			mutationId: 'm4-unclassified-failure',
+			schemaFingerprint: fingerprint,
+			reason: expect.stringContaining('mutation preparation exploded')
+		});
+		expect(beforeRuns).toBe(1);
+		expect(
+			await harness.database.query(
+				"select status, outcome from bolt_browser_mutation where idempotency_key = 'm4-unclassified-failure'"
+			)
+		).toEqual([
+			{
+				status: 'terminal',
+				outcome: expect.objectContaining({ _tag: 'Quarantined' })
+			}
+		]);
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+	});
+
+	it('confirms a committed write through the handshake when the caller has no readable collection', async () => {
 		harness = await open(emptyAuthoredRuntime, {
 			...definition,
 			policies: [
@@ -444,7 +526,7 @@ describe('collections.mutate over the wire', () => {
 			'collections.mutate',
 			mutationPush(fingerprint, {
 				idempotencyKey: mutationId,
-				deviceSequence: 54,
+				seed: 54,
 				graph: {
 					action: 'create',
 					collection: 'orders',
@@ -454,32 +536,50 @@ describe('collections.mutate over the wire', () => {
 		);
 		expect(accepted.value).toMatchObject({ resolution: 'accepted', records: [] });
 
-		const status = await post(harness, 'sync.partition', {
-			pendingMutationIds: [mutationId]
-		});
+		// Confirmation without read entitlement: the handshake resolves no queries but still answers
+		// the journal's terminal outcome for the pending mutation id.
+		const status = await syncConnect(harness, { pending: [mutationId] });
 		expect(status.value).toMatchObject({
-			partition: { key: issuedMutationPartitionKey, schemaFingerprint: fingerprint },
-			mutationConfirmations: [
+			head: { sequence: expect.any(Number) },
+			results: [],
+			outcomes: [
 				{
-					mutationId,
-					cursor: expect.objectContaining({ xid: expect.any(Number), sequence: expect.any(Number) })
+					id: mutationId,
+					status: { resolution: 'accepted', schemaFingerprint: fingerprint }
 				}
-			],
-			mutationRejections: []
+			]
 		});
 	});
 
-	it('binds an M4 journal push to the authenticated partition', async () => {
+	it('binds a browser mutation key to its canonical request digest', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
-		const result = await harness.runtime.runPromise(
+		const accepted = await post(
+			harness,
+			'collections.mutate',
+			mutationPush(fingerprint, {
+				idempotencyKey: 'm4-partition-bound',
+				seed: 42,
+				graph: {
+					action: 'create',
+					collection: 'orders',
+					values: { reference: 'LANDED' }
+				}
+			})
+		);
+		expect(accepted.value).toMatchObject({ resolution: 'accepted' });
+
+		// The partition key a client carries is part of what it canonicalises: the same committed key
+		// pushed under different partition coordinates is a different canonical request, and the
+		// journal refuses to bind the key twice rather than applying a second write beneath it.
+		const changed = await harness.runtime.runPromise(
 			Effect.result(
 				dispatchInvocation(
 					command(
 						'collections.mutate',
 						mutationPush(fingerprint, {
-							idempotencyKey: 'm4-wrong-partition',
-							deviceSequence: 42,
+							idempotencyKey: 'm4-partition-bound',
+							seed: 43,
 							partitionKey: 'sha256:unissued-partition',
 							graph: {
 								action: 'create',
@@ -491,26 +591,42 @@ describe('collections.mutate over the wire', () => {
 				)
 			)
 		);
-
-		expect(result._tag).toBe('Failure');
-		if (result._tag === 'Failure')
-			expect(Collections.unwrapMutationPhase(result.failure)).toBeInstanceOf(
-				AccessControl.AccessDenied
+		expect(changed._tag).toBe('Failure');
+		if (changed._tag === 'Failure')
+			expect(unwrapMutationPhase(changed.failure)).toBeInstanceOf(
+				Collections.MutationIdempotencyConflict
 			);
-		expect(await harness.database.query('select id from orders')).toEqual([]);
+		expect(await harness.database.query('select reference from orders')).toEqual([
+			{ reference: 'LANDED' }
+		]);
 	});
 
-	it('rejects replaying another actor\'s registered physical partition', async () => {
+	it('isolates a shared idempotency key per authenticated authority', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
-		await seedSession(harness, { token: 'other-admin-token', user: 'user-other', team: 'admin' });
-		const input = mutationPush(fingerprint, {
-			idempotencyKey: 'm4-switched-actor',
-			deviceSequence: 43,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'WRONG-ACTOR' } }
+		const firstActor = await post(
+			harness,
+			'collections.mutate',
+			mutationPush(fingerprint, {
+				idempotencyKey: 'm4-switched-actor',
+				seed: 43,
+				graph: { action: 'create', collection: 'orders', values: { reference: 'WRONG-ACTOR' } }
+			})
+		);
+		expect(firstActor.value).toMatchObject({
+			resolution: 'accepted',
+			mutationId: 'm4-switched-actor'
 		});
-		const invocation = command('collections.mutate', input);
-		const result = await harness.runtime.runPromise(
+		await seedSession(harness, { token: 'other-admin-token', user: 'user-other', team: 'admin' });
+		const invocation = command(
+			'collections.mutate',
+			mutationPush(fingerprint, {
+				idempotencyKey: 'm4-switched-actor',
+				seed: 44,
+				graph: { action: 'create', collection: 'orders', values: { reference: 'WRONG-ACTOR' } }
+			})
+		);
+		const otherActor = await harness.runtime.runPromise(
 			Effect.result(
 				dispatchInvocation({
 					...invocation,
@@ -518,63 +634,21 @@ describe('collections.mutate over the wire', () => {
 				})
 			)
 		);
-
-		expect(result._tag).toBe('Failure');
-		if (result._tag === 'Failure')
-			expect(Collections.unwrapMutationPhase(result.failure)).toBeInstanceOf(
-				AccessControl.AccessDenied
-			);
-		expect(await harness.database.query('select id from orders')).toEqual([]);
-	});
-
-	it('selects a retained schema adapter inside the offline horizon and reports a rebase', async () => {
-		const compatibleDefinition: WorkspaceDefinition = {
-			...definition,
-			mutationCompatibility: {
-				offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-				currentSchemaFingerprint: 'schema:orders-v2',
-				adapters: [
-					{
-						fromSchemaFingerprint: 'schema:orders-v1',
-						fieldRenames: { orders: { old_reference: 'reference' } }
-					}
-				]
-			}
-		};
-		harness = await open(authored, compatibleDefinition);
-		await schemaFingerprint(harness);
-		const historicalPartition = await registerHistoricalPartition(
-			harness,
-			'schema:orders-v1',
-			'sha256:orders-v1'
-		);
-		const response = await post(
-			harness,
-			'collections.mutate',
-			mutationPush('schema:orders-v1', {
-				idempotencyKey: 'm4-rebased',
-				deviceSequence: 43,
-				partitionKey: historicalPartition,
-				graph: {
-					action: 'create',
-					collection: 'orders',
-					values: { old_reference: 'REBASING' }
-				}
-			})
-		);
-
-		expect(response.value).toMatchObject({
-			resolution: 'rebased',
-			mutationId: 'm4-rebased',
-			deviceSequence: 43,
-			fromSchemaFingerprint: 'schema:orders-v1'
-		});
-		expect(await harness.database.query('select reference from orders')).toEqual([
-			{ reference: 'REBASING' }
+		// The journal is scoped to (tenant, environment, authority): the second actor's same key is
+		// an independent mutation, not the first actor's write replayed or refused for their key.
+		expect(otherActor._tag).toBe('Success');
+		if (otherActor._tag === 'Success')
+			expect(otherActor.success.value).toMatchObject({
+				resolution: 'accepted',
+				mutationId: 'm4-switched-actor'
+			});
+		expect(await harness.database.query('select id, reference from orders order by id')).toEqual([
+			{ id: '00000000-0000-4000-8000-000000000043', reference: 'WRONG-ACTOR' },
+			{ id: '00000000-0000-4000-8000-000000000044', reference: 'WRONG-ACTOR' }
 		]);
 	});
 
-	it('durably replays an authored M4 rejection without rerunning hooks', async () => {
+	it('durably replays an authored browser-mutation rejection without rerunning hooks', async () => {
 		let beforeRuns = 0;
 		harness = await open({
 			...emptyAuthoredRuntime,
@@ -583,7 +657,7 @@ describe('collections.mutate over the wire', () => {
 					mutate: {
 						perRecord: {
 							before: {
-								description: 'rejects the M4 write once',
+								description: 'rejects the write once',
 								handler: () => {
 									beforeRuns += 1;
 									return refuse('This order cannot be created.');
@@ -597,7 +671,7 @@ describe('collections.mutate over the wire', () => {
 		const fingerprint = await schemaFingerprint(harness);
 		const rejected = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-rejected',
-			deviceSequence: 44,
+			seed: 44,
 			graph: { action: 'create', collection: 'orders', values: { reference: 'REFUSED' } }
 		});
 		const first = await post(harness, 'collections.mutate', rejected);
@@ -607,7 +681,6 @@ describe('collections.mutate over the wire', () => {
 		expect(first.value).toMatchObject({
 			resolution: 'rejected',
 			mutationId: 'm4-rejected',
-			deviceSequence: 44,
 			code: 'refused',
 			message: 'This order cannot be created.',
 			schemaFingerprint: fingerprint
@@ -616,7 +689,7 @@ describe('collections.mutate over the wire', () => {
 		expect(await harness.database.query('select id from orders')).toEqual([]);
 	});
 
-	it('accepts an approval-gated M4 write with durable pending metadata', async () => {
+	it('accepts an approval-gated browser mutation with durable pending metadata', async () => {
 		let approvalRuns = 0;
 		const approvalPolicy = describePolicy('admin-data', {
 			description: 'Orders require review.',
@@ -651,7 +724,7 @@ describe('collections.mutate over the wire', () => {
 		const fingerprint = await schemaFingerprint(harness);
 		const pending = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-pending-approval',
-			deviceSequence: 45,
+			seed: 45,
 			graph: { action: 'create', collection: 'orders', values: { reference: 'REVIEW' } }
 		});
 		const first = await post(harness, 'collections.mutate', pending);
@@ -661,7 +734,6 @@ describe('collections.mutate over the wire', () => {
 		expect(first.value).toMatchObject({
 			resolution: 'accepted',
 			mutationId: 'm4-pending-approval',
-			deviceSequence: 45,
 			schemaFingerprint: fingerprint,
 			records: [],
 			pendingApproval: {
@@ -696,73 +768,40 @@ describe('collections.mutate over the wire', () => {
 				);
 			})
 		);
-		const status = await post(harness, 'sync.partition', {
-			pendingMutationIds: ['m4-pending-approval']
-		});
+		const status = await syncConnect(harness, { pending: ['m4-pending-approval'] });
 		expect(status.value).toMatchObject({
-			partition: { key: issuedMutationPartitionKey },
-			mutationConfirmations: [],
-			mutationRejections: [
+			head: { sequence: expect.any(Number) },
+			results: [],
+			outcomes: [
 				{
-					mutationId: 'm4-pending-approval',
-					code: 'refused'
+					id: 'm4-pending-approval',
+					status: { resolution: 'rejected', code: 'refused' }
 				}
 			]
 		});
 	});
 
-	it('persists an explicit quarantine for an unknown or expired mutation schema', async () => {
-		const compatibleDefinition: WorkspaceDefinition = {
-			...definition,
-			mutationCompatibility: {
-				offlineHorizonMillis: 1_000,
-				currentSchemaFingerprint: 'schema:orders-v2',
-				adapters: [{ fromSchemaFingerprint: 'schema:known-old' }]
-			}
-		};
-		harness = await open(authored, compatibleDefinition);
+	it('durably rejects a mutation stated against a retired schema, and replays the refusal', async () => {
+		harness = await open(authored);
 		await schemaFingerprint(harness);
-		const unknownPartition = await registerHistoricalPartition(
-			harness,
-			'schema:unknown-old',
-			'sha256:unknown-old'
-		);
-		const expiredPartition = await registerHistoricalPartition(
-			harness,
-			'schema:known-old',
-			'sha256:known-old'
-		);
-		const unknown = await post(
-			harness,
-			'collections.mutate',
-			mutationPush('schema:unknown-old', {
-				idempotencyKey: 'm4-quarantine-unknown',
-				deviceSequence: 46,
-				partitionKey: unknownPartition,
-				graph: { action: 'create', collection: 'orders', values: { reference: 'UNKNOWN' } }
-			})
-		);
-		const expiredInput = mutationPush('schema:known-old', {
-			idempotencyKey: 'm4-quarantine-expired',
-			deviceSequence: 47,
-			issuedAtEpochMs: Date.now() - 1_001,
-			partitionKey: expiredPartition,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'EXPIRED' } }
+		const unknownInput = mutationPush('schema:unknown-old', {
+			idempotencyKey: 'm4-reject-unknown',
+			seed: 46,
+			graph: { action: 'create', collection: 'orders', values: { reference: 'UNKNOWN' } }
 		});
-		const expired = await post(harness, 'collections.mutate', expiredInput);
-		const expiredReplay = await post(harness, 'collections.mutate', expiredInput);
+		const unknown = await post(harness, 'collections.mutate', unknownInput);
+		const unknownReplay = await post(harness, 'collections.mutate', unknownInput);
 
-		expect(unknown.value).toMatchObject({ resolution: 'quarantined' });
-		expect(expired.value).toEqual(expiredReplay.value);
-		expect(expired.value).toMatchObject({
-			resolution: 'quarantined',
-			mutationId: 'm4-quarantine-expired',
-			deviceSequence: 47
+		expect(unknown.value).toEqual(unknownReplay.value);
+		expect(unknown.value).toMatchObject({
+			resolution: 'rejected',
+			code: 'refused',
+			mutationId: 'm4-reject-unknown'
 		});
 		expect(await harness.database.query('select id from orders')).toEqual([]);
 	});
 
-	it('durably rejects an M4 write whose whole-row base version is stale', async () => {
+	it('durably rejects a browser mutation whose whole-row base version is stale', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
 		const created = await post(
@@ -770,14 +809,14 @@ describe('collections.mutate over the wire', () => {
 			'collections.mutate',
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-conflict-seed',
-				deviceSequence: 48,
+				seed: 48,
 				graph: { action: 'create', collection: 'orders', values: { reference: 'BASE' } }
 			})
 		);
 		const id = String(storedRecordsOf(created.value)?.[0]?.['id']);
 		const stale = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-stale-update',
-			deviceSequence: 49,
+			seed: 49,
 			graph: { action: 'update', collection: 'orders', values: { id, reference: 'STALE' } },
 			baseVersions: [{ row: { collection: 'orders', recordId: id }, rowVersion: 99 }]
 		});
@@ -787,7 +826,6 @@ describe('collections.mutate over the wire', () => {
 		expect(first.value).toMatchObject({
 			resolution: 'rejected',
 			mutationId: 'm4-stale-update',
-			deviceSequence: 49,
 			code: 'conflict',
 			schemaFingerprint: fingerprint
 		});
@@ -796,7 +834,7 @@ describe('collections.mutate over the wire', () => {
 		]);
 	});
 
-	it('quarantines an M4 update that omitted an existing row from its whole-row base vector', async () => {
+	it('quarantines a browser mutation that omitted an existing row from its whole-row base vector', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
 		const created = await post(
@@ -804,14 +842,14 @@ describe('collections.mutate over the wire', () => {
 			'collections.mutate',
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-missing-base-seed',
-				deviceSequence: 50,
+				seed: 50,
 				graph: { action: 'create', collection: 'orders', values: { reference: 'BASE' } }
 			})
 		);
 		const id = String(storedRecordsOf(created.value)?.[0]?.['id']);
 		const missing = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-missing-base',
-			deviceSequence: 51,
+			seed: 51,
 			graph: { action: 'update', collection: 'orders', values: { id, reference: 'UNSAFE' } }
 		});
 		const first = await post(harness, 'collections.mutate', missing);
@@ -821,7 +859,6 @@ describe('collections.mutate over the wire', () => {
 		expect(first.value).toMatchObject({
 			resolution: 'quarantined',
 			mutationId: 'm4-missing-base',
-			deviceSequence: 51,
 			schemaFingerprint: fingerprint
 		});
 		expect(await harness.database.query('select reference from orders')).toEqual([
@@ -836,7 +873,7 @@ describe('collections.mutate over the wire', () => {
 		const childId = '00000000-0000-4000-8000-000000000152';
 		const created = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-client-create-identities',
-			deviceSequence: 52,
+			seed: 52,
 			graph: {
 				action: 'create',
 				collection: 'orders',
@@ -857,7 +894,7 @@ describe('collections.mutate over the wire', () => {
 			'collections.mutate',
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-client-create-collision',
-				deviceSequence: 53,
+				seed: 53,
 				graph: {
 					action: 'create',
 					collection: 'orders',

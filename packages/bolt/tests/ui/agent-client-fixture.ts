@@ -5,18 +5,26 @@ import type {
 	CollectionType,
 	RemoteQuery
 } from '@norbital-ai/std/collection';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import type { CollectionRegistryFor, PlatformSchema } from '../../src/authoring/internals.js';
 import type { AgentRuntimeConfig } from '../../src/client/ui/agent/client.svelte.js';
 import { createBoltClient, type BoltTransport } from '../../src/client.js';
-import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
+import type {
+	MutationSettlement,
+	MutationSettlements,
+	WorkspaceClientRuntime
+} from '../../src/client/contracts.js';
+import type { SyncClient } from '../../src/client/sync/index.js';
+import { initialClientState } from '../../src/client/sync/machine.js';
+import { stableKey } from '../../src/client/live-query/stable-key.js';
+import { createSystemClient, type SystemClientApi } from '../../src/client/system-client.js';
+import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,
 	| 'approval_request'
 	| 'agent_mailbox'
-	| 'agent_run'
 	| 'chat_session'
 	| 'chat_message'
 	| 'user'
@@ -48,9 +56,34 @@ const emptyOperations = <T extends CollectionType<object, object>>() =>
 		pending: 0
 	}) satisfies CollectionOperations<T>;
 
+/**
+ * The runtime pieces the workspace API proxy reads but an empty agent client never exercises:
+ * no mount ever runs and no mutation is ever settled, so the doubles stay inert.
+ */
+const emptySync: SyncClient = {
+	start: () => undefined,
+	current: () => initialClientState(),
+	subscribe: () => () => undefined,
+	mount: (input) => ({
+		key: stableKey(input),
+		release: () => undefined
+	}),
+	enqueue: () => undefined
+};
+
+const emptySettlements: MutationSettlements = {
+	create: (idempotencyKey) => ({
+		idempotencyKey,
+		settled: new Promise<MutationSettlement>(() => undefined),
+		status: async () => 'unknown',
+		wait: () => new Promise<MutationSettlement>(() => undefined)
+	}),
+	accept: () => undefined
+};
+
 /** A real query surface over settled rows, for action tests that do not read it. */
 export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['client'] => {
-	const runtime = {
+	const runtime: WorkspaceClientRuntime = {
 		db: {},
 		bolt: createBoltClient(
 			InvocationScope.make({
@@ -59,13 +92,31 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 				releaseId: ReleaseId.make('test-release')
 			}),
 			transport
-		)
+		),
+		sync: emptySync,
+		syncStatus: initialClientState(),
+		settlements: emptySettlements
 	};
+	const system: SystemClientApi = createSystemClient(
+		runtime,
+		(name, input, inputSchema, outputSchema, signal) =>
+			createRemoteQuery(
+				() =>
+					Effect.gen(function* () {
+						const checked = yield* Schema.decodeUnknownEffect(inputSchema)(input);
+						const payload = yield* Schema.decodeUnknownEffect(Schema.Json)(checked);
+						return yield* Effect.tryPromise({
+							try: () => runtime.bolt.command(name, payload, outputSchema, signal),
+							catch: (cause) => cause
+						});
+					}),
+				outputSchema
+			)
+	);
 	return {
 		db: {
 			approval_request: emptyOperations<AgentCollections['approval_request']>(),
 			agent_mailbox: emptyOperations<AgentCollections['agent_mailbox']>(),
-			agent_run: emptyOperations<AgentCollections['agent_run']>(),
 			chat_session: emptyOperations<AgentCollections['chat_session']>(),
 			chat_message: emptyOperations<AgentCollections['chat_message']>(),
 			user: emptyOperations<AgentCollections['user']>(),
@@ -74,6 +125,6 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 		records: {
 			findMany: () => page<CollectionRecord>([])
 		},
-		system: createWorkspaceApiProxy(runtime).system
+		system
 	};
 };

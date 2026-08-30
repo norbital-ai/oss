@@ -1,11 +1,15 @@
 // repository-health:allow SEM_PARALLEL -- the runtime workspace-schema consumes the compiler
-// schema-plan build/plan/identify names over the #lib alias, so the pair is linked, not parallel.
+// schema-plan contract/identify names over the #lib alias, so the pair is linked, not parallel.
 import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
-import { RECORD_EMBEDDING_COLUMN } from '#lib/authoring/model-introspection.js';
+import {
+	RECORD_EMBEDDING_COLUMN,
+	SEARCH_DOCUMENT_COLUMN,
+	searchableColumns
+} from '#lib/authoring/model-introspection.js';
 import { eq } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import { buildSchemaPlan, planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
+import { planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
 export { fingerprintSchemaSteps } from '#lib/compiler/schema-plan.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -57,12 +61,12 @@ class SchemaValidationError extends Schema.TaggedError<SchemaValidationError>()(
 }
 /** Identifies the schema service in Effect's context so dependency wiring remains explicit and type checked. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/WorkspaceSchema');
-export const layer = Layer.effect(
-	Service,
-	Effect.gen(function* () {
+export const layer = (schemaPlan: SchemaPlan) =>
+	Layer.effect(
+		Service,
+		Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const database = yield* Database.Service;
-		const schemaPlan = buildSchemaPlan(workspace.definition);
 		/**
 		 * The columns each collection is supposed to have, from the same definition the plan renders DDL
 		 * from — so "declared" cannot drift from "created" by being restated here.
@@ -76,6 +80,14 @@ export const layer = Layer.effect(
 					// here, the lineage creates `record_embedding` and this check calls the column it just
 					// created unexpected, which fails provisioning on a correct database.
 					...(collection.embedding === undefined ? [] : [RECORD_EMBEDDING_COLUMN]),
+					// The generated lexical document, for the same reason and read the same way the plan
+					// decides to create it: `search.fields` when the compiler derived them, otherwise the
+					// `search: true` flags themselves. Omitting it made every searchable collection —
+					// `user` and `team` among them — report the column the plan had just added as
+					// unexpected, which fails `migrate` on a database that is exactly right.
+					...((collection.search?.fields ?? searchableColumns(collection.fields)).length === 0
+						? []
+						: [SEARCH_DOCUMENT_COLUMN]),
 					...Object.entries(collection.fields).flatMap(([name, field]) =>
 						field.reference === undefined
 							? [name]
@@ -301,5 +313,5 @@ export const layer = Layer.effect(
 			}),
 			verify
 		});
-	})
-);
+		})
+	);

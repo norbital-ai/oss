@@ -1,9 +1,6 @@
 import {
 	Activation,
 	ActivationResult,
-	BundleResult,
-	Invocation,
-	InvocationId,
 	PROTOCOL_VERSION,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
@@ -11,7 +8,13 @@ import { Clock, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
-import { makeScheduler, makeTaskBinding, makeTaskInvocationControl } from './scheduler.js';
+import {
+	makeTaskBinding,
+	makeTaskInvocationControl,
+	ScheduleTickError,
+	runScheduleTick
+} from './schedules.js';
+import { makeTimekeeper } from './timekeeper.js';
 import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
 /** Reports a lifecycle phase that prevented the self-host application from becoming usable. */
@@ -83,64 +86,34 @@ export const startApplication = (options: ApplicationOptions) =>
 			}
 
 			/**
-			 * One tick, dispatched and decoded as a plain Effect.
+			 * One tick, held against the bundle this process already loaded.
 			 *
-			 * `Task`, not `Command`: a `Task` carries no credential by construction, which is what the
-			 * runtime's provenance gate requires of enqueued work — and a host minting a tenant session to
-			 * talk to its own tenant would be a standing key to tenant data. The answer carries the next
-			 * instant anything is due, which is the only thing this side needs to know.
+			 * The queue is driven through `host.schedules.discover` / `host.schedules.settle` with the
+			 * occurrences invoked between them — `schedules.ts` owns that conversation, because it is the
+			 * guest's protocol rather than this file's lifecycle. What is left here is which bundle it
+			 * talks to, which scope it talks about, and the deadline this host grants an invocation.
 			 */
 			const tickOnce = () =>
 				Effect.gen(function* () {
 					const loader = yield* BundleLoader;
 					const bundle = yield* loader.load();
-					const now = yield* Clock.currentTimeMillis;
-					const unsafeResult = yield* Effect.tryPromise({
-						try: (signal) => {
-							const controller = taskInvocations.open(InvocationId.make(`tasks.tick:${now}`));
-							return bundle
-								.dispatch(
-									Invocation.cases.Task.make({
-										protocolVersion: PROTOCOL_VERSION,
-										id: InvocationId.make(`tasks.tick:${now}`),
-										scope: configuration.scope,
-										deadlineEpochMs: now + configuration.invocationTimeoutMillis,
-										command: 'tasks.tick',
-										input: {},
-										attempt: 1
-									}),
-									bound,
-									AbortSignal.any([signal, controller.signal])
-								)
-								.finally(() =>
-									taskInvocations.close(InvocationId.make(`tasks.tick:${now}`), controller)
-								);
-						},
-						catch: (cause) =>
-							new ApplicationStartError({
-								operation: 'BoltServer.Application.tick',
-								message: 'Bolt bundle dispatch failed',
-								cause
-							})
-					}).pipe(Effect.timeout(configuration.invocationTimeoutMillis));
-					const result = yield* Schema.decodeUnknownEffect(BundleResult)(unsafeResult);
-					if (result._tag !== 'Success') {
-						return yield* new ApplicationStartError({
-							operation: 'BoltServer.Application.tick',
-							message: 'Bolt bundle refused a scheduler tick'
-						});
-					}
-					const value = result.response.value;
-					if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-					const due = Reflect.get(value, 'nextDueAtEpochMs');
-					return typeof due === 'number' && Number.isFinite(due) ? due : null;
+					return yield* runScheduleTick({
+						scope: configuration.scope,
+						deadlineMillis: configuration.invocationTimeoutMillis,
+						gatewaySecret: configuration.gatewaySecret,
+						invocations: taskInvocations,
+						dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
+					});
 				}).pipe(
 					Effect.mapError((cause) =>
 						cause instanceof ApplicationStartError
 							? cause
 							: new ApplicationStartError({
 									operation: 'BoltServer.Application.tick',
-									message: 'Bolt scheduler tick failed',
+									message:
+										cause instanceof ScheduleTickError
+											? cause.message
+											: 'Bolt scheduler tick failed',
 									cause
 								})
 					)
@@ -161,20 +134,20 @@ export const startApplication = (options: ApplicationOptions) =>
 					message: 'Bolt scheduler runtime is not ready'
 				})
 			);
-			const scheduler = makeScheduler({
+			const timekeeper = makeTimekeeper({
 				tick: () => runTick,
 				onFailure: (cause) => {
-					// The scheduler backs off; this boundary keeps an unwatched failure visible.
+					// The timekeeper backs off; this boundary keeps an unwatched failure visible.
 					Effect.runFork(
 						Effect.logError(
-							`scheduler.tick: ${cause instanceof Error ? cause.message : String(cause)}`
+							`timekeeper.tick: ${cause instanceof Error ? cause.message : String(cause)}`
 						)
 					);
 				}
 			});
 			const bound: FacilityBindings = {
 				...facilities,
-				tasks: makeTaskBinding(scheduler, () => {}, taskInvocations)
+				tasks: makeTaskBinding(timekeeper, () => {}, taskInvocations)
 			};
 
 			const applicationLayer = Layer.mergeAll(
@@ -224,7 +197,7 @@ export const startApplication = (options: ApplicationOptions) =>
 						});
 					}
 					// Activation already knows the next due instant, so no discovery tick is needed.
-					scheduler.settle(result.nextDueAtEpochMs);
+					timekeeper.settle(result.nextDueAtEpochMs);
 				});
 				const server = yield* Effect.gen(function* () {
 					yield* activated;
@@ -260,7 +233,7 @@ export const startApplication = (options: ApplicationOptions) =>
 			const server: RunningServer = started.success;
 
 			/**
-			 * Runs the ordered transport, drain, scheduler, bundle, and facility finalizers once.
+			 * Runs the ordered transport, drain, timekeeper, bundle, and facility finalizers once.
 			 *
 			 * A transport failure is the one failure reported to the caller of `stop`; every other
 			 * step's failures are observed but do not hide that one.
@@ -278,7 +251,7 @@ export const startApplication = (options: ApplicationOptions) =>
 							return yield* health
 								.drain(configuration.drainTimeoutMillis)
 								.pipe(
-									Effect.ensuring(Effect.sync(() => scheduler.stop())),
+									Effect.ensuring(Effect.sync(() => timekeeper.stop())),
 									Effect.ensuring(loader.dispose()),
 									Effect.ensuring(health.markFinalized())
 								);

@@ -1,15 +1,15 @@
-import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
-import type { Schema } from 'effect';
-import {
-	type CollectionMutationBaseVersion,
-	type CollectionMutationGraph
-} from '@norbital-ai/bolt-protocol';
 import { canonicalSchemaStepEncoding, digestSchemaSteps } from '@norbital-ai/std/reckon/hash';
 export { canonicalSchemaStepEncoding, digestSchemaSteps };
 import type { ModelExclusion, ModelIndex } from '../authoring/models-schema.js';
 import {
 	compileModel,
 	describeModel,
+	EMBEDDED_AT_COLUMN,
+	RECORD_EMBEDDING_COLUMN,
+	RECORD_EMBEDDING_FINGERPRINT_COLUMN,
+	SEARCH_DOCUMENT_COLUMN,
+	searchDocumentExpression,
+	searchTextExpression,
 	searchableColumns
 } from '../authoring/model-introspection.js';
 import { INTERNAL_SYSTEM_MODELS, SYSTEM_MODELS } from '../authoring/system-models.js';
@@ -20,19 +20,16 @@ import type {
 	WorkspaceDefinition
 } from '../authoring/workspace-schema.js';
 import { collection } from '../authoring/workspace-schema.js';
-import {
-	IDENTITY_COLLECTIONS,
-	isReplicatedCollection,
-	withSystemCollections
-} from '../runtime/schema/system-collections.js';
+import { approvalRefusal } from './approval-checks.js';
+import { withSystemCollections } from '../runtime/schema/system-collections.js';
 
-export type SchemaStep = Readonly<{
+type SchemaStep = Readonly<{
 	readonly id: string;
 	/** Compiler-owned DDL, or the explicitly named bootstrap seed below; never application CRUD. */
 	readonly sql: string;
 }>;
 
-/** Fingerprints the exact ordered DDL a database or replica will apply. */
+/** Fingerprints the exact ordered DDL the database will apply. */
 export const fingerprintSchemaSteps = (steps: ReadonlyArray<SchemaStep>): string =>
 	digestSchemaSteps(steps);
 
@@ -43,141 +40,6 @@ export type SchemaPlan = Readonly<{
 
 /** Quotes a PostgreSQL identifier. Shared so plan DDL and migration DDL cannot quote differently. */
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
-
-/** Quotes one PostgreSQL text literal assembled exclusively from compiler-owned schema names. */
-const quoteLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-
-const containsOpaquePolicySql = (value: unknown): boolean => {
-	if (Array.isArray(value)) return value.some(containsOpaquePolicySql);
-	if (value === null || typeof value !== 'object') return false;
-	if ('$sql' in value) return true;
-	return Object.values(value).some(containsOpaquePolicySql);
-};
-
-const policyRelationshipDependencies = (
-	workspace: WorkspaceDefinition,
-	rootCollection: string,
-	where: unknown
-): ReadonlySet<string> => {
-	const dependencies = new Set<string>();
-	const collections = new Map(
-		workspace.collections.map((collection) => [collection.name, collection] as const)
-	);
-	const visit = (value: unknown, collection: string): void => {
-		if (value === null || typeof value !== 'object' || Array.isArray(value)) return;
-		const fields = collections.get(collection)?.fields ?? {};
-		for (const [key, condition] of Object.entries(value)) {
-			if (key === '$sql') continue;
-			if (key === 'AND' || key === 'OR') {
-				if (Array.isArray(condition)) {
-					for (const branch of condition) visit(branch, collection);
-				}
-				continue;
-			}
-			if (key === 'NOT') {
-				visit(condition, collection);
-				continue;
-			}
-			// The where compiler gives a column precedence over a same-named relation.
-			if (Object.hasOwn(fields, key)) continue;
-			const relation = workspace.relations.find(
-				(candidate) => candidate.source === collection && candidate.name === key
-			);
-			if (relation === undefined) continue;
-			dependencies.add(relation.target);
-			visit(condition, relation.target);
-		}
-	};
-	visit(where, rootCollection);
-	return dependencies;
-};
-
-/**
- * The compile-time policy dependency graph used by sync generations.
- *
- * Keys are collections that may be written; values are collections whose row visibility can
- * change as a result. The target collection always depends on itself. Structured relationship
- * traversals contribute their target collections automatically; authored `dependencies` are
- * additive and therefore cannot erase an edge the predicate itself proves. An opaque `$sql` read
- * conservatively depends on every synced collection because an authored dependency list cannot
- * prove which tables arbitrary SQL does not read. This is a safe migration path for existing
- * workspaces: incomplete metadata costs bounded refills, never a silently-valid proof.
- */
-export const syncPolicyDependencyGraph = (
-	authored: WorkspaceDefinition
-): ReadonlyMap<string, ReadonlySet<string>> => {
-	const workspace = withSystemCollections(authored);
-	const synced = new Set(
-		workspace.collections.filter(({ sync }) => sync !== false).map(({ name }) => name)
-	);
-	const graph = new Map<string, Set<string>>();
-	const link = (source: string, dependent: string): void => {
-		const targets = graph.get(source) ?? new Set<string>();
-		targets.add(dependent);
-		graph.set(source, targets);
-	};
-	for (const collection of synced) link(collection, collection);
-	for (const policy of workspace.policies) {
-		for (const grant of policy.grants ?? []) {
-			if (grant.action !== 'read' || !synced.has(grant.collection)) continue;
-			for (const dependency of policyRelationshipDependencies(
-				workspace,
-				grant.collection,
-				grant.where
-			)) {
-				if (!synced.has(dependency)) {
-					throw new TypeError(
-						`Policy ${policy.name} read grant ${grant.collection} traverses unavailable sync dependency ${dependency}.`
-					);
-				}
-				link(dependency, grant.collection);
-			}
-			const declared = grant.dependencies;
-			if (declared !== undefined) {
-				for (const dependency of declared) {
-					if (!synced.has(dependency)) {
-						throw new TypeError(
-							`Policy ${policy.name} read grant ${grant.collection} declares unavailable sync dependency ${dependency}.`
-						);
-					}
-					link(dependency, grant.collection);
-				}
-			}
-			if (containsOpaquePolicySql(grant.where)) {
-				for (const dependency of synced) link(dependency, grant.collection);
-			}
-		}
-	}
-	return new Map(
-		[...graph].map(([source, dependents]) => [source, new Set([...dependents].toSorted())])
-	);
-};
-
-const syncGenerationStatements = (workspace: WorkspaceDefinition): string => {
-	const graph = syncPolicyDependencyGraph(workspace);
-	const bump = (collection: string): string =>
-		`insert into bolt_sync_generation (collection_name, generation, last_xid) values (${collection}, 1, pg_current_xact_id()::text::bigint) on conflict (collection_name) do update set generation = case when bolt_sync_generation.last_xid = excluded.last_xid then bolt_sync_generation.generation else bolt_sync_generation.generation + 1 end, last_xid = excluded.last_xid;`;
-	const dependentBumps = [...graph]
-		.flatMap(([source, dependents]) => {
-			const indirect = [...dependents].filter((dependent) => dependent !== source);
-			if (indirect.length === 0) return [];
-			return [
-				`if TG_TABLE_NAME = ${quoteLiteral(source)} then ${indirect.map((dependent) => bump(quoteLiteral(dependent))).join(' ')} end if;`
-			];
-		})
-		.join(' ');
-	return `${bump('TG_TABLE_NAME')} ${dependentBumps} if TG_TABLE_NAME in ('user', 'team') then ${bump("'__authority__'")} end if;`;
-};
-
-const syncInvalidatedCollectionsExpression = (workspace: WorkspaceDefinition): string => {
-	const branches = [...syncPolicyDependencyGraph(workspace)].flatMap(([source, dependents]) => {
-		const indirect = [...dependents].filter((dependent) => dependent !== source).toSorted();
-		return indirect.length === 0
-			? []
-			: [`when ${quoteLiteral(source)} then ${quoteLiteral(JSON.stringify(indirect))}::jsonb`];
-	});
-	return `case TG_TABLE_NAME ${branches.join(' ')} else '[]'::jsonb end`;
-};
 
 /**
  * The tables the plan's steps create, read back out of the DDL this module rendered.
@@ -251,64 +113,6 @@ const SchemaPlanValues = {
 
 const systemRowFields = describeModel(defineSystemRowModel());
 const systemTableNames: ReadonlySet<string> = new Set(Object.keys(SYSTEM_MODELS));
-/** Additive initialization owned by the runtime table capability that requires it. */
-const systemTableInitializers: ReadonlyMap<string, SchemaStep> = new Map([
-	[
-		'approval_request',
-		{
-			id: 'collection:approval_request:zz-approval-teams-backfill',
-			// repository-health:allow SQL1 -- idempotent bootstrap backfill for approval rows created before the normalized team projections existed; migrate executes every initializer inside the schema transaction.
-			sql: `do $bolt_approval_team_backfill$ begin
-				if to_regclass('bolt_approvals') is not null then
-					update approval_request projected
-					set approver_teams = coalesce((
-						select jsonb_agg(distinct lower(approver.team_name))
-						from bolt_approvals approval
-						cross join lateral jsonb_array_elements(
-							case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array'
-							then approval.state #> '{operation,approval,steps}' else '[]'::jsonb end
-						) active(step_value)
-						cross join lateral jsonb_array_elements_text(
-							case when jsonb_typeof(active.step_value->'approvers') = 'array'
-							then active.step_value->'approvers' else '[]'::jsonb end
-						) approver(team_name)
-						where approval.request_id = projected.id::text
-					), '[]'::jsonb),
-					superseder_teams = coalesce((
-						select jsonb_agg(distinct lower(superseder.team_name))
-						from bolt_approvals approval
-						cross join lateral jsonb_array_elements_text(
-							case when jsonb_typeof(approval.state #> '{operation,approval,superceded_by}') = 'array'
-							then approval.state #> '{operation,approval,superceded_by}' else '[]'::jsonb end
-						) superseder(team_name)
-						where approval.request_id = projected.id::text
-						), '[]'::jsonb)
-					where projected.status = 'ONGOING'
-						and (projected.approver_teams = '[]'::jsonb or projected.superseder_teams = '[]'::jsonb);
-				end if;
-			end $bolt_approval_team_backfill$`
-		}
-	],
-	[
-		'bolt_audit',
-		{
-			id: 'collection:bolt_audit:zz-approval-request-backfill',
-			// repository-health:allow SQL1 -- idempotent bootstrap backfill for approval audit rows created before request_id was normalized; migrate owns the transaction.
-			sql: `update bolt_audit
-				set request_id = payload->>'requestId'
-				where request_id is null and payload ? 'requestId'`
-		}
-	],
-	[
-		'bolt_sync_horizon',
-		{
-			id: 'collection:bolt_sync_horizon:seed',
-			// repository-health:allow SQL1 -- bootstrap data: the singleton is part of provisioning the
-			// sync ledger, is idempotent, and runs only inside the schema plan's provisioning transaction.
-			sql: 'insert into bolt_sync_horizon (singleton) values (true) on conflict (singleton) do nothing'
-		}
-	]
-]);
 const internalSystemTables: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 > = Object.entries(INTERNAL_SYSTEM_MODELS).map(([name, declaration]) =>
@@ -345,12 +149,47 @@ const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
  * Exported because the migration generator creates the same index as a Drizzle entity and has to
  * name it identically: a workspace that got the index from its lineage must meet a
  * `create index if not exists` that is already satisfied, rather than a second index over the same
- * column under a different name. This is the same arrangement `collectionSearchTrigramIndexName`
- * gives the trigram indexes, kept here because the declared index is Bolt's own naming and nothing
- * outside the compiler needs to say it.
+ * column under a different name. This is the same arrangement the shared collection search index
+ * naming helpers give the lexical indexes, kept here because the declared index is Bolt's own
+ * naming and nothing outside the compiler needs to say it.
  */
 export const collectionIndexName = (collectionName: string, columnName: string): string =>
 	`${collectionName}_${columnName}_idx`;
+
+const boundedCollectionIndexName = (fullName: string, suffix: string): string => {
+	if (fullName.length <= 63) return fullName;
+	let hash = 2166136261;
+	for (const character of fullName) {
+		hash ^= character.codePointAt(0) ?? 0;
+		hash = Math.imul(hash, 16777619);
+	}
+	const hashedSuffix = `_${(hash >>> 0).toString(36)}_${suffix}`;
+	return `${fullName.slice(0, 63 - hashedSuffix.length)}${hashedSuffix}`;
+};
+
+/** Stable compiler-owned name for the GIN over a collection's stored lexical document. */
+export const collectionSearchDocumentIndexName = (collectionName: string): string =>
+	boundedCollectionIndexName(`${collectionName}_search_document_gin_idx`, 'search_gin_idx');
+
+/** Stable compiler-owned name for the GIN over a collection's concatenated searchable text. */
+export const collectionSearchTextTrigramIndexName = (collectionName: string): string =>
+	boundedCollectionIndexName(`${collectionName}_search_text_trgm_idx`, 'trgm_idx');
+
+/** One ongoing request may govern a collection record at a time, including concurrent creates. */
+export const APPROVAL_REQUEST_ONGOING_INDEX_NAME =
+	'approval_request_collection_record_ongoing_uidx';
+
+const approvalRequestOngoingIndexSteps = (
+	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+): ReadonlyArray<SchemaStep> =>
+	collection.name !== 'approval_request'
+		? []
+		: [
+				{
+					id: `collection:${collection.name}:index:${APPROVAL_REQUEST_ONGOING_INDEX_NAME}`,
+					sql: `create unique index if not exists ${quoteIdentifier(APPROVAL_REQUEST_ONGOING_INDEX_NAME)} on ${quoteIdentifier(collection.name)} (${quoteIdentifier('collection_name')}, ${quoteIdentifier('record_id')}) where ${quoteIdentifier('status')} = 'ONGOING'`
+				}
+			];
 
 /**
  * A collection's declared index steps, one per column authored `indexed: true`.
@@ -405,26 +244,31 @@ const modelIndexSteps = (
 	});
 
 /**
- * A collection's trigram index steps, one per column the author opted into free-text search.
+ * A collection's generated lexical document and its two supporting indexes.
  *
- * Free-text search compiles to `ilike '%term%'`, which no btree index can answer, so every search was
- * a sequential scan over the whole collection. `gin_trgm_ops` indexes character trigrams rather than
- * words, so one index serves substring search in any script without a dictionary or a tokenizer.
- *
- * The name comes from `@norbital-ai/std/collection` rather than being formatted here: the migration
- * generator creates the same index as a Drizzle entity under that same name, so a workspace that got
- * the index from its lineage meets a `create index if not exists` that is already satisfied instead of
- * a second index over the same column.
+ * `search_document` uses the immutable `to_tsvector(regconfig, text)` overload and is stored, so
+ * reads never rebuild it. Its GIN serves token/prefix matches; a second GIN over the same concatenated
+ * text with `gin_trgm_ops` serves fuzzy and language-agnostic matching. The field list comes solely
+ * from the model's `search: true` flags and is sorted once by `searchableColumns`.
  */
 const searchIndexSteps = (
 	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-): ReadonlyArray<SchemaStep> =>
-	searchableColumns(collection.fields).map((column) => ({
-		// Sorts after `collection:<name>` (its table) and after every `bolt:` id, so `pg_trgm` is
-		// installed and the column exists by the time this runs.
-		id: `collection:${collection.name}:search:${column}`,
-		sql: `create index if not exists ${quoteIdentifier(collectionSearchTrigramIndexName(collection.name, column))} on ${quoteIdentifier(collection.name)} using gin (${quoteIdentifier(column)} gin_trgm_ops)`
-	}));
+): ReadonlyArray<SchemaStep> => {
+	const columns = collection.search?.fields ?? searchableColumns(collection.fields);
+	if (columns.length === 0) return [];
+	const table = quoteIdentifier(collection.name);
+	const document = quoteIdentifier(SEARCH_DOCUMENT_COLUMN);
+	return [
+		{
+			id: `collection:${collection.name}:search:1-document-gin`,
+			sql: `create index if not exists ${quoteIdentifier(collectionSearchDocumentIndexName(collection.name))} on ${table} using gin (${document})`
+		},
+		{
+			id: `collection:${collection.name}:search:2-trigram-gin`,
+			sql: `create index if not exists ${quoteIdentifier(collectionSearchTextTrigramIndexName(collection.name))} on ${table} using gin ((${searchTextExpression(columns)}) gin_trgm_ops)`
+		}
+	];
+};
 
 /**
  * One authored EXCLUDE constraint, guarded so re-running the plan is a no-op.
@@ -467,25 +311,80 @@ const exclusionStep = (collectionName: string, exclusion: ModelExclusion): Schem
 	};
 };
 
-/** Installs the database-owned sync capture for one collection after its table exists. */
-const syncTriggerSteps = (collectionName: string): ReadonlyArray<SchemaStep> => [
-	{
-		id: `sync-trigger:${collectionName}:1-drop`,
-		sql: `drop trigger if exists bolt_sync_capture on ${quoteIdentifier(collectionName)}`
-	},
-	{
-		id: `sync-trigger:${collectionName}:2-create`,
-		sql: `create trigger bolt_sync_capture after insert or update or delete on ${quoteIdentifier(collectionName)} for each row execute function bolt_capture_sync_change()`
+/**
+ * Installs the database-owned sync capture for one collection after its table exists.
+ *
+ * The RFC's precondition for the sync engine is that embedding write-back never enters the
+ * changelog: `embedRecords` rewrites each embedding-declaring row's derived settle columns —
+ * `record_embedding`, `record_embedding_fingerprint`, `embedded_at` — and none of that is a change
+ * a query is interested in. So an embedding collection's UPDATE capture fires only when the row
+ * moved *outside* the derived columns: the WHEN witnesses NEW ≈ OLD on exactly those columns, and
+ * any ordinary write — which advances `row_version`/`updated_at` and touches authored fields —
+ * still captures, while a refresh that sets only derived columns is silent. A trigger WHEN may
+ * reference OLD and NEW only, and only on an UPDATE trigger, which is why capture is split here:
+ * inserts and deletes always capture; only the update half carries the witness.
+ *
+ * `search_document` stays out of the witness on purpose: it is a stored generated column no
+ * statement can write, so it can only differ when an authored field did — and that update must
+ * capture. Collections without a declared embedding keep the single three-op trigger, because
+ * their tables have none of the witness columns and a WHEN referencing them would fail to create.
+ */
+const syncTriggerSteps = (
+	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+): ReadonlyArray<SchemaStep> => {
+	const table = quoteIdentifier(collection.name);
+	if (collection.embedding === undefined) {
+		return [
+			{
+				id: `sync-trigger:${collection.name}:1-drop`,
+				sql: `drop trigger if exists bolt_sync_capture on ${table}`
+			},
+			{
+				id: `sync-trigger:${collection.name}:2-create`,
+				sql: `create trigger bolt_sync_capture after insert or update or delete on ${table} for each row execute function bolt_capture_sync_change()`
+			}
+		];
 	}
-];
+	// NEW-≈-OLD on the runtime's derived settle columns: false only when the refresh itself wrote
+	// them, which is exactly the write that must not be captured. Everything else about the row
+	// changing — authored fields, row_version, updated_at — fires the trigger as before.
+	const derivedUnchanged = [
+		RECORD_EMBEDDING_COLUMN,
+		RECORD_EMBEDDING_FINGERPRINT_COLUMN,
+		EMBEDDED_AT_COLUMN
+	]
+		.map(
+			(column) =>
+				`new.${quoteIdentifier(column)} is not distinct from old.${quoteIdentifier(column)}`
+		)
+		.join(' and ');
+	return [
+		{
+			id: `sync-trigger:${collection.name}:1-drop`,
+			sql: `drop trigger if exists bolt_sync_capture on ${table}`
+		},
+		{
+			id: `sync-trigger:${collection.name}:2-create`,
+			sql: `create trigger bolt_sync_capture after insert or delete on ${table} for each row execute function bolt_capture_sync_change()`
+		},
+		{
+			id: `sync-trigger:${collection.name}:2-update-drop`,
+			sql: `drop trigger if exists bolt_sync_capture_update on ${table}`
+		},
+		{
+			id: `sync-trigger:${collection.name}:3-update-create`,
+			sql: `create trigger bolt_sync_capture_update after update on ${table} for each row when (${derivedUnchanged}) execute function bolt_capture_sync_change()`
+		}
+	];
+};
 
 /** Owns build schema plan behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
+	const authorityRefusal = approvalRefusal(authored);
+	if (authorityRefusal !== undefined) throw new TypeError(authorityRefusal);
 	// Runtime-owned collections are planned exactly like authored ones: authored queries read them,
 	// so they need the same row columns rather than a private hand-written table shape.
 	const workspace = withSystemCollections(authored);
-	const generationStatements = syncGenerationStatements(authored);
-	const invalidatedCollections = syncInvalidatedCollectionsExpression(authored);
 	// Step ids are sorted, and every `bolt:` id sorts before every `collection:` id, so these
 	// projections exist before the generated columns that call them are created.
 	const foundation: ReadonlyArray<SchemaStep> = [
@@ -498,19 +397,6 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		//
 		// No `pgcrypto`: `gen_random_uuid()`, the default on every primary key, has been core since
 		// Postgres 13. Requesting the extension only fails on a build that does not ship it.
-		/**
-		 * `approval_request.locked_record_refs` is gone, so the column goes with it.
-		 *
-		 * It tracked the records a request governed, beside the history that was already recording
-		 * every one of them. Two sources for one fact meant the tracked one drifted: a revision that
-		 * created a record never joined it, and a cascade never appeared at all. The ledger is now
-		 * derived from `bolt_collection_history` by `approval_id`, and a column nothing writes is worse
-		 * than absent - it reads as authoritative.
-		 */
-		{
-			id: 'bolt:drop-approval-locked-record-refs',
-			sql: 'alter table if exists approval_request drop column if exists locked_record_refs'
-		},
 		{ id: 'bolt:extension-btree-gist', sql: 'create extension if not exists btree_gist' },
 		{ id: 'bolt:extension-pg-trgm', sql: 'create extension if not exists pg_trgm' },
 		// `vector`, for the embedding columns two templates declare. Unconditional, like the two above:
@@ -545,19 +431,26 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: "create or replace function bolt_daterange(payload jsonb) returns daterange language sql immutable parallel safe as $bolt_daterange$ select daterange(nullif(payload->>'start', '')::date, nullif(payload->>'end', '')::date, '[)') $bolt_daterange$"
 		},
 		{
-			// Every sync-visible row enters the ordered outbox with both full images, and advances the
-			// direct/dependent collection generations in the same transaction. Before-images make a
-			// policy transition decidable without consulting a page; dependent generation bumps cover
-			// the cases where a linking row changes visibility without writing the visible collection.
+			// The trigger is the only writer of the outbox, which is the ordered per-commit changelog:
+			// one row per sync-visible write carrying the collection and the sequence that orders it, with
+			// the write's xid stamped for commit visibility. Consumers
+			// read which collections moved between two sequences; the row itself (and the write's before/
+			// after state) is the transaction's business, not the changelog's.
+			//
+			// Derived settle state never reaches here: an embedding collection's update trigger carries
+			// a WHEN that fires only when the row moved outside `record_embedding`,
+			// `record_embedding_fingerprint` and `embedded_at`, so `embedRecords`' refresh — a write the
+			// sync engine's precondition excludes from the changelog — lands no outbox row per pass.
+			// Deletes and inserts always capture; the split lives in the trigger steps, which can
+			// reference both OLD and NEW, where a shared multi-event trigger's WHEN could not.
 			id: 'bolt:function-sync-capture',
-			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ declare mutation_id text := nullif(current_setting('bolt.mutation_id', true), ''); begin ${generationStatements} if TG_OP = 'DELETE' then insert into bolt_sync_outbox (collection_name, record_id, operation, mutation_id, before_record, after_record, invalidated_collections) values (TG_TABLE_NAME, OLD.id::text, 'delete', mutation_id, to_jsonb(OLD), null, ${invalidatedCollections}); return OLD; end if; insert into bolt_sync_outbox (collection_name, record_id, operation, mutation_id, before_record, after_record, invalidated_collections) values (TG_TABLE_NAME, NEW.id::text, case when TG_OP = 'INSERT' then 'create' else 'update' end, mutation_id, case when TG_OP = 'UPDATE' then to_jsonb(OLD) else null end, to_jsonb(NEW), ${invalidatedCollections}); return NEW; end $bolt_sync_capture$`
+			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ begin insert into bolt_sync_outbox (collection_name) values (TG_TABLE_NAME); if TG_OP = 'DELETE' then return OLD; end if; return NEW; end $bolt_sync_capture$`
 		},
 		{
-			// The task queue remains private: command inputs are arbitrary and may contain secrets.
-			// Its automation rows project into a sync-visible collection inside the same transaction,
-			// so queue code writes one source of truth and the browser never reads the queue itself.
+			// Cron inputs are private because they may contain secrets. Their run records project into a
+			// sync-visible collection in the same transaction; no claim, lease or retry state exists.
 			id: 'bolt:function-automation-run-projection',
-			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, attempts, max_attempts, progress, progress_sequence, progress_updated_at, result, error, next_run_at) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.attempts, NEW.max_attempts, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error, case when NEW.status in ('pending', 'resuming') then NEW.run_at else null end) on conflict (task_id) do update set name = excluded.name, status = excluded.status, attempts = excluded.attempts, max_attempts = excluded.max_attempts, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
+			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, progress, progress_sequence, progress_updated_at, result, error) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error) on conflict (task_id) do update set name = excluded.name, status = excluded.status, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
 		}
 	];
 	/**
@@ -582,40 +475,33 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 				exclusionStep(collection.name, exclusion)
 			);
 			if (!systemTableNames.has(collection.name)) return exclusions;
-			const initializer = systemTableInitializers.get(collection.name);
 			const fields = Object.entries(collection.fields)
 				.sort(([left], [right]) => left.localeCompare(right))
 				.map(([name, field]) => ({ name, sql: renderColumn(name, field) }));
+			const searchColumns = collection.search?.fields ?? searchableColumns(collection.fields);
+			const searchDocument =
+				searchColumns.length === 0
+					? []
+					: [
+							`${quoteIdentifier(SEARCH_DOCUMENT_COLUMN)} tsvector generated always as (${searchDocumentExpression(searchColumns)}) stored`
+						];
 			const table = SchemaPlanValues.quoteIdentifier(collection.name);
-			const sql = `create table if not exists ${table} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.map(({ sql }) => sql).join(', ')}`})`;
+			const declaredColumns = [...fields.map(({ sql }) => sql), ...searchDocument];
+			const sql = `create table if not exists ${table} (${SYSTEM_COLUMNS}${declaredColumns.length === 0 ? '' : `, ${declaredColumns.join(', ')}`})`;
 			return [
 				{ id: `collection:${collection.name}`, sql },
-				// Runtime-owned tables have no authored Drizzle lineage. `create table if not exists`
-				// provisions a new tenant but leaves an existing table at its old shape, so adding a
-				// field to (for example) `bolt_task` used to make the new runtime query a column no
-				// deploy could create. Re-apply every declared field as an idempotent additive step.
-				// Existing columns are untouched; a newly required column without a default fails on
-				// populated data instead of pretending the migration succeeded.
-				...fields.map(({ name, sql }) => ({
-					id: `collection:${collection.name}:column:${name}`,
-					sql: `alter table ${table} add column if not exists ${sql}`
-				})),
 				...declaredIndexSteps(collection),
 				...modelIndexSteps(collection),
+				...approvalRequestOngoingIndexSteps(collection),
 				...searchIndexSteps(collection),
-				...(initializer === undefined ? [] : [initializer]),
 				...exclusions
 			];
 		})
 		.sort((left, right) => left.id.localeCompare(right.id));
 	const syncTriggers = workspace.collections
 		.filter((collection) => collection.sync !== false)
-		.flatMap(({ name }) => syncTriggerSteps(name));
+		.flatMap((collection) => syncTriggerSteps(collection));
 	const taskProjectionTriggers: ReadonlyArray<SchemaStep> = [
-		{
-			id: 'sync-trigger:bolt_task-agent-run:1-drop',
-			sql: 'drop trigger if exists bolt_project_agent_run on bolt_task'
-		},
 		{
 			id: 'sync-trigger:bolt_task-automation-run:1-drop',
 			sql: 'drop trigger if exists bolt_project_automation_run on bolt_task'
@@ -633,325 +519,3 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 	].toSorted((left, right) => left.id.localeCompare(right.id));
 	return { fingerprint: fingerprintSchemaSteps(steps), steps };
 };
-
-/**
- * Exact ordered DDL a browser replica receives from `sync.provisioning`.
- *
- * Both the endpoint and `sync.schema` consume this function. That shared source is what makes the
- * advertised migration digest a verification of the bytes that are later applied, instead of a
- * digest of a similar plan assembled along another path.
- */
-const REPLICA_FOUNDATION_STEP_IDS: ReadonlySet<string> = new Set([
-	'bolt:extension-btree-gist',
-	'bolt:extension-pg-trgm',
-	'bolt:extension-vector',
-	'bolt:function-daterange',
-	'bolt:function-instant'
-]);
-
-export const replicaProvisioningSteps = (
-	workspace: WorkspaceDefinition
-): ReadonlyArray<SchemaStep> => {
-	/**
-	 * A replica receives the current queryable shape, never the server's migration history.
-	 *
-	 * The lineage may name private runtime tables in foreign keys (an authored `r.one.user` is the
-	 * common case), and the server plan contains every auth, agent, automation and sync table. Sending
-	 * either to the browser would disclose and synthesize a server-private schema just to satisfy a
-	 * constraint the authoritative database already enforces. Rendering the current collection
-	 * declaration keeps the UUID column but deliberately has no relationship constraints, which is
-	 * also the right logical-replication behavior when related rows arrive independently.
-	 */
-	const replicaCollections = withSystemCollections(workspace)
-		.collections.filter(isReplicatedCollection)
-		.toSorted((left, right) => left.name.localeCompare(right.name));
-	const collectionSteps = replicaCollections.flatMap((definition) => {
-		// A polymorphic reference is one logical value backed by one nullable UUID column per target.
-		// The server enforces the one-of constraint; the replica only needs the physical columns that
-		// synced row images and local query compilation address.
-		const physicalFieldEntries: Array<readonly [string, FieldDefinition]> = [];
-		for (const [name, field] of Object.entries(definition.fields)) {
-			if (field.type !== 'reference' || field.reference === undefined) {
-				physicalFieldEntries.push([name, field]);
-				continue;
-			}
-			for (const { storageColumn } of field.reference.targets) {
-				physicalFieldEntries.push([
-					storageColumn,
-					{
-						type: 'uuid',
-						required: false,
-						indexed: field.indexed,
-						...(field.unique === true ? { unique: true } : {})
-					}
-				]);
-			}
-		}
-		const physicalFields: Readonly<Record<string, FieldDefinition>> =
-			Object.fromEntries(physicalFieldEntries);
-		const physicalDefinition = { ...definition, fields: physicalFields };
-		const fields = Object.entries(physicalFields)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([name, field]) => renderColumn(name, field));
-		const table = quoteIdentifier(definition.name);
-		return [
-			{
-				id: `replica:collection:${definition.name}`,
-				sql: `create table if not exists ${table} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.join(', ')}`})`
-			},
-			...declaredIndexSteps(physicalDefinition),
-			...modelIndexSteps(definition),
-			...searchIndexSteps(definition),
-			...(definition.exclusions ?? []).map((exclusion) => exclusionStep(definition.name, exclusion))
-		];
-	});
-	const foundation = buildSchemaPlan(workspace).steps.filter(({ id }) =>
-		REPLICA_FOUNDATION_STEP_IDS.has(id)
-	);
-	return [...foundation, ...collectionSteps];
-};
-
-export type MutationCompatibilityResolution = Readonly<
-	| {
-			readonly resolution: 'accepted';
-			readonly graph: CollectionMutationGraph;
-			readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
-	  }
-	| {
-			readonly resolution: 'rebased';
-			readonly graph: CollectionMutationGraph;
-			readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
-	  }
-	| { readonly resolution: 'quarantined'; readonly reason: string }
->;
-
-/**
- * Selects and applies the one compiler-generated forward adapter for an offline mutation.
- *
- * Unknown fields are deliberately left in the transformed graph. The ordinary declarative graph
- * validator then refuses them, so an incomplete adapter can never turn a removed field into a
- * silently dropped write.
- */
-export const reconcileMutationSchema = (
-	workspace: WorkspaceDefinition,
-	input: Readonly<{
-		readonly fromSchemaFingerprint: string;
-		readonly toSchemaFingerprint: string;
-		readonly ageMillis: number;
-		readonly graph: CollectionMutationGraph;
-		readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
-	}>
-): MutationCompatibilityResolution => {
-	const compatibility = workspace.mutationCompatibility;
-	if (compatibility === undefined)
-		return {
-			resolution: 'quarantined',
-			reason: 'The compiled workspace carries no mutation compatibility lineage.'
-		};
-	const horizon = compatibility.offlineHorizonMillis;
-	if (input.ageMillis > horizon)
-		return {
-			resolution: 'quarantined',
-			reason: `The mutation was authored ${input.ageMillis}ms ago, outside the ${horizon}ms schema compatibility horizon.`
-		};
-	if (input.fromSchemaFingerprint === input.toSchemaFingerprint)
-		return { resolution: 'accepted', graph: input.graph, baseVersions: input.baseVersions };
-	const adapter = compatibility.adapters.find(
-		(entry) => entry.fromSchemaFingerprint === input.fromSchemaFingerprint
-	);
-	if (adapter === undefined)
-		return {
-			resolution: 'quarantined',
-			reason: `No retained compatibility adapter understands schema ${input.fromSchemaFingerprint}.`
-		};
-	if (
-		adapter.fieldRenames?.[input.graph.collection]?.['id'] !== undefined &&
-		adapter.fieldRenames[input.graph.collection]?.['id'] !== 'id'
-	)
-		return {
-			resolution: 'quarantined',
-			reason: `Compatibility adapter for ${input.graph.collection} cannot rewrite record identity.`
-		};
-	if ((adapter.incompatibleActions?.[input.graph.collection] ?? []).includes(input.graph.action))
-		return {
-			resolution: 'quarantined',
-			reason: `Compatibility adapter for ${input.graph.collection} cannot preserve ${input.graph.action} semantics.`
-		};
-	const collection = adapter.collectionRenames?.[input.graph.collection] ?? input.graph.collection;
-	type AdaptedValues =
-		| Readonly<{ readonly ok: true; readonly values: Readonly<Record<string, Schema.Json>> }>
-		| Readonly<{ readonly ok: false; readonly reason: string }>;
-	const oldCollectionName = (current: string): string =>
-		Object.entries(adapter.collectionRenames ?? {}).find(([, target]) => target === current)?.[0] ??
-		current;
-	const relationshipOwnsChildren = (source: string, name: string): boolean => {
-		const many = workspace.relations.find(
-			(relation) =>
-				relation.source === source && relation.cardinality === 'many' && relation.name === name
-		);
-		if (many === undefined) return false;
-		const hasWritableEndpoints = (relation: WorkspaceDefinition['relations'][number]): boolean => {
-			const { from, to } = relation;
-			return (
-				from !== undefined &&
-				to !== undefined &&
-				((from.collection === many.target && to.collection === source) ||
-					(to.collection === many.target && from.collection === source))
-			);
-		};
-		const inverses = workspace.relations.filter(
-			(relation) =>
-				relation.source === many.target &&
-				relation.target === source &&
-				relation.cardinality === 'one'
-		);
-		const inverseCascade = inverses.length === 1 && inverses[0]?.cascade === true;
-		if (hasWritableEndpoints(many)) return many.cascade === true || inverseCascade;
-		const writableInverses = inverses.filter(hasWritableEndpoints);
-		return (
-			writableInverses.length === 1 &&
-			(many.cascade === true || writableInverses[0]?.cascade === true)
-		);
-	};
-	const baseVersionKeys = new Set(
-		input.baseVersions.map(({ row }) => `${row.collection}\u0000${row.recordId}`)
-	);
-	const renameValues = (
-		oldName: string,
-		currentName: string,
-		values: Readonly<Record<string, Schema.Json>>,
-		action: 'create' | 'update'
-	): AdaptedValues => {
-		if ((adapter.incompatibleActions?.[oldName] ?? []).includes(action))
-			return {
-				ok: false,
-				reason: `Compatibility adapter for ${oldName} cannot preserve ${action} semantics.`
-			};
-		const renames = adapter.fieldRenames?.[oldName] ?? {};
-		const incompatible = new Set(adapter.incompatibleFields?.[oldName] ?? []);
-		if (renames['id'] !== undefined && renames['id'] !== 'id')
-			return {
-				ok: false,
-				reason: `Compatibility adapter for ${oldName} cannot rewrite record identity.`
-			};
-		const adapted: Record<string, Schema.Json> = {};
-		for (const [field, value] of Object.entries(values)) {
-			if (incompatible.has(field))
-				return {
-					ok: false,
-					reason: `Compatibility adapter for ${oldName} cannot losslessly translate field ${field}.`
-				};
-			const renamed = renames[field] ?? field;
-			if (renamed in adapted)
-				return {
-					ok: false,
-					reason: `Compatibility adapter for ${oldName} maps more than one field to ${renamed}.`
-				};
-			const relation = workspace.relations.find(
-				(entry) =>
-					entry.source === currentName && entry.cardinality === 'many' && entry.name === renamed
-			);
-			if (relation === undefined || !Array.isArray(value)) {
-				adapted[renamed] = value;
-				continue;
-			}
-			const nestedOldName = oldCollectionName(relation.target);
-			// An owned many relationship included in an update is a complete desired state. Rows
-			// omitted from a non-cascade edge continue to live independently, so that graph implies only
-			// the create/update actions carried by its child objects.
-			if (
-				action === 'update' &&
-				relationshipOwnsChildren(currentName, renamed) &&
-				(adapter.incompatibleActions?.[nestedOldName] ?? []).includes('delete')
-			)
-				return {
-					ok: false,
-					reason: `Compatibility adapter for ${nestedOldName} cannot preserve delete semantics.`
-				};
-			const children: Array<Schema.Json> = [];
-			for (const child of value) {
-				if (child === null || typeof child !== 'object' || Array.isArray(child)) {
-					children.push(child);
-					continue;
-				}
-				const childValues = child as Readonly<Record<string, Schema.Json>>;
-				const childId = childValues['id'];
-				const childAction =
-					action === 'create' ||
-					typeof childId !== 'string' ||
-					!baseVersionKeys.has(`${nestedOldName}\u0000${childId}`)
-						? 'create'
-						: 'update';
-				const nested = renameValues(nestedOldName, relation.target, childValues, childAction);
-				if (!nested.ok) return nested;
-				children.push(nested.values);
-			}
-			adapted[renamed] = children;
-		}
-		return { ok: true, values: adapted };
-	};
-	const adaptedValues =
-		input.graph.action === 'delete'
-			? undefined
-			: renameValues(input.graph.collection, collection, input.graph.values, input.graph.action);
-	if (adaptedValues !== undefined && !adaptedValues.ok)
-		return { resolution: 'quarantined', reason: adaptedValues.reason };
-	const graph: CollectionMutationGraph =
-		input.graph.action === 'delete'
-			? { ...input.graph, collection }
-			: { ...input.graph, collection, values: adaptedValues!.values };
-	return {
-		resolution: 'rebased',
-		graph,
-		baseVersions: input.baseVersions.map((entry) => ({
-			...entry,
-			row: {
-				...entry.row,
-				collection: adapter.collectionRenames?.[entry.row.collection] ?? entry.row.collection
-			}
-		}))
-	};
-};
-
-/**
- * The steps a host applies before anything can authenticate.
- *
- * A freshly provisioned database is empty, and `schema.migrate` — the command that would fill it —
- * authenticates through a session row like every other command. So a host has to create identity's
- * tables before it can migrate, and this is what it applies: the same steps the plan would emit for
- * those collections, generated from the same declaration, rather than a copy of the DDL kept
- * somewhere a host could let drift. `schema.migrate` remains the authority and re-applies them.
- */
-/** The identity collections' names, so the filter below reads the declaration and not a convention. */
-const IDENTITY_COLLECTION_NAMES: ReadonlyArray<string> = IDENTITY_COLLECTIONS.map(
-	({ name }) => name
-);
-
-export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
-	buildSchemaPlan({
-		name: 'identity',
-		version: '0.0.1',
-		collections: IDENTITY_COLLECTIONS,
-		customTypes: {},
-		apps: [],
-		policies: [],
-		relations: [],
-		prompt: '',
-		tools: [],
-		skills: [],
-		automations: [],
-		envoys: [],
-		integrations: [],
-		requiredFacilities: []
-	}).steps.filter(
-		(step) =>
-			!step.id.includes(':search:') &&
-			!step.id.startsWith('sync-trigger:') &&
-			// Derived from the declaration rather than from a naming convention. `team` and
-			// `auth_config` are just as necessary to authentication as Better Auth's four models, so a
-			// prefix or allowlist maintained beside the declarations could silently leave a new host
-			// unable to authenticate anybody.
-			IDENTITY_COLLECTION_NAMES.some(
-				(name) => step.id === `collection:${name}` || step.id.startsWith(`collection:${name}:`)
-			)
-	);

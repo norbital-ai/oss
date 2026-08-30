@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionHooks, MutateGraph } from '../../src/authoring/contracts-schema.js';
+import { Effect } from 'effect';
+import type {
+	CollectionHooks,
+	DeleteAfterContext,
+	DeleteBeforeContext,
+	MutateAfterContext,
+	MutateBeforeContext,
+	MutateEditContext,
+	MutateGraph,
+	MutatePrepareContext
+} from '../../src/authoring/contracts-schema.js';
 
 /**
  * That a nested write is checked at compile time, not discovered at run time.
@@ -11,7 +21,7 @@ import type { CollectionHooks, MutateGraph } from '../../src/authoring/contracts
  *
  * The schema is written by hand rather than generated, because what is under test is the type the
  * compiler emits *into*: `tables`, `relations` keyed by collection then by declared relation name,
- * and `inputs`. `renderRelationTypes` in `compiler/sync.ts` produces exactly this shape.
+ * and `inputs`. `renderRelationTypes` in `compiler/workspace-build.ts` produces exactly this shape.
  */
 interface TestSchema {
 	readonly tables: {
@@ -38,12 +48,16 @@ interface TestSchema {
 				readonly target: 'payslips';
 				readonly cardinality: 'many';
 				readonly column: 'payroll_run_id';
+				readonly parentColumn: 'id';
+				readonly cascade: false;
 			};
 			// A `one` relation points at a parent that must already exist. Not expandable.
 			readonly payroll_run_company: {
 				readonly target: 'companies';
 				readonly cardinality: 'one';
 				readonly column: 'company_id';
+				readonly parentColumn: 'id';
+				readonly cascade: false;
 			};
 		};
 		readonly payslips: {
@@ -51,6 +65,8 @@ interface TestSchema {
 				readonly target: 'payslip_lines';
 				readonly cardinality: 'many';
 				readonly column: 'payslip_id';
+				readonly parentColumn: 'id';
+				readonly cascade: false;
 			};
 		};
 	};
@@ -104,11 +120,58 @@ const hooks: CollectionHooks<TestSchema, 'payroll_runs'> = {
 		perRecord: {
 			before: {
 				description: 'Builds a run and its payslips.',
-				handler: ({ input }) => ({
-					company_id: input.company_id,
-					period: input.period,
-					payslip_payroll_run: [{ employment_id: 'e', gross: 1 }]
-				})
+				handler: ({ input, existing }) => {
+					if (existing === undefined) {
+						// The create arm keeps the required insert shape.
+						return {
+							company_id: input.company_id,
+							period: input.period,
+							payslip_payroll_run: [{ employment_id: 'e', gross: 1 }]
+						};
+					}
+					// The update arm is the submitted patch, so omitted values resolve against the row.
+					return {
+						company_id: input.company_id ?? existing.company_id,
+						period: input.period ?? existing.period,
+						payslip_payroll_run: [{ employment_id: 'e', gross: 1 }]
+					};
+				}
+			}
+		}
+	}
+};
+
+type PreparedHooks = CollectionHooks<
+	TestSchema,
+	'payroll_runs',
+	Readonly<{ readonly periods: ReadonlySet<string> }>
+>;
+
+/** Every authored phase has a public, direct context helper. */
+const phaseContextTypes = (
+	prepare: MutatePrepareContext<PreparedHooks>,
+	before: MutateBeforeContext<PreparedHooks>,
+	after: MutateAfterContext<PreparedHooks>,
+	edit: MutateEditContext<PreparedHooks>,
+	deleteBefore: DeleteBeforeContext<PreparedHooks>,
+	deleteAfter: DeleteAfterContext<PreparedHooks>
+) => {
+	prepare.inputs;
+	before.prepared.periods;
+	after.record.period;
+	edit.existing.period;
+	deleteBefore.existing.period;
+	deleteAfter.record.period;
+};
+
+/** A plain Error is a defect, not an authored refusal, and cannot inhabit a hook error channel. */
+const invalidFailureChannel: CollectionHooks<TestSchema, 'payroll_runs'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Invalid failure type.',
+				// @ts-expect-error hooks may fail only with AuthoredRefusal
+				handler: () => Effect.fail(new Error('not an authored refusal'))
 			}
 		}
 	}
@@ -125,7 +188,9 @@ describe('the nested write graph', () => {
 			wrongChildColumn,
 			writesTheForeignKey,
 			expandsAOneRelation,
-			hooks
-		]).toHaveLength(9);
+			hooks,
+			phaseContextTypes,
+			invalidFailureChannel
+		]).toHaveLength(11);
 	});
 });

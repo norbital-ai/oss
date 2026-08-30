@@ -22,19 +22,19 @@ export const TurnOutput = Schema.Struct({
 	toolCalls: Schema.optionalKey(Schema.Array(ToolCall))
 });
 
-/** How many rounds one turn may run before it is broken off rather than left to loop. */
-export const maxToolRounds = 8;
-/** How many transcript rows a prompt is built from. */
-export const recentPromptRows = 64;
 /** How many of the newest assistant rows survive pruning untouched. */
 export const protectedAssistantTurns = 3;
-export const softToolOutputCharacters = 4_000;
-export const hardToolOutputCharacters = 50_000;
+const softToolOutputCharacters = 4_000;
+const hardToolOutputCharacters = 50_000;
+
+/**
+ * The replay share of a model context. The rest belongs to instructions, tool schemas, the live
+ * round, and the answer the model is about to produce.
+ */
+export const promptReplayFraction = 0.6;
 
 /** How deep usage roll-up and transcript walk follow delegation. */
 export const maxDelegationDepth = 8;
-/** How many times a backgrounded delegated turn may be resumed before it is abandoned. */
-export const maxResumes = 4;
 
 /**
  * The transport surface a turn reflects into, when one is watching.
@@ -71,19 +71,47 @@ export const TurnPart = Schema.Union([
 ]);
 export type TurnPart = Schema.Schema.Type<typeof TurnPart>;
 
+/**
+ * Closes every committed tool call that has no committed result yet.
+ *
+ * Stop, interruption, and host-loss are terminal boundaries. Replaying an assistant tool call
+ * across one of those boundaries without its matching tool result produces an invalid provider
+ * transcript, so lifecycle code applies this before publishing the terminal turn state.
+ */
+export const closeUnpairedToolCalls = (
+	parts: ReadonlyArray<TurnPart>,
+	reason: 'host-restarted' | 'interrupted' | 'stopped' | 'tool-failed'
+): ReadonlyArray<TurnPart> => {
+	const results = new Set(parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : [])));
+	const closed: Array<TurnPart> = [...parts];
+	for (const part of parts) {
+		if (part.kind !== 'tool' || results.has(part.id)) continue;
+		closed.push({
+			kind: 'tool-result',
+			id: part.id,
+			name: part.name,
+			output: {
+				terminal: true,
+				error: 'tool interrupted before completion',
+				reason
+			}
+		});
+		results.add(part.id);
+	}
+	return closed;
+};
+
 export const TurnStatus = Schema.Literals([
-	'queued',
 	'running',
-	'paused',
+	'stopped',
 	'completed',
 	'failed',
-	'interrupted',
-	'dequeued'
+	'interrupted'
 ]);
 export type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
 
 /**
- * Everything a parked turn needs in order to continue under the authority that started it.
+ * Everything a stored turn needs to run under the authority that started it.
  *
  * The subject is a snapshot, deliberately. A task invocation carries no credential, and rebuilding a
  * subject from `chat_session.user_id` would be both incomplete (there is no team path there)
@@ -94,30 +122,20 @@ export const StoredTurn = Schema.Struct({
 	status: TurnStatus,
 	/** Invocation nesting carried with the durable turn, without a scheduler payload. */
 	depth: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
-	parent_agent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
 	parts: Schema.Array(TurnPart),
-	resumed: Schema.optionalKey(
-		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
-	),
 	subject: Schema.optionalKey(Identity.Subject),
 	agent_name: Schema.optionalKey(Schema.NonEmptyString),
+	/** Caller-selected host model. Absent means the catalog's current default. */
+	model: Schema.optionalKey(Schema.NonEmptyString),
 	usage: Schema.optionalKey(AIUsage),
 	usage_unreported: Schema.optionalKey(Schema.Boolean)
 });
 export type StoredTurn = Schema.Schema.Type<typeof StoredTurn>;
 
-/** What `await_agent` asks of its child before returning control to its parent. */
-export const AwaitInput = Schema.Struct({
-	agentId: Schema.NonEmptyString,
-	taskId: Schema.NonEmptyString
-});
-/** The one value a parked wait must be — `waiting: true` — named by construction. */
-export const WaitingAnswer = Schema.Struct({ waiting: Schema.Literal(true) });
-
 /** A completed delegated turn, returned to its parent as the answer to its await tool call. */
 export const SettledTarget = Schema.Struct({
 	id: Schema.NonEmptyString,
-	status: Schema.Literals(['completed', 'failed', 'interrupted', 'dequeued']),
+	status: Schema.Literals(['completed', 'failed', 'interrupted', 'stopped']),
 	parts: Schema.Array(TurnPart)
 });
 
@@ -125,7 +143,7 @@ export const SettledTarget = Schema.Struct({
  * A replay of a stored assistant turn: the text and the tool calls a provider needs, in the order
  * they happened, with either half optional — the one shape a provider actually builds a prompt from.
  */
-export const ReplayContent = Schema.Struct({
+const ReplayContent = Schema.Struct({
 	text: Schema.optionalKey(Schema.String),
 	toolCalls: Schema.optionalKey(Schema.Array(Schema.Json))
 });
@@ -200,4 +218,85 @@ export const pruneToolOutput = (
 		}
 		return part;
 	});
+};
+
+/** One indivisible stored turn after its rows have been decoded and soft-pruned. */
+export type PromptWindowTurn = Readonly<{
+	readonly messages: ReadonlyArray<Schema.Json>;
+	/** The newest user turn and recent assistant turns form the retention floor. */
+	readonly protected: boolean;
+	/** Provider-reported usage for the assistant row in this turn, when one was recorded. */
+	readonly usage?: AIUsage;
+}>;
+
+const jsonBytes = (value: Schema.Json): number =>
+	new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+/** The tokenizer-free estimate used at the prompt seam: UTF-8 bytes divided by four. */
+export const estimatedPromptTokens = (messages: ReadonlyArray<Schema.Json>): number =>
+	messages.reduce<number>((tokens, message) => tokens + Math.ceil(jsonBytes(message) / 4), 0);
+
+/**
+ * Corrects the byte estimate with prompt usage the provider reported on earlier turns.
+ *
+ * Stored usage is cumulative when a turn took several rounds, so dividing it by the number of
+ * assistant messages reconstructed for that turn avoids treating a repeated prompt as new
+ * transcript. The correction never reduces the byte estimate: provider counts include system and
+ * tool-schema tokens which are deliberately outside the replay allowance, and under-counting here
+ * is the dangerous direction.
+ */
+const usageCorrection = (
+	turns: ReadonlyArray<PromptWindowTurn>,
+	fixedMessages: ReadonlyArray<Schema.Json>
+): number => {
+	let correction = 1;
+	let prefix: Array<Schema.Json> = [...fixedMessages];
+	for (const turn of turns) {
+		prefix = [...prefix, ...turn.messages];
+		const reported = turn.usage?.inputTokens;
+		if (reported === undefined || !Number.isFinite(reported) || reported <= 0) continue;
+		const assistantRounds = Math.max(
+			1,
+			turn.messages.filter(
+				(message) =>
+					typeof message === 'object' &&
+					message !== null &&
+					!Array.isArray(message) &&
+					Reflect.get(message, 'role') === 'assistant'
+			).length
+		);
+		const observedPrompt = reported / assistantRounds;
+		const estimatedPrefix = estimatedPromptTokens(prefix);
+		if (estimatedPrefix > 0) correction = Math.max(correction, observedPrompt / estimatedPrefix);
+	}
+	return correction;
+};
+
+/**
+ * Applies the 60% hard replay window without ever cutting through a stored turn.
+ *
+ * Soft tool-output pruning has already happened when these units arrive. Oldest unprotected turns
+ * are removed until the corrected estimate fits. A retention floor may itself exceed the budget;
+ * system instructions, the newest user request, and protected assistants are promises stronger than
+ * the cap and therefore remain whole rather than producing a provider-invalid fragment.
+ */
+export const truncatePromptWindow = (
+	turns: ReadonlyArray<PromptWindowTurn>,
+	contextTokens: number,
+	fixedMessages: ReadonlyArray<Schema.Json> = []
+): ReadonlyArray<Schema.Json> => {
+	if (!Number.isFinite(contextTokens) || contextTokens <= 0) {
+		throw new RangeError('model context tokens must be a positive finite number');
+	}
+	const budget = Math.floor(contextTokens * promptReplayFraction);
+	const correction = usageCorrection(turns, fixedMessages);
+	const estimates = turns.map((turn) => estimatedPromptTokens(turn.messages) * correction);
+	let total = estimates.reduce((sum, estimate) => sum + estimate, 0);
+	const retained = turns.map(() => true);
+	for (let index = 0; index < turns.length && total > budget; index += 1) {
+		if (turns[index]?.protected === true) continue;
+		retained[index] = false;
+		total -= estimates[index] ?? 0;
+	}
+	return turns.flatMap((turn, index) => (retained[index] ? turn.messages : []));
 };

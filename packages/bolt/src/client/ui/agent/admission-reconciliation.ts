@@ -1,4 +1,4 @@
-import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
+import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 
 /** One caller-owned admission identity retained only while its HTTP outcome is unknown. */
 export type UnsettledAgentAdmission = Readonly<{

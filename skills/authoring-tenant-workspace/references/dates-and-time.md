@@ -83,14 +83,14 @@ the query crosses the server boundary. Server roles, fixtures, functions, and di
 must already provide canonical wire values. Never make the server guess a timezone.
 
 For `custom('instant_range')` filters, `contains_date` starts from the viewer's calendar date and resolves it
-through the viewer timezone. `overlaps` uses UTC range bounds. Local replica and server evaluation
+through the viewer timezone. `overlaps` uses UTC range bounds. Client and server evaluation
 must receive identical operands so optimistic results cannot disagree with confirmed results.
 
 ## Review checklist
 
 1. State whether each value is a calendar day, wall-clock time, instant, or instant interval.
 2. Confirm storage and wire shapes match the table above.
-3. Trace create/edit, display, filter, sync replica, server query, fixture, and export/import paths.
+3. Trace create/edit, display, filter, live query, server query, fixture, and export/import paths.
 4. Check timezone changes and daylight-saving boundaries for instants; confirm calendar days and
    wall-clock times do not move.
 5. Reject ambiguous/unzoned instant strings at the boundary instead of normalizing them.

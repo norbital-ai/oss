@@ -1,5 +1,15 @@
 import { Clock, Config, Context, Effect, Option, Redacted, Schema } from 'effect';
-import { ConfigResponse, EffectId, FacilityCall, InvocationId } from '@norbital-ai/bolt-protocol';
+import {
+	ConfigResponse,
+	EffectId,
+	FacilityCall,
+	GATEWAY_SECRET_VARIABLE,
+	InvocationId,
+	SIGNATURE_LIFETIME_MILLIS,
+	SYSTEM_SIGNATURE_HEADER,
+	SYSTEM_TIMESTAMP_HEADER,
+	systemSignaturePayload
+} from '@norbital-ai/bolt-protocol';
 import type { FacilityBindings } from '@norbital-ai/bolt-protocol';
 import type { PolicyDeclaration } from '#lib/authoring/workspace-schema.js';
 
@@ -67,91 +77,20 @@ export const COLONY_SYSTEM_POLICY: PolicyDeclaration = Object.freeze<PolicyDecla
 export const SYSTEM_PRINCIPAL_ID = 'colony-system';
 
 /**
- * The configuration key the host's signing secret is read from — the same `COLONY_GATEWAY_SECRET`
- * the host already verifies `/api/operations` bodies against, not a second secret minted for this.
+ * The signing contract, held in the protocol package and re-exported here.
  *
- * Read through Effect's `ConfigProvider` rather than `process.env`, for the reason
- * `BOLT_SECRETS_KEY` is: the runtime describes what it needs and the host supplies it, so the same
- * bundle runs in-process inside Colony and standalone inside bolt-server without either reaching for
- * an environment it should not know about.
- *
- * A host that sets no secret can mint no system principal. That is the correct failure: the check
- * below returns `false` rather than treating an unconfigured host as a trusted one.
+ * There are two hosts that sign — Colony, and bolt-server driving the tenant's own scheduler in
+ * process — and one runtime that verifies. Two renderings of "the bytes we sign" is how a signature
+ * check comes to pass on a payload nobody meant to authorize, so the definition lives in the one
+ * package all three already import, and this module holds the verification rather than a copy of the
+ * payload. Callers that reached these through `bolt/host` are unaffected.
  */
-export const GATEWAY_SECRET_VARIABLE = 'COLONY_GATEWAY_SECRET';
-
-/** The two headers a host-signed invocation carries. Named for the host, as `x-colony-impersonated-team` already is. */
-export const SYSTEM_SIGNATURE_HEADER = 'x-colony-system-signature';
-export const SYSTEM_TIMESTAMP_HEADER = 'x-colony-system-timestamp';
-
-/**
- * How long a signature is good for.
- *
- * This is the answer to "how long does the authority last": one invocation, inside a five minute
- * window. There is no credential to revoke because none is issued — the previous design minted a
- * session row in the tenant database and had to remember to delete it, and a row that outlives its
- * provisioning is a standing key. A signature that is merely *stale* is refused by arithmetic.
- *
- * Wide enough for clock skew between a host and a runtime that may not share a machine, narrow
- * enough that a captured header is worthless long before anybody could find it. The comparison is
- * two-sided so a timestamp from the future is refused too.
- */
-export const SIGNATURE_LIFETIME_MILLIS = 300_000;
-
-/** The four facts the host signs, in order. The schema owns the shape so signing and verifying cannot drift. */
-const SignaturePayload = Schema.Struct({
-	timestamp: Schema.Number,
-	command: Schema.NonEmptyString,
-	tenantId: Schema.NonEmptyString,
-	input: Schema.Unknown
-});
-type SignaturePayload = typeof SignaturePayload.Type;
-
-/**
- * The bytes the host signs, rendered identically on both sides.
- *
- * Exported from bolt and imported by the host rather than restated there: two implementations of
- * "what exactly gets signed" is how a signature check comes to pass on a payload nobody meant to
- * authorize. The host builds this, HMACs it, and sends the digest; this module builds it again from
- * what actually arrived and compares.
- *
- * All four fields are in it, and each closes something. The `timestamp` bounds replay. The `command`
- * binds the signature to *this* command, so a digest captured from a `schema.migrate` cannot be
- * replayed onto an `identity.admitFounder`. The `tenantId` binds it to one workspace, so a signature
- * for a demo tenant cannot migrate a customer's. The canonical rendering of `input` binds it to the
- * arguments, so a captured `admitFounder` signature cannot be replayed with a different address —
- * which is the same property `/api/operations` gets by signing its raw request body, and the reason
- * a bearer token would not do.
- */
-export const systemSignaturePayload = (parameters: SignaturePayload): string =>
-	[
-		String(parameters.timestamp),
-		parameters.command,
-		parameters.tenantId,
-		canonicalJson(parameters.input)
-	].join('\n');
-
-/**
- * A rendering of a JSON value that does not depend on key order.
- *
- * `JSON.stringify` preserves insertion order, and the input the host signs is a literal it wrote
- * while the input this module verifies may have been round-tripped through a JSON body by
- * bolt-server. Sorting the keys is what makes those two the same string. Anything that is not JSON
- * renders as `null`, which can only ever fail a comparison rather than pass one.
- */
-const canonicalJson = (value: unknown): string => {
-	if (value == null) return 'null';
-	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-	if (typeof value === 'object') {
-		const entries = Object.entries(value)
-			.filter(([, entry]) => entry !== undefined)
-			.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`);
-		return `{${entries.join(',')}}`;
-	}
-	if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
-	if (typeof value === 'number') return Number.isFinite(value) ? JSON.stringify(value) : 'null';
-	return 'null';
+export {
+	GATEWAY_SECRET_VARIABLE,
+	SIGNATURE_LIFETIME_MILLIS,
+	SYSTEM_SIGNATURE_HEADER,
+	SYSTEM_TIMESTAMP_HEADER,
+	systemSignaturePayload
 };
 
 /** Reads one header case-insensitively out of the protocol's multi-value shape. */

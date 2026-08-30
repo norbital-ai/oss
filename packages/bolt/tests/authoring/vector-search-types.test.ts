@@ -101,6 +101,24 @@ const refused = () => {
 		// @ts-expect-error the distance is the ordering; a second one would discard the answer.
 		orderBy: { captured_at: 'desc' }
 	});
+	photos.findNearest({
+		column: 'perceptual_embedding',
+		probe,
+		// @ts-expect-error nearest-neighbour reads do not hydrate relations.
+		with: { evidence_job: true }
+	});
+	photos.findNearest({
+		column: 'perceptual_embedding',
+		probe,
+		// @ts-expect-error vector probes do not also accept collection text search.
+		search: 'ignored'
+	});
+	photos.findNearest({
+		column: 'perceptual_embedding',
+		probe,
+		// @ts-expect-error root offset pagination is not part of the nearest surface.
+		offset: 10
+	});
 };
 
 describe('vector search', () => {

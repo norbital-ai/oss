@@ -82,7 +82,10 @@ describe('durable sign-in code delivery', () => {
 			Identity.DELIVER_CODE_COMMAND,
 			Identity.DELIVER_CODE_COMMAND
 		]);
-		expect(tasks.map((row) => row['status'])).toEqual(['pending', 'pending']);
+		// `running` is what an enqueued row is. `bolt_task` is an observation of work the runtime has
+		// already taken on rather than a durable queue with a claim in front of it, so there is no
+		// `pending` state left for a row to sit in before something picks it up.
+		expect(tasks.map((row) => row['status'])).toEqual(['running', 'running']);
 		expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(true);
 
 		const delivery = Schema.decodeUnknownSync(Identity.CodeDelivery)(tasks[1]?.['input']);

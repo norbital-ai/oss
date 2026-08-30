@@ -156,7 +156,7 @@ module size remains explicit in assessment metrics and hotspot tables so respons
 splits can be reviewed with cohesion and complexity evidence rather than a blanket cutoff.
 
 Scanner v31 makes the live-data and SQL boundaries structural. SQL1 permits only transaction control,
-the policy compiler's keyed `$sql` predicate input, and narrowly identifiable schema-bootstrap DDL
+the policy compiler's explicit `policySql` predicate input, and narrowly identifiable schema-bootstrap DDL
 including model/compiler tagged expressions; `ON CONFLICT` DML, comparison stubs, runtime persistence
 directories and replica directories are no longer exemptions. QRY2
 forbids manual live-query refresh in every lifecycle, QRY4 forbids exposing that member on a query

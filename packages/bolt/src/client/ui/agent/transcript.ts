@@ -176,7 +176,6 @@ const ElicitationRequest = Schema.Struct({
 const StoredTurn = Schema.Struct({
 	id: Schema.String,
 	status: Schema.String,
-	parent_agent_id: Schema.NullOr(Schema.String),
 	parts: Schema.Array(JsonObject),
 	usage: Schema.optionalKey(JsonObject),
 	error: Schema.optionalKey(Schema.String)
@@ -188,6 +187,34 @@ const decodeJsonObject = Schema.decodeUnknownOption(JsonObject);
 const decodeJsonObjects = Schema.decodeUnknownOption(JsonObjects);
 const decodeElicitationRequest = Schema.decodeUnknownOption(ElicitationRequest);
 const emptyJsonObject = (): typeof JsonObject.Type => ({});
+
+/** Child session ids are the durable result of spawn calls, not a field duplicated onto each turn. */
+const delegatedSessionIds = (
+	records: readonly Readonly<Record<string, unknown>>[]
+): ReadonlySet<string> => {
+	const spawnCalls = new Set<string>();
+	for (const record of records) {
+		for (const part of partsOf(record)) {
+			if (part.kind === 'tool' && part.name === 'spawn_agent' && typeof part.id === 'string') {
+				spawnCalls.add(part.id);
+			}
+		}
+	}
+	const sessions = new Set<string>();
+	for (const record of records) {
+		for (const part of partsOf(record)) {
+			if (
+				part.kind !== 'tool-result' ||
+				typeof part.id !== 'string' ||
+				!spawnCalls.has(part.id)
+			)
+				continue;
+			const output = Option.getOrElse(decodeJsonObject(part.output), emptyJsonObject);
+			if (typeof output.agentId === 'string') sessions.add(output.agentId);
+		}
+	}
+	return sessions;
+};
 
 /**
  * Projects the typed, reactive `chat_message` query into the transcript's presentation records.
@@ -241,24 +268,21 @@ export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[])
 	const turns = rows.flatMap((row) =>
 		Option.match(decodeStoredTurn(row.content), {
 			onNone: () => [],
-			onSome: ({ id, status, parent_agent_id, error }) => [
+			onSome: ({ id, status, error }) => [
 				{
 					id,
 					conversation_id: row.conversation_id,
 					status,
-					parent_agent_id,
 					...(error === undefined ? {} : { error })
 				}
 			]
 		})
 	);
-	const delegatedTurnIds = new Set(
-		turns.filter((turn) => turn.parent_agent_id !== null).map((turn) => turn.id)
-	);
+	const delegatedAgentIds = delegatedSessionIds(projected);
 	return {
 		messages: projected.map((record) => ({
 			...record,
-			...(record.turn_id !== null && delegatedTurnIds.has(record.turn_id)
+			...(delegatedAgentIds.has(record.conversation_id)
 				? { delegated: true }
 				: {})
 		})),
@@ -289,14 +313,6 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	read_agent: { labelKey: 'bolt.agent.tool.readAgent', icon: 'lucide:scan-search' },
 	message_agent: { labelKey: 'bolt.agent.tool.messageAgent', icon: 'lucide:send' },
 	await_agent: { labelKey: 'bolt.agent.tool.awaitAgent', icon: 'lucide:hourglass' },
-	dequeue_agent_message: {
-		labelKey: 'bolt.agent.tool.dequeueAgentMessage',
-		icon: 'lucide:list-x'
-	},
-	reorder_agent_queue: {
-		labelKey: 'bolt.agent.tool.reorderAgentQueue',
-		icon: 'lucide:list-ordered'
-	},
 	interrupt_agent: { labelKey: 'bolt.agent.tool.interruptAgent', icon: 'lucide:octagon-x' },
 	stop_agent: { labelKey: 'bolt.agent.tool.stopAgent', icon: 'lucide:pause' },
 	resume_agent: { labelKey: 'bolt.agent.tool.resumeAgent', icon: 'lucide:play' }
@@ -325,8 +341,6 @@ const SANDBOX_AGENT_TOOLS = new Set([
 	'read_agent',
 	'message_agent',
 	'await_agent',
-	'dequeue_agent_message',
-	'reorder_agent_queue',
 	'interrupt_agent',
 	'stop_agent',
 	'resume_agent'
@@ -354,22 +368,17 @@ export function toPanelMessages(
 	}
 
 	const turnStatus = new Map<string, string>();
-	const subagentTurnIds = new Set<string>();
+	const delegatedAgentIds = delegatedSessionIds(records);
 	for (const turn of turns) {
 		const turnId = turn.id;
 		if (typeof turnId === 'string' && typeof turn.status === 'string') {
 			turnStatus.set(turnId, turn.status);
 		}
-		const subagentId = turn.parent_agent_id;
-		if (typeof turnId !== 'string' || typeof subagentId !== 'string') continue;
-		subagentTurnIds.add(turnId);
 	}
 	const byAgent = new Map<string, Readonly<Record<string, unknown>>[]>();
 	for (const record of records) {
-		const turnId = record.turn_id;
-		if (typeof turnId !== 'string' || !subagentTurnIds.has(turnId)) continue;
 		const agentId = record.conversation_id;
-		if (typeof agentId !== 'string') continue;
+		if (typeof agentId !== 'string' || !delegatedAgentIds.has(agentId)) continue;
 		const bucket = byAgent.get(agentId) ?? [];
 		bucket.push(record);
 		byAgent.set(agentId, bucket);
@@ -377,10 +386,11 @@ export function toPanelMessages(
 
 	const context: ProjectionContext = { results, byAgent, turnStatus };
 	// A child agent's rows belong beneath its spawn call, not in the root conversation flow.
-	const roots = records.filter((record) => {
-		const turnId = record.turn_id;
-		return typeof turnId !== 'string' || !subagentTurnIds.has(turnId);
-	});
+	const roots = records.filter(
+		(record) =>
+			typeof record.conversation_id !== 'string' ||
+			!delegatedAgentIds.has(record.conversation_id)
+	);
 
 	// A checkpoint absorbs everything before it. Later checkpoints therefore contain earlier ones,
 	// which is what makes repeated compaction readable rather than a chain of recaps of recaps.
@@ -829,8 +839,8 @@ function containsPrompt(messages: readonly PanelMessage[], pending: string): boo
 /**
  * The conversation as the panel shows it, including a prompt that has not landed yet.
  *
- * Admission atomically writes the user's message and queued turn, then returns before inference.
- * The echo covers only the transport-to-replica gap and disappears the moment the real row arrives,
+ * One invocation atomically admits the user's message and executes its assistant turn.
+ * The echo covers only the transport-to-commit gap and disappears the moment the real row arrives,
  * without a timer or a second response channel.
  * Sending the same text twice suppresses the echo one message early, which is invisible.
  */

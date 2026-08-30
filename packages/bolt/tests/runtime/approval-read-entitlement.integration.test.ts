@@ -9,6 +9,7 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
+import { policySql } from '../../src/authoring/policy-sql.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
@@ -57,8 +58,10 @@ const command = (name: string, credential: string, input: unknown = null) =>
 	});
 
 const REVIEWERS = 'Reviewers';
-const REQUEST_ID = '019f6f10-0007-7000-8000-000000000001';
 const JOB_ID = '019f6f10-0008-7000-8000-000000000001';
+const APPROVAL_EFFECT_ID = EffectId.make('approval-read-entitlement');
+const APPROVAL_ROOT = { collection: 'jobs', id: JOB_ID, action: 'create' } as const;
+const REQUEST_ID = Approvals.approvalRequestId(APPROVAL_ROOT, APPROVAL_EFFECT_ID);
 
 /** The approval the raiser's grant carries. `approvers` and `team.name` are the same string. */
 const jobApproval = {
@@ -73,7 +76,7 @@ const jobApproval = {
 };
 
 /** Both parties read only their own rows — the narrowing an approver's ordinary grant would have. */
-const ownRowsOnly = { $sql: '"owner_id"::text = ${requestor.id}' } as const;
+const ownRowsOnly = policySql('"owner_id"::text = ${requestor.id}');
 
 const reviewWorkspace = workspace({
 	name: 'test-workspace',
@@ -86,23 +89,26 @@ const reviewWorkspace = workspace({
 	],
 	apps: [app({ name: 'work', label: 'Work' })],
 	policies: [
+		// `jobs read` has one owner and every team composes it, which is how all three principals end
+		// up with the identical narrowing the suite depends on.
+		policy({
+			name: 'own-jobs',
+			effect: 'allow',
+			capabilities: { apps: ['work'] },
+			grants: [{ collection: 'jobs', action: 'read', where: ownRowsOnly }]
+		}),
 		policy({
 			name: 'raiser',
 			effect: 'allow',
 			capabilities: { apps: ['work'] },
-			grants: [
-				{ collection: 'jobs', action: 'read', where: ownRowsOnly },
-				{ collection: 'jobs', action: 'create', approval: jobApproval }
-			]
-		}),
-		policy({
-			name: 'reviewer',
-			effect: 'allow',
-			capabilities: { apps: ['work'] },
-			grants: [{ collection: 'jobs', action: 'read', where: ownRowsOnly }]
+			grants: [{ collection: 'jobs', action: 'create', approval: jobApproval }]
 		})
 	],
-	teams: { Raisers: ['raiser'], [REVIEWERS]: ['reviewer'], Bystanders: ['reviewer'] },
+	teams: {
+		Raisers: ['own-jobs', 'raiser'],
+		[REVIEWERS]: ['own-jobs'],
+		Bystanders: ['own-jobs']
+	},
 	automations: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -123,11 +129,11 @@ const raiserSubject: Identity.Subject = {
 const titlesVisibleTo = async (runtime: BoltTestRuntime, credential: string) => {
 	const outcome = await runtime.runtime.runPromise(
 		dispatchInvocation(
-			command('collections.findMany', credential, { collection: 'jobs', limit: 50 })
+			command('collections.export', credential, { collection: 'jobs', limit: 50 })
 		).pipe(Effect.result)
 	);
 	if (outcome._tag !== 'Success') throw new Error(`refused: ${JSON.stringify(outcome)}`);
-	const rows = Reflect.get(outcome.success.value as object, 'rows');
+	const rows = outcome.success.value;
 	if (!Array.isArray(rows)) throw new Error('expected rows');
 	return (rows as ReadonlyArray<Record<string, unknown>>).map((row) => row['title']).sort();
 };
@@ -156,22 +162,19 @@ const place = async (runtime: BoltTestRuntime) => {
 	);
 };
 
-/** Raised through `Approvals.request`, the only writer of the state the predicate reads. */
+/** Raised through the public approval gate, the only owner of the state the predicate reads. */
 const raise = (runtime: BoltTestRuntime) =>
 	runtime.runtime.runPromise(
 		Effect.gen(function* () {
-			return yield* (yield* Approvals.Service).request(
-				EffectId.make(`approval-${REQUEST_ID}`),
-				raiserSubject,
-				REQUEST_ID,
-				{
-					collection: 'jobs',
-					id: JOB_ID,
-					action: 'create',
-					values: { title: 'Extra scaffolding' },
-					approval: jobApproval
-				}
-			);
+			return yield* (yield* Approvals.Service).gate({
+				effectId: APPROVAL_EFFECT_ID,
+				subject: raiserSubject,
+				root: APPROVAL_ROOT,
+				storedGraph: { version: 1, collection: 'jobs', id: JOB_ID, action: 'create' },
+				proposedValues: { title: 'Extra scaffolding' },
+				approval: jobApproval,
+				review: undefined
+			});
 		})
 	);
 

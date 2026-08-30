@@ -60,6 +60,9 @@ const gatedWorkspace = workspace({
 			description: 'Creates people through one concrete review flow.',
 			grants: {
 				people: {
+					// The requester can read its own proposal back without masking; the inbox
+					// projection masks with the requesting subject's own read grant.
+					read: { fields: ['name'] },
 					create: {
 						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
 					}
@@ -102,25 +105,23 @@ describe('approval gate over SQL', () => {
 			Effect.flip(
 				Effect.gen(function* () {
 					const collections = yield* Collections.Service;
-					yield* collections.create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id: rid('person-1'),
-						values: { name: 'Ada' }
-					});
+					yield* collections.mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id: rid('person-1'), name: 'Ada' }],
+						false,
+						0,
+						{ root: { id: rid('person-1'), action: 'create' } }
+					);
 				})
 			)
 		);
 
 		expect(failure).toBeInstanceOf(PendingApproval);
 		expect(failure).toMatchObject({ collection: 'people', id: rid('person-1'), action: 'create' });
-		// The point of the gate is not that the record is absent — it is that it is not settled. The row
-		// is written so a reviewer has something to open and the table has something to badge, and it
-		// carries the request that holds it, which is what every later mutation checks.
-		expect(await rowCount(harness, 'people')).toBe(1);
-		const held = await harness.database.query('select approval_id from people where id = $1', [
-			rid('person-1')
-		]);
-		expect(held[0]?.['approval_id']).toEqual(expect.any(String));
+		// The canonical gate stores the engine graph and review, but no provisional domain row.
+		expect(await rowCount(harness, 'people')).toBe(0);
 	});
 
 	it('records the held request so a reviewer can find and read it', async () => {
@@ -130,11 +131,15 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id: rid('person-2'),
-						values: { name: 'Grace' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id: rid('person-2'), name: 'Grace' }],
+						false,
+						0,
+						{ root: { id: rid('person-2'), action: 'create' } }
+					);
 				})
 			)
 		);
@@ -167,11 +172,15 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-decided'), policySubject, {
-						collection: 'people',
-						id: rid('person-decided'),
-						values: { name: 'Margaret' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-decided'),
+						policySubject,
+						'people',
+						[{ id: rid('person-decided'), name: 'Margaret' }],
+						false,
+						0,
+						{ root: { id: rid('person-decided'), action: 'create' } }
+					);
 				})
 			)
 		);
@@ -240,13 +249,15 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(
+					yield* (yield* Collections.Service).mutate(
 						effectId('create-admin-superseded'),
 						policySubject,
+						'people',
+						[{ id: rid('person-admin-superseded'), name: 'Katherine' }],
+						false,
+						0,
 						{
-							collection: 'people',
-							id: rid('person-admin-superseded'),
-							values: { name: 'Katherine' }
+							root: { id: rid('person-admin-superseded'), action: 'create' }
 						}
 					);
 				})
@@ -297,11 +308,15 @@ describe('approval gate over SQL', () => {
 
 		await runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(effectId('create-direct'), adminSubject, {
-					collection: 'people',
-					id: rid('person-3'),
-					values: { name: 'Ada' }
-				});
+				yield* (yield* Collections.Service).mutate(
+					effectId('create-direct'),
+					adminSubject,
+					'people',
+					[{ id: rid('person-3'), name: 'Ada' }],
+					false,
+					0,
+					{ root: { id: rid('person-3'), action: 'create' } }
+				);
 			})
 		);
 
@@ -316,47 +331,53 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).createMany(effectId('create-many'), policySubject, [
-						{ collection: 'people', id: rid('person-4'), values: { name: 'Ada' } },
-						{ collection: 'people', id: rid('person-5'), values: { name: 'Grace' } }
-					]);
+					for (const [index, person] of [
+						{ id: rid('person-4'), name: 'Ada' },
+						{ id: rid('person-5'), name: 'Grace' }
+					].entries())
+						yield* (yield* Collections.Service).mutate(
+							effectId(`create-many:${index}`),
+							policySubject,
+							'people',
+							[person],
+							false,
+							0,
+							{ root: { id: person.id, action: 'create' } }
+						);
 				})
 			)
 		);
 
 		expect(failure).toBeInstanceOf(PendingApproval);
-		// Each row is written and held on its own request; a batch is not one decision.
-		expect(await rowCount(harness, 'people')).toBe(1);
+		// The first request aborts preparation before any domain row is committed.
+		expect(await rowCount(harness, 'people')).toBe(0);
 	});
 
-	it('replicates a held write, because a reviewer reads through the replica', async () => {
+	it('does not replicate a provisional domain row while approval is pending', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 
 		await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id: rid('person-6'),
-						values: { name: 'Ada' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id: rid('person-6'), name: 'Ada' }],
+						false,
+						0,
+						{ root: { id: rid('person-6'), action: 'create' } }
+					);
 				})
 			)
 		);
 
-		// A held record has to reach the replica. The decision surface reads a row's
-		// `approval_id` to know it is pending and to offer approve/reject on it, and it reads
-		// through the replica like everything else — so a record withheld until approval is a record
-		// nobody can approve. Who may see it is still the access predicate's question, not this one's.
+		// The changelog captures committed writes only. A held create has not reached COMMIT, so it has
+		// neither a domain row nor an outbox entry while approval is pending.
 		const outbox = (await harness.database.query(
-			"select operation, after_record from bolt_sync_outbox where collection_name = 'people' order by xid, sequence"
-		)) as ReadonlyArray<{ readonly operation: string; readonly after_record: unknown }>;
-		// The imperative `create` publishes the inserted row and then the approval lock that holds it. The
-		// replica applies both in cursor order, so the reviewer ends on the locked representation. The
-		// declarative browser mutation path is different by contract: it holds before a domain row exists.
-		expect(outbox).toHaveLength(2);
-		expect(outbox.map(({ operation }) => operation)).toEqual(['create', 'update']);
-		expect(outbox[1]?.after_record).toMatchObject({ approval_id: expect.any(String) });
+			"select collection_name from bolt_sync_outbox where collection_name = 'people'"
+		)) as ReadonlyArray<{ readonly collection_name: string }>;
+		expect(outbox).toEqual([]);
 	});
 });

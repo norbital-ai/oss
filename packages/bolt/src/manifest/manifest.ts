@@ -1,25 +1,14 @@
 import { Schema } from 'effect';
 import { BundleManifest, PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
+import { canonicalJson } from '../canonical-json.js';
 import { manifestIntegrations } from '../authoring/integration-introspection.js';
 import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../compiler/schema-plan.js';
 
-/** Owns stable behavior at the manifest boundary so validation and typed semantics stay consistent for every caller. */
-const stable = (value: unknown): string => {
-	if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-	if (value !== null && typeof value === 'object') {
-		return `{${Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, entry]) => `${JSON.stringify(key)}:${stable(entry)}`)
-			.join(',')}}`;
-	}
-	return JSON.stringify(value) ?? 'null';
-};
-
 /** Owns fingerprint behavior at the manifest boundary so validation and typed semantics stay consistent for every caller. */
 const ManifestValues = {
-	fingerprint: (value: unknown): string => `sha256:${sha256Text(stable(value))}`
+	fingerprint: (value: unknown): string => `sha256:${sha256Text(canonicalJson(value))}`
 };
 export const fingerprint = ManifestValues.fingerprint;
 
@@ -32,9 +21,9 @@ export const buildManifest = (
 ): BundleManifest => {
 	const requiredFacilities = [...new Set(workspace.requiredFacilities)].sort();
 	const schemaPlan = buildSchemaPlan(workspace);
-	const schemaFingerprint = workspace.mutationCompatibility?.currentSchemaFingerprint;
+	const schemaFingerprint = workspace.schemaFingerprint;
 	if (schemaFingerprint === undefined)
-		throw new TypeError('Compiled workspace is missing its mutation compatibility fingerprint.');
+		throw new TypeError('Compiled workspace is missing its schema fingerprint.');
 	return BundleManifest.make({
 		protocolVersion: PROTOCOL_VERSION,
 		artifactId: input.artifactId,

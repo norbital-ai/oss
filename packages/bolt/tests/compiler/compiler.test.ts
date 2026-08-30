@@ -82,9 +82,13 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.find(({ id }) => id === 'collection:approval_request')?.sql).toContain(
 			'"approval_request"'
 		);
-		expect(first.steps.find(({ id }) => id === 'collection:bolt_sync_horizon')?.sql).toContain(
-			'"singleton" boolean default true not null unique'
-		);
+		// `bolt_sync_horizon` is retired: the changelog's truncation backstop replaced the compaction mark.
+		expect(first.steps.map(({ id }) => id)).not.toContain('collection:bolt_sync_horizon');
+		expect(first.steps.map(({ id }) => id).some((id) => id.startsWith('bolt:drop-'))).toBe(false);
+		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':zz-'))).toBe(false);
+		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':column:'))).toBe(false);
+		expect(first.steps.map(({ id }) => id).some((id) => id === 'collection:agent_run')).toBe(false);
+		expect(first.steps.map(({ id }) => id)).not.toContain('bolt:hard-cut-agent-task-state');
 		expect(first.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
 	});
 
@@ -133,6 +137,16 @@ describe('Bolt compiler owners', () => {
 		expect(sql).toContain('"id" uuid primary key default gen_random_uuid()');
 		expect(sql).toMatch(/"sys_period" tstzrange default .* not null/);
 		expect(sql).not.toContain('id text primary key');
+	});
+
+	it('renders the clean system-table baseline without additive compatibility steps', () => {
+		const plan = buildSchemaPlan(fixture);
+		const table = plan.steps.find(({ id }) => id === 'collection:bolt_collection_history')?.sql;
+
+		expect(table).toContain('"effect_id" text');
+		expect(table).not.toContain('"effect_id" text not null');
+		expect(plan.steps.some(({ id }) => id.startsWith('collection:bolt_collection_history:column:')))
+			.toBe(false);
 	});
 
 	/**

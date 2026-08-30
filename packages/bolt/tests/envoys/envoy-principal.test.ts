@@ -20,6 +20,7 @@ const contractorEnvoy = () =>
 		transport: 'whatsapp',
 		audience: 'authenticated',
 		policies: ['contractor'],
+		delegation: 'enabled',
 		task: 'Answer a contractor about their own assignments.'
 	});
 

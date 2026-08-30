@@ -80,8 +80,8 @@ the scrim — never on the raw banner art — so contrast does not depend on lig
 The media header **is** the app's header. An app must not repeat its own title or description in a
 `PageHeader` underneath it — that is the same identity twice, one directly above the other.
 
-A scope picker is the reason apps used to do it anyway: `PageHeader` was the only thing that could
-hold a control, and it renders a title as soon as you give it one. Hand the control to the shell
+A scope picker is why some apps reach for `PageHeader` anyway: it is the only thing that can hold
+a control, and it renders a title as soon as you give it one. Hand the control to the shell
 instead and it lands at the trailing edge of the media header:
 
 ```svelte

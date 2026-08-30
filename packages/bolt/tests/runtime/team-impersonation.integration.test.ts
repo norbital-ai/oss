@@ -150,10 +150,9 @@ const hrWorkspace = workspace({
 			name: 'HR',
 			effect: 'allow',
 			capabilities: { apps: ['hr_controller'] },
-			grants: [
-				{ collection: 'notices', action: 'read' },
-				{ collection: 'payslips', action: 'read' }
-			]
+			// `notices read` belongs to `Employee` and to nothing else: a coordinate has exactly one
+			// owner, and the `admin` team below composes both policies rather than restating either.
+			grants: [{ collection: 'payslips', action: 'read' }]
 		})
 	],
 	teams: {
@@ -196,16 +195,16 @@ describe('team impersonation', () => {
 
 		const refused = await failureOf(
 			harness,
-			command('collections.findMany', 'admin-token', { collection: 'payslips' }, 'Employee')
+			command('collections.export', 'admin-token', { collection: 'payslips' }, 'Employee')
 		);
 		expect(refused).toBeInstanceOf(AccessControl.AccessDenied);
-		// A page is admitted to its durable sync partition before its row query runs. That admission
-		// deliberately makes an unauthorized dependency indistinguishable from an unknown one, so the
-		// refusal names the subscription boundary rather than confirming the collection's existence.
+		// The read is refused by the policy decision itself. There is no partition admission in front
+		// of a page any more, so the refusal names the collection the previewed subject may not read
+		// and the reason no grant matched — which is the same answer an ordinary Employee gets.
 		expect(refused).toMatchObject({
 			action: 'read',
-			resource: 'sync.subscription',
-			reason: 'sync subscription unavailable'
+			resource: 'payslips',
+			reason: 'no matching allow policy'
 		});
 	});
 
@@ -224,7 +223,7 @@ describe('team impersonation', () => {
 
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.findMany', 'admin-token', { collection: 'notices' }, 'Employee')
+				command('collections.export', 'admin-token', { collection: 'notices' }, 'Employee')
 			)
 		);
 		expect(response.status).toBe(200);
@@ -243,7 +242,7 @@ describe('team impersonation', () => {
 		]);
 
 		const restored = await harness.runtime.runPromise(
-			dispatchInvocation(command('collections.findMany', 'admin-token', { collection: 'payslips' }))
+			dispatchInvocation(command('collections.export', 'admin-token', { collection: 'payslips' }))
 		);
 		expect(restored.status).toBe(200);
 	});
@@ -280,7 +279,7 @@ describe('team impersonation', () => {
 		// by naming HR, which is the direction a widening bug would take.
 		const widened = await failureOf(
 			harness,
-			command('collections.findMany', 'employee-token', { collection: 'payslips' }, 'HR')
+			command('collections.export', 'employee-token', { collection: 'payslips' }, 'HR')
 		);
 		expect(widened).toBeInstanceOf(AccessControl.AccessDenied);
 	});

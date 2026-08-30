@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-	EffectId,
 	EnvironmentName,
 	Invocation,
 	InvocationId,
@@ -9,6 +8,7 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
+import { policySql } from '../../src/authoring/policy-sql.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -77,7 +77,7 @@ const scopedWorkspace = workspace({
 				{
 					collection: 'deals',
 					action: 'read',
-					where: { $sql: '"owner_id"::text IN ${requestor.team_scope_users}' }
+					where: policySql('"owner_id"::text IN ${requestor.team_scope_users}')
 				}
 			]
 		})
@@ -121,11 +121,11 @@ const place = async (runtime: BoltTestRuntime) => {
 const dealsVisibleTo = async (runtime: BoltTestRuntime, credential: string) => {
 	const outcome = await runtime.runtime.runPromise(
 		dispatchInvocation(
-			command('collections.findMany', credential, { collection: 'deals', limit: 50 })
+			command('collections.export', credential, { collection: 'deals', limit: 50 })
 		).pipe(Effect.result)
 	);
 	if (outcome._tag !== 'Success') throw new Error(`refused: ${JSON.stringify(outcome)}`);
-	const rows = Reflect.get(outcome.success.value as object, 'rows');
+	const rows = outcome.success.value;
 	if (!Array.isArray(rows)) throw new Error('expected rows');
 	return (rows as ReadonlyArray<Record<string, unknown>>).map((row) => row['label']).sort();
 };

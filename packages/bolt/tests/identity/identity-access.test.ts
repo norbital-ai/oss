@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decide } from '../../src/runtime/access/access-control.js';
+import { decidePolicies } from '../../src/runtime/access/policy-compiler.js';
 
 const subject = { userId: 'u1', tenantId: 't1', policies: [], teamPath: ['member'] };
 
@@ -29,20 +29,20 @@ describe('Identity and AccessControl owners', () => {
 				capabilities: { apps: ['people'] }
 			}
 		];
-		expect(decide(policies, subject, 'read', 'people', held('allow', 'deny'))).toEqual({
+		expect(decidePolicies(policies, subject, 'read', 'people', held('allow', 'deny'))).toEqual({
 			allowed: false,
 			reason: 'explicit deny'
 		});
 	});
 	it('defaults to deny when no policy matches', () => {
-		expect(decide([], subject, 'read', 'people', held())).toEqual({
+		expect(decidePolicies([], subject, 'read', 'people', held())).toEqual({
 			allowed: false,
 			reason: 'no matching allow policy'
 		});
 	});
 	it('leaves authored-resource classification to the access service', () => {
 		const administrator = { ...subject, admin: true };
-		expect(decide([], administrator, 'read', 'people', held())).toEqual({
+		expect(decidePolicies([], administrator, 'read', 'people', held())).toEqual({
 			allowed: false,
 			reason: 'no matching allow policy'
 		});
@@ -62,7 +62,7 @@ describe('Identity and AccessControl owners', () => {
 				capabilities: { apps: ['people'] }
 			}
 		];
-		expect(decide(policies, subject, 'read', 'people', held())).toEqual({
+		expect(decidePolicies(policies, subject, 'read', 'people', held())).toEqual({
 			allowed: false,
 			reason: 'no matching allow policy'
 		});
@@ -77,11 +77,11 @@ describe('Identity and AccessControl owners', () => {
 				capabilities: { apps: ['helper'] }
 			}
 		];
-		expect(decide(policies, admin, 'agent', 'workspace', held('admin-agent'))).toEqual({
+		expect(decidePolicies(policies, admin, 'agent', 'workspace', held('admin-agent'))).toEqual({
 			allowed: false,
 			reason: 'no matching allow policy'
 		});
-		expect(decide(policies, admin, 'agent', 'helper', held('admin-agent'))).toEqual({
+		expect(decidePolicies(policies, admin, 'agent', 'helper', held('admin-agent'))).toEqual({
 			allowed: true,
 			reason: 'explicit allow'
 		});

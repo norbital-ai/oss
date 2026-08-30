@@ -43,10 +43,16 @@ const openAdjacentAgents = async (runtime: BoltTestRuntime): Promise<Agents.Inte
 };
 
 describe('messages between adjacent agents', () => {
-	it('retries the same persisted turn after a retryable model failure', async () => {
+	it('keeps a failed persisted turn terminal instead of retrying it across invocations', async () => {
 		let attempts = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async () => {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Models') {
+					return {
+						_tag: 'Success',
+						value: { output: { defaultModel: 'test-model', options: [{ id: 'test-model', contextLength: 128_000 }] } }
+					};
+				}
 				attempts += 1;
 				return attempts === 1
 					? {
@@ -63,28 +69,31 @@ describe('messages between adjacent agents', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
-		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', {
-				kind: 'user_message',
-				text: 'Keep trying if the model is temporarily unavailable.'
-			})
-		);
 		await expect(
 			harness.runtime.runPromise(
-				agents.execute(harness.effectId('execute:first'), sender, admitted.turnId)
+				agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', {
+					kind: 'user_message',
+					text: 'Keep trying if the model is temporarily unavailable.'
+				})
 			)
 		).rejects.toMatchObject({ retryable: true });
 		const retried = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:retry'), sender, admitted.turnId)
+			agents.execute(harness.effectId('execute:retry'), sender, 'turn-retry')
 		);
-		expect(retried).toMatchObject({ status: 'completed', output: { text: 'Recovered.' } });
-		expect(attempts).toBe(2);
+		expect(retried).toMatchObject({ status: 'failed', output: null });
+		expect(attempts).toBe(1);
 	});
 
 	it('stores the sender and durably queues the receiving agent', async () => {
 		let round = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async () => {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Models') {
+					return {
+						_tag: 'Success',
+						value: { output: { defaultModel: 'test-model', options: [{ id: 'test-model', contextLength: 128_000 }] } }
+					};
+				}
 				round += 1;
 				return {
 					_tag: 'Success',
@@ -109,16 +118,12 @@ describe('messages between adjacent agents', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
-		const admitted = await harness.runtime.runPromise(
+		await harness.runtime.runPromise(
 			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-send', {
 				kind: 'user_message',
 				text: 'Reply to the migration agent'
 			})
 		);
-		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute'), sender, admitted.turnId)
-		);
-
 		const messages = await harness.database.query(
 			`select content from chat_message
 			 where conversation_id = $1 and role = 'user'
@@ -135,18 +140,24 @@ describe('messages between adjacent agents', () => {
 			text: 'Those four are already fixed.'
 		});
 		const runs = await harness.database.query(
-			`select status from agent_run
-			 where conversation_id = $1
+			`select content->>'status' as status from chat_message
+			 where conversation_id = $1 and role = 'assistant'
 			 order by created_at desc limit 1`,
 			[recipient]
 		);
-		expect(runs[0]).toMatchObject({ status: 'queued' });
+		expect(runs[0]).toMatchObject({ status: 'running' });
 	});
 
 	it('attributes a received agent message when replaying the model prompt', async () => {
 		let prompt: ReadonlyArray<Readonly<Record<string, unknown>>> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
+				if (request._tag === 'Models') {
+					return {
+						_tag: 'Success',
+						value: { output: { defaultModel: 'test-model', options: [{ id: 'test-model', contextLength: 128_000 }] } }
+					};
+				}
 				if (request._tag === 'Turn') {
 					prompt = request.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
 				}
@@ -168,16 +179,12 @@ describe('messages between adjacent agents', () => {
 			 values ($1, 'user', $2::jsonb)`,
 			[sender, JSON.stringify(stored)]
 		);
-		const admitted = await harness.runtime.runPromise(
+		await harness.runtime.runPromise(
 			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-prompt', {
 				kind: 'user_message',
 				text: 'Anything outstanding?'
 			})
 		);
-		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute'), sender, admitted.turnId)
-		);
-
 		const relayed = prompt.find(
 			(message) =>
 				typeof message.content === 'string' && message.content.includes(stored.text)

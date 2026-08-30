@@ -22,11 +22,11 @@
 		"skills:generate": "node scripts/generate-skills.mjs",
 		"test": "turbo test",
 		"test:integration": "turbo test:integration",
-		"test:scripts": "node --test scripts/tests/*.test.mjs",
-		"yalc:publish": "node scripts/yalc-publish.mjs",
-		"yalc:refresh": "node scripts/yalc-refresh.mjs"
+		"test:scripts": "node --test scripts/tests/*.test.mjs"
 	},
 	"devDependencies": {
+		"@norbital-ai/doctor-effect": "workspace:*",
+		"@norbital-ai/doctor-norbital": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"effect": "4.0.0-rc.111",

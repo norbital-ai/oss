@@ -1,14 +1,17 @@
-// repository-health:allow SEM_PARALLEL -- documents consumes chat-messages' ChatDocumentRef
-// (./chat-messages.js), so the pair is linked, not parallel.
+// repository-health:allow SEM_PARALLEL -- documents consumes chat-messages' storage-key validator,
+// so the pair is linked, not parallel.
 import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import {
+	ChatDocumentRef,
+	EffectId,
+	type EffectId as EffectIdType
+} from '@norbital-ai/bolt-protocol';
 import { eq } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { Files } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import * as SyncWake from '#lib/runtime/sync/wake.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
-import { ChatDocumentRef, isChatDocumentStorageKey } from './chat-messages.js';
+import { isChatDocumentStorageKey } from './chat-messages.js';
 
 const { chat_session: chatSession } = SYSTEM_MODEL_TABLES;
 
@@ -72,7 +75,6 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database.Service;
 		const files = yield* Files.Service;
-		const wake = yield* SyncWake.Service;
 
 		const attachmentsOf = (effectId: EffectIdType, conversationId: string) =>
 			executeBuilt(
@@ -144,7 +146,6 @@ export const layer = Layer.effect(
 					.set({ files: [...current, file] })
 					.where(eq(chatSession.conversation_id, conversationId))
 			);
-			yield* wake.announce(EffectId.make(`${effectId}:sync`), ['chat_session']);
 		});
 
 		return Service.of({
@@ -226,8 +227,7 @@ export const layer = Layer.effect(
 							.set({ files: remaining })
 							.where(eq(chatSession.conversation_id, conversationId))
 					);
-					yield* wake.announce(EffectId.make(`${effectId}:sync`), ['chat_session']);
-				}
+						}
 				yield* files
 					.execute(EffectId.make(`${effectId}:bytes`), { _tag: 'Delete', key: storageKey })
 					.pipe(Effect.ignore);

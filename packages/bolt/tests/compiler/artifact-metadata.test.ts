@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineModel, text } from '../../src/authoring/models-schema.js';
 import { compileModel, describeHooks } from '../../src/authoring/model-introspection.js';
-import { renderArtifact } from '../../src/compiler/sync.js';
+import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 /**
  * What `defineModel` metadata survives the crossing into the artifact.
@@ -68,11 +68,6 @@ const artifactFor = (collections: ReadonlyArray<string>): string =>
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-			currentSchemaFingerprint: 'sha256:fixture',
-			adapters: []
-		},
 		schemaFingerprint: 'sha256:fixture'
 	});
 

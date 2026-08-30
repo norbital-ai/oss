@@ -56,17 +56,28 @@ type AgentOrbStateInput = Readonly<{
  * Project the durable conversation aggregate into the one product-wide Agent activity state.
  *
  * The session remains the source of truth, so the FAB and an open conversation cannot disagree.
- * A just-submitted request may set `pending` before its turn is replicated; that short interval is
+ * A just-submitted request may set `pending` before its turn is committed; that short interval is
  * deliberately represented as working instead of ready.
  */
 export function agentOrbState(input: AgentOrbStateInput): ThinkingOrbState {
 	const messages = input.messages ?? [];
 	const turns = input.turns ?? [];
-	const root = [...turns].filter((turn) => turn.parent_agent_id == null).at(-1);
+	// Transcript projection marks child-session rows from their spawn result. The active/root session
+	// is therefore the first non-delegated conversation represented in the aggregate.
+	const rootConversationId = messages.find(
+		(message) =>
+			message.delegated !== true && typeof message.conversation_id === 'string'
+	)?.conversation_id;
+	const root = [...turns]
+		.toReversed()
+		.find(
+			(turn) =>
+				rootConversationId === undefined || turn.conversation_id === rootConversationId
+		);
 	if (input.failed === true || root?.status === 'failed') {
 		return 'error';
 	}
-	const running = input.pending === true || root?.status === 'running' || root?.status === 'queued';
+	const running = input.pending === true || root?.status === 'running';
 	if (running) return 'working';
 	// A tool still marked running with no running turn is a turn that ended mid-call; the orb keeps
 	// saying so rather than settling, because the transcript still shows an unfinished step.

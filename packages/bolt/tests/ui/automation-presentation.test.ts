@@ -29,7 +29,7 @@ describe('Studio automation status presentation', () => {
 		});
 	});
 
-	it('presents terminal, stopped, and resuming outcomes distinctly', () => {
+	it('presents terminal outcomes distinctly', () => {
 		expect(presentAutomationStatus('done')).toEqual({
 			status: 'done',
 			label: 'Completed',
@@ -40,18 +40,6 @@ describe('Studio automation status presentation', () => {
 			status: 'failed',
 			label: 'Failed',
 			canStop: false,
-			canResume: false
-		});
-		expect(presentAutomationStatus('paused')).toEqual({
-			status: 'paused',
-			label: 'Stopped',
-			canStop: false,
-			canResume: true
-		});
-		expect(presentAutomationStatus('resuming')).toEqual({
-			status: 'resuming',
-			label: 'Resuming',
-			canStop: true,
 			canResume: false
 		});
 	});

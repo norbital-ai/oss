@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { generateDrizzleJson } from 'drizzle-kit/api-postgres';
-import { readWorkspaceMigrations } from '../../src/compiler/sync.js';
+import { readWorkspaceMigrations } from '../../src/compiler/workspace-build.js';
 import { latestSnapshot, writeMigration } from '../../src/compiler/schema-migrations.js';
 
 /**

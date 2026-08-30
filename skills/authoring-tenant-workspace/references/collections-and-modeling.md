@@ -118,9 +118,8 @@ indexes: [
 ```
 
 Nearest-neighbor search is **server-only** (`api.db.<collection>.findNearest` in hooks / functions /
-automations); the browser client exposes no distance operators. The replica loads the pgvector
-extension but the client query surface declares no `findNearest` — do not invent a parallel one to
-reach for it.
+automations); the browser client exposes no distance operators and declares no `findNearest` — do
+not invent a parallel one to reach for it.
 
 ## Temporal fields
 

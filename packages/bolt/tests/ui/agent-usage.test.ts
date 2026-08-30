@@ -9,6 +9,8 @@ import {
 
 const spawnCallId = 'turn-1:tool:0:0';
 const childTurnId = 'child-turn-1';
+const grandchildSpawnCallId = 'child-turn-1:tool:0:0';
+const grandchildTurnId = 'grandchild-turn-1';
 
 const messages = projectStoredChatMessages([
 	{
@@ -26,7 +28,6 @@ const messages = projectStoredChatMessages([
 		content: {
 			id: 'turn-1',
 			status: 'completed',
-			parent_agent_id: null,
 			usage: { inputTokens: 4_000, outputTokens: 200, totalTokens: 4_200, costUsd: 0.01 },
 			parts: [
 				{ kind: 'tool', id: spawnCallId, name: 'spawn_agent', input: { task: 'Count staff' } },
@@ -34,7 +35,7 @@ const messages = projectStoredChatMessages([
 					kind: 'tool-result',
 					id: spawnCallId,
 					name: 'spawn_agent',
-					output: { agentId: `agent:${spawnCallId}`, taskId: childTurnId, status: 'queued' }
+					output: { agentId: `agent:${spawnCallId}`, taskId: childTurnId, status: 'running' }
 				},
 				{ kind: 'text', text: 'Forty-two people.' }
 			]
@@ -55,9 +56,44 @@ const messages = projectStoredChatMessages([
 		content: {
 			id: childTurnId,
 			status: 'completed',
-			parent_agent_id: 'conversation-1',
 			usage: { inputTokens: 90_000, outputTokens: 900, totalTokens: 90_900, costUsd: 0.24 },
-			parts: [{ kind: 'text', text: 'Forty-two.' }]
+			parts: [
+				{ kind: 'text', text: 'Forty-two.' },
+				{
+					kind: 'tool',
+					id: grandchildSpawnCallId,
+					name: 'spawn_agent',
+					input: { task: 'Verify the total' }
+				},
+				{
+					kind: 'tool-result',
+					id: grandchildSpawnCallId,
+					name: 'spawn_agent',
+					output: {
+						agentId: `agent:${grandchildSpawnCallId}`,
+						taskId: grandchildTurnId,
+						status: 'running'
+					}
+				}
+			]
+		}
+	},
+	{
+		id: 'message-5',
+		conversation_id: `agent:${grandchildSpawnCallId}`,
+		role: 'user',
+		turn_id: grandchildTurnId,
+		content: 'Verify the total'
+	},
+	{
+		id: 'message-6',
+		conversation_id: `agent:${grandchildSpawnCallId}`,
+		role: 'assistant',
+		turn_id: grandchildTurnId,
+		content: {
+			id: grandchildTurnId,
+			status: 'completed',
+			parts: [{ kind: 'text', text: 'Verified forty-two.' }]
 		}
 	}
 ]);
@@ -95,7 +131,16 @@ describe('conversation usage', () => {
 		if (spawn?.kind !== 'tool') throw new Error('spawn tool was not projected');
 		expect(
 			spawn.children.map((child) => (child.kind === 'text' ? child.content : child.kind))
-		).toEqual(['Count staff', 'Forty-two.']);
+		).toEqual(['Count staff', 'Forty-two.', 'tool']);
+		const grandchildSpawn = spawn.children.find(
+			(child) => child.kind === 'tool' && child.name === 'spawn_agent'
+		);
+		if (grandchildSpawn?.kind !== 'tool') throw new Error('grandchild spawn was not projected');
+		expect(
+			grandchildSpawn.children.map((child) =>
+				child.kind === 'text' ? child.content : child.kind
+			)
+		).toEqual(['Verify the total', 'Verified forty-two.']);
 		expect(panel.flatMap((message) => (message.kind === 'text' ? [message.content] : []))).toEqual([
 			'Summarise headcount',
 			'Forty-two people.'

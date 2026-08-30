@@ -1,25 +1,27 @@
 import { Clock, Effect, Number as ENumber, Result, Schema } from 'effect';
 import {
 	CollectionMutateRequest,
-	CollectionGroupedQueryRequestFields,
 	CollectionQueryRequestFields,
-	type CollectionMutationBaseVersion,
-	type CollectionMutationGraph,
+	ApprovalState,
+	ChatDocumentRef,
+	HOST_AGENT_EXECUTE_CHILD_COMMAND,
+	HOST_RECOVER_COMMAND,
+	HOST_SCHEDULE_DISCOVER_COMMAND,
+	HOST_SCHEDULE_SETTLE_COMMAND,
+	HostAgentExecuteChildRequest,
+	HostScheduleDiscoverRequest,
+	HostScheduleSettleRequest,
+	SyncAdvanceRequest,
+	SyncConnectRequest,
 	EffectId,
-	makeWireError,
 	PluginTrustedContext,
-	StoredRecord,
 	type DispatchResponse,
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
-import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { AutomationProgression } from '#lib/authoring/automations-schema.js';
-import { reconcileMutationSchema, replicaProvisioningSteps } from '#lib/compiler/schema-plan.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
-import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import {
 	AI,
 	Files,
@@ -27,7 +29,6 @@ import {
 	type FilesInterface
 } from '#lib/runtime/facilities/services.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
-import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import { EnvoyDelivery } from '#lib/runtime/envoys/envoys.js';
@@ -37,15 +38,6 @@ import {
 	SEED_PRINCIPAL_ID
 } from '#lib/runtime/identity/static-identity.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
-import { resolveWritableManyRelation } from '#lib/runtime/collections/collections.js';
-import {
-	canonicalizeCollectionQuery,
-	normalizeCollectionHydration,
-	projectCollectionQueryRecord,
-	withoutCollectionQueryProjection,
-	workspaceCollectionQueryMetadata
-} from '#lib/runtime/collections/canonical-query.js';
-import { compileOrderTerms, makeWhereContext } from '#lib/runtime/collections/where.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { ADMIN_STATUS, Subject } from '#lib/runtime/identity/identity.js';
@@ -53,22 +45,9 @@ import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import { Notification } from '#lib/runtime/notifications/notifications.js';
 import { RemoteRegistry, type RuntimeRemoteRegistry } from '#lib/runtime/remotes.js';
 import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
-import {
-	isReplicatedCollection,
-	SYSTEM_COLLECTION_NAMES
-} from '#lib/runtime/schema/system-collections.js';
+import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
-import {
-	PersonalSecrets,
-	type Interface as PersonalSecretsInterface
-} from '#lib/runtime/secrets/personal-secrets.js';
-import {
-	describeGeneratedColumnWrite,
-	describeInvalidCustomValue
-} from '#lib/runtime/collections/custom-values.js';
-import * as SyncCompaction from '#lib/runtime/sync/compaction.js';
 import * as Sync from '#lib/runtime/sync/sync.js';
-import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import {
 	AuthoredRuntimeService,
@@ -80,15 +59,13 @@ import {
 	type AuthoredRuntime
 } from '#lib/runtime/collections/authored.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
-import { describeCause, DispatchError } from '#lib/runtime/workspace.js';
+import { DispatchError } from '#lib/runtime/workspace.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 
 export { DispatchError } from '#lib/runtime/workspace.js';
 
 const VisibleAppsInput = Schema.Struct({ subject: Subject });
-const ImpersonateInput = Schema.Struct({ actor: Subject, target: Subject });
 const ImpersonateTeamInput = Schema.Struct({ actor: Subject, teamId: Schema.NonEmptyString });
 /**
  * Both halves are minted by the boundary, never read from the payload.
@@ -102,44 +79,34 @@ const ImpersonationStateInput = Schema.Struct({
 	actor: Subject,
 	impersonatedTeam: Schema.NullOr(Schema.String)
 });
-const AccessDecisionInput = Schema.Struct({
-	subject: Subject,
-	action: Schema.NonEmptyString,
-	resource: Schema.NonEmptyString
-});
-const AccessMaskInput = Schema.Struct({
-	subject: Subject,
-	action: Schema.NonEmptyString,
-	resource: Schema.NonEmptyString,
-	value: Schema.Record(Schema.String, Schema.Json)
-});
-const ApprovalRequestInput = Schema.Struct({
-	subject: Subject,
-	requestId: Schema.NonEmptyString,
-	operation: Schema.Json
-});
 const ApprovalDecideInput = Schema.Struct({
 	subject: Subject,
 	state: ApprovalState,
 	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'supersede']),
 	reason: Schema.optionalKey(Schema.String)
 });
-/**
- * The authenticated wire shape for a partition-oriented pull.
- *
- * The exported request schema deliberately has no subject: callers cannot choose authority. This
- * boundary adds the subject minted from the credential before decoding and invoking the service.
- */
-const SyncPullInput = Schema.Struct({
+const AuthenticatedSyncConnect = Schema.Struct({
 	subject: Subject,
 	actor: Subject,
 	impersonatedTeam: Schema.NullOr(Schema.String),
-	...Sync.SyncPullRequest.fields
+	...SyncConnectRequest.fields
 });
-/** The host signature mints the outer system subject; each opaque credential is resolved in-guest. */
-const SyncDistributeInput = Schema.Struct({
+/** Only a verified host principal may submit opaque credentials for batched advance. */
+const AuthenticatedSyncAdvance = Schema.Struct({
 	subject: Subject,
-	...Sync.SyncDistributeRequest.fields
+	...SyncAdvanceRequest.fields
+});
+const AuthenticatedHostScheduleDiscover = Schema.Struct({
+	subject: Subject,
+	...HostScheduleDiscoverRequest.fields
+});
+const AuthenticatedHostScheduleSettle = Schema.Struct({
+	subject: Subject,
+	...HostScheduleSettleRequest.fields
+});
+const AuthenticatedHostAgentExecuteChild = Schema.Struct({
+	subject: Subject,
+	...HostAgentExecuteChildRequest.fields
 });
 
 const AgentEnqueueInput = Schema.Struct({
@@ -147,11 +114,9 @@ const AgentEnqueueInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
-	message: Schema.String
-});
-const AgentRunInput = Schema.Struct({
-	subject: Subject,
-	conversationId: Schema.NonEmptyString
+	message: Schema.String,
+	/** Caller-selected host model; absent means the catalog default. */
+	model: Schema.optionalKey(Schema.NonEmptyString)
 });
 const AgentDocumentBindInput = Schema.Struct({
 	subject: Subject,
@@ -163,34 +128,15 @@ const AgentDocumentInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	storageKey: Schema.NonEmptyString
 });
-const AgentTitleInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const CollectionFindInput = Schema.Struct({
 	subject: Subject,
 	...CollectionQueryRequestFields
-});
-const CollectionGroupedInput = Schema.Struct({
-	subject: Subject,
-	...CollectionGroupedQueryRequestFields
 });
 const SecretsWriteInput = Schema.Struct({
 	subject: Subject,
 	name: Schema.NonEmptyString,
 	value: Schema.String
 });
-/**
- * Note what these do *not* declare: no `subject`, no `userId`, no owner of any kind.
- *
- * Every other input on this page decodes a `Subject` because the command acts on tenant data and has
- * to say on whose authority. A personal secret has exactly one legitimate owner — the person whose
- * credential this invocation authenticated — and the service reads that from `Identity.CurrentSubject`.
- * Accepting an owner here, even one the boundary overwrites, would put a user id on the path from a
- * request body to a WHERE clause, and the only safe number of such paths is none.
- */
-const PersonalSecretsWriteInput = Schema.Struct({
-	name: Schema.NonEmptyString,
-	value: Schema.String
-});
-const PersonalSecretsNameInput = Schema.Struct({ name: Schema.NonEmptyString });
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const DataBrowserInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -217,10 +163,6 @@ const AuthenticatedCollectionMutation = Schema.Struct({
 	subject: Subject,
 	actor: Subject,
 	impersonatedTeam: Schema.NullOr(Schema.String)
-});
-const AuthenticatedSyncPartitionStatus = Schema.Struct({
-	...AuthenticatedCollectionMutation.fields,
-	...Sync.SyncPartitionStatusRequest.fields
 });
 const CollectionMutation = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -284,7 +226,6 @@ const IntegrationPullInput = Schema.Struct({
 	cursor: Schema.Json,
 	binding: Schema.optionalKey(Schema.NonEmptyString)
 });
-const NamedInput = Schema.Struct({ name: Schema.NonEmptyString });
 const TaskInput = Schema.Struct({
 	taskId: Schema.NonEmptyString,
 	input: Schema.optionalKey(Schema.Json)
@@ -309,35 +250,9 @@ const AgentOpenInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString
 });
 const AgentLaneInput = Schema.Struct({ subject: Subject, conversationId: Schema.NonEmptyString });
-const AgentDequeueInput = Schema.Struct({
-	subject: Subject,
-	conversationId: Schema.NonEmptyString,
-	taskId: Schema.NonEmptyString
-});
-const AgentReorderInput = Schema.Struct({
-	subject: Subject,
-	conversationId: Schema.NonEmptyString,
-	taskIds: Schema.Array(Schema.NonEmptyString)
-});
 const AgentVerifierInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	verifier: Schema.Json
-});
-const AgentHistoryInput = Schema.Struct({
-	subject: Subject,
-	conversationId: Schema.NonEmptyString
-});
-const AgentListConversationsInput = Schema.Struct({ subject: Subject });
-/**
- * Which skill, and for whom.
- *
- * `agent` is gone. A skill is capability, granted by a policy, so the answer to "which skills are
- * available" depends on the subject asking and not on which agent they are talking to — two people
- * on the same web agent are offered different skills, and an agent name could not express that.
- */
-const SkillInput = Schema.Struct({
-	subject: Subject,
-	name: Schema.optionalKey(Schema.NonEmptyString)
 });
 const ApprovalStatusInput = Schema.Struct({
 	subject: Subject,
@@ -345,43 +260,7 @@ const ApprovalStatusInput = Schema.Struct({
 });
 const ApprovalRequestIdInput = Schema.Struct({ requestId: Schema.NonEmptyString });
 const ApprovalWithdrawInput = Schema.Struct({ subject: Subject, state: ApprovalState });
-const SyncShapeInput = Schema.Struct({ subject: Subject });
-/**
- * A `subject` on a command that acts on no subject's data, and that is exactly why it is here.
- *
- * Compaction deletes history for the whole workspace. It is gated by `SYSTEM_ONLY_COMMANDS`, and
- * that gate reads `subject.system` — so the field is what the check has to look at, minted by the
- * boundary from a verified gateway signature and refused when a payload claims it.
- */
-const SyncCompactInput = Schema.Struct({
-	subject: Subject,
-	retentionDays: Schema.optional(Schema.Number)
-});
 const EnvoyNameInput = Schema.Struct({ envoy: Schema.NonEmptyString });
-const EnvoyReplyInput = Schema.Struct({
-	envoy: Schema.NonEmptyString,
-	recipient: Schema.NonEmptyString,
-	payload: Schema.Json
-});
-/**
- * One pushed webhook delivery, as the boundary receives it.
- *
- * `body` is a string and `headers` travel beside it, because the source's HMAC was computed over the
- * exact bytes it sent: `JSON.stringify(JSON.parse(body))` is a different string for the same
- * document, so a parsed payload cannot be verified against anything. This used to be
- * `{ name, receiptId, input: Schema.Json }` — a parsed body and a caller-nominated dedup key, which
- * is a shape in which verification is not merely absent but impossible.
- *
- * There is no `receiptId` here for the same reason there is no `subject`: it decides whether a
- * delivery is a duplicate, so a caller that supplies it decides whether a write happens. It is
- * derived instead, from the header the binding declares or from the verified digest.
- */
-const IntegrationReceiveInput = Schema.Struct({
-	name: Schema.NonEmptyString,
-	binding: Schema.NonEmptyString,
-	headers: Schema.Record(Schema.String, Schema.String),
-	body: Schema.String
-});
 /**
  * `input` is optional because the drain's own registration does not carry one.
  *
@@ -392,27 +271,6 @@ const IntegrationReceiveInput = Schema.Struct({
 const IntegrationFlushInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	input: Schema.optionalKey(Schema.Json)
-});
-const NotificationRecipientInput = Schema.Struct({
-	recipient: Schema.NonEmptyString,
-	unreadOnly: Schema.optionalKey(Schema.Boolean)
-});
-const NotificationReadInput = Schema.Struct({
-	recipient: Schema.NonEmptyString,
-	id: Schema.NonEmptyString
-});
-const IdentityInviteInput = Schema.Struct({
-	tenantId: Schema.NonEmptyString,
-	email: Schema.NonEmptyString,
-	invitedBy: Schema.NonEmptyString
-});
-const IdentityAcceptInput = Schema.Struct({
-	invitationId: Schema.NonEmptyString,
-	userId: Schema.NonEmptyString
-});
-const IdentitySessionInput = Schema.Struct({
-	userId: Schema.NonEmptyString,
-	tenantId: Schema.NonEmptyString
 });
 const IdentityContinueSessionInput = Schema.Struct({
 	email: Schema.NonEmptyString,
@@ -458,60 +316,8 @@ const IdentityVerifyCodeInput = Schema.Struct({
  * does not serve.
  */
 const SIGN_IN_COMMANDS: ReadonlySet<string> = new Set(['identity.sendCode', 'identity.verifyCode']);
-const IdentityCredentialInput = Schema.Struct({ credential: Schema.NonEmptyString });
 const IdentitySettingsInput = Schema.Struct({ tenantId: Schema.NonEmptyString });
-/**
- * What an operator may say about a team, and — by omission — what they may not.
- *
- * There is no policy field on any of these and there is nowhere one could go. Which policies a team
- * holds is declared in `+teams.ts` and compiled into the release, so it changes by deploying and by
- * nothing else; a `teams.*` command shapes the tree and decides who is in it, and that is the whole
- * of its reach.
- *
- * `parentId` and `description` are `optionalKey` over a nullable value because absent and `null`
- * mean different things: absent leaves the column as it is, `null` clears it. Collapsing them would
- * make renaming a team silently unparent it, or make moving one to the root inexpressible.
- */
-const TeamCreateInput = Schema.Struct({
-	subject: Subject,
-	tenantId: Schema.NonEmptyString,
-	name: Schema.NonEmptyString,
-	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
-});
-const TeamUpdateInput = Schema.Struct({
-	subject: Subject,
-	tenantId: Schema.NonEmptyString,
-	teamId: Schema.NonEmptyString,
-	name: Schema.optionalKey(Schema.NonEmptyString),
-	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
-});
-const TeamDeleteInput = Schema.Struct({
-	subject: Subject,
-	tenantId: Schema.NonEmptyString,
-	teamId: Schema.NonEmptyString
-});
-/**
- * The person being moved is `memberId`, deliberately not `userId`.
- *
- * `userId` is a `MINTED_IDENTITY` field: the boundary overwrites it with the id of whoever the
- * credential authenticated, on every command, before any case reads it. Naming the target that way
- * would compile, decode and run — and would move the operator instead of the member, every time,
- * with nothing anywhere reporting a fault.
- */
-const TeamAssignInput = Schema.Struct({
-	subject: Subject,
-	tenantId: Schema.NonEmptyString,
-	memberId: Schema.NonEmptyString,
-	/** The team to put them in, or `null` to take them out of every team. */
-	teamId: Schema.Union([Schema.String, Schema.Null])
-});
 const IdentityAuthenticateInput = Schema.Struct({ credential: Schema.NonEmptyString });
-const IdentityResolveInput = Schema.Struct({
-	provider: Schema.NonEmptyString,
-	externalId: Schema.NonEmptyString
-});
 const CollectionRecordInput = Schema.Struct({
 	subject: Subject,
 	collection: Schema.NonEmptyString,
@@ -600,141 +406,6 @@ const DispatchValues = {
 };
 const decode = DispatchValues.decode;
 
-/**
- * Refuses a write whose `custom()` value does not match the schema its type declares.
- *
- * It lives at this boundary rather than inside Collections because a malformed value is exactly what
- * `invalid_input` already means here — so the check reuses the failure the boundary already has,
- * instead of introducing one that every service touching a write would have to widen to carry.
- */
-const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
-	collection: string,
-	values: Readonly<Record<string, Schema.Json>>
-) {
-	const workspace = yield* Workspace.Service;
-	const definition = yield* workspace.collection(collection);
-	// Both faults are the same kind of thing — values this collection will not accept — so they are
-	// reported the same way, through the `invalid_input` the boundary already has.
-	//
-	// Relation keys pass through untouched: neither check looks at a key that is not a declared
-	// field, so the children of a graph are invisible here and are reached by the walk below instead.
-	const writtenSystemField = Object.keys(values).find(
-		(name) => name !== 'id' && SYSTEM_COLUMN_NAMES.includes(name)
-	);
-	const invalid =
-		(writtenSystemField === undefined
-			? undefined
-			: `${collection}.${writtenSystemField} is managed by Bolt and cannot be written.`) ??
-		describeGeneratedColumnWrite(definition.fields, values) ??
-		describeInvalidCustomValue(definition.fields, values, workspace.definition.customTypes);
-	if (invalid !== undefined)
-		yield* Effect.fail(new DispatchError({ code: 'invalid_input', message: invalid }));
-});
-
-/**
- * How far the boundary follows a mutation graph down.
- *
- * The same bound the runtime's `flattenGraph` applies, and stated here for the same reason: the
- * relation set has cycles in it, so a body that closes one would be walked until the isolate died.
- * The two numbers are independent copies of one decision, which is tolerable only because exceeding
- * either one is a refusal rather than a difference in what gets written — this walk validates and
- * the runtime's walk is what actually refuses.
- */
-const GRAPH_CHECK_DEPTH = 5;
-
-/** Child rows named in writable `many` relationship keys, followed to their own collections. */
-const writtenGraphChildren = (
-	collection: string,
-	values: Readonly<Record<string, Schema.Json>>,
-	definition: WorkspaceDefinition
-): ReadonlyArray<{
-	readonly collection: string;
-	readonly values: Readonly<Record<string, Schema.Json>>;
-}> => {
-	const children: Array<{
-		readonly collection: string;
-		readonly values: Readonly<Record<string, Schema.Json>>;
-	}> = [];
-	for (const [key, value] of Object.entries(values)) {
-		const childRows = Schema.decodeUnknownResult(Schema.Array(JsonObject))(value);
-		if (Result.isFailure(childRows)) continue;
-		const relation = resolveWritableManyRelation(definition, collection, key);
-		if (relation === undefined) continue;
-		for (const child of childRows.success) {
-			children.push({
-				collection: relation.childCollection,
-				values: child
-			});
-		}
-	}
-	return children;
-};
-
-/**
- * The same check, down every branch of a mutation graph.
- *
- * A nested write posts a parent and its children in one body, and the children are rows in *other*
- * collections — so checking only the top level would let a generated column be written on a child
- * and report nothing, which is the failure mode the top-level check exists to end. The walk follows
- * declared `many` relations only, because those are the only keys the runtime will expand; anything
- * else is left alone here and refused by `flattenGraph`, which can say what the key should have
- * been.
- */
-const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
-	collection: string,
-	values: Readonly<Record<string, Schema.Json>>
-) {
-	const workspace = yield* Workspace.Service;
-	// A worklist rather than recursion: the depth bound is the point of the walk, and a queue makes
-	// it a value the loop carries rather than something to be reconstructed from a call stack.
-	const pending: Array<{
-		readonly collection: string;
-		readonly values: Readonly<Record<string, Schema.Json>>;
-		readonly depth: number;
-	}> = [{ collection, values, depth: 0 }];
-	while (pending.length > 0) {
-		const node = pending.shift();
-		if (node === undefined) break;
-		const id = node.values['id'];
-		if (id !== undefined && (typeof id !== 'string' || id.length === 0))
-			yield* Effect.fail(
-				new DispatchError({
-					code: 'invalid_input',
-					message: `The id of a ${node.collection} mutation must be a non-empty string.`
-				})
-			);
-		if (typeof id === 'string' && !MUTATION_RECORD_ID.test(id))
-			yield* Effect.fail(
-				new DispatchError({
-					code: 'invalid_input',
-					message: `The id of a ${node.collection} mutation must be a UUID.`
-				})
-			);
-		const collectionDefinition = yield* workspace.collection(node.collection);
-		const unknown = Object.keys(node.values).find(
-			(key) =>
-				key !== 'id' &&
-				!SYSTEM_COLUMN_NAMES.includes(key) &&
-				!(key in collectionDefinition.fields) &&
-				resolveWritableManyRelation(workspace.definition, node.collection, key) === undefined
-		);
-		if (unknown !== undefined)
-			yield* Effect.fail(
-				new DispatchError({
-					code: 'invalid_input',
-					message: `${node.collection} has no writable field or many relationship named "${unknown}".`
-				})
-			);
-		yield* checkWrittenValues(node.collection, node.values);
-		if (node.depth >= GRAPH_CHECK_DEPTH) continue;
-		pending.push(
-			...writtenGraphChildren(node.collection, node.values, workspace.definition).map((child) => ({
-				...child,
-				depth: node.depth + 1
-			}))
-		);
-	}
-});
 const json = DispatchValues.json;
 
 /**
@@ -775,65 +446,23 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
 	yield* (yield* AccessControl.Service).authorize(input.subject, action, SCHEMA_RESOURCE);
 });
 
-/**
- * The commands that write membership, and the authority they require.
- *
- * `identity.admitFounder` had no check at all. It upserts a row by email with `status = 'admin'`, so
- * any subject holding a session in the tenant could POST it their own address and become an
- * administrator of the workspace. That status permits membership administration and team preview;
- * it still must never grant tenant collections or apps. The command was reachable from a browser: Colony proxies
- * `/api/bolt/command/<name>` and bolt-server serves `/_bolt/command/<name>`, and neither restricts
- * which name.
- *
- * Gated on `manage`/`identity` rather than on `isAdministrator` directly, so that provisioning has a
- * way in that is not "be an administrator": `colony system` enumerates exactly this grant, which is
- * how a host admits the first founder into a workspace that has none. Administrators match an
- * explicit built-in policy selected by their status; everybody else is refused unless the workspace
- * deliberately authored a policy over the `identity` resource — the same vocabulary, and the same
- * author's choice, that `secrets` and `schema` already have.
- *
- * A map rather than a prefix test, because `identity.` is mostly sign-in and session traffic that
- * must stay reachable. It is checked in one place before the switch, so a second membership-writing
- * command is gated by adding a line here rather than by remembering to write a check inside a case.
- */
 const IDENTITY_RESOURCE = 'identity';
-/**
- * The `teams.*` commands join it, and they are membership writes in exactly the same sense.
- *
- * Administration is a status on the person — `user.status` — and `decide` short-circuits
- * on it before it consults a policy, so an administrator passes this gate and that is how these are
- * meant to be reached. They are gated on `manage`/`identity` rather than on `isAdministrator`
- * directly for the reason stated above: provisioning needs a way in that is not "be an
- * administrator", and `colony system` enumerates precisely this grant.
- *
- * What no entry here can do is change what a team may *do*. The policies a team holds are compiled
- * into the release, so the reachable surface is the tree's shape and who is in it — a `teams.*`
- * command has no policy argument, and the service it calls has no column to put one in.
- */
-const MEMBERSHIP_COMMANDS: ReadonlyMap<string, string> = new Map([
-	['identity.admitFounder', 'manage'],
-	['teams.create', 'manage'],
-	['teams.update', 'manage'],
-	['teams.delete', 'manage'],
-	['teams.assign', 'manage']
-]);
-const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(function* (
-	action: string,
+const authorizeFounderAdmission = Effect.fn('Bolt.authorizeFounderAdmission')(function* (
 	commandInput: unknown
 ) {
 	const input = yield* decode(Schema.Struct({ subject: Subject }), commandInput);
-	yield* (yield* AccessControl.Service).authorize(input.subject, action, IDENTITY_RESOURCE);
+	yield* (yield* AccessControl.Service).authorize(input.subject, 'manage', IDENTITY_RESOURCE);
 });
 
 /**
  * Commands only the host may run, checked against the subject rather than against a policy.
  *
- * `identity.bootstrapFounder` is deliberately *not* an entry in `MEMBERSHIP_COMMANDS` beside
+ * `identity.bootstrapFounder` is deliberately not authorized like
  * `admitFounder`, and the difference is the whole reason this set exists. `admitFounder` writes a
  * row; this one writes a row and hands back a **live session credential** for the address it was
  * given. Gated on `manage`/`identity`, any existing administrator could therefore POST it an
  * arbitrary address and receive a working session as that person — which is a strictly worse
- * primitive than the unchecked `admitFounder` that made `MEMBERSHIP_COMMANDS` necessary in the
+ * primitive than the unchecked `admitFounder` that made the admission gate necessary in the
  * first place.
  *
  * `subject.system` is the narrower thing to gate on because it has exactly one constructor:
@@ -863,29 +492,23 @@ const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	 */
 	'envoys.receive',
 	/**
-	 * Compaction, which is destructive to everybody in the workspace at once.
-	 *
-	 * It used to sit behind no gate at all — neither table named it, and its input decoded no
-	 * `subject` — so it was reachable by any credential this boundary accepted. What that buys is not a
-	 * read: `sync.compact` deletes the outbox past the retention window and moves the horizon mark over
-	 * what it removed, so one call strands every replica in the workspace behind a full rebuild, and a
-	 * call naming a short window strands them behind a larger one.
-	 *
-	 * No policy would express this correctly either. Retention is a property of the deployment rather
-	 * than of the workspace's own authority model, and the host is the only party that knows when it is
-	 * safe to run — after a seed, or on the maintenance tick, which now carries a bounded pass of the
-	 * same work without coming through this boundary at all.
+	 * The live update path. It evaluates probes and patches under each subscription's own stored
+	 * credential, so what a connection receives is exactly what its subject's policy surface
+	 * admits. Host-invocable because the pump calls it per commit batch, with the connections'
+	 * opaque credentials riding the request for the guest to authenticate afresh.
 	 */
-	'sync.compact',
+	'sync.advance',
+	HOST_RECOVER_COMMAND,
+	HOST_SCHEDULE_DISCOVER_COMMAND,
+	HOST_SCHEDULE_SETTLE_COMMAND,
+	HOST_AGENT_EXECUTE_CHILD_COMMAND,
 	/**
 	 * Fills in record embeddings a bulk write could not.
 	 *
-	 * Host-authenticated for the same reason `sync.compact` is: it is called after a seed, spends
-	 * provider credit, and belongs to the deployment rather than to any workspace's authority model.
+	 * Host-authenticated: it is called after a seed, spends provider credit, and belongs to the
+	 * deployment rather than to any workspace's authority model.
 	 */
-	'collections.embed',
-	/** One host-authenticated admission fans many independently authenticated pulls into one read. */
-	'sync.distribute'
+	'collections.embed'
 ]);
 
 /** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
@@ -915,42 +538,6 @@ const authorizeSystemCommand = Effect.fn('Bolt.authorizeSystemCommand')(function
 });
 
 /**
- * A team on the wire, with nulls where the row has none.
- *
- * Spelled out rather than spread, so a column added to `team` cannot reach a client by
- * accident — and so the shape is stable whether the team has a parent or not, which is what lets the
- * settings surface read it with one decoder.
- */
-const teamJson = (team: Identity.TeamRecord): Schema.Json => ({
-	id: team.id,
-	name: team.name,
-	parentId: team.parentId ?? null,
-	description: team.description ?? null
-});
-
-/**
- * How a team write's answer reaches the caller.
- *
- * Every refusal these produce is the caller naming a state that is not there — a team that does not
- * exist, a name somebody already holds, a team that still has members — so they are reported through
- * the `invalid_input` this boundary already has, which `app.ts` maps to 400. Reusing it is the point:
- * a new failure type would need a new arm in that match, and until somebody wrote one these would
- * report as 500s telling the caller to retry a request that cannot succeed.
- */
-const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
-	outcome: Identity.TeamOutcome | Identity.TeamAssignment
-) {
-	if (outcome._tag === 'Refused')
-		return yield* new DispatchError({ code: 'invalid_input', message: outcome.reason });
-	return outcome._tag === 'Team'
-		? json({ team: teamJson(outcome.team) })
-		: json({
-				memberId: outcome.memberId,
-				team: outcome.team === undefined ? null : teamJson(outcome.team)
-			});
-});
-
-/**
  * The commands the runtime enqueues for itself, which is the whole of what a `Task` may run.
  *
  * A durable task is a message the runtime posted to itself and the host handed back; nothing about
@@ -964,12 +551,9 @@ const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
  * subject recorded when the original create was authenticated.
  *
  * `automations.<name>` is resolved against the declared automations rather than matched on the
- * prefix, because `automations.start`, `.register`, `.runStep`, `.resume` and `.stop`
+ * prefix, because `automations.start`, `.register` and `.stop`
  * share it and are host commands rather than enqueued ones.
  */
-/** The one command a host's timer sends, named once so the gate and the router cannot disagree. */
-const TICK_COMMAND = 'tasks.tick';
-
 const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.pull',
 	'integrations.flush',
@@ -979,27 +563,8 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'collections.discard',
 	// Better Auth persists a sign-in challenge, then posts this private courier task. It carries no
 	// caller identity and can only deliver the exact code/address pair the runtime stored in the row.
-	Identity.DELIVER_CODE_COMMAND,
-	// The tick itself, which is the only command a host's timer ever sends. It takes no input and
-	// carries no identity, and everything it goes on to run is checked against the derived set below.
-	TICK_COMMAND
+	Identity.DELIVER_CODE_COMMAND
 ]);
-
-/**
- * What a *task row* may name, which is not the same set as what a host invocation may name.
- *
- * The difference is one command and it is the important one. A host's timer must be able to invoke
- * `tasks.tick`; a row inside `bolt_task` must not, because the command that runs other commands is
- * not itself one of them. Left in, a row naming `tasks.tick` would pass the runner's check and a
- * tick would run a tick — bounded rather than infinite, since each level hides what it takes, but it
- * nests the invocation budget for nothing and grants a capability nobody intended.
- *
- * Derived rather than written out a second time, and named rather than expressed as a `.delete()`
- * somewhere, so the asymmetry between the two gates is visible at both of them.
- */
-const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
-	[...ENQUEUED_COMMANDS].filter((command) => command !== TICK_COMMAND)
-);
 
 /**
  * Which invocation tags may reach the command switch, and on what authority.
@@ -1007,12 +572,8 @@ const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
  * `POST /_bolt/plugin/<anything>/<command>` builds a `Plugin` invocation out of a URL and a request
  * body with no authentication anywhere, and a `Task` carries no credential by construction. Both
  * handed their input to the switch untouched, so the switch was a second, unauthenticated command
- * port: every case that does not happen to decode a `Subject` — `identity.endSession` revoking any
- * session by bare token, `notifications.list`/`markRead` over any recipient, every
- * `automations.*`, `integrations.install`/`disable`/`receive`, `envoys.register`/`reply`,
- * `approvals.status`/`timeline`, `agents.title`/`cancel`/`updateVerifier` — ran for anyone who could
- * reach the port. The `MINTED_IDENTITY` refusal below closed only the cases that name an identity to
- * forge, which is why the remainder outnumbered it.
+ * port. The provenance gate now defaults both tags to deny and admits only commands the runtime
+ * itself enqueues.
  *
  * So the gate is default-deny and it is one gate, at the point where a credential is turned into a
  * subject rather than in the thirty-eight cases that lacked one: a `Plugin` gets the plugin surface
@@ -1025,8 +586,7 @@ const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
  * Whether a command belongs to a set the runtime enqueues, resolving authored automations by name.
  *
  * `automations.<name>` is checked against the declared automations rather than matched on the
- * prefix, because `automations.start`, `.register`, `.runStep`, `.stop` and `.resume` share it and
- * are host commands rather than enqueued ones.
+ * prefix, because lifecycle commands share it and are not enqueued turns.
  */
 const isRunnable = Effect.fn('Bolt.isRunnable')(function* (
 	command: string,
@@ -1055,16 +615,13 @@ const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvena
 /**
  * The identity fields this boundary mints, and why a payload may never supply one.
  *
- * On a `Command` the five below are overwritten with values derived from an authenticated
+ * On a `Command` the fields below are overwritten with values derived from an authenticated
  * credential, so whatever the input claimed about who it is has already been discarded before any
  * case reads it. A `Task` carries no credential, and a non-data-browser `Plugin` is an
  * unauthenticated `POST /_bolt/plugin/<anything>/<command>` — both hand their input to the switch
  * untouched, so on those tags these keys are claims rather than facts. Every case that decodes
- * `subject: Subject` then authorises that claim: `secrets.write` and `secrets.status` took it
- * straight to `authorize(subject, 'manage', 'secrets')` and the vault, `access.impersonate` minted a
- * subject from it, and every `collections.*` read and write ran as it. `identity.startSession` is
- * the same hole one field down — it would have issued a session credential for whatever `userId`
- * the payload named.
+ * `subject: Subject` then authorises that claim. The boundary therefore refuses minted identity
+ * fields on credential-free invocations before any command-specific decoder runs.
  *
  * So the refusal lives where identity is minted, once, rather than in the cases that consume it: a
  * per-case check is exactly what let five `schema.*` commands each ship without one, and the next
@@ -1078,9 +635,7 @@ const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvena
 const MINTED_IDENTITY = [
 	'subject',
 	'actor',
-	'userId',
 	'tenantId',
-	'invitedBy',
 	'impersonatedTeam',
 	/**
 	 * The policies a subject holds directly, which only a *declaration* may name.
@@ -1093,173 +648,6 @@ const MINTED_IDENTITY = [
 	 */
 	'policies'
 ] as const;
-
-/**
- * Samples a durable replica proof only when every query dependency may cross the sync boundary.
- *
- * Runtime-owned identity, automation, agent, notification and approval-party collections remain
- * available through their explicit authenticated read grants, but their rows must never be
- * hydrated into a browser partition. A server-only response therefore carries enough inert wire
- * coordinates to keep the ordinary page protocol stable and marks itself so the client declines
- * materialisation. Its rows live only in the in-memory query that asked for them.
- */
-const collectionQueryPosition = Effect.fn('Bolt.collectionQueryPosition')(function* (
-	effectId: EffectId,
-	subject: Identity.Subject,
-	dependencies: ReadonlyArray<string>
-) {
-	const workspace = yield* Workspace.Service;
-	const definitions = new Map(
-		workspace.definition.collections.map((collection) => [collection.name, collection] as const)
-	);
-	const serverOnly = dependencies.some((name) => {
-		const definition = definitions.get(name);
-		return definition === undefined || !isReplicatedCollection(definition);
-	});
-	const sync = yield* Sync.Service;
-	if (!serverOnly) {
-		const position = yield* sync.positions(effectId, subject, dependencies);
-		return {
-			serverOnly: false,
-			readCursor: position.cursor,
-			partitionKey: position.partition.key,
-			confirmedDependencies: Object.keys(position.generations).toSorted(),
-			dependencyGenerations: position.generations
-		};
-	}
-	const readCursor = yield* sync.head(EffectId.make(`${effectId}:head`));
-	const partition = yield* sync.partition(EffectId.make(`${effectId}:partition`), subject);
-	return {
-		serverOnly: true,
-		readCursor,
-		partitionKey: partition.key,
-		confirmedDependencies: [] as ReadonlyArray<string>,
-		dependencyGenerations: {} as Readonly<Record<string, number>>
-	};
-});
-
-/**
- * Answers one keyset page: the rows, and the cursor its successor should carry.
- *
- * It lives at the boundary that owns the page ceiling, so `findMany` keeps returning plain rows for
- * the callers that want exactly the rows they asked for — `export` reads a whole collection through
- * it, and an authored handler asks for a page without wanting a cursor back.
- *
- * The read asks for one row past the page because that is the only honest answer to "is there
- * another page?". A cursor emitted from a last page that happened to fill the limit would offer a
- * next page that comes back empty, and the table would keep offering one forever.
- */
-const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
-	effectId: EffectId,
-	input: typeof CollectionFindInput.Type
-) {
-	const query = DispatchValues.collectionQuery(input);
-	const workspace = yield* Workspace.Service;
-	const definition = yield* workspace.collection(input.collection);
-	const collections = yield* Collections.Service;
-	const described = canonicalizeCollectionQuery(
-		'findMany',
-		input,
-		workspaceCollectionQueryMetadata(workspace.definition),
-		{ pinnedCollation: true, localRelationships: true, localSearch: true }
-	);
-	if (described === undefined) {
-		return yield* new DispatchError({
-			code: 'invalid_input',
-			message: 'Collection query could not be canonicalized'
-		});
-	}
-	/**
-	 * The proof position is sampled before the page query, never after it.
-	 *
-	 * A row committed after this head may be present in the page, but it will also be replayed by the
-	 * later pull and applied idempotently. The reverse ordering is unsafe: a post-read head could name
-	 * a commit the page did not observe and let CoverageLedger claim a page current past an unseen row.
-	 * The suffix is distinct because database facilities deduplicate by effect id.
-	 */
-	const position = yield* collectionQueryPosition(
-		EffectId.make(`${effectId}:page-position`),
-		input.subject,
-		described.dependencies
-	);
-	// One visible page of lookahead keeps a mutated boundary filled without unbounded hydration.
-	const retainedLimit = query.limit * 2;
-	const rows = yield* collections.findMany(effectId, input.subject, {
-		...query,
-		...(input.with === undefined ? {} : { with: withoutCollectionQueryProjection(input.with) }),
-		limit: retainedLimit + 1
-	});
-	const retained = rows.slice(0, retainedLimit);
-	const hydration = normalizeCollectionHydration(workspace.definition, input.collection, retained);
-	if (Result.isFailure(hydration)) {
-		return yield* new DispatchError({
-			code: 'invalid_stored_record',
-			message: hydration.failure.message
-		});
-	}
-	const visible = retained.slice(0, query.limit);
-	const visibleLast = visible[visible.length - 1];
-	const last = retained[retained.length - 1];
-	// Compiled the same way the seek predicate was, so the tuple the cursor carries is the tuple the
-	// next page's seek compares against — including the primary key `compileOrderTerms` appends.
-	const ordering = compileOrderTerms(
-		input.orderBy,
-		makeWhereContext(input.collection, definition.fields, workspace.definition)
-	);
-	return json({
-		rows: retained,
-		baseRows: hydration.success.baseRows,
-		relationshipRefs: hydration.success.relationshipRefs,
-		pageCursor:
-			rows.length > query.limit && visibleLast !== undefined
-				? Collections.encodeCollectionCursor(ordering, visibleLast)
-				: null,
-		nextCursor:
-			rows.length > retainedLimit && last !== undefined
-				? Collections.encodeCollectionCursor(ordering, last)
-				: null,
-		lookahead: Math.max(0, retained.length - query.limit),
-		...position,
-		reproducibility: described.reproducibility
-	});
-});
-
-/**
- * The rows a write is answered with, filtered to what this subject may read.
- *
- * The write path reads its rows back *elevated* — it has to, because the row it just wrote may sit
- * behind a visibility predicate the writer cannot see past, and an `after` hook still has to be
- * handed the record. That is right inside the runtime and wrong on the way out of it: a response is
- * a disclosure, and a field this subject may not read must not arrive because they wrote the row
- * rather than queried it. So the same `mask` a read applies is applied here, at the boundary, which
- * leaves `mutate` returning the whole row to the authored code that needs it.
- *
- * A subject with no read grant at all is masked down to `{}` rather than refused: the write
- * happened, and the id is still reported beside these records.
- *
- * A row that is not JSON is a failure rather than an empty object. The host's database facility is
- * required to hand back JSON — a `Date` that survived the seam is the recurring form of that being
- * broken — and a mask cannot be applied to a value whose fields it cannot read. Answering `{}` there
- * would report a successful write that stored nothing, which reads exactly like a legitimately empty
- * row and is therefore the version of this nobody would ever look into.
- */
-const maskStoredRecords = Effect.fn('Bolt.maskStoredRecords')(function* (
-	subject: Identity.Subject,
-	collection: string,
-	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-) {
-	const access = yield* AccessControl.Service;
-	const masked: Array<Readonly<Record<string, Schema.Json>>> = [];
-	for (const row of rows) {
-		if (!Schema.is(StoredRecord)(row))
-			return yield* new DispatchError({
-				code: 'invalid_stored_record',
-				message: `A stored ${collection} row came back in a shape that is not JSON, so it cannot be filtered for this caller. The database facility is required to return JSON values.`
-			});
-		masked.push(access.mask(subject, 'read', collection, row));
-	}
-	return masked;
-});
 
 /**
  * Exported for the boundary test.
@@ -1285,7 +673,6 @@ type DispatchServices =
 	| Identity.Interface
 	| Integrations.Interface
 	| Notifications.Interface
-	| PersonalSecretsInterface
 	| RateLimits.Interface
 	| RuntimeRemoteRegistry
 	| SecretsInterface
@@ -1522,9 +909,7 @@ export const dispatchInvocation: (
 						...fields,
 						subject,
 						actor: subject,
-						userId: subject.userId,
 						tenantId: invocation.scope.tenantId,
-						invitedBy: subject.userId,
 						impersonatedTeam: null
 					},
 					subject
@@ -1553,8 +938,8 @@ export const dispatchInvocation: (
 			 * serve rows for.
 			 *
 			 * `actor` stays the real credential holder. `subject` is who the command runs as, `actor` is who
-			 * is really here, and the audit trail, `invitedBy` and `access.impersonation`'s own answer all
-			 * need the second — an admin previewing `Employee` must still be told they may impersonate, or
+			 * is really here, and the audit trail and `access.impersonation`'s own answer both need the
+			 * second — an admin previewing `Employee` must still be told they may impersonate, or
 			 * the picker disappears and there is no way back.
 			 *
 			 * `impersonatedTeam` is minted unconditionally, as `null` when there is no preview, so a payload
@@ -1570,9 +955,7 @@ export const dispatchInvocation: (
 					...fields,
 					subject,
 					actor,
-					userId: actor.userId,
 					tenantId: actor.tenantId,
-					invitedBy: actor.userId,
 					impersonatedTeam: team ?? null
 				},
 				subject
@@ -1622,127 +1005,12 @@ export const dispatchInvocation: (
 				? undefined
 				: (yield* AccessControl.Service).limits(authenticated.subject)
 		);
-		const invoked =
-			invocation.command === TICK_COMMAND
-				? runTick(effectId)
-				: runCommand(invocation.command, effectId, authenticated.input);
+		const invoked = runCommand(invocation.command, effectId, authenticated.input);
 		return yield* authenticated.subject === undefined
 			? invoked
 			: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
 	}
 );
-
-/**
- * One tick of the tenant's own scheduler, and the only command a host's timer ever sends.
- *
- * It lives beside the switch rather than inside it, and that is a type-level fact before it is a
- * design one: a `case` that re-enters `runCommand` makes `runCommand` referenced in its own
- * initializer, so TypeScript cannot infer its type and answers `any` — taking every one of the
- * ninety-odd cases below it with it. Lifting the one command that *runs other commands* out of the
- * set of commands is also the more honest shape, because that is exactly what makes it different.
- *
- * Everything it goes on to run is checked against `ENQUEUED_COMMANDS` again, here, one task at a
- * time. That second check is not belt and braces: `authorizeInvocationProvenance` gates what a
- * `Task` *invocation* may name, and this is one invocation naming one command — `tasks.tick` — that
- * then reaches the switch N more times with commands it read out of a table. Without it, anything
- * that could get a row into `bolt_task` could name `identity.startSession` and have it run with no
- * credential at all. The rows are written by the runtime, but "written by the runtime today" is not
- * a property the switch can see, and a gate has to hold on what it can.
- *
- * A refused or failed command fails its own task rather than the tick, so one bad row backs off and
- * eventually lands in `failed` instead of stopping every other task in the workspace.
- */
-/**
- * Whether one row of `bolt_task` may run, checked per task rather than per invocation.
- *
- * `authorizeInvocationProvenance` gates what a `Task` *invocation* may name, and a tick is one
- * invocation naming one command that then reaches the switch N more times with commands read out of
- * a table. So the check happens again here, against the narrower set: the tick itself is invocable
- * by a host and not runnable as a row.
- */
-const authorizeTaskCommand = Effect.fn('Bolt.authorizeTaskCommand')(function* (command: string) {
-	if (yield* isRunnable(command, TASK_RUNNABLE_COMMANDS)) return;
-	yield* new AccessControl.AccessDenied({
-		action: 'invoke',
-		resource: command,
-		reason: `${command} is not a command the runtime enqueues, so no task row may name it`
-	});
-});
-
-const runTick = Effect.fn('Bolt.runTick')(function* (effectId: EffectId) {
-	const report = yield* (yield* TaskQueue.Service).tick(effectId, (task, attemptEffectId) =>
-		authorizeTaskCommand(task.command).pipe(
-			Effect.andThen(() =>
-				runCommand(
-					task.command,
-					EffectId.make(attemptEffectId),
-					task.command.startsWith('automations.') &&
-						typeof task.input === 'object' &&
-						task.input !== null &&
-						!Array.isArray(task.input)
-						? { ...task.input, bolt_task_id: task.effectId }
-						: task.input
-				)
-			),
-			Effect.match({
-				onSuccess: (response) =>
-					response.status >= 200 && response.status < 300
-						? ({ _tag: 'Done', task, result: response.value ?? null } as const)
-						: ({
-								_tag: 'Failed',
-								task,
-								// A code and a short reason. Never the value: a command's body is where a
-								// partner's data and a person's record are, and `bolt_task.error` is readable by
-								// anyone who can see the operations panel.
-								error: `status ${response.status}`,
-								retryable:
-									response.status >= 500 ||
-									response.status === 408 ||
-									response.status === 409 ||
-									response.status === 425 ||
-									response.status === 429
-							} as const),
-				onFailure: (cause) => {
-					const error = Collections.unwrapMutationPhase(cause);
-					// An approval gate is a successful submission, not a broken automation attempt. The
-					// mutation graph is now durable in the approval inbox and its settlement is owned by
-					// `collections.resume`; retrying this task would only submit the same review again.
-					if (error instanceof Collections.PendingApproval)
-						return {
-							_tag: 'Done',
-							task,
-							result: {
-								status: 'awaiting_approval',
-								pending: true,
-								requestId: error.requestId,
-								collection: error.collection,
-								id: error.id,
-								action: error.action
-							}
-						} as const;
-					return {
-						_tag: 'Failed',
-						task,
-						error: describeCause(cause),
-						retryable:
-							error === null ||
-							typeof error !== 'object' ||
-							Reflect.get(error, 'retryable') !== false
-					} as const;
-				}
-			})
-		)
-	);
-	return json({
-		ran: report.ran,
-		rolled: report.rolled,
-		declined: report.declined,
-		nextDueAtEpochMs: report.nextDueAtEpochMs ?? null,
-		// Surfaced rather than logged: a schedule that could not be read has been retired, and the only
-		// place that says so is the answer to the tick that retired it.
-		rejections: report.rejections.map((rejection) => ({ ...rejection }))
-	});
-});
 
 /**
  * The address a payload names, for a limit keyed on one.
@@ -1764,54 +1032,6 @@ const rateLimitAddress = (payload: unknown): string | undefined => {
 	const value = decoded.success.address ?? decoded.success.email;
 	return value === undefined || value.trim() === '' ? undefined : value;
 };
-
-/** Canonical JSON for a request digest; object insertion order must not change mutation identity. */
-const canonicalJson = (value: Schema.Json): string => {
-	if (value === null || typeof value !== 'object') return JSON.stringify(value);
-	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-	return `{${Object.entries(value)
-		.toSorted(([left], [right]) => left.localeCompare(right))
-		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-		.join(',')}}`;
-};
-
-/** Uses WebCrypto because bundle code runs in isolates and must not import `node:crypto`. */
-const sha256Hex = Effect.fn('Bolt.sha256Hex')((value: string) =>
-	Effect.promise(async () => {
-		const digest = await globalThis.crypto.subtle.digest(
-			'SHA-256',
-			new TextEncoder().encode(value)
-		);
-		return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-	})
-);
-
-const MUTATION_RECORD_ID =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-
-/**
- * The stable actor/effective-subject binding for dedup and delivery.
- *
- * Team paths, administrator flags and compiled authority generations intentionally stay out. A
- * journaled mutation is retried under current policy after those facts change, but it must still
- * resolve the original ledger row rather than acquiring a second idempotency scope.
- */
-const browserMutationScopeFor = (
-	tenantId: string,
-	environment: string,
-	actor: Subject,
-	subject: Subject,
-	impersonatedTeam: string | null
-): Collections.BrowserMutationScope => ({
-	tenantId,
-	environment,
-	principalId: actor.userId,
-	authorityId: canonicalJson({
-		effectiveSubjectId: subject.userId,
-		impersonationBinding: impersonatedTeam === null ? 'operator' : `team:${impersonatedTeam}`
-	}),
-	command: 'collections.mutate'
-});
 
 /** Runs one authored automation body in the invocation that already owns it. */
 const executeAutomationBody = Effect.fn('Bolt.executeAutomationBody')(function* (
@@ -1921,12 +1141,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 	// Gated before the switch, not case by case: the five schema commands were each written without a
 	// check, and one gate on the prefix is the only form a sixth cannot be added past.
 	if (command.startsWith('schema.')) yield* authorizeSchemaCommand(command, commandInput);
-	const membership = MEMBERSHIP_COMMANDS.get(command);
-	if (membership !== undefined) yield* authorizeMembershipCommand(membership, commandInput);
+	if (command === 'identity.admitFounder') yield* authorizeFounderAdmission(commandInput);
 	if (SYSTEM_ONLY_COMMANDS.has(command)) yield* authorizeSystemCommand(command, commandInput);
 	switch (command) {
-		case 'health':
-			return json({ status: 'ok' });
 		/**
 		 * There is deliberately no `secrets.read`.
 		 *
@@ -1966,56 +1183,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			);
 			return json({ saved: true, name: input.name });
 		}
-		/**
-		 * The personal vault: three commands, and deliberately no `personal-secrets.read`.
-		 *
-		 * Same reason `secrets.read` does not exist — a read command is the single line that puts every
-		 * stored credential one fetch away from a browser — and here it would be worse, because these
-		 * values are the things that let a capability act *as* the person: a live signed-in session, a
-		 * personal token. Server-side code reads them through `PersonalSecrets.read`.
-		 *
-		 * There is no `authorize` call in any of the three, and that is not an omission. Authority here
-		 * is ownership, not a permission: the service can only ever touch the row belonging to the
-		 * subject `dispatchInvocation` authenticated, so even the strongest check — `manage secrets` —
-		 * would neither grant an admin somebody else's row nor deny a person their own. Adding one
-		 * would only suggest, falsely, that a permission is what keeps these rows apart.
-		 */
-		case 'personal-secrets.status': {
-			const entries = yield* (yield* PersonalSecrets.Service).status(effectId);
-			// Rebuilt field by field rather than passed through: whatever this boundary returns reaches a
-			// browser, so the shape is written out here where it can be read, not inherited from a type.
-			return json(
-				entries.map((entry) =>
-					DispatchValues.jsonObject({
-						name: entry.name,
-						configured: entry.configured,
-						updatedAt: entry.updatedAt
-					})
-				)
-			);
-		}
-		case 'personal-secrets.write': {
-			const input = yield* decode(PersonalSecretsWriteInput, commandInput);
-			yield* (yield* PersonalSecrets.Service).write(effectId, input.name, input.value);
-			return json({ saved: true, name: input.name });
-		}
-		case 'personal-secrets.forget': {
-			const input = yield* decode(PersonalSecretsNameInput, commandInput);
-			yield* (yield* PersonalSecrets.Service).forget(effectId, input.name);
-			return json({ forgotten: true, name: input.name });
-		}
 		case 'apps.visible': {
 			const input = yield* decode(VisibleAppsInput, commandInput);
 			const access = yield* AccessControl.Service;
 			return json({ apps: access.visibleApps(input.subject) });
-		}
-		case 'access.impersonate': {
-			const input = yield* decode(ImpersonateInput, commandInput);
-			const access = yield* AccessControl.Service;
-			return json({
-				subject: yield* access.impersonate(input.actor, input.target),
-				apps: access.visibleApps(input.target)
-			});
 		}
 		/**
 		 * What the sidebar needs to render the picker: may this actor impersonate, what may they
@@ -2050,45 +1221,22 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const previewed = yield* access.impersonateTeam(input.actor, input.teamId);
 			return json({ subject: previewed, apps: access.visibleApps(previewed) });
 		}
-		case 'access.resolveScope': {
-			const input = yield* decode(VisibleAppsInput, commandInput);
-			return json((yield* AccessControl.Service).resolveScope(input.subject));
-		}
-		case 'access.authorize': {
-			const input = yield* decode(AccessDecisionInput, commandInput);
-			yield* (yield* AccessControl.Service).authorize(input.subject, input.action, input.resource);
-			return json({ allowed: true });
-		}
-		case 'access.predicate':
 		case 'access.explain': {
-			const input = yield* decode(AccessDecisionInput, commandInput);
-			const access = yield* AccessControl.Service;
-			const decision =
-				command === 'access.predicate'
-					? access.predicate(input.subject, input.action, input.resource)
-					: access.explain(input.subject, input.action, input.resource);
-			return json({ allowed: decision.allowed, reason: decision.reason });
-		}
-		case 'access.mask': {
-			const input = yield* decode(AccessMaskInput, commandInput);
-			return json(
-				(yield* AccessControl.Service).mask(
-					input.subject,
-					input.action,
-					input.resource,
-					input.value
-				)
+			const input = yield* decode(
+				Schema.Struct({
+					subject: Subject,
+					action: Schema.NonEmptyString,
+					resource: Schema.NonEmptyString
+				}),
+				commandInput
 			);
+			const access = yield* AccessControl.Service;
+			const decision = access.explain(input.subject, input.action, input.resource);
+			return json({ allowed: decision.allowed, reason: decision.reason });
 		}
 		case 'identity.authenticate': {
 			const input = yield* decode(IdentityAuthenticateInput, commandInput);
 			return json(yield* (yield* Identity.Service).authenticate(effectId, input.credential));
-		}
-		case 'identity.resolveSubject': {
-			const input = yield* decode(IdentityResolveInput, commandInput);
-			return json(
-				yield* (yield* Identity.Service).resolveSubject(effectId, input.provider, input.externalId)
-			);
 		}
 		case 'identity.admitFounder': {
 			const input = yield* decode(IdentityAdmitFounderInput, commandInput);
@@ -2225,22 +1373,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				credential: yield* identity.startSession(effectId, founderId, input.tenantId)
 			});
 		}
-		case 'identity.invite': {
-			const input = yield* decode(IdentityInviteInput, commandInput);
-			return json({
-				invitationId: yield* (yield* Identity.Service).invite(
-					effectId,
-					input.tenantId,
-					input.email,
-					input.invitedBy
-				)
-			});
-		}
-		case 'identity.acceptInvitation': {
-			const input = yield* decode(IdentityAcceptInput, commandInput);
-			yield* (yield* Identity.Service).acceptInvitation(effectId, input.invitationId, input.userId);
-			return json({ accepted: true });
-		}
 		case 'identity.sendCode': {
 			const input = yield* decode(IdentitySendCodeInput, commandInput);
 			yield* (yield* Identity.Service).sendCode(effectId, input.email);
@@ -2265,16 +1397,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			});
 		}
-		case 'identity.startSession': {
-			const input = yield* decode(IdentitySessionInput, commandInput);
-			return json({
-				credential: yield* (yield* Identity.Service).startSession(
-					effectId,
-					input.userId,
-					input.tenantId
-				)
-			});
-		}
 		case 'identity.continueSession': {
 			const input = yield* decode(IdentityContinueSessionInput, commandInput);
 			return json({
@@ -2285,97 +1407,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			});
 		}
-		case 'identity.endSession': {
-			const input = yield* decode(IdentityCredentialInput, commandInput);
-			yield* (yield* Identity.Service).endSession(effectId, input.credential);
-			return json({ ended: true });
-		}
 		case 'identity.workspaceAccess': {
 			const input = yield* decode(IdentitySettingsInput, commandInput);
 			return json(yield* (yield* Identity.Service).workspaceAccess(effectId, input.tenantId));
-		}
-		case 'identity.workspaceSettings': {
-			const input = yield* decode(IdentitySettingsInput, commandInput);
-			return json(yield* (yield* Identity.Service).workspaceSettings(effectId, input.tenantId));
-		}
-		/**
-		 * The four writes behind the `teams` array `identity.workspaceAccess` returns.
-		 *
-		 * They sit here, beside that projection, because they are the other half of one surface: the
-		 * read lists every team including the empty ones, and these are how an operator makes one, moves
-		 * it, retires it, and puts somebody in it. Without them the read was a list nobody could act on
-		 * — and an empty team, which is exactly what a newly declared `approvers` name reconciles into,
-		 * would be visible and permanently unfillable.
-		 *
-		 * All four are gated once, before this switch, by `MEMBERSHIP_COMMANDS`.
-		 *
-		 * `subject.userId` is the person the audit row names. Under a team preview `subjectAsTeam`
-		 * substitutes the team and the policies but keeps the actor's own identity, so this is the real
-		 * credential holder either way — and a preview drops `admin`, so a previewing administrator is
-		 * refused by the gate above before reaching any of this.
-		 *
-		 * `tenantId` is minted from the invocation scope, never read from the payload.
-		 */
-		case 'teams.create': {
-			const input = yield* decode(TeamCreateInput, commandInput);
-			return yield* teamAnswer(
-				yield* (yield* Identity.Service).createTeam(
-					effectId,
-					input.tenantId,
-					input.subject.userId,
-					{
-						name: input.name,
-						parentId: input.parentId,
-						description: input.description
-					}
-				)
-			);
-		}
-		case 'teams.update': {
-			const input = yield* decode(TeamUpdateInput, commandInput);
-			return yield* teamAnswer(
-				yield* (yield* Identity.Service).updateTeam(
-					effectId,
-					input.tenantId,
-					input.subject.userId,
-					input.teamId,
-					{
-						name: input.name,
-						parentId: input.parentId,
-						description: input.description
-					}
-				)
-			);
-		}
-		case 'teams.delete': {
-			const input = yield* decode(TeamDeleteInput, commandInput);
-			return yield* teamAnswer(
-				yield* (yield* Identity.Service).deleteTeam(
-					effectId,
-					input.tenantId,
-					input.subject.userId,
-					input.teamId
-				)
-			);
-		}
-		case 'teams.assign': {
-			const input = yield* decode(TeamAssignInput, commandInput);
-			return yield* teamAnswer(
-				yield* (yield* Identity.Service).assignTeam(
-					effectId,
-					input.tenantId,
-					input.subject.userId,
-					input.memberId,
-					input.teamId
-				)
-			);
-		}
-		case 'approvals.request': {
-			const input = yield* decode(ApprovalRequestInput, commandInput);
-			const approvals = yield* Approvals.Service;
-			return json(
-				yield* approvals.request(effectId, input.subject, input.requestId, input.operation)
-			);
 		}
 		case 'approvals.decide': {
 			const input = yield* decode(ApprovalDecideInput, commandInput);
@@ -2415,298 +1449,62 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			if (visible === undefined) return json(null);
 			return json((yield* (yield* Approvals.Service).status(effectId, input.requestId)) ?? null);
 		}
-		case 'approvals.timeline': {
-			const input = yield* decode(ApprovalStatusInput, commandInput);
-			const visible = yield* (yield* Collections.Service).findFirst(effectId, input.subject, {
-				collection: 'approval_request',
-				where: { id: { eq: input.requestId } }
-			});
-			if (visible === undefined) return json([]);
-			return json(yield* (yield* Approvals.Service).timeline(effectId, input.requestId));
+		case HOST_RECOVER_COMMAND: {
+			yield* decode(Schema.Struct({ subject: Subject }), commandInput);
+			yield* (yield* Agents.Service).recover(EffectId.make(`${effectId}:agents`));
+			yield* (yield* Automations.Service).recover(EffectId.make(`${effectId}:automations`));
+			yield* (yield* TaskQueue.Service).recover(EffectId.make(`${effectId}:tasks`));
+			return json({ recovered: true });
 		}
-		case 'sync.head': {
-			const sync = yield* Sync.Service;
-			return json(yield* sync.head(effectId));
-		}
-		/**
-		 * The public pull half of poke/pull.
-		 *
-		 * The caller names only dependency collections and its one durable partition position. The guest
-		 * derives the security partition, validates every subscription without an existence oracle, and
-		 * returns full-row transitions or one explicit recovery move.
-		 */
-		case 'sync.pull': {
-			const input = yield* decode(SyncPullInput, commandInput);
-			const response = yield* (yield* Sync.Service).pull(effectId, input.subject, {
-				collections: input.collections,
-				cursor: input.cursor,
-				generations: input.generations,
-				...(input.rehydration === undefined ? {} : { rehydration: input.rehydration }),
-				...(input.pendingMutationIds === undefined
-					? {}
-					: { pendingMutationIds: input.pendingMutationIds }),
-				...(input.limit === undefined ? {} : { limit: input.limit }),
-				...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes })
+		case HOST_SCHEDULE_DISCOVER_COMMAND: {
+			const input = yield* decode(AuthenticatedHostScheduleDiscover, commandInput);
+			const discovered = yield* (yield* TaskQueue.Service).discover(effectId, input.nowEpochMs);
+			return json({
+				occurrences: discovered.occurrences,
+				rejections: discovered.rejections,
+				nextDueAtEpochMs: discovered.nextDueAtEpochMs ?? null
 			});
-			const pendingMutationIds = input.pendingMutationIds ?? [];
-			const tenant = yield* TenantScope.Service;
-			const delivery = yield* (yield* Collections.Service).browserMutationDelivery(
-				EffectId.make(`${effectId}:mutation-delivery`),
-				browserMutationScopeFor(
-					tenant.tenantId,
-					tenant.environment,
+		}
+		case HOST_SCHEDULE_SETTLE_COMMAND: {
+			const input = yield* decode(AuthenticatedHostScheduleSettle, commandInput);
+			const nextDueAtEpochMs = yield* (yield* TaskQueue.Service).settle(
+				effectId,
+				input.occurrence.taskId,
+				input.outcome
+			);
+			return json({ settled: true, nextDueAtEpochMs: nextDueAtEpochMs ?? null });
+		}
+		case HOST_AGENT_EXECUTE_CHILD_COMMAND: {
+			const input = yield* decode(AuthenticatedHostAgentExecuteChild, commandInput);
+			return json(
+				yield* (yield* Agents.Service).execute(effectId, input.conversationId, input.turnId)
+			);
+		}
+		case 'sync.connect': {
+			const input = yield* decode(AuthenticatedSyncConnect, commandInput);
+			return json(
+				yield* (yield* Sync.Service).connect(
+					effectId,
 					input.actor,
 					input.subject,
-					input.impersonatedTeam
-				),
-				pendingMutationIds,
-				response.cursor
+					input.impersonatedTeam,
+					input
+				)
 			);
-			const ownedMutationIds = new Set(delivery.ownedMutationIds);
-			return json({
-				...response,
-				deltas: response.deltas.map((delta) => ({
-					...delta,
-					mutationId:
-						delta.mutationId !== null && ownedMutationIds.has(delta.mutationId)
-							? delta.mutationId
-							: null
-				})),
-				mutationConfirmations: response.kind === 'delta' ? delivery.confirmations : [],
-				mutationRejections: delivery.rejections
-			});
 		}
-		/**
-		 * The host-only aggregation half of pull.
-		 *
-		 * Credentials remain opaque host-to-guest forwards. Each is authenticated against the tenant's
-		 * live session rows here, so revocation and team changes cannot be bypassed by a cached host
-		 * projection. Authentication and access failures are values scoped to that original request;
-		 * shared database/decode failures still fail the batch because there is no unaffected read.
-		 */
-		case 'sync.distribute': {
-			const input = yield* decode(SyncDistributeInput, commandInput);
-			const identity = yield* Identity.Service;
-			const access = yield* AccessControl.Service;
-			type Admitted = Readonly<{
-				index: number;
-				requestId: string;
-				actor: Subject;
-				subject: Subject;
-				impersonatedTeam: string | null;
-				pull: Sync.SyncPullRequest;
-			}>;
-			const admitted: Array<Admitted> = [];
-			const settled = new Map<number, Sync.SyncDistributeResult>();
-			for (const [index, entry] of input.entries.entries()) {
-				const authenticated = yield* Effect.result(
-					identity.authenticate(
-						EffectId.make(`${effectId}:authenticate:${index}`),
-						entry.credential
-					)
-				);
-				if (Result.isFailure(authenticated)) {
-					if (!(authenticated.failure instanceof Identity.AuthenticationError)) {
-						return yield* authenticated.failure;
-					}
-					settled.set(index, {
-						requestId: entry.requestId,
-						status: 401,
-						error: makeWireError('unauthorized', 'Credential is invalid or expired', {
-							httpStatus: 401
-						})
-					});
-					continue;
-				}
-				const actor = authenticated.success;
-				if (actor.tenantId !== input.subject.tenantId) {
-					settled.set(index, {
-						requestId: entry.requestId,
-						status: 403,
-						error: makeWireError(
-							'forbidden',
-							'Authenticated subject is outside the invocation tenant',
-							{ httpStatus: 403 }
-						)
-					});
-					continue;
-				}
-				let subject = actor;
-				if (entry.impersonatedTeam !== undefined) {
-					const previewed = yield* Effect.result(
-						access.subjectAsTeam(actor, entry.impersonatedTeam)
-					);
-					if (Result.isFailure(previewed)) {
-						if (!(previewed.failure instanceof AccessControl.AccessDenied)) {
-							return yield* previewed.failure;
-						}
-						settled.set(index, {
-							requestId: entry.requestId,
-							status: 403,
-							error: makeWireError(
-								'forbidden',
-								previewed.failure.message.trim() === ''
-									? 'Access refused'
-									: previewed.failure.message,
-								{ httpStatus: 403 }
-							)
-						});
-						continue;
-					}
-					subject = previewed.success;
-				}
-				admitted.push({
-					index,
-					requestId: entry.requestId,
-					actor,
-					subject,
-					impersonatedTeam: entry.impersonatedTeam ?? null,
-					pull: entry.pull
+		case 'sync.advance': {
+			const input = yield* decode(AuthenticatedSyncAdvance, commandInput);
+			if (input.subject.system !== true)
+				return yield* new AccessControl.AccessDenied({
+					action: 'invoke',
+					resource: 'sync.advance',
+					reason: 'sync.advance is a host-only commit hook'
 				});
-			}
-
-			if (admitted.length > 0) {
-				const tenant = yield* TenantScope.Service;
-				const collections = yield* Collections.Service;
-				const distributed = yield* (yield* Sync.Service).distribute(
-					EffectId.make(`${effectId}:outbox`),
-					admitted.map(({ requestId, subject, pull }) => ({ requestId, subject, pull }))
-				);
-				for (const [admittedIndex, result] of distributed.entries()) {
-					const source = admitted[admittedIndex];
-					if (source === undefined) {
-						return yield* new DispatchError({
-							code: 'dispatch_failed',
-							message: 'Sync distribution returned an uncorrelated result'
-						});
-					}
-					if ('error' in result) {
-						settled.set(source.index, {
-							requestId: source.requestId,
-							status: 403,
-							error: makeWireError(
-								'forbidden',
-								result.error.message.trim() === '' ? 'Access refused' : result.error.message,
-								{ httpStatus: 403 }
-							)
-						});
-					} else {
-						const delivery = yield* collections.browserMutationDelivery(
-							EffectId.make(`${effectId}:mutation-delivery:${source.index}`),
-							browserMutationScopeFor(
-								tenant.tenantId,
-								tenant.environment,
-								source.actor,
-								source.subject,
-								source.impersonatedTeam
-							),
-							source.pull.pendingMutationIds ?? [],
-							result.response.cursor
-						);
-						const ownedMutationIds = new Set(delivery.ownedMutationIds);
-						settled.set(source.index, {
-							requestId: source.requestId,
-							status: 200,
-							value: {
-								...result.response,
-								deltas: result.response.deltas.map((delta) => ({
-									...delta,
-									mutationId:
-										delta.mutationId !== null && ownedMutationIds.has(delta.mutationId)
-											? delta.mutationId
-											: null
-								})),
-								mutationConfirmations:
-									result.response.kind === 'delta' ? delivery.confirmations : [],
-								mutationRejections: delivery.rejections
-							}
-						});
-					}
-				}
-			}
-
-			const results: Array<Sync.SyncDistributeResult> = [];
-			for (const [index] of input.entries.entries()) {
-				const result = settled.get(index);
-				if (result === undefined) {
-					return yield* new DispatchError({
-						code: 'dispatch_failed',
-						message: 'Sync distribution lost an original request'
-					});
-				}
-				results.push(result);
-			}
-			return json({ results });
-		}
-		case 'sync.shape': {
-			const input = yield* decode(SyncShapeInput, commandInput);
-			return json(yield* (yield* Sync.Service).shape(input.subject));
+			return json(yield* (yield* Sync.Service).advance(effectId, input));
 		}
 		case 'collections.embed': {
 			const collections = yield* Collections.Service;
 			return json(yield* collections.embedRecords(effectId));
-		}
-		case 'sync.compact': {
-			const input = yield* decode(SyncCompactInput, commandInput);
-			return json(
-				yield* (yield* Sync.Service).compact(
-					effectId,
-					input.retentionDays ?? SyncCompaction.DEFAULT_RETENTION_DAYS
-				)
-			);
-		}
-		case 'sync.schema':
-			return json((yield* Sync.Service).schema());
-		/**
-		 * Issues the exact physical O2 identity and settles actor-owned write-only mutations.
-		 *
-		 * No collection name is accepted or revealed. The optional bounded mutation ids are opaque
-		 * ledger keys, and the authenticated actor/effective-subject binding scopes every answer.
-		 */
-		case 'sync.partition': {
-			const authority = yield* decode(AuthenticatedSyncPartitionStatus, commandInput);
-			const tenant = yield* TenantScope.Service;
-			const sync = yield* Sync.Service;
-			const identity = yield* sync.partition(
-				EffectId.make(`${effectId}:partition-identity`),
-				authority.subject
-			);
-			const collections = yield* Collections.Service;
-			const registered = yield* collections.registerBrowserMutationPartition(
-				EffectId.make(`${effectId}:partition-register`),
-				{
-					tenantId: tenant.tenantId,
-					environment: tenant.environment,
-					actorId: authority.actor.userId,
-					effectiveSubjectId: authority.subject.userId,
-					impersonationBinding:
-						authority.impersonatedTeam === null ? 'operator' : `team:${authority.impersonatedTeam}`
-				},
-				identity
-			);
-			const pendingMutationIds = authority.pendingMutationIds ?? [];
-			const through = yield* sync.head(EffectId.make(`${effectId}:partition-status-head`));
-			const delivery = yield* collections.browserMutationDelivery(
-				EffectId.make(`${effectId}:partition-status-delivery`),
-				browserMutationScopeFor(
-					tenant.tenantId,
-					tenant.environment,
-					authority.actor,
-					authority.subject,
-					authority.impersonatedTeam
-				),
-				pendingMutationIds,
-				through
-			);
-			return json({
-				partition: registered,
-				mutationConfirmations: delivery.confirmations,
-				mutationRejections: delivery.rejections
-			});
-		}
-		case 'sync.wakeHint': {
-			const input = yield* decode(SyncCursor, commandInput);
-			return json((yield* Sync.Service).wakeHint(input));
 		}
 		case 'agents.enqueue': {
 			const input = yield* decode(AgentEnqueueInput, commandInput);
@@ -2721,14 +1519,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					{
 						kind: 'user_message',
 						text: input.message
-					}
+					},
+					input.model
 				)
-			);
-		}
-		case 'agents.run': {
-			const input = yield* decode(AgentRunInput, commandInput);
-			return json(
-				yield* (yield* Agents.Service).run(effectId, input.subject, input.conversationId)
 			);
 		}
 		case 'agents.documents.attach': {
@@ -2764,11 +1557,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			);
 			return json({ removed: true });
 		}
-		case 'agents.title': {
-			const input = yield* decode(AgentTitleInput, commandInput);
-			const agents = yield* Agents.Service;
-			return json({ title: yield* agents.title(effectId, input.conversationId) });
-		}
 		case 'agents.open': {
 			const input = yield* decode(AgentOpenInput, commandInput);
 			yield* (yield* Agents.Service).open(
@@ -2778,26 +1566,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				input.conversationId
 			);
 			return json({ opened: true, conversationId: input.conversationId });
-		}
-		case 'agents.dequeue': {
-			const input = yield* decode(AgentDequeueInput, commandInput);
-			yield* (yield* Agents.Service).dequeue(
-				effectId,
-				input.subject,
-				input.conversationId,
-				input.taskId
-			);
-			return json({ dequeued: true });
-		}
-		case 'agents.reorder': {
-			const input = yield* decode(AgentReorderInput, commandInput);
-			yield* (yield* Agents.Service).reorder(
-				effectId,
-				input.subject,
-				input.conversationId,
-				input.taskIds
-			);
-			return json({ reordered: true });
 		}
 		case 'agents.interrupt': {
 			const input = yield* decode(AgentLaneInput, commandInput);
@@ -2819,46 +1587,11 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* (yield* Agents.Service).updateVerifier(effectId, input.conversationId, input.verifier);
 			return json({ updated: true });
 		}
-		case 'agents.listConversations': {
-			const input = yield* decode(AgentListConversationsInput, commandInput);
-			const agents = yield* Agents.Service;
-			return json(yield* agents.listConversations(effectId, input.subject));
-		}
-		case 'agents.history': {
-			const input = yield* decode(AgentHistoryInput, commandInput);
-			const agents = yield* Agents.Service;
-			return json(yield* agents.history(effectId, input.subject, input.conversationId));
-		}
-		case 'agents.listSkills': {
-			const input = yield* decode(SkillInput, commandInput);
-			return json((yield* Agents.Service).listSkills(input.subject));
-		}
-		case 'agents.readSkill': {
-			const input = yield* decode(SkillInput, commandInput);
-			if (input.name === undefined)
-				return yield* new DispatchError({
-					code: 'invalid_input',
-					message: 'Skill name is required'
-				});
-			return json(yield* (yield* Agents.Service).readSkill(input.subject, input.name));
-		}
 		// The agent model picker asks for the models this deployment offers. Bolt does not decide that
 		// — the host's AI facility does — so this forwards the question rather than answering it.
 		case 'ai.models': {
 			const ai = yield* AI.Service;
 			return json((yield* ai.execute(effectId, { _tag: 'Models' })).output);
-		}
-		/**
-		 * Every agent a caller can open a conversation with: the web agent, plus one per envoy.
-		 *
-		 * `web` is a literal rather than a declaration, because the web agent has none — it is defined
-		 * entirely by who is using it. This used to answer `definition.agents`, an array that had
-		 * exactly one element in every workspace that ever existed: the placeholder the compiler
-		 * synthesized.
-		 */
-		case 'workspace.agents': {
-			const definition = (yield* Workspace.Service).definition;
-			return json([WEB_AGENT_NAME, ...definition.envoys.map(({ name }) => name)]);
 		}
 		/**
 		 * Runtime consumers receive only collections they may read. Studio has a separate authoring
@@ -2935,8 +1668,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				// There is no `agent` key, because there is no agent to point at. An envoy *is* one, and
 				// the back-pointer this used to publish had the same value for every envoy in every
 				// workspace: the single synthesized agent the compiler invented.
-				envoys: definition.envoys.map(({ name, transport, audience, groupMessages }) =>
-					DispatchValues.jsonObject({ name, transport, audience, groupMessages })
+				envoys: definition.envoys.map(({ name, transport, audience, groupMessages, delegation }) =>
+					DispatchValues.jsonObject({ name, transport, audience, groupMessages, delegation })
 				),
 				/**
 				 * Every static identity this release can mint, with the label a surface renders it as.
@@ -2966,113 +1699,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				requiredFacilities: [...definition.requiredFacilities]
 			});
 		}
-		case 'collections.findMany': {
-			const input = yield* decode(CollectionFindInput, commandInput);
-			return yield* collectionPage(effectId, input);
-		}
-		case 'collections.findGrouped': {
-			const input = yield* decode(CollectionGroupedInput, commandInput);
-			const workspace = yield* Workspace.Service;
-			const definition = yield* workspace.collection(input.collection);
-			if (
-				(!SYSTEM_COLUMN_NAMES.includes(input.group.by) &&
-					!Object.hasOwn(definition.fields, input.group.by)) ||
-				definition.fields[input.group.by]?.reference !== undefined ||
-				definition.fields[input.group.by]?.type === 'json' ||
-				input.group.by === 'sys_period'
-			) {
-				return yield* new DispatchError({
-					code: 'invalid_input',
-					message: 'Grouped queries require one persisted scalar column.'
-				});
-			}
-			const described = canonicalizeCollectionQuery(
-				'findGrouped',
-				input,
-				workspaceCollectionQueryMetadata(workspace.definition),
-				{ pinnedCollation: true, localRelationships: true, localSearch: true }
-			);
-			if (described === undefined) {
-				return yield* new DispatchError({
-					code: 'invalid_input',
-					message: 'Grouped collection query could not be canonicalized'
-				});
-			}
-			const position = yield* collectionQueryPosition(
-				EffectId.make(`${effectId}:grouped-position`),
-				input.subject,
-				described.dependencies
-			);
-			const groups = yield* (yield* Collections.Service).findGrouped(effectId, input.subject, {
-				collection: input.collection,
-				where: input.where,
-				userFilter: input.userFilter,
-				orderBy: input.orderBy,
-				with: withoutCollectionQueryProjection(input.with),
-				search: input.search,
-				groupBy: input.group.by,
-				lanes: input.group.lanes ?? []
-			});
-			const hydration = normalizeCollectionHydration(
-				workspace.definition,
-				input.collection,
-				Object.values(groups).flat()
-			);
-			if (Result.isFailure(hydration)) {
-				return yield* new DispatchError({
-					code: 'invalid_stored_record',
-					message: hydration.failure.message
-				});
-			}
-			return json({
-				groups,
-				baseRows: hydration.success.baseRows,
-				relationshipRefs: hydration.success.relationshipRefs,
-				...position,
-				reproducibility: described.reproducibility
-			});
-		}
-		case 'collections.findFirst': {
-			const input = yield* decode(CollectionFindInput, commandInput);
-			const row = yield* (yield* Collections.Service).findFirst(
-				effectId,
-				input.subject,
-				collectionQuery(input)
-			);
-			return json(
-				row === undefined ? null : projectCollectionQueryRecord(row, input.columns, input.with)
-			);
-		}
-		case 'collections.count': {
-			const input = yield* decode(CollectionFindInput, commandInput);
-			const workspace = yield* Workspace.Service;
-			const described = canonicalizeCollectionQuery(
-				'count',
-				input,
-				workspaceCollectionQueryMetadata(workspace.definition),
-				{ pinnedCollation: true, localRelationships: true, localSearch: true }
-			);
-			if (described === undefined) {
-				return yield* new DispatchError({
-					code: 'invalid_input',
-					message: 'Collection count could not be canonicalized'
-				});
-			}
-			const position = yield* collectionQueryPosition(
-				EffectId.make(`${effectId}:count-position`),
-				input.subject,
-				described.dependencies
-			);
-			return json({
-				count: yield* (yield* Collections.Service).count(
-					effectId,
-					input.subject,
-					collectionQuery(input)
-				),
-				...position,
-				reproducibility: described.reproducibility
-			});
-		}
 		case 'collections.history': {
 			const input = yield* decode(CollectionRecordInput, commandInput);
 			return json(
@@ -3084,376 +1710,19 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
-		/** The browser's one declarative write: a root and every relationship it explicitly owns. */
+		/** The browser mutation lifecycle is owned by Collections. */
 		case 'collections.mutate': {
 			const authority = yield* decode(AuthenticatedCollectionMutation, commandInput);
 			const input = yield* decode(CollectionMutateRequest, commandInput);
-			const tenant = yield* TenantScope.Service;
-			const collections = yield* Collections.Service;
-			const submittedGraph: CollectionMutationGraph = input.graph;
-			const submittedBaseVersions: ReadonlyArray<CollectionMutationBaseVersion> =
-				input.baseVersions;
-			const scope = browserMutationScopeFor(
-				tenant.tenantId,
-				tenant.environment,
-				authority.actor,
-				authority.subject,
-				authority.impersonatedTeam
-			);
-			const registeredPartition = yield* collections.browserMutationPartition(
-				EffectId.make(`${effectId}:browser-mutation:partition`),
-				{
-					tenantId: tenant.tenantId,
-					environment: tenant.environment,
-					actorId: authority.actor.userId,
-					effectiveSubjectId: authority.subject.userId,
-					impersonationBinding:
-						authority.impersonatedTeam === null ? 'operator' : `team:${authority.impersonatedTeam}`
-				},
-				input.partitionKey
-			);
-			if (
-				registeredPartition === undefined ||
-				registeredPartition.schemaFingerprint !== input.schemaFingerprint
-			)
-				return yield* new AccessControl.AccessDenied({
-					action: 'mutate',
-					resource: submittedGraph.collection,
-					reason:
-						'The mutation journal partition is not a server-issued partition for this authenticated identity and schema.'
-				});
-			const requestDigest = yield* sha256Hex(canonicalJson(input));
-			const scopeDigest = yield* sha256Hex(
-				canonicalJson({ ...scope, idempotencyKey: input.idempotencyKey })
-			);
-			const mutationEffectId = EffectId.make(`browser-mutation:${scopeDigest}`);
-			const replayOutcome = Effect.fn('Bolt.replayBrowserMutation')(function* (
-				outcome: Collections.BrowserMutationOutcome
-			) {
-				if (outcome._tag === 'PendingApproval') {
-					return json({
-						resolution: 'accepted',
-						mutationId: input.idempotencyKey,
-						deviceSequence: input.deviceSequence,
-						schemaFingerprint: outcome.schemaFingerprint,
-						records: [],
-						pendingApproval: {
-							requestId: outcome.requestId,
-							collection: outcome.collection,
-							id: outcome.id,
-							action: outcome.action
-						}
-					});
-				}
-				if (outcome._tag === 'VersionConflict') {
-					return json({
-						resolution: 'rejected',
-						mutationId: input.idempotencyKey,
-						deviceSequence: input.deviceSequence,
-						code: 'conflict',
-						message:
-							outcome.currentVersion === null
-								? `${outcome.collection} ${outcome.id} no longer exists at row version ${outcome.baseVersion}.`
-								: `${outcome.collection} ${outcome.id} changed from row version ${outcome.baseVersion} to ${outcome.currentVersion}.`,
-						schemaFingerprint: outcome.schemaFingerprint
-					});
-				}
-				if (outcome._tag === 'Quarantined')
-					return json({
-						resolution: 'quarantined',
-						mutationId: outcome.idempotencyKey,
-						deviceSequence: outcome.deviceSequence,
-						schemaFingerprint: outcome.schemaFingerprint,
-						reason: outcome.reason
-					});
-				if (outcome._tag === 'Rejected') {
-					return json({
-						resolution: 'rejected',
-						mutationId: input.idempotencyKey,
-						deviceSequence: input.deviceSequence,
-						code: outcome.code,
-						message: outcome.message,
-						schemaFingerprint: outcome.schemaFingerprint
-					});
-				}
-				const records =
-					outcome.action === 'delete'
-						? []
-						: yield* collections
-								.findMany(EffectId.make(`${mutationEffectId}:readback`), authority.subject, {
-									collection: outcome.collection,
-									where: { id: { in: [outcome.id] } },
-									limit: 1
-								})
-								.pipe(Effect.catch(() => Effect.succeed([])));
-				return outcome.resolution === 'accepted'
-					? json({
-							resolution: 'accepted',
-							mutationId: input.idempotencyKey,
-							deviceSequence: outcome.deviceSequence,
-							schemaFingerprint: outcome.toSchemaFingerprint,
-							records
-						})
-					: json({
-							resolution: 'rebased',
-							mutationId: input.idempotencyKey,
-							deviceSequence: outcome.deviceSequence,
-							fromSchemaFingerprint: outcome.fromSchemaFingerprint,
-							toSchemaFingerprint: outcome.toSchemaFingerprint,
-							records
-						});
-			});
-			const replay = yield* collections.browserMutationOutcome(
-				EffectId.make(`${effectId}:browser-mutation:lookup`),
-				scope,
-				input.idempotencyKey,
-				requestDigest
-			);
-			if (replay !== undefined) return yield* replayOutcome(replay);
-
-			const nowEpochMs = yield* Clock.currentTimeMillis;
-			if (input.issuedAtEpochMs > nowEpochMs + 5 * 60 * 1000)
-				return yield* new Collections.MutationRetryExpired({
-					issuedAtEpochMs: input.issuedAtEpochMs
-				});
-
-			const currentSchemaFingerprint = (yield* Sync.Service).schema().fingerprint;
-			const workspace = yield* Workspace.Service;
-			const reconciliation = reconcileMutationSchema(workspace.definition, {
-				fromSchemaFingerprint: input.schemaFingerprint,
-				toSchemaFingerprint: currentSchemaFingerprint,
-				ageMillis: Math.max(0, nowEpochMs - input.issuedAtEpochMs),
-				graph: submittedGraph,
-				baseVersions: submittedBaseVersions
-			});
-			const graph =
-				reconciliation.resolution === 'quarantined' ? submittedGraph : reconciliation.graph;
-			const baseVersions =
-				reconciliation.resolution === 'quarantined'
-					? submittedBaseVersions
-					: reconciliation.baseVersions;
-			let quarantineReason =
-				reconciliation.resolution === 'quarantined' ? reconciliation.reason : undefined;
-			if (quarantineReason === undefined) {
-				const seenBaseRows = new Set<string>();
-				for (const entry of baseVersions) {
-					const coordinate = canonicalJson(entry.row);
-					if (seenBaseRows.has(coordinate)) {
-						quarantineReason = `The mutation graph carries more than one base version for ${entry.row.collection} ${entry.row.recordId}.`;
-						break;
-					}
-					seenBaseRows.add(coordinate);
-				}
-			}
-			const submittedId = graph.action === 'delete' ? graph.id : graph.values['id'];
-			if (
-				quarantineReason === undefined &&
-				(typeof submittedId !== 'string' || !MUTATION_RECORD_ID.test(submittedId))
-			)
-				quarantineReason = `${graph.action} mutation ${graph.collection} must carry a valid client-minted UUID.`;
-			if (reconciliation.resolution !== 'quarantined' && graph.action !== 'delete') {
-				const checked = yield* Effect.result(checkWrittenGraph(graph.collection, graph.values));
-				if (Result.isFailure(checked)) {
-					quarantineReason =
-						reconciliation.resolution === 'rebased'
-							? `The retained compatibility adapter cannot produce a valid current-schema graph: ${describeCause(checked.failure)}`
-							: `The journaled graph is not safe to apply to the current schema: ${describeCause(checked.failure)}`;
-				}
-			}
-			const rootId = String(submittedId);
-			const committed: Collections.BrowserMutationOutcome = {
-				_tag: 'Committed',
-				collection: graph.collection,
-				id: rootId,
-				action: graph.action,
-				resolution: reconciliation.resolution === 'rebased' ? 'rebased' : 'accepted',
-				deviceSequence: input.deviceSequence,
-				fromSchemaFingerprint: input.schemaFingerprint,
-				toSchemaFingerprint: currentSchemaFingerprint
-			};
-			const rootBaseVersion = baseVersions.find(
-				(entry) => entry.row.collection === graph.collection && entry.row.recordId === rootId
-			)?.rowVersion;
-			if (graph.action === 'create' && rootBaseVersion !== undefined)
-				quarantineReason = `The create graph carries a base version for its new root ${graph.collection} ${rootId}.`;
-			const quarantined: Collections.BrowserMutationOutcome | undefined =
-				quarantineReason !== undefined
-					? {
-							_tag: 'Quarantined',
-							idempotencyKey: input.idempotencyKey,
-							deviceSequence: input.deviceSequence,
-							schemaFingerprint: input.schemaFingerprint,
-							reason: quarantineReason
-						}
-					: undefined;
-			const fence: Collections.BrowserMutationFence = {
-				scope,
-				idempotencyKey: input.idempotencyKey,
-				requestDigest,
-				issuedAtEpochMs: input.issuedAtEpochMs,
-				deviceSequence: input.deviceSequence,
-				partitionKey: input.partitionKey,
-				schemaFingerprint: input.schemaFingerprint,
-				currentSchemaFingerprint,
-				baseVersions,
-				outcome: quarantined ?? committed
-			};
-			const beginning = yield* collections.beginBrowserMutation(
-				EffectId.make(`${effectId}:browser-mutation:begin`),
-				fence
-			);
-			if (beginning._tag === 'Replay') return yield* replayOutcome(beginning.outcome);
-			if (beginning._tag === 'InProgress')
-				return yield* new Collections.MutationInProgress({
-					retryAfterSeconds: beginning.retryAfterSeconds
-				});
-			const persistTerminalFailure = Effect.fn('Bolt.persistTerminalMutationFailure')(function* (
-				fence: Collections.BrowserMutationFence,
-				cause: unknown
-			) {
-				const error = Collections.unwrapMutationPhase(cause);
-				const refusal = refusalOf(error);
-				const outcome: Collections.BrowserMutationOutcome | undefined =
-					refusal !== undefined
-						? {
-								_tag: 'Rejected',
-								code: 'refused',
-								message: refusal.message,
-								schemaFingerprint: fence.currentSchemaFingerprint,
-								...(refusal.collection === undefined ? {} : { collection: refusal.collection }),
-								...(refusal.action === undefined ? {} : { action: refusal.action })
-							}
-						: error instanceof AccessControl.AccessDenied
-							? {
-									_tag: 'Rejected',
-									code: 'forbidden',
-									message: error.reason,
-									schemaFingerprint: fence.currentSchemaFingerprint,
-									collection: error.resource,
-									...(error.action === 'create' ||
-									error.action === 'update' ||
-									error.action === 'delete'
-										? { action: error.action }
-										: {})
-								}
-							: error instanceof Collections.MutationVersionConflict
-								? {
-										_tag: 'VersionConflict',
-										collection: error.collection,
-										id: error.id,
-										baseVersion: error.baseVersion,
-										currentVersion: error.currentVersion,
-										schemaFingerprint: fence.currentSchemaFingerprint
-									}
-								: error instanceof Collections.PendingApproval
-									? {
-											_tag: 'PendingApproval',
-											requestId: error.requestId,
-											collection: error.collection,
-											id: error.id,
-											action: error.action,
-											schemaFingerprint: fence.currentSchemaFingerprint
-										}
-									: undefined;
-				if (outcome === undefined) return undefined;
-				return yield* collections.rememberBrowserMutationOutcome(
-					EffectId.make(`${effectId}:browser-mutation:terminal-error`),
-					fence,
-					outcome
-				);
-			});
-			if (quarantined !== undefined) {
-				const durable = yield* collections.rememberBrowserMutationOutcome(
-					EffectId.make(`${effectId}:browser-mutation:quarantine`),
-					fence,
-					quarantined
-				);
-				return yield* replayOutcome(durable ?? quarantined);
-			}
-
-			if (graph.action === 'delete') {
-				const deletion = yield* Effect.result(
-					collections.delete(mutationEffectId, authority.subject, graph.collection, graph.id, {
-						...(rootBaseVersion === undefined || rootBaseVersion === null
-							? {}
-							: { baseVersion: rootBaseVersion }),
-						browserMutation: fence
-					})
-				);
-				if (Result.isFailure(deletion)) {
-					const terminal = Collections.unwrapMutationPhase(deletion.failure);
-					if (terminal instanceof Collections.MutationQuarantined)
-						return yield* replayOutcome({
-							_tag: 'Quarantined',
-							idempotencyKey: terminal.idempotencyKey,
-							deviceSequence: terminal.deviceSequence,
-							schemaFingerprint: terminal.schemaFingerprint,
-							reason: terminal.reason
-						});
-					const durable = yield* persistTerminalFailure(fence, deletion.failure);
-					if (durable !== undefined) return yield* replayOutcome(durable);
-					return yield* Effect.fail(deletion.failure);
-				}
-				return yield* replayOutcome(committed);
-			}
-
-			const mutation = yield* Effect.result(
-				collections.mutate(
-					mutationEffectId,
+			return json(
+				yield* (yield* Collections.Service).mutateBrowser(
+					effectId,
+					authority.actor,
 					authority.subject,
-					graph.collection,
-					[graph.values],
-					false,
-					0,
-					{
-						declarative: true,
-						root: { id: rootId, action: graph.action },
-						browserMutation: fence
-					}
+					authority.impersonatedTeam,
+					input
 				)
 			);
-			if (Result.isFailure(mutation)) {
-				const terminal = Collections.unwrapMutationPhase(mutation.failure);
-				if (terminal instanceof Collections.MutationQuarantined)
-					return yield* replayOutcome({
-						_tag: 'Quarantined',
-						idempotencyKey: terminal.idempotencyKey,
-						deviceSequence: terminal.deviceSequence,
-						schemaFingerprint: terminal.schemaFingerprint,
-						reason: terminal.reason
-					});
-				const durable = yield* persistTerminalFailure(fence, mutation.failure);
-				if (durable !== undefined) return yield* replayOutcome(durable);
-				return yield* Effect.fail(mutation.failure);
-			}
-			const written = mutation.success;
-			const stored = written[0];
-			const id = stored?.['id'];
-			// Mutation success is independent of read entitlement. Querying through the ordinary subject
-			// path applies both row and field policy; a write-only subject receives an empty record list,
-			// and a post-commit read failure cannot turn an already committed mutation into a retry.
-			const records =
-				typeof id !== 'string'
-					? []
-					: yield* collections
-							.findMany(EffectId.make(`${mutationEffectId}:readback`), authority.subject, {
-								collection: graph.collection,
-								where: { id: { in: [id] } },
-								limit: 1
-							})
-							.pipe(Effect.catch(() => Effect.succeed([])));
-			return json({
-				resolution: reconciliation.resolution,
-				mutationId: input.idempotencyKey,
-				deviceSequence: input.deviceSequence,
-				...(reconciliation.resolution === 'rebased'
-					? {
-							fromSchemaFingerprint: input.schemaFingerprint,
-							toSchemaFingerprint: currentSchemaFingerprint
-						}
-					: { schemaFingerprint: currentSchemaFingerprint }),
-				records
-			});
 		}
 		case 'collections.resume': {
 			const input = yield* decode(ApprovalRequestIdInput, commandInput);
@@ -3476,68 +1745,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(CollectionFindInput, commandInput);
 			return json(
 				yield* (yield* Collections.Service).export(effectId, input.subject, collectionQuery(input))
-			);
-		}
-		/**
-		 * The exact DDL this subject's browser replica is provisioned with, in order.
-		 *
-		 * The server renders it from the compiled current model, so the browser has no schema generator
-		 * and no drizzle-kit. It intentionally differs from the authoritative schema in one respect:
-		 * private tables and relationship constraints are absent because server-side writes enforce them.
-		 *
-		 * This is a replica projection rather than the server plan or its lineage: only the extensions
-		 * and pure projection functions the current tenant shape needs, followed by the current replicated
-		 * tenant tables and `approval_request`. Server-private tables and relationship constraints never
-		 * cross this boundary.
-		 */
-		case 'sync.provisioning': {
-			const input = yield* decode(SyncShapeInput, commandInput);
-			const workspace = yield* Workspace.Service;
-			const access = yield* AccessControl.Service;
-			const steps = replicaProvisioningSteps(workspace.definition);
-			const collections = workspace.definition.collections.filter(isReplicatedCollection);
-			const collectionNames = new Set(collections.map(({ name }) => name));
-			const schemaFingerprint =
-				workspace.definition.mutationCompatibility?.currentSchemaFingerprint;
-			if (schemaFingerprint === undefined)
-				throw new TypeError(
-					'Compiled workspace is missing its mutation compatibility fingerprint.'
-				);
-			// The projection is JSON by construction — every value is a string, an array of strings or
-			// a decoded declaration — so the wire value is the same object after serialisation, and a
-			// decode of the serialised form is the boundary check that keeps that claim honest.
-			const provisioning = {
-				steps,
-				// O2 namespace identity and M4 compatibility use the compiler-owned logical SHA-256.
-				// `migrationDigest` on sync.schema separately authenticates these exact ordered DDL bytes.
-				fingerprint: schemaFingerprint,
-				/**
-				 * The metadata the replica needs to compile a query the way the server would.
-				 *
-				 * Sent rather than re-derived on the client, so the local read path and the server read
-				 * path cannot disagree about what a column is. Nothing is disclosed that the DDL above
-				 * does not already state — these are the same collections, spelled as declarations
-				 * instead of as `create table`.
-				 */
-				collections: collections.map(({ name, fields }) => {
-					const projection = access.predicate(input.subject, 'read', name);
-					return {
-						name,
-						fields,
-						...(projection.allowed
-							? { readableFields: projection.fields === undefined ? null : projection.fields }
-							: {})
-					};
-				}),
-				// Local joins can only name tables that exist in this replica. Relations to private runtime
-				// collections remain in the authored catalog for Bolt's remote identity renderer, but never
-				// become local schema metadata or an invitation to query a private table.
-				relations: (workspace.definition.relations ?? []).filter(
-					({ source, target }) => collectionNames.has(source) && collectionNames.has(target)
-				)
-			};
-			return json(
-				Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(JSON.stringify(provisioning))
 			);
 		}
 		case 'schema.plan': {
@@ -3581,39 +1788,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				result: result ?? null
 			});
 		}
-		case 'automations.register': {
-			const input = yield* decode(NamedInput, commandInput);
-			yield* (yield* Automations.Service).register(input.name);
-			return json({ registered: true });
-		}
-		case 'automations.runStep': {
-			const input = yield* decode(AutomationStartInput, commandInput);
-			const automations = yield* Automations.Service;
-			const taskId = yield* automations.runStep(effectId, input.name, input.input);
-			const result = yield* executeDirectAutomation(
-				EffectId.make(`${effectId}:execute`),
-				input.name,
-				taskId
-			);
-			return json({
-				taskId,
-				result: result ?? null
-			});
-		}
 		case 'automations.stop': {
 			const input = yield* decode(AutomationLifecycleInput, commandInput);
 			yield* (yield* Automations.Service).stop(effectId, input.name, input.taskId);
 			return json({ stopped: true });
-		}
-		case 'automations.resume': {
-			const input = yield* decode(AutomationLifecycleInput, commandInput);
-			yield* (yield* Automations.Service).resume(effectId, input.name, input.taskId);
-			const result = yield* executeDirectAutomation(
-				EffectId.make(`${effectId}:execute`),
-				input.name,
-				input.taskId
-			);
-			return json({ resumed: true, result: result ?? null });
 		}
 		case 'envoys.receive': {
 			const input = yield* decode(EnvoyReceiveInput, commandInput);
@@ -3638,16 +1816,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
-		case 'envoys.register': {
-			const input = yield* decode(EnvoyNameInput, commandInput);
-			yield* (yield* Envoys.Service).register(effectId, input.envoy);
-			return json({ registered: true });
-		}
-		case 'envoys.reply': {
-			const input = yield* decode(EnvoyReplyInput, commandInput);
-			yield* (yield* Envoys.Service).reply(effectId, input.envoy, input.recipient, input.payload);
-			return json({ replied: true });
-		}
 		case 'envoys.status': {
 			const input = yield* decode(EnvoyNameInput, commandInput);
 			return json(yield* (yield* Envoys.Service).status(effectId, input.envoy));
@@ -3657,68 +1825,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const integrations = yield* Integrations.Service;
 			return json(yield* integrations.pull(effectId, input.name, input.cursor, input.binding));
 		}
-		case 'integrations.install':
-		case 'integrations.reconcile':
-		case 'integrations.disable':
-		case 'integrations.status': {
-			const input = yield* decode(NamedInput, commandInput);
-			const integrations = yield* Integrations.Service;
-			if (command === 'integrations.install') {
-				yield* integrations.install(effectId, input.name);
-				return json({ installed: true });
-			}
-			if (command === 'integrations.reconcile') {
-				yield* integrations.reconcile(effectId, input.name);
-				return json({ reconciled: true });
-			}
-			if (command === 'integrations.disable') {
-				yield* integrations.disable(effectId, input.name);
-				return json({ disabled: true });
-			}
-			return json(yield* integrations.status(effectId, input.name));
-		}
-		case 'integrations.receive': {
-			const input = yield* decode(IntegrationReceiveInput, commandInput);
-			// Deliberately *not* added to `ENQUEUED_COMMANDS`: a webhook is not something the runtime
-			// posts to itself, so it stays a `Command` and the host relaying it must present its own
-			// credential. That is one of the two independent checks a delivery passes — the host proves it
-			// is the host, and the HMAC proves the source is the source. Listing it as enqueued would drop
-			// the first of those and re-open a credential-free route into a collection write.
-			return json(
-				yield* (yield* Integrations.Service).receive(effectId, input.name, input.binding, {
-					headers: input.headers,
-					body: input.body
-				})
-			);
-		}
 		case 'integrations.flush': {
 			const input = yield* decode(IntegrationFlushInput, commandInput);
 			return json(
 				yield* (yield* Integrations.Service).flush(effectId, input.name, input.input ?? null)
 			);
 		}
-		case 'notifications.enqueue': {
-			const input = yield* decode(Notification, commandInput);
-			const notifications = yield* Notifications.Service;
-			yield* notifications.enqueue(effectId, input);
-			return json({ enqueued: true, id: input.id });
-		}
 		case 'notifications.drain': {
 			const input = yield* decode(Notification, commandInput);
 			const notifications = yield* Notifications.Service;
 			yield* notifications.drain(effectId, input);
 			return json({ delivered: true, id: input.id });
-		}
-		case 'notifications.markRead': {
-			const input = yield* decode(NotificationReadInput, commandInput);
-			yield* (yield* Notifications.Service).markRead(effectId, input.recipient, input.id);
-			return json({ read: true, id: input.id });
-		}
-		case 'notifications.list': {
-			const input = yield* decode(NotificationRecipientInput, commandInput);
-			return json(
-				yield* (yield* Notifications.Service).list(effectId, input.recipient, input.unreadOnly)
-			);
 		}
 		default:
 			// An enqueued `automations.<name>` task is an authored automation's turn to run: the

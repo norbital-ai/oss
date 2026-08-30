@@ -4,7 +4,7 @@ import {
 	withoutAdmittedDocuments,
 	type UnsettledAgentAdmission
 } from '../../src/client/ui/agent/admission-reconciliation.js';
-import type { ChatDocumentRef } from '../../src/runtime/agents/chat-messages.js';
+import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 
 const document = (storageKey: string): ChatDocumentRef => ({
 	storage_key: storageKey,

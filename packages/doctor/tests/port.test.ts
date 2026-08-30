@@ -1,9 +1,8 @@
 /**
- * Every ported rule, with source that must be reported and source that must not.
- *
- * This is the port's acceptance criterion. The legacy detector's rules were visitors whose
- * behaviour was asserted only indirectly, which is how `QRY1` came to match variable names for
- * years without anybody noticing. A rule that cannot demonstrate both halves here is not ported.
+ * Port acceptance for the neutral packs: typed boundaries and structure. Every rule reports
+ * source that must be reported and none reports source that must not — the table is the
+ * criterion, and a rule without both halves is not ported. Effect ownership lives in
+ * packages/doctor-effect; the Norbital product rules live in packages/doctor-norbital.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -11,38 +10,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import {
-	boundaryRules,
-	effectRules,
-	platformRules,
-	runRules,
-	structureRules,
-	svelteRules,
-	type Rule
-} from '../build/index.js';
+import { boundaryRules, runRules, structureRules, type Rule } from '../build/index.js';
 
-const ALL: ReadonlyArray<Rule> = [
-	...boundaryRules,
-	...effectRules,
-	...structureRules,
-	...platformRules,
-	...svelteRules
-];
-
-/** Effect-owned by default: several rules only apply where Effect is imported. */
-const PRELUDE = "import { Effect } from 'effect';\n";
+const ALL: ReadonlyArray<Rule> = [...boundaryRules, ...structureRules];
 
 type Case = Readonly<{
 	rule: string;
 	bad: string;
 	good: string;
 	file?: string;
-	/** Extra repository files a rule needs in order to mean anything — a tsconfig, a manifest. */
 	fixture?: Readonly<Record<string, string>>;
 }>;
-
 const CASES: ReadonlyArray<Case> = [
-	// --- typed boundaries -------------------------------------------------------------------
 	{
 		rule: 'R1',
 		bad: 'export function f(v: any) { return v; }',
@@ -89,67 +68,6 @@ const CASES: ReadonlyArray<Case> = [
 	},
 
 	// --- Effect ownership -------------------------------------------------------------------
-	{
-		rule: 'EFF1',
-		bad: `${PRELUDE}export const f = () => { try { go(); } catch (e) { report(e); } };`,
-		good: `${PRELUDE}export const f = () => Effect.try(go);`
-	},
-	{
-		rule: 'EFF2',
-		bad: `${PRELUDE}export const f = () => Promise.all([a, b]);`,
-		good: `${PRELUDE}export const f = () => Effect.all([a, b]);`
-	},
-	{
-		rule: 'EFF3',
-		bad: `${PRELUDE}export async function f() { return 1; }`,
-		good: `${PRELUDE}export const f = Effect.succeed(1);`
-	},
-	{
-		rule: 'EFF5',
-		bad: `${PRELUDE}export const f = Effect.gen(function* () { const t = Date.now(); return yield* Effect.succeed(t); });`,
-		// The second workflow is the regression: `new Date(millis)` converts a Clock reading the
-		// line above it, which is the shape this rule is supposed to be asking for.
-		good:
-			`${PRELUDE}export const f = Effect.gen(function* () { return yield* Clock.currentTimeMillis; });\n` +
-			`export const g = Effect.gen(function* () { const m = yield* Clock.currentTimeMillis; return new Date(m); });`
-	},
-	{
-		rule: 'EFF6',
-		bad: `${PRELUDE}export const f = Effect.gen(function* () { throw new Error('x'); });`,
-		good: `${PRELUDE}export const f = Effect.gen(function* () { return yield* Effect.fail('x'); });`
-	},
-	{
-		rule: 'EFF7',
-		bad: `${PRELUDE}export const f = Effect.gen(function* () { return yield* Effect.succeed(1); });`,
-		good: `${PRELUDE}export const f = Effect.succeed(1);`
-	},
-	{
-		rule: 'NONDET1',
-		bad: `${PRELUDE}export const id = Math.random();`,
-		good: `${PRELUDE}export const id = Effect.succeed(0);`
-	},
-	{
-		rule: 'EQ1',
-		bad: 'export const s = JSON.stringify(a) === JSON.stringify(b);',
-		good: 'export const s = Equal.equals(a, b);'
-	},
-	{
-		rule: 'LOG1',
-		bad: "export const f = () => console.log('x');",
-		good: "export const f = () => Effect.log('x');"
-	},
-	{
-		rule: 'IO1',
-		bad: "import { readFileSync } from 'node:fs';\nexport const f = () => readFileSync('/x', 'utf8');",
-		good: "export const f = () => fs.readFile('/x');"
-	},
-	{
-		rule: 'STATE1',
-		bad: 'export let shared: number[] = [];',
-		good: 'export const shared: ReadonlyArray<number> = [];'
-	},
-
-	// --- structure --------------------------------------------------------------------------
 	{
 		rule: 'A1',
 		bad: 'export const f = () => { setInterval(tick, 10); };',
@@ -249,11 +167,6 @@ const CASES: ReadonlyArray<Case> = [
 		good: 'export const prod = config.isProduction ? 1 : 2;'
 	},
 	{
-		rule: 'E2',
-		bad: 'export const ENABLE_BETA = true;',
-		good: 'export const enableBeta = config.beta;'
-	},
-	{
 		rule: 'IMP1',
 		// The rule claims a *declared alias* is being bypassed, so the fixture has to declare one.
 		// Without this the case passed against a rule that only ever matched `../../`.
@@ -300,129 +213,9 @@ const CASES: ReadonlyArray<Case> = [
 		rule: 'AL3',
 		bad: 'export type Bag = Record<string, unknown>;',
 		good: 'export type Bag = { readonly id: string };'
-	},
+	}
 
 	// --- platform ---------------------------------------------------------------------------
-	{
-		rule: 'ORM1',
-		bad: "export const t = { id: text('thing_id') };",
-		good: 'export const t = { id: text() };'
-	},
-	{
-		rule: 'DDL1',
-		bad: "export const t = pgTable('things', {});",
-		good: 'export const t = defineModel({});'
-	},
-	{
-		rule: 'SQL1',
-		bad:
-			"export const q = 'SELECT id FROM users';\n" +
-			'export const fragment = sql`now()`;\n' +
-			"export const seed = 'insert into h (s) values (true) on conflict do nothing';\n" +
-			"export const stub = (i) => i.sql === 'select name from bolt_secrets';",
-		// Transaction control and narrowly identifiable schema bootstrap DDL are the only raw SQL
-		// forms the production scanner accepts.
-		good:
-			'export const q = db.users.findMany({});\n' +
-			'export const boot = `create table if not exists ${t} (id uuid)`;\n' +
-			'export const hist = `create table ${t}_history (id uuid)`;\n' +
-			'export const trig = `create trigger t after insert on x execute function f()`;\n' +
-			"export const policy = 'create policy tenant_rows on things using (tenant_id = current_user)';\n" +
-			'export const predicate = { $sql: \'"tenant_id" = current_user\' } as const;\n' +
-			"export const begin = 'begin';\n" +
-			"export const commit = 'commit';\n" +
-			"export const rollback = 'rollback';"
-	},
-	{
-		rule: 'SQL1',
-		file: 'src/collections/things/+model.ts',
-		bad: "export const runtimeRead = 'select id from things';",
-		good: "export const key = text().generatedAlwaysAs(sql`source ->> 'kind'`);"
-	},
-	{
-		rule: 'SQL1',
-		bad: "export function request() { const statement = { sql: 'insert into things (id) values ($1)' }; return { _tag: 'Query', ...statement }; }",
-		good: "export function request() { const statement = { sql: 'insert into things (id) values ($1)', parameters: [id] }; return { _tag: 'Transaction', statements: [statement] }; }"
-	},
-	{
-		rule: 'SQL1',
-		bad: "import { transactionSql } from './lookalike.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);",
-		good: "import { transactionSql } from '#lib/runtime/persistence.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);"
-	},
-	{
-		rule: 'QRY2',
-		bad: 'export const f = () => { void query.refresh(); };',
-		good:
-			'export const f = () => { const rows = client.db.things.findMany({}); return rows; };\n' +
-			'export const updateToc = () => toc.refresh();'
-	},
-	{
-		rule: 'QRY4',
-		bad: 'export interface RemoteQuery<T> { readonly current: T; readonly refresh: () => Promise<void>; }',
-		good:
-			'export interface RemoteQuery<T> { readonly current: T; }\n' +
-			'export interface DocumentToc { readonly refresh: () => void; }'
-	},
-	{
-		rule: 'LIVE1',
-		bad: 'export const pollStatus = () => status();',
-		good:
-			'export const rows = client.db.things.findMany({});\n' +
-			'export const clock = setInterval(() => { currentTime = new Date(); }, 60_000);'
-	},
-	{
-		rule: 'LIVE1',
-		bad: 'export async function watch() { while (true) { await sleep(1000); await status(); } }',
-		good: 'export function transform(rows) { for (const row of rows) emit(row); }'
-	},
-	{
-		rule: 'LIVE2',
-		bad:
-			"export const source = new EventSource('/events');\n" +
-			"export const contentType = 'text/event-stream';\n" +
-			"export const protocol = 'sse';",
-		good: "export const transport = 'websocket';"
-	},
-	{
-		rule: 'QRY3',
-		bad: 'export const rows = client.db.things.findMany({});',
-		good: 'export const rows = $derived(client.db.things.findMany({}));'
-	},
-	{
-		rule: 'UI18',
-		// The rule is scoped to client UI, which is what its summary always claimed; the same call in
-		// the transport layer below the generated client is that layer doing its job.
-		file: 'src/ui/probe.ts',
-		bad: 'export const f = () => transport.command({});',
-		good: 'export const f = () => client.db.things.create({});'
-	},
-	{
-		rule: 'LEGACY1',
-		bad: '/** @deprecated use next */\nexport function old() { return 1; }',
-		// The second declaration is the regression: prose naming the tag is not a deprecation, and
-		// trivia reaching back to the previous token is not this declaration's comment.
-		good: '/** Current. */\nexport function current() { return 1; }\n/** Reads the `@deprecated` tag. */\nexport function reader() { return 2; }'
-	},
-	{
-		rule: 'COMPAT1',
-		bad: '// legacy forwarder for the old name\nexport const oldName = newName;',
-		good: 'export const name = newName;'
-	},
-	{
-		rule: 'TRANS1',
-		bad: '// TODO: remove once the migration lands\nexport const bridge = 1;',
-		good: '// Kept because the importer needs it.\nexport const bridge = 1;'
-	},
-	{
-		rule: 'TRANS2',
-		bad: 'export const n = row.name ?? row.legacy_name;',
-		good: 'export const n = row.name;'
-	},
-	{
-		rule: 'E3',
-		bad: "export const url = process.env['SECRET_URL'] ?? '';",
-		good: 'export const url = config.secretUrl;'
-	}
 ];
 
 function scan(
@@ -646,11 +439,8 @@ test('simplification rules keep their declared service and bootstrap boundaries'
 		false
 	);
 });
-
 test('every rule in every pack has a case in this table', () => {
 	const covered = new Set(CASES.map((testCase) => testCase.rule));
-	// Layout and rune rules are covered by the svelte suite, which needs component fixtures.
-	const componentOnly = new Set(svelteRules.map((rule) => rule.id));
 	const uncovered = ALL.map((rule) => rule.id).filter(
 		(id) => !covered.has(id) && !componentOnly.has(id)
 	);

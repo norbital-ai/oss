@@ -189,14 +189,18 @@ describe('the bounds a grouped insert is built against', () => {
 				layer: 0,
 				columns: ['id', 'body'],
 				parameters: ['id-1', 'first'],
-				where: { sql: '"owner" = $1', parameters: ['ada'] }
+				// A predicate is appended after the row's own column parameters and shares one bound
+				// list with them, so its placeholders are numbered from where those end. The runtime
+				// numbers them through `predicateStatement`'s `parameterOffset`; the fixture says the
+				// same thing by hand.
+				where: { sql: '"owner" = $3', parameters: ['ada'] }
 			},
 			{
 				table: 'notes',
 				layer: 0,
 				columns: ['id', 'body'],
 				parameters: ['id-2', 'second'],
-				where: { sql: '"owner" = $1', parameters: ['ada'] }
+				where: { sql: '"owner" = $3', parameters: ['ada'] }
 			}
 		];
 

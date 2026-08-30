@@ -11,7 +11,6 @@ import {
 	IDENTITY_COLLECTIONS,
 	withSystemCollections
 } from '../../src/runtime/schema/system-collections.js';
-import { identitySchemaSteps } from '../../src/compiler/schema-plan.js';
 
 /**
  * Identity is declared once, as collections, and Better Auth is given a view of it.
@@ -88,15 +87,4 @@ describe('identity as collections', () => {
 		expect(searchable('team')).toEqual(['name']);
 	});
 
-	it('renders the steps a host applies before anything can authenticate', () => {
-		const steps = identitySchemaSteps();
-		for (const table of Object.values(AUTH_MODELS)) {
-			expect(
-				steps.some((step) => step.sql.includes(`create table if not exists "${table}"`)),
-				`no create-table step for ${table}`
-			).toBe(true);
-		}
-		// Keyed by the platform's id, which is what a workspace relation points at.
-		expect(steps.some((step) => step.sql.includes('id'))).toBe(true);
-	});
 });

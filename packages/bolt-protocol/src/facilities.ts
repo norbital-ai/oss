@@ -330,10 +330,19 @@ export const TaskRequest = Schema.TaggedUnion({
 	/** Releases the host's ephemeral task-to-invocation association after the attempt settles. */
 	Settled: { taskId: Schema.NonEmptyString },
 	/** Accelerates a durable stop/interrupt by terminating only the invocation running this task. */
-	Interrupt: { taskId: Schema.NonEmptyString }
+	Interrupt: { taskId: Schema.NonEmptyString },
+	/**
+	 * Runs one already-admitted delegated agent turn through a fresh host Conductor invocation.
+	 * The host learns no agent semantics; it routes these two durable coordinates to the typed
+	 * `host.agents.executeChild` command and returns that command's JSON answer.
+	 */
+	Delegate: {
+		conversationId: Schema.NonEmptyString,
+		turnId: Schema.NonEmptyString
+	}
 });
 export type TaskRequest = typeof TaskRequest.Type;
-export const TaskResponse = Schema.Struct({});
+export const TaskResponse = Schema.Struct({ output: Schema.optionalKey(Schema.Json) });
 export interface TaskResponse extends Schema.Schema.Type<typeof TaskResponse> {}
 
 export const HostToolRequest = Schema.Struct({ tool: Schema.NonEmptyString, input: Schema.Json });
@@ -410,10 +419,8 @@ export const TransportRequest = Schema.TaggedUnion({
 	 * browser opened and has nowhere to remember it. The host does hold them, and knows which belong
 	 * to the tenant this invocation is scoped to, so naming the topic is the whole of the address.
 	 *
-	 * This is the direction the sync engine needs and the only one it needs: the host tells a replica
-	 * that something changed, and the replica asks for the changes over the ordinary command channel.
-	 * Nothing about the data travels this way, which is what keeps the frame a hint rather than a
-	 * second, weaker copy of the log.
+	 * `Publish` lets any invocation fan one application-defined frame out to the clients listening on
+	 * that topic. The transport does not interpret the bytes; it only performs the host-owned fan-out.
 	 */
 	Publish: {
 		topic: Schema.NonEmptyString,

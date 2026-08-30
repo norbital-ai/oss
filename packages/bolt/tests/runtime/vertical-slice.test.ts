@@ -79,11 +79,7 @@ const definition = workspace({
 	skills: [],
 	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks'],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:vertical-slice-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:vertical-slice-fixture'
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-fixture' });
 const bundle = makeBundle(definition, manifest, {
@@ -222,29 +218,6 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 						};
 			return Promise.resolve({ _tag: 'Success', value: { rows: [resolved], affectedRows: 0 } });
 		}
-		if (request._tag === 'Query' && request.sql.startsWith('update bolt_sync_partition_registry')) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows: [
-						{
-							identity: {
-								key: 'sha256:vertical-slice-partition',
-								tenantId: scope.tenantId,
-								environment: scope.environment,
-								effectivePolicyHolder: 'administrator',
-								impersonationTarget: null,
-								authorityGeneration: 0,
-								schemaFingerprint: 'sha256:vertical-slice-fixture'
-							},
-							schema_fingerprint: 'sha256:vertical-slice-fixture',
-							authority_generation: 0
-						}
-					],
-					affectedRows: 1
-				}
-			});
-		}
 		if (
 			request._tag === 'Query' &&
 			request.sql.startsWith('select request_digest, status, outcome') &&
@@ -281,9 +254,9 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 					value: { rows: [], affectedRows: 0 }
 				});
 			browserMutationLedger.set(key, {
-				// Claim parameters are the six-part scope, device sequence, partition, schema,
-				// then request digest. Storing the device sequence here made the terminal update miss.
-				request_digest: request.parameters[9] ?? null,
+				// Claim parameters are the six-part scope, partition key ($7), schema fingerprint ($8),
+				// then the request digest ($9).
+				request_digest: request.parameters[8] ?? null,
 				status: 'running',
 				outcome: null
 			});
@@ -294,7 +267,7 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		}
 		if (
 			request._tag === 'Query' &&
-			request.sql.includes('__bolt_graph_row_ordinal') &&
+			request.sql.includes('__bolt_write_wave_record') &&
 			request.parameters.includes(employeeRecordId)
 		) {
 			const record = browserMutationApplied
@@ -305,8 +278,9 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: {
 					rows: [
 						{
-							__bolt_graph_row_ordinal: 0,
-							__bolt_graph_row_record: record
+							__bolt_write_wave_kind: 'row',
+							__bolt_write_wave_ordinal: 0,
+							__bolt_write_wave_record: record
 						}
 					],
 					affectedRows: 0
@@ -412,9 +386,8 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 						{
 							id: 'agent-turn-message',
 							content: {
-								id: 'invoke-agents.enqueue',
-								status: 'queued',
-								parent_agent_id: null,
+								id: 'turn-1',
+								status: 'running',
 								parts: [],
 								subject,
 								agent_name: 'web',
@@ -468,8 +441,17 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	}
 };
 const ai: FacilityBinding<AIRequest, AIResponse> = {
-	call: () =>
-		Promise.resolve({ _tag: 'Success', value: { output: { text: 'Hello from the HR agent' } } })
+	call: (_metadata, request) =>
+		Promise.resolve({
+			_tag: 'Success',
+			value: {
+				output:
+					request._tag === 'Models'
+						? // The model catalog the runtime decodes before every turn: one default, one option.
+							{ defaultModel: 'gpt-test', options: [{ id: 'gpt-test', contextLength: 8192 }] }
+						: { text: 'Hello from the HR agent' }
+			}
+		})
 };
 const taskRequests: Array<TaskRequest> = [];
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
@@ -552,16 +534,6 @@ const invokePlugin = async (
 };
 
 describe('runnable Bolt vertical slice', () => {
-	it('impersonates within the tenant and exposes only target-visible apps', async () => {
-		const result = await invoke('access.impersonate', { actor: subject, target: employee });
-		expect(result).toMatchObject({
-			_tag: 'Success',
-			response: {
-				value: { apps: ['hr'], subject: { userId: 'employee-1', impersonatedBy: 'admin-1' } }
-			}
-		});
-	});
-
 	it('derives command identity from credentials and ignores forged browser roles', async () => {
 		// The payload tries to supply an employee subject. The trusted identity still comes from the
 		// credential. The forged employee payload cannot narrow or replace the administrator.
@@ -583,17 +555,6 @@ describe('runnable Bolt vertical slice', () => {
 		expect(
 			await bundle.dispatch(unauthenticated, facilities, new AbortController().signal)
 		).toMatchObject({ _tag: 'Failure', error: { code: 'unauthorized', httpStatus: 401 } });
-	});
-
-	it('preserves authorization refusal as a typed forbidden wire result', async () => {
-		const result = await invoke('access.impersonate', {
-			target: { ...employee, tenantId: 'other-tenant' }
-		});
-		expect(result).toMatchObject({
-			_tag: 'Failure',
-			error: { code: 'forbidden', httpStatus: 403 }
-		});
-		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
 	});
 
 	it('normalizes Request credentials and binds authenticated identity to the invocation tenant', async () => {
@@ -622,51 +583,6 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
-	it('issues unpredictable sessions only for the authenticated subject', async () => {
-		const first = await invoke('identity.startSession', {
-			userId: 'forged-user',
-			tenantId: 'other-tenant'
-		});
-		const second = await invoke('identity.startSession', {
-			userId: 'forged-user',
-			tenantId: 'other-tenant'
-		});
-		expect(first).toMatchObject({
-			_tag: 'Success',
-			response: { value: { credential: expect.stringMatching(/^bolt:tenant-1:/) } }
-		});
-		expect(second).toMatchObject({
-			_tag: 'Success',
-			response: { value: { credential: expect.stringMatching(/^bolt:tenant-1:/) } }
-		});
-		expect(first).not.toEqual(second);
-	});
-
-	it('runs approval request and decision with a durable resume task', async () => {
-		const requested = await invoke('approvals.request', {
-			subject,
-			requestId: 'approval-1',
-			operation: {
-				collection: 'employees',
-				approval: {
-					id: 'employees:create',
-					steps: [{ id: 'employees:create:stage:1', approvers: ['admin'] }],
-					superceded_by: []
-				}
-			}
-		});
-		expect(requested).toMatchObject({ _tag: 'Success', response: { value: { _tag: 'Pending' } } });
-		const decided = await invoke('approvals.decide', {
-			subject,
-			state: { _tag: 'Pending', requestId: 'approval-1', step: 0, operation: {} },
-			decision: 'approve'
-		});
-		expect(decided, JSON.stringify(decided)).toMatchObject({
-			_tag: 'Success',
-			response: { value: { _tag: 'Approved', decidedBy: 'admin-1' } }
-		});
-	});
-
 	it('atomically admits an agent message before executing the persisted turn', async () => {
 		expect(
 			await invoke('agents.enqueue', {
@@ -683,25 +599,17 @@ describe('runnable Bolt vertical slice', () => {
 			turnId: 'turn-1',
 			message: 'Hello'
 		});
+		// One command owns admission and the ordinary invocation that executes the admitted turn, so
+		// the settled turn comes back from the same invocation that admitted it.
 		expect(admitted, JSON.stringify(admitted)).toMatchObject({
 			_tag: 'Success',
-			response: { value: { status: 'queued', turnId: 'turn-1' } }
-		});
-		const result = await invoke('agents.run', {
-			subject,
-			conversationId: 'conversation-1'
-		});
-		expect(result).toMatchObject({
-			_tag: 'Success',
-			response: { value: { conversationId: 'conversation-1', status: 'drained' } }
+			response: {
+				value: { conversationId: 'conversation-1', taskId: 'turn-1', turnId: 'turn-1', status: 'completed' }
+			}
 		});
 	});
 
-	it('refuses an unknown agent name and lists the declared workspace agent', async () => {
-		expect(await invoke('workspace.agents', null)).toMatchObject({
-			_tag: 'Success',
-			response: { value: ['web'] }
-		});
+	it('refuses an unknown agent name', async () => {
 		expect(
 			await invoke('agents.enqueue', {
 				subject,
@@ -731,11 +639,10 @@ describe('runnable Bolt vertical slice', () => {
 	});
 
 	/**
-	 * These three assertions used to read the other way round: the plugin minted a subject out of
-	 * `trustedContext.roles`, so `{ teamPath: ['admin'], policies: [] }` on an unauthenticated POST was an admin. The
-	 * roles now come from the session the credential names, which makes the payload's copy inert — and
-	 * with no credential at all there is nothing to run as, so the read is refused rather than answered
-	 * with the empty page an inert role set would have produced.
+	 * The plugin never mints a subject out of `trustedContext.roles`: `{ teamPath: ['admin'], policies: [] }` on an
+	 * unauthenticated POST is not an admin. The roles come from the session the credential names, which makes the
+	 * payload's copy inert — and with no credential at all there is nothing to run as, so the read is refused rather
+	 * than answered with the empty page an inert role set would have produced.
 	 */
 	it('refuses a Data Browser query whose only claim to admin is its own trustedContext', async () => {
 		const forged = await invokePlugin(
@@ -782,7 +689,6 @@ describe('runnable Bolt vertical slice', () => {
 			protocolVersion: 2,
 			idempotencyKey: 'vertical-slice-update-employee',
 			issuedAtEpochMs: Date.now(),
-			deviceSequence: 1,
 			partitionKey: 'sha256:vertical-slice-partition',
 			schemaFingerprint: 'sha256:vertical-slice-fixture',
 			graph: {
@@ -800,8 +706,9 @@ describe('runnable Bolt vertical slice', () => {
 				value: {
 					resolution: 'accepted',
 					mutationId: 'vertical-slice-update-employee',
-					deviceSequence: 1,
-					records: [{ id: employeeRecordId, name: 'Grace', row_version: 2 }]
+					schemaFingerprint: 'sha256:vertical-slice-fixture',
+					records: [{ id: employeeRecordId, name: 'Grace', row_version: 2 }],
+					changes: [{ collection: 'employees', recordId: employeeRecordId }]
 				}
 			}
 		});
@@ -839,12 +746,12 @@ describe('runnable Bolt vertical slice', () => {
 		const result = await bundle.activate(activation, facilities, new AbortController().signal);
 		expect(result).toEqual({
 			_tag: 'Activated',
-			// Routing, and only routing. A registration used to carry `schedule` and `input` as well, so
-			// that a host could *originate* work — and that was the wrong side of the seam, because a
-			// cron is declared by a release and only the guest can read a release. Schedules are now
-			// rows in the tenant's own `bolt_schedule`, and what a host is told is one number.
+			// Routing, and only routing. A registration carries the command alone: a cron is declared
+			// by a release and only the guest can read a release, so a host is never told anything
+			// that would let it originate work. Schedules are rows in the tenant's own `bolt_schedule`,
+			// and what a host is told is one number.
 			registrations: [
-				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
+				// A refused approval has durable hold and browser-ledger cleanup to do. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
 				{ command: 'collections.discard' },
 				{ command: 'collections.resume' },

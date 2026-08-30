@@ -4,7 +4,9 @@ import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.j
 
 const policy = (
 	name: string,
-	grants: ReadonlyArray<Readonly<{ collection: string; action: 'read' | 'create' | 'update' }>>
+	grants: ReadonlyArray<
+		Readonly<{ collection: string; action: 'read' | 'create' | 'update' | 'delete' }>
+	>
 ) => ({ name, grants }) as WorkspaceDefinition['policies'][number];
 
 const workspace = (
@@ -64,12 +66,12 @@ describe('authority bindings', () => {
 		);
 		expect(rules(definition)).toEqual(['overlapping-policy-grant']);
 		const message = approvalDiagnostics(definition)[0]?.message;
-		expect(message).toContain('team "Operators"');
+		expect(message).toContain('team "Operators" composes policies');
 		expect(message).toContain('read on jobs');
-		expect(message).toContain('exactly one owner');
+		expect(message).toContain('exactly one owner per holder');
 	});
 
-	it('allows the same policies when separate holders receive them', () => {
+	it('accepts alternative holders with different grants for the same coordinate', () => {
 		const definition = workspace(
 			[
 				policy('own_jobs', [{ collection: 'jobs', action: 'read' }]),
@@ -78,6 +80,18 @@ describe('authority bindings', () => {
 			{ Operators: ['own_jobs'], Managers: ['regional_jobs'] }
 		);
 		expect(approvalDiagnostics(definition)).toEqual([]);
+		expect(approvalRefusal(definition)).toBeUndefined();
+	});
+
+	it('checks authored policies against runtime-owned policies after merge', () => {
+		const definition = workspace(
+			[policy('approval_reader', [{ collection: 'approval_request', action: 'read' }])],
+			{ Operators: ['approval_reader'] }
+		);
+		expect(rules(definition)).toContain('overlapping-policy-grant');
+		expect(approvalDiagnostics(definition)[0]?.message).toContain(
+			'team "Operators" composes policies "approval_reader", "bolt.system-collections"'
+		);
 	});
 
 	it('refuses duplicate coordinates in an envoy composition', () => {
@@ -93,7 +107,7 @@ describe('authority bindings', () => {
 			}
 		);
 		expect(rules(definition)).toEqual(['overlapping-policy-grant']);
-		expect(approvalDiagnostics(definition)[0]?.message).toContain('envoy "desk"');
+		expect(approvalDiagnostics(definition)[0]?.message).toContain('envoy "desk" composes policies');
 	});
 
 	it('refuses duplicate coordinates in an automation composition', () => {
@@ -109,7 +123,9 @@ describe('authority bindings', () => {
 			}
 		);
 		expect(rules(definition)).toEqual(['overlapping-policy-grant']);
-		expect(approvalDiagnostics(definition)[0]?.message).toContain('automation "review"');
+		expect(approvalDiagnostics(definition)[0]?.message).toContain(
+			'automation "review" composes policies'
+		);
 	});
 
 	it('refuses an undeclared policy named by an integration', () => {
@@ -143,7 +159,7 @@ describe('authority bindings', () => {
 		const definition = workspace([duplicate], { Operators: ['reader'] });
 		expect(rules(definition)).toEqual(['overlapping-policy-grant']);
 		expect(approvalDiagnostics(definition)[0]?.message).toContain(
-			'policy "reader" declares it more than once'
+			'team "Operators" composes policy "reader" declares it more than once'
 		);
 	});
 
@@ -167,8 +183,8 @@ describe('authority bindings', () => {
  * `history: false` keeps no such version, so the only honest reversal left is deleting the record -
  * destroying data whose only offence was being edited by somebody without authority.
  */
-describe('approval gates that cannot roll back', () => {
-	const gated = (collection: string, action: 'create' | 'update') =>
+describe('approval gates without their durable review ledger', () => {
+	const gated = (collection: string, action: 'create' | 'update' | 'delete') =>
 		({
 			name: 'payroll',
 			grants: [{ collection, action, approval: { flow: () => undefined, superceded_by: [] } }]
@@ -181,34 +197,43 @@ describe('approval gates that cannot roll back', () => {
 
 	it('refuses a gated update on a collection that keeps no history', () => {
 		const diagnostics = approvalDiagnostics(
-			withCollections(
-				[gated('audit_notes', 'update')],
-				[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
-			)
+			withCollections([gated('audit_notes', 'update')], [
+				{ name: 'audit_notes', fields: {}, history: false }
+			] as WorkspaceDefinition['collections'])
 		);
 		expect(diagnostics.map(({ rule }) => rule)).toContain('approval-without-history');
-		expect(approvalRefusal(withCollections(
-			[gated('audit_notes', 'update')],
-			[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
-		))).toContain('history: false');
+		expect(
+			approvalRefusal(
+				withCollections([gated('audit_notes', 'update')], [
+					{ name: 'audit_notes', fields: {}, history: false }
+				] as WorkspaceDefinition['collections'])
+			)
+		).toContain('history: false');
 	});
 
-	it('allows a gated create, because rejecting one is a deletion by definition', () => {
+	it('refuses a gated create because review membership is stored in history', () => {
 		const diagnostics = approvalDiagnostics(
-			withCollections(
-				[gated('audit_notes', 'create')],
-				[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
-			)
+			withCollections([gated('audit_notes', 'create')], [
+				{ name: 'audit_notes', fields: {}, history: false }
+			] as WorkspaceDefinition['collections'])
 		);
-		expect(diagnostics.map(({ rule }) => rule)).not.toContain('approval-without-history');
+		expect(diagnostics.map(({ rule }) => rule)).toContain('approval-without-history');
+	});
+
+	it('refuses a gated delete because reviewers need its durable masked snapshot', () => {
+		const diagnostics = approvalDiagnostics(
+			withCollections([gated('audit_notes', 'delete')], [
+				{ name: 'audit_notes', fields: {}, history: false }
+			] as WorkspaceDefinition['collections'])
+		);
+		expect(diagnostics.map(({ rule }) => rule)).toContain('approval-without-history');
 	});
 
 	it('allows a gated update where the collection keeps history', () => {
 		const diagnostics = approvalDiagnostics(
-			withCollections(
-				[gated('payroll_runs', 'update')],
-				[{ name: 'payroll_runs', fields: {}, history: true }] as WorkspaceDefinition['collections']
-			)
+			withCollections([gated('payroll_runs', 'update')], [
+				{ name: 'payroll_runs', fields: {}, history: true }
+			] as WorkspaceDefinition['collections'])
 		);
 		expect(diagnostics.map(({ rule }) => rule)).not.toContain('approval-without-history');
 	});

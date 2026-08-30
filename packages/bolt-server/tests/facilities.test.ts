@@ -34,7 +34,8 @@ import {
 } from '../src/facilities/database.js';
 import { makeFilesBindingFromConfig, makeLocalFilesBinding } from '../src/facilities/files.js';
 import { makeHostToolBinding, makeHostToolBindingFromConfig } from '../src/facilities/providers.js';
-import { makeScheduler, makeTaskBinding, makeTaskInvocationControl } from '../src/scheduler.js';
+import { makeTaskBinding, makeTaskInvocationControl } from '../src/schedules.js';
+import { makeTimekeeper } from '../src/timekeeper.js';
 import { makeMemoryTransport } from '../src/facilities/transport.js';
 
 const metadata = {
@@ -396,7 +397,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		});
 		const registered: Array<string> = [];
 		const tasks = makeTaskBinding(
-			makeScheduler({
+			makeTimekeeper({
 				tick: () => Effect.succeed(null),
 				onFailure: () => {}
 			}),
@@ -465,7 +466,7 @@ it.effect('interrupts only the exact active task dispatch and forgets settled po
 	Effect.gen(function* () {
 		const invocations = makeTaskInvocationControl();
 		const tasks = makeTaskBinding(
-			makeScheduler({
+			makeTimekeeper({
 				tick: () => Effect.succeed(null),
 				onFailure: () => {}
 			}),
@@ -529,7 +530,7 @@ it.effect('constructs each extension provider selected by Effect Config', () =>
 		});
 		// The task facility has no provider left to configure — the host owns the timer itself.
 		const tasks = makeTaskBinding(
-			makeScheduler({
+			makeTimekeeper({
 				tick: () => Effect.succeed(null),
 				onFailure: () => {}
 			})

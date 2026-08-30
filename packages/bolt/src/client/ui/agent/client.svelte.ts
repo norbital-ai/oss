@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { getContext, setContext } from 'svelte';
+import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
-import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import {
 	createAgentModelController,
@@ -53,7 +53,6 @@ export type AgentRuntimeConfig = Readonly<{
 			| 'chat_session'
 			| 'chat_message'
 			| 'agent_mailbox'
-			| 'agent_run'
 			| 'user'
 			| 'bolt_notifications'
 		>;
@@ -111,14 +110,13 @@ function startInteractiveAgent(
 			conversationId,
 			turnId: input.turnId,
 			message: input.message,
+			...(input.model === undefined ? {} : { model: input.model }),
 			...(input.documents === undefined ? {} : { documents: input.documents })
 		})
 	).pipe(
 		Effect.map((admitted) => {
-			// Admission is the interaction boundary: the durable transcript is visible immediately.
-			// Execution is a second direct I/O invocation, deliberately not awaited by the composer and
-			// deliberately not represented by a scheduler task.
-			Effect.runFork(agentRequest('run', active.client.system.agents.run({ conversationId })));
+			// One command owns admission and the ordinary invocation that executes the admitted turn.
+			// The committed transcript remains the authority for admission.
 			return {
 				runId: conversationId,
 				chatId: conversationId,

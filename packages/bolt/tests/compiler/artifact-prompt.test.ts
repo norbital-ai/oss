@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { renderArtifact, discoverAuthoredSource } from '../../src/compiler/sync.js';
+import { renderArtifact, discoverAuthoredSource } from '../../src/compiler/workspace-build.js';
 
 /**
  * `src/+agents.md`, from the file an author writes to the artifact a runtime boots.
@@ -48,11 +48,6 @@ const artifactWithPrompt = (prompt: string): string =>
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-			currentSchemaFingerprint: 'sha256:fixture',
-			adapters: []
-		},
 		schemaFingerprint: 'sha256:fixture',
 		integrationFiles: []
 	});

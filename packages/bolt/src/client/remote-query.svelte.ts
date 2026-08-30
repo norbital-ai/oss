@@ -1,27 +1,12 @@
 import { Effect, Fiber, Schema } from 'effect';
-import type { QueryCache } from '#lib/client/replica/query-cache.js';
-import type { LiveQueryRegistry } from '#lib/client/replica/live-queries.js';
 import type { RemoteQuery } from '@norbital-ai/std/collection';
+import type { ClientState } from '#lib/client/sync/machine.js';
+import type { MountedLiveQuery, SyncClient } from '#lib/client/sync/client.js';
 
 const asError = (cause: unknown): Error =>
 	cause instanceof Error
 		? cause
 		: new Error(cause == null ? 'Remote invocation failed' : String(cause));
-
-/**
- * What a query needs to take part in the sync engine's cache.
- *
- * Optional as a whole: a runtime built without a cache — the test harness, a non-browser caller —
- * gets exactly the previous fetch-every-time behaviour rather than a second code path.
- */
-type RemoteQueryCaching = Readonly<{
-	readonly cache: QueryCache;
-	readonly key: string;
-	readonly collections: ReadonlyArray<string>;
-	readonly registry: LiveQueryRegistry;
-	/** A server-only response may remain live without being retained in browser storage. */
-	readonly retain?: (value: Schema.Json) => boolean;
-}>;
 
 /**
  * One reload attempt's publication fence.
@@ -32,7 +17,7 @@ type RemoteQueryCaching = Readonly<{
  * reactive value. That makes "request 10 cannot publish over request 11" one invariant rather than
  * two best-effort checks.
  */
-export type RemoteQueryAttempt = Readonly<{
+type RemoteQueryAttempt = Readonly<{
 	readonly generation: number;
 	readonly isCurrent: () => boolean;
 }>;
@@ -44,31 +29,10 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 	loading = $state(false);
 	readonly #pending: Fiber.Fiber<Value, unknown>;
 	readonly #fetch: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>;
-	readonly #caching: RemoteQueryCaching | undefined;
 	#requestGeneration = 0;
-	/** Keeps the registry's weak registration alive for exactly as long as this query is alive. */
-	readonly #liveRegistration:
-		| Readonly<{
-				readonly collections: ReadonlyArray<string>;
-				readonly reexecute: () => Effect.Effect<void, unknown>;
-		  }>
-		| undefined;
 
-	constructor(
-		fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>,
-		caching: RemoteQueryCaching | undefined
-	) {
+	constructor(fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>) {
 		this.#fetch = fetchValue;
-		this.#caching = caching;
-		if (caching === undefined) {
-			this.#liveRegistration = undefined;
-		} else {
-			this.#liveRegistration = {
-				collections: caching.collections,
-				reexecute: () => this.#reload()
-			};
-			caching.registry.register(this.#liveRegistration);
-		}
 		this.#pending = Effect.runFork(
 			this.#reload().pipe(
 				Effect.flatMap(() => {
@@ -88,11 +52,10 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 	 *
 	 * `loading` stays true across the cached paint on purpose: the answer on screen is real but not
 	 * yet confirmed, and a spinner that cleared here would tell the reader the revalidation had
-	 * finished. Callers that want "have I got anything to show" already ask `current !== undefined` —
-	 * which is exactly the test `companiesUnknown` on the leave page makes.
+	 * finished. Callers that want "have I got anything to show" already ask `current !== undefined`.
 	 *
 	 * The whole flow is one Effect. `loading` is reset in the effect's own continuation rather than in
-	 * a `finally`, because a cache read failing above the fetch is left to propagate with the flag still
+	 * a `finally`, because a failure above the fetch is left to propagate with the flag still
 	 * true — the pending fiber surfaces that failure to its awaiter.
 	 */
 	readonly #reload = (): Effect.Effect<void, unknown> => {
@@ -109,10 +72,6 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 				self.loading = true;
 				self.error = undefined;
 			});
-			const caching = self.#caching;
-			// Persisted query values carry no coverage cursor. They remain useful as post-fetch
-			// bookkeeping/dedup metadata, but never paint: a page is local only through a PGlite proof,
-			// and every other command revalidates with its authority before becoming visible.
 			yield* self.#fetch(attempt).pipe(
 				Effect.match({
 					onFailure: (cause) => {
@@ -122,13 +81,6 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 					onSuccess: (value) => {
 						if (!attempt.isCurrent()) return;
 						self.current = value;
-						if (caching !== undefined && (caching.retain?.(value) ?? true)) {
-							caching.cache.write(caching.key, value, caching.collections);
-						} else if (caching !== undefined) {
-							// A prior release may already have persisted this server-only query. Dropping
-							// its dependency set removes that legacy copy as well as refusing the new one.
-							caching.cache.invalidate(caching.collections);
-						}
 					}
 				})
 			);
@@ -145,6 +97,116 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 /** Starts a command and exposes its result as Svelte-tracked query state. */
 export const createRemoteQuery = <Output extends Schema.ConstraintDecoder<Schema.Json>>(
 	fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Output['Type'], unknown>,
-	caching: RemoteQueryCaching | undefined,
 	_schema: Output
-): RemoteQuery<Output['Type']> => new ReactiveRemoteQuery(fetchValue, caching);
+): RemoteQuery<Output['Type']> => new ReactiveRemoteQuery(fetchValue);
+
+type LiveQueryMachine = Readonly<{
+	readonly subscribe: (listener: (state: ClientState) => void) => () => void;
+}>;
+
+/**
+ * Releases a mounted query when nothing references its view any more.
+ *
+ * The subscription must not anchor the view: the listener reaches it through a WeakRef, so an
+ * unreferenced query is collectable and this registry then unsubscribes it and releases the mount.
+ * The Machine retains a released query for RETAIN_MS, so back-navigation repaints without a round
+ * trip while the host stops computing for it afterwards.
+ */
+const liveQueryFinalizers = new FinalizationRegistry<() => void>((cleanup) => cleanup());
+
+/**
+ * A collection read answered by the Machine: `{ current, loading, error }` with the §1.7 semantics.
+ *
+ * `current` is projected once per Machine publication, so a frame, an outcome and a mount all land
+ * as one paint. `loading` stays true while a revalidation repaints a retained answer, and
+ * `current !== undefined` remains the readiness test. The awaited half resolves with the first
+ * projected value, or rejects when a query fails before holding one — the same contract the
+ * command-backed query above keeps.
+ *
+ * An authoritative answer that projects to nothing is also an answer: a `findFirst` over an empty
+ * set is settled, not stuck, so the awaited half resolves `undefined` instead of hanging behind a
+ * value that will never come. Pending is different — no answer yet — and keeps waiting. `oneshot`
+ * marks a read answered once by contract (a cursored page, §2.3): the moment its awaited half
+ * settles, the mount is released and the subscription dropped so the host stops computing for it.
+ */
+class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
+	current = $state.raw<Value | undefined>(undefined);
+	error = $state.raw<Error | undefined>(undefined);
+	loading = $state(true);
+	readonly #key: string;
+	readonly #project: (state: ClientState) => Value | undefined;
+	readonly #awaited: Promise<Value>;
+	readonly #resolve: (value: Value) => void;
+	readonly #reject: (cause: unknown) => void;
+	#release?: () => void;
+
+	constructor(
+		machine: LiveQueryMachine,
+		mounted: MountedLiveQuery,
+		project: (state: ClientState) => Value | undefined,
+		oneshot = false
+	) {
+		this.#key = mounted.key;
+		this.#project = project;
+		let resolve!: (value: Value) => void;
+		let reject!: (cause: unknown) => void;
+		this.#awaited = new Promise<Value>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		this.#resolve = resolve;
+		this.#reject = reject;
+		const weak = new WeakRef<MachineRemoteQuery<Value>>(this);
+		const unsubscribe = machine.subscribe((state) => {
+			const self = weak.deref();
+			if (self !== undefined) self.#observe(state);
+		});
+		const cleanup = () => {
+			unsubscribe();
+			mounted.release();
+		};
+		if (oneshot) this.#release = cleanup;
+		liveQueryFinalizers.register(this, cleanup);
+	}
+
+	readonly #observe = (state: ClientState): void => {
+		const query = state.queries.get(this.#key);
+		this.loading = query === undefined || query.phase === 'pending' || query.answer === undefined;
+		this.error =
+			query !== undefined && query.phase === 'failed' && query.error !== undefined
+				? new Error(query.error)
+				: undefined;
+		const value = this.#project(state);
+		let settled = false;
+		if (value !== undefined) {
+			this.#resolve(value);
+			settled = true;
+		} else if (this.error !== undefined) {
+			this.#reject(this.error);
+			settled = true;
+		} else if (query !== undefined && query.phase !== 'pending' && query.answer !== undefined) {
+			// The answer exists and the projection legitimately maps it to nothing — an empty
+			// findFirst, an empty page. The wait is over; the emptiness is the answer.
+			this.#resolve(undefined as Value);
+			settled = true;
+		}
+		this.current = value;
+		if (settled) this.#release?.();
+	};
+
+	then: RemoteQuery<Value>['then'] = (onfulfilled, onrejected) =>
+		this.#awaited.then(onfulfilled, onrejected);
+}
+
+/**
+ * Opens one Machine-backed view over a mounted live query.
+ *
+ * `oneshot` releases the mount once the read's awaited half settles, for reads answered once by
+ * contract rather than held live.
+ */
+export const createMachineQuery = <Value>(
+	sync: SyncClient,
+	mounted: MountedLiveQuery,
+	project: (state: ClientState) => Value | undefined,
+	oneshot = false
+): RemoteQuery<Value> => new MachineRemoteQuery<Value>(sync, mounted, project, oneshot);

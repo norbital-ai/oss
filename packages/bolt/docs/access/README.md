@@ -47,7 +47,7 @@ Every actor shares `Subject` (`src/runtime/identity/subject.ts`):
 ### Person
 
 Session credential → `Identity.authenticate` → `subjectFromSource`. `teamPath` is computed from
-`user.team_id`. Used for every credential-backed command, replica partition, `${requestor.*}`
+`user.team_id`. Used for every credential-backed command, `${requestor.*}`
 tokens, and approval requestor links.
 
 A person belongs to **exactly one team**. There are no roles. Administration is
@@ -81,8 +81,6 @@ reaches exactly what an anonymous sender reaches.
   `admin` cleared; `impersonatedBy` set. Requires an `impersonate` / `identity` grant.
 - **User impersonation** (`access.impersonate`): subject becomes the target user.
 
-Replica partition includes `impersonationTarget` when `impersonatedBy` is set.
-
 ### `colony-seed`
 
 A name in a history row so seeded records have a creator. Holds no policy. The seeder writes over
@@ -99,9 +97,12 @@ keyed by collection; presence is the rule, absence is denial.
 - Write: `{ fields?, authorize?, approval? }` — see [approvals](./approvals.md)
 - Delete: `{ authorize?, approval? }`
 
-`where` compiles to SQL with bound `${requestor.id}`, `${requestor.email}`,
-`${requestor.team_scope_users}`. `authorize` is a server-only function over the prepared
-candidate. `capabilities` grants apps, tools, MCP, skills. `limits` are rate rules.
+`where` is normally the same structured field predicate used by collection reads. A relation scope
+that cannot be expressed structurally uses `policySql(statement)`, a policy-only serialized
+predicate; it is deliberately absent from `api.db.*` query configuration. Both forms bind
+`${requestor.id}`, `${requestor.email}`, and `${requestor.team_scope_users}`. `authorize` is a
+server-only function over the prepared candidate. `capabilities` grants apps, tools, MCP, skills.
+`limits` are rate rules.
 
 **Membership is a row; authority is source.**
 
@@ -131,14 +132,7 @@ Bolt runs Better Auth inside the bundle: OTP, persistence, delivery, `verifyCode
 
 ---
 
-## Replica partition
-
-`Sync.partitionIdentity` hashes tenant, environment, effective policy holder, impersonation
-target, authority generation, schema fingerprint, and per-collection read predicates. Holder is
-`actor:<userId>` when any grant uses actor-bound predicates; otherwise `administrator`,
-`static:<policies>`, `team:<teamPath[0]>`, or `authenticated`.
-
-See [P4](../pillars/04-sync-engine/README.md#partition) and [P5](../pillars/05-client/README.md).
+## Wire subject
 
 The facility wire `CallSubject` is `{ userId, team? }` only. The full `Subject` exists inside the
 guest.

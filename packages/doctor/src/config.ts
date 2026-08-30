@@ -25,7 +25,6 @@ import { registerHooks } from 'node:module';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadRegisteredPack } from './packs/registry.js';
-import { overlapRules, type OverlapBinding } from './overlaps.js';
 import { loadPatternFiles, type SemanticQuery } from './patterns-yaml.js';
 import type { EmbedKind } from './semantic/embedder.js';
 import { definePack, type Pack, type Rule } from './rules.js';
@@ -167,9 +166,6 @@ export type LoadedConfig = Readonly<{
  * Node strips types on import, so a `.ts` config loads with no build step. A config that throws
  * is reported as such rather than silently yielding zero rules — "no rules configured" and "the
  * config failed to load" must never look the same.
- *
- * Legacy keys (`base`, `overlaps`) still work through a shim that rewrites them onto the current
- * surface and says so once on stderr; they stop resolving entirely in the next minor.
  */
 export async function loadConfig(root: string): Promise<LoadedConfig> {
 	const configPath = findConfig(root);
@@ -198,11 +194,6 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 		);
 	config = (Result.match(outcome, { onSuccess: (v) => v, onFailure: () => undefined }) ?? {}) as ProbeConfig;
 
-	const warnings: Array<string> = [];
-	// Read through a partial view: the legacy keys are off the declared surface, but a shim that
-	// could not see them would break every config written before it existed.
-	const legacy = config as Partial<{ base: 'norbital' | 'none'; overlaps: ReadonlyArray<OverlapBinding> }>;
-
 	const packNames: Array<string> = [];
 	const rules: Array<Rule> = [...(config.rules ?? [])];
 
@@ -224,24 +215,6 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 		packNames.push(pack.name);
 		rules.push(...pack.rules);
 	}
-
-	// Legacy shim: `base: 'norbital'` spelled what is now `packs: ['norbital']`.
-	if (legacy.base === 'norbital' && !packNames.includes('norbital/base')) {
-		const pack = await loadRegisteredPack('norbital');
-		if (pack !== undefined) {
-			packNames.push(pack.name);
-			rules.push(...pack.rules);
-		}
-		warnings.push(`config key "base" is retired; add packs: ['norbital'] instead`);
-	} else if (legacy.base === 'none') {
-		warnings.push(`config key "base" is retired; omitting it already gives the neutral baseline`);
-	}
-	if (legacy.overlaps !== undefined && legacy.overlaps.length > 0) {
-		rules.push(...overlapRules(legacy.overlaps));
-		warnings.push(`config key "overlaps" is retired; express bindings as YAML detect/prefer rules`);
-	}
-	for (const warning of warnings)
-		process.stderr.write(`norbital-doctor: ${configPath}: ${warning}\n`);
 
 	const implicitPatterns = config.patterns === undefined;
 	const patterns = await loadPatternFiles(

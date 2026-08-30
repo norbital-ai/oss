@@ -86,10 +86,10 @@ const WITNESSES: ReadonlyArray<Witness> = [
 			indexes: 'authoredIndex',
 			exclusions: 'renderArtifact',
 			recordLabel: 'extractCollectionCatalog',
-			// Two readers, one declaration: `compileModelTable` renders the `record_embedding` column
+			// Two readers, one declaration: `compileModelTable` renders the embedding/staleness columns
 			// and `recordEmbeddingIndexes` its HNSW index, so a declared embedding reaches the lineage
 			// as both. Named here by the one that owns the column.
-			embedding: 'recordEmbeddingColumn',
+			embedding: 'recordEmbeddingColumns',
 			// Lifted off `model.metadata` onto the collection descriptor beside `exclusions`, then
 			// projected by `workspace.manifest` so a host surface can read them.
 			description: 'renderArtifact',

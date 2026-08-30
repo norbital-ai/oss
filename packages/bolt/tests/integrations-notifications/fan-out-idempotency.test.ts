@@ -33,8 +33,7 @@ const store = () => {
 					keys.map((key) => [
 						key,
 						[...rows.entries()]
-							.filter(([, values]) => values[column] === key)
-							.map(([id]) => id)
+							.flatMap(([id, values]) => (values[column] === key ? [id] : []))
 							.sort()
 					])
 				)

@@ -1,7 +1,6 @@
 export { defineBoltHost } from './host.js';
 export type { BoltHostConfig, ColonyBoltHostConfig, SelfHostedBoltHostConfig } from './host.js';
 export {
-	collectionClient,
 	createBoltClient,
 	createHttpBoltTransport,
 	downloadCollectionExport,
@@ -22,7 +21,6 @@ export * as Collections from './runtime/collections/collections.js';
 export * as Identity from './runtime/identity/identity.js';
 export { AUTH_MODELS } from './authoring/system-models.js';
 export { DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
-export { identitySchemaSteps } from './compiler/schema-plan.js';
 export * as Integrations from './runtime/integrations/integrations.js';
 export * as Notifications from './runtime/notifications/notifications.js';
 export * as Sync from './runtime/sync/sync.js';

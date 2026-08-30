@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderArtifact } from '../../src/compiler/sync.js';
+import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 /**
  * Every name the emitted artifact uses must be a name the emitted artifact declares.
@@ -39,11 +39,6 @@ const artifactWithEverything = (): string =>
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-			currentSchemaFingerprint: 'sha256:fixture',
-			adapters: []
-		},
 		schemaFingerprint: 'sha256:fixture'
 	});
 

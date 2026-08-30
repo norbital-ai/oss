@@ -33,6 +33,9 @@ export const manifest = {
 
 const ok = (response) => ({ _tag: 'Success', response });
 
+/** Last `sync.advance` this fixture saw, so the suite can prove the host signed it. */
+let lastAdvance = null;
+
 export const dispatch = async (invocation, _facilities, signal) => {
 	if (invocation._tag === 'Command') {
 		if (invocation.command === 'test.unauthenticated') {
@@ -58,6 +61,92 @@ export const dispatch = async (invocation, _facilities, signal) => {
 					httpStatus: 403
 				}
 			};
+		}
+		if (invocation.command === 'sync.connect') {
+			// The handshake evaluation: registrations and answers-where-stale, computed from the
+			// credential the invocation presented. The fixture answers everything as changed.
+			lastAdvance = null;
+			const request = invocation.input;
+			return ok({
+				status: 200,
+				headers: {},
+				value: {
+					head: { sequence: 1 },
+					results: (request.queries ?? []).map((query) => ({
+						key: query.key,
+						input: query.input,
+						policyHash: 'fixture-policy',
+						dependencies: ['fixture-notes'],
+						policyDependencies: [],
+						heldIds: [],
+						digestOnly: false,
+						digest: 'fixture-digest-1',
+						changed: true,
+						answer: [{ id: 'note-1' }]
+					})),
+					outcomes: []
+				}
+			});
+		}
+		if (invocation.command === 'sync.advance') {
+			// One full answer per affected subscription; the writer's pending ledger ids settle here.
+			// The real runtime admits this command only from a host-signed system principal. The
+			// fixture mirrors that gate so an unsigned advance cannot hide behind a fake guest.
+			lastAdvance = {
+				signature: invocation.headers['x-colony-system-signature']?.[0] ?? null,
+				timestamp: invocation.headers['x-colony-system-timestamp']?.[0] ?? null,
+				input: invocation.input
+			};
+			if (lastAdvance.signature === null || lastAdvance.timestamp === null) {
+				return {
+					_tag: 'Failure',
+					error: {
+						code: 'unauthorized',
+						message: 'sync.advance requires a host system signature',
+						retryable: false,
+						outcome: 'known',
+						httpStatus: 401
+					}
+				};
+			}
+			const request = invocation.input;
+			return ok({
+				status: 200,
+				headers: {},
+				value: {
+					head: { sequence: 2 },
+					updates: (request.subscriptions ?? []).map((subscription, index) => ({
+						subId: subscription.subId,
+						from: subscription.digest,
+						to: `fixture-digest-${index + 2}`,
+						patch: { op: 'answer', answer: [{ id: 'note-1' }, { id: 'note-2' }] },
+						heldIds: ['note-1', 'note-2'],
+						digestOnly: false,
+						policyHash: subscription.policyHash,
+						dependencies: ['fixture-notes'],
+						policyDependencies: []
+					})),
+					refused: [],
+					outcomes: (request.pending ?? []).map((id) => ({
+						id,
+						status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
+					}))
+				}
+			});
+		}
+		if (invocation.command === 'test.lastAdvance') {
+			return ok({ status: 200, headers: {}, value: lastAdvance });
+		}
+		if (invocation.command === 'test.mutate') {
+			const idempotencyKey = invocation.input?.idempotencyKey;
+			return ok({
+				status: 200,
+				headers: {},
+				value: { mutationId: idempotencyKey ?? null },
+				changes: [
+					{ collection: 'fixture-notes', recordId: 'note-2', mutationId: idempotencyKey }
+				]
+			});
 		}
 		return ok({
 			status: 200,

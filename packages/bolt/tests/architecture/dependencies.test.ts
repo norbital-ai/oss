@@ -28,6 +28,49 @@ describe('Bolt architecture boundaries', () => {
 		);
 		expect(auditImports(Object.fromEntries(entries))).toEqual([]);
 	});
+
+	it('keeps browser workspace entrypoints independent of the server runtime graph', async () => {
+		const entrypoints = ['workspace-api.ts', 'system-client.ts'];
+		const violations = (
+			await Promise.all(
+				entrypoints.map(async (entrypoint) => {
+					const source = await readFile(
+						new URL(`../../src/client/${entrypoint}`, import.meta.url),
+						'utf8'
+					);
+					return /from\s+['"](?:#lib\/runtime\/|\.\.\/runtime\/)/u.test(source)
+						? [entrypoint]
+						: [];
+				})
+			)
+		).flat();
+		expect(violations).toEqual([]);
+	});
+
+	it('keeps collection implementation leaves behind the authored hook boundary', async () => {
+		const root = new URL('../../src/runtime/collections', import.meta.url).pathname;
+		const files = await sourceFiles(root);
+		const boundaryOwners = new Set([
+			join(root, 'authored.ts'),
+			join(root, 'collections.ts'),
+			join(root, 'hooks/boundary.ts')
+		]);
+		const violations = (
+			await Promise.all(
+				files
+					.filter((file) => !boundaryOwners.has(file))
+					.map(async (file) => {
+						const source = await readFile(file, 'utf8');
+						return /from\s+['"](?:#lib\/runtime\/collections\/authored\.js|\.\.?\/.*authored\.js)['"]/u.test(
+							source
+						)
+							? [file.slice(root.length + 1)]
+							: [];
+					})
+			)
+		).flat();
+		expect(violations).toEqual([]);
+	});
 });
 
 /**

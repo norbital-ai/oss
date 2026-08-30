@@ -123,7 +123,7 @@ export interface CollectionTableRowActionContext<TRow extends object> {
 }
 
 /** Svelte snippets construct component parameters; retain the row type through that constructor. */
-export interface CollectionTableColumnComponent<TRow extends object> {
+interface CollectionTableColumnComponent<TRow extends object> {
 	new <TRenderer extends Component<never> = Component<FieldRendererProps>>(
 		options: ComponentConstructorOptions<CollectionTableColumnPrimitiveProps<TRow, TRenderer>>
 	): SvelteComponent<CollectionTableColumnPrimitiveProps<TRow, TRenderer>>;

@@ -17,24 +17,29 @@ export type {
 	AnySchema,
 	AppName,
 	Api,
+	CollectionSearch,
 	CollectionMutationValues,
 	CollectionHooks,
+	DeleteAfterContext,
+	DeleteBeforeContext,
+	MutateAfterContext,
 	MutateBeforeContext,
 	MutateEditContext,
+	MutatePrepareContext,
 	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,
-	NearestMetric,
 	PolicyDecisionApi,
 	PolicyDefinition,
-	PolicyWriteContext,
 	SchemaQueryConfig,
 	SchemaNearestConfig,
 	SchemaQueryRow,
 	TeamName,
-	Teams,
-	VectorColumnName
+	Teams
 } from './contracts-schema.js';
+
+export { policySql } from './policy-sql.js';
+export type { PolicySqlPredicate } from './policy-sql.js';
 
 export { schema, schemaFor } from './schema.js';
 export type { SchemaShape, SchemaShapeConfig, SchemaShapeRow } from './schema.js';

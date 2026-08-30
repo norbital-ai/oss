@@ -26,23 +26,27 @@ const jiti = createJiti(import.meta.url, {
 	tsconfigPaths: true
 });
 
-const resolved = jiti.esmResolve('#lib/runtime/collections/relation-query.js');
-const resolvedPath = resolved.startsWith('file:') ? fileURLToPath(resolved) : resolved;
-if (!resolvedPath.startsWith(sourceRoot + path.sep)) {
-	console.error(
-		`refusing to run: '#lib/*' resolved to ${resolvedPath}, which is not under ${sourceRoot}.`
-	);
-	process.exit(1);
-}
+const assertResolvedUnderSource = (specifier) => {
+	const resolved = jiti.esmResolve(specifier);
+	const resolvedPath = resolved.startsWith('file:') ? fileURLToPath(resolved) : resolved;
+	if (!resolvedPath.startsWith(sourceRoot + path.sep)) {
+		console.error(
+			`refusing to run: '${specifier}' resolved to ${resolvedPath}, which is not under ${sourceRoot}.`
+		);
+		process.exit(1);
+	}
+};
+
+assertResolvedUnderSource('#lib/runtime/collections/read/relation-plan.js');
+assertResolvedUnderSource('#lib/runtime/collections/read/where.js');
 
 const { Effect } = await jiti.import('effect');
 const { collectionQueryTable, relationalSchema } = await jiti.import(
 	'#lib/compiler/relational-schema.js'
 );
 const { relationalComposer } = await jiti.import('#lib/runtime/persistence.js');
-const { orderingExpressions, planRelations } = await jiti.import(
-	'#lib/runtime/collections/relation-query.js'
-);
+const { planRelations } = await jiti.import('#lib/runtime/collections/read/relation-plan.js');
+const { orderingExpressions } = await jiti.import('#lib/runtime/collections/read/where.js');
 const { resolveWritableManyRelation } = await jiti.import(
 	'#lib/runtime/collections/collections.js'
 );

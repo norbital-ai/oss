@@ -34,7 +34,7 @@
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
-	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
+	import type { ClientState } from '#lib/client/sync/machine.js';
 	import {
 		AGENT_PATH,
 		APPROVALS_PATH,
@@ -143,8 +143,8 @@
 		isAdmin?: boolean;
 		/** Whether user-triggered shell catalog and notification reads may begin. */
 		deferredQueriesReady?: boolean;
-		/** Engine-owned data freshness and mutation settlement facts; absent is explicitly unverified. */
-		syncStatus?: WorkspaceSyncStatus | undefined;
+		/** The Machine's one sync state — link, head and unsettled writes; absent is explicitly unverified. */
+		syncStatus?: ClientState | undefined;
 		/**
 		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
 		 *
@@ -307,14 +307,10 @@
 	const statusLabel = $derived.by(() => {
 		if (status !== 'ready') return status;
 		if (syncStatus === undefined) return 'Sync status unavailable';
-		if (syncStatus.issues.length > 0) return 'Sync issues need attention';
-		if (syncStatus.connectivity === 'disconnected')
-			return 'Sync disconnected — downloaded data only';
-		if (syncStatus.connectivity === 'syncing') return 'Syncing with the authority';
-		if (syncStatus.offlineRetainedOnly) return 'Data freshness unverified';
-		if (syncStatus.pendingMutations > 0)
-			return 'Changes are saved locally and awaiting confirmation';
-		if (syncStatus.staleServerProofWindows > 0) return 'Server-verified results may be out of date';
+		if (syncStatus.link === 'needsReload') return 'Workspace update required';
+		if (syncStatus.writes.size > 0)
+			return 'Changes are visible here and awaiting server confirmation';
+		if (syncStatus.link === 'reconnecting') return 'Reconnecting to live updates';
 		return 'Up to date';
 	});
 
@@ -348,10 +344,12 @@
 	);
 	const manifestQuery = $derived(runtime.client.system.workspace.manifest({}));
 	const declaredEnvoys = $derived(manifestQuery.current?.envoys ?? []);
-	const finderCollectionsQuery = $derived(
-		deferredQueriesReady ? runtime.client.system.sync.shape({}) : undefined
+	// The agent's collection catalog is the manifest's policy-filtered collection names.
+	const finderCollections = $derived(
+		(deferredQueriesReady ? manifestQuery.current?.collections : undefined)?.map(
+			({ name }) => name
+		) ?? []
 	);
-	const finderCollections = $derived(finderCollectionsQuery?.current ?? []);
 
 	const NotificationText = Schema.Union([
 		Schema.NonEmptyString,

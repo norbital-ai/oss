@@ -2,6 +2,11 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import {
+	authoredHooks,
+	type CollectionHooks,
+	type MutateGraph
+} from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
@@ -67,28 +72,67 @@ const definition = workspace({
 	]
 });
 
+/**
+ * The two fixtures as a schema, so the hooks are typed the way a compiled workspace's are: the
+ * many edge is declared with the endpoint the mutations own, which lets a `before` return a child
+ * graph without naming the foreign key.
+ */
+interface NestedWriteSchema {
+	readonly tables: {
+		readonly orders: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly reference: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly reference: string;
+			};
+		};
+		readonly order_lines: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly order_id: string;
+				readonly sku: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly order_id: string;
+				readonly sku: string;
+			};
+		};
+	};
+	readonly relations: {
+		readonly orders: {
+			readonly order_line_order: {
+				readonly cardinality: 'many';
+				readonly target: 'order_lines';
+				readonly column: 'order_id';
+				readonly parentColumn: 'id';
+			};
+		};
+	};
+}
+
 /** The hook returns a graph, which is the case the whole design exists for. */
-const authored = {
-	...emptyAuthoredRuntime,
-	hooks: {
-		orders: {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Expands an order into its lines.',
-						handler: (context: unknown) => ({
-							reference: (context as MutateContext).input['reference'],
-							order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
-						})
-					}
-				}
+const orderHooks: CollectionHooks<NestedWriteSchema, 'orders'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Expands an order into its lines.',
+				handler: ({ input }) => ({
+					...(input.reference === undefined ? {} : { reference: input.reference }),
+					order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
+				})
 			}
 		}
 	}
 };
 
-/** What the runtime hands a mutate hook. Cast to, because the authored module types it `unknown`. */
-type MutateContext = { readonly input: Record<string, unknown> };
+const authored = {
+	...emptyAuthoredRuntime,
+	hooks: { orders: authoredHooks(orderHooks) }
+};
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -129,19 +173,25 @@ describe('a nested write', () => {
 			authored: {
 				...authored,
 				hooks: {
-					orders: {
+					orders: authoredHooks<NestedWriteSchema, 'orders'>({
 						mutate: {
 							perRecord: {
 								before: {
 									description: 'Returns a misspelled relation name.',
-									handler: (context: unknown) => ({
-										reference: (context as MutateContext).input['reference'],
-										order_line_orders: [{ sku: 'a-1' }]
-									})
+									handler: ({ input }) => {
+										// The misspelled key is the point of the test: it is a type error on a returned
+										// literal, so the handler builds the graph in a variable — which is exactly the
+										// shape the runtime's FLATTEN refuses before the transaction.
+										const misspelled = {
+											reference: input.reference,
+											order_line_orders: [{ sku: 'a-1' }]
+										};
+										return misspelled as MutateGraph<NestedWriteSchema, 'orders'>;
+									}
 								}
 							}
 						}
-					}
+					})
 				}
 			}
 		});
@@ -165,40 +215,33 @@ describe('a nested write', () => {
  * is where the query a person would actually write goes — one read over the window the batch spans.
  *
  * What is counted here is how many times `load` ran against how many records it served, because
- * that ratio *is* the feature. The rule stays in `handler`, once, which is the difference between
- * this and the `batchHandler` it replaces — that one was a second place to write the rule, and the
- * template it shipped in had the same assertion in both halves.
+ * that ratio *is* the feature. The rule stays in `handler`, once, while preparation only loads the
+ * shared data it needs.
  */
 describe('a batch prepare', () => {
 	const prepareCalls: Array<number> = [];
 	const withPrepare = {
 		...emptyAuthoredRuntime,
 		hooks: {
-			orders: {
+			orders: authoredHooks<NestedWriteSchema, 'orders', { readonly seen: Set<string> }>({
 				mutate: {
 					// Once for the batch. Returns data; decides nothing.
-					prepare: (context: unknown) => {
-						const { inputs } = context as { inputs: ReadonlyArray<Record<string, unknown>> };
+					prepare: ({ inputs }) => {
 						prepareCalls.push(inputs.length);
-						return { seen: new Set(inputs.map((input) => String(input['reference']))) };
+						return { seen: new Set(inputs.map((input) => String(input.reference))) };
 					},
 					perRecord: {
 						before: {
 							description: 'Rejects a reference the batch has already claimed.',
-							handler: (context: unknown) => {
-								const { input, prepared } = context as MutateContext & {
-									prepared: { seen: Set<string> };
-								};
-								return {
-									reference: prepared.seen.has(String(input['reference']))
-										? String(input['reference'])
-										: 'unclaimed'
-								};
-							}
+							handler: ({ input, prepared }) => ({
+								reference: prepared.seen.has(String(input.reference))
+									? String(input.reference)
+									: 'unclaimed'
+							})
 						}
 					}
 				}
-			}
+			})
 		}
 	};
 
@@ -224,29 +267,5 @@ describe('a batch prepare', () => {
 		expect(rows).toHaveLength(6);
 		// And every handler saw what `load` returned, rather than `undefined`.
 		expect(rows.every((row) => row['reference'] !== 'unclaimed')).toBe(true);
-	}, 60_000);
-
-	it('runs once per batch when the call is split, and sees only its own rows', async () => {
-		prepareCalls.length = 0;
-		harness = await makeBoltTestRuntime(definition, { authored: withPrepare });
-
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				return yield* collections.mutate(
-					EffectId.make('load-2'),
-					adminSubject,
-					'orders',
-					Array.from({ length: 5 }, (_, index) => ({ reference: `ORD-${index}` })),
-					false,
-					0,
-					{ batchSize: 2 }
-				);
-			})
-		);
-
-		// A batch is the unit of atomicity and of the isolate's span, so it is the unit a read is
-		// scoped to as well.
-		expect(prepareCalls).toEqual([2, 2, 1]);
 	}, 60_000);
 });

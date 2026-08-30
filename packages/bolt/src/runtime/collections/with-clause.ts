@@ -4,7 +4,7 @@ import { Schema } from 'effect';
  * How a `with` clause is read: which relations it names, which columns each of them keeps, and how
  * it recurses.
  *
- * The reading has two consumers that must agree exactly. `relation-query.ts` turns a clause into a
+ * The reading has two consumers that must agree exactly. `read/relation-plan.ts` turns a clause into a
  * Drizzle relational query, and `authoring/schema.ts` turns the same clause into the `Schema` of the
  * row that query returns. A shape that selected columns by a different rule than a read does would
  * be a second grammar for one clause, and the type would stop describing the value.
@@ -14,7 +14,7 @@ import { Schema } from 'effect';
  */
 
 /** What a caller asked to load: `true`, or a nested spec that may narrow columns and recurse. */
-export type WithSpec = Readonly<Record<string, unknown>>;
+type WithSpec = Readonly<Record<string, unknown>>;
 
 /** A `columns` clause, normalized to its boolean members. */
 export type ColumnSelection = Readonly<Record<string, boolean>>;

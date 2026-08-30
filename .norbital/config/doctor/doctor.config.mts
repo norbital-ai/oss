@@ -1,9 +1,6 @@
-import {
-	defineConfig,
-	reactivePack,
-	stringlyPack,
-	effectCeremonyPack
-} from '@norbital-ai/doctor';
+import { defineConfig, stringlyPack } from '@norbital-ai/doctor';
+import { effectCeremonyPack } from '@norbital-ai/doctor-effect';
+import { reactivePack } from '@norbital-ai/doctor-norbital';
 
 /**
  * One doctor for the OSS monorepo. YAML extensions in this directory join automatically.

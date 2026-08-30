@@ -24,6 +24,7 @@ const READ_GRANT_KEYS = new Set(['where', 'fields', 'dependencies']);
 const DELETE_GRANT_KEYS = new Set(['authorize', 'approval']);
 const WRITE_GRANT_KEYS = new Set(['fields', 'authorize', 'approval']);
 const APPROVAL_KEYS = new Set(['flow', 'superceded_by']);
+const POLICY_SQL_KEYS = new Set(['kind', 'statement']);
 
 const AuthoredActionGrant = Schema.Struct({
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -68,7 +69,7 @@ const AuthoredEnvoy = Schema.Struct({
 	policies: Schema.Array(Schema.String),
 	task: Schema.String,
 	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
-	delegation: Schema.optionalKey(Schema.Literals(['enabled', 'disabled']))
+	delegation: Schema.Literals(['enabled', 'disabled'])
 });
 
 const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
@@ -140,6 +141,39 @@ const validateGrantApproval = (grant: Record<string, unknown>, location: string)
 	}
 };
 
+const rejectLegacyPolicySql = (value: unknown, location: string): void => {
+	if (value === null || typeof value !== 'object') return;
+	if (Array.isArray(value)) {
+		value.forEach((entry, index) => rejectLegacyPolicySql(entry, `${location}[${index}]`));
+		return;
+	}
+	for (const [key, nested] of Object.entries(value)) {
+		if (key === '$sql') {
+			throw new TypeError(`${location} uses removed $sql policy syntax; use policySql(statement).`);
+		}
+		rejectLegacyPolicySql(nested, `${location}.${key}`);
+	}
+};
+
+const validateGrantWhere = (grant: Record<string, unknown>, location: string): void => {
+	if (!('where' in grant)) return;
+	const where = grant.where;
+	if (
+		where !== null &&
+		typeof where === 'object' &&
+		!Array.isArray(where) &&
+		Reflect.get(where, 'kind') === 'policy-sql'
+	) {
+		requireExactKeys(where, POLICY_SQL_KEYS, `${location}.where`);
+		const statement = Reflect.get(where, 'statement');
+		if (typeof statement !== 'string' || statement.trim() === '') {
+			throw new TypeError(`${location}.where policySql statement must be a non-empty string.`);
+		}
+		return;
+	}
+	rejectLegacyPolicySql(where, `${location}.where`);
+};
+
 const validateGrantShape = (
 	name: string,
 	collection: string,
@@ -156,6 +190,7 @@ const validateGrantShape = (
 	validateGrantFields(grant, location);
 	if (READ_ACTIONS.has(typedAction)) {
 		validateGrantDependencies(grant, location);
+		validateGrantWhere(grant, location);
 	}
 	validateGrantApproval(grant, location);
 };
@@ -201,12 +236,12 @@ const describeGrant = (
 	authorizations: Map<string, PolicyRuntimeFunction>,
 	approvalFlows: Map<string, PolicyRuntimeFunction>
 ): RuntimePolicyGrant => {
+	const where =
+		grant.where === undefined ? undefined : Schema.decodeUnknownSync(jsonObject)(grant.where);
 	const described: RuntimePolicyGrant = {
 		collection,
 		action,
-		...(grant.where === undefined
-			? {}
-			: { where: grant.where as Readonly<Record<string, unknown>> }),
+		...(where === undefined ? {} : { where }),
 		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> }),
 		...(grant.dependencies === undefined
 			? {}
@@ -315,12 +350,12 @@ export const describeEnvoy = (
 	readonly policies: ReadonlyArray<string>;
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
-	readonly delegation?: 'enabled' | 'disabled';
+	readonly delegation: 'enabled' | 'disabled';
 } => {
 	const decoded = Schema.decodeUnknownResult(AuthoredEnvoy)(declaration);
 	if (Result.isFailure(decoded)) {
 		throw new TypeError(
-			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, groupMessages?, delegation? }.`
+			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, delegation, groupMessages? }.`
 		);
 	}
 	if (decoded.success.transport.trim() === '') {
@@ -340,9 +375,9 @@ export const describeEnvoy = (
 		audience: decoded.success.audience,
 		policies: Object.freeze(decoded.success.policies),
 		task: decoded.success.task.trim(),
+		delegation: decoded.success.delegation,
 		...(decoded.success.groupMessages === undefined
 			? {}
-			: { groupMessages: decoded.success.groupMessages }),
-		...(decoded.success.delegation === undefined ? {} : { delegation: decoded.success.delegation })
+			: { groupMessages: decoded.success.groupMessages })
 	});
 };

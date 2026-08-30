@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { approveBy, noApproval } from '../../src/authoring/approval-flow.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import {
 	approvalConfigurationId,
 	describePolicy,
@@ -58,6 +59,50 @@ const definitionFor = (policy: ReturnType<typeof describedPolicy>) =>
 		teams: { writers: ['entry_writer'], Reviewers: [], 'Review Leads': [] }
 	});
 
+/**
+ * The fixture collection as a schema, so the hooks below are typed the way a compiled workspace's
+ * are: `CollectionHooks` reads handler contexts off `tables`, making `input`, `existing` and
+ * `api.db.entries` inferred rather than reflected.
+ *
+ * `normalized` is optional in the insert because the hook derives it — the honest statement of
+ * what a create must carry.
+ */
+interface EntriesSchema {
+	readonly tables: {
+		readonly entries: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly label: string;
+				readonly normalized: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly label: string;
+				readonly normalized?: string;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
+const entriesHooks: CollectionHooks<EntriesSchema, 'entries'> = {
+	mutate: {
+		perRecord: {
+			before: {
+				description: 'Normalizes the candidate before policy code runs.',
+				handler: (context) => {
+					const { input } = context;
+					if (context.existing !== undefined) return input;
+					return {
+						...input,
+						normalized: String(input['label']).trim().toLocaleLowerCase()
+					};
+				}
+			}
+		}
+	}
+};
+
 const authoredFor = (
 	policy: ReturnType<typeof describedPolicy>,
 	functions = policyRuntimeFunctionsFor([policy])
@@ -65,29 +110,7 @@ const authoredFor = (
 	...emptyAuthoredRuntime,
 	policyAuthorizations: functions.authorizations,
 	approvalFlows: functions.approvalFlows,
-	hooks: {
-		entries: {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Normalizes the candidate before policy code runs.',
-						handler: (context: unknown) => {
-							const mutation = context as {
-								readonly input: Readonly<Record<string, unknown>>;
-								readonly existing?: Readonly<Record<string, unknown>>;
-							};
-							const { input } = mutation;
-							if (mutation.existing !== undefined) return input;
-							return {
-								...input,
-								normalized: String(input['label']).trim().toLocaleLowerCase()
-							};
-						}
-					}
-				}
-			}
-		}
-	}
+	hooks: { entries: authoredHooks(entriesHooks) }
 });
 
 const mutate = (runtime: BoltTestRuntime, effectId: string, label: string) =>
@@ -100,7 +123,7 @@ const mutate = (runtime: BoltTestRuntime, effectId: string, label: string) =>
 				[{ label }],
 				false,
 				0,
-				{ declarative: true }
+				{}
 			);
 		})
 	);
@@ -152,14 +175,67 @@ describe('routed policy approvals', () => {
 		);
 		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
 
-		await expect(mutate(harness, 'approval-none', ' Ordinary ')).resolves.toEqual([
-			expect.objectContaining({ normalized: 'ordinary' })
-		]);
+		const committed = await mutate(harness, 'approval-none', ' Ordinary ');
+		expect(committed.records).toHaveLength(1);
+		expect(committed.records[0]).toMatchObject({ normalized: 'ordinary' });
 		await expect(mutate(harness, 'approval-review', ' REVIEW ')).rejects.toBeInstanceOf(
 			Collections.PendingApproval
 		);
 		expect(seen).toEqual(['ordinary', 'review']);
 		expect(exposedWrites).toEqual([false, false]);
+	});
+
+	it('holds only gated roots while committing and returning ordinary roots deterministically', async () => {
+		const policy = describedPolicy((context) =>
+			Reflect.get(Reflect.get(context as object, 'record') as object, 'normalized') === 'review'
+				? approveBy('Reviewers')
+				: noApproval
+		);
+		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
+		const committedId = '00000000-0000-4000-8000-000000000231';
+		const heldId = '00000000-0000-4000-8000-000000000232';
+
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).mutate(
+					EffectId.make('approval-mixed-roots'),
+					writer,
+					'entries',
+					[
+						{ id: committedId, label: ' Ordinary ' },
+						{ id: heldId, label: ' REVIEW ' }
+					],
+					false,
+					0,
+					{
+						roots: [
+							{ id: committedId, action: 'create' },
+							{ id: heldId, action: 'create' }
+						]
+					}
+				);
+			})
+		);
+
+		// The batch result is the commit: the settled records in batch order, held roots present as
+		// their bare id because nothing was written for them.
+		expect(result.records).toEqual([
+			expect.objectContaining({ id: committedId, normalized: 'ordinary' }),
+			{ id: heldId }
+		]);
+		expect(await harness.database.query('select id from entries order by id')).toEqual([
+			{ id: committedId }
+		]);
+		expect(
+			await harness.database.query(
+				'select record_id, status from approval_request order by record_id'
+			)
+		).toEqual([{ record_id: heldId, status: 'ONGOING' }]);
+		expect(
+			await harness.database.query(
+				"select record_id from bolt_collection_history where collection_name = 'entries' order by record_id"
+			)
+		).toEqual([{ record_id: committedId }]);
 	});
 
 	it('runs write authorization against the same prepared object and accepts only true', async () => {
@@ -170,7 +246,8 @@ describe('routed policy approvals', () => {
 		);
 		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
 
-		await expect(mutate(harness, 'authorization-allow', ' ALLOWED ')).resolves.toHaveLength(1);
+		const allowed = await mutate(harness, 'authorization-allow', ' ALLOWED ');
+		expect(allowed.records).toHaveLength(1);
 		await expect(mutate(harness, 'authorization-deny', ' denied ')).rejects.toMatchObject({
 			_tag: 'Bolt.Collections.MutationPhaseFailure',
 			cause: { _tag: 'Bolt.AccessControl.AccessDenied' }

@@ -234,11 +234,7 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 		skills: [],
 		envoys: [],
 		requiredFacilities: ['database', 'connector'],
-		mutationCompatibility: {
-			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-			currentSchemaFingerprint: 'sha256:outbound-delivery-fixture',
-			adapters: []
-		},
+		schemaFingerprint: 'sha256:outbound-delivery-fixture',
 		environment: { variables: { PARTNER_TOKEN: { label: 'Partner API token', secret: true } } }
 	});
 
@@ -291,22 +287,30 @@ const create = (
 ) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.create(EffectId.make(`create:${name}`), subject, {
-				collection: 'orders',
-				id: recordId(name),
-				values
-			})
+			collections.mutate(
+				EffectId.make(`create:${name}`),
+				subject,
+				'orders',
+				[{ ...values, id: recordId(name) }],
+				false,
+				0,
+				{ root: { id: recordId(name), action: 'create' } }
+			)
 		)
 	);
 
 const update = (name: string, run: string, values: Readonly<Record<string, Schema.Json>>) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.update(EffectId.make(`update:${run}`), adminSubject, {
-				collection: 'orders',
-				id: recordId(name),
-				values
-			})
+			collections.mutate(
+				EffectId.make(`update:${run}`),
+				adminSubject,
+				'orders',
+				[{ ...values, id: recordId(name) }],
+				false,
+				0,
+				{ root: { id: recordId(name), action: 'update' } }
+			)
 		)
 	);
 
@@ -883,8 +887,10 @@ describe('a write queues the drain that will deliver it', () => {
 			"select command, input, status from bolt_task where command = 'integrations.flush'",
 			[]
 		);
+		// `running`, because `bolt_task` records work the runtime has taken on rather than work
+		// waiting to be claimed: the queue's `pending` state went with the claim that read it.
 		expect(rows).toEqual([
-			{ command: 'integrations.flush', input: { name: 'orders.partner' }, status: 'pending' }
+			{ command: 'integrations.flush', input: { name: 'orders.partner' }, status: 'running' }
 		]);
 		// And it commits with the record, not after it: the two cannot disagree on whether the
 		// delivery exists.

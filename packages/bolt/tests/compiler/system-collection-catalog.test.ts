@@ -29,6 +29,20 @@ describe('system collection catalog', () => {
 		for (const name of ['user', 'team', 'session']) expect(byName.has(name)).toBe(true);
 	});
 
+	it('does not publish the retired agent-run continuation collection', () => {
+		expect(byName.has('agent_run')).toBe(false);
+	});
+
+	it('publishes automation observability without queue and retry columns', () => {
+		const fields = byName.get('automation_run')?.fields.map(({ name }) => name) ?? [];
+		for (const field of ['task_id', 'name', 'status', 'progress', 'result', 'error']) {
+			expect(fields).toContain(field);
+		}
+		for (const retired of ['attempts', 'max_attempts', 'next_run_at', 'lane', 'position']) {
+			expect(fields).not.toContain(retired);
+		}
+	});
+
 	it('gives every field a catalog kind rather than defaulting silently', () => {
 		const kinds = new Set(entries.flatMap((entry) => entry.fields.map(({ kind }) => kind)));
 		expect(kinds.size).toBeGreaterThan(1);

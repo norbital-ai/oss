@@ -7,7 +7,7 @@
 	 * Records of one collection, read the way every workspace surface reads them.
 	 *
 	 * The rows come through the workspace client's own `db[collection].findMany`, which is the
-	 * `collections.findMany` command — the same authorized path an authored app uses, carrying the
+	 * authorized collection-read path — the same path an authored app uses, carrying the
 	 * caller's credential and passing through the read predicate and field masking. The Studio has no
 	 * privileged query of its own, and a host plugin invocation would have been a weaker subject than
 	 * the operator standing in front of it.

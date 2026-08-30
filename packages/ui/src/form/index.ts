@@ -16,4 +16,3 @@ export {
 export type { FilterNull, FilterUndefined, FilterUndefinedAndNull, Get, Path } from './path';
 export { SubmissionHandledExternallyError } from './submission_handled_externally_error';
 export { default as Label } from './label.svelte';
-export type { JsonPatchOperation as Operation } from '@norbital-ai/std/json';

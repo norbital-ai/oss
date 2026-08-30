@@ -1,64 +1,41 @@
 import { Effect, Schema } from 'effect';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
-import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
 
 export type {
 	BoltClient,
 	BoltTransport,
-	LocallyDurableMutationResult,
+	CollectionMutationValues,
+	MemoryMutationResult,
 	MutationSettlement,
 	MutationSettlementHandle,
-	MutationSettlementStatus
+	MutationSettlementStatus,
+	RemoteQuery,
+	WorkspaceClientRuntime
 } from '#lib/client/contracts.js';
-export type {
-	SyncIssue,
-	WorkspaceSyncStatus,
-	WorkspaceSyncStatusSignal
-} from '#lib/client/replica/sync-status.js';
 
-/** One page of a keyset read, built once rather than per call. */
-const CollectionPage = Schema.Struct({ rows: Schema.Array(Schema.Json) });
-
-/** Owns authenticated transport decoding and the collection, remote, and sync client views built on top of it. */
+/** Owns authenticated transport decoding and the remote client view built on top of it. */
 const ClientFactories = {
 	bolt: (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
 		scope,
-		command: (command, input, output, signal) => {
+		command: (command, input, output, signal, headers) => {
 			// Built before the request rather than inside the pipe: the decoder belongs to the schema the
 			// caller named, not to the response it happens to be applied to.
 			const decode = Schema.decodeUnknownEffect(output);
 			return Effect.runPromise(
 				Effect.tryPromise({
-					try: () => transport.command(command, input, signal),
+					try: () => transport.command(command, input, signal, headers),
 					catch: (cause) => cause
 				}).pipe(Effect.flatMap(decode))
 			);
 		}
 	}),
-	collection: (client: BoltClient, collection: string) => ({
-		// The command answers one keyset page. This view takes a row count and gives back rows, so it
-		// reads the page apart here rather than making every caller of it learn about cursors.
-		findMany: (limit = 100, signal?: AbortSignal) =>
-			Effect.runPromise(
-				Effect.tryPromise({
-					try: () =>
-						client.command('collections.findMany', { collection, limit }, CollectionPage, signal),
-					catch: (cause) => cause
-				}).pipe(Effect.map((page) => page.rows))
-			)
-	}),
 	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>
-		client.command(command, input, Schema.Json, signal),
-	sync: (client: BoltClient) => ({
-		head: (signal?: AbortSignal) => client.command('sync.head', null, SyncCursor, signal)
-	})
+		client.command(command, input, Schema.Json, signal)
 };
 
 export const createBoltClient = ClientFactories.bolt;
-export const collectionClient = ClientFactories.collection;
 export const remote = ClientFactories.remote;
-export const syncClient = ClientFactories.sync;
 
 /**
  * What a host may reach for, and nothing besides.

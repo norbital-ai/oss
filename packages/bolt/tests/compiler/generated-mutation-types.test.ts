@@ -3,7 +3,7 @@ import {
 	renderClientDeclaration,
 	renderCollectionTypes,
 	renderWorkspaceTypes
-} from '../../src/compiler/sync.js';
+} from '../../src/compiler/workspace-build.js';
 
 describe('generated declarative mutation types', () => {
 	it('carries a uniquely reversed child foreign key onto a differently named many relation', () => {

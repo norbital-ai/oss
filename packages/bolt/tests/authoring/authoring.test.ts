@@ -4,8 +4,12 @@ import {
 	defineAutomation,
 	defineCommandHandler,
 	defineConnection,
+	defineModel,
 	custom,
+	file,
 	hexToBinaryEmbedding,
+	numeric,
+	text,
 	vector
 } from '../../src/authoring/index.js';
 import { defineAgentTool } from '../../src/authoring/agent-tools.js';
@@ -55,6 +59,29 @@ describe('Bolt authoring contracts', () => {
 	it('expands hexadecimal binary embeddings deterministically', () => {
 		expect(hexToBinaryEmbedding('a0')).toEqual([1, 0, 1, 0, 0, 0, 0, 0]);
 		expect(() => hexToBinaryEmbedding('xyz')).toThrow();
+	});
+
+	it('keeps embedding sources tied to declared text or file fields', () => {
+		const declaration = defineModel(
+			{ title: text(), photo: file(), amount: numeric() },
+			{ embedding: { fields: ['title', 'photo'], dimensions: 384 } }
+		);
+		expect(declaration.metadata?.embedding?.fields).toEqual(['title', 'photo']);
+		expect(() =>
+			defineModel(
+				{ title: text() },
+				{ embedding: { fields: ['missing'] } } as never
+			)
+		).toThrow(/undeclared field missing/u);
+		expect(() =>
+			defineModel(
+				{ amount: numeric() },
+				{ embedding: { fields: ['amount'] } }
+			)
+		).toThrow(/must be text or file data/u);
+		expect(() =>
+			defineModel({ title: text() }, { embedding: { fields: [] } })
+		).toThrow(/at least one source field/u);
 	});
 
 	it('preserves command and connection declaration inference', () => {

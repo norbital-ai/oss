@@ -33,6 +33,16 @@ const scope = {
 	environment: EnvironmentName.make('test'),
 	releaseId: ReleaseId.make('release-1')
 };
+const modelCatalogResponse = () =>
+	Promise.resolve({
+		_tag: 'Success' as const,
+		value: {
+			output: {
+				defaultModel: 'test-model',
+				options: [{ id: 'test-model', contextLength: 128_000 }]
+			}
+		}
+	});
 const definition = workspace({
 	name: 'hr',
 	version: '1.0.0',
@@ -87,11 +97,7 @@ const definition = workspace({
 	],
 	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
 	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools'],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:tools-loop-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:tools-loop-fixture'
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});
@@ -163,8 +169,6 @@ const jsonObjectParameter = (parameters: ReadonlyArray<unknown>): PersistedTurn 
 };
 
 let returnedMessage = 0;
-const admittedTurns = new Map<string, string>();
-const claimedConversations = new Set<string>();
 const turnConversations = new Map<string, string>();
 const persistedTurns = new Map<string, PersistedTurn>();
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
@@ -178,77 +182,23 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 					statementIntent(statement, 'update', 'chat_message'))
 			) {
 				persistedTurns.set(persisted.id, persisted);
+				if (statementIntent(statement, 'insert', 'chat_message')) {
+					const conversationId = statement.parameters.find(
+						(parameter) =>
+							typeof parameter === 'string' &&
+							parameter !== persisted.id &&
+							!['user', 'assistant', 'system'].includes(parameter) &&
+							!parameter.startsWith('{') &&
+							!parameter.startsWith('[')
+					);
+					if (typeof conversationId === 'string') {
+						turnConversations.set(persisted.id, conversationId);
+					}
+				}
 			}
 		}
 		if (request._tag !== 'Query') {
-			for (const statement of request.statements) {
-				if (statementIntent(statement, 'insert', 'agent_run')) {
-					const conversationId = String(statement.parameters[0]);
-					const turnId = String(statement.parameters[1]);
-					admittedTurns.set(conversationId, turnId);
-					turnConversations.set(turnId, conversationId);
-				}
-			}
-			const claim = request.statements.find((statement) =>
-				statement.sql.includes('pg_advisory_xact_lock')
-			);
-			if (claim !== undefined) {
-				const conversationId = String(claim.parameters[0] ?? '');
-				if (claimedConversations.has(conversationId)) {
-					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
-				}
-				claimedConversations.add(conversationId);
-				const turnId =
-					admittedTurns.get(conversationId) ??
-					`${conversationId.replace(/^conversation-/, 'agent-')}:turn`;
-				turnConversations.set(turnId, conversationId);
-				return Promise.resolve({
-					_tag: 'Success',
-					value: {
-						rows: [
-							{
-								task_id: turnId,
-								conversation_id: conversationId,
-								turn_id: turnId,
-								agent_name: 'web'
-							}
-						],
-						affectedRows: 1
-					}
-				});
-			}
 			return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
-		}
-		if (request.sql.includes('pg_advisory_xact_lock')) {
-			const conversationId = String(request.parameters[0] ?? '');
-			if (claimedConversations.has(conversationId)) {
-				return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
-			}
-			claimedConversations.add(conversationId);
-			const turnId =
-				admittedTurns.get(conversationId) ??
-				`${conversationId.replace(/^conversation-/, 'agent-')}:turn`;
-			turnConversations.set(turnId, conversationId);
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows: [
-						{
-							task_id: turnId,
-							conversation_id: conversationId,
-							turn_id: turnId,
-							agent_name: 'web'
-						}
-					],
-					affectedRows: 1
-				}
-			});
-		}
-		if (request.sql.includes('as mailbox_status') && request.sql.includes('as has_running')) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: { rows: [{ mailbox_status: 'active', has_running: false }], affectedRows: 0 }
-			});
 		}
 		if (statementIntent(request, 'select', 'session')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subjectRow], affectedRows: 0 } });
@@ -296,7 +246,10 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				}
 			});
 		}
-		if (statementIntent(request, 'select', 'chat_message') && request.sql.includes('turn_id')) {
+		if (
+			statementIntent(request, 'select', 'chat_message') &&
+			request.parameters.some((parameter) => turnConversations.has(String(parameter)))
+		) {
 			// Drizzle may place literal predicates (for example `role = 'assistant'`) before
 			// either identifier. Resolve the persisted target semantically instead of coupling
 			// this facility double to a generated parameter order.
@@ -310,8 +263,7 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 					? undefined
 					: {
 							id: turnId,
-							status: 'queued' as const,
-							parent_agent_id: null,
+							status: 'running' as const,
 							parts: [],
 							subject,
 							agent_name: 'web',
@@ -335,7 +287,7 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: {
 					rows: [...persistedTurns.entries()].flatMap(([turnId, content]) =>
 						turnConversations.get(turnId) === conversationId
-							? [{ id: `${turnId}:message`, role: 'assistant', content }]
+							? [{ id: `${turnId}:message`, role: 'assistant', content, turn_id: turnId }]
 							: []
 					),
 					affectedRows: 0
@@ -357,7 +309,8 @@ describe('Bolt agent tool loop', () => {
 	it('executes describe_workspace then completes the turn', async () => {
 		let turns = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
@@ -400,16 +353,19 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-tools'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.run',
+			command: 'agents.enqueue',
 			input: {
-				conversationId: 'conversation-tools'
+				agent: 'web',
+				conversationId: 'conversation-tools',
+				turnId: 'agent-tools:turn',
+				message: 'Describe this workspace'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { conversationId: 'conversation-tools', status: 'drained' } }
+			response: { value: { conversationId: 'conversation-tools', status: 'completed' } }
 		});
 		expect(turns).toBe(2);
 		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
@@ -449,6 +405,62 @@ describe('Bolt agent tool loop', () => {
 		expect(rewrites.map((turn) => turn.parts.length)).toEqual([0, 1, 2, 3, 3]);
 	});
 
+	it('keeps one invocation alive beyond the former eight-round ceiling', async () => {
+		let turns = 0;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
+				turns += 1;
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						output:
+							turns <= 10
+								? { toolCalls: [{ name: 'describe_workspace', input: {} }] }
+								: { text: 'All ten rounds finished.' }
+					}
+				});
+			}
+		};
+		const facilities: FacilityBindings = {
+			scope,
+			database: sessionDatabase,
+			ai,
+			tasks: { call: () => Promise.resolve({ _tag: 'Success', value: {} }) },
+			hostTools: {
+				call: () => Promise.resolve({ _tag: 'Success', value: { output: null } })
+			}
+		};
+		const result = await bundle.dispatch(
+			{
+				_tag: 'Command',
+				protocolVersion: PROTOCOL_VERSION,
+				id: InvocationId.make('agent-unbounded'),
+				scope,
+				deadlineEpochMs: Date.now() + 10_000,
+				command: 'agents.enqueue',
+				input: {
+					agent: 'web',
+					conversationId: 'conversation-unbounded',
+					turnId: 'agent-unbounded:turn',
+					message: 'Run every tool round'
+				},
+				headers: { authorization: ['Bearer test-session'] }
+			},
+			facilities,
+			new AbortController().signal
+		);
+		expect(result).toMatchObject({
+			_tag: 'Success',
+			response: { value: { conversationId: 'conversation-unbounded', status: 'completed' } }
+		});
+		expect(turns).toBe(11);
+		expect(persistedTurns.get('agent-unbounded:turn')).toMatchObject({
+			status: 'completed',
+			parts: expect.arrayContaining([{ kind: 'text', text: 'All ten rounds finished.' }])
+		});
+	});
+
 	/**
 	 * A part is durable before the turn settles.
 	 *
@@ -460,7 +472,8 @@ describe('Bolt agent tool loop', () => {
 	it('has the call durable and the turn still running while the tool is executing', async () => {
 		let turns = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
@@ -513,9 +526,12 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-streaming'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.run',
+				command: 'agents.enqueue',
 				input: {
-					conversationId: 'conversation-streaming'
+					agent: 'web',
+					conversationId: 'conversation-streaming',
+					turnId: 'agent-streaming:turn',
+					message: 'Observe this tool call'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -543,7 +559,8 @@ describe('Bolt agent tool loop', () => {
 	it('writes a two-round turn as one assistant message whose parts are in order', async () => {
 		let turns = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
@@ -574,9 +591,12 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-two-rounds'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.run',
+				command: 'agents.enqueue',
 				input: {
-					conversationId: 'conversation-two-rounds'
+					agent: 'web',
+					conversationId: 'conversation-two-rounds',
+					turnId: 'agent-two-rounds:turn',
+					message: 'Use two rounds'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -637,7 +657,8 @@ describe('Bolt agent tool loop', () => {
 	it('executes MCP tools through the connector facility', async () => {
 		let turns = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
@@ -696,16 +717,19 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-mcp'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.run',
+			command: 'agents.enqueue',
 			input: {
-				conversationId: 'conversation-mcp'
+				agent: 'web',
+				conversationId: 'conversation-mcp',
+				turnId: 'agent-mcp:turn',
+				message: 'Search the connector'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { conversationId: 'conversation-mcp', status: 'drained' } }
+			response: { value: { conversationId: 'conversation-mcp', status: 'completed' } }
 		});
 		expect(connectorCalls).toEqual([
 			{
@@ -747,9 +771,12 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-mcp-undeclared'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.run',
+				command: 'agents.enqueue',
 				input: {
-					conversationId: 'conversation-mcp-undeclared'
+					agent: 'web',
+					conversationId: 'conversation-mcp-undeclared',
+					turnId: 'agent-mcp-undeclared:turn',
+					message: 'Call an undeclared connector operation'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -757,7 +784,8 @@ describe('Bolt agent tool loop', () => {
 				scope,
 				database: sessionDatabase,
 				ai: {
-					call: () => {
+					call: (_metadata, request) => {
+						if (request._tag === 'Models') return modelCatalogResponse();
 						turns += 1;
 						return Promise.resolve({
 							_tag: 'Success',
@@ -786,12 +814,13 @@ describe('Bolt agent tool loop', () => {
 		expect(connectorCalls).toBe(0);
 	});
 
-	it('spawns an in-session subagent and parks only at the explicit await', async () => {
+	it('awaits a spawned subagent inside the same parent invocation', async () => {
 		let turns = 0;
 		const targetAgentId = 'agent:agent-spawn:turn:tool:0:0';
 		const targetTaskId = 'agent-spawn:turn:tool:0:0';
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				return Promise.resolve({
 					_tag: 'Success',
@@ -817,8 +846,8 @@ describe('Bolt agent tool loop', () => {
 				});
 			}
 		};
-		// The spawn is a durable `agent_run` admission and direct execution. The task facility is used
-		// only for an in-memory interruption handle; no Wake may be emitted.
+		// The spawn persists a child turn and joins its exact execution. The task facility is used only
+		// for an in-memory interruption handle; no Wake may be emitted.
 		const taskSignals: Array<string> = [];
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 			call: (_metadata, request) => {
@@ -873,19 +902,31 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-spawn'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.run',
+			command: 'agents.enqueue',
 			input: {
-				conversationId: 'conversation-spawn'
+				agent: 'web',
+				conversationId: 'conversation-spawn',
+				turnId: 'agent-spawn:turn',
+				message: 'Delegate this task'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { conversationId: 'conversation-spawn', status: 'drained' } }
+			response: { value: { conversationId: 'conversation-spawn', status: 'completed' } }
 		});
 		expect(turns).toBe(4);
 		expect(persistedTurns.get(targetTaskId)?.status).toBe('completed');
+		const parent = persistedTurns.get('agent-spawn:turn');
+		const awaitResult = parent?.parts.find(
+			(part) => part.kind === 'tool-result' && part.name === 'await_agent'
+		);
+		expect(awaitResult?.output).toMatchObject({
+			agentId: targetAgentId,
+			taskId: targetTaskId,
+			status: 'completed'
+		});
 		expect(taskSignals).not.toContain('wake');
 	});
 
@@ -900,7 +941,8 @@ describe('Bolt agent tool loop', () => {
 		);
 		let turns = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
@@ -920,9 +962,12 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-workspace-tool'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.run',
+				command: 'agents.enqueue',
 				input: {
-					conversationId: 'conversation-workspace-tool'
+					agent: 'web',
+					conversationId: 'conversation-workspace-tool',
+					turnId: 'agent-workspace-tool:turn',
+					message: 'Use the workspace tool'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -931,7 +976,7 @@ describe('Bolt agent tool loop', () => {
 		);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { conversationId: 'conversation-workspace-tool', status: 'drained' } }
+			response: { value: { conversationId: 'conversation-workspace-tool', status: 'completed' } }
 		});
 	});
 });

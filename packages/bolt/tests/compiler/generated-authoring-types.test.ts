@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
-import { renderAuthoringTypes, renderWorkspaceAuthoring } from '../../src/compiler/sync.js';
+import { renderAuthoringTypes, renderWorkspaceAuthoring } from '../../src/compiler/workspace-build.js';
 
 const roots: string[] = [];
 afterEach(async () => {

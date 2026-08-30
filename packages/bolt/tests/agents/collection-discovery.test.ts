@@ -87,11 +87,7 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools'],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:collection-discovery-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:collection-discovery-fixture'
 });
 
 describe('agent collection discovery', () => {
@@ -201,8 +197,7 @@ describe('agent collection discovery', () => {
 									id: 'collection-discovery:turn:message',
 									content: {
 										id: 'collection-discovery:turn',
-										status: 'queued',
-										parent_agent_id: null,
+										status: 'running',
 										parts: [],
 										subject,
 										agent_name: 'whatsapp-field',
@@ -238,6 +233,12 @@ describe('agent collection discovery', () => {
 		let round = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: (_metadata, request) => {
+				if (request._tag === 'Models') {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: { output: { defaultModel: 'test-model', options: [{ id: 'test-model', contextLength: 128_000 }] } }
+					});
+				}
 				offered.push(request);
 				round += 1;
 				return Promise.resolve({
@@ -274,10 +275,12 @@ describe('agent collection discovery', () => {
 			id: InvocationId.make('collection-discovery'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.run',
+			command: 'agents.enqueue',
 			input: {
-				subject,
-				conversationId: 'conversation-discovery'
+				agent: 'whatsapp-field',
+				conversationId: 'conversation-discovery',
+				turnId: 'collection-discovery:turn',
+				message: 'Describe reachable collections'
 			},
 			headers: { authorization: ['Bearer envoy-test-session'] }
 		};

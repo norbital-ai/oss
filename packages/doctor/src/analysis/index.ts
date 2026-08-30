@@ -8,3 +8,10 @@
  */
 export { assembleReport } from './snapshot.js';
 export type { AssembleOptions, AssembleResult, ReportFormat } from './snapshot.js';
+export { computeCheckpointDelta, deltaSummary } from './delta.js';
+export type {
+	CheckpointDelta,
+	DeltaOptions,
+	DeltaSide,
+	PillarDelta
+} from './delta.js';

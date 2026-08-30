@@ -61,8 +61,8 @@ directly and are never rows in `user`.
 Read the reference that matches the question. Do not answer from memory.
 
 - **[Approvals and policies](references/approvals-and-policies.md)** — how permission grants work,
-  how an approval flow is declared and routed, write-then-lock behaviour, approval statuses, why a
-  record came back locked, who is allowed to approve.
+  how an approval flow is declared and routed, prepare/gate/commit behaviour, approval statuses,
+  why a record came back locked, who is allowed to approve.
 - **[Records, history and audit](references/records-history-and-audit.md)** — the framework-owned
   columns on every row, temporal history, rollback, audit, and how the client replica syncs.
 - **[Agent capabilities](references/agent-capabilities.md)** — what a workspace agent can do, how

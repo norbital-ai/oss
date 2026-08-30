@@ -15,12 +15,11 @@
 	import Icon from '@iconify/svelte';
 	import { Number as Number_ } from 'effect';
 	import { onDestroy, onMount } from 'svelte';
-	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
 	import { DataRenderer, formatDataValue, type FieldRendererComponent } from '#lib/data-renderer';
-	import { Cover, Inline, Stack, Bound } from '#lib/layout';
+	import { Cover, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
 		CollectionActionToolbar,
@@ -102,8 +101,7 @@
 		getCollectionSurfaceRuntime,
 		resolveCollectionSurface,
 		resolveCollectionViewKey,
-		setCollectionClientContext,
-		setCollectionRecordScope
+		setCollectionClientContext
 	} from '#lib/collection-runtime';
 
 	type ColumnConfig = CollectionTableColumn<TRow>;
@@ -369,7 +367,10 @@
 			query: {
 				...query,
 				with: { ...automaticRelationshipWith, ...(query?.with ?? {}) },
-				search: queryState.search || undefined,
+				search:
+					queryState.search === ''
+						? undefined
+						: { mode: 'lexical' as const, term: queryState.search },
 				orderBy: orderBy ?? defaultOrderBy,
 				limit: queryState.pageSize,
 				after: cursors[queryState.pageIndex]
@@ -403,7 +404,10 @@
 			operations,
 			query: {
 				where: query?.where,
-				search: queryState.search || undefined,
+				search:
+					queryState.search === ''
+						? undefined
+						: { mode: 'lexical' as const, term: queryState.search },
 				columns: query?.columns,
 				bypass_secret: query?.bypass_secret
 			},

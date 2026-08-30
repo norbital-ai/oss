@@ -26,6 +26,7 @@ const supportEnvoy = () =>
 		transport: 'whatsapp',
 		audience: 'authenticated',
 		policies: ['member'],
+		delegation: 'enabled',
 		task: 'Answer support questions for this member.'
 	});
 
@@ -199,22 +200,12 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 				(
 					await read(
 						composer
-							.select({
-								collection_name: syncOutbox.collection_name,
-								record_id: syncOutbox.record_id,
-								operation: syncOutbox.operation
-							})
+							.select({ collection_name: syncOutbox.collection_name })
 							.from(syncOutbox)
-							.where(eq(syncOutbox.record_id, notification.id))
+							.where(eq(syncOutbox.collection_name, 'bolt_notifications'))
 					)
 				).rows
-			).toEqual([
-				{
-					collection_name: 'bolt_notifications',
-					record_id: notification.id,
-					operation: 'create'
-				}
-			]);
+			).toEqual([{ collection_name: 'bolt_notifications' }]);
 			expect(
 				(
 					await read(

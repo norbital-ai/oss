@@ -3,13 +3,18 @@ import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { refuse, AuthoredRefusal } from '../../src/authoring/refusal.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import {
+	emptyAuthoredRuntime,
+	type AuthoredRuntime
+} from '../../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
 /**
  * Which of a batch's three phases failed, which is a different question from why.
@@ -50,23 +55,41 @@ const definition = workspace({
 	]
 });
 
-const hooksRefusingIn = (site: 'before' | 'after') => ({
-	...emptyAuthoredRuntime,
-	hooks: {
-		notes: {
-			mutate: {
-				perRecord: {
-					[site]: {
-						description: `refuses in ${site}`,
-						handler: (context: unknown) => {
-							refuse('A note must name a subject.');
-							return context;
-						}
-					}
-				}
-			}
+/**
+ * The fixture collection as a schema, so the hooks are typed the way a compiled workspace's are:
+ * `CollectionHooks` reads handler contexts off `tables`, keeping `input`, `existing`, `previous`,
+ * `record` and `api` inferred rather than untyped.
+ *
+ * A refusal terminates control flow (`refuse` throws), so a refusing handler needs no `context`:
+ * the declared `never` return is what satisfies the hook's graph type without reflecting.
+ */
+interface NotesSchema {
+	readonly tables: {
+		readonly notes: {
+			readonly $inferSelect: { readonly id: string; readonly body: string };
+			readonly $inferInsert: { readonly id?: string; readonly body: string };
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
+const refusalHook = (site: 'before' | 'after'): CollectionHooks<NotesSchema, 'notes'> => {
+	const described = {
+		description: `refuses in ${site}`,
+		handler: () => {
+			refuse('A note must name a subject.');
 		}
-	}
+	};
+	return {
+		mutate: {
+			perRecord: site === 'before' ? { before: described } : { after: described }
+		}
+	};
+};
+
+const hooksRefusingIn = (site: 'before' | 'after'): AuthoredRuntime => ({
+	...emptyAuthoredRuntime,
+	hooks: { notes: authoredHooks(refusalHook(site)) }
 });
 
 let harness: BoltTestRuntime | undefined;
@@ -103,7 +126,7 @@ describe('a batched write that fails', () => {
 		// The claim `committed: []` makes, checked against the database rather than taken on trust.
 		expect(await harness.database.query('select id from notes')).toHaveLength(0);
 		// And the sentence the author wrote is still the failure underneath, not a casualty of it.
-		const cause = Collections.unwrapMutationPhase(failure);
+		const cause = unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
 		expect((cause as AuthoredRefusal).message).toBe('A note must name a subject.');
 		expect((cause as AuthoredRefusal).action).toBe('mutate.before');
@@ -122,7 +145,7 @@ describe('a batched write that fails', () => {
 		expect(stored).toHaveLength(2);
 		const committed = (failure as Collections.MutationPhaseFailure).committed;
 		expect([...committed].toSorted()).toEqual(stored.map((row) => String(row['id'])).toSorted());
-		const cause = Collections.unwrapMutationPhase(failure);
+		const cause = unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
 		expect((cause as AuthoredRefusal).action).toBe('mutate.after');
 	}, 60_000);
@@ -132,15 +155,15 @@ describe('a batched write that fails', () => {
 
 		const written = await harness.runtime.runPromise(writeTwo());
 
-		expect(written).toHaveLength(2);
-		expect(written.map((row) => row['body'])).toEqual(['first', 'second']);
+		expect(written.records).toHaveLength(2);
+		expect(written.records.map((row) => row['body'])).toEqual(['first', 'second']);
 	}, 60_000);
 });
 
 describe('unwrapMutationPhase', () => {
 	it('returns a value that is not a phase failure unchanged', () => {
 		const refusal = new AuthoredRefusal({ message: 'unrelated' });
-		expect(Collections.unwrapMutationPhase(refusal)).toBe(refusal);
+		expect(unwrapMutationPhase(refusal)).toBe(refusal);
 	});
 
 	it('keeps the innermost phase when one batch fails inside another', () => {

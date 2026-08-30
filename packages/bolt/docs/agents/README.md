@@ -44,9 +44,8 @@ One assembly path (`allowedTools`):
 3. **Authored** `defineAgentTool` — only when a policy names the tool.
 4. **MCP** — only when a policy names the server. Wire names fold `:` to `_`.
 5. **Sandbox** (unless `delegation: disabled`): `spawn_agent`, `list_agents`, `read_agent`,
-   `message_agent`, `await_agent`, `dequeue_agent_message`, `reorder_agent_queue`,
-   `interrupt_agent`, `stop_agent`, `resume_agent`. Structural; they do not grant workspace
-   data authority.
+	`message_agent`, `await_agent`, `interrupt_agent`, `stop_agent`, `resume_agent`. Structural;
+	they do not grant workspace data authority.
 6. **Host tools** — only if a policy names them. The host implements the dangerous side.
 
 Denied tools return `{ error }` in the loop (`ToolNotAllowed`). There is no "missing means all"
@@ -61,28 +60,33 @@ sandbox, no tools.
 
 ```text
   agents.enqueue
-        │  authorize subject
-        │  persist user message + assistant row (queued)
-        │  enqueue task agents.execute     ← returns before inference
-        ▼
-  agents.execute
-        │  load turn + subject snapshot
-        │  transcript (recent 64 rows)
-        ▼
-  continueToolLoop     up to maxToolRounds = 8
-        │  ai.execute → text | toolCalls
-        │  run tools → append parts → commit row
-        │  await_agent parks (status: waiting); parent resumed separately
-        ▼
-  settle usage (tokens / USD on turn + chat_session)
+		│  authorize subject
+		│  persist user message + running assistant row
+		│  load the token-capped transcript window
+		▼
+  continueToolLoop     one ordinary invocation, no round count
+		│  ai.execute → text | toolCalls
+		│  append + commit each tool call before execution
+		│  append + commit its exact result on return
+		│  await_agent executes and joins that exact child turn
+		▼
+  settle turn + usage (tokens / USD on turn + chat_session)
 ```
 
 The assistant message is **one row** with ordered `text` | `tool` | `tool-result` parts, not one
 row per round.
 
-**Resume.** Task-queue retry on failure; `agents.continue` after approval/wait; `maxResumes = 4`
-for a waiting parent. Nesting of delegated agents / automations is capped
+There is no agent queue, retry, park, continuation row, or round limit. A stop fences the live
+invocation at its next facility boundary. Resume is a new ordinary invocation that reconstructs
+the same turn from its committed parts. A host restart marks an in-flight row interrupted; it is
+never claimed again automatically. The host calls `Agents.recover` exactly once when it loads an
+environment after restart; ordinary requests never run that sweep because they may overlap a live
+turn. Nesting of delegated agents and automations remains capped
 (`DEFAULT_NESTING_LIMIT = 8`).
+
+The replay window keeps whole turns and whole tool-call/result pairs under 60% of the selected
+model's reported context window. Missing context metadata is an error; the runtime does not guess a
+model cap.
 
 **Metering.** Cumulative and per-segment usage on the turn; billing settlement on completion.
 

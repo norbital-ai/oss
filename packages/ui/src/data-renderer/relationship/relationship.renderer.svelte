@@ -67,7 +67,9 @@
 					? { ...declaredWhere, ...Object.fromEntries(narrowed.map(([k, v]) => [k, { eq: v }])) }
 					: declaredWhere,
 				...(relationOptions?.orderBy ? { orderBy: relationOptions.orderBy } : {}),
-				...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+				...(searchQuery.trim()
+					? { search: { mode: 'lexical' as const, term: searchQuery.trim() } }
+					: {}),
 				limit: relationOptions?.limit ?? 100
 			}
 		};

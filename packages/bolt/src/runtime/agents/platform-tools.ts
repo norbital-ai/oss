@@ -8,6 +8,7 @@ import {
 	type WorkspaceDefinition
 } from '#lib/authoring/workspace-schema.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
+import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
 import type * as Database from '#lib/runtime/facilities/database.js';
 import type { HostToolsInterface } from '#lib/runtime/facilities/services.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
@@ -209,9 +210,7 @@ const serializedBytes = (value: Schema.Json): number =>
 	new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
 const defaultCollectionCursor = (row: Schema.Json | undefined): string | null =>
-	row === undefined
-		? null
-		: Collections.encodeCollectionCursor([{ column: 'id', direction: 'asc' }], row);
+	row === undefined ? null : encodeCollectionCursor([{ column: 'id', direction: 'asc' }], row);
 
 /**
  * Gives the model the largest complete row prefix whose serialized envelope fits the hard byte
@@ -464,18 +463,30 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 			const parsed = yield* decode(CollectionWriteInput, input);
 			switch (parsed.operation) {
 				case 'create':
-					yield* context.collections.create(context.effectId, context.subject, {
-						collection: parsed.collection,
-						id: parsed.id,
-						values: parsed.values ?? {}
-					});
+					yield* context.collections.mutate(
+						context.effectId,
+						context.subject,
+						parsed.collection,
+						[{ ...(parsed.values ?? {}), id: parsed.id }],
+						false,
+						0,
+						{
+							root: { id: parsed.id, action: 'create' }
+						}
+					);
 					break;
 				case 'update':
-					yield* context.collections.update(context.effectId, context.subject, {
-						collection: parsed.collection,
-						id: parsed.id,
-						values: parsed.values ?? {}
-					});
+					yield* context.collections.mutate(
+						context.effectId,
+						context.subject,
+						parsed.collection,
+						[{ ...(parsed.values ?? {}), id: parsed.id }],
+						false,
+						0,
+						{
+							root: { id: parsed.id, action: 'update' }
+						}
+					);
 					break;
 				case 'delete':
 					yield* context.collections.delete(

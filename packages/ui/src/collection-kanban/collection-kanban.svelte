@@ -13,7 +13,7 @@
 	import { isSystemCollectionField } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { watch } from 'runed';
-	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
 	import { onMount } from 'svelte';
@@ -202,7 +202,10 @@
 		query: {
 			...collectionQuery,
 			with: { ...automaticRelationshipWith, ...(collectionQuery?.with ?? {}) },
-			search: queryState.search || collectionQuery?.search,
+			search:
+				queryState.search === ''
+					? collectionQuery?.search
+					: { mode: 'lexical' as const, term: queryState.search },
 			orderBy: collectionQuery?.orderBy,
 			group: {
 				by: groupBy,

@@ -13,7 +13,7 @@
  * time and is worth that. `typeAware: false` in a receipt now means only that the selection held no
  * file a program can contain, and `assess` refuses to consolidate a root that reports it.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runAuthored } from './authored.js';
 import { findConfig } from './config.js';
@@ -23,6 +23,8 @@ import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import { assembleReport } from './analysis/index.js';
+export { computeCheckpointDelta, deltaSummary } from './analysis/delta.js';
+export type { CheckpointDelta, DeltaOptions, DeltaSide, PillarDelta } from './analysis/delta.js';
 import type { Confidence, Severity } from './rules.js';
 
 export { definePack } from './rules.js';
@@ -40,21 +42,14 @@ export type { LoadedConfig, OverlapBinding, ProbeConfig } from './config.js';
 export { overlapRules } from './overlaps.js';
 export type { OverlapShape } from './overlaps.js';
 export { runRules, sourceFiles, svelteMarkup, svelteScript } from './runner.js';
-export { reactivePack } from './packs/reactive.js';
 export { stringlyPack, stringlyTyped } from './packs/stringly.js';
 export type { StringlyOptions } from './packs/stringly.js';
-export { effectCeremonyPack, effectCeremonyPatterns } from './packs/effect-ceremony.js';
 export { defineRule, defineScope, verifyExamples, matchSource } from './pattern.js';
 export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
+export { nameOf } from './nameof.js';
 export { boundariesPack, boundaryRules } from './packs/boundaries.js';
-export { effectPack, effectRules } from './packs/effect.js';
 export { structurePack, structureRules } from './packs/structure.js';
-export { platformPack, platformRules } from './packs/platform.js';
-export { sveltePack, svelteRules } from './packs/svelte.js';
-export { norbitalPack, norbitalRules } from './packs/norbital.js';
 export { runCrossFile } from './cross-file.js';
-export { CAPABILITIES, capabilityPack, defineCapability } from './capability.js';
-export type { Capability } from './capability.js';
 export type {
 	Bindings,
 	Constraints,
@@ -193,10 +188,12 @@ export type AuditResult = Readonly<{
  * error, never a quietly empty result.
  */
 export function decodeReceipt(text: string, path: string): Receipt {
-	const parsed = Effect.runSync(Effect.result(
+	const parsed = Effect.runSync(
+		Effect.result(
 			// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
 			Effect.try(() => JSON.parse(text))
-		));
+		)
+	);
 	/*
 	 * One decode at the boundary. The receipt is a received shape and is understood here and
 	 * nowhere else: the parse becomes a schema decode, and a half-written file fails as the
@@ -204,9 +201,7 @@ export function decodeReceipt(text: string, path: string): Receipt {
 	 */
 	return Result.match(parsed, {
 		onFailure: (failure) => {
-			throw new Error(
-				`norbital-doctor: ${path} is not valid JSON: ${String(failure)}`
-			);
+			throw new Error(`norbital-doctor: ${path} is not valid JSON: ${String(failure)}`);
 		},
 		onSuccess: (value) => decodeReceiptShape(value, path)
 	});
@@ -214,7 +209,9 @@ export function decodeReceipt(text: string, path: string): Receipt {
 
 /** The receipt schema, decoded field by field at the boundary that received it. */
 function decodeReceiptShape(value: unknown, path: string): Receipt {
-	const decoded = Effect.runSync(Effect.result(Schema.decodeUnknownEffect(ReceiptHeadSchema)(value)));
+	const decoded = Effect.runSync(
+		Effect.result(Schema.decodeUnknownEffect(ReceiptHeadSchema)(value))
+	);
 	return Result.match(decoded, {
 		onFailure: (failure) => {
 			throw new Error(`norbital-doctor: ${path} ${receiptFailureMessage(failure, path)}`);
@@ -310,7 +307,7 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 	});
 
 	/*
-	 * One path. The legacy detector is gone, so `base: 'norbital'` selects a pack of ported rules
+	 * One path. The legacy detector is gone, so `packs: ['norbital']` selects a pack of ported rules
 	 * rather than a second scanner, and there is nothing left to spawn.
 	 */
 	if (options.paths?.length && authored.selectedFiles.length === 0)

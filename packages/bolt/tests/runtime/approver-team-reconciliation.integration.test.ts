@@ -86,11 +86,7 @@ const definition = workspace({
 	skills: [],
 	envoys: [],
 	requiredFacilities: [],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:approver-teams-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:approver-teams-fixture'
 });
 
 const manifest = buildManifest(definition, { artifactId: 'approver-teams' });

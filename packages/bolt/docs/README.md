@@ -19,16 +19,16 @@ not host topology.
 packages/bolt/docs/
 ├── README.md                          ← you are here
 ├── pillars/
-│   ├── 04-sync-engine/                P4  outbox, partitions, pull
-│   └── 05-client/                     P5  PGlite replica, overlay, shell
+│   ├── 04-sync-engine/                P4  changelog, SyncHost, connect / advance
+│   └── 05-client/                     P5  Machine reducer, drivers, shell
 ├── access/                            identities, policies, approvals
 └── agents/                            turns, tools, envoys
 ```
 
 | Folder                                                       | Pins                                                          |
 | ------------------------------------------------------------ | ------------------------------------------------------------- |
-| [pillars/04-sync-engine](./pillars/04-sync-engine/README.md) | Outbox, poke, pull, partition, query / mutate path            |
-| [pillars/05-client](./pillars/05-client/README.md)           | PGlite replica, windows, journal, leader, budget              |
+| [pillars/04-sync-engine](./pillars/04-sync-engine/README.md) | Changelog, ledger, SyncHost registry, connect / advance, invariants |
+| [pillars/05-client](./pillars/05-client/README.md)           | Machine reducer, project(), SSE / HTTP drivers, syncStatus    |
 | [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md) |
 | [agents](./agents/README.md)                                 | Tool loop, envoys vs automations                              |
 
@@ -63,7 +63,7 @@ packages/bolt/docs/
     │
     │  facilities (host-provided): database, files, ai, tasks, transport, …
     ▼
-  browser client  PGlite replica, live queries, overlay writes, agent UI
+  browser client  pure Machine reducer + SSE/HTTP drivers, live queries, mutate writes, agent UI
 ```
 
 Colony publishes the artifact into P2 and routes `(tenant, environment) → release` (P1). Bolt never
@@ -73,7 +73,7 @@ sees another tenant.
 
 ## Authoring layout
 
-Discovery is `src/compiler/sync.ts`. The kind is the directory, the name is the file, and a
+Discovery is `src/compiler/workspace-build.ts`. The kind is the directory, the name is the file, and a
 leading `+` means the compiler reads it.
 
 ```text
@@ -110,7 +110,7 @@ src/
 ```
 
 A leading `+` means the compiler reads the file. A stray `+` file is a build error
-(`discoverAuthoredSource` in `src/compiler/sync.ts`). `collections/+relationship.ts` is a
+(`discoverAuthoredSource` in `src/compiler/workspace-build.ts`). `collections/+relationship.ts` is a
 known optional file, not a stray.
 
 There is no `bolt build`, no `+agent.ts`, no `+seed.ts`. Fixtures come from `seed_bank/` via
@@ -126,12 +126,12 @@ It is the tenant id and the string typed at `/login`. It is not the directory na
 ## Guest runtime
 
 `src/runtime/app.ts` builds Effect layers from the artifact. `src/runtime/dispatch.ts` routes
-commands (`collections.mutate`, `sync.pull`, `agents.enqueue`, …).
+commands (`collections.mutate`, `sync.connect`, `sync.advance`, `agents.enqueue`, …).
 
 The guest has no Node builtins. Every I/O port is a facility the host binds per invocation
 (`packages/bolt-protocol/src/facilities.ts`). On Colony that binding happens inside a fresh
 isolated-vm context; see [P3 Runtime](../../../../norbital/apps/colony/docs/pillars/03-runtime/README.md).
 
-Reads and writes on `api.db.<collection>` are policy-guarded. Browser mutations go through
-`collections.mutate`. Vector search (`findNearest`) is a server verb; the browser client does not
-declare it.
+Reads and writes on `api.db.<collection>` are policy-guarded. Browser writes are one verb,
+`collections.mutate` (plus `delete`, and `resume` for approval release). Vector search
+(`findNearest`) is a server verb; the browser client does not declare it.

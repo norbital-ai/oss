@@ -123,37 +123,18 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'secrets.status',
 	'secrets.write',
 	'apps.visible',
-	'access.impersonate',
-	'access.resolveScope',
-	'access.authorize',
-	'access.predicate',
 	'access.explain',
-	'access.mask',
-	'approvals.request',
 	'approvals.decide',
 	'approvals.withdraw',
 	'approvals.capabilities',
 	'approvals.status',
-	'approvals.timeline',
-	// It decodes one so `SYSTEM_ONLY_COMMANDS` has a `system` flag to check; the claim is refused
-	// here for the same reason every other one is, before that gate is reached.
-	'sync.compact',
-	'sync.shape',
-	'sync.provisioning',
 	'agents.enqueue',
 	'agents.open',
-	'agents.dequeue',
-	'agents.reorder',
 	'agents.interrupt',
 	'agents.stop',
 	'agents.resume',
-	'agents.listConversations',
-	'agents.history',
 	'workspace.manifest',
 	'workspace.authoringManifest',
-	'collections.findMany',
-	'collections.findFirst',
-	'collections.count',
 	'collections.history',
 	'collections.mutate',
 	'collections.import',
@@ -163,16 +144,11 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 /**
  * The same hole one field down.
  *
- * These take no `Subject`, but a `Command` mints their `userId`, `tenantId` and `invitedBy` from
- * the authenticated one all the same — so on a credential-free tag `identity.startSession` would
- * have issued a live session credential for any user id the payload named.
+ * This takes no `Subject`, but a `Command` mints its `tenantId` from the authenticated one all the
+ * same.
  */
 const IDENTITY_FIELD_COMMANDS: ReadonlyArray<string> = [
-	'identity.invite',
-	'identity.acceptInvitation',
-	'identity.startSession',
-	'identity.workspaceAccess',
-	'identity.workspaceSettings'
+	'identity.workspaceAccess'
 ];
 
 const vaultWorkspace = workspace({
@@ -338,7 +314,7 @@ describe('payload-supplied identity', () => {
 	 * The task path the runtime actually enqueues, still working.
 	 *
 	 * `Approvals` enqueues `collections.resume` with `{ requestId }` and nothing else. Its authority
-	 * is the stored approval itself — `authorizeResume` requires the request to be `Approved`, and the
+	 * is the stored approval itself — `Approvals.resume` requires the request to be `Approved`, and the
 	 * write is replayed under the subject recorded when the original create was authenticated — so it
 	 * never had a payload subject to lose.
 	 */
@@ -350,11 +326,15 @@ describe('payload-supplied identity', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
-						collection: 'people',
-						id,
-						values: { name: 'Ada' }
-					});
+					yield* (yield* Collections.Service).mutate(
+						effectId('create-held'),
+						policySubject,
+						'people',
+						[{ id, name: 'Ada' }],
+						false,
+						0,
+						{ root: { id, action: 'create' } }
+					);
 				})
 			)
 		);
@@ -368,10 +348,15 @@ describe('payload-supplied identity', () => {
 		);
 		if (pending?._tag !== 'Pending')
 			throw new Error(`expected a pending approval, got ${String(pending?._tag)}`);
-		await harness.database.query('update bolt_approvals set state = $2 where request_id = $1', [
-			requestId,
-			{ _tag: 'Approved', requestId, decidedBy: adminSubject.userId, operation: pending.operation }
-		]);
+		// Only the discriminant and the decider move. `status` answers the *public* projection, which
+		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
+		// replays from — so writing that projection back would approve a request nothing could resume.
+		await harness.database.query(
+			`update bolt_approvals
+			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))
+			 where request_id = $1`,
+			[requestId, adminSubject.userId]
+		);
 
 		const resumed = await runtime.runPromise(
 			dispatchInvocation(task('collections.resume', { requestId }))

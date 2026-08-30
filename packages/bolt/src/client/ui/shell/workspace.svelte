@@ -31,7 +31,7 @@
 	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
 	import { workspaceSession } from '#lib/client/session.js';
-	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
+	import type { ClientState } from '#lib/client/sync/machine.js';
 	import type {
 		CompiledWorkspace,
 		WorkspaceHostActions,
@@ -65,17 +65,16 @@
 	} = $props();
 
 	const session = workspaceSession();
-	let replicaAccessScope = $state(session.accessScope);
+	let accessScope = $state(session.accessScope);
 	let interactiveQueriesRequestedScope = $state<string | undefined>(undefined);
 	const syncStatusSignal = untrack(() => workspace.syncStatus);
-	let syncStatus = $state.raw<WorkspaceSyncStatus | undefined>(syncStatusSignal?.current());
+	let syncStatus = $state.raw<ClientState | undefined>(syncStatusSignal?.current());
 
 	/**
-	 * Mirrors the engine's one platform status signal into this bundle's Svelte graph.
+	 * Mirrors the Machine's one sync state into this bundle's Svelte graph.
 	 *
-	 * No signal means no proof: leave the value absent so the shell says freshness and settlement are
-	 * unverified. It must never synthesize “online”, “settled”, or an exact local result from browser
-	 * connectivity alone.
+	 * No signal means no proof: leave the value absent so the shell says the connection state is
+	 * unverified. It must never synthesize “live” from browser connectivity alone.
 	 */
 	$effect(() => syncStatusSignal?.subscribe((next) => (syncStatus = next)));
 
@@ -241,21 +240,17 @@
 	});
 
 	/**
-	 * The subject the local replica reasons about.
+	 * The principal the agent panel acts as.
 	 *
-	 * Built from what the host proved, never from a default. `policyNames` is unioned in for the local
-	 * replica alone, and only for a non-administrator: an administrator's authority is the status,
-	 * which the replica's own access control short-circuits on, so widening their roles as well would
-	 * conflate the two again.
+	 * Built from what the host proved, never from a default. The runtime re-derives authority from
+	 * the credential on every command, so this is display and panel input, not an authorization
+	 * decision: `policies` stays empty because a person holds policies through their one team, and a
+	 * static identity must not claim them.
 	 */
 	const subject = $derived({
 		userId: view.user.id,
 		tenantId: view.organization.id,
 		teamPath: [...view.user.teamPath],
-		// Empty, and empty for a person always: a person holds policies through their one team, and
-		// this array is what a *static* identity carries. It is a `MINTED_IDENTITY` field, so the
-		// boundary would refuse a payload that claimed one anyway — sending `[]` is the honest shape
-		// rather than a claim the server has to strip.
 		policies: [],
 		...(view.user.admin ? { admin: true } : {}),
 		...(view.user.email === '' ? {} : { email: view.user.email })
@@ -300,18 +295,18 @@
 	 * from the runtime before anything is shown.
 	 */
 	const visibleAppsQuery = $derived.by(() => {
-		void replicaAccessScope;
+		void accessScope;
 		return workspace.frameworkClient.system.apps.visible({});
 	});
 	const allAuthoredAppNames = untrack(() => [
 		...new Set([...Object.keys(workspace.appGroups), ...Object.keys(workspace.appLoaders)])
 	]);
 	const administratorInitialApps = $derived(
-		view.user.admin && replicaAccessScope === 'operator' ? allAuthoredAppNames : []
+		view.user.admin && accessScope === 'operator' ? allAuthoredAppNames : []
 	);
 	const accessibleApps = $derived(visibleAppsQuery.current?.apps ?? administratorInitialApps);
 	const applicationsReady = $derived(
-		visibleAppsQuery.current !== undefined || (view.user.admin && replicaAccessScope === 'operator')
+		visibleAppsQuery.current !== undefined || (view.user.admin && accessScope === 'operator')
 	);
 
 	/**
@@ -324,7 +319,6 @@
 	 * that appears a round trip late.
 	 */
 	const impersonationQuery = $derived.by(() => {
-		const accessScope = replicaAccessScope;
 		// A running team preview is an authority boundary and must be resolved immediately so host
 		// plugins cannot flash as available. In the ordinary operator scope this only feeds the account
 		// menu, so it waits for the first real interaction instead of competing with app data reads.
@@ -346,20 +340,16 @@
 	const impersonateTeam = (teamId: string): Effect.Effect<void> =>
 		workspace.frameworkClient.system.access.impersonateTeam({ teamId }).pipe(
 			Effect.map(() => {
-				// The host callback writes the cookie synchronously. Switch the browser caches immediately
-				// so no reader can observe rows held under the previous policy scope.
+				// The host callback writes the cookie synchronously. The runtime re-derives the subject
+				// from the credential on every command and the stream re-keys on policy drift, so a
+				// preview narrows reads without any browser-side scope to switch.
 				actions.impersonate(teamId);
-				const nextScope = `team:${teamId}`;
-				workspace.changeAccessScope(nextScope);
-				replicaAccessScope = nextScope;
 			}),
 			Effect.catch((cause) => Effect.logError('Impersonation was refused', cause))
 		);
 
 	const stopImpersonating = (): void => {
 		actions.stopImpersonating();
-		workspace.changeAccessScope('operator');
-		replicaAccessScope = 'operator';
 	};
 
 	/**
@@ -371,7 +361,7 @@
 	 */
 	const hostPluginsVisible = $derived(
 		view.user.admin &&
-			!replicaAccessScope.startsWith('team:') &&
+			!accessScope.startsWith('team:') &&
 			!(impersonation?.isActive ?? false)
 	);
 
@@ -480,9 +470,8 @@
 		);
 	};
 
-	/** User-triggered shell reads stay deferred, independently of root-owned replica startup. */
+	/** User-triggered shell reads start only after the first interaction with a painted workspace. */
 	$effect(() => {
-		const accessScope = replicaAccessScope;
 		if (!applicationsReady || interactiveQueriesRequestedScope === accessScope) return;
 		const stopListening = (): void => {
 			window.removeEventListener('pointerdown', requestDeferredQueries, true);
@@ -490,7 +479,7 @@
 		};
 		const requestDeferredQueries = (): void => {
 			stopListening();
-			if (replicaAccessScope === accessScope) interactiveQueriesRequestedScope = accessScope;
+			interactiveQueriesRequestedScope = accessScope;
 		};
 		window.addEventListener('pointerdown', requestDeferredQueries, {
 			capture: true,
@@ -500,18 +489,6 @@
 		return () => {
 			stopListening();
 		};
-	});
-
-	/**
-	 * Gives the host a starter for this exact authority scope.
-	 *
-	 * Registration is not initiation. Colony's persistent root calls `start`, races initial catch-up
-	 * readiness against its hard online boundary and owns the returned teardown. A generated workspace
-	 * therefore contains no interaction, paint or application-module gate in front of replica work.
-	 */
-	$effect(() => {
-		const accessScope = replicaAccessScope;
-		return actions.registerBootstrap?.(workspace.createBootstrap(accessScope));
 	});
 
 	$effect(() => {
@@ -604,7 +581,7 @@
 	plugins={WORKSPACE_HOST_PLUGINS}
 	{impersonation}
 	isAdmin={hostPluginsVisible}
-	deferredQueriesReady={interactiveQueriesRequestedScope === replicaAccessScope}
+	deferredQueriesReady={interactiveQueriesRequestedScope === accessScope}
 	onImpersonate={impersonateTeam}
 	onStopImpersonating={stopImpersonating}
 	onNavigate={actions.navigate}

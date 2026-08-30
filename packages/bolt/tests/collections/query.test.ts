@@ -1,23 +1,26 @@
-import { Effect, Result } from 'effect';
+import { pgTable, text } from 'drizzle-orm/pg-core';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { Result } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { field } from '../../src/authoring/workspace-schema.js';
-import { compilePredicate, quoteIdentifier } from '../../src/runtime/collections/collections.js';
 import {
 	compileOrderTerms,
 	compileWhere,
-	renderOrderBy,
+	orderingExpressions,
 	type WhereContext
-} from '../../src/runtime/collections/where.js';
+} from '../../src/runtime/collections/read/where.js';
 import {
 	compileCollectionCursorSeek,
 	encodeCollectionCursor
-} from '../../src/runtime/collections/cursor.js';
+} from '../../src/runtime/collections/read/cursor.js';
 
-/** Unwraps a where compilation the test expects to succeed. */
+/** Unwraps a where compilation the test expects to succeed and renders it the way the driver would. */
+const dialect = new PgDialect();
 const whereSql = (where: unknown, context: WhereContext) => {
 	const result = compileWhere(where, context);
 	if (Result.isFailure(result)) throw new Error(`compileWhere failed: ${result.failure.message}`);
-	return result.success;
+	const built = dialect.sqlToQuery(result.success);
+	return { sql: built.sql, parameters: built.params };
 };
 
 const context = (collection: string, extras: Partial<WhereContext> = {}): WhereContext => ({
@@ -60,13 +63,6 @@ const context = (collection: string, extras: Partial<WhereContext> = {}): WhereC
 });
 
 describe('Collections query owner', () => {
-	it('parameterizes values without interpolating them', () => {
-		const compiled = compilePredicate({ _tag: 'Equal', field: 'name', value: "Ada'" });
-		expect(compiled.sql).toBe('"name" = $1');
-		expect(compiled.parameters).toEqual(["Ada'"]);
-	});
-	it('escapes identifier quotes', () => expect(quoteIdentifier('a"b')).toBe('"a""b"'));
-
 	it('compiles isNull against a system column', () => {
 		const compiled = whereSql({ approval_id: { isNull: true } }, context('companies'));
 		expect(compiled.sql).toBe('"companies"."approval_id" is null');
@@ -79,7 +75,7 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'"companies"."name" collate "C" = $1 AND "companies"."approval_id" is null'
+			'("companies"."name" = $1 and "companies"."approval_id" is null)'
 		);
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
@@ -90,9 +86,12 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."effective_range"->>\'start\')::timestamptz <= $1 AND ("companies"."effective_range"->>\'end\' is null OR ("companies"."effective_range"->>\'end\')::timestamptz >= $1)'
+			'("companies"."effective_range"->>\'start\')::timestamptz <= $1 and (("companies"."effective_range"->>\'end\') is null or ("companies"."effective_range"->>\'end\')::timestamptz >= $2)'
 		);
-		expect(compiled.parameters).toEqual(['2026-08-15T16:00:00.000Z']);
+		expect(compiled.parameters).toEqual([
+			'2026-08-15T16:00:00.000Z',
+			'2026-08-15T16:00:00.000Z'
+		]);
 	});
 
 	it('maps id to the persisted id column', () => {
@@ -112,7 +111,7 @@ describe('Collections query owner', () => {
 			context('employees')
 		);
 		expect(compiled.sql).toBe(
-			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" AND ("employments"."approval_id" is null AND "employments"."company_id" collate "C" = $1))'
+			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" and (("employments"."approval_id" is null and "employments"."company_id" = $1)))'
 		);
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
@@ -133,7 +132,7 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'"companies"."name" collate "C" >= $1 AND "companies"."name" collate "C" <= $2 AND "companies"."name" collate "C" <> $3 AND "companies"."name" collate "C" > $4 AND "companies"."name" collate "C" < $5'
+			'("companies"."name" >= $1 and "companies"."name" <= $2 and "companies"."name" <> $3 and "companies"."name" > $4 and "companies"."name" < $5)'
 		);
 		expect(compiled.parameters).toEqual(['A', 'M', 'Bob', 'A', 'Z']);
 	});
@@ -149,10 +148,10 @@ describe('Collections query owner', () => {
 
 	it('expands in and notIn to placeholder lists', () => {
 		const included = whereSql({ name: { in: ['Acme', 'Globex'] } }, context('companies'));
-		expect(included.sql).toBe('"companies"."name" collate "C" in ($1, $2)');
+		expect(included.sql).toBe('"companies"."name" in ($1, $2)');
 		expect(included.parameters).toEqual(['Acme', 'Globex']);
 		const excluded = whereSql({ name: { notIn: ['Acme'] } }, context('companies'));
-		expect(excluded.sql).toBe('"companies"."name" collate "C" not in ($1)');
+		expect(excluded.sql).toBe('"companies"."name" not in ($1)');
 		expect(excluded.parameters).toEqual(['Acme']);
 	});
 
@@ -200,7 +199,7 @@ describe('Collections query owner', () => {
 
 	it('compiles pattern operators', () => {
 		const compiled = whereSql({ name: { ilike: '%acme%' } }, context('companies'));
-		expect(compiled.sql).toBe('"companies"."name" collate "C" ilike $1');
+		expect(compiled.sql).toBe('lower("companies"."name"::text) like lower($1)');
 		expect(compiled.parameters).toEqual(['%acme%']);
 	});
 
@@ -210,14 +209,14 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."name" collate "C" = $1 OR "companies"."company_id" collate "C" = $2)'
+			'("companies"."name" = $1 or "companies"."company_id" = $2)'
 		);
 		expect(compiled.parameters).toEqual(['Acme', 'c-1']);
 	});
 
 	it('negates a nested where under NOT', () => {
 		const compiled = whereSql({ NOT: { name: { eq: 'Acme' } } }, context('companies'));
-		expect(compiled.sql).toBe('not ("companies"."name" collate "C" = $1)');
+		expect(compiled.sql).toBe('not ("companies"."name" = $1)');
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
 
@@ -244,30 +243,35 @@ describe('Collections query owner', () => {
 
 	it('appends a whitelist order by clause, always ending on the primary key', () => {
 		// The tiebreaker is not decoration: keyset paging seeks past the last row's ordering tuple, so a
-		// sort that is not total repeats or skips rows at every page boundary.
-		expect(renderOrderBy(compileOrderTerms({ name: 'asc' }, context('companies')))).toBe(
-			' order by "name" collate "C" asc, "id" asc'
-		);
-		expect(renderOrderBy(compileOrderTerms({ unknown: 'asc' }, context('companies')))).toBe(
-			' order by "id" asc'
-		);
-		expect(renderOrderBy(compileOrderTerms({ id: 'desc' }, context('companies')))).toBe(
-			' order by "id" desc'
-		);
+		// sort that is not total repeats or skips rows at every page boundary. Ordering resolves
+		// against the driver's table, which keeps runtime collation metadata out of the cursor.
+		const companies = pgTable('companies', { id: text('id'), name: text('name') });
+		const named = compileOrderTerms({ name: 'asc' }, context('companies'));
+		expect(named).toEqual([
+			{ column: 'name', direction: 'asc' },
+			{ column: 'id', direction: 'asc' }
+		]);
+		expect(compileOrderTerms({ unknown: 'asc' }, context('companies'))).toEqual([
+			{ column: 'id', direction: 'asc' }
+		]);
+		const descending = compileOrderTerms({ id: 'desc' }, context('companies'));
+		expect(descending).toEqual([{ column: 'id', direction: 'desc' }]);
+		const rendered = new PgDialect().sqlToQuery(orderingExpressions(companies, descending)[0]!);
+		expect(rendered.sql).toBe('"companies"."id" desc');
 	});
 
-	it('pins text order and every matching cursor seek term to C collation', async () => {
+	it('uses cursor v2 without embedding runtime collation metadata', () => {
 		const terms = compileOrderTerms({ name: 'asc' }, context('companies'));
 		expect(terms).toEqual([
-			{ column: 'name', direction: 'asc', collation: 'C' },
+			{ column: 'name', direction: 'asc' },
 			{ column: 'id', direction: 'asc' }
 		]);
 		const cursor = encodeCollectionCursor(terms, { name: 'Ada', id: 'company-1' });
 		if (cursor === null) throw new Error('expected an encoded collection cursor');
-		const seek = await Effect.runPromise(
-			compileCollectionCursorSeek(cursor, terms, 'companies')
-		);
-		expect(seek.sql).toContain('"name" collate "C" > $1');
-		expect(seek.sql).toContain('"name" collate "C" = $2');
+		const seek = compileCollectionCursorSeek(cursor, terms, 'companies');
+		if (Result.isFailure(seek)) throw new Error(`cursor seek failed: ${seek.failure.message}`);
+		const built = new PgDialect().sqlToQuery(seek.success);
+		expect(built.sql).toContain('"name" > $1');
+		expect(built.sql).toContain('"name" = $2');
 	});
 });

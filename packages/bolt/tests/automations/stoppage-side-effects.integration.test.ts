@@ -162,8 +162,8 @@ describe('automation stoppage facility guard', () => {
 				])
 			).toEqual([
 				{
-					status: 'paused',
-					error: null
+					status: 'stopped',
+					error: 'stopped'
 				}
 			]);
 			const observations = harness.database.calls

@@ -202,7 +202,8 @@ export const linkConsumers = ({
 								names: packages,
 								yalcBin,
 								yalcStoreDirectory,
-								run
+								run,
+								force
 							});
 							const stale = stalePackages(consumer.directory, packages);
 							return { ...consumer, packages, prepared, stale };
@@ -232,8 +233,20 @@ export const ensurePureInstallation = ({
 	names,
 	yalcBin,
 	yalcStoreDirectory = resolveYalcStoreDirectory(),
-	run
+	run,
+	force = false
 }) => {
+	// A stamped signature on leftover `.yalc` files is not proof the store was copied.
+	// `yalc add --pure` skips the copy when it already sees that stamp, so `--force`
+	// must delete the leftover tree first or a rebuilt store never reaches the consumer.
+	if (force) {
+		for (const name of names) {
+			rmSync(path.join(consumerDirectory, '.yalc', ...name.split('/')), {
+				recursive: true,
+				force: true
+			});
+		}
+	}
 	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const lockfile = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
 	const unlinked = names.filter(
@@ -248,7 +261,7 @@ export const ensurePureInstallation = ({
 		// Plain add records the replaced registry pin; the pure pass then yields ownership to pnpm.
 		run(yalcBin, withYalcStore(yalcStoreDirectory, ['add', ...unlinked]), consumerDirectory);
 	}
-	const prepared = [...new Set([...unlinked, ...impure])];
+	const prepared = [...new Set([...unlinked, ...impure, ...(force ? names : [])])];
 	if (prepared.length > 0)
 		run(
 			yalcBin,

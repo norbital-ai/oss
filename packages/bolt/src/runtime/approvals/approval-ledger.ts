@@ -17,8 +17,9 @@ import { Schema } from 'effect';
  * - **Dynamic collections.** History is one shared table keyed by name. Collections may be added,
  *   renamed or removed with no approval-side migration.
  * - **Supersession.** An inherited anchor is just the earliest sequence across both requests.
- * - **The sync engine.** A rollback is an ordinary write, so it emits outbox deltas and replicas
- *   converge without knowing approvals exist.
+ * - **The sync engine.** A rollback is an ordinary write, so it emits outbox changes, affected live
+ *   queries are re-evaluated, and clients receive the authoritative result without knowing approvals
+ *   exist.
  */
 export const LedgerEntry = Schema.Struct({
 	collection_name: Schema.NonEmptyString,
@@ -36,7 +37,7 @@ export const LedgerEntry = Schema.Struct({
 export type LedgerEntry = Schema.Schema.Type<typeof LedgerEntry>;
 
 /** What rejecting a request does to one record. */
-export type RollbackStep =
+type RollbackStep =
 	| Readonly<{ readonly kind: 'delete'; readonly entry: LedgerEntry }>
 	| Readonly<{
 			readonly kind: 'restore';

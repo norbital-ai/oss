@@ -104,7 +104,7 @@ describe('the workspace rate limiter', () => {
 
 	it('lets the most specific rule win, so one command can be tightened without restating its class', () => {
 		expect(rateLimitFor({ rules: held }, 'collections.mutate')[0]?.limit).toBe(1);
-		expect(rateLimitFor({ rules: held }, 'collections.findMany')[0]?.limit).toBe(3);
+		expect(rateLimitFor({ rules: held }, 'collections.export')[0]?.limit).toBe(3);
 	});
 
 	/**

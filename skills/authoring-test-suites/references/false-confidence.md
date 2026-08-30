@@ -153,12 +153,12 @@ constrains the test, not the code.
 The two legitimate uses in this repository both pair it with a state assertion:
 
 ```
-oss/packages/bolt/tests/client/replica.test.ts:189
-	expect(onError).toHaveBeenCalled();
-	expect(client.cursor()).toEqual(ORIGIN_CURSOR);   // the behaviour: the cursor did not advance
+oss/packages/bolt/tests/client/sync-drivers.test.ts
+	expect(disconnected).toHaveBeenCalledOnce();
+	expect(source.closed()).toBe(1);   // the behaviour: the EventSource actually closed
 ```
 
-`onError` is a callback the caller passes _in_ — an output port of the subject, not a collaborator
+`disconnected` is a callback the caller passes _in_ — an output port of the subject, not a collaborator
 it reaches out to — so its firing is part of the contract. Even so, the assertion that carries the
 test is the next line.
 

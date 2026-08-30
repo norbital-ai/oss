@@ -69,12 +69,8 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { resolveAgentIntent } from '#lib/client/ui/agent/intent.js';
 	import { workspaceSession } from '#lib/client/session.js';
-	import {
-		chatDocumentStorageKey,
-		parseStoredChatInput,
-		type ChatDocumentRef
-	} from '#lib/runtime/agents/chat-messages.js';
-	import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
+	import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
+	import { chatDocumentStorageKey } from '#lib/runtime/agents/chat-messages.js';
 	import {
 		retryableAdmission,
 		withoutAdmittedDocuments,
@@ -466,20 +462,24 @@
 		return options;
 	});
 	const showScopePicker = $derived(isAdmin && currentUserId != null);
-	const unsettledRunQuery = $derived(
+	const unsettledTurnQuery = $derived(
 		unsettledAdmission
-			? runtime.client.db.agent_run.findMany({
-					where: { task_id: { eq: unsettledAdmission.turnId } },
+			? runtime.client.db.chat_message.findMany({
+					where: {
+						conversation_id: { eq: unsettledAdmission.conversationId },
+						turn_id: { eq: unsettledAdmission.turnId },
+						role: { eq: 'assistant' }
+					},
 					limit: 1
 				})
 			: undefined
 	);
-	const replicatedAdmission = $derived.by(() => {
+	const committedAdmission = $derived.by(() => {
 		const admission = unsettledAdmission;
 		if (
 			admission === null ||
 			!sessions.some(({ conversation_id }) => conversation_id === admission.conversationId) ||
-			!unsettledRunQuery?.current?.some(({ task_id }) => task_id === admission.turnId)
+			!unsettledTurnQuery?.current?.some(({ turn_id }) => turn_id === admission.turnId)
 		) {
 			return null;
 		}
@@ -543,15 +543,6 @@
 	const activeConversation = $derived(projectStoredChatMessages(messageQuery?.current ?? []));
 	const activeMessages = $derived(activeConversation.messages);
 	const activeTurns = $derived(activeConversation.turns);
-	const runQuery = $derived(
-		activeChatId
-			? runtime.client.db.agent_run.findMany({
-					where: { conversation_id: { eq: activeChatId } },
-					orderBy: { position: 'asc' },
-					limit: 500
-				})
-			: undefined
-	);
 	const mailboxQuery = $derived(
 		activeChatId
 			? runtime.client.db.agent_mailbox.findMany({
@@ -560,12 +551,7 @@
 				})
 			: undefined
 	);
-	const agentRuns = $derived(runQuery?.current ?? []);
-	const mutableRuns = $derived(
-		agentRuns.filter((run) => ['queued', 'paused', 'resuming'].includes(run.status))
-	);
-	const runningRun = $derived(agentRuns.find((run) => run.status === 'running') ?? null);
-	const mailboxPaused = $derived(mailboxQuery?.current?.[0]?.status === 'paused');
+	const mailboxStopped = $derived(mailboxQuery?.current?.[0]?.status === 'stopped');
 	const activeSessionIsEnvoy = $derived(activeSession?.visibility.startsWith('envoy_') ?? false);
 	const activeSessionIsOtherUsersPersonal = $derived(
 		isAdmin &&
@@ -578,14 +564,16 @@
 	);
 	const stored = $derived(toPanelMessages(activeMessages, activeTurns));
 	const messages = $derived(withPendingEcho(stored, session.echo));
-	const rootTurn = $derived([...activeTurns].filter((turn) => turn.parent_agent_id == null).at(-1));
-	/** Admission is the only brief composer lock. The durable lane may accept more work while running. */
-	const composerLocked = $derived(session.pending);
-	const agentWorking = $derived(
-		runningRun !== null || mutableRuns.length > 0 || rootTurn?.status === 'running'
+	const rootTurn = $derived(
+		[...activeTurns]
+			.toReversed()
+			.find((turn) => turn.conversation_id === activeChatId)
 	);
+	const agentWorking = $derived(rootTurn?.status === 'running');
+	/** One conversation admits no overlapping turn while its current invocation is alive. */
+	const composerLocked = $derived(session.pending || agentWorking);
 	const terminalMessage = $derived(messages.at(-1));
-	const replicaFailure = $derived.by(() => {
+	const syncedFailure = $derived.by(() => {
 		const root = rootTurn;
 		if (root?.status === 'failed') {
 			return typeof root.error === 'string' && root.error.trim()
@@ -598,7 +586,7 @@
 		}
 		return null;
 	});
-	const failure = $derived(session.sendFailure ?? replicaFailure);
+	const failure = $derived(session.sendFailure ?? syncedFailure);
 	const activityState = $derived(
 		agentOrbState({
 			pending: agentWorking,
@@ -609,7 +597,8 @@
 	);
 	const canSend = $derived(
 		(draft.trim().length > 0 || documents.length > 0) &&
-			!session.pending &&
+			!composerLocked &&
+			!mailboxStopped &&
 			!uploadingDocument &&
 			!activeSessionIsReadOnly
 	);
@@ -686,12 +675,11 @@
 		);
 	});
 
-	// A command response can be lost after the atomic admission committed. The sync replica is the
-	// authority for that unknown outcome: when its conversation and exact run arrive, adopt them and
-	// publish the shared FAB from the same durable projection. Until then the restored draft is plainly
-	// unsent and no durable run exists from which queue controls could render.
+	// A command response can be lost after the atomic admission committed. The synced transcript is
+	// the authority for that unknown outcome: only the exact assistant turn proves admission committed.
+	// When it arrives, adopt the conversation and publish the shared FAB from that projection.
 	$effect(() => {
-		const admission = replicatedAdmission;
+		const admission = committedAdmission;
 		if (admission !== null) {
 			session.runId = admission.conversationId;
 			session.chatId = admission.conversationId;
@@ -714,19 +702,6 @@
 		});
 	});
 
-	function queueLabel(turnId: string): string {
-		const row = messageQuery?.current?.find(
-			(message) => message.turn_id === turnId && message.role === 'user'
-		);
-		const input = parseStoredChatInput(row?.content);
-		if (input?.kind === 'user_message') return input.text || t('bolt.agent.queuedMessage');
-		if (input?.kind === 'inbound_batch') {
-			return input.messages.at(-1)?.text || t('bolt.agent.queuedMessage');
-		}
-		const relayed = parseAgentMessage(row?.content);
-		return relayed?.text || t('bolt.agent.queuedMessage');
-	}
-
 	function performQueueAction(key: string, request: Effect.Effect<unknown, unknown>): void {
 		if (queueActionPending !== null) return;
 		queueActionPending = key;
@@ -738,27 +713,6 @@
 			.finally(() => {
 				queueActionPending = null;
 			});
-	}
-
-	function moveQueuedTask(taskId: string, offset: -1 | 1): void {
-		if (!activeChatId) return;
-		const taskIds = mutableRuns.map((run) => run.task_id);
-		const index = taskIds.indexOf(taskId);
-		const target = index + offset;
-		if (index < 0 || target < 0 || target >= taskIds.length) return;
-		[taskIds[index], taskIds[target]] = [taskIds[target]!, taskIds[index]!];
-		performQueueAction(
-			`reorder:${taskId}`,
-			runtime.client.system.agents.reorder({ conversationId: activeChatId, taskIds })
-		);
-	}
-
-	function dequeueTask(taskId: string): void {
-		if (!activeChatId) return;
-		performQueueAction(
-			`dequeue:${taskId}`,
-			runtime.client.system.agents.dequeue({ conversationId: activeChatId, taskId })
-		);
 	}
 
 	function controlAgent(action: 'interrupt' | 'stop' | 'resume'): void {
@@ -866,7 +820,7 @@
 				session.runId = result.runId;
 				session.chatId = result.chatId;
 				session.composingNew = false;
-				// Interactive start returns before inference; the replicated root turn owns in-flight after this.
+				// The command returns only after this turn's invocation settles.
 				session.pending = false;
 				session.echo = admission?.message ?? null;
 				if (admission !== null) documents = withoutAdmittedDocuments(documents, admission);
@@ -959,7 +913,7 @@
 		}
 	}
 
-	/** Switches the panel to an existing replicated session. */
+	/** Switches the panel to an existing synced session. */
 	function selectConversation(value: string | null): void {
 		if (!value) return;
 		const row = sessions.find((candidate) => candidate.conversation_id === value);
@@ -1235,124 +1189,30 @@
 		</Bound>
 	{/if}
 
-	<!-- Queue chrome earns its row only when something is actually waiting: a lone in-flight turn
-	     shows nothing here (its interrupt control lives on the composer instead). -->
-	{#if activeChatId && (mutableRuns.length > 0 || mailboxPaused)}
+	{#if activeChatId && mailboxStopped}
 		<Stack
 			as="section"
 			gap="sm"
 			class="border-t bg-card/55 px-3 py-2.5 sm:px-4"
-			aria-label={t('bolt.agent.queue')}
+			aria-label={t('bolt.agent.stopped')}
 		>
 			<Inline justify="between" align="center" gap="sm">
 				<Inline align="center" gap="xs" class="min-w-0 text-xs text-muted-foreground">
-					<Icon
-						icon={mailboxPaused
-							? 'lucide:pause'
-							: runningRun
-								? 'lucide:loader-circle'
-								: 'lucide:list-ordered'}
-						class={`size-3.5 shrink-0 ${runningRun ? 'animate-spin' : ''}`}
-					/>
-					<span class="font-medium text-foreground">
-						{mailboxPaused
-							? t('bolt.agent.queuePaused')
-							: runningRun
-								? t('bolt.agent.queueRunning')
-								: t('bolt.agent.queue')}
-					</span>
-					{#if mutableRuns.length > 0}
-						<span>{t('bolt.agent.queuedCount', { count: mutableRuns.length })}</span>
-					{/if}
+					<Icon icon="lucide:square" class="size-3.5 shrink-0" />
+					<span class="font-medium text-foreground">{t('bolt.agent.stopped')}</span>
 				</Inline>
 				<Inline justify="end" align="center" gap="xs">
-					{#if mailboxPaused}
-						<Button
-							variant="ghost"
-							size="sm"
-							disabled={queueActionPending !== null}
-							onclick={() => controlAgent('resume')}
-						>
-							<Icon icon="lucide:play" class="size-3.5" />
-							{t('bolt.agent.resume')}
-						</Button>
-					{:else}
-						{#if runningRun}
-							<Button
-								variant="ghost"
-								size="sm"
-								disabled={queueActionPending !== null}
-								onclick={() => controlAgent('interrupt')}
-							>
-								<Icon icon="lucide:octagon-x" class="size-3.5" />
-								{t('bolt.agent.interrupt')}
-							</Button>
-						{/if}
-						<Button
-							variant="ghost"
-							size="sm"
-							disabled={queueActionPending !== null}
-							onclick={() => controlAgent('stop')}
-						>
-							<Icon icon="lucide:pause" class="size-3.5" />
-							{t('bolt.agent.pause')}
-						</Button>
-					{/if}
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={queueActionPending !== null}
+						onclick={() => controlAgent('resume')}
+					>
+						<Icon icon="lucide:play" class="size-3.5" />
+						{t('bolt.agent.resume')}
+					</Button>
 				</Inline>
 			</Inline>
-
-			{#if mutableRuns.length > 0}
-				<ol class="divide-y divide-border/60 border-t border-border/60" aria-live="polite">
-					{#each mutableRuns as run, index (run.task_id)}
-						<Inline as="li" align="center" gap="sm" class="min-w-0 py-1.5 text-xs">
-							<span class="w-5 shrink-0 text-center tabular-nums text-muted-foreground"
-								>{index + 1}</span
-							>
-							<span class="min-w-0 flex-1 truncate text-foreground" title={queueLabel(run.turn_id)}>
-								{queueLabel(run.turn_id)}
-							</span>
-							<span class="shrink-0 text-tiny text-muted-foreground">
-								{run.status === 'paused' ? t('bolt.agent.paused') : t('bolt.agent.queued')}
-							</span>
-							<Inline gap="none" class="shrink-0">
-								<Button
-									variant="ghost"
-									size="icon"
-									class="size-7"
-									disabled={index === 0 || queueActionPending !== null}
-									hint={t('bolt.agent.moveEarlier')}
-									aria-label={t('bolt.agent.moveEarlier')}
-									onclick={() => moveQueuedTask(run.task_id, -1)}
-								>
-									<Icon icon="lucide:chevron-up" class="size-3.5" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									class="size-7"
-									disabled={index === mutableRuns.length - 1 || queueActionPending !== null}
-									hint={t('bolt.agent.moveLater')}
-									aria-label={t('bolt.agent.moveLater')}
-									onclick={() => moveQueuedTask(run.task_id, 1)}
-								>
-									<Icon icon="lucide:chevron-down" class="size-3.5" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									class="size-7 text-muted-foreground hover:text-destructive"
-									disabled={queueActionPending !== null}
-									hint={t('bolt.agent.removeQueued')}
-									aria-label={t('bolt.agent.removeQueued')}
-									onclick={() => dequeueTask(run.task_id)}
-								>
-									<Icon icon="lucide:x" class="size-3.5" />
-								</Button>
-							</Inline>
-						</Inline>
-					{/each}
-				</ol>
-			{/if}
 		</Stack>
 	{/if}
 
@@ -1583,7 +1443,7 @@
 									disabled={composerLocked || modelState.status !== 'ready'}
 								/>
 							</div>
-							{#if runningRun && mutableRuns.length === 0 && !mailboxPaused}
+							{#if rootTurn?.status === 'running'}
 								<Button
 									variant="ghost"
 									size="icon"

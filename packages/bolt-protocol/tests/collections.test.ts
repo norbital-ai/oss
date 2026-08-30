@@ -1,20 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { CollectionMutateRequest } from '../src/index.js';
+import { CollectionMutateRequest, CollectionQueryRequest } from '../src/index.js';
 
-/** The sole local-first collection mutation request accepted by both protocol endpoints. */
+/** The sole declarative collection mutation request accepted by both protocol endpoints. */
 describe('the declarative mutation request', () => {
 	const common = {
 		protocolVersion: 2,
 		idempotencyKey: 'mutation-1',
 		issuedAtEpochMs: 1_700_000_000_000,
-		deviceSequence: 1,
 		partitionKey: 'sha256:partition',
 		schemaFingerprint: 'sha256:schema',
 		baseVersions: []
 	} as const;
 
-	it('accepts a local-first journal push with client identities at every graph level', () => {
+	it('accepts a mutation push with client-minted record identities at every graph level', () => {
 		expect(
 			Schema.is(CollectionMutateRequest)({
 				...common,
@@ -24,9 +23,7 @@ describe('the declarative mutation request', () => {
 					values: {
 						id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42310',
 						reference: 'ORD-1',
-						order_line_order: [
-							{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }
-						]
+						order_line_order: [{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }]
 					}
 				}
 			})
@@ -37,7 +34,6 @@ describe('the declarative mutation request', () => {
 		expect(
 			Schema.is(CollectionMutateRequest)({
 				...common,
-				deviceSequence: 2,
 				graph: {
 					action: 'update',
 					collection: 'orders',
@@ -64,13 +60,12 @@ describe('the declarative mutation request', () => {
 		).toBe(false);
 	});
 
-	it('requires the version, durable ordering, physical partition and schema identity', () => {
+	it('requires the version, physical partition and schema identity', () => {
 		const create = {
 			...common,
 			graph: { action: 'create', collection: 'orders', values: { id: 'order-1' } }
 		} as const;
 		expect(Schema.is(CollectionMutateRequest)({ ...create, protocolVersion: 1 })).toBe(false);
-		expect(Schema.is(CollectionMutateRequest)({ ...create, deviceSequence: 0 })).toBe(false);
 		expect(Schema.is(CollectionMutateRequest)({ ...create, partitionKey: '' })).toBe(false);
 		expect(Schema.is(CollectionMutateRequest)({ ...create, schemaFingerprint: '' })).toBe(false);
 		expect(
@@ -95,6 +90,41 @@ describe('the declarative mutation request', () => {
 				idempotencyKey: 'mutation\u0000injected',
 				graph: { action: 'create', collection: 'orders', values: {} }
 			})
+		).toBe(false);
+	});
+});
+
+describe('collection search commands', () => {
+	const query = { collection: 'orders' } as const;
+
+	it('admits explicit lexical and semantic search commands', () => {
+		expect(
+			Schema.is(CollectionQueryRequest)({
+				...query,
+				search: { mode: 'lexical', term: 'open invoices' }
+			})
+		).toBe(true);
+		expect(
+			Schema.is(CollectionQueryRequest)({
+				...query,
+				search: { mode: 'semantic', term: 'similar contract disputes' }
+			})
+		).toBe(true);
+	});
+
+	it('refuses strings, unknown modes, and empty commands', () => {
+		expect(Schema.is(CollectionQueryRequest)({ ...query, search: 'open invoices' })).toBe(false);
+		expect(
+			Schema.is(CollectionQueryRequest)({
+				...query,
+				search: { mode: 'hybrid', term: 'ordinary typing' }
+			})
+		).toBe(false);
+		expect(
+			Schema.is(CollectionQueryRequest)({ ...query, search: { mode: 'lexical', term: '' } })
+		).toBe(false);
+		expect(
+			Schema.is(CollectionQueryRequest)({ ...query, search: { mode: 'semantic', term: '' } })
 		).toBe(false);
 	});
 });

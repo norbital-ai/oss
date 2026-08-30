@@ -58,9 +58,9 @@ export interface ModelExclusion {
  * contribute their bytes as an image part, so a photograph participates directly rather than
  * through a caption about it.
  */
-export interface ModelEmbedding {
+export interface ModelEmbedding<Field extends string = string> {
 	/** Declared columns that feed the vector, in the order they are sent to the model. */
-	readonly fields: ReadonlyArray<string>;
+	readonly fields: ReadonlyArray<Field>;
 	/** The embeddings model; the host's configured default when absent. */
 	readonly model?: string;
 	/** Matryoshka truncation, when the model supports it. The model's own width when absent. */
@@ -71,14 +71,14 @@ export interface ModelEmbedding {
  * What a `defineModel` declaration may say about the collection as a whole.
  *
  * Every key here is read by something; an option nothing reads is a lie in the authoring surface, so
- * `opsGuard`, `replica` and `insertOnly` were removed rather than left accepted. They had no
+ * The authoring surface accepts no `opsGuard`, `replica` or `insertOnly` field: they have no
  * reference anywhere in this package and no declaration in any template — accepting them only bought
  * an author the belief that a flag had an effect.
  *
  * `tests/authoring/metadata-witness.test.ts` holds this interface against the function that reads
  * each key, so a key added here has to name its reader or be listed as knowingly unread.
  */
-export interface ModelMetadata {
+export interface ModelMetadata<Field extends string = string> {
 	readonly description?: string;
 	/**
 	 * The column, or columns, that name a record on screen.
@@ -89,12 +89,12 @@ export interface ModelMetadata {
 	readonly recordLabel?: string | ReadonlyArray<string>;
 	readonly icon?: string;
 	readonly history?: boolean;
-	/** Whether readable rows belong in the browser replica. Defaults to true. */
+	/** Whether writes to this collection are captured into the live-query changelog. Defaults to true. */
 	readonly sync?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
 	/** One platform-maintained vector over the named fields. See `ModelEmbedding`. */
-	readonly embedding?: ModelEmbedding;
+	readonly embedding?: ModelEmbedding<Field>;
 }
 
 export interface ModelDeclaration<
@@ -104,6 +104,9 @@ export interface ModelDeclaration<
 > {
 	readonly __kind: 'model';
 	readonly columns: TColumns;
+	// Covariant on purpose: naming the fields through `keyof TColumns` here would make the
+	// declaration invariant in its columns and strand every generic registry that stores one.
+	// Authoring-time field checking happens on `defineModel`'s metadata parameter instead.
 	readonly metadata?: ModelMetadata;
 }
 
@@ -248,16 +251,46 @@ const decodeVectorDimensions = Schema.decodeUnknownSync(
 	Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 16_000, exclusiveMinimum: true }))
 );
 
+const validateEmbeddingDeclaration = (
+	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
+	embedding: ModelEmbedding | undefined
+): void => {
+	if (embedding === undefined) return;
+	if (embedding.fields.length === 0)
+		throw new TypeError('A model embedding must name at least one source field.');
+	const seen = new Set<string>();
+	for (const field of embedding.fields) {
+		if (seen.has(field)) throw new TypeError(`A model embedding names ${field} more than once.`);
+		seen.add(field);
+		const builder = columns[field];
+		if (builder === undefined)
+			throw new TypeError(`A model embedding names undeclared field ${field}.`);
+		if (isReferenceBuilder(builder))
+			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
+		const config = Reflect.get(builder, 'config');
+		const embeddable =
+			config !== null &&
+			typeof config === 'object' &&
+			(Reflect.get(config, 'dataType') === 'string' || Reflect.get(config, 'boltFile') === true);
+		if (!embeddable)
+			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
+	}
+	if (embedding.dimensions !== undefined) decodeVectorDimensions(embedding.dimensions);
+};
+
 /** Keeps the Drizzle-backed column factories together so consumers retain native fluent builder identity. */
 const ColumnAuthoring = {
 	defineModel: <const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>>(
 		columns: TColumns,
-		metadata?: ModelMetadata
-	): ModelDeclaration<TColumns> => ({
-		__kind: 'model',
-		columns,
-		...(metadata === undefined ? {} : { metadata })
-	}),
+		metadata?: ModelMetadata<keyof TColumns & string>
+	): ModelDeclaration<TColumns> => {
+		validateEmbeddingDeclaration(columns, metadata?.embedding);
+		return {
+			__kind: 'model',
+			columns,
+			...(metadata === undefined ? {} : { metadata })
+		};
+	},
 	/**
 	 * Records the opt-in on the builder rather than dropping it.
 	 *

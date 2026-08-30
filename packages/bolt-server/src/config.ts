@@ -2,6 +2,7 @@ import { Config, Effect, Option, Redacted, Schema } from 'effect';
 import {
 	EnvironmentName,
 	FacilityCall,
+	GATEWAY_SECRET_VARIABLE,
 	InvocationScope,
 	ReleaseId,
 	TenantId,
@@ -19,7 +20,21 @@ export const ServerConfiguration = Schema.Struct({
 	mode: Schema.Literals(['development', 'production']),
 	drainTimeoutMillis: Schema.Int,
 	invocationTimeoutMillis: Schema.Int,
-	requestBodyLimitBytes: Schema.Int
+	requestBodyLimitBytes: Schema.Int,
+	/**
+	 * The secret this host proves itself with when it calls a `host.*` command on its own bundle.
+	 *
+	 * Optional because a bolt-server that serves only requests needs none: everything a browser
+	 * reaches presents a credential of its own. The two callers that do need it are the scheduler
+	 * (`host.schedules.discover`/`settle`) and the sync pump (`sync.advance`) — both system-only,
+	 * both admitted only from a host that signed for this exact command, tenant and input.
+	 *
+	 * It is read under `GATEWAY_SECRET_VARIABLE`, which is the same key the bundle reads on the other
+	 * side of the call — deliberately one value rather than a host key and a guest key that can be
+	 * configured apart. A host without it starts and serves; its scheduled work refuses with a
+	 * message naming the variable rather than failing as something else.
+	 */
+	gatewaySecret: Schema.optional(Schema.Redacted(Schema.String))
 });
 
 export interface ServerConfiguration extends Schema.Schema.Type<typeof ServerConfiguration> {}
@@ -200,7 +215,8 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			),
 			requestBodyLimitBytes: Config.int('BOLT_SERVER_REQUEST_BODY_LIMIT_BYTES').pipe(
 				Config.withDefault(1_048_576)
-			)
+			),
+			gatewaySecret: Config.option(Config.redacted(GATEWAY_SECRET_VARIABLE))
 		});
 
 		if (
@@ -226,7 +242,10 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			mode: values.mode,
 			drainTimeoutMillis: values.drainTimeoutMillis,
 			invocationTimeoutMillis: values.invocationTimeoutMillis,
-			requestBodyLimitBytes: values.requestBodyLimitBytes
+			requestBodyLimitBytes: values.requestBodyLimitBytes,
+			...(Option.isSome(values.gatewaySecret)
+				? { gatewaySecret: values.gatewaySecret.value }
+				: {})
 		});
 	},
 	(effect) =>

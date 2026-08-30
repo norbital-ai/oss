@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Cause, Effect } from 'effect';
-import { syncWorkspace, type SyncResult } from './sync.js';
+import { syncWorkspace, type SyncResult } from './workspace-build.js';
 
 const { positionals, values: options } = parseArgs({
 	options: {
@@ -174,26 +174,15 @@ const run = (): Promise<void> => {
 			const result = yield* generateWorkspaceMigration(workspaceRoot, nameValue);
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
-			} else if (result.tag === undefined && !result.compatibilityLedgerWritten) {
-				process.stdout.write(
-					'Bolt migrate: the authored models and the migration lineage already agree; nothing written.\n'
-				);
 			} else if (result.tag === undefined) {
 				process.stdout.write(
-					[
-						'Bolt migrate wrote mutation compatibility lineage (no SQL migration was required)',
-						`Lineage: ${result.migrationsRoot}`,
-						''
-					].join('\n')
+					'Bolt migrate: the authored models and the migration lineage already agree; nothing written.\n'
 				);
 			} else {
 				process.stdout.write(
 					[
 						`Bolt migrate wrote ${result.tag} (${result.statements.length} statements)`,
 						`Lineage: ${result.migrationsRoot}`,
-						...(result.compatibilityLedgerWritten
-							? ['Mutation compatibility lineage: updated']
-							: []),
 						...result.statements.map((statement) => `  ${statement}`),
 						''
 					].join('\n')

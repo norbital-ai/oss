@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { build, type Plugin } from 'vite';
-import { tenantRuntimeBoundary } from '../../src/compiler/sync.js';
+import { tenantRuntimeBoundary } from '../../src/compiler/workspace-build.js';
 
 const virtualTenant = (source: string): Plugin => ({
 	name: 'virtual-tenant-fixture',

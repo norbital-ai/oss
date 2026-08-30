@@ -22,6 +22,7 @@ const externalSubjectsTable = SYSTEM_MODEL_TABLES.bolt_external_subjects;
 const invitationsTable = SYSTEM_MODEL_TABLES.bolt_invitations;
 const workspaceIdentitySettingsTable = SYSTEM_MODEL_TABLES.bolt_workspace_identity_settings;
 const verificationTable = SYSTEM_MODEL_TABLES.verification;
+const boltTaskTable = SYSTEM_MODEL_TABLES.bolt_task;
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const NullableString = Schema.NullOr(Schema.String);
@@ -607,27 +608,37 @@ export const layerWith = (
 							Effect.gen(function* () {
 								const nowEpochMs = yield* Clock.currentTimeMillis;
 								const deliveryId = `${DELIVER_CODE_COMMAND}:${effectId}`;
+								const runAtEpochMs = nowEpochMs;
 								/**
-								 * Better Auth writes the verification row before it invokes this callback. `enqueue`
-								 * does not answer until `bolt_task` contains the courier job, so returning from the
-								 * challenge means both the redeemable code and its delivery are durable. Provider I/O
-								 * happens only when the tenant scheduler takes this row.
+								 * Better Auth writes the verification row before it invokes this callback. The courier
+								 * row is written here — enqueueing is a row in the tenant's own database — and the host
+								 * timer is armed before it commits, so returning from the challenge means both the
+								 * redeemable code and its delivery are durable. Provider I/O happens only when the
+								 * tenant scheduler takes this row.
 								 */
 								yield* taskQueue
-									.enqueue(EffectId.make(`${effectId}:code-enqueue`), [
-										{
+									.wake(EffectId.make(`${effectId}:code-wake`), runAtEpochMs)
+									.pipe(Effect.orDie);
+								yield* executeBuilt(
+									EffectId.make(`${effectId}:code-enqueue`),
+									database,
+									composer
+										.insert(boltTaskTable)
+										.values({
 											command: DELIVER_CODE_COMMAND,
-											effectId: deliveryId,
-											input: {
+											input: JSON.stringify({
 												deliveryId,
 												email: message.email,
 												code: message.code,
 												purpose: message.purpose,
 												expiresAtEpochMs: nowEpochMs + SIGN_IN_CODE_EXPIRES_SECONDS * 1_000
-											}
-										}
-									])
-									.pipe(Effect.orDie);
+											}),
+											effect_id: deliveryId,
+											run_at: new Date(runAtEpochMs).toISOString(),
+											status: 'running'
+										})
+										.onConflictDoNothing({ target: boltTaskTable.effect_id })
+								).pipe(Effect.orDie);
 							})
 					},
 					random,

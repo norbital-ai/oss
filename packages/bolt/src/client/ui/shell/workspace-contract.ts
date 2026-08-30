@@ -1,5 +1,5 @@
 import type { WorkspaceSession } from '#lib/client/session.js';
-import type { WorkspaceSyncStatusSignal } from '#lib/client/replica/sync-status.js';
+import type { ClientState } from '#lib/client/sync/machine.js';
 import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Component } from 'svelte';
@@ -39,7 +39,7 @@ export type WorkspaceView = {
 		 * Never defaulted. An absent team used to be an absent role list that read as `['admin']`, so a
 		 * session the host never reported on was rendered with the highest privilege in the workspace.
 		 * No team is no authority, and the runtime re-derives it from the credential on every command
-		 * regardless — this is for display and for the local replica's own decisions.
+		 * regardless — this is for display only.
 		 */
 		readonly team?: string;
 		/** The team names whose policies this session holds — its own, then any it inherits. */
@@ -52,41 +52,16 @@ export type WorkspaceView = {
 	readonly search: string;
 };
 
-/** The three user-facing stages a host may report while it prepares an offline workspace. */
-export type WorkspaceBootstrapPhase = 'preparing' | 'loading' | 'applying';
-
-/** Optional measured progress. A missing total remains indeterminate rather than inventing one. */
-export type WorkspaceBootstrapProgress = Readonly<{
-	readonly phase: WorkspaceBootstrapPhase;
-	readonly completed?: number;
-	readonly total?: number;
-	readonly unit?: 'rows' | 'bytes';
-}>;
-
-/** Whether the partition already contains a replica the current runtime can safely resume. */
-export type WorkspaceReplicaCompatibility = 'compatible' | 'missing' | 'incompatible';
-
-/** The smallest lifetime handle the host needs after replica startup completes. */
-export type WorkspaceReplicaHandle = Readonly<{ readonly stop: () => void }>;
-
 /**
- * Bolt's replica capability, registered with the host that owns when and how it starts.
+ * Read-only synchronization status: the Machine's one state, subscribed or sampled.
  *
- * Only `start` exists in every implementation. The optional members are facts an evolving sync
- * engine may be able to prove; their absence tells the host to use an indeterminate loader and its
- * hard online fallback. In particular, `clearAndRebuild` both classifies a startup failure and
- * returns the recovery action. Returning `undefined` means the failure is not verified local
- * corruption, so destructive recovery must not be offered.
+ * `link` is the whole connection story — `live`, `reconnecting`, `needsReload` — and `writes` holds
+ * the tab's unsettled mutations. There is no richer status surface to expose: these three fields are
+ * everything the Machine keeps.
  */
-export type WorkspaceBootstrapController = Readonly<{
-	readonly start: () => Promise<WorkspaceReplicaHandle>; // repository-health:allow EFF2 -- The generated browser runtime exposes a Promise boundary and the host owns its lifecycle.
-	readonly inspectCompatibility?: () => Promise<WorkspaceReplicaCompatibility>; // repository-health:allow EFF2 -- Inspection crosses the separately compiled workspace/host boundary.
-	readonly subscribeProgress?: (
-		listener: (progress: WorkspaceBootstrapProgress) => void
-	) => () => void;
-	readonly initialCatchUpReady?: () => Promise<void>; // repository-health:allow EFF2 -- Initial catch-up readiness crosses the separately compiled workspace/host boundary.
-	readonly continueOnline?: () => void;
-	readonly clearAndRebuild?: (cause: unknown) => undefined | (() => Promise<void>); // repository-health:allow EFF2 -- Corruption recovery crosses the separately compiled workspace/host boundary.
+type WorkspaceSyncSignal = Readonly<{
+	readonly current: () => ClientState;
+	readonly subscribe: (listener: (state: ClientState) => void) => () => void;
 }>;
 
 /**
@@ -116,14 +91,6 @@ export type WorkspaceHostActions = {
 	 */
 	readonly impersonate: (teamId: string) => void;
 	readonly stopImpersonating: () => void;
-	/**
-	 * Gives the root host a replica starter without starting it inside the generated workspace.
-	 *
-	 * Optional for one release boundary: an older host can still mount a newer workspace over the
-	 * network, while a current host owns bootstrap, its five-second escape and teardown. The returned
-	 * callback unregisters exactly this authority scope.
-	 */
-	readonly registerBootstrap?: (controller: WorkspaceBootstrapController) => () => void;
 };
 
 export type AppGroup = Readonly<{
@@ -168,11 +135,7 @@ export type CompiledWorkspace = Readonly<{
 	/** Full collection/system capability held only by Bolt's own shell and Studio wiring. */
 	readonly frameworkClient: WorkspaceClient;
 	/** Read-only synchronization status without exposing the command/runtime capability. */
-	readonly syncStatus?: WorkspaceSyncStatusSignal;
-	/** Builds the host-owned bootstrap capability without publishing the underlying runtime. */
-	readonly createBootstrap: (accessScope: string) => WorkspaceBootstrapController;
-	/** Withdraws browser data from the previous policy scope before reactive reads resume. */
-	readonly changeAccessScope: (accessScope: string) => void;
+	readonly syncStatus?: WorkspaceSyncSignal;
 }>;
 
 /**

@@ -21,7 +21,7 @@ import {
 	TenantRelease
 } from '@norbital-ai/bolt-protocol';
 import { generateWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
-import { syncWorkspace } from '../../src/compiler/sync.js';
+import { syncWorkspace } from '../../src/compiler/workspace-build.js';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const packagesRoot = dirname(packageRoot);

@@ -1,6 +1,7 @@
 import { Effect, Predicate, Schema } from 'effect';
 import type { FacilityBindings } from './facilities.js';
 import type { Activation, Invocation } from './invocation.js';
+import { SyncChange } from './sync.js';
 import { FacilityName, ProtocolVersion, WireError } from './wire.js';
 
 /**
@@ -49,13 +50,11 @@ export interface AssetIndexEntry extends Schema.Schema.Type<typeof AssetIndexEnt
  * ├── bundle.mjs          materialized ESM graph entry for local/self-hosted use
  * ├── code/*.mjs          materialized runtime, dependency, and tenant modules
  * ├── release.json        standalone manifest and verified ESM graph
- * ├── asset-index.json    compatibility projection of the two asset indexes
  * └── assets/<sha256>     one flat object per distinct code, asset, or provenance digest
  * ```
  */
 export const ARTIFACT_BUNDLE_FILE = 'bundle.mjs';
 export const ARTIFACT_ASSET_DIRECTORY = 'assets';
-export const ARTIFACT_ASSET_INDEX_FILE = 'asset-index.json';
 /**
  * The host-readable release authority beside a compiled artifact.
  *
@@ -64,19 +63,6 @@ export const ARTIFACT_ASSET_INDEX_FILE = 'asset-index.json';
  * byte is evaluated.
  */
 export const ARTIFACT_RELEASE_FILE = 'release.json';
-
-/**
- * `asset-index.json`, for a reader that has the release on disk and no reason to evaluate it.
- *
- * The same two arrays the manifest carries. A host that imports the bundle reads them off the
- * manifest; a deploy path that only moves blobs around reads them from here, and neither has to
- * take the other's word for the split.
- */
-export const ArtifactAssetIndex = Schema.Struct({
-	browser: Schema.Array(AssetIndexEntry),
-	server: Schema.Array(AssetIndexEntry)
-}).annotate({ identifier: 'BoltArtifactAssetIndex' });
-export interface ArtifactAssetIndex extends Schema.Schema.Type<typeof ArtifactAssetIndex> {}
 
 /** One immutable object in the artifact's flat digest-addressed object directory. */
 export const ArtifactObjectReference = Schema.Struct({
@@ -355,38 +341,6 @@ export const SyncSchemaFacts = Schema.Struct({
 }).annotate({ identifier: 'BoltSyncSchemaFacts' });
 export interface SyncSchemaFacts extends Schema.Schema.Type<typeof SyncSchemaFacts> {}
 
-/** Ephemeral pre-DDL notice. It withdraws local readers but never advances durable schema state. */
-export const ReplicaSchemaMaintenance = Schema.Struct({
-	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
-	affectedCollections: Schema.Array(Schema.NonEmptyString)
-}).annotate({ identifier: 'BoltReplicaSchemaMaintenance' });
-export interface ReplicaSchemaMaintenance extends Schema.Schema.Type<
-	typeof ReplicaSchemaMaintenance
-> {}
-
-/** Explicit proof that an uncommitted maintenance transition was aborted. */
-export const ReplicaSchemaMaintenanceClear = Schema.Struct({
-	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
-}).annotate({ identifier: 'BoltReplicaSchemaMaintenanceClear' });
-export interface ReplicaSchemaMaintenanceClear extends Schema.Schema.Type<
-	typeof ReplicaSchemaMaintenanceClear
-> {}
-
-/**
- * The host-authored schema barrier delivered to a browser replica.
- *
- * The host copies every field but `generation` from `sync.schema` and supplies `generation` only
- * from its durable tenant matrix. This makes a client-provided generation structurally impossible.
- */
-export const ReplicaSchemaBarrier = Schema.Struct({
-	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
-	fingerprint: Schema.NonEmptyString,
-	minimumProtocolVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
-	migrationDigest: Schema.NonEmptyString,
-	affectedCollections: Schema.Array(Schema.NonEmptyString)
-}).annotate({ identifier: 'BoltReplicaSchemaBarrier' });
-export interface ReplicaSchemaBarrier extends Schema.Schema.Type<typeof ReplicaSchemaBarrier> {}
-
 export const BundleManifest = Schema.Struct({
 	protocolVersion: ProtocolVersion,
 	artifactId: Schema.NonEmptyString,
@@ -417,6 +371,12 @@ export const BundleManifest = Schema.Struct({
 }).annotate({ identifier: 'BoltBundleManifest' });
 export interface BundleManifest extends Schema.Schema.Type<typeof BundleManifest> {}
 
+/** The two asset namespaces authorized only as part of a complete tenant release. */
+const TenantReleaseAssets = Schema.Struct({
+	browser: Schema.Array(AssetIndexEntry),
+	server: Schema.Array(AssetIndexEntry)
+});
+
 /**
  * Standalone authority for one immutable tenant release.
  *
@@ -433,7 +393,7 @@ export const TenantRelease = Schema.Struct({
 	artifactVersion: Schema.NonEmptyString,
 	requiredFacilities: Schema.Array(FacilityName),
 	code: ArtifactCodeGraph,
-	assets: ArtifactAssetIndex,
+	assets: TenantReleaseAssets,
 	schema: Schema.Struct({
 		fingerprint: Schema.NonEmptyString,
 		description: Schema.Struct({
@@ -502,7 +462,9 @@ export const DispatchResponse = Schema.Struct({
 	headers: Schema.Record(Schema.String, Schema.Array(Schema.String)),
 	body: Schema.optionalKey(Schema.Uint8Array),
 	value: Schema.optionalKey(Schema.Json),
-	realtime: Schema.optionalKey(RealtimeOutput)
+	realtime: Schema.optionalKey(RealtimeOutput),
+	/** Exact committed coordinates; a host feeds these directly to `sync.advance`. */
+	changes: Schema.optionalKey(Schema.Array(SyncChange))
 });
 export interface DispatchResponse extends Schema.Schema.Type<typeof DispatchResponse> {}
 
@@ -612,12 +574,9 @@ export const decodeBoltBundleModule = Effect.fn('BoltProtocol.decodeBoltBundleMo
 	return bundle;
 });
 
-/** Owns host-side bundle compatibility checks without attaching runtime or business meaning. */
-const BundleCompatibility = {
-	missingFacilities: (
-		manifest: BundleManifest,
-		bindings: FacilityBindings
-	): ReadonlyArray<FacilityName> =>
-		manifest.requiredFacilities.filter((name) => bindings[name] === undefined)
-};
-export const missingFacilities = BundleCompatibility.missingFacilities;
+/** Reports facilities required by the bundle but absent from the host bindings. */
+export const missingFacilities = (
+	manifest: BundleManifest,
+	bindings: FacilityBindings
+): ReadonlyArray<FacilityName> =>
+	manifest.requiredFacilities.filter((name) => bindings[name] === undefined);

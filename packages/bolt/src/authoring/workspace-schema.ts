@@ -14,6 +14,7 @@ import type {
 	WebhookSignatureSpec
 } from './contracts-schema.js';
 import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
+import type { PolicySqlPredicate } from './policy-sql.js';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
@@ -183,11 +184,32 @@ export const field = {
 	json: makeField('json'),
 	uuid: makeField('uuid')
 };
+
+/** Compiler-derived lexical search facts carried to the runtime. */
+export interface CollectionSearchDefinition {
+	/** The authored `search: true` fields, sorted for stable DDL and ranking. */
+	readonly fields: ReadonlyArray<string>;
+	readonly documentColumn: 'search_document';
+	readonly configuration: 'simple';
+	/** The two database ranking primitives the read resolver blends. */
+	readonly ranking: Readonly<{
+		readonly lexical: 'ts_rank_cd';
+		readonly fuzzy: 'similarity';
+	}>;
+}
+
+/** Model embedding declaration plus the platform columns settle maintains. */
+export interface CollectionEmbeddingDefinition extends ModelEmbedding {
+	readonly vectorColumn: 'record_embedding';
+	readonly embeddedAtColumn: 'embedded_at';
+	readonly sourceFingerprintColumn: 'record_embedding_fingerprint';
+}
+
 export interface CollectionDefinition<Fields extends Readonly<Record<string, FieldDefinition>>> {
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history: boolean;
-	/** Whether readable rows belong in the browser replica. Defaults to true. */
+	/** Whether writes to this collection are captured into the live-query changelog. Defaults to true. */
 	readonly sync?: boolean;
 	/**
 	 * What the collection is, and the icon a host surface lists it under.
@@ -215,7 +237,9 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	 * the schema plan renders the column and its index, and the runtime write path decides what to
 	 * send the model — two consumers that must agree on one declaration.
 	 */
-	readonly embedding?: ModelEmbedding;
+	readonly embedding?: CollectionEmbeddingDefinition;
+	/** Lexical search metadata derived from the same model flags that generated its indexes. */
+	readonly search?: CollectionSearchDefinition;
 	/** Workspace-relative path of the authored model, so a host surface can link to its source. */
 	readonly sourcePath?: string;
 }
@@ -317,6 +341,9 @@ export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
 		throw new TypeError(
 			`Envoy ${name} names no policies, so every turn on it would hold no authority at all. Name the policies it may act under.`
 		);
+	}
+	if (!['enabled', 'disabled'].includes(declaration.delegation)) {
+		throw new TypeError(`Envoy ${name} requires delegation to be "enabled" or "disabled".`);
 	}
 	if (declaration.task.trim() === '') throw new TypeError(`Envoy ${name} requires a task.`);
 	return Object.freeze({
@@ -842,7 +869,7 @@ export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 export interface RuntimePolicyGrant {
 	readonly collection: string;
 	readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
-	readonly where?: Readonly<Record<string, unknown>>;
+	readonly where?: Readonly<Record<string, unknown>> | PolicySqlPredicate;
 	readonly fields?: ReadonlyArray<string>;
 	/** Additional linking collections; compiler-derived predicate edges remain authoritative. */
 	readonly dependencies?: ReadonlyArray<string>;
@@ -966,36 +993,6 @@ export interface WorkspaceMigrationEntry {
 }
 
 /**
- * Compiler-owned forward adapter for mutations journaled under one retired schema fingerprint.
- *
- * This is artifact metadata, not tenant authoring. The migration compiler derives it from a schema
- * diff and retains it for the platform's offline horizon. Only lossless collection/field renames
- * are expressible here; a removed or type-incompatible field has no mapping and is quarantined.
- */
-export interface MutationCompatibilityAdapter {
-	readonly fromSchemaFingerprint: string;
-	readonly collectionRenames?: Readonly<Record<string, string>>;
-	readonly fieldRenames?: Readonly<Record<string, Readonly<Record<string, string>>>>;
-	/** Old fields whose current meaning/type is not losslessly compatible. Any use quarantines. */
-	readonly incompatibleFields?: Readonly<Record<string, ReadonlyArray<string>>>;
-	/**
-	 * Old verbs whose omitted values may have changed meaning (for example, a changed default on
-	 * `create`). Field incompatibility is conditional on the graph using that field; this is the
-	 * conservative collection-wide fence for changes that cannot be decided from a present value.
-	 */
-	readonly incompatibleActions?: Readonly<
-		Record<string, ReadonlyArray<'create' | 'update' | 'delete'>>
-	>;
-}
-
-export interface MutationCompatibilityDefinition {
-	readonly offlineHorizonMillis: number;
-	/** The compiler-owned logical fingerprint shared by partitioning and M4 reconciliation. */
-	readonly currentSchemaFingerprint: string;
-	readonly adapters: ReadonlyArray<MutationCompatibilityAdapter>;
-}
-
-/**
  * A team's authority: the policies its members hold, keyed by the team's name.
  *
  * Names are matched case-insensitively against `team.name` — one rule, everywhere. Today
@@ -1088,8 +1085,8 @@ export interface WorkspaceDefinition {
 	 * read by `WorkspaceSchema.migrate`, which already holds the definition.
 	 */
 	readonly migrations?: ReadonlyArray<WorkspaceMigrationEntry>;
-	/** Generated compatibility metadata; never authored in a workspace source module. */
-	readonly mutationCompatibility?: MutationCompatibilityDefinition;
+	/** Compiler-generated identity of the workspace's mutation-visible schema. */
+	readonly schemaFingerprint?: string;
 }
 
 /** Accepts an authored workspace before `relations` is normalized to an array. */

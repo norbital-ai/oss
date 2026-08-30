@@ -1,0 +1,45 @@
+{
+	"name": "@norbital-ai/doctor-norbital",
+	"version": "0.0.10",
+	"description": "The Norbital product rule pack for @norbital-ai/doctor: live-data ownership, the model compiler, the generated client, and the design system's layout laws.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"files": [
+		"build",
+		"package.json"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/doctor-norbital"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/doctor-norbital",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"exports": {
+		".": "./build/index.js",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor-norbital",
+		"lint": "tsc -p tsconfig.json --noEmit",
+		"test": "pnpm build && node --test \"tests/**/*.test.ts\""
+	},
+	"dependencies": {
+		"@norbital-ai/doctor": "workspace:*",
+		"@norbital-ai/doctor-effect": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"typescript": "catalog:"
+	},
+	"devDependencies": {
+		"@norbital-ai/config": "workspace:*",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:"
+	}
+}

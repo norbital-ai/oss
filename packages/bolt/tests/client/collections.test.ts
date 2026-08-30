@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
+import { EnvironmentName, ReleaseId, TenantId, type SyncAnswer } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
+import { stableKey } from '../../src/client/live-query/stable-key.js';
+import { initialClientState, type ClientState } from '../../src/client/sync/machine.js';
+import type {
+	BoltClient,
+	MutationSettlement,
+	MutationSettlements,
+	WorkspaceClientRuntime
+} from '../../src/client/contracts.js';
+import type { SyncClient } from '../../src/client/sync/index.js';
 import { setWorkspaceSession } from '#lib/client/session.js';
 
 const scope = {
@@ -10,6 +19,78 @@ const scope = {
 	environment: EnvironmentName.make('test'),
 	releaseId: ReleaseId.make('release')
 };
+
+/**
+ * A SyncClient double that answers reads the way the Machine does.
+ *
+ * Collection reads are Machine-backed now: the proxy mounts one live question and the Machine
+ * publishes its answer, so a fake has to hold query state and notify subscribers rather than
+ * transport a command. `publish` paints one query's answer with the phase the caller names, which
+ * is what lets a test drive both the fresh and the revalidating paints.
+ */
+const fakeSyncClient = () => {
+	let state = initialClientState();
+	const listeners = new Set<(state: ClientState) => void>();
+	const mounted: Array<{ readonly key: string; readonly input: unknown }> = [];
+	const client = {
+		start: () => undefined,
+		current: () => state,
+		subscribe: (listener: (state: ClientState) => void) => {
+			listeners.add(listener);
+			listener(state);
+			return () => listeners.delete(listener);
+		},
+		mount: (input: Schema.Json) => {
+			const key = stableKey(input);
+			mounted.push({ key, input });
+			return { key, release: () => undefined };
+		},
+		enqueue: () => undefined,
+		publish: (key: string, answer: SyncAnswer, phase: 'fresh' | 'pending' = 'fresh') => {
+			state = {
+				...state,
+				queries: new Map([...state.queries]).set(key, {
+					input: { kind: 'findMany', collection: 'jobs' },
+					answer,
+					phase,
+					subscribers: 1
+				})
+			};
+			for (const listener of listeners) listener(state);
+		}
+	};
+	return { client, mounted };
+};
+
+/**
+ * The runtime members these tests never drive: no live mount runs outside the fake Machine above,
+ * and no write is ever settled, so the stubs stay inert while satisfying the runtime contract.
+ */
+const inertSync: SyncClient = {
+	start: () => undefined,
+	current: () => initialClientState(),
+	subscribe: () => () => undefined,
+	mount: (input) => ({ key: stableKey(input), release: () => undefined }),
+	enqueue: () => undefined
+};
+
+const inertSettlements: MutationSettlements = {
+	create: (idempotencyKey) => ({
+		idempotencyKey,
+		settled: new Promise<MutationSettlement>(() => undefined),
+		status: async () => 'unknown',
+		wait: () => new Promise<MutationSettlement>(() => undefined)
+	}),
+	accept: () => undefined
+};
+
+const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceClientRuntime => ({
+	bolt,
+	db: {},
+	sync,
+	syncStatus: initialClientState(),
+	settlements: inertSettlements
+});
 
 beforeEach(() => {
 	setWorkspaceSession({
@@ -56,7 +137,7 @@ describe('typed browser client', () => {
 				return Promise.resolve({ answer: 42 });
 			}
 		});
-		const runtime = { bolt, db: {} };
+		const runtime = runtimeOf(bolt);
 		const proxy = createWorkspaceApiProxy(runtime);
 		const query = proxy.invoke['forecast']?.({});
 		expect(query?.loading).toBe(true);
@@ -64,41 +145,43 @@ describe('typed browser client', () => {
 		expect(commands).toEqual(['invoke.forecast']);
 	});
 
-	it('loads collection tables through collections.findMany', async () => {
+	it('answers collection pages from the machine instead of a transport command', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				commands.push({ command, input });
-				if (command === 'collections.findMany') {
-					// The shape the command boundary actually answers: one keyset page, not a bare array.
-					return Promise.resolve({ rows: [{ id: 'e1', name: 'Ada' }], nextCursor: null });
-				}
-				return Promise.resolve({ xid: 1, sequence: 1 });
+				return Promise.resolve(null);
 			}
 		});
-		const runtime = { bolt, db: {} };
-		const proxy = createWorkspaceApiProxy(runtime);
+		const sync = fakeSyncClient();
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as
-			{ findMany: (input?: object) => PromiseLike<unknown> } | undefined;
+			| {
+					findMany: (input?: object) => PromiseLike<unknown> & { readonly nextCursor: unknown };
+			  }
+			| undefined;
 		const query = employees?.findMany({ limit: 20, after: undefined });
+		expect(sync.mounted).toHaveLength(1);
+		// The mounted question is the whole read: `after: undefined` has no JSON representation and is
+		// stripped before it reaches the wire, exactly as omission would be.
+		expect(sync.mounted[0]?.input).toEqual({
+			kind: 'findMany',
+			collection: 'employees',
+			limit: 20
+		});
+		sync.client.publish(sync.mounted[0]?.key ?? '', [{ id: 'e1', name: 'Ada' }]);
 		expect(proxy.collections['employees']?.name).toBe('employees');
 		expect(await query).toEqual([{ id: 'e1', name: 'Ada' }]);
-		expect(commands.map((entry) => entry.command)).toContain('collections.findMany');
-		expect(commands.find((entry) => entry.command === 'collections.findMany')?.input).toMatchObject(
-			{
-				collection: 'employees',
-				limit: 20
-			}
-		);
-		expect(
-			commands.find((entry) => entry.command === 'collections.findMany')?.input
-		).not.toHaveProperty('after');
+		// A cursored read is one-shot and never live: no page walk is registered, so there is no next
+		// cursor to walk and no read command ever crossed the transport.
+		expect(query?.nextCursor).toBeNull();
+		expect(commands).toEqual([]);
 	});
 
 	it('seals private platform collections out of the authored browser proxy', () => {
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const proxy = createWorkspaceApiProxy(
-			{ bolt, db: {} },
+			runtimeOf(bolt),
 			{
 				employees: { name: 'employees', fields: [], relationships: [] },
 				approval_request: { name: 'approval_request', fields: [], relationships: [] },
@@ -128,34 +211,26 @@ describe('typed browser client', () => {
 		expect(Reflect.get(approval, 'pending')).toBeUndefined();
 	});
 
-	it('uses the authoritative grouped aggregate without hydrating a bounded page', async () => {
-		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
-		const bolt = createBoltClient(scope, {
-			command: (command, input) => {
-				commands.push({ command, input });
-				return Promise.resolve({
-					groups: {
-						active: [
-							{ id: 'e1', status: 'active' },
-							{ id: 'e2', status: 'active' }
-						],
-						pending: [],
-						closed: [{ id: 'e3', status: 'closed' }]
-					}
-				});
-			}
-		});
-		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+	it('answers a grouped aggregate from the machine without hydrating a bounded page', async () => {
+		const sync = fakeSyncClient();
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findGrouped: (input: object) => PromiseLike<unknown>;
 		};
 
-		await expect(
-			employees.findGrouped({
-				where: { archived: { eq: false } },
-				group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
-			})
-		).resolves.toEqual({
+		const query = employees.findGrouped({
+			where: { archived: { eq: false } },
+			group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
+		});
+		expect(sync.mounted).toHaveLength(1);
+		expect(sync.mounted[0]?.input).toEqual({
+			kind: 'findGrouped',
+			collection: 'employees',
+			where: { archived: { eq: false } },
+			group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
+		});
+		sync.client.publish(sync.mounted[0]?.key ?? '', {
 			active: [
 				{ id: 'e1', status: 'active' },
 				{ id: 'e2', status: 'active' }
@@ -163,16 +238,14 @@ describe('typed browser client', () => {
 			pending: [],
 			closed: [{ id: 'e3', status: 'closed' }]
 		});
-		expect(commands).toEqual([
-			{
-				command: 'collections.findGrouped',
-				input: {
-					collection: 'employees',
-					where: { archived: { eq: false } },
-					group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
-				}
-			}
-		]);
+		await expect(query).resolves.toEqual({
+			active: [
+				{ id: 'e1', status: 'active' },
+				{ id: 'e2', status: 'active' }
+			],
+			pending: [],
+			closed: [{ id: 'e3', status: 'closed' }]
+		});
 	});
 
 	it('loads an approval request by id instead of mistaking timeline events for request rows', async () => {
@@ -191,7 +264,7 @@ describe('typed browser client', () => {
 				]);
 			}
 		});
-		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt));
 
 		expect(await proxy.approvals.findMany('request-1')).toEqual([
 			{
@@ -226,7 +299,7 @@ describe('typed browser client', () => {
 				return Promise.resolve({});
 			}
 		});
-		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt));
 
 		await proxy.approvals.process({
 			approvalRequestId: 'request-1',

@@ -1,4 +1,0 @@
-error	high	NODE2	unpruned recursive directory walk reimplements node:fs	scripts/lib/templates.mjs:58: function countMatchingFiles(directory, predicate) { [walker=countMatchingFiles prefer=readdir-recursive]	simplicity,efficiency,no-bloat
-error	high	NODE3	command entrypoint reimplements node:util parseArgs	scripts/lock-templates.mjs:1: import { execFileSync } from 'node:child_process'; [options=11 prefer=node:util.parseArgs]	simplicity,straightforwardness,no-bloat
-error	high	NODE3	command entrypoint reimplements node:util parseArgs	scripts/project-templates.mjs:1: import { execFileSync } from 'node:child_process'; [options=9 prefer=node:util.parseArgs]	simplicity,straightforwardness,no-bloat
-error	high	NODE3	command entrypoint reimplements node:util parseArgs	scripts/yalc-link.mjs:17: import { execFileSync } from 'node:child_process'; [options=8 prefer=node:util.parseArgs]	simplicity,straightforwardness,no-bloat

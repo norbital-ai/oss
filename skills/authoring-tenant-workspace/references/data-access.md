@@ -1,11 +1,12 @@
 # Data Access
 
-Bolt's sync engine maintains a policy-scoped local replica. Every `findMany`/
-`findFirst`/`count` is a **live query** — it re-executes locally when the underlying collection
-changes, with no `refetch` or `invalidate`. Mutations are **optimistic**: the UI updates same-frame;
-the server confirms or rejects asynchronously. See the
-[bolt sync source](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/runtime/sync/sync.ts)
-for the wire protocol and invariants.
+Bolt's sync engine pushes every live query's answer from the server. Every `findMany`/
+`findFirst`/`count` is a **live query** — it is registered once and the server re-evaluates it on
+every relevant commit, with no `refetch` or `invalidate`. Mutations are **optimistic**: the UI
+updates same-frame; the server settles each write asynchronously
+(`accepted` / `rebased` / `rejected` / `quarantined`). See the
+[bolt-protocol sync schema](https://github.com/norbital-ai/oss/blob/main/packages/bolt-protocol/src/sync.ts)
+for the wire contract and invariants.
 
 ## Contents
 
@@ -21,7 +22,7 @@ for the wire protocol and invariants.
 ## Describe queries declaratively
 
 `findMany` / `findFirst` / `count` return **live query handles**. The handle’s `.current` updates
-when the replica changes. When _your_ filter inputs change (selected entity, date range, ids),
+when the sync engine pushes a new answer. When _your_ filter inputs change (selected entity, date range, ids),
 build the next handle with `$derived` — never `$effect` or `watch`. Templates are declarative:
 `$state` for operator input; `$derived` for everything downstream.
 
@@ -86,7 +87,7 @@ entity selector’s company list). Otherwise keep data on the primary query.
 Instants (and `custom('instant_range')` bounds) travel as UTC ISO ending in `Z` — never an unzoned string.
 Client controls convert the viewer's local input to UTC; server roles must already supply canonical
 operands. Calendar-day and wall-clock values stay `YYYY-MM-DD` / `HH:mm` whatever the column is.
-Local replica and server filters must receive the same value. See
+Client and server filters must receive the same value. See
 [dates-and-time.md](dates-and-time.md) for range and timezone rules.
 
 ## Batch genuine bulk work

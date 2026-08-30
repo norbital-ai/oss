@@ -25,7 +25,16 @@ pnpm add -D @norbital-ai/doctor
 norbital-doctor audit                # this repository
 norbital-doctor audit --include-tests   # include test and e2e sources
 norbital-doctor assess --root . --root ../other --out report.json
+norbital-doctor delta --root . --against master   # file and code-LOC movement per pillar
 ```
+
+`delta` answers a question a report cannot: which pillar shrank or grew between a git checkpoint
+and what is on disc right now. The checkpoint's tracked tree is materialized through a temporary
+index — not `git archive`, whose `export-ignore` attributes would thin the baseline — and both
+sides are counted by the same walk, the same comment-excluding LOC classifiers, and the same
+pillar assignment the report uses. `--json` adds each pillar's added, removed, and changed file
+lists. A delta is inventory, not a gate: it carries no verdict, and only invalid evidence (not a
+git work tree, an unknown ref) fails it at exit 2.
 
 Exit codes are the contract, and they are three-valued on purpose:
 

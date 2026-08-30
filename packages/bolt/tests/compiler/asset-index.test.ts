@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { Effect, Schema } from 'effect';
-import { ArtifactAssetIndex } from '@norbital-ai/bolt-protocol';
+import { Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { buildAssetIndex } from '../../src/compiler/sync.js';
+import { buildAssetIndex } from '../../src/compiler/workspace-build.js';
 import {
 	ARTIFACT_ASSET_DIRECTORY,
-	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_DIRECTORY,
 	SERVER_ASSET_DECLARATION_FILE_NAME,
 	WORKSPACE_ENTRY_FILE_NAME
@@ -73,11 +71,9 @@ describe('artifact asset index', () => {
 			expect(bytes.byteLength).toBe(entry.byteLength);
 		}
 
-		// And the sidecar a reader with the release on disk consumes without evaluating the bundle.
-		const onDisk = Schema.decodeUnknownSync(Schema.fromJsonString(ArtifactAssetIndex))(
-			await readFile(join(artifactDirectory, ARTIFACT_ASSET_INDEX_FILE), 'utf8')
-		);
-		expect(onDisk).toEqual({ browser: index.browser, server: index.server });
+		// Asset indexing emits only content-addressed objects. The complete release document written by
+		// `syncWorkspace` is the sole on-disk authority for these two arrays.
+		expect(await readdir(artifactDirectory)).toEqual([ARTIFACT_ASSET_DIRECTORY]);
 	});
 
 	/**

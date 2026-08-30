@@ -1,77 +1,82 @@
-import { describe, expect, it, vi } from 'vitest';
-import { policiesHeld } from '../../src/runtime/access/access-control.js';
+import { Effect, Layer } from 'effect';
+import { describe, expect, it } from 'vitest';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Database from '../../src/runtime/facilities/database.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 
-/**
- * A workspace declaring three policies and a team map over them.
- *
- * Only the two fields `policiesHeld` reads are real; everything else a `WorkspaceDefinition`
- * carries is irrelevant to the question and would only obscure it.
- */
+/** A minimal layer that exercises policy holding through AccessControl's public behavior. */
+const accessFor = (definition: WorkspaceDefinition): AccessControl.Interface =>
+	Effect.runSync(
+		Effect.gen(function* () {
+			return yield* AccessControl.Service;
+		}).pipe(
+			Effect.provide(
+				AccessControl.layer.pipe(
+					Layer.provide(
+						Layer.merge(
+							Layer.succeed(
+								Workspace.Service,
+								Workspace.Service.of({ definition } as Workspace.Interface)
+							),
+							Layer.succeed(
+								Database.Service,
+								Database.Service.of({
+									execute: () => Effect.die('database is not used by policy holding')
+								})
+							)
+						)
+					)
+				)
+			)
+		)
+	);
+
 const definition = (teams: Readonly<Record<string, ReadonlyArray<string>>>): WorkspaceDefinition =>
 	({
-		policies: [{ name: 'employee' }, { name: 'supervisor' }, { name: 'hr_manager' }],
+		collections: [],
+		policies: ['employee', 'supervisor', 'hr_manager'].map((name) => ({
+			name,
+			capabilities: { apps: [name] }
+		})),
 		teams
 	}) as unknown as WorkspaceDefinition;
 
-const subject = (teamPath: ReadonlyArray<string>) =>
-	({ userId: 'u1', tenantId: 't1', teamPath }) as never;
+const subject = (teamPath: ReadonlyArray<string>) => ({
+	userId: 'u1',
+	tenantId: 't1',
+	policies: [],
+	teamPath
+});
+
+const held = (
+	teams: Readonly<Record<string, ReadonlyArray<string>>>,
+	teamPath: ReadonlyArray<string>
+): ReadonlyArray<string> =>
+	[...accessFor(definition(teams)).capabilities(subject(teamPath)).apps].toSorted();
 
 describe('policies held through a team', () => {
 	it('holds what its team declares, folded on both sides', () => {
-		const held = policiesHeld(
-			definition({ 'HR Manager': ['employee', 'hr_manager'] }),
-			// The row's name and the map's key differ in case, which is the ordinary state of affairs
-			// once a name has been through a dashboard, an import and a seed file.
-			subject(['hr manager'])
-		);
-		expect([...held].toSorted()).toEqual(['employee', 'hr_manager']);
+		expect(held({ 'HR Manager': ['employee', 'hr_manager'] }, ['hr manager'])).toEqual([
+			'employee',
+			'hr_manager'
+		]);
 	});
 
 	it('uses descendant teams for scope but never inherits their policies', () => {
-		const held = policiesHeld(
-			definition({ Manager: ['supervisor'], Employee: ['employee'] }),
-			subject(['Manager', 'Employee'])
-		);
-		expect([...held]).toEqual(['supervisor']);
+		expect(
+			held({ Manager: ['supervisor'], Employee: ['employee'] }, ['Manager', 'Employee'])
+		).toEqual(['supervisor']);
 	});
 
 	it('holds nothing when the subject belongs to no team', () => {
-		expect(policiesHeld(definition({ Manager: ['supervisor'] }), subject([])).size).toBe(0);
+		expect(held({ Manager: ['supervisor'] }, [])).toEqual([]);
 	});
 
-	it('holds nothing for a team the release does not declare, and says nothing about it', () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		try {
-			// An operator can create a team before the code that gives it authority ships. That is the
-			// ordinary case, not a fault, so it is silent.
-			expect(policiesHeld(definition({}), subject(['Newly Created'])).size).toBe(0);
-			expect(warn).not.toHaveBeenCalled();
-		} finally {
-			warn.mockRestore();
-		}
-	});
-
-	/**
-	 * The case this whole tolerance exists for: a team names a policy that has since been renamed or
-	 * deleted. The name is bogus and is dropped; the request is *not* refused, and the rest of the
-	 * team's authority still resolves. A workspace must not fall over on a stale string.
-	 */
-	it('drops a policy the release no longer declares, keeps the rest, and warns once', () => {
-		const warn = vi.fn<(message: string) => void>();
-		const workspace = definition({ 'HR Manager': ['employee', 'payroll_admin_removed'] });
-		const reported = new Set<string>();
-		const held = policiesHeld(workspace, subject(['HR Manager']), reported, warn);
-		expect([...held]).toEqual(['employee']);
-		expect(warn).toHaveBeenCalledTimes(1);
-		const [line] = warn.mock.calls[0] as [string];
-		expect(line).toContain('HR Manager');
-		expect(line).toContain('payroll_admin_removed');
-
-		// Deduped across calls: this runs on the authorization path, so one stale name must be one
-		// line and not one line per request.
-		policiesHeld(workspace, subject(['HR Manager']), reported, warn);
-		policiesHeld(workspace, subject(['HR Manager']), reported, warn);
-		expect(warn).toHaveBeenCalledTimes(1);
+	it('ignores undeclared teams and stale policy names without widening authority', () => {
+		expect(held({}, ['Newly Created'])).toEqual([]);
+		expect(held({ 'HR Manager': ['employee', 'payroll_admin_removed'] }, ['HR Manager'])).toEqual([
+			'employee'
+		]);
 	});
 });

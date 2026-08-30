@@ -9,6 +9,7 @@ import {
 	workspace,
 	type WorkspaceDefinition
 } from '../../src/authoring/workspace-schema.js';
+import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -56,44 +57,53 @@ const definition: WorkspaceDefinition = workspace({
 	]
 });
 
-const authored = {
-	...emptyAuthoredRuntime,
-	hooks: {
-		runs: {
-			mutate: {
-				perRecord: {
-					after: {
-						description: 'Builds the derived output owned by the completed run.',
-						handler: (context: unknown, api: unknown) =>
-							Effect.gen(function* () {
-								if (Reflect.get(context as object, 'previous') !== undefined) return;
-								const runId = String(
-									(context as { readonly record: Readonly<Record<string, unknown>> }).record.id
-								);
-								const outputs = (
-									api as {
-										readonly db: Readonly<
-											Record<
-												string,
-												{
-													readonly mutate: (
-														values: Readonly<Record<string, unknown>>
-													) => Effect.Effect<void>;
-												}
-											>
-										>;
-									}
-								).db['outputs'];
-								if (outputs === undefined) return yield* Effect.die('outputs api missing');
-								yield* outputs.mutate({ run_id: runId, amount: 10 });
-								yield* outputs.mutate({ run_id: runId, amount: 20 });
-							})
-					}
-				}
+/**
+ * The fixture tables as a schema, so the hook is typed the way a compiled workspace's are: the
+ * `record` an after hook receives types the run id down, and `api.db.outputs.mutate` carries the
+ * collection's own write shape instead of a reflected `Record`.
+ */
+interface ElevatedAccessSchema {
+	readonly tables: {
+		readonly runs: {
+			readonly $inferSelect: { readonly id: string; readonly label: string };
+			readonly $inferInsert: { readonly id?: string; readonly label: string };
+		};
+		readonly outputs: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly run_id: string;
+				readonly amount: number;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly run_id: string;
+				readonly amount: number;
+			};
+		};
+	};
+	readonly relations: Record<string, never>;
+}
+
+const runHooks: CollectionHooks<ElevatedAccessSchema, 'runs'> = {
+	mutate: {
+		perRecord: {
+			after: {
+				description: 'Builds the derived output owned by the completed run.',
+				handler: ({ previous, record, api }) =>
+					Effect.gen(function* () {
+						if (previous !== undefined) return;
+						yield* api.db.outputs.mutate({ run_id: record.id, amount: 10 });
+						yield* api.db.outputs.mutate({ run_id: record.id, amount: 20 });
+					})
 			}
 		}
 	}
-} as unknown as typeof emptyAuthoredRuntime;
+};
+
+const authored = {
+	...emptyAuthoredRuntime,
+	hooks: { runs: authoredHooks(runHooks) }
+};
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -115,11 +125,15 @@ describe('an elevated after-hook mutation', () => {
 		);
 		expect(direct._tag).toBe('Failure');
 
-		await harness.runtime.runPromise(
-			collections.mutate(EffectId.make('authorized-root'), operator, 'runs', [
-				{ label: 'August payroll' }
-			])
+		// The whole write — commit and the settle aftermath it triggers, which is where the derived
+		// outputs are written — must complete. Asserted through the outcome so a post-commit settle
+		// failure surfaces as `MutationPhaseFailure phase: 'settle'` right here, not as a bare throw.
+		const outcome = await harness.runtime.runPromise(
+			collections
+				.mutate(EffectId.make('authorized-root'), operator, 'runs', [{ label: 'August payroll' }])
+				.pipe(Effect.result)
 		);
+		expect(outcome._tag, 'the settled mutation must succeed').toBe('Success');
 
 		expect(await harness.database.query('select amount from outputs order by amount')).toEqual([
 			{ amount: 10 },

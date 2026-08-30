@@ -37,6 +37,7 @@ publicHoistPattern:
 allowBuilds:
   '@tailwindcss/oxide': true
   esbuild: true
+  msgpackr-extract: false
   protobufjs: true
 
 overrides:

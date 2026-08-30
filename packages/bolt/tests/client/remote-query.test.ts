@@ -1,86 +1,135 @@
 import { describe, expect, it } from 'vitest';
 import { Effect, Schema } from 'effect';
-import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
+import type { StoredRecord } from '@norbital-ai/bolt-protocol';
+import { createMachineQuery, createRemoteQuery } from '../../src/client/remote-query.svelte.js';
+import {
+	initialClientState,
+	type ClientState,
+	type QueryState
+} from '../../src/client/sync/machine.js';
+import { stableKey } from '../../src/client/live-query/stable-key.js';
+import type { SyncClient } from '../../src/client/sync/index.js';
 
 /**
- * What a failing remote tells the reader.
+ * What a failing remote tells the reader, and what a query promises the reader.
  *
- * The query loader records the cause in the reactive `error` cell, which previously left the awaited
- * half with nothing but "the value is undefined" to say — it raised `Remote invocation completed without a
- * value`, naming neither the command nor the reason. A remote failing on
- * `operator does not exist: text = uuid` reached the screen as "could not be loaded" and the console
- * as a sentence about undefined, and the Postgres message the server had already put in the response
- * body was discarded one frame from the reader.
+ * The command-backed loader records the cause in the reactive `error` cell, which previously left
+ * the awaited half with nothing but "the value is undefined" to say. The Machine-backed loader
+ * keeps the §1.7 read semantics: the awaited half resolves with the first projected value,
+ * `current !== undefined` is the readiness test, and `loading` stays true while a revalidation
+ * repaints a retained answer — the answer on screen is real but not yet confirmed.
  */
 describe('remote query failure reporting', () => {
 	it('rejects with the cause the command failed on', async () => {
 		const cause = new Error('PostgreSQL operation failed: operator does not exist: text = uuid');
-		const query = createRemoteQuery(() => Effect.fail(cause), undefined, Schema.Json);
+		const query = createRemoteQuery(() => Effect.fail(cause), Schema.Json);
 		await expect(Promise.resolve(query)).rejects.toThrow('operator does not exist: text = uuid');
 		expect(query.error).toBe(cause);
 		expect(query.current).toBeUndefined();
-		expect(Reflect.has(query, 'refresh')).toBe(false);
+		expect(query.loading).toBe(false);
 	});
 
 	/** A command that answers nothing at all still has to say so, rather than resolving `undefined`. */
 	it('still names a command that completed without a value', async () => {
-		const query = createRemoteQuery(
-			() => Effect.succeed(undefined as never),
-			undefined,
-			Schema.Json
-		);
+		const query = createRemoteQuery(() => Effect.succeed(undefined as never), Schema.Json);
 		await expect(Promise.resolve(query)).rejects.toThrow(
 			'Remote invocation completed without a value'
 		);
 	});
+});
 
-	it('keeps the last value visible and rejects an older response after a newer reload', async () => {
-		let reload: (() => Effect.Effect<void, unknown>) | undefined;
-		let call = 0;
-		let resolveSecond: (value: string) => void = () => undefined;
-		let resolveThird: (value: string) => void = () => undefined;
-		const query = createRemoteQuery(
-			() => {
-				call += 1;
-				if (call === 1) return Effect.succeed('retained');
-				return Effect.promise(
-					() =>
-						new Promise<string>((resolve) => {
-							if (call === 2) resolveSecond = resolve;
-							else resolveThird = resolve;
-						})
-				);
-			},
-			{
-				key: 'window',
-				collections: ['jobs'],
-				cache: {
-					hydrated: Effect.void,
-					read: () => Effect.succeed(undefined),
-					write: () => undefined,
-					invalidate: () => [],
-					clear: () => undefined
-				},
-				registry: {
-					register: (registration) => {
-						reload = registration.reexecute;
-					},
-					reexecuteAffected: () => 0,
-					size: () => 1
-				}
-			},
-			Schema.String
-		);
-		expect(await Promise.resolve(query)).toBe('retained');
-		const older = Effect.runPromise(reload?.() ?? Effect.void);
-		expect(query.current).toBe('retained');
+const queryState = (overrides: Partial<QueryState>): QueryState => ({
+	input: { kind: 'findMany', collection: 'jobs' },
+	phase: 'fresh',
+	subscribers: 1,
+	...overrides
+});
+
+/** The projection under test: a row answer becomes the ids the reader sees. */
+const projectIds = (state: ClientState): ReadonlyArray<string> | undefined => {
+	const answer = state.queries.get('jobs')?.answer;
+	if (!Array.isArray(answer)) return undefined;
+	return answer.map((row) => {
+		const id = row['id'];
+		return typeof id === 'string' ? id : '';
+	});
+};
+
+const fakeMachine = () => {
+	const listeners = new Set<(state: ClientState) => void>();
+	const client: SyncClient = {
+		start: () => undefined,
+		current: () => initialClientState(),
+		subscribe: (listener) => {
+			listeners.add(listener);
+			listener(initialClientState());
+			return () => listeners.delete(listener);
+		},
+		mount: (input) => ({
+			key: stableKey(input),
+			release: () => undefined
+		}),
+		enqueue: () => undefined
+	};
+	return {
+		client,
+		publish: (state: ClientState) => {
+			for (const listener of listeners) listener(state);
+		}
+	};
+};
+
+describe('machine-backed query read semantics', () => {
+	it('resolves with the first projected value and repaints the retained answer while loading', async () => {
+		const machine = fakeMachine();
+		let released = 0;
+		const mounted = {
+			key: 'jobs',
+			release: () => {
+				released += 1;
+			}
+		};
+		const query = createMachineQuery(machine.client, mounted, projectIds);
+
 		expect(query.loading).toBe(true);
-		const newer = Effect.runPromise(reload?.() ?? Effect.void);
-		resolveThird('newest');
-		await newer;
-		resolveSecond('superseded');
-		await older;
-		expect(query.current).toBe('newest');
+		expect(query.current).toBeUndefined();
+
+		const fresh = (rows: ReadonlyArray<StoredRecord>, phase: 'fresh' | 'pending'): ClientState => ({
+			...initialClientState(),
+			queries: new Map([['jobs', queryState({ phase, answer: [...rows] })]])
+		});
+
+		machine.publish(fresh([{ id: 'retained' }], 'fresh'));
+		expect(await Promise.resolve(query)).toEqual(['retained']);
+		expect(query.current).toEqual(['retained']);
 		expect(query.loading).toBe(false);
+
+		// A commit revalidates: the Machine keeps the retained answer but flips the phase, and the
+		// read must repaint the cached rows without telling the reader the revalidation finished.
+		machine.publish(fresh([{ id: 'retained' }], 'pending'));
+		expect(query.current).toEqual(['retained']);
+		expect(query.loading).toBe(true);
+
+		machine.publish(fresh([{ id: 'newest' }], 'fresh'));
+		expect(query.current).toEqual(['newest']);
+		expect(query.loading).toBe(false);
+		expect(released).toBe(0);
+	});
+
+	it('rejects a query that fails before holding a value', async () => {
+		const machine = fakeMachine();
+		const query = createMachineQuery(
+			machine.client,
+			{ key: 'jobs', release: () => undefined },
+			projectIds
+		);
+		machine.publish({
+			...initialClientState(),
+			queries: new Map([
+				['jobs', queryState({ phase: 'failed', error: 'operator does not exist: text = uuid' })]
+			])
+		});
+		expect(query.error).toBeInstanceOf(Error);
+		await expect(Promise.resolve(query)).rejects.toThrow('operator does not exist: text = uuid');
 	});
 });

@@ -43,7 +43,10 @@ export const matchingRows = (
 		.filter(
 			(row) =>
 				collectionTableRowMatchesWhere(row, query?.where) &&
-				(query?.search === undefined || collectionTableRowMatchesSearch(row, query.search)) &&
+				// Lexical search re-filters locally; a semantic filter is the server's decision (the
+				// rows arrived already ranked against the corpus), so it constrains nothing here.
+				(typeof query?.search !== 'string' ||
+					collectionTableRowMatchesSearch(row, query.search)) &&
 				collectionTableRowMatchesFilters(row, filters)
 		)
 		.toSorted((left, right) => {

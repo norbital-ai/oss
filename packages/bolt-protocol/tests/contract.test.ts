@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Effect, Schema } from 'effect';
 import {
 	ARTIFACT_ASSET_DIRECTORY,
-	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_BUNDLE_FILE,
 	ARTIFACT_RELEASE_FILE,
-	ArtifactAssetIndex,
 	artifactCodeGraphRefusals,
 	ArtifactCodeGraph,
 	AssetIndexEntry,
@@ -146,15 +144,10 @@ describe('artifact asset index', () => {
 		).toBe('Failure');
 	});
 
-	it('names the sidecar layout every host resolves a blob through', () => {
+	it('names the canonical artifact layout every host resolves a blob through', () => {
 		expect(ARTIFACT_BUNDLE_FILE).toBe('bundle.mjs');
 		expect(ARTIFACT_ASSET_DIRECTORY).toBe('assets');
-		expect(ARTIFACT_ASSET_INDEX_FILE).toBe('asset-index.json');
 		expect(ARTIFACT_RELEASE_FILE).toBe('release.json');
-		expect(Schema.decodeUnknownSync(ArtifactAssetIndex)({ browser: [entry], server: [] })).toEqual({
-			browser: [entry],
-			server: []
-		});
 	});
 
 	it('describes an independently verifiable ESM module graph', () => {

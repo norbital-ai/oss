@@ -50,7 +50,7 @@ whole because migrations and doctor configuration are committed. The authored `t
 Local OSS changes cross five boundaries. One command covers the first four:
 
 ```sh
-pnpm --dir oss yalc:refresh
+pnpm run env -- link
 ```
 
 1. Build `oss/packages/<name>/build`.
@@ -60,7 +60,7 @@ pnpm --dir oss yalc:refresh
    virtual-store copy.
 5. Run `bolt sync`, then restart Colony so its bootstrap publishes and routes the new artifact.
 
-`yalc:refresh` ends by verifying that every workspace resolves through pnpm's store and actually
+`env -- link` ends by verifying that every workspace resolves through pnpm's store and actually
 imports, so a missed hop fails the command instead of surfacing later as an edit that did nothing.
 
 The realm command performs all five for Colony and templates and also links OSS packages into the
@@ -68,14 +68,14 @@ website:
 
 ```bash
 # Colony must be stopped; --ui refuses to run over an existing :5173 process.
-pnpm --dir norbital dev --ui
-pnpm --dir norbital dev --ui --template=<directory-or-handle>
+pnpm --dir norbital run env -- dev --ui
+pnpm --dir norbital run env -- dev --ui --template=<directory-or-handle>
 ```
 
-For an OSS change used only by Colony/Website, `pnpm --dir norbital yalc:link` establishes or updates
-the pure links. Restart the website after linking; Vite dependency optimization is not package HMR.
-Run `pnpm --dir norbital yalc:retreat` and each template repository's `pnpm yalc:retreat` before a
-release build or commit so exact registry pins and lockfiles are restored.
+For an OSS change used only by Colony/Website, `pnpm --dir norbital run env -- link` establishes or
+updates the pure links. Restart the website after linking; Vite dependency optimization is not
+package HMR. Run `pnpm --dir norbital run env -- retreat` before a release build or commit so exact
+registry pins and lockfiles are restored in Colony, the website and both template repositories.
 
 ## Local refresh matrix
 
@@ -83,8 +83,8 @@ release build or commit so exact registry pins and lockfiles are restored.
 | -------------------------------------------- | ------------------------------- | --------------------------------------------------- |
 | Colony route/component/server module         | Usually Vite HMR                | Reload; restart for `.env`, bootstrap, dependencies |
 | Website route/component/server module        | Usually Vite HMR                | Reload                                              |
-| Any OSS package consumed by a template       | No                              | realm `dev --ui`; hard-refresh tenant               |
-| OSS `config`, `std`, or `ui` used by website | No                              | `norbital yalc:link`; restart website               |
+| Any OSS package consumed by a template       | No                              | realm `env -- dev --ui`; hard-refresh tenant        |
+| OSS `config`, `std`, or `ui` used by website | No                              | `norbital env -- link`; restart website             |
 | Template source, asset, migration, or i18n   | No                              | `pnpm sync`; restart Colony through realm command   |
 | Template manifest / catalogue membership     | No                              | restart Colony                                      |
 | Template README/thumbnail on local website   | No local source path            | publish public template refs; rebuild website       |

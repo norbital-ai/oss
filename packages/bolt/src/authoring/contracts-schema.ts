@@ -11,6 +11,10 @@ import type {
 } from './models-schema.js';
 import type { RateLimitKey, RateLimitRule, RateLimitRules } from './rate-limits-schema.js';
 import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
+import type { AuthoredRefusal } from './refusal.js';
+import type { AuthoredCollectionHookModule } from '../runtime/collections/authored.js';
+import type { PolicySqlPredicate } from './policy-sql.js';
+import type { CollectionSearch } from '@norbital-ai/std/collection';
 
 /** A pull or webhook connection's environment binding, validated by `defineConnection`. */
 export interface PrivateEnvReference {
@@ -102,7 +106,13 @@ export type SystemRow = {
  * situations — a collection that declares no embedding, and a row whose vector has not been written
  * yet — so authored code has to narrow before using it, which is the truth about the value.
  */
-type RecordEmbeddingRow = { readonly record_embedding?: readonly number[] | null };
+type RecordEmbeddingRow = {
+	readonly record_embedding?: readonly number[] | null;
+	/** When the current record embedding was last written by settle. */
+	readonly embedded_at?: string | null;
+	/** Fingerprint of the authored source values represented by `record_embedding`. */
+	readonly record_embedding_fingerprint?: string | null;
+};
 
 type SelectForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = SystemRow &
 	RecordEmbeddingRow & {
@@ -282,10 +292,16 @@ type SchemaWhere<Row extends object, References extends object = Readonly<Record
 	readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
 	readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
 	readonly NOT?: SchemaWhere<Row, References>;
-	readonly $sql?: string;
 };
+
+/** A structured row filter or one explicitly trusted, serialized policy SQL statement. */
+type PolicyWhere<Row extends object> = SchemaWhere<Row> | PolicySqlPredicate;
+
+export type { CollectionSearch } from '@norbital-ai/std/collection';
+
 export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> {
 	readonly where?: SchemaWhere<SchemaRow<S, N>, SchemaReferences<S, N>>;
+	readonly search?: CollectionSearch;
 	readonly columns?: Partial<Readonly<Record<keyof SchemaRow<S, N>, boolean>>>;
 	readonly orderBy?: Partial<
 		Readonly<Record<Exclude<keyof SchemaRow<S, N>, keyof SchemaReferences<S, N>>, 'asc' | 'desc'>>
@@ -302,8 +318,34 @@ export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> 
 			Record<string, boolean | Readonly<Record<string, unknown>>>
 	>;
 	readonly limit?: number;
-	readonly offset?: number;
 }
+
+type ExactConfig<Input, Shape> = Input & Readonly<Record<Exclude<keyof Input, keyof Shape>, never>>;
+
+/** Rejects raw-SQL escape keys at every logical branch without publishing one on `SchemaWhere`. */
+type ExactWhere<Input> = Input extends object
+	? {
+			readonly [K in keyof Input]: K extends '$sql'
+				? never
+				: K extends 'AND' | 'OR'
+					? Input[K] extends ReadonlyArray<infer Branch>
+						? ReadonlyArray<ExactWhere<Branch>>
+						: Input[K]
+					: K extends 'NOT'
+						? ExactWhere<Input[K]>
+						: Input[K];
+		}
+	: Input;
+
+type ExactWhereMember<Input> = Input extends { readonly where?: infer Where }
+	? Readonly<{ readonly where?: ExactWhere<Where> }>
+	: unknown;
+
+type ExactQueryInput<
+	S extends AnySchema,
+	N extends TableName<S>,
+	Input extends SchemaQueryConfig<S, N>
+> = ExactConfig<Input, SchemaQueryConfig<S, N>> & ExactWhereMember<Input>;
 
 type ReferenceTargetName<
 	S extends AnySchema,
@@ -468,7 +510,7 @@ export type CollectionMutationValues<
 > = MutationRecord<S, N> & MutationChildren<S, N>;
 
 /** The distances pgvector can measure: Euclidean, cosine, and negative inner product. */
-export type NearestMetric = 'l2' | 'cosine' | 'ip';
+type NearestMetric = 'l2' | 'cosine' | 'ip';
 
 /**
  * The collection's vector columns, and only those.
@@ -480,7 +522,7 @@ export type NearestMetric = 'l2' | 'cosine' | 'ip';
  * `.array()` is unavailable on the authoring surface, so this is the only way a column reaches that
  * type.
  */
-export type VectorColumnName<S extends AnySchema, N extends TableName<S>> = {
+type VectorColumnName<S extends AnySchema, N extends TableName<S>> = {
 	readonly [K in keyof SchemaRow<S, N>]-?: NonNullable<
 		SchemaRow<S, N>[K]
 	> extends ReadonlyArray<number>
@@ -494,23 +536,18 @@ export type VectorColumnName<S extends AnySchema, N extends TableName<S>> = {
  * A nearest-neighbour read: an ordinary query config, plus what to measure against.
  *
  * `orderBy` is absent because the ordering *is* the query — the distance decides it, and offering a
- * second ordering would be offering to throw the answer away. Everything else is the config
- * `findMany` already takes, so narrowing a vector search is the same `where` clause as narrowing
- * any other read; the predecessor's bespoke `excludeIds` could exclude by id and by nothing else.
+ * second ordering would be offering to throw the answer away. It shares only ordinary narrowing,
+ * projection and limit with `findMany`; text search and relation hydration are different operations.
+ * The predecessor's bespoke `excludeIds` could exclude by id and by nothing else.
  */
 export interface SchemaNearestConfig<
 	S extends AnySchema,
 	N extends TableName<S>,
 	Col extends VectorColumnName<S, N>
-> extends Omit<SchemaQueryConfig<S, N>, 'orderBy'> {
-	/**
-	 * Stated as `never` rather than merely omitted.
-	 *
-	 * A generic `Config extends SchemaNearestConfig` admits extra properties, so leaving `orderBy`
-	 * out would let one through silently — accepted by the compiler, ignored by the runtime, and
-	 * read by whoever wrote it as an ordering that applies.
-	 */
-	readonly orderBy?: never;
+> {
+	readonly where?: SchemaWhere<SchemaRow<S, N>, SchemaReferences<S, N>>;
+	readonly columns?: Partial<Readonly<Record<keyof SchemaRow<S, N>, boolean>>>;
+	readonly limit?: number;
 	readonly column: Col;
 	/** The vector to measure against, typed as the column that stores it. */
 	readonly probe: NonNullable<SchemaRow<S, N>[Col]>;
@@ -522,13 +559,15 @@ export interface SchemaNearestConfig<
 interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 	findMany(): Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
 	findMany<const Config extends SchemaQueryConfig<S, N>>(
-		config: Config
+		config: ExactQueryInput<S, N, Config>
 	): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>>>;
 	findFirst(): Effect.Effect<(SchemaRow<S, N> & Readonly<Record<string, unknown>>) | undefined>;
 	findFirst<const Config extends SchemaQueryConfig<S, N>>(
-		config: Config
+		config: ExactQueryInput<S, N, Config>
 	): Effect.Effect<(SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>) | undefined>;
-	readonly count: (config?: Pick<SchemaQueryConfig<S, N>, 'where'>) => Effect.Effect<number>;
+	readonly count: (
+		config?: Pick<SchemaQueryConfig<S, N>, 'where' | 'search'>
+	) => Effect.Effect<number>;
 	/**
 	 * The rows nearest a probe vector, closest first, each carrying its measured `distance`.
 	 *
@@ -539,7 +578,8 @@ interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 		const Col extends VectorColumnName<S, N>,
 		const Config extends SchemaNearestConfig<S, N, Col>
 	>(
-		config: Config & { readonly column: Col }
+		config: ExactConfig<Config, SchemaNearestConfig<S, N, Col>> &
+			ExactWhereMember<Config> & { readonly column: Col }
 	): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<{ readonly distance: number }>>>;
 }
 interface ApprovalRequestRow extends SystemRow {
@@ -548,24 +588,19 @@ interface ApprovalRequestRow extends SystemRow {
 	readonly closed_at: Date | null;
 	readonly locked_record_refs: unknown;
 }
+type ApprovalRequestManyConfig = Readonly<{
+	readonly where?: SchemaWhere<ApprovalRequestRow>;
+	readonly columns?: Partial<Readonly<Record<keyof ApprovalRequestRow, boolean>>>;
+	readonly orderBy?: Partial<Readonly<Record<keyof ApprovalRequestRow, 'asc' | 'desc'>>>;
+	readonly limit?: number;
+}>;
+type ApprovalRequestFirstConfig = Pick<ApprovalRequestManyConfig, 'where' | 'limit'>;
 interface ApprovalRequestQuery {
-	readonly findMany: <
-		const Config extends {
-			readonly where?: SchemaWhere<ApprovalRequestRow>;
-			readonly columns?: Partial<Readonly<Record<keyof ApprovalRequestRow, boolean>>>;
-			readonly orderBy?: Partial<Readonly<Record<keyof ApprovalRequestRow, 'asc' | 'desc'>>>;
-			readonly limit?: number;
-		}
-	>(
-		config?: Config
+	readonly findMany: <const Config extends ApprovalRequestManyConfig>(
+		config?: ExactConfig<Config, ApprovalRequestManyConfig> & ExactWhereMember<Config>
 	) => Effect.Effect<Array<ApprovalRequestRow>>;
-	readonly findFirst: <
-		const Config extends {
-			readonly where?: SchemaWhere<ApprovalRequestRow>;
-			readonly limit?: number;
-		}
-	>(
-		config?: Config
+	readonly findFirst: <const Config extends ApprovalRequestFirstConfig>(
+		config?: ExactConfig<Config, ApprovalRequestFirstConfig> & ExactWhereMember<Config>
 	) => Effect.Effect<ApprovalRequestRow | undefined>;
 }
 /**
@@ -647,22 +682,15 @@ export type MutationValuesFor<S extends AnySchema, N extends MutationTableName<S
 	? CollectionMutationValues<S, N>
 	: DeclaredMutationValues<S, N, DeclaredInput<Inputs, N>>;
 
-type AuthoredDatabase<S extends AnySchema, Inputs> = {
+type AuthoredDatabase<S extends AnySchema> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N> & {
 		/** The same singular declarative record-or-graph mutation the browser client accepts. */
-		readonly mutate: (values: MutationValuesFor<S, N, Inputs>) => Effect.Effect<void>;
+		readonly mutate: (values: MutationValuesFor<S, N, unknown>) => Effect.Effect<void>;
 	};
 } & { readonly approval_request: ApprovalRequestQuery };
 
-/**
- * `Inputs` is the workspace's map of declared write shapes, and it is the second parameter rather
- * than a lookup on `S` because `S` is models only. That split is what keeps the type acyclic:
- * `schema()` resolves against the models half, `input` is a `const` built from it, and the map that
- * collects those constants is read one binding at a time — never by asking what a `+hooks.ts`
- * default export is, which is the question that would close the loop.
- */
-export type Api<S extends AnySchema = DefaultWorkspaceSchema, Inputs = unknown> = {
-	readonly db: AuthoredDatabase<S, Inputs>;
+export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
+	readonly db: AuthoredDatabase<S>;
 	/**
 	 * Manually run a declared automation from code, in the background, with retry.
 	 *
@@ -697,89 +725,35 @@ export type Api<S extends AnySchema = DefaultWorkspaceSchema, Inputs = unknown> 
 	}>;
 };
 /**
- * A hook, and the only shape a hook has.
- *
- * There used to be a second one beside it — `batchHandler`, taking every row of a batch at once —
- * declared here, re-typed in `runtime/collections/authored.ts`, and called from nowhere in the
- * runtime. An author could write batch validation there, ship it, and have it silently never run.
- *
- * It is gone rather than wired, because a hook is authored for one record and that is the claim the
- * write surface makes. Its two real uses live elsewhere now: a read that all N rows need is served
- * by one query without the hook knowing a batch exists, and "these N rows contain a duplicate" is a
- * unique index — which is stricter, because it also catches a collision with a row already stored.
+ * A hook, and the only shape a hook has: it is authored for one record, and that is the claim the
+ * write surface makes. A read that all N rows need is served by one query without the hook knowing
+ * a batch exists, and "these N rows contain a duplicate" is a unique index — which is stricter,
+ * because it also catches a collision with a row already stored.
  */
 type DescribedHook<Handler> = { readonly description: string; readonly handler: Handler };
-/**
- * What a `mutate` hook is handed.
- *
- * Partial, because there is one write and it serves both halves of it: a create carries whatever
- * the caller sent and an update carries a patch, and a single type that claimed every column was
- * present would be a lie on every update. What guarantees a column *is* there is the collection's
- * `export const input` — a create that omits one it names is refused before a hook sees it.
- *
- * `id` is present exactly when a stored record is being written, which is the same fact `existing`
- * carries into `before` and the only way `prepare` — which sees a batch and no rows — can tell a
- * recalculation from a first build.
- */
-/**
- * What one write states, and it states the whole record.
- *
- * `mutate` is an upsert: no id creates, an id updates, and an included `many` relationship is that
- * parent's complete desired state. The input follows the same rule — this is the collection's insert
- * shape, not a patch of it, so every required column is present on every write whether it creates or
- * updates. A hook therefore reads `input.company_id` and gets a `string`, never a `string |
- * undefined` it has to resolve against `existing` before it can use.
- *
- * The alternative — a partial — makes every required column optional at the type level on a write
- * that is usually a create, so each hook re-derives the value it was already given and the compiler
- * cannot tell a genuinely absent column from one the caller simply did not restate.
- */
-type MutateInput<S extends AnySchema, N extends TableName<S>> = Readonly<{
-	readonly id?: MutationIdentity<S, N>;
+type MutateHookInsert<S extends AnySchema, N extends TableName<S>> = Omit<
+	MutationInsertFor<S, N>,
+	'id'
+>;
+/** A create carries the collection's insert shape and cannot claim an existing identity. */
+type MutateCreateInput<S extends AnySchema, N extends TableName<S>> = MutateHookInsert<S, N> &
+	Readonly<{ readonly id?: never }>;
+
+/** An update carries an identity and exactly the patch the caller submitted. */
+type MutateUpdateInput<S extends AnySchema, N extends TableName<S>> = Readonly<{
+	readonly id: MutationIdentity<S, N>;
 }> &
-	MutationInsertFor<S, N>;
-
-/** The relations `+relationship.ts` declared for one collection, as the compiler emits them. */
-type RelationsOf<S extends AnySchema, N extends TableName<S>> = S extends {
-	readonly relations: infer R;
-}
-	? N extends keyof R
-		? R[N]
-		: Readonly<Record<never, never>>
-	: Readonly<Record<never, never>>;
+	Partial<MutateHookInsert<S, N>>;
 
 /**
- * The relations a nested write may expand: `many`, and with a foreign key to fill.
+ * What a mutate phase is handed.
  *
- * A `one` relation is the child pointing at a parent that must already exist, so writing it inline
- * would mean inventing the parent. A `many` with no declared endpoint carries `never` as its column
- * and is excluded here rather than guessed at — an edge the author declared loosely is one a nested
- * write refuses, not one it improvises a foreign key for.
+ * The runtime has always decoded updates through a partial input schema. Stating the two arms here
+ * keeps create requirements while making the update arm honest; `id` remains the discriminator for
+ * `prepare`, which has no stored rows beside its batch.
  */
-type ChildRelation<S extends AnySchema, N extends TableName<S>> = {
-	[K in keyof RelationsOf<S, N>]: RelationsOf<S, N>[K] extends {
-		readonly cardinality: 'many';
-		readonly column: string;
-	}
-		? K
-		: never;
-}[keyof RelationsOf<S, N>];
-
-type ChildTable<
-	S extends AnySchema,
-	N extends TableName<S>,
-	K extends ChildRelation<S, N>
-> = RelationsOf<S, N>[K] extends { readonly target: infer T }
-	? T extends TableName<S>
-		? T
-		: never
-	: never;
-
-type ChildColumn<
-	S extends AnySchema,
-	N extends TableName<S>,
-	K extends ChildRelation<S, N>
-> = RelationsOf<S, N>[K] extends { readonly column: infer C } ? C : never;
+type MutateInput<S extends AnySchema, N extends TableName<S>> =
+	MutateCreateInput<S, N> | MutateUpdateInput<S, N>;
 
 /**
  * How deep a nested write may go, as a countdown.
@@ -802,9 +776,9 @@ type Prev = [never, 0, 1, 2, 3, 4];
  * it is a claim that could disagree with one.
  */
 type ChildrenOf<S extends AnySchema, N extends TableName<S>, D extends Depth> = {
-	readonly [K in ChildRelation<S, N>]?: ReadonlyArray<
-		MutateGraph<S, ChildTable<S, N, K>, Prev[D]> extends infer G
-			? Omit<G, ChildColumn<S, N, K> & keyof G>
+	readonly [K in MutationManyRelation<S, N>]?: ReadonlyArray<
+		MutateGraph<S, MutationRelationTarget<S, N, K>, Prev[D]> extends infer G
+			? Omit<G, MutationRelationColumn<S, N, K> & keyof G>
 			: never
 	>;
 };
@@ -832,31 +806,31 @@ export type MutateGraph<S extends AnySchema, N extends TableName<S>, D extends D
 	: Partial<MutationInsertFor<S, N>> & ChildrenOf<S, N, D>;
 
 /**
- * The one place a rule about a written record lives.
- *
- * There used to be two, `create.before` and `update.before`, and every asymmetry between them was
- * an accident of that split rather than a distinction anybody meant: one returned a typed graph and
- * the other a flat patch, though the runtime split a graph out of both; one could be preceded by
- * `prepare` and the other could not, so a recalculation could not batch its reads.
+ * The one place a rule about a written record lives. Creates and updates share one phase and one
+ * shape: both carry a typed graph, both can be preceded by `prepare`, so a recalculation can batch
+ * its reads.
  *
  * **`existing` is the discriminator.** It is `undefined` on a create and the stored row on an
  * update, which is the same fact the runtime decides the operation from — the presence of an id —
  * rather than a second flag that could disagree with it.
  */
-type MutateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
-	readonly input: MutateInput<S, N>;
-	/** The stored row this write lands on, or `undefined` when this write creates it. */
-	readonly existing: SchemaRow<S, N> | undefined;
-	/**
-	 * What this batch's `prepare` returned, or `undefined` if the collection declares none.
-	 *
-	 * Its type is `prepare`'s return type, so the two cannot drift apart: a `prepare` that stops
-	 * returning what `before` reads is a compile error at the `satisfies`, not a runtime surprise on
-	 * a four-thousand-row import.
-	 */
-	readonly prepared: Prepared;
-	readonly api: Api<S>;
-}) => Effect.Effect<MutateGraph<S, N>, unknown, never> | MutateGraph<S, N>;
+type MutateBeforePhaseContext<S extends AnySchema, N extends TableName<S>, Prepared> =
+	| Readonly<{
+			readonly input: MutateCreateInput<S, N>;
+			readonly existing: undefined;
+			readonly prepared: Prepared;
+			readonly api: Api<S>;
+	  }>
+	| Readonly<{
+			readonly input: MutateUpdateInput<S, N>;
+			readonly existing: SchemaRow<S, N>;
+			readonly prepared: Prepared;
+			readonly api: Api<S>;
+	  }>;
+
+type MutateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (
+	context: MutateBeforePhaseContext<S, N, Prepared>
+) => Effect.Effect<MutateGraph<S, N>, AuthoredRefusal, never> | MutateGraph<S, N>;
 
 /**
  * What a settled write may do afterwards, and it returns nothing.
@@ -877,7 +851,7 @@ type MutateAfter<S extends AnySchema, N extends TableName<S>> = (
 		readonly record: SchemaRow<S, N>;
 		readonly api: Api<S>;
 	}>
-) => Effect.Effect<void, unknown, never> | void;
+) => Effect.Effect<void, AuthoredRefusal, never> | void;
 
 /**
  * The reads a whole batch needs, done once.
@@ -886,28 +860,27 @@ type MutateAfter<S extends AnySchema, N extends TableName<S>> = (
  * `time_entries` asks two questions per row, so a four-thousand-row import asks eight thousand
  * times. The rule and the reads are separable, and only the reads want to be batched.
  *
- * This is deliberately **not** a second place to write the rule. `batchHandler` was that, and the
- * drift it invites is not hypothetical — one collection had the same assertion written into both of
- * its hooks and five carried batch validation the runtime never called. `prepare` is not an
- * alternative branch: it runs before `before`, every time, for a batch of four thousand and for a
- * single write alike. Nothing has to decide which one applies.
+ * This is deliberately **not** a second place to write the rule — the rule stays in the per-record
+ * hook, and `prepare` owns the reads the whole batch needs. `prepare` is not an alternative branch:
+ * it runs before `before`, every time, for a batch of four thousand and for a single write alike.
+ * Nothing has to decide which one applies.
  *
  * What it is *for* is the query a person would write and a resolver cannot derive: four thousand
  * questions of the form "is this employment's day covered by leave" become one query over the window
  * the batch spans. Merging identical queries with different keys is something the runtime can do on
  * its own; reformulating them into a different query is judgement about the domain.
  *
- * It runs on updates too, which it did not before. An input carries `id` exactly when it names a
- * stored row, so a recalculation can gather its prior state in one query rather than one per record.
+ * It runs on updates too: an input carries `id` exactly when it names a stored row, so a
+ * recalculation can gather its prior state in one query rather than one per record.
  *
- * Scoped to the batch, not the call: with `batchSize: 250` over 4 000 rows it runs sixteen times,
- * each seeing its own 250. A batch is the unit of atomicity and of the isolate's span, so it is the
- * unit a read belongs to as well.
+ * Scoped to the atomic batch, not the surrounding import: an import's explicit chunks each prepare
+ * only their own rows. A batch is the unit of atomicity and of the isolate's span, so it is the unit
+ * a read belongs to as well.
  */
 type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly inputs: ReadonlyArray<MutateInput<S, N>>;
 	readonly api: Api<S>;
-}) => Effect.Effect<Prepared, unknown, never> | Prepared;
+}) => Effect.Effect<Prepared, AuthoredRefusal, never> | Prepared;
 
 /**
  * Everything a collection may say about a write, arranged by how often it runs.
@@ -932,11 +905,9 @@ type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  * property of this type could not, since resolving it would mean asking what the default export is
  * while the default export is being checked against this type.
  *
- * The nesting is the documentation. An earlier shape put a batch-wide function beside a per-record
- * one at the same level — `batchHandler` next to `handler` — and nothing about the declaration said
- * which ran when, or that one was a rule and the other was a second copy of it. Five collections
- * shipped batch validation that the runtime never called, and one had the same assertion written
- * into both halves.
+ * The nesting is the documentation. A batch-wide preparation step and a per-record decision cannot
+ * be mistaken for interchangeable rule sites: the declaration states which runs when and keeps each
+ * assertion in one place.
  *
  * `prepare` is not a place to put rules. It returns data and nothing else decides anything there.
  * `perRecord` is where every decision lives, once, for one record — whether the write was one row or
@@ -958,15 +929,52 @@ export type MutateBeforeContext<H> = H extends {
 		: never
 	: never;
 
+/** The context one `mutate.prepare` phase receives. */
+export type MutatePrepareContext<H> = H extends {
+	readonly mutate?: { readonly prepare?: infer P };
+}
+	? P extends (context: infer C) => unknown
+		? C
+		: never
+	: never;
+
+/** The context one settled `mutate.after` phase receives. */
+export type MutateAfterContext<H> = H extends {
+	readonly mutate?: { readonly perRecord?: { readonly after?: infer A } };
+}
+	? A extends { readonly handler: (context: infer C) => unknown }
+		? C
+		: never
+	: never;
+
+/** The context one `delete.before` phase receives. */
+export type DeleteBeforeContext<H> = H extends {
+	readonly delete?: { readonly perRecord?: { readonly before?: infer B } };
+}
+	? B extends { readonly handler: (context: infer C) => unknown }
+		? C
+		: never
+	: never;
+
+/** The context one settled `delete.after` phase receives. */
+export type DeleteAfterContext<H> = H extends {
+	readonly delete?: { readonly perRecord?: { readonly after?: infer A } };
+}
+	? A extends { readonly handler: (context: infer C) => unknown }
+		? C
+		: never
+	: never;
+
 /**
  * The same context on an edit, where `existing` is the stored row rather than `undefined`.
  *
  * `existing === undefined` is how an author tells a create from an edit, so the edit half of a split
  * handler wants that narrowing in its signature instead of re-checking what the caller already knows.
  */
-export type MutateEditContext<H> = MutateBeforeContext<H> & {
-	readonly existing: NonNullable<MutateBeforeContext<H>['existing']>;
-};
+export type MutateEditContext<H> = Extract<
+	MutateBeforeContext<H>,
+	Readonly<{ readonly existing: object }>
+>;
 
 export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepared = void> = {
 	readonly mutate?: {
@@ -983,17 +991,33 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 				(context: {
 					readonly existing: SchemaRow<S, N>;
 					readonly api: Api<S>;
-				}) => Effect.Effect<void, unknown, never> | void
+				}) => Effect.Effect<void, AuthoredRefusal, never> | void
 			>;
 			readonly after?: DescribedHook<
 				(context: {
 					readonly record: SchemaRow<S, N>;
 					readonly api: Api<S>;
-				}) => Effect.Effect<void, unknown, never> | void
+				}) => Effect.Effect<void, AuthoredRefusal, never> | void
 			>;
 		};
 	};
 };
+
+/**
+ * Hands a typed hooks module to the runtime carrier that runs it.
+ *
+ * `CollectionHooks` types every handler's `context` from the workspace schema; the carrier
+ * (`AuthoredCollectionHookModule`) reads it as `unknown`, because the runtime composes that context
+ * out of parts — a decoded input, the stored row, the api — that no author's schema can name. Under
+ * `strictFunctionTypes` the two arrows point in incompatible directions and the compiler refuses the
+ * assignment, which is correct about the arrows and wrong about the intent: the carrier only ever
+ * calls a handler with the context the schema promised. This is the one place the handoff is said,
+ * so a hook written typed is *carried* typed, instead of the author un-typing their own handler —
+ * and re-deriving every field off it with reflection — to get it past the compiler.
+ */
+export const authoredHooks = <S extends AnySchema, N extends TableName<S>, Prepared = unknown>(
+	hooks: CollectionHooks<S, N, Prepared>
+): AuthoredCollectionHookModule => hooks as AuthoredCollectionHookModule;
 
 export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 	readonly export?: {
@@ -1001,7 +1025,7 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 		readonly handler: (
 			context: { readonly records: ReadonlyArray<SchemaRow<S, N>> },
 			api: Api<S>
-		) => Effect.Effect<TExportManifest, unknown, never> | TExportManifest;
+		) => Effect.Effect<TExportManifest, AuthoredRefusal, never> | TExportManifest;
 	};
 	readonly import?: {
 		readonly description: string;
@@ -1010,7 +1034,7 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 			context: { readonly input: unknown },
 			api: Api<S>
 		) =>
-			| Effect.Effect<ReadonlyArray<MutateInput<S, N>>, unknown, never>
+			| Effect.Effect<ReadonlyArray<MutateInput<S, N>>, AuthoredRefusal, never>
 			| ReadonlyArray<MutateInput<S, N>>;
 	};
 };
@@ -1347,7 +1371,7 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
  * runtime-assigned id. An update has a complete stored row on both sides and exposes only the
  * prepared patch as `changes`. A delete sees the complete stored row it is about to remove.
  */
-export type PolicyWriteContext<
+type PolicyWriteContext<
 	StoredRecord,
 	Action extends 'create' | 'update' | 'delete',
 	CreateRecord = StoredRecord,
@@ -1448,13 +1472,8 @@ export interface EnvoyDefinition {
 	/** The standing instruction for this envoy's turns, on top of the workspace's `+agents.md`. */
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
-	/**
-	 * Whether this envoy may create and coordinate delegated sandbox-agent sessions.
-	 *
-	 * Delegation is enabled when omitted for compatibility. Disable it for narrow ingress envoys that
-	 * must act alone, even though the same principal-scoped sandbox tools remain available elsewhere.
-	 */
-	readonly delegation?: 'enabled' | 'disabled';
+	/** Whether this envoy may create and coordinate delegated sandbox-agent sessions. */
+	readonly delegation: 'enabled' | 'disabled';
 }
 /**
  * The only columns a grant exposes or accepts for its action.
@@ -1477,7 +1496,7 @@ type PolicyGrantFields<S extends AnySchema, N extends TableName<S>> = ReadonlyAr
  * `history` sits here for the same reason: reading what a record used to be is still reading.
  */
 type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
-	readonly where?: SchemaWhere<SchemaRow<S, N>>;
+	readonly where?: PolicyWhere<SchemaRow<S, N>>;
 	readonly fields?: PolicyGrantFields<S, N>;
 	/**
 	 * Additional collections whose rows can change this grant's visible row set.
@@ -1485,8 +1504,8 @@ type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
 	 * This metadata is additive: the compiler also derives every relationship traversal it can see,
 	 * and this list cannot remove those edges. A write to any resulting linking collection advances
 	 * this collection's visibility generation even though no row in this collection was written.
-	 * Opaque `$sql` predicates conservatively depend on every synced collection because a declaration
-	 * cannot prove which tables arbitrary SQL does not read.
+	 * Opaque `policySql` predicates conservatively depend on every synced collection because a
+	 * declaration cannot prove which tables arbitrary SQL does not read.
 	 */
 	readonly dependencies?: ReadonlyArray<TableName<S>>;
 };

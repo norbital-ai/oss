@@ -91,8 +91,6 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {
-		"@electric-sql/pglite": "^0.5.5",
-		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@iconify/svelte": "catalog:",
 		"@norbital-ai/bolt-protocol": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
@@ -116,6 +114,8 @@
 	},
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-rc.111",
+		"@electric-sql/pglite": "^0.5.5",
+		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@norbital-ai/config": "workspace:*",
 		"@norbital-ai/doctor": "workspace:*",
 		"@sveltejs/package": "^2.5.8",

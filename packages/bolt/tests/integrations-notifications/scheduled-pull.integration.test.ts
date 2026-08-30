@@ -19,7 +19,7 @@ import {
 	describeIntegrations,
 	manifestIntegrations
 } from '../../src/authoring/integration-introspection.js';
-import { renderArtifact } from '../../src/compiler/sync.js';
+import { renderArtifact } from '../../src/compiler/workspace-build.js';
 import {
 	collection,
 	defineConnection,
@@ -127,11 +127,7 @@ const definition = workspace({
 	skills: [],
 	envoys: [],
 	requiredFacilities: ['database', 'connector'],
-	mutationCompatibility: {
-		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
-		currentSchemaFingerprint: 'sha256:scheduled-pull-fixture',
-		adapters: []
-	}
+	schemaFingerprint: 'sha256:scheduled-pull-fixture'
 });
 
 const manifest = buildManifest(definition, { artifactId: 'scheduled-pull' });
@@ -228,23 +224,22 @@ describe('a host can read an integration out of the manifest', () => {
 			customTypeDefinitions: [],
 			environmentFile: undefined,
 			migrations: [],
-			mutationCompatibility: {
-				offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
-				currentSchemaFingerprint: 'sha256:fixture',
-				adapters: []
-			},
 			schemaFingerprint: 'sha256:fixture'
 		});
 		const start = artifact.indexOf('const manifestValue = ');
 		const end = artifact.indexOf('\nconst remoteHandlers', start);
 		if (start < 0 || end < 0) throw new Error('the artifact no longer assembles a manifestValue');
 		const built = new Function(
+			'workspace',
+			'buildManifest',
 			'browserAssets',
 			'serverAssets',
 			'describedIntegrations',
 			'manifestIntegrations',
 			`${artifact.slice(start, end)}\nreturn manifestValue;`
-		)([], [], described, manifestIntegrations) as Readonly<Record<string, unknown>>;
+		)(definition, buildManifest, [], [], described, manifestIntegrations) as Readonly<
+			Record<string, unknown>
+		>;
 		expect(built['integrations']).toEqual(manifest.integrations);
 	});
 

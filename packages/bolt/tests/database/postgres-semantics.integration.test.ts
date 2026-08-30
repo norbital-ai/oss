@@ -10,7 +10,7 @@ import { custom, defineModel, text } from '../../src/authoring/models-schema.js'
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { provisioningStatements } from '../support/bolt-test-layer.js';
-import { compileWhere, makeWhereContext } from '../../src/runtime/collections/where.js';
+import { compileWhere, makeWhereContext } from '../../src/runtime/collections/read/where.js';
 
 /** A stable UUID for a readable fixture name — records are keyed by `id uuid`. */
 const rid = (name: string): string => {
@@ -129,7 +129,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		}
 
 		const indexes = await database.query<{ indexdef: string }>(
-			`select indexdef from pg_indexes where tablename = 'jurisdictions' and indexname = 'jurisdictions_name_search_trgm_idx'`
+			`select indexdef from pg_indexes where tablename = 'jurisdictions' and indexname = 'jurisdictions_search_text_trgm_idx'`
 		);
 		expect(indexes.rows).toHaveLength(1);
 		expect(indexes.rows[0]?.indexdef).toContain('gin_trgm_ops');
@@ -140,10 +140,10 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		await database.exec('analyze jurisdictions');
 		await database.exec('set enable_seqscan = off');
 		const explain = await database.query<{ 'QUERY PLAN': string }>(
-			`explain (costs off) select * from jurisdictions where name ilike '%1234%'`
+			`explain (costs off) select * from jurisdictions where (coalesce(name, '')) ilike '%1234%'`
 		);
 		expect(explain.rows.map((row) => row['QUERY PLAN']).join('\n')).toContain(
-			'jurisdictions_name_search_trgm_idx'
+			'jurisdictions_search_text_trgm_idx'
 		);
 
 		const period = (start: string, end: string): string => JSON.stringify({ start, end });
@@ -257,9 +257,14 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		);
 		if (Result.isFailure(compiled))
 			throw new Error(`compileWhere failed: ${compiled.failure.message}`);
+		const rendered = compiled.success.toQuery({
+			escapeName: (name) => `"${name.replaceAll('"', '""')}"`,
+			escapeParam: (index) => `$${index + 1}`,
+			escapeString: (value) => `'${value.replaceAll("'", "''")}'`
+		});
 		const matched = await database.query<{ id: string }>(
-			`select id from leave_requests where ${compiled.success.sql}`,
-			[...compiled.success.parameters]
+			`select id from leave_requests where ${rendered.sql}`,
+			[...rendered.params]
 		);
 		expect(matched.rows.map(({ id }) => id)).toEqual([rid('leave-1')]);
 	});

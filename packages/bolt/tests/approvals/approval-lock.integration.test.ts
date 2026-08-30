@@ -14,13 +14,12 @@ import { ApprovalConflict } from '../../src/runtime/approvals/approvals.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
-import * as SyncWake from '../../src/runtime/sync/wake.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
 import * as Database from '../../src/runtime/facilities/database.js';
-import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
+import { AI, Files, Tasks } from '../../src/runtime/facilities/services.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
@@ -106,6 +105,18 @@ const subject = Subject.make({
 	teamPath: ['approvers'],
 	policies: []
 });
+
+const mutateRecord = (
+	service: Collections.Interface,
+	effectId: EffectId,
+	collection: string,
+	id: string,
+	action: 'create' | 'update',
+	values: Readonly<Record<string, unknown>>
+) =>
+	service.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
+		root: { id, action }
+	});
 
 const dataFunctions = policyRuntimeFunctionsFor([dataPolicy]);
 
@@ -499,6 +510,46 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
 					return { rows: [next], affectedRows: 1 } satisfies DatabaseResponse;
 				}
+				if (unquotedSql.includes('__bolt_write_wave_kind')) {
+					// The write engine's wave read: one `union all` of per-row and per-relation
+					// branches, each carrying its ordinal and the id to look up. Parameters arrive
+					// in branch order — row branches bind (ordinal, id); relation branches bind
+					// (ordinal, parentId) against `child."<column>"`.
+					const current = yield* Ref.get(tables);
+					const branches = sql.split(/ union all /i);
+					const rows: Array<Schema.Json> = [];
+					let index = 0;
+					for (const branch of branches) {
+						const ordinal = parameters[index] ?? null;
+						index += 1;
+						const table = quotedName(branch, 'from');
+						const bucket = current.get(table ?? '');
+						if (branch.includes("'row'::text")) {
+							const id = parameters[index];
+							index += 1;
+							const row = bucket?.get(String(id));
+							if (row !== undefined)
+								rows.push({
+									__bolt_write_wave_kind: 'row',
+									__bolt_write_wave_ordinal: ordinal,
+									__bolt_write_wave_record: row
+								});
+						} else {
+							const parent = parameters[index];
+							index += 1;
+							const column = /child\."([^"]+)" = /.exec(branch)?.[1] ?? '';
+							for (const child of bucket?.values() ?? []) {
+								if (String(child[column] ?? '') === String(parent))
+									rows.push({
+										__bolt_write_wave_kind: 'relation',
+										__bolt_write_wave_ordinal: ordinal,
+										__bolt_write_wave_record: child
+									});
+							}
+						}
+					}
+					return { rows, affectedRows: 0 } satisfies DatabaseResponse;
+				}
 				if (unquotedSql.includes('select approval_id')) {
 					const table = quotedName(sql, 'from');
 					const current = yield* Ref.get(tables);
@@ -554,7 +605,6 @@ const context = testCallContext('approval-lock');
  * The follow-up work a decision schedules is the part that is easy to leave out — `resume` was
  * enqueued on approval and nothing at all was enqueued on rejection, so the lock a refused request
  * had taken was never released by anybody. The enqueue is now a `bolt_task` row in the caller's own
- * database (observed through `taskInserts`), and the wake is the host's cue that a row is waiting.
  */
 const recordingTasks = () =>
 	Tasks.layer(
@@ -568,17 +618,16 @@ const workspaceLayer = Workspace.layer(definition);
 const testLayer = (recorded: Array<string> = []) => {
 	const tasks = recordingTasks();
 	const database = memoryDatabaseLayer(recorded);
-	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
-	const taskQueue = TaskQueue.layer(context).pipe(
-		Layer.provide(Layer.mergeAll(database, tasks, wake))
-	);
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)));
 	const tenantScope = TenantScope.layer(context.tenantId);
 	const automations = Automations.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0), tenantScope))
+		Layer.provide(
+			Layer.mergeAll(workspaceLayer, database, taskQueue, InvocationBudget.layer(0), tenantScope)
+		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, wake))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
 	);
 	const authoredLayer = Layer.succeed(AuthoredRuntimeService, {
 		...emptyAuthoredRuntime,
@@ -598,9 +647,9 @@ const testLayer = (recorded: Array<string> = []) => {
 				taskQueue,
 				automations,
 				authoredLayer,
+				tasks
 				// No transport is bound, so the announcement is ignored — which is exactly the behaviour
 				// under test here: a write path must not depend on anywhere to publish.
-				wake
 			)
 		)
 	);
@@ -612,10 +661,8 @@ describe('approval lock and resume', () => {
 		Effect.gen(function* () {
 			const service = yield* Collections.Service;
 			const pending = yield* Effect.flip(
-				service.create(EffectId.make('create-order'), subject, {
-					collection: 'orders',
-					id: rid('order-1'),
-					values: { title: 'Held' }
+				mutateRecord(service, EffectId.make('create-order'), 'orders', rid('order-1'), 'create', {
+					title: 'Held'
 				})
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
@@ -626,12 +673,11 @@ describe('approval lock and resume', () => {
 			expect(pending.requestId).toMatch(
 				/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/
 			);
-			// The record exists and is held, rather than being absent until somebody decides. That is
-			// what makes it reviewable: the row carries the request that holds it.
+			// Review state owns the engine graph; no provisional domain row is visible.
 			const orders = yield* service.findMany(EffectId.make('read-order'), subject, {
 				collection: 'orders'
 			});
-			expect(orders).toHaveLength(1);
+			expect(orders).toEqual([]);
 			const stored = yield* (yield* Approvals.Service).status(
 				EffectId.make('status-order'),
 				pending.requestId
@@ -645,11 +691,14 @@ describe('approval lock and resume', () => {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-resume'), subject, {
-					collection: 'orders',
-					id: rid('order-2'),
-					values: { title: 'Released' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-resume'),
+					'orders',
+					rid('order-2'),
+					'create',
+					{ title: 'Released' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -679,23 +728,20 @@ describe('approval lock and resume', () => {
 		Effect.gen(function* () {
 			const service = yield* Collections.Service;
 			const first = yield* Effect.flip(
-				service.create(EffectId.make('create-lock-1'), subject, {
-					collection: 'orders',
-					id: rid('order-3'),
-					values: { title: 'First' }
+				mutateRecord(service, EffectId.make('create-lock-1'), 'orders', rid('order-3'), 'create', {
+					title: 'First'
 				})
 			);
 			expect(first).toBeInstanceOf(PendingApproval);
 			const second = yield* Effect.flip(
-				service.create(EffectId.make('create-lock-2'), subject, {
-					collection: 'orders',
-					id: rid('order-3'),
-					values: { title: 'Second' }
+				mutateRecord(service, EffectId.make('create-lock-2'), 'orders', rid('order-3'), 'create', {
+					title: 'Second'
 				})
 			);
 			expect(second).toBeInstanceOf(ApprovalConflict);
 			if (!(second instanceof ApprovalConflict)) return;
-			expect(second.reason).toContain('locked');
+			// The engine's lock refusal names the holding approval request rather than the word 'locked'.
+			expect(second.reason).toContain('is held by another approval request');
 		}).pipe(Effect.provide(testLayer()))
 	);
 
@@ -704,11 +750,14 @@ describe('approval lock and resume', () => {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-two-step'), subject, {
-					collection: 'employees',
-					id: rid('employee-1'),
-					values: { name: 'Ada' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-two-step'),
+					'employees',
+					rid('employee-1'),
+					'create',
+					{ name: 'Ada' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -725,8 +774,7 @@ describe('approval lock and resume', () => {
 				'approve'
 			);
 			expect(first).toMatchObject({ _tag: 'Pending', step: 1 });
-			// Still held after the first of two approvals — the row is there, and stays held until the
-			// last step decides.
+			// Still held after the first of two approvals; the row is created only after the last.
 			const employees = yield* collectionsService.findMany(
 				EffectId.make('read-two-step'),
 				subject,
@@ -734,7 +782,7 @@ describe('approval lock and resume', () => {
 					collection: 'employees'
 				}
 			);
-			expect(employees).toHaveLength(1);
+			expect(employees).toEqual([]);
 			const last = yield* approvalsService.decide(
 				EffectId.make('decide-two-step-2'),
 				subject,
@@ -755,17 +803,23 @@ describe('approval lock and resume', () => {
 		Effect.gen(function* () {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
-			yield* collectionsService.create(EffectId.make('create-note'), subject, {
-				collection: 'notes',
-				id: rid('note-1'),
-				values: { body: 'Original' }
-			});
+			yield* mutateRecord(
+				collectionsService,
+				EffectId.make('create-note'),
+				'notes',
+				rid('note-1'),
+				'create',
+				{ body: 'Original' }
+			);
 			const pending = yield* Effect.flip(
-				collectionsService.update(EffectId.make('update-note'), subject, {
-					collection: 'notes',
-					id: rid('note-1'),
-					values: { body: 'Pending' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('update-note'),
+					'notes',
+					rid('note-1'),
+					'update',
+					{ body: 'Pending' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -802,17 +856,20 @@ describe('approval lock and resume', () => {
 		}).pipe(Effect.provide(testLayer()))
 	);
 
-	it.effect('discards the provisional row when a create is rejected', () => {
+	it.effect('keeps a rejected create absent when its hold is discarded', () => {
 		const enqueued: Array<string> = [];
 		return Effect.gen(function* () {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-rejected'), subject, {
-					collection: 'orders',
-					id: rid('order-rejected'),
-					values: { title: 'Refused' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-rejected'),
+					'orders',
+					rid('order-rejected'),
+					'create',
+					{ title: 'Refused' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -828,14 +885,11 @@ describe('approval lock and resume', () => {
 				'reject',
 				'not this one'
 			);
-			// The decision schedules its own cleanup. Asserted before running it by hand, because a
-			// `discard` that works but is never called leaves the record locked in exactly the way
-			// this whole path exists to prevent.
+			// The decision schedules its own durable cleanup. Asserted before running it by hand because
+			// the approval and browser-mutation hold must still reach a terminal state.
 			expect(enqueued.some((request) => request.includes('collections.discard'))).toBe(true);
 			yield* collectionsService.discard(EffectId.make('discard-rejected'), pending.requestId);
-			// Write-then-lock means the row was already there when it was refused. Releasing its lock
-			// would have published exactly the record somebody just rejected, because a workspace's
-			// liveness predicate is `approval_id is null` — so the provisional write goes.
+			// PREPARE held the graph before COMMIT, so rejecting it leaves the domain row absent.
 			expect(
 				yield* collectionsService.findMany(EffectId.make('read-rejected'), subject, {
 					collection: 'orders'
@@ -848,17 +902,23 @@ describe('approval lock and resume', () => {
 		Effect.gen(function* () {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
-			yield* collectionsService.create(EffectId.make('create-note-reject'), subject, {
-				collection: 'notes',
-				id: rid('note-reject'),
-				values: { body: 'Original' }
-			});
+			yield* mutateRecord(
+				collectionsService,
+				EffectId.make('create-note-reject'),
+				'notes',
+				rid('note-reject'),
+				'create',
+				{ body: 'Original' }
+			);
 			const pending = yield* Effect.flip(
-				collectionsService.update(EffectId.make('update-note-reject'), subject, {
-					collection: 'notes',
-					id: rid('note-reject'),
-					values: { body: 'Pending' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('update-note-reject'),
+					'notes',
+					rid('note-reject'),
+					'update',
+					{ body: 'Pending' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -896,11 +956,14 @@ describe('approval lock and resume', () => {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-changes-requested'), subject, {
-					collection: 'orders',
-					id: rid('order-changes-requested'),
-					values: { title: 'Needs revision' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-changes-requested'),
+					'orders',
+					rid('order-changes-requested'),
+					'create',
+					{ title: 'Needs revision' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -934,11 +997,14 @@ describe('approval lock and resume', () => {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-withdrawn'), subject, {
-					collection: 'orders',
-					id: rid('order-withdrawn'),
-					values: { title: 'Recalled' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-withdrawn'),
+					'orders',
+					rid('order-withdrawn'),
+					'create',
+					{ title: 'Recalled' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
@@ -962,11 +1028,14 @@ describe('approval lock and resume', () => {
 			const collectionsService = yield* Collections.Service;
 			const approvalsService = yield* Approvals.Service;
 			const pending = yield* Effect.flip(
-				collectionsService.create(EffectId.make('create-timeline'), subject, {
-					collection: 'orders',
-					id: rid('order-4'),
-					values: { title: 'Audited' }
-				})
+				mutateRecord(
+					collectionsService,
+					EffectId.make('create-timeline'),
+					'orders',
+					rid('order-4'),
+					'create',
+					{ title: 'Audited' }
+				)
 			);
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;

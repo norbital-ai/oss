@@ -1,4 +1,5 @@
 import { Option, Schema } from 'effect';
+import { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 
 const keySegment = (value: string): string => {
 	const bytes = new TextEncoder().encode(value);
@@ -29,15 +30,6 @@ export const isChatDocumentStorageKey = (conversationId: string, storageKey: str
 	storageKey.startsWith(`chat-sessions/${keySegment(conversationId)}/`) &&
 	!storageKey.includes('..') &&
 	storageKey.split('/').length === 3;
-
-/** The immutable descriptor persisted for a document owned by one chat session. */
-export const ChatDocumentRef = Schema.Struct({
-	storage_key: Schema.NonEmptyString,
-	file_name: Schema.NonEmptyString,
-	file_size: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
-	mime_type: Schema.NonEmptyString
-});
-export interface ChatDocumentRef extends Schema.Schema.Type<typeof ChatDocumentRef> {}
 
 export const ChatAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,

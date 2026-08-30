@@ -1,26 +1,15 @@
-import { readFileSync } from 'node:fs';
-import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-	EnvironmentName,
-	InvocationId,
-	Invocation,
-	PROTOCOL_VERSION,
-	ReleaseId,
-	TenantId
-} from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
-import * as AccessControl from '../../src/runtime/access/access-control.js';
-import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 /**
- * The personal vault, over real SQL and through the real dispatch boundary.
+ * The personal vault, over real SQL and through its server-side service.
  *
  * The claim being tested is not "a per-user table exists" — it is that a personal secret has exactly
  * one reader and one writer, the person it belongs to, and that no route reaches somebody else's row:
@@ -34,34 +23,6 @@ afterEach(async () => {
 	await harness?.dispose();
 	harness = undefined;
 });
-
-const scope = {
-	tenantId: TenantId.make('test-tenant'),
-	environment: EnvironmentName.make('development'),
-	releaseId: ReleaseId.make('local')
-};
-
-const command = (name: string, credential: string, input: unknown = null) =>
-	Invocation.cases.Command.make({
-		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(`command-${name}-${credential}`),
-		scope,
-		deadlineEpochMs: Date.now() + 30_000,
-		command: name,
-		input: input as never,
-		headers: { authorization: [`Bearer ${credential}`] }
-	});
-
-const task = (name: string, input: unknown = {}) =>
-	Invocation.cases.Task.make({
-		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(`task-${name}`),
-		scope,
-		deadlineEpochMs: Date.now() + 30_000,
-		command: name,
-		input: input as never,
-		attempt: 0
-	});
 
 // The readable name is hashed the same way the fixture's SQL hashes it, because identity is keyed
 // by `id uuid` and a subject has to name the row the session actually points at.
@@ -115,15 +76,6 @@ const writeAs = (
 		)
 	);
 
-const failureOf = async (harnessed: BoltTestRuntime, invocation: Invocation) => {
-	const outcome = await harnessed.runtime.runPromise(
-		dispatchInvocation(invocation).pipe(Effect.result)
-	);
-	if (outcome._tag !== 'Failure')
-		throw new Error(`expected a refusal, got ${JSON.stringify(outcome)}`);
-	return outcome.failure;
-};
-
 const SESSION_NAME = 'linkedin.session';
 
 const vaultWorkspace = workspace({
@@ -154,30 +106,6 @@ const vaultWorkspace = workspace({
 });
 
 describe('personal secrets', () => {
-	it('round-trips a value for the person who stored it, through the command surface', async () => {
-		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await seedSession(harness, { token: 'a-token', user: 'user-a', team: 'employee' });
-
-		const written = await harness.runtime.runPromise(
-			dispatchInvocation(
-				command('personal-secrets.write', 'a-token', { name: SESSION_NAME, value: 'li_at=AAA' })
-			)
-		);
-		expect(written.value).toMatchObject({ saved: true, name: SESSION_NAME });
-
-		expect(await readAs(harness, userA, SESSION_NAME)).toBe('li_at=AAA');
-
-		const status = await harness.runtime.runPromise(
-			dispatchInvocation(command('personal-secrets.status', 'a-token'))
-		);
-		expect(status.value).toEqual([
-			expect.objectContaining({ name: SESSION_NAME, configured: true })
-		]);
-		// The whole point of there being no `personal-secrets.read`: nothing a browser can ask for carries
-		// the value.
-		expect(JSON.stringify(status.value)).not.toContain('li_at=AAA');
-	});
-
 	/**
 	 * The load-bearing test.
 	 *
@@ -251,66 +179,6 @@ describe('personal secrets', () => {
 	});
 
 	/**
-	 * A payload that names an owner is ignored, because no owner is ever read from a payload.
-	 *
-	 * `MINTED_IDENTITY` already overwrites `subject` and `userId` on a `Command`, so this is the
-	 * consequence one hop further in: the input schemas below declare no owner at all, and the WHERE
-	 * clause takes its user id from `Identity.CurrentSubject`. If either of those changed, user B's row
-	 * would appear here.
-	 */
-	it('honours no user id a command names, only the credential holder', async () => {
-		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await seedSession(harness, { token: 'a-token', user: 'user-a', team: 'employee' });
-		await writeAs(harness, userB, SESSION_NAME, 'li_at=BBB');
-
-		const written = await harness.runtime.runPromise(
-			dispatchInvocation(
-				command('personal-secrets.write', 'a-token', {
-					name: SESSION_NAME,
-					value: 'stolen',
-					// Every shape somebody might expect to be honoured: the minted fields, and a plausible
-					// owner field the boundary does not mint and so never overwrites.
-					userId: 'user-b',
-					owner: 'user-b',
-					subject: { userId: 'user-b', tenantId: 'test-tenant', policies: [], teamPath: ['admin'] }
-				})
-			)
-		);
-		expect(written.value).toMatchObject({ saved: true });
-
-		// The write landed on the credential holder's row, not on the one the payload named. Read back
-		// through the service because the column holds an envelope, and each read is bound to its own
-		// owner — so `user-b` still reading `li_at=BBB` is the assertion that their row was untouched.
-		expect(
-			(
-				await harness.database.query('select user_id from bolt_personal_secrets order by user_id')
-			).map((row) => row['user_id'])
-		).toEqual([fixtureUserId('user-a'), fixtureUserId('user-b')].sort());
-		expect(await readAs(harness, userA, SESSION_NAME)).toBe('stolen');
-		expect(await readAs(harness, userB, SESSION_NAME), 'a named user id reached the write').toBe(
-			'li_at=BBB'
-		);
-
-		// And the same through `forget`, which is the destructive half of the same question.
-		await harness.runtime.runPromise(
-			dispatchInvocation(
-				command('personal-secrets.forget', 'a-token', {
-					name: SESSION_NAME,
-					userId: 'user-b',
-					owner: 'user-b'
-				})
-			)
-		);
-		expect(
-			(await harness.database.query('select user_id from bolt_personal_secrets')).map(
-				(row) => row['user_id']
-			),
-			'a named user id reached the delete'
-		).toEqual([fixtureUserId('user-b')]);
-		expect(await readAs(harness, userB, SESSION_NAME)).toBe('li_at=BBB');
-	});
-
-	/**
 	 * Work with nobody behind it is refused, not answered emptily.
 	 *
 	 * A scheduled task has no person and therefore no personal secrets. Answering `[]` or `null` would
@@ -318,20 +186,10 @@ describe('personal secrets', () => {
 	 * credential that is already stored — and, worse, invites a future caller to treat the absence as a
 	 * reason to fall back to a shared one.
 	 */
-	it('refuses a task, at the dispatch gate and again in the service', async () => {
+	it('refuses personal secret access when no person is in context', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
 
-		for (const name of [
-			'personal-secrets.status',
-			'personal-secrets.write',
-			'personal-secrets.forget'
-		]) {
-			const failure = await failureOf(harness, task(name, { name: SESSION_NAME, value: 'x' }));
-			expect(failure, name).toBeInstanceOf(AccessControl.AccessDenied);
-		}
-
-		// The service refuses on its own, without relying on the dispatch gate above: a server-side caller
-		// running inside a task reaches it directly.
+		// The service refuses on its own: a server-side caller running inside a task reaches it directly.
 		// Matched rather than flipped, so a method that *answers* is reported as the answer it gave — a
 		// bare `Effect.flip` turns "it returned null" into an unreadable defect, and "it returned null"
 		// is precisely the wrong behaviour under test.
@@ -457,16 +315,4 @@ describe('personal secrets', () => {
 		expect(await harness.database.query('select 1 from bolt_personal_secrets')).toHaveLength(0);
 	});
 
-	it('exposes status, write and forget, and deliberately no read', () => {
-		// Asserted on the dispatch source because the absence is the guarantee — a test that only
-		// exercised the commands that exist could never notice one being added.
-		const dispatch = readFileSync(
-			new URL('../../src/runtime/dispatch.ts', import.meta.url),
-			'utf8'
-		);
-		expect(dispatch).toContain("case 'personal-secrets.status'");
-		expect(dispatch).toContain("case 'personal-secrets.write'");
-		expect(dispatch).toContain("case 'personal-secrets.forget'");
-		expect(dispatch).not.toContain("case 'personal-secrets.read'");
-	});
 });

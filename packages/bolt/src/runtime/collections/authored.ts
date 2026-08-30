@@ -1,17 +1,18 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
 import { Context, Duration, Effect, Option, Result, Schema } from 'effect';
-import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import { type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
-import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import type { Interface as CollectionsInterface } from './collections.contract.js';
 import type * as Automations from '#lib/runtime/automations/automations.js';
 import type { AIInterface, FilesInterface } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { encodeBase64, readFileAsset, type FileAsset } from './file-assets.js';
+import { nearestQueryInput, queryInput } from './query-input.js';
 
 /**
  * The runtime carrier for a workspace's authored business logic.
@@ -26,7 +27,8 @@ import * as Database from '#lib/runtime/facilities/database.js';
 /** One authored hook point: an optional description and the handler the runtime invokes. */
 type AuthoredHookPoint = Readonly<{
 	readonly description?: string;
-	readonly handler: (context: unknown, api: unknown) => unknown;
+	/** One argument: the context carries the invocation api, so no second positional exists. */
+	readonly handler: (context: unknown) => unknown;
 }>;
 
 /** The per-record halves of one operation. Both run once per record, whatever the batch size. */
@@ -47,7 +49,7 @@ export type AuthoredCollectionHookModule = Readonly<{
 	readonly input?: Schema.Codec<unknown, unknown>;
 	readonly mutate?: Readonly<{
 		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
-		readonly prepare?: (context: unknown, api: unknown) => unknown;
+		readonly prepare?: (context: unknown) => unknown;
 		readonly perRecord?: AuthoredPerRecord;
 	}>;
 	readonly delete?: Readonly<{
@@ -58,12 +60,12 @@ export type AuthoredCollectionHookModule = Readonly<{
 type AuthoredPipelineModule = Readonly<{
 	readonly export?: Readonly<{
 		readonly description: string;
-		readonly handler: (context: unknown, api: unknown) => unknown;
+		readonly handler: (context: unknown) => unknown;
 	}>;
 	readonly import?: Readonly<{
 		readonly description: string;
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly handler: (context: unknown, api: unknown) => unknown;
+		readonly handler: (context: unknown) => unknown;
 	}>;
 }>;
 
@@ -152,9 +154,10 @@ const isPromiseLike = <A>(value: AuthoredHandlerResult<A>): value is PromiseLike
  * **It takes a thunk, not a result.** That is what makes the synchronous case reachable at all.
  * `refuse` throws, and the majority of authored handlers are plain functions — no `async`, no
  * `Effect.gen` — so the throw happens while the *argument* is being evaluated at the call site.
- * Passing `handler(context, api)` meant the throw escaped before this function was entered, past
- * every recovery written here, and out through whichever generator happened to be running. Passing
- * `() => handler(context, api)` moves the call inside `Effect.suspend`, where it can be caught.
+ * Calling `handler(context)` in the argument position meant the throw escaped before this function
+ * was entered, past every recovery written here, and out through whichever generator happened to be
+ * running. Passing `() => handler(context)` moves the call inside `Effect.suspend`, where it can be
+ * caught.
  *
  * Three arrival paths, because a refusal can be raised from any world the surface admits:
  *
@@ -229,17 +232,7 @@ export type AuthoringOps = AuthoringReadOps &
 			options: Readonly<{ readonly after?: string | number }> | undefined
 		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
 		readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
-		readonly readFileAsset: (file: FileRef) => Effect.Effect<
-			{
-				readonly id: string;
-				readonly name: string;
-				readonly mimeType: string | null;
-				readonly size: number;
-				readonly bytes: Uint8Array;
-			},
-			unknown,
-			never
-		>;
+		readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, unknown, never>;
 	}>;
 
 /** A preflight the runtime may place in front of an authored operation. */
@@ -272,22 +265,6 @@ export const guardAuthoringOps = (
 	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
 	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file)))
 });
-
-/**
- * What an authored `readFileAsset` answers with, and what an inference image is built from.
- *
- * `id` is the object store's key, which is the file's only identifier now — there is no second one.
- * It used to be a `document_asset` row id, and the gap between the two is exactly the bug this
- * shape closes: an id that named a row, a row that named a key, and an upload path that wrote the
- * key and never the row.
- */
-type AuthoredFileAsset = Readonly<{
-	readonly id: string;
-	readonly name: string;
-	readonly mimeType: string | null;
-	readonly size: number;
-	readonly bytes: Uint8Array;
-}>;
 
 /** One image an authored `api.infer` attached to its turn, taken straight from a `file()` column. */
 type AuthoredInferenceImage = Readonly<{
@@ -328,7 +305,7 @@ export type RuntimeAuthoringApi = Readonly<{
 		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
 	}>;
 	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
-	readonly readFileAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, unknown, never>;
+	readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, unknown, never>;
 }>;
 
 /** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
@@ -347,22 +324,7 @@ const MAX_INFERENCE_IMAGES = 8;
 const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /** Leaves grounded structured turns enough room to finish the required JSON instead of returning null. */
-export const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
-
-/**
- * Base64 over bytes, in chunks.
- *
- * `String.fromCharCode(...bytes)` is the one-liner and it is a stack overflow on anything the size
- * of a photograph — the spread becomes one argument per byte. Chunked, the argument count is
- * bounded whatever the file weighs.
- */
-const base64 = (bytes: Uint8Array): string => {
-	let binary = '';
-	for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-		binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-	}
-	return btoa(binary);
-};
+const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
 
 /**
  * The user turn `api.infer` sends, with the authored images attached to it.
@@ -377,10 +339,10 @@ const base64 = (bytes: Uint8Array): string => {
  * automation asking a model to judge a photograph it never received answered confidently about
  * nothing at all.
  */
-export const inferenceTurnContent = (
+const inferenceTurnContent = (
 	prompt: string,
 	images: ReadonlyArray<AuthoredInferenceImage> | undefined,
-	readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
+	readAsset: (file: FileRef) => Effect.Effect<FileAsset, Database.FacilityError>
 ): Effect.Effect<Schema.Json, Database.FacilityError> =>
 	Effect.gen(function* () {
 		if (images === undefined || images.length === 0) return prompt;
@@ -418,7 +380,7 @@ export const inferenceTurnContent = (
 			parts.push({
 				type: 'image_url',
 				image_url: {
-					url: `data:${asset.mimeType};base64,${base64(asset.bytes)}`,
+					url: `data:${asset.mimeType};base64,${encodeBase64(asset.bytes)}`,
 					detail: image.detail ?? 'auto'
 				}
 			});
@@ -461,7 +423,7 @@ export const inferOp =
 	(
 		effectId: EffectIdType,
 		ai: AIInterface,
-		readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
+		readAsset: (file: FileRef) => Effect.Effect<FileAsset, Database.FacilityError>
 	): AuthoringOps['infer'] =>
 	(input) =>
 		Effect.gen(function* () {
@@ -589,78 +551,19 @@ export const makeBoundAuthoringOps = (
 	automations: Automations.Interface,
 	runAutomation?: AuthoringOps['runAutomation']
 ): AuthoringOps => {
-	type QueryInput = Parameters<CollectionsInterface['findMany']>[2];
-	type NearestQueryInput = Parameters<CollectionsInterface['findNearest']>[2];
-	const query = (collection: string, input: Readonly<Record<string, unknown>>): QueryInput => ({
-		collection,
-		...input
-	});
-	/**
-	 * A nearest-neighbour read's input, with the two fields the compiler cannot leave open.
-	 *
-	 * `column` and `probe` are what makes this a vector query rather than an ordinary one, and the
-	 * runtime refuses either if it arrives wrong. They are read off the authored config here rather
-	 * than spread blindly so that a handler that omits one fails with the runtime's own refusal
-	 * naming the field, not with an `undefined` reaching the SQL builder.
-	 */
-	const nearestQuery = (
-		collection: string,
-		input: Readonly<Record<string, unknown>>
-	): NearestQueryInput => {
-		const { column, probe, metric, ...rest } = input;
-		return {
-			collection,
-			...rest,
-			column: typeof column === 'string' ? column : '',
-			probe: Array.isArray(probe) ? (probe as ReadonlyArray<number>) : [],
-			metric: metric === 'cosine' || metric === 'ip' ? metric : 'l2'
-		};
-	};
-	/**
-	 * The bytes and description behind a `file()` column's value.
-	 *
-	 * The value *is* the description — `{storage_key, file_name, file_size, mime_type}` — so this
-	 * asks the Files facility for the key it names and attaches the rest. There is nothing to look
-	 * up, which is the point: a `file()` column used to hold the `id` of a `document_asset`
-	 * row, that row was the only thing naming the object-store key, and the upload path never wrote
-	 * one. So every authored `readFileAsset` resolved against a row that did not exist, and
-	 * `mimeType` came back `null` because there was no row to read it from.
-	 */
-	const readAsset = (file: FileRef): Effect.Effect<AuthoredFileAsset, Database.FacilityError> =>
-		Effect.gen(function* () {
-			const storageKey = typeof file?.storage_key === 'string' ? file.storage_key : undefined;
-			if (storageKey === undefined) {
-				return yield* new Database.FacilityError({
-					operation: 'files.read',
-					code: 'files.asset_missing',
-					message: 'This file value names no stored object, so there is nothing to read.',
-					retryable: false,
-					outcome: 'known'
-				});
-			}
-			const response = yield* files.execute(effectId, { _tag: 'Read', key: storageKey });
-			const bytes = response.bytes ?? new Uint8Array();
-			return {
-				id: storageKey,
-				name: typeof file.file_name === 'string' ? file.file_name : storageKey,
-				mimeType: typeof file.mime_type === 'string' ? file.mime_type : null,
-				size: bytes.byteLength,
-				bytes
-			};
-		});
+	const readAsset = (file: FileRef) => readFileAsset(effectId, files, file);
 	return {
 		allowedCollections: collections.authoringCollectionNames,
 		findMany: (collection, input) =>
-			collections.findMany(effectId, subject, query(collection, input)),
+			collections.findMany(effectId, subject, queryInput(collection, input)),
 		findFirst: (collection, input) =>
-			collections.findFirst(effectId, subject, query(collection, input)),
-		count: (collection, input) => collections.count(effectId, subject, query(collection, input)),
+			collections.findFirst(effectId, subject, queryInput(collection, input)),
+		count: (collection, input) =>
+			collections.count(effectId, subject, queryInput(collection, input)),
 		findNearest: (collection, input) =>
-			collections.findNearest(effectId, subject, nearestQuery(collection, input)),
+			collections.findNearest(effectId, subject, nearestQueryInput(collection, input)),
 		mutate: (collection, values) =>
-			collections
-				.mutate(effectId, subject, collection, [values], false, 0, { declarative: true })
-				.pipe(Effect.asVoid),
+			collections.mutate(effectId, subject, collection, [values], false, 0).pipe(Effect.asVoid),
 		/**
 		 * Runs a declared automation under its own declared subject.
 		 *

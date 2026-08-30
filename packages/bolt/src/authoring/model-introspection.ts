@@ -3,7 +3,10 @@
 import { SQL, getColumns, is, sql } from 'drizzle-orm';
 import {
 	PgDialect,
+	customType,
 	pgTable,
+	text,
+	timestamp,
 	uuid,
 	type AnyPgColumn,
 	type AnyPgColumnBuilder,
@@ -281,10 +284,10 @@ export const describeModelColumns = (
 /**
  * The columns a collection opted into free-text search, sorted.
  *
- * One reader, because the trigram index and the `ilike` search have to cover exactly the same
- * columns: an index over a column search never reads is dead weight, and a column search reads
- * without one is the sequential scan #44 is about. The opt-in itself is decided once — `boltSearch`
- * is written only by `text()`, `phone()` and `enums()`, and `describeModelColumns` above is the only
+ * One reader, because the generated tsvector, trigram expression, and ranking have to cover exactly
+ * the same columns: an index over a field search never reads is dead weight, and a searched field
+ * absent from the document is a sequential scan or a false negative. The opt-in is decided once —
+ * `boltSearch` is written only by `text()`, `phone()` and `enums()`, and `describeModelColumns` is the only
  * thing that reads it — so every consumer here is agreeing with that decision rather than restating
  * it. `isSearchableCollectionField` in `@norbital-ai/std/collection` is the same rule stated over the
  * *client catalog* field, where a `kind` exists to weigh; `tests/authoring/searchable-fields.test.ts`
@@ -298,6 +301,19 @@ export const searchableColumns = (
 		.map(([name]) => name)
 		.toSorted();
 
+/** Platform column containing the immutable, generated lexical document. */
+export const SEARCH_DOCUMENT_COLUMN = 'search_document';
+
+/** The PostgreSQL text expression shared by generated DDL, trigram matching, and ranking. */
+export const searchTextExpression = (columns: ReadonlyArray<string>): string =>
+	columns
+		.map((column) => `coalesce("${column.replaceAll('"', '""')}", '')`)
+		.join(" || ' ' || ");
+
+/** The stored document expression. The explicit regconfig selects PostgreSQL's immutable overload. */
+export const searchDocumentExpression = (columns: ReadonlyArray<string>): string =>
+	`to_tsvector('simple'::regconfig, ${searchTextExpression(columns)})`;
+
 /** Describes a whole `defineModel` declaration, tolerating a module that failed to export one. */
 export const describeModel = (
 	declaration: ModelDeclaration | undefined
@@ -310,9 +326,15 @@ type ModelCollectionOptions = Readonly<{
 
 const assertNoSystemColumnOverrides = (declaration: ModelDeclaration | undefined): void => {
 	if (declaration === undefined) return;
-	const system = defineSystemRowModel().columns;
+	const reserved = new Set([
+		...Object.keys(defineSystemRowModel().columns),
+		SEARCH_DOCUMENT_COLUMN,
+		RECORD_EMBEDDING_COLUMN,
+		EMBEDDED_AT_COLUMN,
+		RECORD_EMBEDDING_FINGERPRINT_COLUMN
+	]);
 	const collisions = Object.keys(declaration.columns)
-		.filter((name) => name in system)
+		.filter((name) => reserved.has(name))
 		.toSorted();
 	if (collisions.length > 0)
 		throw new TypeError(`A model cannot redeclare platform columns: ${collisions.join(', ')}`);
@@ -368,6 +390,7 @@ export const compileModel = (
 	const structuredIndexes = indexes.filter((index) => simpleIndexColumn(index) === undefined);
 	const hooks = options.hooks ?? [];
 	const exclusions = metadata?.exclusions ?? [];
+	const lexicalFields = searchableColumns(described);
 	return {
 		...base,
 		...(Object.keys(described).length === 0 ? {} : { fields: described }),
@@ -378,7 +401,26 @@ export const compileModel = (
 		...(metadata?.history === undefined ? {} : { history: metadata.history }),
 		...(metadata?.description === undefined ? {} : { description: metadata.description }),
 		...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),
-		...(metadata?.embedding === undefined ? {} : { embedding: metadata.embedding }),
+		...(lexicalFields.length === 0
+			? {}
+			: {
+					search: {
+						fields: lexicalFields,
+						documentColumn: SEARCH_DOCUMENT_COLUMN,
+						configuration: 'simple',
+						ranking: { lexical: 'ts_rank_cd', fuzzy: 'similarity' }
+					}
+				}),
+		...(metadata?.embedding === undefined
+			? {}
+			: {
+					embedding: {
+						...metadata.embedding,
+						vectorColumn: RECORD_EMBEDDING_COLUMN,
+						embeddedAtColumn: EMBEDDED_AT_COLUMN,
+						sourceFingerprintColumn: RECORD_EMBEDDING_FINGERPRINT_COLUMN
+					}
+				}),
 		...(options.sourcePath === undefined ? {} : { sourcePath: options.sourcePath })
 	};
 };
@@ -435,6 +477,10 @@ type CompiledModelTable<
  * know what the author called it.
  */
 export const RECORD_EMBEDDING_COLUMN = 'record_embedding';
+/** Settle timestamp for observable embedding staleness (`embedded_at < updated_at`). */
+export const EMBEDDED_AT_COLUMN = 'embedded_at';
+/** Idempotency key for one embedding source payload. */
+export const RECORD_EMBEDDING_FINGERPRINT_COLUMN = 'record_embedding_fingerprint';
 
 /**
  * The width used when a model declares an embedding without asking for one.
@@ -446,8 +492,23 @@ export const RECORD_EMBEDDING_COLUMN = 'record_embedding';
  */
 export const DEFAULT_RECORD_EMBEDDING_DIMENSIONS = 256;
 
-/** The physical column a declared record embedding contributes, or nothing when none is declared. */
-const recordEmbeddingColumn = (
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+
+/** The physical generated lexical document, or nothing when no field opts into search. */
+const searchDocumentColumn = (
+	declaration: ModelDeclaration | undefined
+): Readonly<Record<string, AnyPgColumnBuilder>> => {
+	const columns = searchableColumns(describeModel(declaration));
+	if (columns.length === 0) return {};
+	return {
+		[SEARCH_DOCUMENT_COLUMN]: tsvector().generatedAlwaysAs(
+			sql.raw(searchDocumentExpression(columns))
+		)
+	};
+};
+
+/** The physical fields maintained by embedding settle, or nothing when none is declared. */
+const recordEmbeddingColumns = (
 	declaration: ModelDeclaration | undefined
 ): Readonly<Record<string, AnyPgColumnBuilder>> => {
 	const embedding = declaration?.metadata?.embedding;
@@ -455,7 +516,9 @@ const recordEmbeddingColumn = (
 	return {
 		[RECORD_EMBEDDING_COLUMN]: vector({
 			dimensions: embedding.dimensions ?? DEFAULT_RECORD_EMBEDDING_DIMENSIONS
-		})
+		}),
+		[EMBEDDED_AT_COLUMN]: timestamp({ withTimezone: true, mode: 'string' }),
+		[RECORD_EMBEDDING_FINGERPRINT_COLUMN]: text()
 	};
 };
 
@@ -488,7 +551,8 @@ export const compileModelTable = <
 	}
 	const columns = {
 		...defineSystemRowModel().columns,
-		...recordEmbeddingColumn(declaration),
+		...searchDocumentColumn(declaration),
+		...recordEmbeddingColumns(declaration),
 		...authoredColumns
 	} as SystemRowColumns &
 		AuthoredPhysicalColumns<TColumns> &
