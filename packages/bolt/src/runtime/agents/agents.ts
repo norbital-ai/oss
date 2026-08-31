@@ -52,7 +52,6 @@ import {
 	type TurnSurface
 } from './turn.js';
 export { TurnPart, type TurnSurface } from './turn.js';
-
 /** The web agent or declared envoy executing a turn. */
 type ResolvedAgent = Readonly<{
 	readonly name: string;
@@ -63,7 +62,6 @@ type ResolvedAgent = Readonly<{
 	/** Whether this agent may create and coordinate delegated sandbox-agent sessions. */
 	readonly delegation: 'enabled' | 'disabled';
 }>;
-
 /** Selects the subject-owned or envoy-owned sandbox tree for a turn. */
 const sandboxKeyFor = (
 	subject: Identity.Subject,

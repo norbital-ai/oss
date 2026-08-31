@@ -39,8 +39,9 @@ export const DEVELOPMENT_SIGN_IN_CODE = '123456';
 export const SIGN_IN_CODE_EXPIRES_SECONDS = 600;
 
 /**
- * What Bolt does with a code after Better Auth persists it. In the runtime this durably enqueues
- * provider delivery; a focused auth test may bind a direct courier. Never called in development.
+ * What Bolt does with a code after Better Auth persists it. In the runtime this calls the host's
+ * communication facility directly; the provider owns accepted-message delivery. Never called in
+ * development.
  *
  * The purposes are Better Auth's own, taken from its type rather than restated: a narrower union
  * here would compile until the day a plugin sends a purpose this bolt never listed, and then fail at
@@ -54,7 +55,7 @@ export type DeliverCode = (message: {
 	readonly email: string;
 	readonly code: string;
 	readonly purpose: CodePurpose;
-}) => Effect.Effect<void>;
+}) => Effect.Effect<void, unknown>;
 
 type AuthOptions = Readonly<{
 	readonly execute: ExecuteQuery;

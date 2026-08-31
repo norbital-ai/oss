@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import {
 	type CommunicationRequest,
 	type CommunicationResponse,
@@ -52,8 +52,8 @@ const sendCode = (runtime: BoltTestRuntime, effectId: string, email: string) =>
 		)
 	);
 
-describe('durable sign-in code delivery', () => {
-	it('persists challenges and courier tasks for known and unknown addresses before touching the provider', async () => {
+describe('direct sign-in code delivery', () => {
+	it('persists challenges and submits known and unknown addresses directly to the provider', async () => {
 		const communication = recordingCommunication();
 		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
 		await harness.database.query(
@@ -65,68 +65,49 @@ describe('durable sign-in code delivery', () => {
 		await sendCode(harness, 'challenge-known', 'known@example.test');
 		await sendCode(harness, 'challenge-unknown', 'unknown@example.test');
 
-		// The HTTP-side operation performs no provider I/O. Both address states take the same two
-		// durable writes, so its success cannot be used as an account-existence oracle.
-		expect(communication.calls).toEqual([]);
+		// Both address states persist the challenge and take the same provider path, so the response
+		// cannot be used as an account-existence oracle.
+		expect(communication.calls.map(({ request }) => request)).toEqual([
+			expect.objectContaining({ _tag: 'Send', recipient: 'known@example.test' }),
+			expect.objectContaining({ _tag: 'Send', recipient: 'unknown@example.test' })
+		]);
+		expect(communication.calls.map(({ metadata }) => metadata.idempotencyKey)).toEqual([
+			'challenge-known:code-delivery',
+			'challenge-unknown:code-delivery'
+		]);
 		const verification = await harness.database.query(
 			`select identifier, value from "verification" order by identifier`,
 			[]
 		);
 		expect(verification).toHaveLength(2);
 		const tasks = await harness.database.query(
-			`select command, effect_id, input, status from bolt_task order by effect_id`,
+			`select command, effect_id, status from bolt_task where command = 'identity.deliverCode'`,
 			[]
 		);
-		expect(tasks).toHaveLength(2);
-		expect(tasks.map((row) => row['command'])).toEqual([
-			Identity.DELIVER_CODE_COMMAND,
-			Identity.DELIVER_CODE_COMMAND
-		]);
-		// `running` is what an enqueued row is. `bolt_task` is an observation of work the runtime has
-		// already taken on rather than a durable queue with a claim in front of it, so there is no
-		// `pending` state left for a row to sit in before something picks it up.
-		expect(tasks.map((row) => row['status'])).toEqual(['running', 'running']);
-		expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(true);
-
-		const delivery = Schema.decodeUnknownSync(Identity.CodeDelivery)(tasks[1]?.['input']);
-		expect(
-			verification.some((row) => String(row['value']).startsWith(`${delivery.code}:`))
-		).toBe(true);
+		expect(tasks).toEqual([]);
+		expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
 	});
 
-	it('reuses one provider idempotency key across attempts and never sends an expired code', async () => {
+	it('surfaces a provider rejection and allows the caller to request a fresh code', async () => {
 		const communication = recordingCommunication();
 		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
-		await sendCode(harness, 'challenge-retry', 'retry@example.test');
-		const current = harness;
-		const [task] = await harness.database.query(
-			`select input from bolt_task where command = $1`,
-			[Identity.DELIVER_CODE_COMMAND]
-		);
-		const delivery = Schema.decodeUnknownSync(Identity.CodeDelivery)(task?.['input']);
-
-		const deliver = (attempt: string, input: Identity.CodeDelivery) =>
-			current.runtime.runPromise(
-				Effect.flatMap(Identity.Service, (identity) =>
-					identity.deliverCode(current.effectId(attempt), input)
-				)
-			);
 		communication.failOnce();
-		// The failure is not swallowed: dispatch hands its retryable bit to the durable task runner.
-		await expect(deliver('attempt-1', delivery)).rejects.toBeDefined();
-		expect(await deliver('attempt-2', delivery)).toBe(true);
+		await expect(sendCode(harness, 'challenge-rejected', 'retry@example.test')).rejects.toBeDefined();
+		await sendCode(harness, 'challenge-retry', 'retry@example.test');
 		expect(communication.calls.map(({ metadata }) => String(metadata.idempotencyKey))).toEqual([
-			delivery.deliveryId,
-			delivery.deliveryId
+			'challenge-rejected:code-delivery',
+			'challenge-retry:code-delivery'
 		]);
 		expect(communication.calls.map(({ request }) => request)).toEqual([
-			expect.objectContaining({ _tag: 'Send', recipient: delivery.email }),
-			expect.objectContaining({ _tag: 'Send', recipient: delivery.email })
+			expect.objectContaining({ _tag: 'Send', recipient: 'retry@example.test' }),
+			expect.objectContaining({ _tag: 'Send', recipient: 'retry@example.test' })
 		]);
-
-		const expired = { ...delivery, expiresAtEpochMs: 0 };
-		expect(await deliver('attempt-expired', expired)).toBe(false);
-		expect(communication.calls).toHaveLength(2);
+		expect(
+			await harness.database.query(
+				`select effect_id from bolt_task where command = 'identity.deliverCode'`,
+				[]
+			)
+		).toEqual([]);
 	});
 
 	it('refuses the request and leaves no courier when challenge persistence fails', async () => {
@@ -135,7 +116,6 @@ describe('durable sign-in code delivery', () => {
 		await harness.database.query('drop table "verification"', []);
 
 		await expect(sendCode(harness, 'challenge-unpersisted', 'lost@example.test')).rejects.toBeDefined();
-		expect(await harness.database.query('select effect_id from bolt_task', [])).toEqual([]);
 		expect(communication.calls).toEqual([]);
 	});
 });

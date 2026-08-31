@@ -519,9 +519,7 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'envoys.drain',
 	'envoys.complete',
 	'collections.resume',
-	'collections.discard',
-	// Private courier task for the exact persisted sign-in challenge.
-	Identity.DELIVER_CODE_COMMAND
+	'collections.discard'
 ]);
 
 /** Resolves both built-in task commands and authored automation names. */
@@ -1270,12 +1268,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			// Always the same answer. A response that differed for a known address would turn this
 			// into an account-enumeration oracle for anyone who can reach the endpoint.
 			return json({ sent: true });
-		}
-		case Identity.DELIVER_CODE_COMMAND: {
-			const delivery = yield* decode(Identity.CodeDelivery, commandInput);
-			return json({
-				delivered: yield* (yield* Identity.Service).deliverCode(effectId, delivery)
-			});
 		}
 		case 'identity.verifyCode': {
 			const input = yield* decode(IdentityVerifyCodeInput, commandInput);

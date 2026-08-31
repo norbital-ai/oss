@@ -8,7 +8,6 @@ import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { makeAuth, SIGN_IN_CODE_EXPIRES_SECONDS } from '#lib/runtime/identity/auth.js';
 import { identitiesOf, identityMatches } from '#lib/runtime/envoys/transport-identity.js';
 import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/persistence.js';
-import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 
 export { Subject } from './subject.js';
 export { CurrentSubject, currentSubject } from './subject.js';
@@ -22,7 +21,6 @@ const externalSubjectsTable = SYSTEM_MODEL_TABLES.bolt_external_subjects;
 const invitationsTable = SYSTEM_MODEL_TABLES.bolt_invitations;
 const workspaceIdentitySettingsTable = SYSTEM_MODEL_TABLES.bolt_workspace_identity_settings;
 const verificationTable = SYSTEM_MODEL_TABLES.verification;
-const boltTaskTable = SYSTEM_MODEL_TABLES.bolt_task;
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const NullableString = Schema.NullOr(Schema.String);
@@ -107,19 +105,6 @@ const AuditSourceRow = Schema.Struct({
 });
 const AssignedMemberRow = Schema.Struct({ id: Schema.NonEmptyString, email: NullableString });
 const WorkspaceSettingsRow = Schema.Struct({ settings: Schema.Json });
-
-/** The runtime-private message stored in `bolt_task` between challenge creation and mail delivery. */
-export const CodeDelivery = Schema.Struct({
-	deliveryId: Schema.NonEmptyString,
-	email: Schema.NonEmptyString,
-	code: Schema.NonEmptyString,
-	purpose: Schema.Literals(['email-verification', 'sign-in', 'forget-password', 'change-email']),
-	expiresAtEpochMs: Schema.Number
-});
-export type CodeDelivery = Schema.Schema.Type<typeof CodeDelivery>;
-
-/** The only queued identity command. Kept with its input contract so enqueue and dispatch agree. */
-export const DELIVER_CODE_COMMAND = 'identity.deliverCode';
 
 /** Workspace invitations last long enough to be acted on, while still bounding forwarded links. */
 export const INVITATION_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
@@ -313,16 +298,11 @@ export type Interface = Readonly<{
 		invitationId: string,
 		subject: Subject
 	) => Effect.Effect<InvitationAcceptance, Database.FacilityError>;
-	/** Persists a sign-in code and queues its delivery. Bolt issues it; the host only carries it. */
+	/** Persists a sign-in code and submits it to the host's communication provider. */
 	readonly sendCode: (
 		effectId: EffectId,
 		email: string
 	) => Effect.Effect<void, Database.FacilityError>;
-	/** Delivers one already-persisted code. Called only by the durable task runner. */
-	readonly deliverCode: (
-		attemptEffectId: EffectId,
-		delivery: CodeDelivery
-	) => Effect.Effect<boolean, Database.FacilityError>;
 	/** Exchanges a code for a session credential, or refuses it. */
 	readonly verifyCode: (
 		effectId: EffectId,
@@ -479,7 +459,6 @@ export const layerWith = (
 			const database = yield* Database.Service;
 			const communication = yield* Communication.Service;
 			const identityHooks = yield* IdentityHooks.Service;
-			const taskQueue = yield* TaskQueue.Service;
 			const teamProjection = {
 				id: teamsTable.id,
 				name: teamsTable.name,
@@ -632,39 +611,25 @@ export const layerWith = (
 							}),
 						deliver: (message) =>
 							Effect.gen(function* () {
-								const nowEpochMs = yield* Clock.currentTimeMillis;
-								const deliveryId = `${DELIVER_CODE_COMMAND}:${effectId}`;
-								const runAtEpochMs = nowEpochMs;
 								/**
-								 * Better Auth writes the verification row before it invokes this callback. The courier
-								 * row is written here — enqueueing is a row in the tenant's own database — and the host
-								 * timer is armed before it commits, so returning from the challenge means both the
-								 * redeemable code and its delivery are durable. Provider I/O happens only when the
-								 * tenant scheduler takes this row.
+								 * Better Auth writes the verification row before it invokes this callback. OTP delivery
+								 * is interactive work: submit it immediately and answer only after the provider accepts
+								 * it. The effect id is the provider idempotency key, so an uncertain transport outcome
+								 * can be retried without sending the same code twice. Once accepted, Resend owns delivery.
 								 */
-								yield* taskQueue
-									.wake(EffectId.make(`${effectId}:code-wake`), runAtEpochMs)
-									.pipe(Effect.orDie);
-								yield* executeBuilt(
-									EffectId.make(`${effectId}:code-enqueue`),
-									database,
-									composer
-										.insert(boltTaskTable)
-										.values({
-											command: DELIVER_CODE_COMMAND,
-											input: JSON.stringify({
-												deliveryId,
-												email: message.email,
-												code: message.code,
-												purpose: message.purpose,
-												expiresAtEpochMs: nowEpochMs + SIGN_IN_CODE_EXPIRES_SECONDS * 1_000
-											}),
-											effect_id: deliveryId,
-											run_at: new Date(runAtEpochMs).toISOString(),
-											status: 'running'
-										})
-										.onConflictDoNothing({ target: boltTaskTable.effect_id })
-								).pipe(Effect.orDie);
+								yield* communication.execute(EffectId.make(`${effectId}:code-delivery`), {
+									_tag: 'Send',
+									channel: 'email',
+									recipient: message.email,
+									payload: {
+										kind: 'sign_in_code',
+										code: message.code,
+										purpose: message.purpose,
+										expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
+										subject: 'Your sign-in code',
+										body: `Your sign-in code is ${message.code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
+									}
+								});
 							})
 					},
 					random,
@@ -1011,14 +976,7 @@ export const layerWith = (
 						return { state: 'accepted' as const };
 					}
 				),
-				/**
-				 * Persists a sign-in code and its courier task for an address.
-				 *
-				 * Bolt generates it, decides its lifetime and its attempt limit, then stores delivery in its
-				 * tenant-owned task queue. The host learns the code only when that task calls the communication
-				 * facility, and cannot mint one — which is the difference from the arrangement this replaces,
-				 * where the host generated the code and bolt was never involved.
-				 */
+				/** Persists a sign-in code, then submits it directly to the host communication facility. */
 				sendCode: Effect.fn('Identity.sendCode')(function* (effectId, email) {
 					const auth = yield* authFor(effectId).pipe(
 						Effect.mapError((cause) =>
@@ -1034,13 +992,14 @@ export const layerWith = (
 						)
 					);
 					/**
-					 * Better Auth uses the same storage path for every address: with sign-up enabled, an
-					 * unknown address receives a challenge too. Propagating a storage/enqueue failure therefore
-					 * reveals no address-existence fact. Swallowing it would be worse: the HTTP boundary could
-					 * accept a challenge whose verification row or courier task was never persisted.
+					 * Better Auth's public send endpoint deliberately treats its courier callback as background
+					 * work and logs rather than propagates a rejection. That is useful for non-interactive mail
+					 * and wrong for sign-in: the UI must not say "sent" when the provider refused the request.
+					 * Create the persisted challenge through Better Auth, then await the communication facility
+					 * ourselves. Unknown addresses take the same two steps, preserving non-enumeration.
 					 */
-					yield* Effect.tryPromise({
-						try: () => auth.api.sendVerificationOTP({ body: { email, type: 'sign-in' } }),
+					const code = yield* Effect.tryPromise({
+						try: () => auth.api.createVerificationOTP({ body: { email, type: 'sign-in' } }),
 						catch: (cause) =>
 							cause instanceof Database.FacilityError
 								? cause
@@ -1052,33 +1011,19 @@ export const layerWith = (
 										outcome: 'unknown'
 									})
 					});
-				}),
-				deliverCode: Effect.fn('Identity.deliverCode')(function* (_attemptEffectId, delivery) {
-					if ((yield* Clock.currentTimeMillis) >= delivery.expiresAtEpochMs) {
-						yield* Effect.logWarning(
-							`identity: discarded expired sign-in code delivery ${delivery.deliveryId}`
-						);
-						return false;
-					}
-					/**
-					 * Attempts deliberately reuse the delivery id. The communication facility carries it to
-					 * the provider as its idempotency key, so an unknown first outcome can be retried without
-					 * manufacturing a second message.
-					 */
-					yield* communication.execute(EffectId.make(delivery.deliveryId), {
+					yield* communication.execute(EffectId.make(`${effectId}:code-delivery`), {
 						_tag: 'Send',
 						channel: 'email',
-						recipient: delivery.email,
+						recipient: email,
 						payload: {
 							kind: 'sign_in_code',
-							code: delivery.code,
-							purpose: delivery.purpose,
+							code,
+							purpose: 'sign-in',
 							expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
 							subject: 'Your sign-in code',
-							body: `Your sign-in code is ${delivery.code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
+							body: `Your sign-in code is ${code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
 						}
 					});
-					return true;
 				}),
 				/**
 				 * Redeems a code and returns a credential that can actually be used.

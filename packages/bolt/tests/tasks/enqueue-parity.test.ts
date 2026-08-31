@@ -141,7 +141,6 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			'approvals/approvals.ts',
 			'collections/collections.ts',
 			'envoys/envoys.ts',
-			'identity/identity.ts',
 			'integrations/integrations.ts',
 			'tasks/queue.ts'
 		]);
