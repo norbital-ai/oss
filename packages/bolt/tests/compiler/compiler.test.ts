@@ -87,7 +87,11 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.map(({ id }) => id).some((id) => id.startsWith('bolt:drop-'))).toBe(false);
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':zz-'))).toBe(false);
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':column:'))).toBe(false);
-		expect(first.steps.map(({ id }) => id).some((id) => id === 'collection:agent_run')).toBe(false);
+		expect(first.steps.map(({ id }) => id)).toContain('collection:agent_run');
+		for (const collection of ['chat_message_part', 'agent_lane', 'agent_inbox']) {
+			expect(first.steps.map(({ id }) => id)).toContain(`collection:${collection}`);
+		}
+		expect(first.steps.map(({ id }) => id)).not.toContain('collection:agent_mailbox');
 		expect(first.steps.map(({ id }) => id)).not.toContain('bolt:hard-cut-agent-task-state');
 		expect(first.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
 	});

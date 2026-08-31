@@ -887,10 +887,10 @@ describe('a write queues the drain that will deliver it', () => {
 			"select command, input, status from bolt_task where command = 'integrations.flush'",
 			[]
 		);
-		// `running`, because `bolt_task` records work the runtime has taken on rather than work
-		// waiting to be claimed: the queue's `pending` state went with the claim that read it.
+		// The row commits as pending. Only the scheduler's atomic claim may make it running and attach
+		// a finite lease; persisting it as already running is what previously made this work invisible.
 		expect(rows).toEqual([
-			{ command: 'integrations.flush', input: { name: 'orders.partner' }, status: 'running' }
+			{ command: 'integrations.flush', input: { name: 'orders.partner' }, status: 'pending' }
 		]);
 		// And it commits with the record, not after it: the two cannot disagree on whether the
 		// delivery exists.

@@ -101,6 +101,14 @@ export const dbNowPlusSeconds = (seconds: number): SQL<string> =>
 export const dbNowMinusDays = (days: number): SQL<string> =>
 	expression([fixed('now() - make_interval(days => '), sql.param(days), fixed(')')]);
 
+/** Chooses the earliest non-null result of two scalar queries. PostgreSQL ignores nulls in LEAST. */
+export const least = <T>(left: SQLWrapper<T>, right: SQLWrapper<T>): SQL<T> =>
+	expression([fixed('least('), left, fixed(', '), right, fixed(')')]);
+
+/** A one-row source for selecting over scalar subqueries without owning a real table. */
+export const singleton = (): SQL =>
+	expression([fixed('(values (1)) as '), sql.identifier('singleton')]);
+
 /** A typed `true` predicate for a builder branch that intentionally matches every row. */
 export const always = (): SQL<boolean> => expression([fixed('true')]);
 

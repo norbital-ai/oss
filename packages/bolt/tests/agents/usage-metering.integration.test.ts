@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
 	PROTOCOL_VERSION,
 	type AIRequest,
@@ -17,6 +17,18 @@ import { Effect, Schema } from 'effect';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
+import * as Agents from '../../src/runtime/agents/agents.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	type BoltTestRuntime
+} from '../support/bolt-test-layer.js';
+import {
+	assistantText,
+	assistantToolCall,
+	lastToolResult,
+	modelMessages
+} from './canonical-ai-fixture.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant-1'),
@@ -94,6 +106,31 @@ const groundedInferringBundle = makeBundle(definition, manifest, {
 		})
 });
 const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
+
+let agentHarness: BoltTestRuntime | undefined;
+afterEach(async () => {
+	await agentHarness?.dispose();
+	agentHarness = undefined;
+});
+
+const runCanonicalAgent = async (
+	ai: FacilityBinding<AIRequest, AIResponse>,
+	conversationId: string,
+	message: string
+) => {
+	agentHarness = await makeBoltTestRuntime(definition, { ai });
+	const agents = await agentHarness.runtime.runPromise(Agents.Service);
+	return agentHarness.runtime.runPromise(
+		agents.enqueue(
+			agentHarness.effectId(`enqueue:${conversationId}`),
+			adminSubject,
+			'web',
+			conversationId,
+			`input:${conversationId}`,
+			Agents.userAgentInput(message)
+		)
+	);
+};
 
 type Statement = { readonly sql: string; readonly parameters: ReadonlyArray<unknown> };
 
@@ -235,29 +272,6 @@ const makeDatabase = (
 					}
 				});
 			}
-			if (selectsFrom(request.sql, 'chat_message') && request.sql.includes('turn_id')) {
-				const conversationId = String(request.parameters[0] ?? '');
-				const turnId = String(request.parameters[1] ?? '');
-				return Promise.resolve({
-					_tag: 'Success',
-					value: {
-						rows: [
-							{
-								id: `${turnId}:message`,
-								content: {
-									id: turnId,
-									status: 'running',
-									parts: [],
-									subject,
-									agent_name: 'web',
-									usage_unreported: false
-								}
-							}
-						],
-						affectedRows: 0
-					}
-				});
-			}
 			if (
 				selectsFrom(request.sql, 'chat_session') &&
 				request.sql.includes('"conversation_id"') &&
@@ -326,7 +340,7 @@ describe('agent turn usage', () => {
 				const value: AIResponse =
 					round === 1
 						? {
-								output: { toolCalls: [{ name: 'describe_workspace', input: {} }] },
+								output: assistantToolCall('describe_workspace', {}, 'usage-describe'),
 								usage: {
 									inputTokens: 1_000,
 									outputTokens: 200,
@@ -337,7 +351,7 @@ describe('agent turn usage', () => {
 								}
 							}
 						: {
-								output: { text: 'Two collections.' },
+								output: assistantText('Two collections.', 'usage-answer'),
 								usage: {
 									inputTokens: 1_400,
 									outputTokens: 100,
@@ -350,50 +364,50 @@ describe('agent turn usage', () => {
 				return Promise.resolve<FacilityResult<AIResponse>>({ _tag: 'Success', value });
 			}
 		};
-		const statements: Array<Statement> = [];
-		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
-		const result = await bundle.dispatch(
-			turnInvocation('conversation-usage', 'What collections exist?'),
-			facilities,
-			new AbortController().signal
+		const result = await runCanonicalAgent(
+			ai,
+			'conversation-usage',
+			'What collections exist?'
 		);
-		expect(result).toMatchObject({ _tag: 'Success' });
+		expect(result.status).toBe('completed');
 		expect(round).toBe(2);
 
-		// One turn, one figure. A per-round breakdown would report two charges for something the reader
-		// asked once, and the panel would have to guess which of them was the turn's.
-		const settled = turnRewrites(statements).at(-1);
-		expect(settled).toMatchObject({ status: 'completed' });
-		expect(settled?.usage).toEqual({
-			inputTokens: 2_400,
-			outputTokens: 300,
-			totalTokens: 2_700,
-			costUsd: 0.007,
-			// The host's charge folds the same way the provider's does, and one currency survives the sum.
-			costMicroUnits: 18_200,
-			costCurrency: 'SGD'
-		});
-
-		const rollup = usageWrite(statements);
-		expect(rollup).toBeDefined();
-		// Provider charge, host charge, its currency, tokens, and nothing unreported — this turn is priced.
-		expect(parameterAssignedTo(rollup!, 'usage_cost_usd')).toBe(0.007);
-		expect(parameterAssignedTo(rollup!, 'usage_cost_micro_units')).toBe(18_200);
-		expect(parameterAssignedTo(rollup!, 'usage_cost_currency')).toBe('SGD');
-		expect(parameterAssignedTo(rollup!, 'usage_total_tokens')).toBe(2_700);
-		expect(parameterAssignedTo(rollup!, 'usage_turns_counted')).toBe(1);
-		expect(parameterAssignedTo(rollup!, 'usage_turns_unreported')).toBe(0);
-		expect(rollup?.parameters).toContain('conversation-usage');
-		// The lineage read supplies the parent link; the update itself remains one ordinary table write
-		// in the transaction, without coupling this test to Drizzle's formatting or placeholder order.
 		expect(
-			statements.some(
-				(entry) =>
-					selectsFrom(entry.sql, 'chat_session') &&
-					entry.sql.includes('"parent_id"') &&
-					entry.parameters.includes('conversation-usage')
+			await agentHarness!.database.query(
+				`select status, usage, usage_unreported from agent_run where conversation_id = $1`,
+				['conversation-usage']
 			)
-		).toBe(true);
+		).toEqual([
+			{
+				status: 'completed',
+				usage: {
+					inputTokens: 2_400,
+					outputTokens: 300,
+					totalTokens: 2_700,
+					costUsd: 0.007,
+					costMicroUnits: 18_200,
+					costCurrency: 'SGD'
+				},
+				usage_unreported: false
+			}
+		]);
+		expect(
+			await agentHarness!.database.query(
+				`select usage_cost_usd, usage_cost_micro_units, usage_cost_currency,
+				 usage_total_tokens, usage_turns_counted, usage_turns_unreported
+				 from chat_session where conversation_id = $1`,
+				['conversation-usage']
+			)
+		).toEqual([
+			{
+				usage_cost_usd: 0.007,
+				usage_cost_micro_units: 18_200,
+				usage_cost_currency: 'SGD',
+				usage_total_tokens: 2_700,
+				usage_turns_counted: 1,
+				usage_turns_unreported: 0
+			}
+		]);
 	});
 
 	it('counts a turn its host priced at nothing as unreported, not as free', async () => {
@@ -402,51 +416,99 @@ describe('agent turn usage', () => {
 				request._tag === 'Models'
 					? modelCatalogResponse()
 					: Promise.resolve<FacilityResult<AIResponse>>({
-					_tag: 'Success',
-					value: { output: { text: 'Hello.' } }
-					})
+							_tag: 'Success',
+							value: { output: assistantText('Hello.', 'unpriced-answer') }
+						})
 		};
-		const statements: Array<Statement> = [];
-		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
-		await bundle.dispatch(
-			turnInvocation('conversation-unpriced', 'Hi'),
-			facilities,
-			new AbortController().signal
-		);
-		expect(turnRewrites(statements).at(-1)?.usage).toBeUndefined();
-		// The last parameter is the unreported count. Reporting zero here would let a conversation
-		// nobody could price read as a cheap one, and the null currency leaves whatever the running
-		// total is already denominated in untouched.
-		const rollup = usageWrite(statements);
-		expect(rollup).toBeDefined();
-		expect(parameterAssignedTo(rollup!, 'usage_cost_usd')).toBe(0);
-		expect(parameterAssignedTo(rollup!, 'usage_cost_micro_units')).toBe(0);
-		expect(parameterAssignedTo(rollup!, 'usage_cost_currency')).toBeUndefined();
-		expect(parameterAssignedTo(rollup!, 'usage_total_tokens')).toBe(0);
-		expect(parameterAssignedTo(rollup!, 'usage_turns_counted')).toBe(1);
-		expect(parameterAssignedTo(rollup!, 'usage_turns_unreported')).toBe(1);
-		expect(rollup?.parameters).toContain('conversation-unpriced');
+		await runCanonicalAgent(ai, 'conversation-unpriced', 'Hi');
+		expect(
+			await agentHarness!.database.query(
+				`select usage, usage_unreported from agent_run where conversation_id = $1`,
+				['conversation-unpriced']
+			)
+		).toEqual([{ usage: null, usage_unreported: true }]);
+		expect(
+			await agentHarness!.database.query(
+				`select usage_cost_usd, usage_cost_micro_units, usage_cost_currency,
+				 usage_total_tokens, usage_turns_counted, usage_turns_unreported
+				 from chat_session where conversation_id = $1`,
+				['conversation-unpriced']
+			)
+		).toEqual([
+			{
+				usage_cost_usd: 0,
+				usage_cost_micro_units: 0,
+				usage_cost_currency: null,
+				usage_total_tokens: 0,
+				usage_turns_counted: 1,
+				usage_turns_unreported: 1
+			}
+		]);
 	});
 
 	it('preserves a child agent parent link so its spend can be traced through the hierarchy', async () => {
+		let parentRound = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: (_metadata, request) =>
-				request._tag === 'Models'
-					? modelCatalogResponse()
-					: Promise.resolve<FacilityResult<AIResponse>>({
-					_tag: 'Success',
-					value: { output: { text: 'Done.' }, usage: { totalTokens: 40, costUsd: 0.0001 } }
-					})
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
+				if (request._tag !== 'Turn') throw new Error('expected a turn');
+				const messages = modelMessages(request);
+				const child = messages.some(
+					(message) =>
+						message.role === 'user' && String(message.content).includes('Summarise the headcount')
+				);
+				let output;
+				if (child) output = assistantText('Child done.', 'child-usage-answer');
+				else if (parentRound === 0) {
+					parentRound += 1;
+					output = assistantToolCall(
+						'spawn_agent',
+						{ task: 'Summarise the headcount' },
+						'spawn-usage'
+					);
+				} else if (parentRound === 1) {
+					parentRound += 1;
+					const spawned = lastToolResult(request);
+					output = assistantToolCall(
+						'await_agent',
+						{ agentId: String(spawned?.agentId), taskId: String(spawned?.taskId) },
+						'await-usage'
+					);
+				} else output = assistantText('Parent done.', 'parent-usage-answer');
+				return Promise.resolve({
+					_tag: 'Success' as const,
+					value: { output, usage: { totalTokens: 40, costUsd: 0.0001 } }
+				});
+			}
 		};
-		const statements: Array<Statement> = [];
-		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
-		await bundle.dispatch(
-			turnInvocation('agent:agent-usage:tool:0:0', 'Summarise the headcount'),
-			facilities,
-			new AbortController().signal
-		);
-		// Execution rewrites the already-admitted child turn instead of appending replacement rows.
-		expect(turnRewrites(statements)).not.toHaveLength(0);
+		await runCanonicalAgent(ai, 'conversation-parent-usage', 'Delegate the work.');
+		expect(
+			await agentHarness!.database.query(
+				`select parent_id, usage_cost_usd, usage_total_tokens, usage_turns_counted
+				 from chat_session where parent_id = $1`,
+				['conversation-parent-usage']
+			)
+		).toEqual([
+			{
+				parent_id: 'conversation-parent-usage',
+				usage_cost_usd: 0.0001,
+				usage_total_tokens: 40,
+				usage_turns_counted: 1
+			}
+		]);
+		expect(
+			await agentHarness!.database.query(
+				`select usage_cost_usd, usage_total_tokens, usage_turns_counted
+				 from chat_session where conversation_id = $1`,
+				['conversation-parent-usage']
+			)
+		).toEqual([
+			{
+				usage_cost_usd: 0.0004,
+				usage_total_tokens: 160,
+				usage_turns_counted: 2
+			}
+		]);
 	});
 
 	it('meters a second api.infer in one invocation instead of replaying the first', async () => {
@@ -626,18 +688,12 @@ describe('agent turn usage', () => {
 				effectIds.push(String(metadata.effectId));
 				const value: AIResponse =
 					effectIds.length === 1
-						? { output: { toolCalls: [{ name: 'describe_workspace', input: {} }] } }
-						: { output: { text: 'Done.' } };
+						? { output: assistantToolCall('describe_workspace', {}, 'meter-id-call') }
+						: { output: assistantText('Done.', 'meter-id-answer') };
 				return Promise.resolve<FacilityResult<AIResponse>>({ _tag: 'Success', value });
 			}
 		};
-		const statements: Array<Statement> = [];
-		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
-		await bundle.dispatch(
-			turnInvocation('conversation-ids', 'What collections exist?'),
-			facilities,
-			new AbortController().signal
-		);
+		await runCanonicalAgent(ai, 'conversation-ids', 'What collections exist?');
 		expect(effectIds.length).toBe(2);
 		expect(new Set(effectIds).size).toBe(effectIds.length);
 		// And the idempotency key the host retries under is that same distinct id.

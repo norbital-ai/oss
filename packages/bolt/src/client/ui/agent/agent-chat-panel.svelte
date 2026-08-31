@@ -69,10 +69,14 @@
 	import { createDebouncedRecordSearch } from '#lib/client/ui/agent/debounced-record-search.js';
 	import { formatFinderEntityForPrompt } from '#lib/client/ui/finder/finder-entity.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { resolveAgentIntent } from '#lib/client/ui/agent/intent.js';
+	import {
+		isAgentModeShortcut,
+		parseAgentSlashCommand,
+		resolveAgentIntent
+	} from '#lib/client/ui/agent/intent.js';
 	import { workspaceSession } from '#lib/client/session.js';
 	import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
-	import { chatDocumentStorageKey } from '#lib/runtime/agents/chat-messages.js';
+	import { chatDocumentStorageKey } from '#lib/runtime/agents/agent-runtime.js';
 	import {
 		retryableAdmission,
 		withoutAdmittedDocuments,
@@ -469,8 +473,7 @@
 			? runtime.client.db.chat_message.findMany({
 					where: {
 						conversation_id: { eq: unsettledAdmission.conversationId },
-						turn_id: { eq: unsettledAdmission.turnId },
-						role: { eq: 'assistant' }
+						message_id: { eq: `input:${unsettledAdmission.turnId}` }
 					},
 					limit: 1
 				})
@@ -481,7 +484,9 @@
 		if (
 			admission === null ||
 			!sessions.some(({ conversation_id }) => conversation_id === admission.conversationId) ||
-			!unsettledTurnQuery?.current?.some(({ turn_id }) => turn_id === admission.turnId)
+			!unsettledTurnQuery?.current?.some(
+				({ message_id }) => message_id === `input:${admission.turnId}`
+			)
 		) {
 			return null;
 		}
@@ -542,18 +547,55 @@
 			limit: 5_000
 		});
 	});
-	const activeConversation = $derived(projectStoredChatMessages(messageQuery?.current ?? []));
+	const messageIdsKey = $derived(
+		(messageQuery?.current ?? []).map(({ message_id }) => message_id).join('\u0000')
+	);
+	const messagePartQuery = $derived.by(() => {
+		if (messageIdsKey.length === 0) return undefined;
+		return runtime.client.db.chat_message_part.findMany({
+			where: { message_id: { in: messageIdsKey.split('\u0000') } },
+			orderBy: { ordinal: 'asc' },
+			limit: 20_000
+		});
+	});
+	const runQuery = $derived.by(() => {
+		if (activeConversationKey.length === 0) return undefined;
+		return runtime.client.db.agent_run.findMany({
+			where: { conversation_id: { in: activeConversationKey.split('\u0000') } },
+			orderBy: { created_at: 'asc' },
+			limit: 5_000
+		});
+	});
+	const activeConversation = $derived(
+		projectStoredChatMessages(
+			messageQuery?.current ?? [],
+			messagePartQuery?.current ?? [],
+			runQuery?.current ?? []
+		)
+	);
 	const activeMessages = $derived(activeConversation.messages);
 	const activeTurns = $derived(activeConversation.turns);
-	const mailboxQuery = $derived(
+	const laneQuery = $derived(
 		activeChatId
-			? runtime.client.db.agent_mailbox.findMany({
+			? runtime.client.db.agent_lane.findMany({
 					where: { conversation_id: { eq: activeChatId } },
 					limit: 1
 				})
 			: undefined
 	);
-	const mailboxStopped = $derived(mailboxQuery?.current?.[0]?.status === 'stopped');
+	const laneStopped = $derived(laneQuery?.current?.[0]?.state === 'stopped');
+	const pendingInboxQuery = $derived(
+		activeChatId
+			? runtime.client.db.agent_inbox.findMany({
+					where: {
+						conversation_id: { eq: activeChatId },
+						state: { eq: 'pending' }
+					},
+					orderBy: { receipt_sequence: 'asc' },
+					limit: 100
+				})
+			: undefined
+	);
 	const activeSessionIsEnvoy = $derived(activeSession?.visibility.startsWith('envoy_') ?? false);
 	const activeSessionIsOtherUsersPersonal = $derived(
 		isAdmin &&
@@ -574,9 +616,7 @@
 			.toReversed()
 			.find((turn) => turn.conversation_id === activeChatId && turn.status === 'running')
 	);
-	const queuedTurns = $derived(
-		activeTurns.filter((turn) => turn.conversation_id === activeChatId && turn.status === 'queued')
-	);
+	const queuedTurns = $derived(pendingInboxQuery?.current ?? []);
 	const agentWorking = $derived(runningTurn !== undefined);
 	/** Admission itself locks the composer; a running turn accepts durable follow-ups into its lane. */
 	const composerLocked = $derived(session.pending);
@@ -605,19 +645,29 @@
 			turns: activeTurns
 		})
 	);
+	const parsedDraft = $derived(parseAgentSlashCommand(draft));
 	const canSend = $derived(
-		(draft.trim().length > 0 || documents.length > 0) &&
+		(parsedDraft.command === null
+			? draft.trim().length > 0 || documents.length > 0
+			: parsedDraft.complete) &&
 			!composerLocked &&
-			!mailboxStopped &&
+			!laneStopped &&
 			!uploadingDocument &&
 			!activeSessionIsReadOnly
 	);
 	const previewIntent = $derived(
 		resolveAgentIntent({
-			message: draft,
-			planMode,
+			message: parsedDraft.message,
+			intent:
+				parsedDraft.command === 'plan'
+					? 'plan'
+					: parsedDraft.command === 'compact'
+						? 'compact'
+						: 'do',
+			planMode: parsedDraft.command === null ? planMode : false,
 			verifierPrompt: verifierOverride,
-			mentionCount: mention.mentions.length
+			mentionCount: mention.mentions.length,
+			goal: parsedDraft.command === 'goal'
 		})
 	);
 	const verifierPrompt = $derived(previewIntent.verifierPrompt);
@@ -757,7 +807,7 @@
 			});
 	}
 
-	function controlAgent(action: 'interrupt' | 'stop' | 'resume'): void {
+	function controlAgent(action: 'stop' | 'resume'): void {
 		if (!activeChatId) return;
 		performQueueAction(
 			action,
@@ -794,18 +844,33 @@
 	});
 
 	/** Starts a turn, or durably queues the draft behind the turn already in this conversation lane. */
-	function send(): Effect.Effect<void> {
+	function send(mode: 'queue' | 'steer' = 'queue'): Effect.Effect<void> {
 		let admission: UnsettledAgentAdmission | null = null;
 		return Effect.suspend(() => {
 			const originalDraft = draft;
-			const { message, references } = serializeMentions(draft, mention.mentions);
+			const serialized = serializeMentions(draft, mention.mentions);
+			const command = parseAgentSlashCommand(serialized.message);
+			const message = command.message;
+			const references = serialized.references;
 			if (
-				(message.length === 0 && documents.length === 0) ||
+				(command.command === null
+					? message.length === 0 && documents.length === 0
+					: !command.complete) ||
 				composerLocked ||
 				uploadingDocument ||
 				activeSessionIsReadOnly
 			)
 				return Effect.void;
+			const resolvedIntent = resolveAgentIntent({
+				message,
+				intent:
+					command.command === 'plan' ? 'plan' : command.command === 'compact' ? 'compact' : 'do',
+				planMode: command.command === null ? planMode : false,
+				verifierPrompt: verifierOverride,
+				mentionCount: mention.mentions.length,
+				goal: command.command === 'goal'
+			});
+			if (command.command !== null) planMode = command.command === 'plan';
 			const createdConversation = activeRunId === undefined;
 			const conversationId = activeRunId ?? globalThis.crypto.randomUUID();
 			const sentDocuments = [...documents];
@@ -822,7 +887,7 @@
 				createdConversation,
 				documentKeys: sentDocuments.map(({ storage_key }) => storage_key)
 			};
-			const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
+			const { verify, verifierPrompt: resolvedVerifierPrompt } = resolvedIntent;
 			if (!activeChatId) {
 				session.composingNew = true;
 				session.runId = conversationId;
@@ -833,6 +898,7 @@
 			// echo by identity/content as soon as sync observes it; a refusal removes it and restores
 			// the draft below. Waiting for the whole command response made a healthy turn look frozen.
 			session.echo = message;
+			unsettledAdmission = admission;
 			draft = '';
 			mention.lastDraft = '';
 			mention.mentions = [];
@@ -849,8 +915,9 @@
 				documents: sentDocuments,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
-				intent: planMode ? 'plan' : 'do',
-				...(planMode ? { planMode: true } : {}),
+				intent: resolvedIntent.intent,
+				mode,
+				...(resolvedIntent.planMode ? { planMode: true } : {}),
 				...(verify ? { verifierPrompt: resolvedVerifierPrompt } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
@@ -1082,6 +1149,12 @@
 				}
 			}
 		}
+		if (isAgentModeShortcut(event)) {
+			event.preventDefault();
+			planMode = !planMode;
+			verifierOverride = null;
+			return;
+		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
 			Effect.runFork(send());
@@ -1240,7 +1313,7 @@
 		</Bound>
 	{/if}
 
-	{#if activeChatId && mailboxStopped}
+	{#if activeChatId && laneStopped}
 		<Stack
 			as="section"
 			gap="sm"
@@ -1377,6 +1450,7 @@
 										refreshTrigger();
 									}}
 									onclick={refreshTrigger}
+									aria-keyshortcuts="Tab"
 									aria-autocomplete="list"
 									aria-expanded={menuOpen}
 									aria-controls="agent-mention-menu"
@@ -1388,6 +1462,28 @@
 							</div>
 						</Stack>
 					</div>
+
+					{#if previewIntent.intent === 'plan'}
+						<Inline
+							gap="sm"
+							class="mx-3 rounded-md bg-primary/8 px-2.5 py-2 text-tiny leading-relaxed text-foreground/85 sm:mx-4"
+							role="note"
+							data-testid="agent-plan-context-note"
+						>
+							<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0 text-primary" />
+							<span>{t('bolt.agent.planContextHint')}</span>
+						</Inline>
+					{:else if previewIntent.intent === 'compact'}
+						<Inline
+							gap="sm"
+							class="mx-3 rounded-md bg-muted/70 px-2.5 py-2 text-tiny leading-relaxed text-foreground/85 sm:mx-4"
+							role="note"
+							data-testid="agent-compact-context-note"
+						>
+							<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
+							<span>{t('bolt.agent.compactContextHint')}</span>
+						</Inline>
+					{/if}
 
 					{#if previewIntent.verify}
 						<details class="group/verifier px-2.5 sm:px-3" data-testid="agent-verifier">
@@ -1440,6 +1536,7 @@
 							<button
 								type="button"
 								aria-pressed={planMode}
+								aria-keyshortcuts="Tab"
 								disabled={composerLocked}
 								onclick={() => {
 									planMode = !planMode;
@@ -1453,8 +1550,12 @@
 								title={planMode ? t('bolt.agent.planModeOn') : t('bolt.agent.planModeOff')}
 								data-testid="agent-plan-mode"
 							>
-								{t('bolt.agent.plan')}
+								{planMode ? t('bolt.agent.plan') : t('bolt.agent.agentMode')}
 							</button>
+							<kbd
+								class="rounded border border-border/70 bg-muted/60 px-1 py-0.5 font-mono text-micro leading-none text-muted-foreground"
+								title={t('bolt.agent.modeShortcut')}>Tab</kbd
+							>
 							{#if contextPercent !== null}
 								<Inline as="span" gap="xs" title={t('bolt.agent.contextWindowUsed')}>
 									<span
@@ -1515,12 +1616,23 @@
 									variant="ghost"
 									size="icon"
 									class="size-8 shrink-0 rounded-full"
-									disabled={queueActionPending !== null}
-									hint={t('bolt.agent.interrupt')}
-									aria-label={t('bolt.agent.interrupt')}
-									onclick={() => controlAgent('interrupt')}
+									disabled={!canSend}
+									hint={t('bolt.agent.steer')}
+									aria-label={t('bolt.agent.steer')}
+									onclick={() => Effect.runFork(send('steer'))}
 								>
-									<Icon icon="lucide:octagon-x" class="size-4" />
+									<Icon icon="lucide:milestone" class="size-4" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-8 shrink-0 rounded-full"
+									disabled={queueActionPending !== null}
+									hint={t('bolt.agent.stop')}
+									aria-label={t('bolt.agent.stop')}
+									onclick={() => controlAgent('stop')}
+								>
+									<Icon icon="lucide:square" class="size-4" />
 								</Button>
 							{/if}
 							<Button

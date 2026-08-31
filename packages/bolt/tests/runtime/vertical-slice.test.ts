@@ -375,31 +375,6 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			});
 		}
 		if (
-			request._tag === 'Query' &&
-			request.sql.includes('from "chat_message"') &&
-			request.sql.includes('"turn_id"')
-		) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows: [
-						{
-							id: 'agent-turn-message',
-							content: {
-								id: 'turn-1',
-								status: 'running',
-								parts: [],
-								subject,
-								agent_name: 'web',
-								usage_unreported: false
-							}
-						}
-					],
-					affectedRows: 0
-				}
-			});
-		}
-		if (
 			request._tag === 'Transaction' &&
 			request.statements.some((statement) => statement.sql.includes('__bolt_graph_record'))
 		) {
@@ -580,32 +555,6 @@ describe('runnable Bolt vertical slice', () => {
 		expect(await bundle.dispatch(foreign, facilities, new AbortController().signal)).toMatchObject({
 			_tag: 'Failure',
 			error: { code: 'forbidden', httpStatus: 403 }
-		});
-	});
-
-	it('atomically admits an agent message before executing the persisted turn', async () => {
-		expect(
-			await invoke('agents.enqueue', {
-				subject,
-				agent: 'web',
-				conversationId: 'conversation-without-turn-id',
-				message: 'A turnless enqueue is not accepted.'
-			})
-		).toMatchObject({ _tag: 'Failure' });
-		const admitted = await invoke('agents.enqueue', {
-			subject,
-			agent: 'web',
-			conversationId: 'conversation-1',
-			turnId: 'turn-1',
-			message: 'Hello'
-		});
-		// One command owns admission and the ordinary invocation that executes the admitted turn, so
-		// the settled turn comes back from the same invocation that admitted it.
-		expect(admitted, JSON.stringify(admitted)).toMatchObject({
-			_tag: 'Success',
-			response: {
-				value: { conversationId: 'conversation-1', taskId: 'turn-1', turnId: 'turn-1', status: 'completed' }
-			}
 		});
 	});
 

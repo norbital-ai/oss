@@ -48,7 +48,8 @@ const occurrence = {
 	scheduleKey: 'nightly',
 	scheduledForEpochMs: 1,
 	command: 'automations.nightly',
-	input: { proof: true }
+	input: { proof: true },
+	attempt: 2
 };
 
 /** A guest that answers each command from a table, recording every invocation it was handed. */
@@ -204,7 +205,7 @@ it.effect('reports a refused occurrence to the queue instead of failing the tick
 		// so the host settles it and stays punctual rather than backing its whole clock off.
 		assert.deepStrictEqual(inputOf(bundle.seen, 'host.schedules.settle'), {
 			occurrence,
-			outcome: { _tag: 'Failed', error: 'the automation threw' }
+			outcome: { _tag: 'Failed', error: 'the automation threw', retryable: false }
 		});
 		// A settle answering `null` does not erase what discovery reported: one harmless extra tick is
 		// the safe direction, a disarmed timer is not.
@@ -231,10 +232,11 @@ it.effect('renders a thrown occurrence dispatch as a failed outcome', () =>
 			'host.schedules.settle'
 		]);
 		const settled = inputOf(bundle.seen, 'host.schedules.settle');
-		assert.strictEqual(
-			(settled as { outcome: { _tag: string } } | undefined)?.outcome._tag,
-			'Failed'
-		);
+		assert.deepStrictEqual((settled as { outcome?: unknown } | undefined)?.outcome, {
+			_tag: 'Failed',
+			error: 'Bolt bundle dispatch failed',
+			retryable: true
+		});
 	})
 );
 
@@ -393,6 +395,7 @@ it.live('runs a due occurrence end to end from the armed timer', () =>
 						.digest('hex')
 				);
 				assert.strictEqual(entries[1]?.['command'], 'automations.nightly');
+				assert.strictEqual(entries[1]?.['attempt'], occurrence.attempt);
 				assert.strictEqual(entries[2]?.['taskId'], occurrence.taskId);
 				assert.strictEqual(
 					(entries[2]?.['outcome'] as { readonly _tag?: string } | undefined)?._tag,

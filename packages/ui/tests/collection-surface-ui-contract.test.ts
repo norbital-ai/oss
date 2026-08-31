@@ -70,6 +70,26 @@ test('list and Kanban cards render the shared record-warning leading accent', ()
 	);
 });
 
+test('tinted warning surfaces keep readable text in both color schemes', () => {
+	const metadata = componentSource('collection-record-metadata/collection-record-metadata.svelte');
+	const alert = componentSource('alert/alert.svelte');
+	const detail = componentSource('collection-table/collection-record-detail.svelte');
+
+	assert.match(
+		metadata,
+		/border-warning\/40 bg-warning\/10 text-warning-foreground dark:text-warning/u
+	);
+	assert.match(
+		alert,
+		/border-warning\/50 bg-warning\/10 text-warning-foreground dark:bg-warning\/30 dark:text-warning/u
+	);
+	assert.equal(
+		detail.match(/bg-warning\/15 text-warning-foreground dark:text-warning/gu)?.length,
+		2,
+		'both changes-requested warning tints use the dark-mode warning foreground'
+	);
+});
+
 test('an unbounded CollectionTable yields vertical scrolling to its record-detail parent', () => {
 	const types = componentSource('collection-table/collection-table.types.ts');
 	const table = componentSource('collection-table/collection-table.svelte');

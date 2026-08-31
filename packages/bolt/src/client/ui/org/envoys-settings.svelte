@@ -8,6 +8,11 @@
 	import { workspaceSession } from '#lib/client/session.js';
 	import type { WorkspaceManifest } from '#lib/client/ui/studio/studio-state.js';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+	import {
+		connectionIsRecovering,
+		connectionIsTerminalError,
+		connectionLabel
+	} from './envoy-connection-presentation.js';
 
 	/**
 	 * The Envoys surface: every agent this workspace exposes on a transport, and how each is doing.
@@ -62,6 +67,11 @@
 		pairedAs: Schema.optionalKey(Schema.String),
 		pairing: Schema.optionalKey(Schema.String),
 		pairingExpiresAt: Schema.optionalKey(Schema.Number),
+		/** True only while the host is automatically reopening a recoverable connection. */
+		retrying: Schema.optionalKey(Schema.Boolean),
+		/** Operator-readable context for a non-terminal connection transition. */
+		detail: Schema.optionalKey(Schema.String),
+		/** Reserved for `state: 'error'`, whose recovery requires operator action. */
 		error: Schema.optionalKey(Schema.String),
 		stored: Schema.Boolean
 	});
@@ -253,23 +263,6 @@
 			);
 		});
 
-	const connectionLabel = (envoy: string, provider: string): string => {
-		const connection = connections[envoy];
-		if (connection === undefined) return 'Reading…';
-		switch (connection.state) {
-			case 'connected':
-				return 'Connected';
-			case 'pairing':
-				return provider === 'whatsapp' ? 'Scan to pair' : 'Pairing';
-			case 'connecting':
-				return 'Connecting';
-			case 'error':
-				return 'Needs attention';
-			default:
-				return connection.stored ? 'Paired, not connected' : 'Not paired';
-		}
-	};
-
 	/** Waits for provider-published revisions; it performs no timed status reads. */
 	const observePairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
 		Effect.suspend(() => {
@@ -407,6 +400,8 @@
 						{envoy.transport === 'whatsapp'
 							? 'Open WhatsApp on the phone this envoy should answer as, then Linked devices → Link a device.'
 							: 'The transport provider is waiting for pairing to finish.'}
+					{:else if connectionIsRecovering(connection)}
+						The host is reopening the {envoy.transport} session automatically.
 					{:else if connection?.stored === true}
 						A credential is stored, but this host has no open session for it.
 					{:else}
@@ -415,7 +410,7 @@
 				</p>
 			</div>
 			<span class="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-meta">
-				{connectionLabel(envoy.name, envoy.transport)}
+				{connectionLabel(connection, envoy.transport)}
 			</span>
 		</Inline>
 
@@ -428,7 +423,11 @@
 			when an unknown person messages an authenticated envoy.
 		</p>
 
-		{#if connection?.error !== undefined}
+		{#if connection?.detail !== undefined}
+			<p class="text-meta" aria-live="polite">{connection.detail}</p>
+		{/if}
+
+		{#if connectionIsTerminalError(connection) && connection?.error !== undefined}
 			<p class="text-xs text-destructive" role="alert">{connection.error}</p>
 		{/if}
 
@@ -665,7 +664,19 @@
 						authenticated envoy.
 					</p>
 				</Stack>
-			{:else if connection?.state === 'error'}
+			{:else if connectionIsRecovering(connection)}
+				<Stack gap="sm" align="center" class="rounded-lg border border-info/30 p-5 text-center">
+					<IconWrapper
+						name="lucide:loader-circle"
+						class="size-8 text-info motion-safe:animate-spin"
+					/>
+					<p class="text-sm font-medium text-foreground">Reconnecting the transport</p>
+					<p class="text-meta" aria-live="polite">
+						{connection?.detail ??
+							`The host is reopening the ${target.transport} session automatically. No action is needed.`}
+					</p>
+				</Stack>
+			{:else if connectionIsTerminalError(connection)}
 				<Stack
 					gap="sm"
 					align="center"
@@ -674,19 +685,15 @@
 					<IconWrapper name="lucide:circle-alert" class="size-8 text-destructive" />
 					<p class="text-sm font-medium text-foreground">The transport needs attention</p>
 					<p class="text-xs text-destructive" role="alert">
-						{connection.error ?? 'Close this dialog and try again.'}
+						{connection?.error ?? 'Close this dialog and try again.'}
 					</p>
 				</Stack>
 			{:else if connection?.state === 'disconnected'}
-				<Stack
-					gap="sm"
-					align="center"
-					class="rounded-lg border border-destructive/30 p-5 text-center"
-				>
-					<IconWrapper name="lucide:unplug" class="size-8 text-destructive" />
-					<p class="text-sm font-medium text-foreground">The transport did not open</p>
-					<p class="text-meta" role={connection.error === undefined ? undefined : 'alert'}>
-						{connection.error ?? 'Close this dialog, then try pairing again.'}
+				<Stack gap="sm" align="center" class="rounded-lg border border-warning/30 p-5 text-center">
+					<IconWrapper name="lucide:unplug" class="size-8 text-warning" />
+					<p class="text-sm font-medium text-foreground">Transport disconnected</p>
+					<p class="text-meta">
+						{connection.detail ?? 'Close this dialog, then try pairing again.'}
 					</p>
 				</Stack>
 			{:else if connection?.state === 'pairing' && qr !== undefined && !pairingExpired}

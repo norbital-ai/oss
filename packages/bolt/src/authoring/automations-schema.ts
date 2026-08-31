@@ -10,6 +10,8 @@ import type {
 
 export interface AutomationDeclaration {
 	readonly name: string;
+	/** Human-readable purpose projected into read-only workspace manifests. */
+	readonly description?: string;
 	readonly trigger:
 		| { readonly _tag: 'Schedule'; readonly cron: string }
 		| { readonly _tag: 'Manual' }

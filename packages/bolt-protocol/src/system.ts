@@ -14,7 +14,9 @@ export const AgentEnqueueResult = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
-	status: Schema.Literals(['queued', 'completed', 'failed'])
+	messageId: Schema.NonEmptyString,
+	runId: Schema.optionalKey(Schema.NonEmptyString),
+	status: Schema.Literals(['pending', 'running', 'completed', 'needs_attention', 'failed'])
 });
 export interface AgentEnqueueResult extends Schema.Schema.Type<typeof AgentEnqueueResult> {}
 

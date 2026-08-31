@@ -77,6 +77,7 @@ export const AIRequest = Schema.TaggedUnion({
 	Models: {},
 	Turn: {
 		model: Schema.NonEmptyString,
+		/** Pinned TanStack ModelMessage values plus mechanical system-prompt wire entries. */
 		messages: Schema.Array(Schema.Json),
 		tools: Schema.Array(Schema.Json),
 		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
@@ -115,21 +116,11 @@ export const AIUsage = Schema.Struct({
 	// Non-exact optional so the normaliser can hold an absent field as an explicit `undefined`; the
 	// wire never carries those, and it is the normaliser that decides presence, not the reader.
 	model: Schema.optional(Schema.String),
-	inputTokens: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	cachedInputTokens: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	outputTokens: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	reasoningTokens: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	totalTokens: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
+	inputTokens: Schema.optional(Schema.Natural),
+	cachedInputTokens: Schema.optional(Schema.Natural),
+	outputTokens: Schema.optional(Schema.Natural),
+	reasoningTokens: Schema.optional(Schema.Natural),
+	totalTokens: Schema.optional(Schema.Natural),
 	costUsd: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
@@ -144,11 +135,9 @@ export const AIUsage = Schema.Struct({
 	 * Absent when the host has no rate card of its own, in which case the provider charge is the only
 	 * honest figure there is and consumers fall back to it.
 	 */
-	costMicroUnits: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
+	costMicroUnits: Schema.optional(Schema.Natural),
 	/** ISO 4217 code the charge above is denominated in. Meaningless without the micro-unit amount. */
-	costCurrency: Schema.optional(Schema.String)
+	costCurrency: Schema.optional(Schema.NonEmptyString)
 });
 export interface AIUsage extends Schema.Schema.Type<typeof AIUsage> {}
 
@@ -162,6 +151,14 @@ const usageNumber = (
 		if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
 	}
 	return undefined;
+};
+
+const usageNatural = (
+	source: Readonly<Record<string, unknown>>,
+	keys: ReadonlyArray<string>
+): number | undefined => {
+	const value = usageNumber(source, keys);
+	return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
 };
 
 const usageRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
@@ -188,37 +185,40 @@ export const readAIUsage = (value: unknown): AIUsage | undefined => {
 		usageRecord(inner['prompt_tokens_details']) ?? usageRecord(inner['inputTokensDetails']);
 	const completion =
 		usageRecord(inner['completion_tokens_details']) ?? usageRecord(inner['outputTokensDetails']);
-	const inputTokens = usageNumber(inner, [
+	const inputTokens = usageNatural(inner, [
 		'inputTokens',
 		'input_tokens',
 		'promptTokens',
 		'prompt_tokens'
 	]);
-	const outputTokens = usageNumber(inner, [
+	const outputTokens = usageNatural(inner, [
 		'outputTokens',
 		'output_tokens',
 		'completionTokens',
 		'completion_tokens'
 	]);
-	const totalTokens =
-		usageNumber(inner, ['totalTokens', 'total_tokens']) ??
-		(inputTokens === undefined && outputTokens === undefined
+	const computedTotal = (inputTokens ?? 0) + (outputTokens ?? 0);
+	const totalTokens = usageNatural(inner, ['totalTokens', 'total_tokens']) ??
+		(inputTokens === undefined && outputTokens === undefined || !Number.isSafeInteger(computedTotal)
 			? undefined
-			: (inputTokens ?? 0) + (outputTokens ?? 0));
+			: computedTotal);
 	const cachedInputTokens =
-		usageNumber(inner, ['cachedInputTokens', 'cached_input_tokens']) ??
-		(details === undefined ? undefined : usageNumber(details, ['cachedTokens', 'cached_tokens']));
+		usageNatural(inner, ['cachedInputTokens', 'cached_input_tokens']) ??
+		(details === undefined ? undefined : usageNatural(details, ['cachedTokens', 'cached_tokens']));
 	const reasoningTokens =
-		usageNumber(inner, ['reasoningTokens', 'reasoning_tokens']) ??
+		usageNatural(inner, ['reasoningTokens', 'reasoning_tokens']) ??
 		(completion === undefined
 			? undefined
-			: usageNumber(completion, ['reasoningTokens', 'reasoning_tokens']));
+			: usageNatural(completion, ['reasoningTokens', 'reasoning_tokens']));
 	const costUsd = usageNumber(inner, ['costUsd', 'cost_usd', 'cost', 'totalCost', 'total_cost']);
 	// Read only under its canonical name: no provider reports what *this host* charges, so a dialect
 	// list here would be inviting some field of the provider's to be mistaken for the tenant's bill.
-	const costMicroUnits = usageNumber(inner, ['costMicroUnits']);
+	const reportedCostMicroUnits = usageNatural(inner, ['costMicroUnits']);
 	const costCurrency =
-		typeof inner['costCurrency'] === 'string' ? inner['costCurrency'] : undefined;
+		typeof inner['costCurrency'] === 'string' && inner['costCurrency'].length > 0
+			? inner['costCurrency']
+			: undefined;
+	const costMicroUnits = costCurrency === undefined ? undefined : reportedCostMicroUnits;
 	const model =
 		typeof inner['model'] === 'string'
 			? inner['model']
@@ -253,26 +253,48 @@ export const addAIUsage = (
 	total: AIUsage | undefined,
 	next: AIUsage | undefined
 ): AIUsage | undefined => {
+	const validateUsage = (usage: AIUsage | undefined) => {
+		if (usage === undefined) return;
+		for (const field of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningTokens',
+			'totalTokens', 'costMicroUnits'] as const) {
+			const value = usage[field];
+			if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+				throw new TypeError(`AI usage ${field} must be a non-negative safe integer`);
+			}
+		}
+		if (usage.costUsd !== undefined && (!Number.isFinite(usage.costUsd) || usage.costUsd < 0)) {
+			throw new TypeError('AI provider cost must be a finite non-negative USD amount');
+		}
+		const hasAmount = usage.costMicroUnits !== undefined;
+		const hasCurrency = usage.costCurrency !== undefined;
+		if (hasAmount !== hasCurrency) throw new TypeError('AI tenant charge requires both amount and currency');
+	};
+	validateUsage(total);
+	validateUsage(next);
 	if (next === undefined) return total;
 	if (total === undefined) return { ...next };
 	const sum = (left: number | undefined, right: number | undefined): number | undefined =>
 		left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
-	const inputTokens = sum(total.inputTokens, next.inputTokens);
-	const cachedInputTokens = sum(total.cachedInputTokens, next.cachedInputTokens);
-	const outputTokens = sum(total.outputTokens, next.outputTokens);
-	const reasoningTokens = sum(total.reasoningTokens, next.reasoningTokens);
-	const totalTokens = sum(total.totalTokens, next.totalTokens);
+	const naturalSum = (left: number | undefined, right: number | undefined): number | undefined => {
+		const value = sum(left, right);
+		if (value !== undefined && !Number.isSafeInteger(value)) {
+			throw new TypeError('AI usage total exceeds the exact integer range');
+		}
+		return value;
+	};
+	const inputTokens = naturalSum(total.inputTokens, next.inputTokens);
+	const cachedInputTokens = naturalSum(total.cachedInputTokens, next.cachedInputTokens);
+	const outputTokens = naturalSum(total.outputTokens, next.outputTokens);
+	const reasoningTokens = naturalSum(total.reasoningTokens, next.reasoningTokens);
+	const totalTokens = naturalSum(total.totalTokens, next.totalTokens);
 	const costUsd = sum(total.costUsd, next.costUsd);
-	const costMicroUnits = sum(total.costMicroUnits, next.costMicroUnits);
-	// Two charges in different currencies do not add up, and a sum labelled with one of the two is a
-	// wrong number rather than a rounded one. Nothing in a single host mixes them; if something ever
-	// does, the total loses its label instead of misstating it.
+	const costMicroUnits = naturalSum(total.costMicroUnits, next.costMicroUnits);
+	if (total.costCurrency !== undefined && next.costCurrency !== undefined &&
+		total.costCurrency !== next.costCurrency) {
+		throw new TypeError(`Cannot add AI tenant charges in ${total.costCurrency} and ${next.costCurrency}`);
+	}
 	const costCurrency =
-		total.costCurrency === undefined || next.costCurrency === undefined
-			? (total.costCurrency ?? next.costCurrency)
-			: total.costCurrency === next.costCurrency
-				? total.costCurrency
-				: undefined;
+		total.costCurrency ?? next.costCurrency;
 	return {
 		inputTokens,
 		cachedInputTokens,
@@ -368,7 +390,7 @@ export const TaskRequest = Schema.TaggedUnion({
 	Active: { taskId: Schema.NonEmptyString },
 	/** Releases the host's ephemeral task-to-invocation association after the attempt settles. */
 	Settled: { taskId: Schema.NonEmptyString },
-	/** Accelerates a durable stop/interrupt by terminating only the invocation running this task. */
+	/** Accelerates a durable stop by terminating only the invocation running this task. */
 	Interrupt: { taskId: Schema.NonEmptyString },
 	/**
 	 * Runs one already-admitted delegated agent turn through a fresh host Conductor invocation.

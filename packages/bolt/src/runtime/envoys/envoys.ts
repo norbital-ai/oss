@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import type { ModelMessage } from '@tanstack/ai';
 import { and, asc, count, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -7,10 +8,10 @@ import * as Agents from '#lib/runtime/agents/agents.js';
 import * as ChatDocuments from '#lib/runtime/agents/documents.js';
 import {
 	chatDocumentStorageKey,
+	inboundAgentInput,
 	type ChatAttachment,
-	type InboundBatchMessage,
-	type StoredInboundBatch
-} from '#lib/runtime/agents/chat-messages.js';
+	type InboundBatchMessage
+} from '#lib/runtime/agents/agent-runtime.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { PendingApproval } from '#lib/runtime/collections/collections.js';
@@ -334,7 +335,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							input: JSON.stringify({ envoy: envoyName, conversationId }),
 							effect_id: taskId,
 							run_at: new Date(runAtEpochMs).toISOString(),
-							status: 'running'
+							status: 'pending'
 						})
 						.onConflictDoNothing({ target: boltTaskTable.effect_id })
 				);
@@ -667,21 +668,27 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 			};
 
-			const progressBody = (parts: ReadonlyArray<Agents.TurnPart>): string => {
+			const progressBody = (messages: ReadonlyArray<ModelMessage>): string => {
 				const completed = new Set(
-					parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : []))
+					messages.flatMap((message) =>
+						message.role === 'tool' && message.toolCallId !== undefined
+							? [message.toolCallId]
+							: []
+					)
 				);
-				const activeTool = [...parts]
+				const activeTool = messages
+					.flatMap((message) => (message.role === 'assistant' ? (message.toolCalls ?? []) : []))
 					.toReversed()
-					.find((part) => part.kind === 'tool' && !completed.has(part.id));
-				if (activeTool?.kind === 'tool') {
-					return `Working · ${activeTool.name.replaceAll('_', ' ')}`;
+					.find((call) => !completed.has(call.id));
+				if (activeTool !== undefined) {
+					return `Working · ${activeTool.function.name.replaceAll('_', ' ')}`;
 				}
-				const last = parts.at(-1);
-				if (last?.kind === 'tool-result')
+				const last = messages.at(-1);
+				if (last?.role === 'tool' && last.name !== undefined)
 					return `Working · finished ${last.name.replaceAll('_', ' ')}`;
-				if (last?.kind === 'reasoning' && last.text.trim().length > 0) {
-					return `Working · ${truncatePreview(last.text, 72)}`;
+				const thought = last?.role === 'assistant' ? last.thinking?.at(-1)?.content : undefined;
+				if (thought !== undefined && thought.trim().length > 0) {
+					return `Working · ${truncatePreview(thought, 72)}`;
 				}
 				return 'Working…';
 			};
@@ -791,9 +798,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				let currentKey = stored.transport_message_key;
 				let currentBody = stored.transport_progress;
 				return {
-					observe: (parts: ReadonlyArray<Agents.TurnPart>) =>
+					observe: (messages: ReadonlyArray<ModelMessage>) =>
 						Effect.gen(function* () {
-							const body = progressBody(parts);
+							const body = progressBody(messages);
 							if (body === currentBody) return;
 							const sent = yield* deliver(effectId, envoy, recipient, { text: body }, currentKey);
 							if (!sent.delivered) return;
@@ -809,7 +816,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					currentKey: () => currentKey,
 					complete: (output: Schema.Json) =>
 						settleDelivery(effectId, envoy, conversationId, output, currentKey).pipe(Effect.asVoid)
-				} satisfies Agents.TurnSurface;
+				} satisfies Agents.AgentSurface;
 			});
 
 			const showQueuedPreview = Effect.fn('Envoys.showQueuedPreview')(function* (
@@ -818,10 +825,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				conversationId: string,
 				recipient: string,
 				message: string,
-				mode: 'queued' | 'interrupt' = 'queued'
+				mode: 'queued' | 'steer' = 'queued'
 			) {
 				const state = yield* readSurface(EffectId.make(`${effectId}:read`), conversationId);
-				const label = mode === 'interrupt' ? 'Interrupting' : 'Queued';
+				const label = mode === 'steer' ? 'Steering' : 'Queued';
 				const body = `${state.transport_progress ?? 'Working…'}\n\n${label} · ${truncatePreview(message)}`;
 				const sent = yield* deliver(
 					EffectId.make(`${effectId}:send`),
@@ -868,9 +875,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						envoy.groupMessages === 'all' ||
 						delivery.invocation === 'mention' ||
 						delivery.invocation === 'reply';
-					const interruptRequested = addressed && /^\s*\/interrupt(?:\s|$)/i.test(delivery.text);
-					const inboundText = interruptRequested
-						? delivery.text.replace(/^\s*\/interrupt(?:\s+|$)/i, '').trimStart()
+					const steerRequested = addressed && /^\s*\/steer(?:\s|$)/i.test(delivery.text);
+					const inboundText = steerRequested
+						? delivery.text.replace(/^\s*\/steer(?:\s+|$)/i, '').trimStart()
 						: delivery.text;
 
 					const linked =
@@ -939,6 +946,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						},
 						access.limits(subject)
 					);
+					if (steerRequested && inboundText.trim().length === 0) {
+						yield* deliver(effectId, envoy, delivery.conversationId, {
+							text: 'Use /steer <message> to redirect the current work at its next safe boundary.'
+						});
+						return {
+							status: 'buffered' as const,
+							envoy: envoyName,
+							conversationId: delivery.conversationId
+						};
+					}
 
 					const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
 					yield* agents.open(
@@ -1047,21 +1064,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							conversationId
 						);
 						if (running) {
-							if (interruptRequested) {
-								yield* showQueuedPreview(
-									EffectId.make(`${effectId}:interrupt-preview`),
-									envoy,
-									conversationId,
-									delivery.conversationId,
-									inboundText,
-									'interrupt'
-								);
-								yield* agents.interrupt(
-									EffectId.make(`${effectId}:interrupt`),
-									subject,
-									conversationId
-								);
-							}
 							yield* executeBuilt(
 								EffectId.make(`${effectId}:processing`),
 								database,
@@ -1070,9 +1072,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									.set({ status: 'processing' })
 									.where(eq(boltEnvoyInbound.id, claimed.value.id))
 							);
-							const batch: StoredInboundBatch = {
-								kind: 'inbound_batch',
-								messages: [
+							const batch = inboundAgentInput([
 									{
 										sender: {
 											...(senderId === undefined ? {} : { id: senderId }),
@@ -1086,16 +1086,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										attachments: stored,
 										invocation: delivery.invocation
 									}
-								]
-							};
-							const surface = interruptRequested
-								? yield* makeTurnSurface(
-										EffectId.make(`${effectId}:surface`),
-										envoy,
-										conversationId,
-										delivery.conversationId
-									)
-								: undefined;
+								]);
 							const admitted = yield* agents.enqueue(
 								EffectId.make(`${effectId}:turn`),
 								subject,
@@ -1104,15 +1095,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								`${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
 								batch,
 								undefined,
-								surface
+								undefined,
+								steerRequested ? 'steer' : 'queue',
+								'envoy'
 							);
-							if (admitted.status === 'queued') {
+							if (admitted.status === 'pending') {
 								yield* showQueuedPreview(
 									EffectId.make(`${effectId}:queue-preview`),
 									envoy,
 									conversationId,
 									delivery.conversationId,
-									inboundText
+									inboundText,
+									steerRequested ? 'steer' : 'queued'
 								);
 							}
 							return {
@@ -1232,7 +1226,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						attachments: row.attachments,
 						invocation: row.invocation
 					}));
-					const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
+					const batch = inboundAgentInput(messages);
 					const turnId = String(effectId);
 					const surface = yield* makeTurnSurface(
 						EffectId.make(`${effectId}:surface`),

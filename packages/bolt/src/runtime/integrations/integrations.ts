@@ -239,7 +239,7 @@ const enqueueTaskRow = (
 			input: JSON.stringify(input),
 			effect_id: taskEffectId,
 			...(runAtEpochMs === undefined ? {} : { run_at: new Date(runAtEpochMs).toISOString() }),
-			status: 'running'
+			status: 'pending'
 		})
 		.onConflictDoNothing({ target: boltTaskTable.effect_id });
 

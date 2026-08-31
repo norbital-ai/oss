@@ -1,6 +1,5 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import DataBrowser from './data-browser.svelte';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { Button } from '@norbital-ai/ui/button';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
@@ -8,56 +7,32 @@
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
-	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import type {
 		ManifestCollection,
 		WorkspaceManifest
 	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
-	 * One collection, read through its five faces: its records, its model, and the code declared
-	 * around it.
+	 * One collection, read through its four declared faces: model, hooks, pipelines and integrations.
 	 *
-	 * Two sources, because they answer different questions. The manifest is the *authorized* view —
-	 * it only describes collections this subject may read, and it carries the declared kind, the
-	 * enum members, whether free-text search may reach a column, and the authored source path. The
-	 * compiled catalog is what the shared table prefers to lay a column out from, so a `custom()`
-	 * value renders here exactly as it does in the app that owns it. Colony's `$bolt/client` is the
-	 * host bundle, not the tenant isolate, so that catalog is often empty here — the Data tab then
-	 * uses the manifest fields rather than claiming there is nothing to draw.
+	 * The manifest is the authorized view: declared kind, enum members, searchable columns and the
+	 * authored source path. Runtime records belong to the apps that operate on them; Manifest stays a
+	 * description rather than becoming a second data browser.
 	 */
 	let {
 		collection,
 		manifest,
-		client,
 		onopenSource
 	}: {
 		collection: ManifestCollection;
 		manifest: WorkspaceManifest;
-		client?: WorkspaceClient | undefined;
 		// `exactOptionalPropertyTypes`: the parent forwards its own optional handler, so the prop has
 		// to accept an explicit `undefined` and not merely tolerate being omitted.
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
 
-	// Bound rather than passed as a literal: the reader's choice of face is this component's own
-	// state. It deliberately survives a change of collection — someone comparing two collections'
-	// hooks should not be dropped back onto Data by the act of choosing the second one.
-	let activeView = $state('data');
-
-	const catalogFields = $derived.by((): ReadonlyArray<CollectionField> => {
-		const compiled = client?.collections[collection.name]?.fields ?? [];
-		if (compiled.length > 0) return compiled;
-		return collection.fields.map((field) => ({
-			name: field.name,
-			kind: field.customType ?? field.type,
-			nullable: !field.required,
-			...(field.generated ? { readOnly: true } : {}),
-			...(field.search === true ? { search: true } : {}),
-			values: field.values
-		}));
-	});
+	// The reader's chosen declaration face survives while comparing collections.
+	let activeView = $state('model');
 	const hooks = $derived(collection.hooks ?? []);
 
 	/**
@@ -68,14 +43,6 @@
 	 */
 	const RUNTIME_PIPELINES = ['collections.export', 'collections.import'] as const;
 </script>
-
-{#snippet dataView()}
-	{#if client === undefined}
-		<p class="text-meta">Connecting to the workspace…</p>
-	{:else}
-		<DataBrowser {client} collection={collection.name} fields={catalogFields} />
-	{/if}
-{/snippet}
 
 {#snippet modelView()}
 	<Scroll name="Collection model">
@@ -244,7 +211,6 @@
 		keepAlive
 		animate={false}
 		config={[
-			{ name: 'data', label: 'Data', icon: 'product:collections', content: dataView },
 			{ name: 'model', label: 'Model', icon: 'product:models', content: modelView },
 			{ name: 'hooks', label: 'Hooks', icon: 'product:hooks', content: hooksView },
 			{

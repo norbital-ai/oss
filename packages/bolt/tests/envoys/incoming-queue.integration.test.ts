@@ -10,6 +10,7 @@ import type {
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
+import { assistantText, assistantToolCall } from '../agents/canonical-ai-fixture.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -97,10 +98,15 @@ describe('envoy incoming queue and interruption', () => {
 					await firstRoundHeld;
 					return {
 						_tag: 'Success',
-						value: { output: { toolCalls: [{ name: 'describe_workspace', input: {} }] } }
+						value: { output: assistantToolCall('describe_workspace', {}, 'envoy-describe') }
 					};
 				}
-				return { _tag: 'Success', value: { output: { text: 'Both updates recorded.' } } };
+				return {
+					_tag: 'Success',
+					value: {
+						output: assistantText('Both updates recorded.', `envoy-answer-${turns.length}`)
+					}
+				};
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
@@ -146,8 +152,9 @@ describe('envoy incoming queue and interruption', () => {
 		releaseFirstRound();
 		await drain;
 
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Also include the pump reading.');
+		expect(turns).toHaveLength(3);
+		expect(JSON.stringify(turns[1]?.messages)).not.toContain('Also include the pump reading.');
+		expect(JSON.stringify(turns[2]?.messages)).toContain('Also include the pump reading.');
 		expect(
 			await harness.database.query(
 				`select external_message_id, status from bolt_envoy_inbound
@@ -160,7 +167,7 @@ describe('envoy incoming queue and interruption', () => {
 		]);
 	});
 
-	it('treats /interrupt as explicit preemption and never publishes the stale answer', async () => {
+	it('treats /steer as explicit preemption and never publishes the stale answer', async () => {
 		let releaseInterruptedRound!: () => void;
 		const interruptedRoundHeld = new Promise<void>((resolve) => {
 			releaseInterruptedRound = resolve;
@@ -179,9 +186,15 @@ describe('envoy incoming queue and interruption', () => {
 				if (turns.length === 1) {
 					announceInterruptedRound();
 					await interruptedRoundHeld;
-					return { _tag: 'Success', value: { output: { text: 'Stale answer.' } } };
+					return {
+						_tag: 'Success',
+						value: { output: assistantText('Stale answer.', 'stale-answer') }
+					};
 				}
-				return { _tag: 'Success', value: { output: { text: 'Priority handled.' } } };
+				return {
+					_tag: 'Success',
+					value: { output: assistantText('Priority handled.', 'priority-answer') }
+				};
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
@@ -208,44 +221,45 @@ describe('envoy incoming queue and interruption', () => {
 
 		await harness.runtime.runPromise(
 			envoys.receive(
-				harness.effectId('receive:interrupt'),
+				harness.effectId('receive:steer'),
 				'field_ops_whatsapp',
-				delivery('two', '/interrupt Handle the safety alarm first.')
+				delivery('two', '/steer Handle the safety alarm first.')
 			)
 		);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Handle the safety alarm first.');
-		expect(JSON.stringify(turns[1]?.messages)).not.toContain('/interrupt');
 		expect(sends).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					_tag: 'Send',
 					payload: expect.objectContaining({
 						updateOf: 'wire-1',
-						text: expect.stringContaining('Interrupting · Handle the safety alarm first.')
+						text: expect.stringContaining('Steering · Handle the safety alarm first.')
 					})
-				}),
+				})
+			])
+		);
+		releaseInterruptedRound();
+		await drain;
+		expect(turns).toHaveLength(2);
+		expect(JSON.stringify(turns[1]?.messages)).toContain('Handle the safety alarm first.');
+		expect(JSON.stringify(turns[1]?.messages)).not.toContain('/steer');
+		expect(sends).toEqual(
+			expect.arrayContaining([
 				expect.objectContaining({
 					_tag: 'Send',
 					payload: { text: 'Priority handled.', updateOf: 'wire-1' }
 				})
 			])
 		);
-		const sentBeforeStaleSettlement = sends.length;
-		releaseInterruptedRound();
-		await drain;
-		expect(sends).toHaveLength(sentBeforeStaleSettlement);
+		expect(JSON.stringify(sends)).not.toContain('Stale answer.');
 		expect(
 			await harness.database.query(
-				`select turn_id, content->>'status' as status from chat_message
-				 where conversation_id = $1 and role = 'assistant' order by sequence`,
+				`select status, disposition from agent_run
+				 where conversation_id = $1 order by generation`,
 				[conversationId]
 			)
 		).toEqual([
-			{ turn_id: 'drain:first', status: 'interrupted' },
-			{
-				turn_id: 'field_ops_whatsapp:6591234567@s.whatsapp.net:two',
-				status: 'completed'
-			}
+			{ status: 'aborted', disposition: 'superseded' },
+			{ status: 'completed', disposition: null }
 		]);
 	});
 });

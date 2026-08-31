@@ -1494,7 +1494,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								input: JSON.stringify({ name: integration }),
 								effect_id: `${effectId}:flush:${integration}`,
 								run_at: dbNow(),
-								status: 'running'
+								status: 'pending'
 							})
 							.onConflictDoNothing({ target: boltTaskTable.effect_id })
 							.toSQL()

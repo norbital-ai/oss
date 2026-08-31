@@ -105,6 +105,11 @@
 			     is what the border rides on. -->
 			<div class="pt-1 pl-3.5">
 				<Stack gap="sm" class="border-l border-border/60 py-1 pl-3">
+					{#if message.fold === 'plan'}
+						<p class="m-0 text-tiny leading-relaxed text-muted-foreground">
+							{t('bolt.agent.planCheckpointHint')}
+						</p>
+					{/if}
 					<Inline gap="xs" role="tablist" aria-label={t('bolt.agent.compactedContextAria')}>
 						<button
 							type="button"

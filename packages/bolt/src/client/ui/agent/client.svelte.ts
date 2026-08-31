@@ -14,7 +14,8 @@ type InteractiveAgentStartInput = {
 	readonly turnId: string;
 	readonly runId?: string;
 	readonly planMode?: boolean;
-	readonly intent?: 'do' | 'plan';
+	readonly intent?: 'do' | 'plan' | 'compact';
+	readonly mode?: 'queue' | 'steer';
 	readonly verifierPrompt?: string;
 	readonly model?: string;
 	readonly documents?: readonly ChatDocumentRef[];
@@ -52,7 +53,10 @@ export type AgentRuntimeConfig = Readonly<{
 			| 'approval_request'
 			| 'chat_session'
 			| 'chat_message'
-			| 'agent_mailbox'
+			| 'chat_message_part'
+			| 'agent_lane'
+			| 'agent_run'
+			| 'agent_inbox'
 			| 'user'
 			| 'bolt_notifications'
 		>;
@@ -110,6 +114,9 @@ function startInteractiveAgent(
 			conversationId,
 			turnId: input.turnId,
 			message: input.message,
+			...(input.mode === undefined ? {} : { mode: input.mode }),
+			...(input.intent === undefined ? {} : { intent: input.intent }),
+			...(input.verifierPrompt === undefined ? {} : { verifierPrompt: input.verifierPrompt }),
 			...(input.model === undefined ? {} : { model: input.model }),
 			...(input.documents === undefined ? {} : { documents: input.documents })
 		})

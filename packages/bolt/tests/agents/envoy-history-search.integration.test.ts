@@ -29,14 +29,15 @@ describe('envoy history search scope', () => {
 			);
 		}
 		await harness.database.query(
-			`insert into chat_message (conversation_id, role, content, created_at) values
-			 ($1, 'user', $2::jsonb, '2026-08-24T10:00:00.000Z'),
-			 ($3, 'user', $4::jsonb, '2026-08-24T10:05:00.000Z')`,
+			`insert into chat_message
+			 (message_id, conversation_id, role, content_kind, content_text, search_text, semantic_hash, created_at)
+			 values ('history-first', $1, 'user', 'text', $2, $2, 'hash-first', '2026-08-24T10:00:00.000Z'),
+			 ('history-second', $3, 'user', 'text', $4, $4, 'hash-second', '2026-08-24T10:05:00.000Z')`,
 			[
 				'desk:dm:first',
-				JSON.stringify({ kind: 'user_message', text: 'first marker', documents: [] }),
+				'first marker',
 				'desk:dm:second',
-				JSON.stringify({ kind: 'user_message', text: 'second marker', documents: [] })
+				'second marker'
 			]
 		);
 
@@ -98,14 +99,13 @@ describe('envoy history search scope', () => {
 			[adminSubject.userId]
 		);
 		await harness.database.query(
-			`insert into chat_message (conversation_id, turn_id, role, content, created_at) values
-			 ('web-history', 'old', 'user', $1::jsonb, '2026-08-01T10:00:00.000Z'),
-			 ('web-history', 'queued', 'user', $2::jsonb, '2026-08-31T10:00:00.000Z'),
-			 ('web-history', 'queued', 'assistant', $3::jsonb, '2026-08-31T10:00:00.001Z')`,
+			`insert into chat_message
+			 (message_id, conversation_id, role, content_kind, content_text, search_text, semantic_hash, created_at)
+			 values ('history-old', 'web-history', 'user', 'text', $1, $1, 'hash-old', '2026-08-01T10:00:00.000Z'),
+			 ('history-pending', 'web-history', 'user', 'text', $2, $2, 'hash-pending', '2026-08-31T10:00:00.000Z')`,
 			[
-				JSON.stringify({ kind: 'user_message', text: 'older searchable marker' }),
-				JSON.stringify({ kind: 'user_message', text: 'incoming queued marker' }),
-				JSON.stringify({ id: 'queued', status: 'queued', parts: [] })
+				'older searchable marker',
+				'incoming queued marker'
 			]
 		);
 

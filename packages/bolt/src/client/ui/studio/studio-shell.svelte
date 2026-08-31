@@ -3,6 +3,7 @@
 	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import OperationsPane from './operations-pane.svelte';
+	import AutomationRunsPane from './automation-runs-pane.svelte';
 	import ManifestPane from './manifest-pane.svelte';
 	import ManifestTree from './manifest-tree.svelte';
 	import SourceEditor from './source-editor.svelte';
@@ -14,6 +15,7 @@
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { workspaceSession } from '#lib/client/session.js';
+	import { ENVOYS_SETTINGS_PATH } from '#lib/client/ui/shell/workspace-navigation.js';
 	import {
 		settleSourceCommit,
 		sourceCommitFiles,
@@ -47,7 +49,13 @@
 	 * resolved a workspace by reading the routed tenant off the document, which is how a Studio
 	 * opened after a client-side organization switch could browse the previous tenant's data.
 	 */
-	let { client }: { client: WorkspaceClient } = $props();
+	let {
+		client,
+		onnavigate
+	}: {
+		client: WorkspaceClient;
+		onnavigate?: ((href: string) => void) | undefined;
+	} = $props();
 
 	const OperationsStateSchema = Schema.Struct({
 		capabilities: Schema.Struct({ canDecideReview: Schema.Boolean }),
@@ -157,6 +165,7 @@
 		workbench: WorkbenchView;
 		review: StudioReviewTab;
 		selected: string;
+		automation: string | undefined;
 		expanded: ReadonlyArray<string>;
 		environmentId: string | undefined;
 	}>({
@@ -164,6 +173,7 @@
 		workbench: 'manifest',
 		review: 'requests',
 		selected: 'collections',
+		automation: undefined,
 		expanded: ['collections'],
 		environmentId: undefined
 	});
@@ -218,6 +228,7 @@
 	const rootTabs = $derived([
 		{ name: 'workbench', label: 'Workbench', content: '' },
 		{ name: 'review', label: 'Review', content: '' },
+		{ name: 'runs', label: 'Runs', content: '' },
 		...(snapshot?.capabilities.canDecideReview === true
 			? [{ name: 'operations', label: 'Operations', content: '' }]
 			: [])
@@ -245,6 +256,7 @@
 	);
 	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isReview = $derived(view.rootTab === 'review');
+	const isRuns = $derived(view.rootTab === 'runs');
 	const isOperations = $derived(view.rootTab === 'operations');
 	const sourceDraftCount = $derived(Object.keys(sourceDrafts).length);
 	const currentCommitAlreadyRequested = $derived(
@@ -495,8 +507,14 @@
 				<Tabs
 					value={view.rootTab}
 					onValueChange={(next) => {
-						if (next === 'workbench' || next === 'review' || next === 'operations') {
+						if (
+							next === 'workbench' ||
+							next === 'review' ||
+							next === 'runs' ||
+							next === 'operations'
+						) {
 							view.rootTab = next;
+							if (next === 'runs') view.automation = undefined;
 						}
 					}}
 					showContent={false}
@@ -507,7 +525,7 @@
 					listClass="mx-0 w-full"
 					config={rootTabs}
 				/>
-				{#if !isOperations}
+				{#if isWorkbench || isReview}
 					<Button
 						variant="ghost"
 						size="sm"
@@ -522,7 +540,7 @@
 			</Cluster>
 		</Stack>
 
-		{#if !isOperations}
+		{#if isWorkbench || isReview}
 			<!-- The root rail and every nested tab surface share one page gutter. Keeping the gutter on
 			     this parent prevents Workbench and Review from drifting independently. -->
 			<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
@@ -623,6 +641,15 @@
 					onrollback={() => void Effect.runPromise(actions.rollback())}
 				/>
 			</Bound>
+		{:else if isRuns}
+			<Bound size="full" grow clip class="bg-background font-sans">
+				<AutomationRunsPane
+					{client}
+					automations={workspace.manifest?.automations ?? []}
+					selected={view.automation}
+					onselect={(name) => (view.automation = name)}
+				/>
+			</Bound>
 		{:else}
 			<aside
 				class="hidden w-72 shrink-0 border-r border-border/60 bg-card font-sans md:block"
@@ -662,13 +689,17 @@
 						{sections}
 						{envoys}
 						{tools}
-						{client}
 						system={client.system}
 						{files}
 						selected={view.selected}
 						environment={vault.entries}
 						environmentError={vault.error}
 						onopenSource={openSource}
+						onconfigureEnvoys={() => onnavigate?.(ENVOYS_SETTINGS_PATH)}
+						onviewRuns={(name) => {
+							view.automation = name;
+							view.rootTab = 'runs';
+						}}
 					/>
 				{:else}
 					<SourceEditor

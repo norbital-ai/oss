@@ -97,10 +97,10 @@ describe('Bolt protocol schemas', () => {
 				taskId: 'agent-turn-1'
 			});
 		}
-		// 6 is the version that moves AI image-byte expansion to the trusted host. The literal is
+		// 7 adds durable task attempts, claim leases and retry classification to host scheduling. The literal is
 		// asserted rather than the constant compared to itself: a bump is a deliberate act, and a
 		// release that changes shape without one is the failure this pins.
-		expect(PROTOCOL_VERSION).toBe(6);
+		expect(PROTOCOL_VERSION).toBe(7);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

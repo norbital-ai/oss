@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { EnvironmentName, ReleaseId, TenantId, type SyncAnswer } from '@norbital-ai/bolt-protocol';
+import {
+	EnvironmentName,
+	ReleaseId,
+	TenantId,
+	type CollectionMutateRequest,
+	type SyncAnswer,
+	type SyncQueryInput
+} from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
@@ -32,6 +39,7 @@ const fakeSyncClient = () => {
 	let state = initialClientState();
 	const listeners = new Set<(state: ClientState) => void>();
 	const mounted: Array<{ readonly key: string; readonly input: unknown }> = [];
+	const enqueued: Array<CollectionMutateRequest> = [];
 	const client = {
 		start: () => undefined,
 		current: () => state,
@@ -45,12 +53,14 @@ const fakeSyncClient = () => {
 			mounted.push({ key, input });
 			return { key, release: () => undefined };
 		},
-		enqueue: () => undefined,
+		enqueue: (request: CollectionMutateRequest) => enqueued.push(request),
 		publish: (key: string, answer: SyncAnswer, phase: 'fresh' | 'pending' = 'fresh') => {
+			const input = mounted.find((entry) => entry.key === key)?.input as SyncQueryInput | undefined;
+			if (input === undefined) throw new Error(`Unknown mounted query ${key}`);
 			state = {
 				...state,
 				queries: new Map([...state.queries]).set(key, {
-					input: { kind: 'findMany', collection: 'jobs' },
+					input,
 					answer,
 					phase,
 					subscribers: 1
@@ -59,7 +69,7 @@ const fakeSyncClient = () => {
 			for (const listener of listeners) listener(state);
 		}
 	};
-	return { client, mounted };
+	return { client, mounted, enqueued };
 };
 
 /**
@@ -88,6 +98,7 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceCli
 	bolt,
 	db: {},
 	sync,
+	mutation: { partitionKey: 'test-partition', schemaFingerprint: 'sha256:test' },
 	syncStatus: initialClientState(),
 	settlements: inertSettlements
 });
@@ -176,6 +187,91 @@ describe('typed browser client', () => {
 		// cursor to walk and no read command ever crossed the transport.
 		expect(query?.nextCursor).toBeNull();
 		expect(commands).toEqual([]);
+	});
+
+	it('enqueues the complete protocol-v2 mutation envelope with authoritative base versions', async () => {
+		const sync = fakeSyncClient();
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const runtime = runtimeOf(bolt, sync.client);
+		const proxy = createWorkspaceApiProxy(runtime, {
+			employees: { name: 'employees', fields: [], relationships: [] }
+		});
+		const employees = Reflect.get(proxy.db, 'employees') as {
+			findMany: () => { readonly current: unknown };
+			mutate: (values: Schema.Json) => Promise<{ readonly row: unknown }>;
+		};
+		employees.findMany();
+		sync.client.publish(sync.mounted[0]?.key ?? '', [
+			{ id: 'employee-1', name: 'Ada', row_version: 7 }
+		]);
+
+		await employees.mutate({ id: 'employee-1', name: 'Grace' });
+		await employees.mutate({ name: 'Lin' });
+
+		expect(sync.enqueued).toHaveLength(2);
+		expect(sync.enqueued[0]).toMatchObject({
+			protocolVersion: 2,
+			partitionKey: 'test-partition',
+			schemaFingerprint: 'sha256:test',
+			graph: {
+				action: 'update',
+				collection: 'employees',
+				values: { id: 'employee-1', name: 'Grace' }
+			},
+			baseVersions: [
+				{
+					row: { collection: 'employees', recordId: 'employee-1' },
+					rowVersion: 7
+				}
+			]
+		});
+		expect(sync.enqueued[0]?.issuedAtEpochMs).toBeGreaterThan(0);
+		expect(sync.enqueued[0]?.idempotencyKey).toBeTypeOf('string');
+		expect(sync.enqueued[1]).toMatchObject({
+			protocolVersion: 2,
+			graph: { action: 'create', collection: 'employees', values: { name: 'Lin' } },
+			baseVersions: []
+		});
+	});
+
+	it('includes known nested relationship rows in the whole-row base vector', async () => {
+		const sync = fakeSyncClient();
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client), {
+			orders: {
+				name: 'orders',
+				fields: [],
+				relationships: [{ name: 'lines', target: 'order_lines', cardinality: 'many' }]
+			},
+			order_lines: { name: 'order_lines', fields: [], relationships: [] }
+		});
+		const orders = Reflect.get(proxy.db, 'orders') as {
+			findMany: () => unknown;
+			mutate: (values: Schema.Json) => Promise<unknown>;
+		};
+		const lines = Reflect.get(proxy.db, 'order_lines') as { findMany: () => unknown };
+		orders.findMany();
+		lines.findMany();
+		sync.client.publish(sync.mounted[0]?.key ?? '', [
+			{ id: 'order-1', reference: 'A', row_version: 3 }
+		]);
+		sync.client.publish(sync.mounted[1]?.key ?? '', [
+			{ id: 'line-1', sku: 'OLD', row_version: '9' }
+		]);
+
+		await orders.mutate({
+			id: 'order-1',
+			reference: 'B',
+			lines: [
+				{ id: 'line-1', sku: 'NEW' },
+				{ id: 'line-new', sku: 'NEW-ROW' }
+			]
+		});
+
+		expect(sync.enqueued[0]?.baseVersions).toEqual([
+			{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 3 },
+			{ row: { collection: 'order_lines', recordId: 'line-1' }, rowVersion: 9 }
+		]);
 	});
 
 	it('seals private platform collections out of the authored browser proxy', () => {

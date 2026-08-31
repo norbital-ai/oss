@@ -1,7 +1,7 @@
-export const protocolVersion = 6;
+export const protocolVersion = 7;
 
 export const manifest = {
-	protocolVersion: 6,
+	protocolVersion: 7,
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
@@ -143,9 +143,7 @@ export const dispatch = async (invocation, _facilities, signal) => {
 				status: 200,
 				headers: {},
 				value: { mutationId: idempotencyKey ?? null },
-				changes: [
-					{ collection: 'fixture-notes', recordId: 'note-2', mutationId: idempotencyKey }
-				]
+				changes: [{ collection: 'fixture-notes', recordId: 'note-2', mutationId: idempotencyKey }]
 			});
 		}
 		return ok({

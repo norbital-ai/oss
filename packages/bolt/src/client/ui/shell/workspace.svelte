@@ -592,7 +592,7 @@
 			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
 		/>
 	{:else if hostPlugin === 'workspace-studio'}
-		<StudioShell client={workspace.frameworkClient} />
+		<StudioShell client={workspace.frameworkClient} onnavigate={actions.navigate} />
 	{:else if hostPlugin === 'organization'}
 		<OrganizationSettings tenantId={view.organization.id} client={workspace.frameworkClient} />
 	{:else if hostPlugin === 'envoys'}

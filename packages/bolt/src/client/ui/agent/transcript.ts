@@ -7,11 +7,14 @@
  */
 import { Effect, Option, Schema } from 'effect';
 import {
+	modelMessagesToUIMessages,
+	type ModelMessage,
+	type UIMessage
+} from '@tanstack/ai';
+import {
 	parseStoredGoalVerdict,
 	parseStoredVerifierScheduled
 } from '#lib/client/ui/agent/goal-verdict.js';
-import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
-import { chatInputForModel, parseStoredChatInput } from '#lib/runtime/agents/chat-messages.js';
 import { humanize } from '@norbital-ai/std';
 import { parseStoredSummary } from '#lib/client/ui/agent/intent.js';
 
@@ -153,16 +156,36 @@ export type PanelMessage =
 	| PanelGoal
 	| PanelVerifier;
 
-/** One typed `chat_message` row, with only its intentionally untyped jsonb content left to decode. */
-// repository-health:allow AL8 -- a structural projection of the row, so `projectStoredChatMessages`
-// is testable without the generated client; declaring the canonical type this rule asks for would
-// itself be a matching type literal.
+/** The synced header of one canonical TanStack ModelMessage. */
 type StoredChatMessageRow = Readonly<{
 	readonly id: string;
+	readonly sequence?: number;
+	readonly message_id: string;
 	readonly conversation_id: string;
-	readonly turn_id: string | null;
 	readonly role: string;
-	readonly content: unknown;
+	readonly name?: string | null;
+	readonly run_id?: string | null;
+	readonly content_kind: string;
+	readonly content_text?: string | null;
+	readonly tool_call_id?: string | null;
+	readonly error?: string | null;
+	readonly model_metadata?: unknown;
+	readonly app_metadata?: unknown;
+}>;
+
+type StoredModelFieldRow = Readonly<{
+	readonly message_id: string;
+	readonly field: string;
+	readonly ordinal: number;
+	readonly payload: unknown;
+}>;
+
+type StoredAgentRunRow = Readonly<{
+	readonly run_id: string;
+	readonly conversation_id: string;
+	readonly status: string;
+	readonly error?: unknown;
+	readonly usage?: unknown;
 }>;
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
@@ -173,16 +196,6 @@ const ElicitationRequest = Schema.Struct({
 	mode: Schema.optionalKey(Schema.Literals(['form', 'url'])),
 	url: Schema.optionalKey(Schema.String)
 });
-const StoredTurn = Schema.Struct({
-	id: Schema.String,
-	status: Schema.String,
-	parts: Schema.Array(JsonObject),
-	usage: Schema.optionalKey(JsonObject),
-	error: Schema.optionalKey(Schema.String)
-});
-const StoredText = Schema.Union([Schema.String, Schema.Struct({ text: Schema.String })]);
-const decodeStoredTurn = Schema.decodeUnknownOption(StoredTurn);
-const decodeStoredText = Schema.decodeUnknownOption(StoredText);
 const decodeJsonObject = Schema.decodeUnknownOption(JsonObject);
 const decodeJsonObjects = Schema.decodeUnknownOption(JsonObjects);
 const decodeElicitationRequest = Schema.decodeUnknownOption(ElicitationRequest);
@@ -212,68 +225,157 @@ const delegatedSessionIds = (
 	return sessions;
 };
 
-/**
- * Projects the typed, reactive `chat_message` query into the transcript's presentation records.
- *
- * Only `content` is decoded: it is the model's deliberate jsonb payload. Collection columns are
- * already typed by `PlatformSchema`, so this function never re-checks or widens them.
- */
-export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[]) {
-	const projected = rows.map((row) => {
-		const chatInput = parseStoredChatInput(row.content);
-		if (chatInput !== null) {
-			return {
-				id: row.id,
-				conversation_id: row.conversation_id,
-				role: row.role,
-				parts: [{ kind: 'text', text: chatInputForModel(chatInput) }],
-				turn_id: row.turn_id
-			};
+const jsonColumn = (value: unknown): unknown => {
+	if (typeof value !== 'string') return value;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return value;
+	}
+};
+
+const objectColumn = (value: unknown): Readonly<Record<string, unknown>> => {
+	const decoded = jsonColumn(value);
+	return typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)
+		? (decoded as Readonly<Record<string, unknown>>)
+		: {};
+};
+
+const modelMessage = (
+	row: StoredChatMessageRow,
+	fields: readonly StoredModelFieldRow[]
+): ModelMessage => {
+	const items = (field: string) =>
+		fields
+			.filter((part) => part.message_id === row.message_id && part.field === field)
+			.toSorted((left, right) => left.ordinal - right.ordinal)
+			.map((part) => jsonColumn(part.payload));
+	const content =
+		row.content_kind === 'null'
+			? null
+			: row.content_kind === 'text'
+				? (row.content_text ?? '')
+				: items('content');
+	const toolCalls = items('toolCalls');
+	const thinking = items('thinking');
+	const structuredOutput = items('structuredOutput')[0];
+	const metadata = jsonColumn(row.model_metadata);
+	return {
+		id: row.message_id,
+		role: row.role,
+		content,
+		...(row.name == null ? {} : { name: row.name }),
+		...(row.tool_call_id == null ? {} : { toolCallId: row.tool_call_id }),
+		...(row.error == null ? {} : { error: row.error }),
+		...(metadata === null || metadata === undefined ? {} : { metadata }),
+		...(toolCalls.length === 0 ? {} : { toolCalls }),
+		...(thinking.length === 0 ? {} : { thinking }),
+		...(structuredOutput === undefined ? {} : { structuredOutput })
+	} as unknown as ModelMessage;
+};
+
+const toolInput = (part: Readonly<Record<string, unknown>>): unknown => {
+	if (part.input !== undefined) return part.input;
+	if (typeof part.arguments !== 'string') return {};
+	return jsonColumn(part.arguments);
+};
+
+/** Adapts SDK UI parts into the panel's rendering records; it is not persisted or model-facing. */
+const panelParts = (message: UIMessage): ReadonlyArray<Readonly<Record<string, unknown>>> =>
+	message.parts.flatMap((part): ReadonlyArray<Readonly<Record<string, unknown>>> => {
+		switch (part.type) {
+			case 'text':
+				return [{ kind: 'text', text: part.content }];
+			case 'thinking':
+				return [{ kind: 'reasoning', text: part.content }];
+			case 'tool-call':
+				return [
+					{
+						kind: 'tool',
+						id: part.id,
+						name: part.name,
+						input: toolInput(part as unknown as Readonly<Record<string, unknown>>)
+					}
+				];
+			case 'tool-result':
+				return [
+					{
+						kind: 'tool-result',
+						id: part.toolCallId,
+						output: jsonColumn(part.content),
+						...(part.error === undefined ? {} : { error: part.error })
+					}
+				];
+			case 'structured-output':
+				return [
+					{
+						kind: 'text',
+						text:
+							part.status === 'complete'
+								? JSON.stringify(part.data, null, 2)
+								: part.raw
+					}
+				];
+			case 'image':
+			case 'audio':
+			case 'video':
+			case 'document':
+				return [{ kind: 'text', text: `[${part.type}]` }];
+			case 'ui-resource':
+				return [];
 		}
-		const relayed = parseAgentMessage(row.content);
-		if (relayed !== null) {
-			return {
-				id: row.id,
-				conversation_id: row.conversation_id,
-				kind: relayed.kind,
-				role: row.role,
-				from: relayed.from,
-				parts: [{ kind: 'text', text: relayed.text }],
-				turn_id: row.turn_id
-			};
-		}
-		return Option.match(decodeStoredTurn(row.content), {
-			onNone: () => {
-				const content = Option.getOrElse(decodeStoredText(row.content), () => '');
-				return {
-					id: row.id,
-					conversation_id: row.conversation_id,
-					role: row.role,
-					parts: [{ kind: 'text', text: typeof content === 'string' ? content : content.text }],
-					turn_id: row.turn_id
-				};
-			},
-			onSome: (turn) => ({
-				...turn,
-				conversation_id: row.conversation_id,
-				role: row.role,
-				turn_id: row.turn_id
-			})
-		});
 	});
-	const turns = rows.flatMap((row) =>
-		Option.match(decodeStoredTurn(row.content), {
-			onNone: () => [],
-			onSome: ({ id, status, error }) => [
-				{
-					id,
-					conversation_id: row.conversation_id,
-					status,
-					...(error === undefined ? {} : { error })
-				}
-			]
+
+/**
+ * Reconstructs canonical ModelMessages from synced header/field rows, then delegates message
+ * pairing and UI semantics to the pinned TanStack projection.
+ */
+export function projectStoredChatMessages(
+	rows: readonly StoredChatMessageRow[],
+	fields: readonly StoredModelFieldRow[] = [],
+	runs: readonly StoredAgentRunRow[] = []
+) {
+	const grouped = Map.groupBy(rows, (row) => row.conversation_id);
+	const projected = [...grouped.values()]
+		.flatMap((conversationRows) => {
+			const canonical = conversationRows.map((row) => modelMessage(row, fields));
+			const headers = new Map(conversationRows.map((row) => [row.message_id, row]));
+			return modelMessagesToUIMessages(canonical).map((message) => {
+				const header = headers.get(message.id) ?? conversationRows[0]!;
+				const app = objectColumn(header.app_metadata);
+				const delegated = objectColumn(app.delegated);
+				const from = objectColumn(delegated.from);
+				const rawParts = panelParts(message);
+				const parts =
+					app.delegated === undefined
+						? rawParts
+						: [{ kind: 'text', text: typeof delegated.text === 'string' ? delegated.text : '' }];
+				return {
+					id: message.id,
+					sequence: header.sequence ?? 0,
+					conversation_id: header.conversation_id,
+					role: message.role,
+					parts,
+					...(app.delegated !== undefined
+						? { kind: 'agent_message' }
+						: typeof app.kind === 'string'
+							? { kind: app.kind }
+							: {}),
+					...(app.kind === 'summary' && (app.fold === 'plan' || app.fold === 'compact')
+						? { fold: app.fold }
+						: {}),
+					...(app.delegated === undefined ? {} : { from })
+				};
+			});
 		})
-	);
+		.toSorted((left, right) => left.sequence - right.sequence);
+	const turns = runs.map((run) => ({
+		id: run.run_id,
+		conversation_id: run.conversation_id,
+		status: run.status,
+		...(run.error === undefined || run.error === null ? {} : { error: run.error }),
+		...(run.usage === undefined || run.usage === null ? {} : { usage: jsonColumn(run.usage) })
+	}));
 	const delegatedAgentIds = delegatedSessionIds(projected);
 	return {
 		messages: projected.map((record) => ({
@@ -307,7 +409,7 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	read_agent: { labelKey: 'bolt.agent.tool.readAgent', icon: 'lucide:scan-search' },
 	message_agent: { labelKey: 'bolt.agent.tool.messageAgent', icon: 'lucide:send' },
 	await_agent: { labelKey: 'bolt.agent.tool.awaitAgent', icon: 'lucide:hourglass' },
-	interrupt_agent: { labelKey: 'bolt.agent.tool.interruptAgent', icon: 'lucide:octagon-x' },
+	steer_agent: { labelKey: 'bolt.agent.tool.steerAgent', icon: 'lucide:milestone' },
 	stop_agent: { labelKey: 'bolt.agent.tool.stopAgent', icon: 'lucide:pause' },
 	resume_agent: { labelKey: 'bolt.agent.tool.resumeAgent', icon: 'lucide:play' }
 };
@@ -335,7 +437,7 @@ const SANDBOX_AGENT_TOOLS = new Set([
 	'read_agent',
 	'message_agent',
 	'await_agent',
-	'interrupt_agent',
+	'steer_agent',
 	'stop_agent',
 	'resume_agent'
 ]);
@@ -439,7 +541,8 @@ function checkpointFold(record: Readonly<Record<string, unknown>>): PanelCheckpo
 	// A malformed checkpoint — no id, or no text to fold — is a row like any other.
 	if (typeof id !== 'string' || content === null) return null;
 	const parsed = parseStoredSummary(content);
-	return { kind: 'checkpoint', key: id, summary: parsed.text, before: [], fold: parsed.fold };
+	const fold = record.fold === 'plan' || record.fold === 'compact' ? record.fold : parsed.fold;
+	return { kind: 'checkpoint', key: id, summary: parsed.text, before: [], fold };
 }
 
 /** The verifier verdict or scheduled prompt this goal record folds, or nothing when it reads as content. */

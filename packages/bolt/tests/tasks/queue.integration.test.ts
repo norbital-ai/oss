@@ -5,17 +5,13 @@ import { workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import {
 	makeQueue,
-	recoverStatement,
+	recoverStatements,
 	slotEffectId,
 	stopStatement,
 	type ExecuteStatements
 } from '../../src/runtime/tasks/queue.js';
 
-/**
- * The cron engine is exercised against real Postgres semantics. There is deliberately no fixture
- * here for claims, leases, retries, deferred work, or serial lanes: `bolt_task` is an observation
- * of one already-fired cron occurrence, not a durable execution queue.
- */
+/** Real Postgres semantics prove claims, leases, retries and cron advancement together. */
 const taskSchemaSteps = () =>
 	buildSchemaPlan(
 		workspace({
@@ -37,12 +33,12 @@ const taskSchemaSteps = () =>
 		(step) =>
 			step.id.startsWith('collection:bolt_task') ||
 			step.id.startsWith('collection:bolt_schedule') ||
-			step.id.startsWith('collection:bolt_sync_outbox') ||
-			step.id.startsWith('collection:bolt_sync_horizon')
+			step.id.startsWith('collection:bolt_sync_outbox')
 	);
 
 const HOUR_MILLIS = 3_600_000;
 const DAY_MILLIS = 24 * HOUR_MILLIS;
+const LEASE_MILLIS = 60_000;
 const at = (iso: string): number => Date.parse(iso);
 const hourAt = (instant: number): number => Math.floor(instant / HOUR_MILLIS) * HOUR_MILLIS;
 const nextDailySix = (instant: number): number => {
@@ -51,7 +47,7 @@ const nextDailySix = (instant: number): number => {
 	return today > instant ? today : today + DAY_MILLIS;
 };
 
-describe('cron task observations over a host facility', () => {
+describe('durable task queue over a host facility', () => {
 	let database: PGlite;
 	let execute: ExecuteStatements;
 
@@ -99,7 +95,8 @@ describe('cron task observations over a host facility', () => {
 		return {
 			declare: (...args: Parameters<typeof effects.declare>) =>
 				Effect.runPromise(effects.declare(...args)),
-			fire: (...args: Parameters<typeof effects.fire>) => Effect.runPromise(effects.fire(...args)),
+			fire: (nowEpochMs: number, leaseForMillis = LEASE_MILLIS) =>
+				Effect.runPromise(effects.fire(nowEpochMs, leaseForMillis)),
 			settle: (...args: Parameters<typeof effects.settle>) =>
 				Effect.runPromise(effects.settle(...args)),
 			when: () => Effect.runPromise(effects.when())
@@ -110,7 +107,9 @@ describe('cron task observations over a host facility', () => {
 	const tasks = async () =>
 		(
 			await database.query<Record<string, unknown>>(
-				'select id, command, status, effect_id, error, result, run_at from bolt_task order by created_at, effect_id'
+				`select id, command, status, effect_id, error, result, run_at, lease_expires_at,
+				        attempts, max_attempts
+				 from bolt_task order by created_at, effect_id`
 			)
 		).rows;
 	const schedules = async () =>
@@ -120,15 +119,16 @@ describe('cron task observations over a host facility', () => {
 			)
 		).rows;
 
-	it('applies the cron-only schema repeatedly', async () => {
+	it('applies the durable queue schema repeatedly', async () => {
 		for (const step of taskSchemaSteps()) await database.exec(step.sql);
 		const columns = await database.query<{ column_name: string }>(
 			`select column_name from information_schema.columns
 			 where table_name = 'bolt_task' order by column_name`
 		);
-		expect(columns.rows.map(({ column_name }) => column_name)).not.toEqual(
-			expect.arrayContaining(['attempts', 'lane', 'max_attempts', 'position'])
+		expect(columns.rows.map(({ column_name }) => column_name)).toEqual(
+			expect.arrayContaining(['attempts', 'lease_expires_at', 'max_attempts', 'run_at'])
 		);
+		expect(columns.rows.map(({ column_name }) => column_name)).not.toContain('lane');
 	});
 
 	it('upserts declarations, preserves an unchanged slot, and retires omissions', async () => {
@@ -161,7 +161,7 @@ describe('cron task observations over a host facility', () => {
 		expect(result.nextDueAtEpochMs).toBeUndefined();
 	});
 
-	it('advances one due schedule at fire time and records one running occurrence', async () => {
+	it('rolls and claims one due cron occurrence with a finite lease', async () => {
 		const now = Date.now();
 		const slot = nextDailySix(now) - DAY_MILLIS;
 		await queue().declare(
@@ -183,19 +183,20 @@ describe('cron task observations over a host facility', () => {
 				command: 'automations.digest',
 				taskId: slotEffectId('automations.digest', slot),
 				scheduleKey: 'automations.digest',
-				scheduledForEpochMs: slot
+				scheduledForEpochMs: slot,
+				attempt: 1
 			}
 		]);
 		expect((await tasks())[0]).toMatchObject({
 			status: 'running',
+			attempts: 1,
 			effect_id: slotEffectId('automations.digest', slot)
 		});
-		expect(new Date(String((await schedules())[0]?.next_run_at)).getTime()).toBe(
-			nextDailySix(now)
-		);
+		expect((await tasks())[0]?.lease_expires_at).not.toBeNull();
+		expect(new Date(String((await schedules())[0]?.next_run_at)).getTime()).toBe(nextDailySix(now));
 	});
 
-	it('fires one missed occurrence and rejoins the current rhythm without replaying backlog', async () => {
+	it('fires one missed cron occurrence and rejoins the current rhythm', async () => {
 		const now = Date.now();
 		const missed = hourAt(now) - 3 * HOUR_MILLIS;
 		await queue().declare(
@@ -212,68 +213,193 @@ describe('cron task observations over a host facility', () => {
 		await database.exec(
 			`update bolt_schedule set next_run_at = '${new Date(missed).toISOString()}'`
 		);
-		expect((await queue().fire(now)).occurrences).toHaveLength(1);
+		const first = await queue().fire(now);
+		expect(first.occurrences).toHaveLength(1);
+		await queue().settle(first.occurrences[0]!.taskId, 1, { _tag: 'Done', result: null });
 		expect((await queue().fire(now + 1_000)).occurrences).toHaveLength(0);
 		expect(await tasks()).toHaveLength(1);
 	});
 
-	it('settles success and failure terminally and never creates retry work', async () => {
-		const now = Date.now();
-		await queue().declare(
-			[
-				{ key: 'a', command: 'automations.a', crontab: '* * * * *', input: {} },
-				{ key: 'b', command: 'automations.b', crontab: '* * * * *', input: {} }
-			],
-			now
+	it('discovers a due direct task row through the same claim path', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('integrations.pull', '{"name":"erp","cursor":null}', 'direct-pull')`
 		);
-		await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
-		const fired = await queue().fire(now);
-		const first = fired.occurrences[0];
-		const second = fired.occurrences[1];
-		if (first === undefined || second === undefined) throw new Error('expected two occurrences');
-		await queue().settle(first.taskId, { _tag: 'Done', result: { delivered: 2 } });
-		await queue().settle(second.taskId, { _tag: 'Failed', error: 'provider unavailable' });
-		expect((await tasks()).map(({ status }) => status).toSorted()).toEqual(['done', 'failed']);
-		expect(await queue().when()).toBeGreaterThan(now);
+		const fired = await queue().fire(Date.now());
+		expect(fired.rolled).toBe(0);
+		expect(fired.occurrences).toMatchObject([
+			{
+				taskId: 'direct-pull',
+				scheduleKey: 'task:direct-pull',
+				command: 'integrations.pull',
+				input: { name: 'erp', cursor: null },
+				attempt: 1
+			}
+		]);
 	});
 
-	it('preserves a terminal stop against a late successful completion', async () => {
-		const now = Date.now();
-		await queue().declare(
-			[{ key: 'a', command: 'automations.a', crontab: '* * * * *', input: {} }],
-			now
+	it('keeps deferred direct work asleep and reports its exact wake time', async () => {
+		const future = Date.now() + HOUR_MILLIS;
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id, run_at) values
+			 ('envoys.drain', '{}', 'deferred-drain', '${new Date(future).toISOString()}')`
 		);
-		await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
-		const [task] = (await queue().fire(now)).occurrences;
-		if (task === undefined) throw new Error('expected one occurrence');
-		await runStatements([stopStatement(task.taskId, task.command)]);
-		await queue().settle(task.taskId, { _tag: 'Done', result: { ignored: true } });
-		expect((await tasks())[0]).toMatchObject({ status: 'stopped', error: 'stopped', result: null });
+		expect((await queue().fire(Date.now())).occurrences).toEqual([]);
+		expect(await queue().when()).toBe(future);
 	});
 
-	it('marks every in-flight cron occurrence failed on environment recovery', async () => {
-		await database.exec(`insert into bolt_task (command, input, effect_id, status) values
-			('automations.a', '{}', 'running-a', 'running'),
-			('automations.b', '{}', 'done-b', 'done')`);
-		await runStatements([recoverStatement()]);
-		expect((await tasks()).find(({ effect_id }) => effect_id === 'running-a')).toMatchObject({
-			status: 'failed',
-			error: 'host restarted during run'
+	it('atomically hands one due row to only one competing discovery', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('collections.resume', '{}', 'claim-once')`
+		);
+		const [left, right] = await Promise.all([queue().fire(Date.now()), queue().fire(Date.now())]);
+		expect([...left.occurrences, ...right.occurrences]).toHaveLength(1);
+		expect((await tasks())[0]).toMatchObject({ status: 'running', attempts: 1 });
+	});
+
+	it('does not double-claim a live lease and recovers it after expiry', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('collections.discard', '{}', 'leased')`
+		);
+		const first = await queue().fire(Date.now());
+		expect(first.occurrences[0]).toMatchObject({ taskId: 'leased', attempt: 1 });
+		expect((await queue().fire(Date.now())).occurrences).toEqual([]);
+		await database.exec(
+			"update bolt_task set lease_expires_at = now() - interval '1 second' where effect_id = 'leased'"
+		);
+		expect((await queue().fire(Date.now())).occurrences[0]).toMatchObject({
+			taskId: 'leased',
+			attempt: 2
 		});
-		expect((await tasks()).find(({ effect_id }) => effect_id === 'done-b')?.status).toBe('done');
 	});
 
-	it('records an overlapping occurrence as skipped and never rewrites it later', async () => {
-		const now = Date.now();
-		await queue().declare(
-			[{ key: 'a', command: 'automations.a', crontab: '* * * * *', input: {} }],
-			now
+	it('retries retryable failures with bounded backoff and exhausts the row', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id, max_attempts) values
+			 ('integrations.flush', '{}', 'retrying', 2)`
 		);
-		await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
-		const [occurrence] = (await queue().fire(now)).occurrences;
-		if (occurrence === undefined) throw new Error('expected one occurrence');
-		await queue().settle(occurrence.taskId, { _tag: 'Skipped', reason: 'overlap' });
-		await queue().settle(occurrence.taskId, { _tag: 'Done', result: { tooLate: true } });
+		const first = (await queue().fire(Date.now())).occurrences[0]!;
+		const before = Date.now();
+		await queue().settle(
+			first.taskId,
+			first.attempt,
+			{ _tag: 'Failed', error: 'provider unavailable', retryable: true },
+			() => 0
+		);
+		const retrying = (await tasks())[0]!;
+		expect(retrying).toMatchObject({
+			status: 'pending',
+			attempts: 1,
+			error: 'provider unavailable'
+		});
+		// System instants are stored at second precision, so a five-second delay may lose <1s here.
+		expect(new Date(String(retrying.run_at)).getTime()).toBeGreaterThanOrEqual(before + 4_000);
+		expect(new Date(String(retrying.run_at)).getTime()).toBeLessThanOrEqual(before + 6_000);
+		await database.exec("update bolt_task set run_at = now() - interval '1 second'");
+		const second = (await queue().fire(Date.now())).occurrences[0]!;
+		expect(second.attempt).toBe(2);
+		await queue().settle(
+			second.taskId,
+			second.attempt,
+			{ _tag: 'Failed', error: 'still unavailable', retryable: true },
+			() => 0
+		);
+		expect((await tasks())[0]).toMatchObject({
+			status: 'failed',
+			attempts: 2,
+			error: 'still unavailable'
+		});
+	});
+
+	it('fails non-retryable work on its first attempt', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('collections.resume', '{}', 'invalid')`
+		);
+		const occurrence = (await queue().fire(Date.now())).occurrences[0]!;
+		await queue().settle(occurrence.taskId, occurrence.attempt, {
+			_tag: 'Failed',
+			error: 'invalid input',
+			retryable: false
+		});
+		expect((await tasks())[0]).toMatchObject({ status: 'failed', attempts: 1 });
+	});
+
+	it('fences a late settlement from an expired attempt', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('collections.resume', '{}', 'stale-settle')`
+		);
+		const first = (await queue().fire(Date.now())).occurrences[0]!;
+		await database.exec("update bolt_task set lease_expires_at = now() - interval '1 second'");
+		const second = (await queue().fire(Date.now())).occurrences[0]!;
+		await queue().settle(first.taskId, first.attempt, { _tag: 'Done', result: 'stale' });
+		expect((await tasks())[0]).toMatchObject({ status: 'running', attempts: 2, result: null });
+		await queue().settle(second.taskId, second.attempt, { _tag: 'Done', result: 'current' });
+		expect((await tasks())[0]).toMatchObject({ status: 'done', attempts: 2, result: 'current' });
+	});
+
+	it('stops pending or running work and preserves the terminal fence', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('automations.a', '{}', 'pending-stop')`
+		);
+		await runStatements([stopStatement('pending-stop', 'automations.a')]);
+		expect((await tasks())[0]).toMatchObject({ status: 'stopped', error: 'stopped' });
+
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('automations.b', '{}', 'running-stop')`
+		);
+		const occurrence = (await queue().fire(Date.now())).occurrences[0]!;
+		await runStatements([stopStatement(occurrence.taskId, occurrence.command)]);
+		await queue().settle(occurrence.taskId, occurrence.attempt, {
+			_tag: 'Done',
+			result: { ignored: true }
+		});
+		expect((await tasks()).find(({ effect_id }) => effect_id === 'running-stop')).toMatchObject({
+			status: 'stopped',
+			error: 'stopped',
+			result: null
+		});
+	});
+
+	it('recovery releases only expired leases and terminally fences exhausted ones', async () => {
+		await database.exec(`insert into bolt_task
+			(command, input, effect_id, status, attempts, max_attempts, lease_expires_at) values
+			('automations.a', '{}', 'expired', 'running', 1, 3, now() - interval '1 second'),
+			('automations.b', '{}', 'live', 'running', 1, 3, now() + interval '1 hour'),
+			('automations.c', '{}', 'exhausted', 'running', 3, 3, now() - interval '1 second')`);
+		await runStatements(recoverStatements());
+		expect((await tasks()).find(({ effect_id }) => effect_id === 'expired')).toMatchObject({
+			status: 'pending',
+			error: 'host interrupted previous attempt'
+		});
+		expect((await tasks()).find(({ effect_id }) => effect_id === 'live')).toMatchObject({
+			status: 'running'
+		});
+		expect((await tasks()).find(({ effect_id }) => effect_id === 'exhausted')).toMatchObject({
+			status: 'failed',
+			error: 'attempt budget exhausted after interrupted run'
+		});
+	});
+
+	it('records overlap as terminal and ignores a late success', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('automations.a', '{}', 'overlap')`
+		);
+		const occurrence = (await queue().fire(Date.now())).occurrences[0]!;
+		await queue().settle(occurrence.taskId, occurrence.attempt, {
+			_tag: 'Skipped',
+			reason: 'overlap'
+		});
+		await queue().settle(occurrence.taskId, occurrence.attempt, {
+			_tag: 'Done',
+			result: { tooLate: true }
+		});
 		expect((await tasks())[0]).toMatchObject({
 			status: 'skipped',
 			error: 'overlap',

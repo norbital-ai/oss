@@ -24,9 +24,12 @@ import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,
 	| 'approval_request'
-	| 'agent_mailbox'
+	| 'agent_inbox'
+	| 'agent_lane'
+	| 'agent_run'
 	| 'chat_session'
 	| 'chat_message'
+	| 'chat_message_part'
 	| 'user'
 	| 'bolt_notifications'
 >;
@@ -94,6 +97,7 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 			transport
 		),
 		sync: emptySync,
+		mutation: { partitionKey: 'test-partition', schemaFingerprint: 'sha256:test' },
 		syncStatus: initialClientState(),
 		settlements: emptySettlements
 	};
@@ -116,9 +120,12 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 	return {
 		db: {
 			approval_request: emptyOperations<AgentCollections['approval_request']>(),
-			agent_mailbox: emptyOperations<AgentCollections['agent_mailbox']>(),
+			agent_inbox: emptyOperations<AgentCollections['agent_inbox']>(),
+			agent_lane: emptyOperations<AgentCollections['agent_lane']>(),
+			agent_run: emptyOperations<AgentCollections['agent_run']>(),
 			chat_session: emptyOperations<AgentCollections['chat_session']>(),
 			chat_message: emptyOperations<AgentCollections['chat_message']>(),
+			chat_message_part: emptyOperations<AgentCollections['chat_message_part']>(),
 			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
 		},

@@ -85,11 +85,11 @@ const ExternalMemberSourceRow = Schema.Struct({
 	team_id: NullableString
 });
 const InvitationRow = Schema.Struct({
-	id: Schema.NonEmptyString,
+	invitation_id: Schema.NonEmptyString,
 	email: Schema.String,
 	status: Schema.String,
-	invitedBy: NullableString,
-	expiresAt: Schema.NullOr(Schema.String)
+	invited_by: NullableString,
+	expires_at: Schema.NullOr(Schema.String)
 });
 const AuditSubject = Schema.Struct({
 	collection: Schema.optionalKey(Schema.String),
@@ -1243,11 +1243,11 @@ export const layerWith = (
 						database,
 						composer
 							.select({
-								id: invitationsTable.invitation_id,
+								invitation_id: invitationsTable.invitation_id,
 								email: invitationsTable.email,
 								status: invitationsTable.status,
-								invitedBy: invitationsTable.invited_by,
-								expiresAt: invitationsTable.expires_at
+								invited_by: invitationsTable.invited_by,
+								expires_at: invitationsTable.expires_at
 							})
 							.from(invitationsTable)
 							.where(eq(invitationsTable.tenant_id, tenantId))
@@ -1328,14 +1328,14 @@ export const layerWith = (
 					return {
 						members,
 						invitations: decodedInvitations.map((row) => {
-							const { email, id, invitedBy, status, expiresAt } = row;
+							const { email, invitation_id: id, invited_by, status, expires_at } = row;
 							return {
 								id,
 								email,
 								role: 'basic',
 								status,
-								...(invitedBy === null ? {} : { invitedBy }),
-								...(expiresAt === null ? {} : { expiresAt })
+								...(invited_by === null ? {} : { invitedBy: invited_by }),
+								...(expires_at === null ? {} : { expiresAt: expires_at })
 							};
 						}),
 						teams,

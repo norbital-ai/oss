@@ -91,7 +91,7 @@ type StudioEnvironment = Readonly<{
  * Both nested rails live in the shell's chrome rather than inside their panes, because they sit on
  * the same row of the page and a pane that draws its own tab strip drifts out of that row.
  */
-export type StudioRootTab = 'workbench' | 'review' | 'operations';
+export type StudioRootTab = 'workbench' | 'review' | 'runs' | 'operations';
 export type WorkbenchView = 'manifest' | 'editor';
 export type StudioReviewTab = 'requests' | 'history' | 'schema';
 
@@ -332,9 +332,55 @@ export const ManifestSchema = Schema.Struct({
 			)
 		})
 	),
-	apps: Schema.Array(Schema.Struct({ name: Schema.String, label: Schema.String })),
-	policies: Schema.Array(Schema.Struct({ name: Schema.String, grants: Schema.Number })),
-	automations: Schema.Array(Schema.Struct({ name: Schema.String })),
+	apps: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			label: Schema.String,
+			icon: Schema.optionalKey(Schema.String),
+			description: Schema.optionalKey(Schema.String),
+			banner: Schema.optionalKey(Schema.String),
+			thumbnail: Schema.optionalKey(Schema.String)
+		})
+	),
+	policies: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			description: Schema.String,
+			grants: Schema.Array(
+				Schema.Struct({
+					collection: Schema.String,
+					action: Schema.Literals(['read', 'create', 'update', 'delete', 'history']),
+					fields: Schema.optionalKey(Schema.Array(Schema.String)),
+					dependencies: Schema.optionalKey(Schema.Array(Schema.String)),
+					where: Schema.optionalKey(Schema.Json),
+					approval: Schema.optionalKey(Schema.Boolean),
+					authorization: Schema.optionalKey(Schema.Boolean)
+				})
+			),
+			capabilities: Schema.Struct({
+				apps: Schema.Array(Schema.String),
+				tools: Schema.Array(Schema.String),
+				mcp: Schema.Array(Schema.String),
+				skills: Schema.Array(Schema.String)
+			})
+		})
+	),
+	automations: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			description: Schema.optionalKey(Schema.String),
+			trigger: Schema.Union([
+				Schema.Struct({ _tag: Schema.Literal('Manual') }),
+				Schema.Struct({ _tag: Schema.Literal('Schedule'), cron: Schema.String }),
+				Schema.Struct({
+					_tag: Schema.Literal('Change'),
+					collection: Schema.String,
+					event: Schema.Literals(['created', 'updated', 'deleted'])
+				})
+			]),
+			policies: Schema.Array(Schema.String)
+		})
+	),
 	/**
 	 * Every envoy, with what it is and where it is reached — not a bare name.
 	 *
@@ -459,7 +505,10 @@ export const manifestSections = (
 		expandable: false,
 		entries: (manifest?.policies ?? []).map((policy) => ({
 			name: policy.name,
-			detail: plural(policy.grants, 'grant')
+			detail: plural(
+				policy.grants.length + Object.values(policy.capabilities).flat().length,
+				'grant'
+			)
 		}))
 	},
 	{
@@ -479,7 +528,10 @@ export const manifestSections = (
 		icon: 'automations',
 		summary: 'Work the runtime schedules for itself, without a caller.',
 		expandable: false,
-		entries: (manifest?.automations ?? []).map(({ name }) => ({ name }))
+		entries: (manifest?.automations ?? []).map(({ name, description }) => ({
+			name,
+			...(description === undefined ? {} : { detail: description })
+		}))
 	},
 	{
 		id: 'remotes',

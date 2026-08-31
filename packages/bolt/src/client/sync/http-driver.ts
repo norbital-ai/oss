@@ -1,7 +1,6 @@
 import {
 	SYNC_CONNECTION_HEADER,
-	type CollectionMutationGraph,
-	type CollectionMutationIdempotencyKey,
+	type CollectionMutateRequest,
 	SyncConnectResponse,
 	type SyncConnectRequest
 } from '@norbital-ai/bolt-protocol';
@@ -19,11 +18,7 @@ export class SyncHttpError extends Error {
 	}
 }
 
-export type SyncPushRequest = Readonly<{
-	readonly connectionId: string;
-	readonly id: CollectionMutationIdempotencyKey;
-	readonly graph: CollectionMutationGraph;
-}>;
+export type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutateRequest>;
 
 export type SyncHttpDriver = Readonly<{
 	readonly connect: (

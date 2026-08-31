@@ -11,7 +11,7 @@ import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { Files } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
-import { isChatDocumentStorageKey } from './chat-messages.js';
+import { isChatDocumentStorageKey } from './agent-runtime.js';
 
 const { chat_session: chatSession } = SYSTEM_MODEL_TABLES;
 

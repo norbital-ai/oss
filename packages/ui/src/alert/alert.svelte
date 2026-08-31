@@ -11,7 +11,7 @@
 				success:
 					'border-success/50 text-success bg-success/10 dark:bg-success/30 [&>svg]:text-success',
 				warning:
-					'border-warning/50 text-warning-foreground bg-warning/10 dark:bg-warning/30 [&>svg]:text-warning',
+					'border-warning/50 bg-warning/10 text-warning-foreground dark:bg-warning/30 dark:text-warning [&>svg]:text-warning',
 				info: 'border-info/50 text-info bg-info/10 dark:bg-info/30 [&>svg]:text-info',
 				secondary: 'border-border bg-muted text-foreground [&>svg]:text-muted-foreground',
 				loading:

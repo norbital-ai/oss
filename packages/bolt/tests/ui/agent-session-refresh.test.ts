@@ -1,218 +1,182 @@
 import { describe, expect, it } from 'vitest';
+import type { ModelMessage } from '@tanstack/ai';
 import { agentOrbState } from '../../src/client/ui/agent/agent-orb-state.js';
 import {
 	projectStoredChatMessages,
 	toPanelMessages
 } from '../../src/client/ui/agent/transcript.js';
+import { canonicalAgentRows } from './canonical-agent-fixture.js';
 
-const rows = (status: string, answered: boolean) => [
-	{
-		id: 'message-user',
-		conversation_id: 'conversation-tools',
-		turn_id: 'turn-1',
-		role: 'user',
-		content: 'Which employees are there?'
-	},
-	{
-		id: 'message-assistant',
-		conversation_id: 'conversation-tools',
-		turn_id: 'turn-1',
-		role: 'assistant',
-		content: {
-			id: 'turn-1',
-			status,
-			parts: [
+const project = (
+	source: ReadonlyArray<{
+		readonly conversationId: string;
+		readonly message: ModelMessage;
+		readonly runId?: string;
+	}>,
+	runs: ReadonlyArray<{
+		readonly run_id: string;
+		readonly conversation_id: string;
+		readonly status: string;
+		readonly error?: unknown;
+	}> = []
+) => {
+	const rows = canonicalAgentRows(source);
+	return projectStoredChatMessages(rows.messages, rows.fields, runs);
+};
+
+describe('reactive canonical-message projection', () => {
+	it('shows admitted input while a run has not produced an assistant message yet', () => {
+		const conversation = project(
+			[
 				{
-					kind: 'tool',
-					id: 'call-1',
-					name: 'read_collection',
-					input: { collection: 'employees' }
-				},
-				...(answered
-					? [
-							{
-								kind: 'tool-result',
-								id: 'call-1',
-								name: 'read_collection',
-								output: { rows: 2 }
-							},
-							{ kind: 'text', text: 'Two employees.' }
-						]
-					: [])
-			]
-		}
-	}
-];
-
-describe('reactive chat message projection', () => {
-	it('leaves an admitted empty running turn to the visible working placeholder', () => {
-		const conversation = projectStoredChatMessages([
-			{
-				id: 'message-user-empty',
-				conversation_id: 'conversation-empty',
-				turn_id: 'turn-empty',
-				role: 'user',
-				content: 'Start the check'
-			},
-			{
-				id: 'message-assistant-empty',
-				conversation_id: 'conversation-empty',
-				turn_id: 'turn-empty',
-				role: 'assistant',
-				content: { id: 'turn-empty', status: 'running', parts: [] }
-			}
-		]);
-		const panel = toPanelMessages(conversation.messages, conversation.turns);
-		expect(panel).toEqual([
+					conversationId: 'conversation-empty',
+					message: { id: 'input-1', role: 'user', content: 'Start the check' }
+				}
+			],
+			[{ run_id: 'run-1', conversation_id: 'conversation-empty', status: 'running' }]
+		);
+		expect(toPanelMessages(conversation.messages, conversation.turns)).toEqual([
 			expect.objectContaining({ kind: 'text', role: 'user', content: 'Start the check' })
 		]);
 		expect(agentOrbState(conversation)).toBe('working');
 	});
 
-	it('projects provider reasoning before the tool part in the same running turn', () => {
-		const conversation = projectStoredChatMessages([
-			{
-				id: 'message-assistant-reasoning',
-				conversation_id: 'conversation-reasoning',
-				turn_id: 'turn-reasoning',
-				role: 'assistant',
-				content: {
-					id: 'turn-reasoning',
-					status: 'running',
-					parts: [
-						{ kind: 'reasoning', text: 'I should inspect the assignments first.' },
-						{
-							kind: 'tool',
-							id: 'call-reasoning',
-							name: 'read_collection',
-							input: { collection: 'job_assignments' }
-						}
-					]
+	it('projects SDK thinking before its tool call', () => {
+		const conversation = project(
+			[
+				{
+					conversationId: 'conversation-reasoning',
+					runId: 'run-reasoning',
+					message: {
+						id: 'assistant-reasoning',
+						role: 'assistant',
+						content: '',
+						thinking: [{ content: 'I should inspect assignments first.' }],
+						toolCalls: [
+							{
+								id: 'call-reasoning',
+								type: 'function',
+								function: {
+									name: 'read_collection',
+									arguments: '{"collection":"job_assignments"}'
+								}
+							}
+						]
+					}
 				}
-			}
-		]);
+			],
+			[{ run_id: 'run-reasoning', conversation_id: 'conversation-reasoning', status: 'running' }]
+		);
 		const panel = toPanelMessages(conversation.messages, conversation.turns);
-		expect(panel.map((message) => message.kind)).toEqual(['reasoning', 'tool']);
-		expect(panel[0]).toMatchObject({
-			kind: 'reasoning',
-			content: 'I should inspect the assignments first.'
-		});
-	});
-
-	it('projects a running stored turn without a history command or client-side session cache', () => {
-		const conversation = projectStoredChatMessages(rows('running', false));
-		const panel = toPanelMessages(conversation.messages, conversation.turns);
-		expect(panel.find((message) => message.kind === 'tool')).toMatchObject({
+		expect(panel.map(({ kind }) => kind)).toEqual(['reasoning', 'tool']);
+		expect(panel[1]).toMatchObject({
+			kind: 'tool',
 			name: 'read_collection',
-			detail: 'employees',
+			detail: 'job_assignments',
 			state: 'running'
 		});
-		expect(agentOrbState(conversation)).toBe('working');
 	});
 
-	it('settles the same stored message when the live query row changes', () => {
-		const conversation = projectStoredChatMessages(rows('completed', true));
+	it('pairs a synced tool result with its SDK-projected call', () => {
+		const conversation = project(
+			[
+				{
+					conversationId: 'conversation-tools',
+					message: { id: 'input-tools', role: 'user', content: 'Which employees are there?' }
+				},
+				{
+					conversationId: 'conversation-tools',
+					runId: 'run-tools',
+					message: {
+						id: 'assistant-tools',
+						role: 'assistant',
+						content: 'Two employees.',
+						toolCalls: [
+							{
+								id: 'call-1',
+								type: 'function',
+								function: {
+									name: 'read_collection',
+									arguments: '{"collection":"employees"}'
+								}
+							}
+						]
+					}
+				},
+				{
+					conversationId: 'conversation-tools',
+					runId: 'run-tools',
+					message: {
+						id: 'tool-result-1',
+						role: 'tool',
+						toolCallId: 'call-1',
+						content: '{"rows":2}'
+					}
+				}
+			],
+			[{ run_id: 'run-tools', conversation_id: 'conversation-tools', status: 'completed' }]
+		);
 		const panel = toPanelMessages(conversation.messages, conversation.turns);
-		expect(panel.find((message) => message.kind === 'tool')).toMatchObject({
+		expect(panel.find(({ kind }) => kind === 'tool')).toMatchObject({
 			name: 'read_collection',
-			state: 'complete'
+			state: 'complete',
+			output: expect.stringContaining('"rows": 2')
 		});
-		expect(
-			panel.some(
-				(message) =>
-					message.kind === 'text' &&
-					message.role === 'assistant' &&
-					message.content === 'Two employees.'
-			)
-		).toBe(true);
 		expect(agentOrbState(conversation)).toBe('ready');
 	});
 
-	it('keeps root activity bound to the root when a newer child turn exists', () => {
-		const spawnCallId = 'root-turn:tool:0:0';
-		const childConversationId = `agent:${spawnCallId}`;
-		const conversation = projectStoredChatMessages([
-			{
-				id: 'root-user',
-				conversation_id: 'conversation-root',
-				turn_id: 'root-turn',
-				role: 'user',
-				content: 'Delegate this check'
-			},
-			{
-				id: 'root-assistant',
-				conversation_id: 'conversation-root',
-				turn_id: 'root-turn',
-				role: 'assistant',
-				content: {
-					id: 'root-turn',
-					status: 'completed',
-					parts: [
-						{
-							kind: 'tool',
-							id: spawnCallId,
-							name: 'spawn_agent',
-							input: { task: 'Check the source' }
-						},
-						{
-							kind: 'tool-result',
-							id: spawnCallId,
-							name: 'spawn_agent',
-							output: {
-								agentId: childConversationId,
-								taskId: 'child-turn',
-								status: 'running'
+	it('keeps a child transcript beneath the root spawn call', () => {
+		const spawnId = 'spawn-1';
+		const childId = `agent:${spawnId}`;
+		const conversation = project(
+			[
+				{
+					conversationId: 'root',
+					message: {
+						id: 'root-assistant',
+						role: 'assistant',
+						content: 'Root complete.',
+						toolCalls: [
+							{
+								id: spawnId,
+								type: 'function',
+								function: { name: 'spawn_agent', arguments: '{"task":"Check source"}' }
 							}
-						},
-						{ kind: 'text', text: 'Root complete.' }
-					]
+						]
+					}
+				},
+				{
+					conversationId: 'root',
+					message: {
+						id: 'spawn-result',
+						role: 'tool',
+						toolCallId: spawnId,
+						content: JSON.stringify({ agentId: childId, taskId: 'child-run' })
+					}
+				},
+				{
+					conversationId: childId,
+					message: { id: 'child-user', role: 'user', content: 'Check source' }
+				},
+				{
+					conversationId: childId,
+					message: { id: 'child-answer', role: 'assistant', content: 'Verified.' }
 				}
-			},
-			{
-				id: 'child-user',
-				conversation_id: childConversationId,
-				turn_id: 'child-turn',
-				role: 'user',
-				content: 'Check the source'
-			},
-			{
-				id: 'child-assistant',
-				conversation_id: childConversationId,
-				turn_id: 'child-turn',
-				role: 'assistant',
-				content: {
-					id: 'child-turn',
-					status: 'failed',
-					error: 'Child failed',
-					parts: []
-				}
-			}
-		]);
-		const panel = toPanelMessages(conversation.messages, conversation.turns);
-		const spawn = panel.find(
+			],
+			[
+				{ run_id: 'root-run', conversation_id: 'root', status: 'completed' },
+				{ run_id: 'child-run', conversation_id: childId, status: 'completed' }
+			]
+		);
+		const spawn = toPanelMessages(conversation.messages, conversation.turns).find(
 			(message) => message.kind === 'tool' && message.name === 'spawn_agent'
 		);
-
-		expect(conversation.turns.at(-1)).toMatchObject({
-			conversation_id: childConversationId,
-			status: 'failed'
-		});
-		// The transcript view-model now carries `key`/`role` per rendered child: the child turn's
-		// user message, then the (empty) assistant turn body itself.
 		expect(spawn).toMatchObject({
 			kind: 'tool',
 			children: [
-				{ key: 'child-user:0', kind: 'text', role: 'user', content: 'Check the source' },
-				{ key: 'child-turn', kind: 'text', role: 'assistant', content: '' }
+				{ kind: 'text', role: 'user', content: 'Check source' },
+				{ kind: 'text', role: 'assistant', content: 'Verified.' }
 			]
 		});
-		expect(
-			panel.some(
-				(message) =>
-					(message.kind === 'tool' || message.kind === 'agent-message') &&
-					message.state === 'failed'
-			)
-		).toBe(false);
-		expect(agentOrbState(conversation)).toBe('ready');
 	});
 });

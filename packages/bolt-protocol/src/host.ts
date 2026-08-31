@@ -15,28 +15,32 @@ export const HostRecoverResponse = Schema.Struct({ recovered: Schema.Literal(tru
 export interface HostRecoverResponse extends Schema.Schema.Type<typeof HostRecoverResponse> {}
 
 export const HostScheduleOccurrence = Schema.Struct({
-	/** Stable occurrence identity (`schedule:<key>@<instant>`). */
+	/** Stable task identity (cron uses `schedule:<key>@<instant>`). */
 	taskId: Schema.NonEmptyString,
-	/** Host overlap exclusion is keyed by this value within tenant/environment. */
+	/** Stable work key: the declared schedule key for cron, or `task:<taskId>` for direct work. */
 	scheduleKey: Schema.NonEmptyString,
 	scheduledForEpochMs: Schema.Number.check(Schema.isInt(), Schema.isFinite()),
 	command: Schema.NonEmptyString,
-	input: Schema.Json
+	input: Schema.Json,
+	/** One-based durable attempt number assigned by the atomic claim. */
+	attempt: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
 }).annotate({ identifier: 'BoltHostScheduleOccurrence' });
-export interface HostScheduleOccurrence extends Schema.Schema.Type<
-	typeof HostScheduleOccurrence
-> {}
+export interface HostScheduleOccurrence extends Schema.Schema.Type<typeof HostScheduleOccurrence> {}
 
 export const HostScheduleRejection = Schema.Struct({
 	scheduleKey: Schema.NonEmptyString,
 	reason: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltHostScheduleRejection' });
-export interface HostScheduleRejection extends Schema.Schema.Type<
-	typeof HostScheduleRejection
-> {}
+export interface HostScheduleRejection extends Schema.Schema.Type<typeof HostScheduleRejection> {}
 
 export const HostScheduleDiscoverRequest = Schema.Struct({
-	nowEpochMs: Schema.Number.check(Schema.isInt(), Schema.isFinite())
+	nowEpochMs: Schema.Number.check(Schema.isInt(), Schema.isFinite()),
+	/** Host-owned dispatch deadline; the claim lease covers this complete interval. */
+	leaseForMillis: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(1_000),
+		Schema.isLessThanOrEqualTo(3_600_000)
+	)
 }).annotate({ identifier: 'BoltHostScheduleDiscoverRequest' });
 export interface HostScheduleDiscoverRequest extends Schema.Schema.Type<
 	typeof HostScheduleDiscoverRequest
@@ -53,7 +57,7 @@ export interface HostScheduleDiscoverResponse extends Schema.Schema.Type<
 
 export const HostScheduleOutcome = Schema.TaggedUnion({
 	Done: { result: Schema.Json },
-	Failed: { error: Schema.NonEmptyString },
+	Failed: { error: Schema.NonEmptyString, retryable: Schema.Boolean },
 	Skipped: { reason: Schema.Literal('overlap') }
 }).annotate({ identifier: 'BoltHostScheduleOutcome' });
 export type HostScheduleOutcome = typeof HostScheduleOutcome.Type;

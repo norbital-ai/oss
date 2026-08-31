@@ -2,7 +2,9 @@ import { Effect, Result, Schema } from 'effect';
 import {
 	ApprovalState,
 	CollectionMutationIdempotencyKey,
+	CollectionMutateRequest,
 	SyncQueryInput,
+	type CollectionMutationBaseVersion,
 	type CollectionMutationGraph,
 	type StoredRecord,
 	type SyncQueryInput as SyncQueryInputType
@@ -159,7 +161,95 @@ const decodedCommandEffect = <Output extends Schema.ConstraintDecoder<Schema.Jso
 const pendingGraphs = (
 	state: ClientState
 ): ReadonlyArray<{ readonly graph: CollectionMutationGraph }> =>
-	[...state.writes.values()].map((write) => ({ graph: write.graph }));
+	[...state.writes.values()].map((write) => ({ graph: write.request.graph }));
+
+const rowVersionOf = (row: StoredRecord): number | undefined => {
+	const value = row['row_version'];
+	if (typeof value === 'number')
+		return Number.isSafeInteger(value) && value >= 1 ? value : undefined;
+	if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return undefined;
+	const parsed = Number(value);
+	return Number.isSafeInteger(parsed) ? parsed : undefined;
+};
+
+const answerRows = (query: QueryState): ReadonlyArray<StoredRecord> => {
+	const answer = query.answer;
+	if (answer === undefined || answer === null || typeof answer === 'number') return [];
+	switch (query.input.kind) {
+		case 'count':
+			return [];
+		case 'findFirst':
+			return Array.isArray(answer) ? answer : [answer as StoredRecord];
+		case 'findMany':
+			if (Array.isArray(answer)) return answer;
+			return rowListOf(Reflect.get(answer, 'rows')) ?? [];
+		case 'findGrouped':
+			if (Array.isArray(answer)) return [];
+			return Object.values(answer).flatMap((rows) => rowListOf(rows) ?? []);
+	}
+};
+
+/**
+ * The newest whole-row version already held by this browser for each authoritative coordinate.
+ * Multiple live views may hold the same row; choosing the greatest observed version avoids
+ * manufacturing a conflict from a retained older page while the server still remains final.
+ */
+const authoritativeVersions = (state: ClientState): ReadonlyMap<string, number> => {
+	const versions = new Map<string, number>();
+	for (const query of state.queries.values()) {
+		for (const row of answerRows(query)) {
+			const id = row['id'];
+			const version = rowVersionOf(row);
+			if (typeof id !== 'string' || id.length === 0 || version === undefined) continue;
+			const key = `${query.input.collection}\u0000${id}`;
+			versions.set(key, Math.max(versions.get(key) ?? 0, version));
+		}
+	}
+	return versions;
+};
+
+/** Builds the exact existing-row vector the protocol requires for a browser mutation graph. */
+export const collectionMutationBaseVersions = (
+	state: ClientState,
+	graph: CollectionMutationGraph,
+	catalog: CollectionCatalog
+): ReadonlyArray<CollectionMutationBaseVersion> => {
+	const authoritative = authoritativeVersions(state);
+	const versions = new Map<string, CollectionMutationBaseVersion>();
+	const addKnown = (collection: string, recordId: string): void => {
+		const key = `${collection}\u0000${recordId}`;
+		const rowVersion = authoritative.get(key);
+		if (rowVersion === undefined || versions.has(key)) return;
+		versions.set(key, { row: { collection, recordId }, rowVersion });
+	};
+	const walkManyRelations = (
+		collection: string,
+		values: Readonly<Record<string, Schema.Json>>
+	): void => {
+		for (const relation of catalog[collection]?.relationships ?? []) {
+			if (relation.cardinality !== 'many') continue;
+			const children = values[relation.name];
+			if (!Array.isArray(children)) continue;
+			for (const child of children) {
+				if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+				const childValues = child as Readonly<Record<string, Schema.Json>>;
+				const childId = childValues['id'];
+				if (typeof childId !== 'string' || childId.length === 0) continue;
+				addKnown(relation.target, childId);
+				walkManyRelations(relation.target, childValues);
+			}
+		}
+	};
+
+	if (graph.action === 'delete') addKnown(graph.collection, graph.id);
+	else {
+		const rootId = graph.values['id'];
+		if (graph.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
+			addKnown(graph.collection, rootId);
+		walkManyRelations(graph.collection, graph.values);
+	}
+	return [...versions.values()];
+};
 
 const queryAt = (state: ClientState, key: string): QueryState | undefined => state.queries.get(key);
 
@@ -319,7 +409,7 @@ const stripWrites = (member: PropertyKey): boolean =>
 	member === 'mutate' || member === 'delete' || member === 'pending';
 
 const ClientDatabase = {
-	collection: (runtime: WorkspaceClientRuntime, collection: string) => {
+	collection: (runtime: WorkspaceClientRuntime, collection: string, catalog: CollectionCatalog) => {
 		const mutation = new CollectionMutationState();
 		return {
 			findMany: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
@@ -335,9 +425,11 @@ const ClientDatabase = {
 			 * claimed saved before that outcome (durability is this tab's memory).
 			 */
 			mutate: (input: Schema.Json) =>
-				mutation.run(Effect.sync(() => enqueueMutation(runtime, collection, asJsonRecord(input)))),
+				mutation.run(
+					Effect.sync(() => enqueueMutation(runtime, catalog, collection, asJsonRecord(input)))
+				),
 			delete: (id: string) =>
-				mutation.run(Effect.sync(() => enqueueDeletion(runtime, collection, id))),
+				mutation.run(Effect.sync(() => enqueueDeletion(runtime, catalog, collection, id))),
 			get pending() {
 				return mutation.pending;
 			}
@@ -346,7 +438,8 @@ const ClientDatabase = {
 	database: (
 		runtime: WorkspaceClientRuntime,
 		allowedCollections?: ReadonlySet<string>,
-		readOnlyCollections: ReadonlySet<string> = new Set()
+		readOnlyCollections: ReadonlySet<string> = new Set(),
+		catalog: CollectionCatalog = {}
 	): Readonly<Record<string, unknown>> => {
 		const collections = new Map<string, unknown>();
 		return new Proxy<Record<string, unknown>>(
@@ -359,7 +452,7 @@ const ClientDatabase = {
 					const existing = collections.get(property);
 					if (existing !== undefined) return existing;
 					const created = readOnlyCollections.has(property)
-						? new Proxy(ClientDatabase.collection(runtime, property), {
+						? new Proxy(ClientDatabase.collection(runtime, property, catalog), {
 								get: (target, member, receiver) =>
 									stripWrites(member) ? undefined : Reflect.get(target, member, receiver),
 								has: (target, member) => !stripWrites(member) && Reflect.has(target, member),
@@ -368,7 +461,7 @@ const ClientDatabase = {
 								getOwnPropertyDescriptor: (target, member) =>
 									stripWrites(member) ? undefined : Reflect.getOwnPropertyDescriptor(target, member)
 							})
-						: ClientDatabase.collection(runtime, property);
+						: ClientDatabase.collection(runtime, property, catalog);
 					collections.set(property, created);
 					return created;
 				}
@@ -379,17 +472,28 @@ const ClientDatabase = {
 
 const submitGraph = (
 	runtime: WorkspaceClientRuntime,
+	catalog: CollectionCatalog,
 	graph: CollectionMutationGraph,
 	row: Readonly<Record<string, Schema.Json>> | null
 ): MemoryMutationResult => {
 	const idempotencyKey = CollectionMutationIdempotencyKey.make(crypto.randomUUID());
 	const settlement = runtime.settlements.create(idempotencyKey);
-	runtime.sync.enqueue(idempotencyKey, graph);
+	const request = Schema.decodeUnknownSync(CollectionMutateRequest)({
+		protocolVersion: 2,
+		idempotencyKey,
+		issuedAtEpochMs: Date.now(),
+		partitionKey: runtime.mutation.partitionKey,
+		schemaFingerprint: runtime.mutation.schemaFingerprint,
+		graph,
+		baseVersions: collectionMutationBaseVersions(runtime.sync.current(), graph, catalog)
+	});
+	runtime.sync.enqueue(request);
 	return { durability: 'memory', pending: true, row, idempotencyKey, settlement };
 };
 
 const enqueueMutation = (
 	runtime: WorkspaceClientRuntime,
+	catalog: CollectionCatalog,
 	collection: string,
 	values: Readonly<Record<string, Schema.Json>>
 ): MemoryMutationResult => {
@@ -397,19 +501,20 @@ const enqueueMutation = (
 	if (submittedId !== undefined && (typeof submittedId !== 'string' || submittedId.trim() === ''))
 		throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
 	if (typeof submittedId === 'string')
-		return submitGraph(runtime, { action: 'update', collection, values }, values);
+		return submitGraph(runtime, catalog, { action: 'update', collection, values }, values);
 	const id = crypto.randomUUID();
 	const created = { ...values, id };
-	return submitGraph(runtime, { action: 'create', collection, values: created }, created);
+	return submitGraph(runtime, catalog, { action: 'create', collection, values: created }, created);
 };
 
 const enqueueDeletion = (
 	runtime: WorkspaceClientRuntime,
+	catalog: CollectionCatalog,
 	collection: string,
 	id: string
 ): MemoryMutationResult => {
 	if (id.trim() === '') throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	return submitGraph(runtime, { action: 'delete', collection, id }, null);
+	return submitGraph(runtime, catalog, { action: 'delete', collection, id }, null);
 };
 
 /** --- automations --- */
@@ -547,7 +652,7 @@ const WorkspaceApis = {
 				throw new Error(`Collection ${JSON.stringify(collection)} is private to the Bolt runtime`);
 		};
 		const publicApi = {
-			db: ClientDatabase.database(runtime, allowedCollections, readOnlyCollections),
+			db: ClientDatabase.database(runtime, allowedCollections, readOnlyCollections, catalog),
 			automations: automationClient(runtime),
 			invoke: new Proxy<Record<string, InvokeMethod>>(
 				{},

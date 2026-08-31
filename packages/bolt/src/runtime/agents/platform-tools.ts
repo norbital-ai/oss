@@ -14,9 +14,7 @@ import type { HostToolsInterface } from '#lib/runtime/facilities/services.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
-import { composer, executeBuilt } from '#lib/runtime/persistence.js';
-import { agentMessageForModel, parseAgentMessage } from './agent-message.js';
-import { chatInputForModel, parseStoredChatInput } from './chat-messages.js';
+import { aliased, composer, executeBuilt } from '#lib/runtime/persistence.js';
 
 const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
 
@@ -141,7 +139,7 @@ const EnvoyHistoryRow = Schema.Struct({
 	conversation_id: Schema.String,
 	created_at: Schema.String,
 	role: Schema.String,
-	content: Schema.Json
+	content: Schema.Union([Schema.String, Schema.Null])
 });
 const decodeEnvoyHistoryRow = Schema.decodeUnknownOption(EnvoyHistoryRow);
 
@@ -167,31 +165,6 @@ const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' }))
 	);
-
-/** One text content part, extracted with its shape checked once at the read. */
-const textOfPart = (part: unknown): string | null => {
-	if (typeof part !== 'object' || part === null) return null;
-	const kind = Reflect.get(part, 'kind');
-	const text = Reflect.get(part, 'text');
-	return kind === 'text' && typeof text === 'string' ? text : null;
-};
-
-const historyText = (content: unknown): string | null => {
-	const chatInput = parseStoredChatInput(content);
-	if (chatInput !== null) return chatInputForModel(chatInput);
-	const relayed = parseAgentMessage(content);
-	if (relayed !== null) return agentMessageForModel(relayed);
-	if (typeof content !== 'object' || content === null) return null;
-	const parts = Reflect.get(content, 'parts');
-	if (!Array.isArray(parts)) return null;
-	const text = parts
-		.reduce((acc: ReadonlyArray<string>, part) => {
-			const extracted = textOfPart(part);
-			return extracted === null ? acc : [...acc, extracted];
-		}, [])
-		.join('\n');
-	return text.length === 0 ? null : text;
-};
 
 const instant = (value: string | undefined): string | undefined => {
 	if (value === undefined) return undefined;
@@ -395,7 +368,7 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 			if (after !== undefined) conditions.push(gt(chatMessage.created_at, after));
 			if (parsed.query !== undefined && parsed.query.trim().length > 0) {
 				// repository-health:allow SQL1 -- PostgreSQL has no typed Drizzle operator for case-insensitive search over a JSONB transcript projection; all values remain bound parameters.
-				conditions.push(sql`${chatMessage.content}::text ilike ${`%${parsed.query.trim()}%`}`);
+				conditions.push(sql`${chatMessage.search_text} ilike ${`%${parsed.query.trim()}%`}`);
 			}
 			const limit = parsed.limit ?? 20;
 			let order: SQL = desc(chatMessage.created_at);
@@ -411,7 +384,7 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 						conversation_id: chatMessage.conversation_id,
 						created_at: chatMessage.created_at,
 						role: chatMessage.role,
-						content: chatMessage.content
+						content: aliased(chatMessage.search_text, 'content')
 					})
 					.from(chatMessage)
 					.innerJoin(chatSession, eq(chatSession.conversation_id, chatMessage.conversation_id))
@@ -423,7 +396,7 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 			const messages = result.rows.flatMap((row): ReadonlyArray<Schema.Json> => {
 				const decoded = decodeEnvoyHistoryRow(row);
 				if (decoded._tag === 'None') return [];
-				const content = historyText(decoded.value.content);
+				const content = decoded.value.content;
 				if (content === null) return [];
 				return [
 					{

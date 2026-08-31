@@ -41,7 +41,9 @@ describe('WorkspaceSchema owner', () => {
 		);
 		// Authored collections reach the plan only if they declare something Drizzle cannot render.
 		expect(collectionSteps.some((id) => id.includes('z records'))).toBe(false);
-		expect(plan.steps.map(({ id }) => id)).toEqual([...plan.steps.map(({ id }) => id)].toSorted());
+		expect(plan.steps.map(({ id }) => id)).toEqual(
+			[...plan.steps.map(({ id }) => id)].toSorted((left, right) => left.localeCompare(right))
+		);
 	});
 
 	it('verifies a database the plan has just provisioned', async () => {

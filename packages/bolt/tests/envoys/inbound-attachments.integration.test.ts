@@ -14,6 +14,7 @@ import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
 import { fixtureUserId } from '../support/fixture-identity.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
+import { assistantText } from '../agents/canonical-ai-fixture.js';
 
 const definition = workspace({
 	name: 'envoy-files',
@@ -92,7 +93,10 @@ describe('envoy burst admission and chat documents', () => {
 					};
 				}
 				aiRequests.push(request);
-				return { _tag: 'Success', value: { output: { text: 'Recorded.' } } };
+				return {
+					_tag: 'Success',
+					value: { output: assistantText('Recorded.', `recorded-${aiRequests.length}`) }
+				};
 			}
 		};
 		const files: FacilityBinding<FileRequest, FileResponse> = {
@@ -172,17 +176,15 @@ describe('envoy burst admission and chat documents', () => {
 			expect(context).not.toContain('iVBO');
 
 			const stored = await harness.database.query(
-				`select content from chat_message where conversation_id = $1 and role = 'user'`,
+				`select app_metadata->'inbound' as inbound
+				 from chat_message where conversation_id = $1 and role = 'user'`,
 				[conversationId]
 			);
 			expect(stored).toHaveLength(1);
-			expect(stored[0]?.content).toMatchObject({
-				kind: 'inbound_batch',
-				messages: [
+			expect(stored[0]?.inbound).toMatchObject([
 					{ messageId: 'message-1', sender: { id: '6591234567@s.whatsapp.net' } },
 					{ messageId: 'message-3', text: 'The work is complete.' }
-				]
-			});
+				]);
 			expect(
 				await harness.database.query(
 					`select conversation_id, files from chat_session where conversation_id = $1`,

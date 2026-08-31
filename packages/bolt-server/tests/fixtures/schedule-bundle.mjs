@@ -1,7 +1,7 @@
-export const protocolVersion = 6;
+export const protocolVersion = 7;
 
 export const manifest = {
-	protocolVersion: 6,
+	protocolVersion: 7,
 	artifactId: 'bolt-server-schedule-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
@@ -28,7 +28,8 @@ const occurrence = {
 	scheduleKey: 'nightly',
 	scheduledForEpochMs: 1,
 	command: 'automations.nightly',
-	input: { proof: true }
+	input: { proof: true },
+	attempt: 2
 };
 
 const ok = (value) => ({ _tag: 'Success', response: { status: 200, headers: {}, value } });
@@ -55,7 +56,12 @@ export const dispatch = async (invocation) => {
 		return ok({ settled: true, nextDueAtEpochMs: null });
 	}
 	if (invocation._tag === 'Task') {
-		log.push({ kind: 'task', command: invocation.command, input: invocation.input });
+		log.push({
+			kind: 'task',
+			command: invocation.command,
+			input: invocation.input,
+			attempt: invocation.attempt
+		});
 		return ok({ ran: invocation.command });
 	}
 	if (invocation._tag === 'Request') {

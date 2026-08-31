@@ -319,7 +319,7 @@
 							approvalRequest.status === 'APPROVED' && 'bg-success/10 text-success',
 							approvalRequest.status === 'REJECTED' && 'bg-destructive/10 text-destructive',
 							approvalRequest.status === 'CHANGES_REQUESTED' &&
-								'bg-warning/15 text-warning-foreground',
+								'bg-warning/15 text-warning-foreground dark:text-warning',
 							approvalRequest.status === 'ONGOING' && 'bg-brand/10 text-brand',
 							!['APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'ONGOING'].includes(
 								approvalRequest.status
@@ -351,7 +351,7 @@
 									approvalRequest.status === 'REJECTED' &&
 										'border-destructive/25 bg-destructive/10 text-destructive',
 									approvalRequest.status === 'CHANGES_REQUESTED' &&
-										'border-warning/30 bg-warning/15 text-warning-foreground',
+										'border-warning/30 bg-warning/15 text-warning-foreground dark:text-warning',
 									approvalRequest.status === 'ONGOING' && 'border-brand/25 bg-brand/10 text-brand'
 								)}>{humanize(approvalRequest.status)}</span
 							>

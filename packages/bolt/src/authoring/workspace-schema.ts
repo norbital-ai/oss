@@ -975,6 +975,13 @@ export interface AppDeclaration {
 	readonly label: string;
 }
 
+export interface WorkspaceAppDeclaration extends AppDeclaration {
+	readonly icon?: string;
+	readonly description?: string;
+	readonly banner?: string;
+	readonly thumbnail?: string;
+}
+
 /**
  * One entry of the migration lineage, as it travels inside the artifact.
  *
@@ -1031,7 +1038,7 @@ export interface WorkspaceDefinition {
 	 * reliably see even that.
 	 */
 	readonly rateLimits?: import('./rate-limits-schema.js').RateLimitSpec;
-	readonly apps: ReadonlyArray<AppDeclaration>;
+	readonly apps: ReadonlyArray<WorkspaceAppDeclaration>;
 	readonly policies: ReadonlyArray<PolicyDeclaration>;
 	/**
 	 * The `src/+teams.ts` declaration: which policies each named team holds.
@@ -1125,7 +1132,7 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 	});
 };
 /** Owns app behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const app = (declaration: AppDeclaration): AppDeclaration => {
+export const app = (declaration: WorkspaceAppDeclaration): WorkspaceAppDeclaration => {
 	const name = declaration.name.trim();
 	const label = declaration.label.trim();
 	if (!/^[a-z][a-z0-9_/-]*$/.test(name)) {
@@ -1136,6 +1143,10 @@ export const app = (declaration: AppDeclaration): AppDeclaration => {
 	}
 	return Object.freeze({
 		name,
-		label
+		label,
+		...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
+		...(declaration.description === undefined ? {} : { description: declaration.description }),
+		...(declaration.banner === undefined ? {} : { banner: declaration.banner }),
+		...(declaration.thumbnail === undefined ? {} : { thumbnail: declaration.thumbnail })
 	});
 };

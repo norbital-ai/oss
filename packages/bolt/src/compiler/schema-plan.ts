@@ -447,8 +447,8 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ begin insert into bolt_sync_outbox (collection_name) values (TG_TABLE_NAME); if TG_OP = 'DELETE' then return OLD; end if; return NEW; end $bolt_sync_capture$`
 		},
 		{
-			// Cron inputs are private because they may contain secrets. Their run records project into a
-			// sync-visible collection in the same transaction; no claim, lease or retry state exists.
+			// Task inputs are private because they may contain secrets. Their run records project into a
+			// sync-visible collection while claim, lease and retry state remains host-only.
 			id: 'bolt:function-automation-run-projection',
 			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, progress, progress_sequence, progress_updated_at, result, error) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error) on conflict (task_id) do update set name = excluded.name, status = excluded.status, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
 		}

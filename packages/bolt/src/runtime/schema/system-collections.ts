@@ -46,7 +46,10 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.requestor,
 	collections.chat_session,
 	collections.chat_message,
-	collections.agent_mailbox,
+	collections.chat_message_part,
+	collections.agent_run,
+	collections.agent_lane,
+	collections.agent_inbox,
 	collections.automation_run,
 	collections.bolt_notifications
 ]);
@@ -189,7 +192,12 @@ const OWN_CONVERSATION_MESSAGE = policySql(
 	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
 );
-const OWN_AGENT_MAILBOX = policySql(
+const OWN_CONVERSATION_MESSAGE_PART = policySql(
+	'"message_id" in (select message."message_id" from chat_message message ' +
+		'join chat_session owned on owned."conversation_id" = message."conversation_id" ' +
+		'where owned."user_id" = ${requestor.id})'
+);
+const OWN_AGENT_STATE = policySql(
 	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
 );
@@ -300,9 +308,57 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			where: OWN_CONVERSATION_MESSAGE
 		},
 		{
-			collection: collections.agent_mailbox.name,
+			collection: collections.chat_message_part.name,
 			action: 'read' as const,
-			where: OWN_AGENT_MAILBOX
+			where: OWN_CONVERSATION_MESSAGE_PART
+		},
+		{
+			collection: collections.agent_run.name,
+			action: 'read' as const,
+			where: OWN_AGENT_STATE,
+			fields: [
+				'id',
+				'run_id',
+				'conversation_id',
+				'generation',
+				'status',
+				'started_at',
+				'finished_at',
+				'error',
+				'usage',
+				'cause',
+				'disposition',
+				'depth',
+				'created_at',
+				'updated_at',
+				'row_version'
+			]
+		},
+		{
+			collection: collections.agent_lane.name,
+			action: 'read' as const,
+			where: OWN_AGENT_STATE
+		},
+		{
+			collection: collections.agent_inbox.name,
+			action: 'read' as const,
+			where: OWN_AGENT_STATE,
+			fields: [
+				'id',
+				'conversation_id',
+				'message_id',
+				'receipt_sequence',
+				'source_kind',
+				'source_message_id',
+				'requested_mode',
+				'state',
+				'claimed_by_run_id',
+				'claimed_at',
+				'rejected_reason',
+				'created_at',
+				'updated_at',
+				'row_version'
+			]
 		},
 		{
 			collection: collections.automation_run.name,

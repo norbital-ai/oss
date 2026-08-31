@@ -5,6 +5,7 @@
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import { cn } from '@norbital-ai/ui/utils';
+	import { Button } from '@norbital-ai/ui/button';
 	import {
 		ENVOY_CONNECTION_UNREPORTABLE,
 		type StudioEnvoy,
@@ -35,12 +36,14 @@
 		envoys = [],
 		tools = [],
 		system,
-		onopenSource
+		onopenSource,
+		onconfigure
 	}: {
 		envoys?: ReadonlyArray<StudioEnvoy>;
 		tools?: ReadonlyArray<StudioTool>;
 		system: SystemClientApi;
 		onopenSource?: ((path: string) => void) | undefined;
+		onconfigure?: (() => void) | undefined;
 	} = $props();
 	const agentStyles = $derived(FEATURE_COLOR_STYLES.agents);
 	let browserReady = $state(false);
@@ -98,16 +101,22 @@
 
 <Scroll name="Envoys panel" class="p-4 sm:p-6">
 	<Stack gap="md">
-		<Inline gap="sm">
-			<div
-				class={cn(
-					'flex size-6 items-center justify-center rounded-md border',
-					agentStyles.iconWrapperClass
-				)}
-			>
-				<ProductIcon name="agent" class={cn('size-3.5', agentStyles.iconClass)} />
-			</div>
-			<h2 class="text-sm font-medium text-foreground">Envoys ({envoys.length})</h2>
+		<Inline gap="sm" justify="between">
+			<Inline gap="sm">
+				<div
+					class={cn(
+						'flex size-6 items-center justify-center rounded-md border',
+						agentStyles.iconWrapperClass
+					)}
+				>
+					<ProductIcon name="agent" class={cn('size-3.5', agentStyles.iconClass)} />
+				</div>
+				<h2 class="text-sm font-medium text-foreground">Envoys ({envoys.length})</h2>
+			</Inline>
+			<Button size="sm" variant="outline" onclick={() => onconfigure?.()}>
+				<Icon icon="lucide:settings-2" class="size-3.5" />
+				Configure envoys
+			</Button>
 		</Inline>
 		<p class="max-w-xl text-xs leading-relaxed text-muted-foreground">
 			An agent this workspace exposes on a transport, with its own identity and its own declared

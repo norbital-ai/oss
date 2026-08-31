@@ -745,7 +745,7 @@ class WorkspaceCompiler {
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
-		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog, visibility?: { readonly allowedCollections?: ReadonlyArray<string>; readonly readOnlyCollections?: ReadonlyArray<string>; readonly system?: boolean }): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly system?: SystemClientApi };\n\t\t\t}\n`;
+		`declare module 'virtual:bolt/client-runtime' {\n\timport type { BrowserWorkspaceRuntimeOptions, CollectionCatalog, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(options?: BrowserWorkspaceRuntimeOptions): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog, visibility?: { readonly allowedCollections?: ReadonlyArray<string>; readonly readOnlyCollections?: ReadonlyArray<string>; readonly system?: boolean }): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly system?: SystemClientApi };\n\t\t\t}\n`;
 
 	/** Owns render client declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientDeclaration = (
@@ -818,8 +818,8 @@ class WorkspaceCompiler {
 	};
 
 	/** Runtime capability module consumed by Bolt's generated entry, never by authored `$bolt/client`. */
-	static readonly renderFrameworkClientRuntime = (): string =>
-		`import { createBrowserWorkspaceRuntime, createWorkspaceApiProxy } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog as publicCollectionCatalog, publicCollectionNames } from './collections.js';\nimport { collectionCatalog as frameworkCollectionCatalog } from './framework-collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, publicCollectionCatalog, { allowedCollections: publicCollectionNames, readOnlyCollections: ['approval_request'], system: false });\nexport const frameworkClient = createWorkspaceApiProxy(runtime, frameworkCollectionCatalog);\nexport const syncStatus = runtime.syncStatus;\n`;
+	static readonly renderFrameworkClientRuntime = (schemaFingerprint: string): string =>
+		`import { createBrowserWorkspaceRuntime, createWorkspaceApiProxy } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog as publicCollectionCatalog, publicCollectionNames } from './collections.js';\nimport { collectionCatalog as frameworkCollectionCatalog } from './framework-collections.js';\nconst runtime = createBrowserWorkspaceRuntime({ schemaFingerprint: ${JSON.stringify(schemaFingerprint)} });\nexport const client = createWorkspaceApiProxy(runtime, publicCollectionCatalog, { allowedCollections: publicCollectionNames, readOnlyCollections: ['approval_request'], system: false });\nexport const frameworkClient = createWorkspaceApiProxy(runtime, frameworkCollectionCatalog);\nexport const syncStatus = runtime.syncStatus;\n`;
 
 	/**
 	 * The workspace's stylesheet, generated where the workspace's other generated modules live.
@@ -1289,7 +1289,7 @@ class WorkspaceCompiler {
 		const automationEntries = automations
 			.map(
 				(name, index) =>
-					`{ name: ${JSON.stringify(name)}, trigger: typeof automation${index}.trigger.schedule === 'string' ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : automation${index}.trigger.trigger === undefined ? { _tag: 'Manual' } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, ...(automation${index}.spec.input === undefined ? {} : { input: automation${index}.spec.input }), ...(automation${index}.spec.output === undefined ? {} : { output: automation${index}.spec.output }), handler: automation${index}.spec.handler }`
+					`{ name: ${JSON.stringify(name)}, description: automation${index}.spec.description, trigger: typeof automation${index}.trigger.schedule === 'string' ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : automation${index}.trigger.trigger === undefined ? { _tag: 'Manual' } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, ...(automation${index}.spec.input === undefined ? {} : { input: automation${index}.spec.input }), ...(automation${index}.spec.output === undefined ? {} : { output: automation${index}.spec.output }), handler: automation${index}.spec.handler }`
 			)
 			.join(', ');
 		// Imported live, as models, policies and tools are, rather than being read out of the file's text.
@@ -2042,7 +2042,7 @@ const WorkspaceSynchronization = {
 					),
 					compiler.write(
 						join(generated, 'framework-client.js'),
-						compiler.renderFrameworkClientRuntime()
+						compiler.renderFrameworkClientRuntime(schemaFingerprint)
 					),
 					compiler.write(
 						join(types, 'custom-type-values.d.ts'),

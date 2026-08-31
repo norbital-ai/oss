@@ -6,7 +6,7 @@ import type {
 	FileResponse
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
-import { chatDocumentStorageKey } from '../../src/runtime/agents/chat-messages.js';
+import { chatDocumentStorageKey } from '../../src/runtime/agents/agent-runtime.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,

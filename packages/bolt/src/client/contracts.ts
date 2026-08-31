@@ -97,6 +97,10 @@ export type WorkspaceClientRuntime = Readonly<{
 	readonly db: Readonly<Record<string, unknown>>;
 	readonly bolt: BoltClient;
 	readonly sync: SyncClient;
+	readonly mutation: Readonly<{
+		readonly partitionKey: string;
+		readonly schemaFingerprint: string;
+	}>;
 	/** Reactive view of the Machine's state for the generated framework shell. */
 	readonly syncStatus: ClientState;
 	readonly settlements: MutationSettlements;
@@ -107,4 +111,6 @@ export type BrowserWorkspaceRuntimeOptions = Readonly<{
 	readonly tenantId?: string;
 	readonly environment?: string;
 	readonly releaseId?: string;
+	/** Baked into the generated client from the exact schema lineage shipped in this artifact. */
+	readonly schemaFingerprint?: string;
 }>;

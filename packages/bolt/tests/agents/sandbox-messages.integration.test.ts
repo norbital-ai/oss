@@ -3,14 +3,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import {
-	encodeAgentMessage,
-	parseAgentMessage
-} from '../../src/runtime/agents/agent-message.js';
+	delegatedAgentInput,
+	type DelegatedMessage
+} from '../../src/runtime/agents/agent-runtime.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import {
+	assistantText,
+	assistantToolCall
+} from './canonical-ai-fixture.js';
 
 const sender = 'conversation-auth';
 const recipient = 'conversation-migrations';
@@ -31,7 +35,7 @@ const openAdjacentAgents = async (runtime: BoltTestRuntime): Promise<Agents.Inte
 	);
 	await runtime.database.query(
 		`update chat_session
-		 set parent_id = $1, title = $2
+		 set parent_id = $1, sandbox_key = $1, title = $2
 		 where conversation_id = $3`,
 		[sender, 'Migration and performance verification', recipient]
 	);
@@ -64,21 +68,18 @@ describe('messages between adjacent agents', () => {
 								outcome: 'known'
 							}
 						}
-					: { _tag: 'Success', value: { output: { text: 'Recovered.' } } };
+					: { _tag: 'Success', value: { output: assistantText('Recovered.', 'recovered') } };
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
-		await expect(
-			harness.runtime.runPromise(
-				agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', {
-					kind: 'user_message',
-					text: 'Keep trying if the model is temporarily unavailable.'
-				})
-			)
-		).rejects.toMatchObject({ retryable: true });
+		const failed = await harness.runtime.runPromise(
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', Agents.userAgentInput('Keep trying if the model is temporarily unavailable.'))
+		);
+		expect(failed.status).toBe('failed');
+		if (failed.runId === undefined) throw new Error('expected a failed run id');
 		const retried = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:retry'), sender, 'turn-retry')
+			agents.execute(harness.effectId('execute:retry'), sender, failed.runId)
 		);
 		expect(retried).toMatchObject({ status: 'failed', output: null });
 		expect(attempts).toBe(1);
@@ -100,18 +101,12 @@ describe('messages between adjacent agents', () => {
 					value: {
 						output:
 							round === 1
-								? {
-									toolCalls: [
-										{
-											name: 'message_agent',
-											input: {
-												agentId: recipient,
-												message: 'Those four are already fixed.'
-											}
-										}
-									]
-								}
-								: { text: 'Told them.' }
+								? assistantToolCall(
+										'message_agent',
+										{ agentId: recipient, message: 'Those four are already fixed.' },
+										'message-recipient'
+									)
+								: assistantText('Told them.', 'told-them')
 					}
 				};
 			}
@@ -119,20 +114,16 @@ describe('messages between adjacent agents', () => {
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
 		await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-send', {
-				kind: 'user_message',
-				text: 'Reply to the migration agent'
-			})
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-send', Agents.userAgentInput('Reply to the migration agent'))
 		);
 		const messages = await harness.database.query(
-			`select content from chat_message
+			`select app_metadata->'delegated' as delegated from chat_message
 			 where conversation_id = $1 and role = 'user'
 			 order by sequence desc limit 1`,
 			[recipient]
 		);
-		expect(parseAgentMessage(messages[0]?.content)).toEqual({
-			kind: 'agent_message',
-			from: {
+			expect(messages[0]?.delegated).toEqual({
+				from: {
 				agentId: sender,
 				agentName: 'web',
 				title: 'Wrote bolt-owned auth module'
@@ -140,9 +131,7 @@ describe('messages between adjacent agents', () => {
 			text: 'Those four are already fixed.'
 		});
 		const runs = await harness.database.query(
-			`select content->>'status' as status from chat_message
-			 where conversation_id = $1 and role = 'assistant'
-			 order by created_at desc limit 1`,
+			`select status from agent_run where conversation_id = $1 order by generation desc limit 1`,
 			[recipient]
 		);
 		expect(runs[0]).toMatchObject({ status: 'running' });
@@ -161,29 +150,38 @@ describe('messages between adjacent agents', () => {
 				if (request._tag === 'Turn') {
 					prompt = request.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
 				}
-				return { _tag: 'Success', value: { output: { text: 'Looking.' } } };
+				return { _tag: 'Success', value: { output: assistantText('Looking.', 'looking') } };
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
-		const stored = encodeAgentMessage(
-			{
-				agentId: recipient,
-				agentName: 'web',
-				title: 'Migration and performance verification'
-			},
-			'Heads-up: four errors in auth-store.ts'
-		);
+			const stored: DelegatedMessage = {
+				from: {
+					agentId: recipient,
+					agentName: 'web',
+					title: 'Migration and performance verification'
+				},
+				text: 'Heads-up: four errors in auth-store.ts'
+			};
 		await harness.database.query(
-			`insert into chat_message (conversation_id, role, content)
-			 values ($1, 'user', $2::jsonb)`,
-			[sender, JSON.stringify(stored)]
+			`insert into chat_message
+			 (message_id, conversation_id, role, content_kind, content_text, search_text,
+			  app_metadata, semantic_hash)
+			 values ('relayed-message', $1, 'user', 'text', $2, $2, $3::jsonb, 'relayed-hash')`,
+			[
+				sender,
+					delegatedAgentInput(stored).message.content,
+				JSON.stringify({
+					version: 1,
+					kind: 'input',
+					source: 'delegated',
+					intent: 'do',
+					delegated: stored
+				})
+			]
 		);
 		await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-prompt', {
-				kind: 'user_message',
-				text: 'Anything outstanding?'
-			})
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-prompt', Agents.userAgentInput('Anything outstanding?'))
 		);
 		const relayed = prompt.find(
 			(message) =>

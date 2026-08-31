@@ -290,14 +290,19 @@ const scheduleModel = defineModel(
 	}
 );
 
-/** One fired cron run, retained only for progress/result/error observability. */
+/** One durable unit of scheduled or runtime-authored background work. */
 const taskModel = defineModel(
 	{
 		command: text().notNull(),
 		input: jsonb().notNull(),
-		status: text().notNull().default('running'),
-		/** The declared occurrence this run observes. It is never a claim lease. */
+		status: text().notNull().default('pending'),
+		/** When pending work becomes eligible. Retries move this forward without sleeping a worker. */
 		run_at: instant().notNull().defaultNow(),
+		/** The claim fence for a running attempt. Expiry makes an interrupted attempt recoverable. */
+		lease_expires_at: instant(),
+		/** Counted at claim time so a host crash still consumes one bounded attempt. */
+		attempts: integer().notNull().default(0),
+		max_attempts: integer().notNull().default(12),
 		effect_id: text().notNull().unique('bolt_task_effect_id'),
 		/** Latest automation progression; null until the run reports one. */
 		progress: jsonb(),
@@ -308,17 +313,136 @@ const taskModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false
+		sync: false,
+		indexes: [
+			{
+				name: 'bolt_task_pending_due',
+				columns: ['run_at'],
+				where: "status = 'pending'"
+			},
+			{
+				name: 'bolt_task_running_lease',
+				columns: ['lease_expires_at'],
+				where: "status = 'running'"
+			}
+		]
 	}
 );
 
-/** One conversation lifecycle fence. Direct invocations own execution. */
-const agentMailboxModel = defineModel(
+/** One immutable semantic field item from a canonical TanStack ModelMessage. */
+const agentMessagePartModel = defineModel(
+	{
+		message_id: text().notNull(),
+		field: text().notNull(),
+		ordinal: integer().notNull(),
+		payload: jsonb().notNull()
+	},
+	{
+		history: false,
+		indexes: [
+			systemIndex('message_id'),
+			{
+				name: 'chat_message_part_field_ordinal',
+				columns: ['message_id', 'field', 'ordinal'],
+				unique: true
+			}
+		]
+	}
+);
+
+/** The sole durable scheduler state for one conversation. */
+const agentLaneModel = defineModel(
 	{
 		conversation_id: text().notNull().unique(),
-		status: text().notNull().default('active')
+		state: text().notNull().default('active'),
+		active_run_id: text(),
+		active_generation: integer().notNull().default(0),
+		requested_generation: integer().notNull().default(0),
+		resume_from_run_id: text()
 	},
-	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('status')] }
+	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('active_run_id')] }
+);
+
+/** One execution record and the pinned TanStack RunStore/driver fence row. */
+const agentRunModel = defineModel(
+	{
+		run_id: text().notNull().unique(),
+		conversation_id: text().notNull(),
+		generation: integer().notNull(),
+		status: text().notNull().default('running'),
+		started_at: bigint({ mode: 'number' }).notNull(),
+		finished_at: bigint({ mode: 'number' }),
+		error: jsonb(),
+		usage: jsonb(),
+		usage_unreported: boolean().notNull().default(false),
+		sandbox_key: text(),
+		cancel_requested: boolean().notNull().default(false),
+		driver_epoch: integer().notNull().default(0),
+		cause: text().notNull(),
+		disposition: text(),
+		input_boundary: bigint({ mode: 'number' }).notNull(),
+		subject_snapshot: jsonb().notNull(),
+		authority_fingerprint: text().notNull(),
+		agent_release_id: text().notNull(),
+		resolved_model: jsonb().notNull(),
+		depth: integer().notNull().default(0)
+	},
+	{
+		history: false,
+		indexes: [
+			systemIndex('conversation_id'),
+			systemIndex('status'),
+			{
+				name: 'agent_run_conversation_generation',
+				columns: ['conversation_id', 'generation'],
+				unique: true
+			},
+			{
+				name: 'agent_run_one_running',
+				columns: ['conversation_id'],
+				unique: true,
+				where: "status = 'running'"
+			}
+		]
+	}
+);
+
+/** Durable input awaiting claim, or the immutable receipt of the run that claimed it. */
+const agentInboxModel = defineModel(
+	{
+		tenant_id: text().notNull(),
+		conversation_id: text().notNull(),
+		message_id: text().notNull(),
+		receipt_sequence: bigint({ mode: 'number' }).notNull(),
+		source_kind: text().notNull(),
+		source_message_id: text().notNull(),
+		requested_mode: text().notNull().default('queue'),
+		state: text().notNull().default('pending'),
+		subject_snapshot: jsonb().notNull(),
+		authority_fingerprint: text().notNull(),
+		agent_release_id: text().notNull(),
+		resolved_model: jsonb().notNull(),
+		depth: integer().notNull().default(0),
+		claimed_by_run_id: text(),
+		claimed_at: instant(),
+		rejected_reason: text()
+	},
+	{
+		history: false,
+		indexes: [
+			{
+				name: 'agent_inbox_admission',
+				columns: ['tenant_id', 'conversation_id', 'source_kind', 'source_message_id'],
+				unique: true
+			},
+			{
+				name: 'agent_inbox_pending_fifo',
+				columns: ['conversation_id', 'state', 'receipt_sequence']
+			},
+			systemIndex('message_id'),
+			systemIndex('claimed_by_run_id')
+		]
+	}
 );
 
 /**
@@ -521,18 +645,30 @@ const conversationModel = defineModel(
 const agentMessageModel = defineModel(
 	{
 		sequence: bigserial({ mode: 'number' }).unique(),
+		message_id: text().notNull().unique(),
 		conversation_id: text().notNull(),
-		turn_id: text(),
 		role: text().notNull(),
-		content: jsonb().notNull()
+		name: text(),
+		run_id: text(),
+		iteration_index: integer(),
+		content_kind: text().notNull().default('null'),
+		content_text: text({ search: true }),
+		search_text: text({ search: true }),
+		tool_call_id: text(),
+		error: text(),
+		model_metadata: jsonb(),
+		app_metadata: jsonb(),
+		/** Deterministic canonical payload identity used to reject mutation on idempotent append. */
+		semantic_hash: text().notNull()
 	},
 	{
 		history: false,
 		indexes: [
 			systemIndex('conversation_id'),
+			systemIndex('run_id'),
 			{
-				name: 'chat_message_turn_role',
-				columns: ['conversation_id', 'turn_id', 'role'],
+				name: 'chat_message_generated_identity',
+				columns: ['run_id', 'iteration_index', 'role', 'message_id'],
 				unique: true
 			}
 		]
@@ -761,7 +897,10 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	team: teamModel,
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
-	agent_mailbox: agentMailboxModel,
+	chat_message_part: agentMessagePartModel,
+	agent_run: agentRunModel,
+	agent_lane: agentLaneModel,
+	agent_inbox: agentInboxModel,
 	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });

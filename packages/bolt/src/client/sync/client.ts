@@ -1,6 +1,6 @@
 import type {
 	CollectionMutationIdempotencyKey,
-	CollectionMutationGraph,
+	CollectionMutateRequest,
 	SyncAnswer,
 	SyncConnectRequest,
 	SyncOutcome,
@@ -35,7 +35,7 @@ export type SyncClient = Readonly<{
 	readonly current: () => ClientState;
 	readonly subscribe: (listener: (state: ClientState) => void) => () => void;
 	readonly mount: (input: SyncQueryInput, seed?: LiveQuerySeed) => MountedLiveQuery;
-	readonly enqueue: (id: CollectionMutationIdempotencyKey, graph: CollectionMutationGraph) => void;
+	readonly enqueue: (request: CollectionMutateRequest) => void;
 }>;
 
 export type SyncClientOptions = Readonly<{
@@ -196,8 +196,7 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 			.push(
 				{
 					connectionId: id,
-					id: writeId,
-					graph: write.graph
+					...write.request
 				},
 				connectionAbort?.signal
 			)
@@ -260,6 +259,6 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 				}
 			};
 		},
-		enqueue: (id, graph) => dispatch({ kind: 'writeEnqueued', id, graph, at: Date.now() })
+		enqueue: (request) => dispatch({ kind: 'writeEnqueued', request, at: Date.now() })
 	};
 };

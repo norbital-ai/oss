@@ -70,4 +70,41 @@ describe('AI usage', () => {
 		expect(addAIUsage(first, undefined)).toEqual(first);
 		expect(addAIUsage(undefined, first)).toEqual(first);
 	});
+
+	it('only accepts exact tenant micro-charges with their currency', () => {
+		expect(readAIUsage({ usage: { costMicroUnits: 8060, costCurrency: 'SGD' } })).toEqual({
+			costMicroUnits: 8_060,
+			costCurrency: 'SGD'
+		});
+		expect(readAIUsage({ usage: { costMicroUnits: 8060 } })).toBeUndefined();
+		expect(readAIUsage({ usage: { costMicroUnits: 1.5, costCurrency: 'SGD' } })).toBeUndefined();
+	});
+
+	it('adds one-currency tenant charges exactly and rejects ambiguous ledgers', () => {
+		expect(
+			addAIUsage(
+				{ costUsd: 0.001, costMicroUnits: 2_600, costCurrency: 'SGD' },
+				{ costUsd: 0.002, costMicroUnits: 5_200, costCurrency: 'SGD' }
+			)
+		).toEqual({
+			costUsd: 0.003,
+			costMicroUnits: 7_800,
+			costCurrency: 'SGD'
+		});
+		expect(() =>
+			addAIUsage(
+				{ costMicroUnits: 1, costCurrency: 'SGD' },
+				{ costMicroUnits: 1, costCurrency: 'USD' }
+			)
+		).toThrow('Cannot add AI tenant charges in SGD and USD');
+		expect(() => addAIUsage(undefined, { costMicroUnits: 1 })).toThrow(
+			'AI tenant charge requires both amount and currency'
+		);
+		expect(() =>
+			addAIUsage(
+				{ costMicroUnits: Number.MAX_SAFE_INTEGER, costCurrency: 'SGD' },
+				{ costMicroUnits: 1, costCurrency: 'SGD' }
+			)
+		).toThrow('AI usage total exceeds the exact integer range');
+	});
 });

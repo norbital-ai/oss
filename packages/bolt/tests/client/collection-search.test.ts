@@ -84,6 +84,7 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient): WorkspaceClientRuntime =
 	bolt,
 	db: {},
 	sync,
+	mutation: { partitionKey: 'test-partition', schemaFingerprint: 'sha256:test' },
 	syncStatus: initialClientState(),
 	settlements: inertSettlements
 });

@@ -51,6 +51,8 @@ describe('agent actions', () => {
 				conversationId: 'conversation-streaming',
 				taskId: 'task-streaming',
 				turnId: 'task-streaming',
+				messageId: 'task-streaming',
+				runId: 'run-streaming',
 				status: 'completed'
 			} as never)
 		);
@@ -100,6 +102,8 @@ describe('agent actions', () => {
 				conversationId: 'conversation-turns',
 				taskId: turnId,
 				turnId,
+				messageId: turnId,
+				runId: `run-${String(turnId)}`,
 				status: 'completed'
 			} as never);
 		});

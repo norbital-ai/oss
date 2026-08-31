@@ -86,6 +86,7 @@ describe('emitted artifact bindings', () => {
 		expect(artifact).toContain("automation0.trigger.trigger === undefined ? { _tag: 'Manual' }");
 		expect(artifact).toContain('collection: automation0.trigger.trigger.collection');
 		expect(artifact).toContain('event: automation0.trigger.trigger.event');
+		expect(artifact).toContain('description: automation0.spec.description');
 		expect(artifact).toContain('const automations = declaredWorkspace.automations.map(');
 		expect(artifact).toContain('policies: declaredAutomations[automation.name].policies');
 	});

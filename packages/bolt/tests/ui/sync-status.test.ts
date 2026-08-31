@@ -58,7 +58,15 @@ describe('live sync presentation', () => {
 			[
 				'w1' as CollectionMutationIdempotencyKey,
 				{
-					graph: { action: 'delete', collection: 'tasks', id: 'a' },
+					request: {
+						protocolVersion: 2,
+						idempotencyKey: 'w1' as CollectionMutationIdempotencyKey,
+						issuedAtEpochMs: 1,
+						partitionKey: 'partition',
+						schemaFingerprint: 'schema',
+						graph: { action: 'delete', collection: 'tasks', id: 'a' },
+						baseVersions: []
+					},
 					phase: 'sent',
 					sentAt: 1
 				}

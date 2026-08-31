@@ -266,10 +266,17 @@ const systemCommand = (
  */
 const occurrenceOutcome = (result: BundleResult): ScheduleOutcome =>
 	result._tag !== 'Success'
-		? { _tag: 'Failed', error: result.error.message }
+		? { _tag: 'Failed', error: result.error.message, retryable: result.error.retryable }
 		: result.response.status >= 200 && result.response.status < 300
 			? { _tag: 'Done', result: result.response.value ?? null }
-			: { _tag: 'Failed', error: `status ${result.response.status}` };
+			: {
+					_tag: 'Failed',
+					error: `status ${result.response.status}`,
+					retryable:
+						result.response.status === 408 ||
+						result.response.status === 429 ||
+						result.response.status >= 500
+				};
 
 const invokeOccurrence = (
 	options: ScheduleTickOptions,
@@ -286,14 +293,18 @@ const invokeOccurrence = (
 			deadlineEpochMs: nowEpochMs + options.deadlineMillis,
 			command: occurrence.command,
 			input: occurrence.input,
-			attempt: 1
+			attempt: occurrence.attempt
 		}),
 		invocationId,
 		occurrence.command
 	).pipe(
 		Effect.map(occurrenceOutcome),
 		Effect.catch((failure) =>
-			Effect.succeed<ScheduleOutcome>({ _tag: 'Failed', error: failure.message })
+			Effect.succeed<ScheduleOutcome>({
+				_tag: 'Failed',
+				error: failure.message,
+				retryable: true
+			})
 		)
 	);
 };
@@ -315,12 +326,10 @@ export const runScheduleTick = (
 			options,
 			HOST_SCHEDULE_DISCOVER_COMMAND,
 			InvocationId.make(`${HOST_SCHEDULE_DISCOVER_COMMAND}:${nowEpochMs}`),
-			{ nowEpochMs },
+			{ nowEpochMs, leaseForMillis: options.deadlineMillis },
 			nowEpochMs
 		);
-		const discovered = yield* Schema.decodeUnknownEffect(HostScheduleDiscoverResponse)(
-			answer
-		).pipe(
+		const discovered = yield* Schema.decodeUnknownEffect(HostScheduleDiscoverResponse)(answer).pipe(
 			Effect.mapError(
 				(cause) =>
 					new ScheduleTickError({
@@ -351,15 +360,11 @@ export const runScheduleTick = (
 			const settled = yield* systemCommand(
 				options,
 				HOST_SCHEDULE_SETTLE_COMMAND,
-				InvocationId.make(
-					`${HOST_SCHEDULE_SETTLE_COMMAND}:${occurrence.taskId}:${nowEpochMs}`
-				),
+				InvocationId.make(`${HOST_SCHEDULE_SETTLE_COMMAND}:${occurrence.taskId}:${nowEpochMs}`),
 				{ occurrence, outcome },
 				nowEpochMs
 			).pipe(
-				Effect.flatMap((value) =>
-					Schema.decodeUnknownEffect(HostScheduleSettleResponse)(value)
-				),
+				Effect.flatMap((value) => Schema.decodeUnknownEffect(HostScheduleSettleResponse)(value)),
 				Effect.option
 			);
 			if (Option.isNone(settled)) continue;

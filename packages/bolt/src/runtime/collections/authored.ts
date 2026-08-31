@@ -72,6 +72,7 @@ type AuthoredPipelineModule = Readonly<{
 
 type AuthoredAutomationModule = Readonly<{
 	readonly name: string;
+	readonly description?: string;
 	/** The automation's immutable authority, compiled from its own declaration. */
 	readonly policies: ReadonlyArray<string>;
 	readonly trigger: Readonly<

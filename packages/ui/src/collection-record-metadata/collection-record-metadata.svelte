@@ -57,7 +57,9 @@
 			case 'success':
 				return 'border-success/30 bg-success/10 text-success';
 			case 'warning':
-				return 'border-warning/40 bg-warning/10 text-warning-foreground';
+				// warning-foreground is the dark ink for a solid amber badge. On a translucent
+				// warning surface in dark mode it becomes dark-on-dark, so the tint uses amber itself.
+				return 'border-warning/40 bg-warning/10 text-warning-foreground dark:text-warning';
 			case 'danger':
 				return 'border-destructive/30 bg-destructive/10 text-destructive';
 			case 'neutral':

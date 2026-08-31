@@ -8,7 +8,7 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { envoy, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { app, envoy, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
@@ -458,18 +458,37 @@ describe('workspace.manifest command', () => {
 		expect(collections.find(({ name }) => name === 'people')?.hooks).toEqual([]);
 	});
 
-	it('counts policy grants and lists declared apps', async () => {
+	it('publishes exact policy grants and authored app presentation', async () => {
 		harness = await makeBoltTestRuntime(
 			testWorkspace({
-				collections: [{ name: 'people', fields: { name: field.string() } }],
+				collections: [
+					{ name: 'people', fields: { name: field.string(), active: field.boolean() } }
+				],
+				apps: [
+					app({
+						name: 'directory',
+						label: 'People directory',
+						description: 'Find everyone in the workspace.',
+						icon: 'lucide:users',
+						thumbnail: '/assets/directory.webp'
+					})
+				],
 				policies: [
 					policy({
 						name: 'admin',
+						description: 'Reads visible people and updates names.',
 						effect: 'allow',
 						grants: [
-							{ collection: 'people', action: 'read' },
+							{
+								collection: 'people',
+								action: 'read',
+								fields: ['name'],
+								where: { active: true },
+								dependencies: ['teams']
+							},
 							{ collection: 'people', action: 'update' }
-						]
+						],
+						capabilities: { apps: ['directory'], tools: ['summarize'] }
 					})
 				],
 				teams: {
@@ -481,8 +500,36 @@ describe('workspace.manifest command', () => {
 		const manifest = value(
 			await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
 		);
-		const policies = manifest['policies'] as ReadonlyArray<{ name: string; grants: number }>;
-		expect(policies.find(({ name }) => name === 'admin')?.grants).toBe(2);
-		expect(Array.isArray(manifest['apps'])).toBe(true);
+		const policies = manifest['policies'] as ReadonlyArray<{
+			name: string;
+			description: string;
+			grants: ReadonlyArray<Record<string, unknown>>;
+			capabilities: Record<string, ReadonlyArray<string>>;
+		}>;
+		const admin = policies.find(({ name }) => name === 'admin');
+		expect(admin?.description).toBe('Reads visible people and updates names.');
+		expect(admin?.grants).toEqual([
+			{
+				collection: 'people',
+				action: 'read',
+				fields: ['name'],
+				where: { active: true },
+				dependencies: ['teams']
+			},
+			{ collection: 'people', action: 'update' }
+		]);
+		expect(admin?.capabilities).toMatchObject({
+			apps: ['directory'],
+			tools: ['summarize']
+		});
+		expect(manifest['apps']).toEqual([
+			{
+				name: 'directory',
+				label: 'People directory',
+				description: 'Find everyone in the workspace.',
+				icon: 'lucide:users',
+				thumbnail: '/assets/directory.webp'
+			}
+		]);
 	});
 });

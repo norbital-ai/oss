@@ -32,7 +32,7 @@ import { Schema } from 'effect';
  * means a version mismatch is a refusal at the door rather than a capability discovered halfway
  * through an invocation.
  */
-export const PROTOCOL_VERSION = 6 as const;
+export const PROTOCOL_VERSION = 7 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;

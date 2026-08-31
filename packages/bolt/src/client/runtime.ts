@@ -23,6 +23,7 @@ import { databaseOf } from './workspace-api.js';
 import { createSyncStatusView } from './sync-status.svelte.js';
 
 export type { SystemClientApi } from './system-client.js';
+export type { BrowserWorkspaceRuntimeOptions } from '#lib/client/contracts.js';
 export type { RemoteQuery } from '#lib/client/contracts.js';
 export {
 	createWorkspaceApiProxy,
@@ -86,8 +87,7 @@ const createMutationSettlements = (machine: () => SyncClient): MutationSettlemen
 		create: (id) => ({
 			idempotencyKey: id,
 			settled: new Promise<MutationSettlement>((resolve) => register(id, resolve)),
-			status: async () =>
-				settled.get(id) ?? machine().current().writes.get(id)?.phase ?? 'unknown',
+			status: async () => settled.get(id) ?? machine().current().writes.get(id)?.phase ?? 'unknown',
 			wait: (signal) => {
 				const promise = new Promise<MutationSettlement>((resolve) => register(id, resolve));
 				if (signal === undefined) return promise;
@@ -141,6 +141,10 @@ export const createBrowserWorkspaceRuntime = (
 	options: BrowserWorkspaceRuntimeOptions = {}
 ): WorkspaceClientRuntime => {
 	const session = workspaceSession();
+	const schemaFingerprint = options.schemaFingerprint?.trim();
+	if (schemaFingerprint === undefined || schemaFingerprint.length === 0) {
+		throw new Error('The generated workspace client did not declare its schema fingerprint');
+	}
 	const scope = InvocationScope.make({
 		tenantId: TenantId.make(options.tenantId ?? session.tenantId),
 		environment: EnvironmentName.make(options.environment ?? session.environment),
@@ -151,13 +155,10 @@ export const createBrowserWorkspaceRuntime = (
 		streamUrl: session.syncStreamUrl,
 		http: createSyncHttpDriver({
 			connectUrl: connectUrlOf(session.syncStreamUrl),
-			push: async (request, signal) => {
-				await session.transport.command(
-					'collections.mutate',
-					{ idempotencyKey: request.id, graph: request.graph },
-					signal,
-					{ [SYNC_CONNECTION_HEADER]: request.connectionId }
-				);
+			push: async ({ connectionId, ...request }, signal) => {
+				await session.transport.command('collections.mutate', request, signal, {
+					[SYNC_CONNECTION_HEADER]: connectionId
+				});
 			}
 		}),
 		onOutcomes: (outcomes) => settlements.accept(outcomes),
@@ -169,9 +170,17 @@ export const createBrowserWorkspaceRuntime = (
 		bolt: BoltClient;
 		db: Readonly<Record<string, unknown>>;
 		sync: SyncClient;
+		mutation: WorkspaceClientRuntime['mutation'];
 		syncStatus: ClientState;
 		settlements: MutationSettlements;
-	} = { bolt, db: {}, sync, settlements, syncStatus: createSyncStatusView(sync) };
+	} = {
+		bolt,
+		db: {},
+		sync,
+		mutation: { partitionKey: crypto.randomUUID(), schemaFingerprint },
+		settlements,
+		syncStatus: createSyncStatusView(sync)
+	};
 	runtime.db = databaseOf(runtime);
 	return runtime;
 };

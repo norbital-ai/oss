@@ -1,6 +1,6 @@
 import type {
 	CollectionMutationIdempotencyKey,
-	CollectionMutationGraph,
+	CollectionMutateRequest,
 	StoredRecord,
 	SyncAnswer,
 	SyncApplyFrame,
@@ -42,7 +42,7 @@ export type QueryState = Readonly<{
 }>;
 
 export type WriteState = Readonly<
-	{ readonly graph: CollectionMutationGraph } & (
+	{ readonly request: CollectionMutateRequest } & (
 		{ readonly phase: 'queued' } | { readonly phase: 'sent'; readonly sentAt: number }
 	)
 >;
@@ -69,8 +69,7 @@ export type ClientEvent = Readonly<
 	| { readonly kind: 'unmounted'; readonly key: QueryKey; readonly at: number }
 	| {
 			readonly kind: 'writeEnqueued';
-			readonly id: WriteId;
-			readonly graph: CollectionMutationGraph;
+			readonly request: CollectionMutateRequest;
 			readonly at: number;
 	  }
 	| { readonly kind: 'tick'; readonly now: number }
@@ -482,19 +481,20 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			return [{ ...state, queries }, []];
 		}
 		case 'writeEnqueued': {
-			if (state.writes.has(event.id) || state.link === 'needsReload') return [state, []];
+			const id = event.request.idempotencyKey;
+			if (state.writes.has(id) || state.link === 'needsReload') return [state, []];
 			const writes = new Map(state.writes);
 			writes.set(
-				event.id,
+				id,
 				state.link === 'live'
 					? {
-							graph: event.graph,
+							request: event.request,
 							phase: 'sent',
 							sentAt: event.at
 						}
-					: { graph: event.graph, phase: 'queued' }
+					: { request: event.request, phase: 'queued' }
 			);
-			return [{ ...state, writes }, [{ kind: 'push', writeId: event.id }]];
+			return [{ ...state, writes }, [{ kind: 'push', writeId: id }]];
 		}
 		case 'tick': {
 			if (state.link === 'needsReload') return [state, []];

@@ -29,8 +29,17 @@ describe('system collection catalog', () => {
 		for (const name of ['user', 'team', 'session']) expect(byName.has(name)).toBe(true);
 	});
 
-	it('does not publish the retired agent-run continuation collection', () => {
-		expect(byName.has('agent_run')).toBe(false);
+	it('publishes the canonical agent transcript and sole lane scheduler collections', () => {
+		for (const name of [
+			'chat_message',
+			'chat_message_part',
+			'agent_run',
+			'agent_lane',
+			'agent_inbox'
+		]) {
+			expect(byName.has(name)).toBe(true);
+		}
+		expect(byName.has('agent_mailbox')).toBe(false);
 	});
 
 	it('publishes automation observability without queue and retry columns', () => {

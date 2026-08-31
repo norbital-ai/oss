@@ -8,6 +8,7 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { assistantText } from './canonical-ai-fixture.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -33,11 +34,11 @@ const respondsOnce = (): FacilityBinding<AIRequest, AIResponse> => ({
 						}
 					}
 				}
-			: { _tag: 'Success', value: { output: { text: 'Payroll started.' } } }
+			: { _tag: 'Success', value: { output: assistantText('Payroll started.', 'payroll-answer') } }
 });
 
 describe('agent conversation admission', () => {
-	it('commits one conversation, mailbox, and completed turn in the invoking request', async () => {
+	it('commits one conversation, inbox receipt, lane, and completed run in the invoking request', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace(), { ai: respondsOnce() });
 		const runtime = harness;
 		const admitted = await runtime.runtime.runPromise(
@@ -48,7 +49,7 @@ describe('agent conversation admission', () => {
 					'web',
 					'atomic-conversation',
 					'atomic-turn',
-					{ kind: 'user_message', text: 'Run payroll' }
+					Agents.userAgentInput('Run payroll')
 				);
 			})
 		);
@@ -61,19 +62,23 @@ describe('agent conversation admission', () => {
 			`select
 				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
 				(select count(*)::int from chat_message where conversation_id = $1) as messages,
-				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes`,
+				(select count(*)::int from agent_inbox where conversation_id = $1) as inbox,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs,
+				(select count(*)::int from agent_lane where conversation_id = $1) as lanes`,
 			['atomic-conversation']
 		);
-		expect(counts[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1 });
+		expect(counts[0]).toEqual({ sessions: 1, messages: 2, inbox: 1, runs: 1, lanes: 1 });
 		expect(
 			await runtime.database.query(
 				`select distinct collection_name
 				 from bolt_sync_outbox
-				 where collection_name in ('chat_session', 'chat_message', 'agent_mailbox')
+				 where collection_name in ('chat_session', 'chat_message', 'agent_inbox', 'agent_lane', 'agent_run')
 				 order by collection_name`
 			)
 		).toEqual([
-			{ collection_name: 'agent_mailbox' },
+			{ collection_name: 'agent_inbox' },
+			{ collection_name: 'agent_lane' },
+			{ collection_name: 'agent_run' },
 			{ collection_name: 'chat_message' },
 			{ collection_name: 'chat_session' }
 		]);
@@ -88,7 +93,7 @@ describe('agent conversation admission', () => {
 					'web',
 					'atomic-conversation',
 					'atomic-turn',
-					{ kind: 'user_message', text: 'Run payroll' }
+					Agents.userAgentInput('Run payroll')
 				);
 			})
 		);
@@ -96,29 +101,29 @@ describe('agent conversation admission', () => {
 			`select
 				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
 				(select count(*)::int from chat_message where conversation_id = $1) as messages,
-				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes`,
+				(select count(*)::int from agent_inbox where conversation_id = $1) as inbox,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
 			['atomic-conversation']
 		);
-		expect(afterRetry[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1 });
+		expect(afterRetry[0]).toEqual({ sessions: 1, messages: 2, inbox: 1, runs: 1 });
 		// A fresh query has no admission response or component state to lean on. It sees the same
 		// persisted transcript and queue projection a remounted sync client will reconstruct.
 		expect(
 			await runtime.database.query(
 				`select
 					(select title from chat_session where conversation_id = $1) as title,
-					(select content->>'text' from chat_message
-					 where conversation_id = $1 and turn_id = $2 and role = 'user') as message,
-					(select status from agent_mailbox where conversation_id = $1) as mailbox_status,
-					(select content->>'status' from chat_message
-					 where conversation_id = $1 and turn_id = $2 and role = 'assistant') as turn_status`,
-				['atomic-conversation', 'atomic-turn']
+					(select content_text from chat_message
+					 where conversation_id = $1 and message_id = $2 and role = 'user') as message,
+					(select state from agent_inbox where conversation_id = $1) as inbox_state,
+					(select status from agent_run where conversation_id = $1) as run_status`,
+				['atomic-conversation', 'input:atomic-turn']
 			)
 		).toEqual([
 			{
 				title: 'Run payroll',
 				message: 'Run payroll',
-				mailbox_status: 'active',
-				turn_status: 'completed'
+				inbox_state: 'claimed',
+				run_status: 'completed'
 			}
 		]);
 
@@ -136,7 +141,7 @@ describe('agent conversation admission', () => {
 						'web',
 						'atomic-conversation',
 						'atomic-turn',
-						{ kind: 'user_message', text: 'Different work' }
+						Agents.userAgentInput('Different work')
 					);
 				})
 			)
@@ -145,15 +150,17 @@ describe('agent conversation admission', () => {
 			`select
 				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
 				(select count(*)::int from chat_message where conversation_id = $1) as messages,
-				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes,
-				(select content->>'text' from chat_message
-				 where conversation_id = $1 and turn_id = $2 and role = 'user') as message`,
-			['atomic-conversation', 'atomic-turn']
+				(select count(*)::int from agent_inbox where conversation_id = $1) as inbox,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs,
+				(select content_text from chat_message
+				 where conversation_id = $1 and message_id = $2 and role = 'user') as message`,
+			['atomic-conversation', 'input:atomic-turn']
 		);
 		expect(unchanged[0]).toEqual({
 			sessions: 1,
 			messages: 2,
-			mailboxes: 1,
+			inbox: 1,
+			runs: 1,
 			message: 'Run payroll'
 		});
 	});

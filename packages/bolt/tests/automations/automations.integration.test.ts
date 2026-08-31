@@ -495,7 +495,7 @@ describe('Automations owner', () => {
 		}
 	}, 60_000);
 
-	it('marks direct and cron automation invocations failed at the environment-load gate', async () => {
+	it('fails direct runs but recovers an expired durable cron claim at the environment-load gate', async () => {
 		const harness = await makeBoltTestRuntime(directDefinition);
 		try {
 			await harness.database.query(
@@ -503,8 +503,9 @@ describe('Automations owner', () => {
 					('direct-running', 'parent', 'running')`
 			);
 			await harness.database.query(
-				`insert into bolt_task (command, input, effect_id) values
-					('automations.child', '{}', 'cron-running')`
+				`insert into bolt_task
+					(command, input, effect_id, status, attempts, lease_expires_at) values
+					('automations.child', '{}', 'cron-running', 'running', 1, now() - interval '1 second')`
 			);
 			await harness.runtime.runPromise(
 				Effect.gen(function* () {
@@ -518,7 +519,11 @@ describe('Automations owner', () => {
 					 where task_id in ('direct-running', 'cron-running') order by task_id`
 				)
 			).toEqual([
-				{ task_id: 'cron-running', status: 'failed', error: 'host restarted during run' },
+				{
+					task_id: 'cron-running',
+					status: 'pending',
+					error: 'host interrupted previous attempt'
+				},
 				{ task_id: 'direct-running', status: 'failed', error: 'host restarted during run' }
 			]);
 		} finally {
@@ -526,7 +531,7 @@ describe('Automations owner', () => {
 		}
 	}, 60_000);
 
-	it('stops only the exact running occurrence owned by the named automation', async () => {
+	it('stops only the exact pending occurrence owned by the named automation', async () => {
 		const definition = workspace({
 			name: 'cancellation-scope',
 			version: '1',
@@ -560,8 +565,8 @@ describe('Automations owner', () => {
 					'select task_id, name, status from automation_run order by task_id'
 				)
 			).toEqual([
-				{ task_id: 'daily-run', name: 'daily', status: 'running' },
-				{ task_id: 'weekly-run', name: 'weekly', status: 'running' }
+				{ task_id: 'daily-run', name: 'daily', status: 'pending' },
+				{ task_id: 'weekly-run', name: 'weekly', status: 'pending' }
 			]);
 
 			const outcome = await harness.runtime.runPromise(
@@ -584,7 +589,7 @@ describe('Automations owner', () => {
 				)
 			).toEqual([
 				{ effect_id: 'daily-run', status: 'stopped', error: 'stopped' },
-				{ effect_id: 'weekly-run', status: 'running', error: null }
+				{ effect_id: 'weekly-run', status: 'pending', error: null }
 			]);
 			expect(
 				await harness.database.query(

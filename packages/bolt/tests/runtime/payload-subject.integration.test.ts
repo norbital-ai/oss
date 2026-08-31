@@ -130,7 +130,6 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.status',
 	'agents.enqueue',
 	'agents.open',
-	'agents.interrupt',
 	'agents.stop',
 	'agents.resume',
 	'workspace.manifest',

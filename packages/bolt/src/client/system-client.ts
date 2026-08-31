@@ -21,6 +21,9 @@ const AgentEnqueueInput = Schema.Struct({
 	turnId: Schema.NonEmptyString,
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef)),
+	mode: Schema.optionalKey(Schema.Literals(['queue', 'steer'])),
+	intent: Schema.optionalKey(Schema.Literals(['do', 'plan', 'compact'])),
+	verifierPrompt: Schema.optionalKey(Schema.NonEmptyString),
 	/** Caller-selected host model; absent means the catalog default. */
 	model: Schema.optionalKey(Schema.NonEmptyString)
 });
@@ -66,7 +69,6 @@ const AgentOpenResponse = Schema.Struct({
 	opened: Schema.Literal(true),
 	conversationId: Schema.NonEmptyString
 });
-const AgentInterruptResponse = Schema.Struct({ interrupted: Schema.Literal(true) });
 const AgentStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
 const AgentResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
 const AgentVerifierResponse = Schema.Struct({ updated: Schema.Literal(true) });
@@ -123,10 +125,6 @@ export type SystemClientApi = Readonly<{
 		enqueue: SystemOperation<
 			CommandInput<typeof AgentEnqueueInput>,
 			CommandOutput<typeof AgentEnqueueResult>
-		>;
-		interrupt: SystemOperation<
-			CommandInput<typeof AgentLaneInput>,
-			CommandOutput<typeof AgentInterruptResponse>
 		>;
 		stop: SystemOperation<
 			CommandInput<typeof AgentLaneInput>,
@@ -282,7 +280,6 @@ export const createSystemClient = (
 	agents: {
 		open: command(runtime, 'agents.open', AgentOpenInput, AgentOpenResponse),
 		enqueue: command(runtime, 'agents.enqueue', AgentEnqueueInput, AgentEnqueueResult),
-		interrupt: command(runtime, 'agents.interrupt', AgentLaneInput, AgentInterruptResponse),
 		stop: command(runtime, 'agents.stop', AgentLaneInput, AgentStopResponse),
 		resume: command(runtime, 'agents.resume', AgentLaneInput, AgentResumeResponse),
 		documents: {

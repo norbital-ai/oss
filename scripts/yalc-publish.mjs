@@ -12,7 +12,7 @@
  *   --force          push even where every installation already holds this exact build
  *   --report=<file>  write what happened as JSON, so a caller does not have to re-derive it
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,6 +94,16 @@ const reportPath = arguments_.report;
 const run = (command, args, cwd = repositoryRoot) => {
 	execFileSync(command, args, { cwd, stdio: 'inherit', env: commandEnvironment });
 };
+
+const runAsync = (command, args, cwd = repositoryRoot) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(command, args, { cwd, stdio: 'inherit', env: commandEnvironment });
+		child.once('error', reject);
+		child.once('close', (code, signal) => {
+			if (code === 0) resolve();
+			else reject(new Error(`${command} exited ${signal ?? code}`));
+		});
+	});
 
 const workspaceVersions = Object.fromEntries(
 	['bolt-protocol', 'bolt', 'bolt-server', 'std', 'ui', 'config', 'doctor'].flatMap((directory) => {
@@ -226,14 +236,29 @@ const installationsOf = (name) => {
 
 const report = { packages: {} };
 
+// The dependency-aware Turbo build above is the ordering barrier. Publishing its finished package
+// directories touches disjoint yalc package versions, so copying them one after another only adds
+// their latencies. Consumer pushes remain serial below because yalc owns one installations index.
+await Promise.all(
+	packages.map(({ directory }) =>
+		runAsync(
+			'pnpm',
+			[
+				'exec',
+				'yalc',
+				'--store-folder',
+				yalcStoreDirectory,
+				'publish',
+				'--private',
+				'--no-scripts'
+			],
+			path.join(repositoryRoot, directory)
+		)
+	)
+);
+
 for (const { directory, name } of packages) {
 	const packageRoot = path.join(repositoryRoot, directory);
-	run(
-		'pnpm',
-		['exec', 'yalc', '--store-folder', yalcStoreDirectory, 'publish', '--private', '--no-scripts'],
-		packageRoot
-	);
-
 	const { version } = readManifest(path.join(packageRoot, 'package.json'));
 	const storeDirectory = path.join(yalcStoreDirectory, 'packages', name, version);
 	const storeManifestPath = path.join(storeDirectory, 'package.json');

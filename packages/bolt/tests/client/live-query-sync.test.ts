@@ -1,5 +1,7 @@
 import type {
 	CollectionMutationIdempotencyKey,
+	CollectionMutateRequest,
+	CollectionMutationGraph,
 	SyncApplyFrame,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
@@ -18,6 +20,19 @@ const query = (orderBy: Record<string, string> = { created_at: 'desc', id: 'asc'
 
 const writeId = (value: string): CollectionMutationIdempotencyKey =>
 	value as CollectionMutationIdempotencyKey;
+
+const mutationRequest = (
+	id: CollectionMutationIdempotencyKey,
+	graph: CollectionMutationGraph
+): CollectionMutateRequest => ({
+	protocolVersion: 2,
+	idempotencyKey: id,
+	issuedAtEpochMs: 1,
+	partitionKey: 'partition',
+	schemaFingerprint: 'schema',
+	graph,
+	baseVersions: []
+});
 
 describe('live query identity and projection', () => {
 	it('deduplicates ordinary object key order but preserves SQL order precedence', () => {
@@ -155,9 +170,12 @@ describe('live query Machine', () => {
 		const id = writeId('w1');
 		[state] = step(state, {
 			kind: 'writeEnqueued',
-			id,
 			at: 2,
-			graph: { action: 'update', collection: 'tasks', values: { id: 'a', title: 'new' } }
+			request: mutationRequest(id, {
+				action: 'update',
+				collection: 'tasks',
+				values: { id: 'a', title: 'new' }
+			})
 		});
 		const frame: SyncApplyFrame = {
 			head: { sequence: 2 },
@@ -327,9 +345,8 @@ describe('live query Machine', () => {
 		[state] = step(state, { kind: 'unmounted', key, at: 10 });
 		[state] = step(state, {
 			kind: 'writeEnqueued',
-			id,
 			at: 10,
-			graph: { action: 'delete', collection: 'tasks', id: 'a' }
+			request: mutationRequest(id, { action: 'delete', collection: 'tasks', id: 'a' })
 		});
 		const [next, effects] = step(state, {
 			kind: 'tick',

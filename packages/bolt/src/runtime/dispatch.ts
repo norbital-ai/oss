@@ -22,6 +22,7 @@ import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
+import { userAgentInput } from '#lib/runtime/agents/agent-runtime.js';
 import {
 	AI,
 	Files,
@@ -62,6 +63,7 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import { authoredManifestDeclarations } from '#lib/runtime/workspace-manifest.js';
 
 export { DispatchError } from '#lib/runtime/workspace.js';
 
@@ -115,6 +117,9 @@ const AgentEnqueueInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
 	message: Schema.String,
+	mode: Schema.optionalKey(Schema.Literals(['queue', 'steer'])),
+	intent: Schema.optionalKey(Schema.Literals(['do', 'plan', 'compact'])),
+	verifierPrompt: Schema.optionalKey(Schema.NonEmptyString),
 	/** Caller-selected host model; absent means the catalog default. */
 	model: Schema.optionalKey(Schema.NonEmptyString)
 });
@@ -1366,14 +1371,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case HOST_RECOVER_COMMAND: {
 			yield* decode(Schema.Struct({ subject: Subject }), commandInput);
-			yield* (yield* Agents.Service).recover(EffectId.make(`${effectId}:agents`));
 			yield* (yield* Automations.Service).recover(EffectId.make(`${effectId}:automations`));
 			yield* (yield* TaskQueue.Service).recover(EffectId.make(`${effectId}:tasks`));
 			return json({ recovered: true });
 		}
 		case HOST_SCHEDULE_DISCOVER_COMMAND: {
 			const input = yield* decode(AuthenticatedHostScheduleDiscover, commandInput);
-			const discovered = yield* (yield* TaskQueue.Service).discover(effectId, input.nowEpochMs);
+			const discovered = yield* (yield* TaskQueue.Service).discover(
+				effectId,
+				input.nowEpochMs,
+				input.leaseForMillis
+			);
 			yield* (yield* Automations.Service).publishProjectedRuns(
 				EffectId.make(`${effectId}:publish`),
 				discovered.occurrences.map(({ taskId }) => taskId)
@@ -1389,6 +1397,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const nextDueAtEpochMs = yield* (yield* TaskQueue.Service).settle(
 				effectId,
 				input.occurrence.taskId,
+				input.occurrence.attempt,
 				input.outcome
 			);
 			yield* (yield* Automations.Service).publishProjectedRuns(
@@ -1438,16 +1447,20 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				input.agent,
 				input.conversationId,
 				input.turnId,
-				{
-					kind: 'user_message',
-					text: input.message
-				},
-				input.model
+				userAgentInput(input.message),
+				input.model,
+				undefined,
+				input.mode,
+				'web',
+				input.intent,
+				input.verifierPrompt
 			);
 			return json({
 				conversationId: admitted.conversationId,
 				taskId: admitted.taskId,
 				turnId: admitted.turnId,
+				messageId: admitted.messageId,
+				...(admitted.runId === undefined ? {} : { runId: admitted.runId }),
 				status: admitted.status
 			});
 		}
@@ -1494,11 +1507,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			);
 			return json({ opened: true, conversationId: input.conversationId });
 		}
-		case 'agents.interrupt': {
-			const input = yield* decode(AgentLaneInput, commandInput);
-			yield* (yield* Agents.Service).interrupt(effectId, input.subject, input.conversationId);
-			return json({ interrupted: true });
-		}
 		case 'agents.stop': {
 			const input = yield* decode(AgentLaneInput, commandInput);
 			yield* (yield* Agents.Service).stop(effectId, input.subject, input.conversationId);
@@ -1529,6 +1537,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(VisibleAppsInput, commandInput);
 			const workspace = yield* Workspace.Service;
 			const access = yield* AccessControl.Service;
+			const authoredRuntime = yield* AuthoredRuntimeService;
 			const definition = workspace.definition;
 			const authoring = command === 'workspace.authoringManifest';
 			if (authoring && input.subject.admin !== true) {
@@ -1577,12 +1586,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 						.filter((relation) => relation.source === collection.name)
 						.map(({ name, target, cardinality }) => ({ name, target, cardinality }))
 				})),
-				apps: definition.apps.map(({ name, label }) => ({ name, label })),
-				policies: definition.policies.map((policy) => ({
-					name: policy.name,
-					grants: policy.grants?.length ?? 0
-				})),
-				automations: definition.automations.map(({ name }) => ({ name })),
+				...authoredManifestDeclarations(definition, authoredRuntime),
 				// What identifies an envoy and what shape of traffic it carries, for the same reason the
 				// field projection above stopped naming four keys: a studio that is told only an envoy's
 				// name cannot say which transport it arrives over, and cannot tell a public envoy from one

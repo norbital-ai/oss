@@ -12,7 +12,7 @@ import { Tasks } from '#lib/runtime/facilities/services.js';
 import {
 	makeQueue,
 	progressStatement,
-	recoverStatement,
+	recoverStatements,
 	statusStatement,
 	stopStatement,
 	type Declaration,
@@ -45,12 +45,14 @@ export type Interface = Readonly<{
 	/** Advances due declarations and returns inert occurrence values for the host to invoke. */
 	readonly discover: (
 		effectId: EffectIdType,
-		nowEpochMs: number
+		nowEpochMs: number,
+		leaseForMillis: number
 	) => Effect.Effect<HostScheduleDiscoverResponse, Database.FacilityError>;
 	/** Settles one exact occurrence from a later, fresh host invocation. */
 	readonly settle: (
 		effectId: EffectIdType,
 		taskId: string,
+		attempt: number,
 		outcome: HostScheduleOutcome
 	) => Effect.Effect<number | undefined, Database.FacilityError>;
 	readonly status: (
@@ -126,7 +128,7 @@ export const layer = (_context: CallContext) =>
 			});
 			return Service.of({
 				recover: Effect.fn('TaskQueue.recover')(function* (effectId) {
-					yield* database.execute(effectId, asRequest([recoverStatement()]));
+					yield* database.execute(effectId, asRequest(recoverStatements()));
 				}),
 				active: (effectId, taskId) =>
 					Effect.ignore(tasks.execute(effectId, { _tag: 'Active', taskId })),
@@ -138,8 +140,11 @@ export const layer = (_context: CallContext) =>
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					makeQueue(executeUnder(effectId, 'declare')).declare(declarations, nowEpochMs)
 				),
-				discover: Effect.fn('TaskQueue.discover')(function* (effectId, nowEpochMs) {
-					const report = yield* makeQueue(executeUnder(effectId, 'discover')).fire(nowEpochMs);
+				discover: Effect.fn('TaskQueue.discover')(function* (effectId, nowEpochMs, leaseForMillis) {
+					const report = yield* makeQueue(executeUnder(effectId, 'discover')).fire(
+						nowEpochMs,
+						leaseForMillis
+					);
 					return {
 						occurrences: report.occurrences,
 						rejections: report.rejections.map(({ key, reason }) => ({
@@ -149,8 +154,12 @@ export const layer = (_context: CallContext) =>
 						nextDueAtEpochMs: report.nextDueAtEpochMs ?? null
 					};
 				}),
-				settle: Effect.fn('TaskQueue.settle')(function* (effectId, taskId, outcome) {
-					const next = yield* makeQueue(executeUnder(effectId, 'settle')).settle(taskId, outcome);
+				settle: Effect.fn('TaskQueue.settle')(function* (effectId, taskId, attempt, outcome) {
+					const next = yield* makeQueue(executeUnder(effectId, 'settle')).settle(
+						taskId,
+						attempt,
+						outcome
+					);
 					return next;
 				}),
 				status: Effect.fn('TaskQueue.status')(function* (effectId, taskId) {

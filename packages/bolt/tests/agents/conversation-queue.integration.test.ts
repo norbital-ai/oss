@@ -7,6 +7,7 @@ import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { assistantText, assistantToolCall } from './canonical-ai-fixture.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -22,7 +23,7 @@ const modelCatalog: AIResponse = {
 };
 
 describe('agent conversation queue', () => {
-	it('admits a follow-up immediately and folds it in before the next tool-loop round', async () => {
+	it('admits a follow-up immediately but keeps it outside the active run boundary', async () => {
 		let releaseFirstRound!: () => void;
 		const firstRoundHeld = new Promise<void>((resolve) => {
 			releaseFirstRound = resolve;
@@ -43,13 +44,14 @@ describe('agent conversation queue', () => {
 					return {
 						_tag: 'Success',
 						value: {
-							output: {
-								toolCalls: [{ name: 'describe_workspace', input: {} }]
-							}
+							output: assistantToolCall('describe_workspace', {}, 'queue-describe')
 						}
 					};
 				}
-				return { _tag: 'Success', value: { output: { text: 'Handled both messages.' } } };
+				return {
+					_tag: 'Success',
+					value: { output: assistantText(`answer-${turns.length}`, `queue-answer-${turns.length}`) }
+				};
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
@@ -62,7 +64,7 @@ describe('agent conversation queue', () => {
 				'web',
 				conversationId,
 				'turn-first',
-				{ kind: 'user_message', text: 'Start the work.' }
+				Agents.userAgentInput('Start the work.')
 			)
 		);
 		await firstRoundStarted;
@@ -74,25 +76,27 @@ describe('agent conversation queue', () => {
 				'web',
 				conversationId,
 				'turn-follow-up',
-				{ kind: 'user_message', text: 'Include the newly queued detail.' }
+				Agents.userAgentInput('Include the newly queued detail.')
 			)
 		);
-		expect(followUp.status).toBe('queued');
+		expect(followUp.status).toBe('pending');
 		releaseFirstRound();
 		expect((await first).status).toBe('completed');
 
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Include the newly queued detail.');
+		expect(turns).toHaveLength(3);
+		expect(JSON.stringify(turns[1]?.messages)).not.toContain('Include the newly queued detail.');
+		expect(JSON.stringify(turns[2]?.messages)).toContain('Include the newly queued detail.');
 		expect(
 			await harness.database.query(
-				`select turn_id, content->>'status' as status, content->'parts' as parts
-				 from chat_message where conversation_id = $1 and role = 'assistant'
-				 order by sequence`,
+				`select run.status, count(message.id)::int as assistant_messages
+				 from agent_run run left join chat_message message
+				  on message.run_id = run.run_id and message.role = 'assistant'
+				 where run.conversation_id = $1 group by run.id order by run.generation`,
 				[conversationId]
 			)
 		).toEqual([
-			{ turn_id: 'turn-first', status: 'completed', parts: expect.any(Array) },
-			{ turn_id: 'turn-follow-up', status: 'completed', parts: [] }
+			{ status: 'completed', assistant_messages: 2 },
+			{ status: 'completed', assistant_messages: 1 }
 		]);
 	});
 
@@ -115,7 +119,12 @@ describe('agent conversation queue', () => {
 					announceFirstRound();
 					await firstRoundHeld;
 				}
-				return { _tag: 'Success', value: { output: { text: `answer-${turns.length}` } } };
+				return {
+					_tag: 'Success',
+					value: {
+						output: assistantText(`answer-${turns.length}`, `final-answer-${turns.length}`)
+					}
+				};
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
@@ -128,7 +137,7 @@ describe('agent conversation queue', () => {
 				'web',
 				conversationId,
 				'turn-first',
-				{ kind: 'user_message', text: 'First.' }
+				Agents.userAgentInput('First.')
 			)
 		);
 		await firstRoundStarted;
@@ -141,11 +150,11 @@ describe('agent conversation queue', () => {
 						'web',
 						conversationId,
 						'turn-second',
-						{ kind: 'user_message', text: 'Second.' }
+						Agents.userAgentInput('Second.')
 					)
 				)
 			).status
-		).toBe('queued');
+		).toBe('pending');
 		releaseFirstRound();
 		await first;
 
@@ -153,8 +162,7 @@ describe('agent conversation queue', () => {
 		expect(JSON.stringify(turns[1]?.messages)).toContain('Second.');
 		expect(
 			await harness.database.query(
-				`select content->>'status' as status from chat_message
-				 where conversation_id = $1 and role = 'assistant' order by sequence`,
+				`select status from agent_run where conversation_id = $1 order by generation`,
 				[conversationId]
 			)
 		).toEqual([{ status: 'completed' }, { status: 'completed' }]);

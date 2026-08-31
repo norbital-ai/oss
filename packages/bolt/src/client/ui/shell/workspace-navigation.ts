@@ -32,6 +32,8 @@ const NavigationText = {
 const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
+export const ENVOYS_SETTINGS_PATH = hostPluginSurfaceHref('envoys');
+
 /**
  * The surface a `/__host/…` path names, or `null` if the path names none.
  *
@@ -83,7 +85,7 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		key: 'envoys',
 		label: 'Envoys',
 		icon: 'lucide:bot',
-		entry: hostPluginSurfaceHref('envoys'),
+		entry: ENVOYS_SETTINGS_PATH,
 		placement: 'settings',
 		adminOnly: true
 	},

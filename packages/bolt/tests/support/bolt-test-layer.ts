@@ -19,6 +19,8 @@ import {
 	type FacilityCall,
 	type FileRequest,
 	type FileResponse,
+	type HostToolRequest,
+	type HostToolResponse,
 	type IdentityHookRequest,
 	type IdentityHookResponse,
 	type TaskRequest,
@@ -176,7 +178,7 @@ import {
 	Transport
 } from '../../src/runtime/facilities/services.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
-import { remoteRegistryLayer } from '../../src/runtime/remotes.js';
+import { remoteRegistryLayer, type RuntimeRemoteHandler } from '../../src/runtime/remotes.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import * as RateLimits from '../../src/runtime/rate-limits.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
@@ -358,6 +360,7 @@ export type TestWorkspaceInput = Readonly<{
 		readonly icon?: string;
 	}>;
 	readonly policies?: ReadonlyArray<PolicyDeclaration>;
+	readonly apps?: WorkspaceDefinition['apps'];
 	readonly teams?: Readonly<Record<string, ReadonlyArray<string>>>;
 	/** `src/+agents.md`, when a test cares what the system message says. */
 	readonly prompt?: string;
@@ -380,7 +383,7 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 				{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }
 			]
 		).map(collection),
-		apps: [],
+		apps: input.apps ?? [],
 		policies: input.policies ?? [
 			policy({
 				name: 'admin',
@@ -443,6 +446,9 @@ export const makeBoltTestRuntime = async (
 		readonly communication?: FacilityBinding<CommunicationRequest, CommunicationResponse>;
 		readonly files?: FacilityBinding<FileRequest, FileResponse>;
 		readonly identityHooks?: FacilityBinding<IdentityHookRequest, IdentityHookResponse>;
+		readonly hostTools?: FacilityBinding<HostToolRequest, HostToolResponse>;
+		/** Live closures behind authored agent tools and ordinary workspace remotes. */
+		readonly remoteHandlers?: Readonly<Record<string, RuntimeRemoteHandler>>;
 		/** Bound when a test wants to observe what the write path announces on the sync topic. */
 		readonly transport?: FacilityBinding<TransportRequest, TransportResponse>;
 		readonly authored?: AuthoredRuntime;
@@ -525,7 +531,7 @@ export const makeBoltTestRuntime = async (
 		Communication.layer(bindings.communication, context),
 		Connector.layer(bindings.connector, context),
 		Files.layer(bindings.files, context),
-		HostTools.layer(undefined, context),
+		HostTools.layer(bindings.hostTools, context),
 		IdentityHooks.layer(bindings.identityHooks, context),
 		SyncCommit.layer(undefined, context),
 		Tasks.layer(tasks.binding, context),
@@ -592,7 +598,10 @@ export const makeBoltTestRuntime = async (
 	// Dispatch resolves authored remotes through this registry, and the registry resolves them
 	// through Collections — so it layers over them, not alongside the facilities. No handlers are
 	// registered: a test that calls one should fail on the missing name, not a missing service.
-	const remotes = Layer.provideMerge(remoteRegistryLayer({}), collections);
+	const remotes = Layer.provideMerge(
+		remoteRegistryLayer(bindings.remoteHandlers ?? {}),
+		collections
+	);
 	const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(facilities));
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.

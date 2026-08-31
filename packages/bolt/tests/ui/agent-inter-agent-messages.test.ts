@@ -3,7 +3,7 @@ import {
 	projectStoredChatMessages,
 	toPanelMessages
 } from '../../src/client/ui/agent/transcript.js';
-import { encodeAgentMessage } from '../../src/runtime/agents/agent-message.js';
+import { canonicalAgentRows } from './canonical-agent-fixture.js';
 
 const conversationId = 'conversation-inbox';
 const sender = {
@@ -12,15 +12,27 @@ const sender = {
 	title: 'Migration and performance verification'
 };
 
-const project = (contents: readonly { readonly role: string; readonly content: unknown }[]) => {
-	const stored = projectStoredChatMessages(
-		contents.map((message, index) => ({
-			...message,
-			id: `message-${index}`,
-			conversation_id: conversationId,
-			turn_id: null
+const project = (
+	contents: readonly {
+		readonly role: 'user' | 'assistant' | 'tool';
+		readonly content: string | null;
+		readonly toolCalls?: Array<{
+			id: string;
+			type: 'function';
+			function: { name: string; arguments: string };
+		}>;
+		readonly toolCallId?: string;
+		readonly appMetadata?: Readonly<Record<string, unknown>>;
+	}[]
+) => {
+	const canonical = canonicalAgentRows(
+		contents.map(({ appMetadata, ...message }, index) => ({
+			conversationId,
+			message: { ...message, id: `message-${index}` },
+			...(appMetadata === undefined ? {} : { appMetadata })
 		}))
 	);
+	const stored = projectStoredChatMessages(canonical.messages, canonical.fields);
 	return toPanelMessages(stored.messages, stored.turns);
 };
 
@@ -30,7 +42,12 @@ describe('inter-agent messages in the transcript', () => {
 			{ role: 'user', content: 'Write the auth module' },
 			{
 				role: 'user',
-				content: encodeAgentMessage(sender, 'Heads-up: four errors in auth-store.ts')
+				content: '[message from agent migrator] Heads-up: four errors in auth-store.ts',
+				appMetadata: {
+					version: 1,
+					kind: 'input',
+					delegated: { from: sender, text: 'Heads-up: four errors in auth-store.ts' }
+				}
 			}
 		]);
 		expect(panel.filter((message) => message.kind === 'agent-message')).toEqual([
@@ -47,28 +64,27 @@ describe('inter-agent messages in the transcript', () => {
 
 	it('shows a sent message with its body and recipient', () => {
 		const call = {
-			kind: 'tool',
 			id: 'call-1',
-			name: 'message_agent',
-			input: { agentId: sender.agentId, message: 'Those four are already fixed.' }
+			type: 'function' as const,
+			function: {
+				name: 'message_agent',
+				arguments: JSON.stringify({
+					agentId: sender.agentId,
+					message: 'Those four are already fixed.'
+				})
+			}
 		};
 		const panel = project([
 			{ role: 'user', content: 'Reply to the migration agent' },
 			{
 				role: 'assistant',
-				content: {
-					id: 'turn-1',
-					status: 'completed',
-					parts: [
-						call,
-						{
-							kind: 'tool-result',
-							id: call.id,
-							name: call.name,
-							output: { agentName: sender.agentName, title: sender.title }
-						}
-					]
-				}
+				content: '',
+				toolCalls: [call]
+			},
+			{
+				role: 'tool',
+				toolCallId: call.id,
+				content: JSON.stringify({ agentName: sender.agentName, title: sender.title })
 			}
 		]);
 		expect(panel.find((message) => message.kind === 'agent-message')).toMatchObject({

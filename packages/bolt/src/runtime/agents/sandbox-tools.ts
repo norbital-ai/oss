@@ -7,7 +7,7 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import { ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
-import { encodeAgentMessage, type StoredAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import type { DelegatedMessage } from '#lib/runtime/agents/agent-runtime.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 
 const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
@@ -18,7 +18,7 @@ const sandboxToolNames = [
 	'read_agent',
 	'message_agent',
 	'await_agent',
-	'interrupt_agent',
+	'steer_agent',
 	'stop_agent',
 	'resume_agent'
 ] as const;
@@ -47,19 +47,19 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'list_agents',
-		description: "List this agent's direct parent and direct children.",
+		description: 'List every agent spawned in this workbench.',
 		command: 'platform:list_agents',
 		inputSchema: objectInput({})
 	},
 	{
 		name: 'read_agent',
-		description: 'Read a direct child agent transcript.',
+		description: 'Read another agent transcript from this workbench.',
 		command: 'platform:read_agent',
 		inputSchema: agentIdInput
 	},
 	{
 		name: 'message_agent',
-		description: "Pass a message to this agent's direct parent or a direct child.",
+		description: 'Pass a message to another agent in this workbench.',
 		command: 'platform:message_agent',
 		inputSchema: objectInput(
 			{
@@ -71,7 +71,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'await_agent',
-		description: 'Run and wait for one exact task owned by a direct child agent.',
+		description: 'Run and wait for one exact task owned by an agent in this workbench.',
 		command: 'platform:await_agent',
 		inputSchema: objectInput(
 			{
@@ -81,16 +81,25 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 			['agentId', 'taskId']
 		)
 	},
-	...(['interrupt_agent', 'stop_agent', 'resume_agent'] as const).map((name): ToolDeclaration => ({
+	...(['steer_agent', 'stop_agent', 'resume_agent'] as const).map((name): ToolDeclaration => ({
 		name,
 		description:
-			name === 'interrupt_agent'
-				? 'Interrupt only the currently running task of a direct child agent.'
+			name === 'steer_agent'
+				? 'Send urgent guidance to another agent in this workbench for its next safe boundary.'
 				: name === 'stop_agent'
 					? 'Stop a direct child agent at its next facility boundary.'
 					: 'Replay one stopped task as a fresh invocation.',
 		command: `platform:${name}`,
-		inputSchema: agentIdInput
+		inputSchema:
+			name === 'steer_agent'
+				? objectInput(
+						{
+							agentId: { type: 'string', minLength: 1 },
+							message: { type: 'string', minLength: 1 }
+						},
+						['agentId', 'message']
+					)
+				: agentIdInput
 	}))
 ];
 
@@ -104,7 +113,7 @@ type SandboxAction = (
 type SandboxContext = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
-	readonly sandboxKey: string;
+	readonly workbenchKey: string;
 	readonly agentName: string;
 	readonly conversationId: string;
 	readonly database: Database.Interface;
@@ -113,7 +122,6 @@ type SandboxContext = Readonly<{
 	readonly admit: SandboxAction;
 	/** Runs or joins one exact child task and returns only after its assistant row settles. */
 	readonly awaitTarget: SandboxAction;
-	readonly interrupt: SandboxAction;
 	readonly stop: SandboxAction;
 	readonly resume: SandboxAction;
 }>;
@@ -150,10 +158,10 @@ const agentView = (row: AgentRow) => ({
 	title: row.title
 });
 
-const related = Effect.fn('Agents.related')(function* (
+const workbenchAgent = Effect.fn('Agents.workbenchAgent')(function* (
 	context: SandboxContext,
 	targetId: string,
-	allowed: 'child' | 'message'
+	requireChild = false
 ) {
 	const result = yield* executeBuilt(
 		context.effectId,
@@ -176,17 +184,16 @@ const related = Effect.fn('Agents.related')(function* (
 	const current = rows.find(({ conversation_id }) => conversation_id === context.conversationId);
 	const target = rows.find(({ conversation_id }) => conversation_id === targetId);
 	const child = target?.parent_id === context.conversationId;
-	const parent = current?.parent_id === targetId;
 	if (
 		current === undefined ||
 		target === undefined ||
-		current.sandbox_key !== context.sandboxKey ||
-		target.sandbox_key !== context.sandboxKey ||
-		(!child && (allowed === 'child' || !parent))
+		current.sandbox_key !== context.workbenchKey ||
+		target.sandbox_key !== context.workbenchKey ||
+		(requireChild && !child)
 	) {
 		return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'agent-aperture' });
 	}
-	return { target, relation: child ? ('child' as const) : ('parent' as const) };
+	return target;
 });
 
 const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext) {
@@ -205,7 +212,7 @@ const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext
 	return decoded._tag === 'Some' ? (decoded.value.title ?? null) : null;
 });
 
-/** Coordinates one direct parent-child aperture; durable transcript rows are its only state. */
+/** Coordinates one workbench communication aperture; durable task rows are its only state. */
 export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(function* (
 	name: SandboxToolName,
 	input: Schema.Json,
@@ -219,39 +226,8 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		}
 		case 'list_agents': {
 			yield* decode(EmptyInput, input);
-			const currentResult = yield* executeBuilt(
+			const result = yield* executeBuilt(
 				context.effectId,
-				context.database,
-				composer
-					.select({ parent_id: chatSession.parent_id })
-					.from(chatSession)
-					.where(eq(chatSession.conversation_id, context.conversationId))
-					.limit(1)
-			);
-			const current = Schema.decodeUnknownOption(Schema.Struct({ parent_id: NullableString }))(
-				currentResult.rows[0]
-			);
-			const parentId = current._tag === 'Some' ? current.value.parent_id : null;
-			const parentResult =
-				parentId === null
-					? { rows: [] }
-					: yield* executeBuilt(
-							EffectId.make(`${context.effectId}:parent`),
-							context.database,
-							composer
-								.select({
-									conversation_id: chatSession.conversation_id,
-									parent_id: chatSession.parent_id,
-									sandbox_key: chatSession.sandbox_key,
-									agent_name: chatSession.agent_name,
-									title: chatSession.title
-								})
-								.from(chatSession)
-								.where(eq(chatSession.conversation_id, parentId))
-								.limit(1)
-						);
-			const childrenResult = yield* executeBuilt(
-				EffectId.make(`${context.effectId}:children`),
 				context.database,
 				composer
 					.select({
@@ -262,30 +238,24 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 						title: chatSession.title
 					})
 					.from(chatSession)
-					.where(eq(chatSession.parent_id, context.conversationId))
+					.where(eq(chatSession.sandbox_key, context.workbenchKey))
 			);
-			const adjacent = [...parentResult.rows, ...childrenResult.rows].flatMap((row) => {
+			const agents = result.rows.flatMap((row) => {
 				const decoded = decodeAgentRow(row);
-				return decoded._tag === 'Some' && decoded.value.sandbox_key === context.sandboxKey
+				return decoded._tag === 'Some' && decoded.value.conversation_id !== context.conversationId
 					? [decoded.value]
 					: [];
 			});
-			const parent = adjacent.find(({ conversation_id }) => conversation_id === parentId);
-			return {
-				parent: parent === undefined ? null : agentView(parent),
-				children: adjacent
-					.filter(({ parent_id }) => parent_id === context.conversationId)
-					.map(agentView)
-			};
+			return { workbenchKey: context.workbenchKey, agents: agents.map(agentView) };
 		}
 		case 'read_agent': {
 			const parsed = yield* decode(AgentInput, input);
-			yield* related(context, parsed.agentId, 'child');
+			yield* workbenchAgent(context, parsed.agentId);
 			const result = yield* executeBuilt(
 				context.effectId,
 				context.database,
 				composer
-					.select({ role: chatMessage.role, content: chatMessage.content })
+					.select({ role: chatMessage.role, content: chatMessage.search_text })
 					.from(chatMessage)
 					.where(eq(chatMessage.conversation_id, parsed.agentId))
 					.orderBy(asc(chatMessage.sequence))
@@ -294,37 +264,57 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		}
 		case 'message_agent': {
 			const parsed = yield* decode(MessageInput, input);
-			const target = yield* related(context, parsed.agentId, 'message');
+			const target = yield* workbenchAgent(context, parsed.agentId);
 			const title = yield* ownTitle(context);
 			const depth = yield* context.budget.nest(`message from ${context.agentName}`);
-			const message: StoredAgentMessage = encodeAgentMessage(
-				{
+			const message: DelegatedMessage = {
+				from: {
 					agentId: context.conversationId,
 					agentName: context.agentName,
 					title
 				},
-				parsed.message
-			);
+				text: parsed.message
+			};
 			return yield* context.admit(context.effectId, {
 				agentId: parsed.agentId,
-				agentName: target.target.agent_name,
+				agentName: target.agent_name,
 				message,
 				depth
 			});
 		}
 		case 'await_agent': {
 			const parsed = yield* decode(AwaitInput, input);
-			yield* related(context, parsed.agentId, 'child');
+			yield* workbenchAgent(context, parsed.agentId);
 			return yield* context.awaitTarget(context.effectId, parsed);
 		}
-		case 'interrupt_agent':
+		case 'steer_agent': {
+			const parsed = yield* decode(MessageInput, input);
+			const target = yield* workbenchAgent(context, parsed.agentId);
+			const title = yield* ownTitle(context);
+			const depth = yield* context.budget.nest(`steer from ${context.agentName}`);
+			return yield* context.admit(context.effectId, {
+				agentId: parsed.agentId,
+				agentName: target.agent_name,
+				message: {
+					from: {
+						agentId: context.conversationId,
+						agentName: context.agentName,
+						title
+					},
+					text: parsed.message
+				},
+				depth,
+				mode: 'steer'
+			});
+		}
 		case 'stop_agent':
 		case 'resume_agent': {
 			const parsed = yield* decode(AgentInput, input);
-			yield* related(context, parsed.agentId, 'child');
-			return yield* context[
-				name === 'interrupt_agent' ? 'interrupt' : name === 'stop_agent' ? 'stop' : 'resume'
-			](context.effectId, parsed);
+			yield* workbenchAgent(context, parsed.agentId, true);
+			return yield* context[name === 'stop_agent' ? 'stop' : 'resume'](
+				context.effectId,
+				parsed
+			);
 		}
 		default: {
 			const _exhaustive: never = name;
