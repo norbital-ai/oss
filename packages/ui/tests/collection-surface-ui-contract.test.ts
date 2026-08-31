@@ -70,6 +70,15 @@ test('list and Kanban cards render the shared record-warning leading accent', ()
 	);
 });
 
+test('Kanban moves wait for authoritative settlement before reporting success', () => {
+	const board = componentSource('collection-kanban/collection-kanban.svelte');
+	const commit = between(board, 'function commitCardMove(', '\n\tfunction moveRecord(');
+
+	assert.match(commit, /mutation\.settlement\.wait\(\)/u);
+	assert.match(commit, /settlement\.kind === 'accepted' \|\| settlement\.kind === 'rebased'/u);
+	assert.match(commit, /settlement\.kind === 'rejected' \? settlement\.message/u);
+});
+
 test('tinted warning surfaces keep readable text in both color schemes', () => {
 	const metadata = componentSource('collection-record-metadata/collection-record-metadata.svelte');
 	const alert = componentSource('alert/alert.svelte');
