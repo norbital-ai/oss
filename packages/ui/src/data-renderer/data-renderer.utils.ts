@@ -93,10 +93,7 @@ function formatDateRange(value: unknown, locale: string): string {
 				{ locale, dateStyle: 'medium' }
 			)
 		).pipe(
-			Effect.match({
-				onFailure: () => formatStructuredValue(value),
-				onSuccess: (text) => text
-			})
+			Effect.orElseSucceed(() => formatStructuredValue(value))
 		)
 	);
 }
@@ -131,10 +128,9 @@ function formatScalar(
 						Effect.try(() =>
 							new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount)
 						).pipe(
-							Effect.match({
-								onFailure: () => `${currency} ${new Intl.NumberFormat(locale).format(amount)}`,
-								onSuccess: (text) => text
-							})
+							Effect.orElseSucceed(
+								() => `${currency} ${new Intl.NumberFormat(locale).format(amount)}`
+							)
 						)
 					)
 			});
