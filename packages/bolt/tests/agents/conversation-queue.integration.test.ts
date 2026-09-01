@@ -1,13 +1,18 @@
-import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+import type { AIRequest } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	TaskId
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
-import { assistantText, assistantToolCall } from './canonical-ai-fixture.js';
+import { assistantText, successfulAI } from './canonical-ai-fixture.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -15,156 +20,115 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const modelCatalog: AIResponse = {
-	output: {
-		defaultModel: 'test-model',
-		options: [{ id: 'test-model', contextLength: 128_000 }]
-	}
-};
+const taskRequest = (taskId: TaskId, text: string, priority: 'normal' | 'steer' = 'normal') => ({
+	taskId,
+	agentId: AgentId.make('web'),
+	message: Agents.userAgentInput(text),
+	mode: DirectiveMode.make('agent'),
+	priority: DirectivePriority.make(priority)
+});
 
-describe('agent conversation queue', () => {
-	it('admits a follow-up immediately but keeps it outside the active run boundary', async () => {
-		let releaseFirstRound!: () => void;
-		const firstRoundHeld = new Promise<void>((resolve) => {
-			releaseFirstRound = resolve;
+describe('Task directive queue', () => {
+	it('durably queues a follow-up outside the active run input boundary', async () => {
+		let releaseGeneration!: () => void;
+		const generationHeld = new Promise<void>((resolve) => {
+			releaseGeneration = resolve;
 		});
-		let announceFirstRound!: () => void;
-		const firstRoundStarted = new Promise<void>((resolve) => {
-			announceFirstRound = resolve;
+		let announceGeneration!: () => void;
+		const generationStarted = new Promise<void>((resolve) => {
+			announceGeneration = resolve;
 		});
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return { _tag: 'Success', value: modelCatalog };
-				if (request._tag !== 'Turn') throw new Error('expected an AI turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					announceFirstRound();
-					await firstRoundHeld;
-					return {
-						_tag: 'Success',
-						value: {
-							output: assistantToolCall('describe_workspace', {}, 'queue-describe')
-						}
-					};
-				}
-				return {
-					_tag: 'Success',
-					value: { output: assistantText(`answer-${turns.length}`, `queue-answer-${turns.length}`) }
-				};
-			}
-		};
+		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
+		const ai = successfulAI(async (request) => {
+			generated.push(request);
+			announceGeneration();
+			await generationHeld;
+			return assistantText('First Task answer.');
+		});
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const conversationId = 'queued-follow-up';
-		const first = harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue:first'),
+		const taskId = TaskId.make('00000000-0000-4000-8000-000000000501');
+		await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('queue:first-submit'),
 				adminSubject,
-				'web',
-				conversationId,
-				'turn-first',
-				Agents.userAgentInput('Start the work.')
+				taskRequest(taskId, 'Start the work.')
 			)
 		);
-		await firstRoundStarted;
-
+		const execution = harness.runtime.runPromise(
+			agents.execute(harness.effectId('queue:first-execute'), adminSubject, taskId)
+		);
+		await generationStarted;
 		const followUp = await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue:follow-up'),
+			agents.submit(
+				harness.effectId('queue:follow-up-submit'),
 				adminSubject,
-				'web',
-				conversationId,
-				'turn-follow-up',
-				Agents.userAgentInput('Include the newly queued detail.')
+				taskRequest(taskId, 'Include the newly queued detail.')
 			)
 		);
-		expect(followUp.status).toBe('pending');
-		releaseFirstRound();
-		expect((await first).status).toBe('completed');
+		expect(followUp.directiveId).toEqual(expect.any(String));
+		releaseGeneration();
+		expect((await execution).status).toBe('done');
 
-		expect(turns).toHaveLength(3);
-		expect(JSON.stringify(turns[1]?.messages)).not.toContain('Include the newly queued detail.');
-		expect(JSON.stringify(turns[2]?.messages)).toContain('Include the newly queued detail.');
+		expect(generated).toHaveLength(1);
+		expect(JSON.stringify(generated[0]?.messages)).not.toContain('newly queued detail');
 		expect(
 			await harness.database.query(
-				`select run.status, count(message.id)::int as assistant_messages
-				 from agent_run run left join chat_message message
-				  on message.run_id = run.run_id and message.role = 'assistant'
-				 where run.conversation_id = $1 group by run.id order by run.generation`,
-				[conversationId]
+				`select sequence, state, priority, claimed_run_id is not null as claimed
+				 from agent_inbox where task_id = $1 order by sequence`,
+				[taskId]
 			)
 		).toEqual([
-			{ status: 'completed', assistant_messages: 2 },
-			{ status: 'completed', assistant_messages: 1 }
+			{ sequence: 1, state: 'settled', priority: 'normal', claimed: true },
+			{ sequence: 2, state: 'queued', priority: 'normal', claimed: false }
 		]);
-	});
-
-	it('promotes a follow-up that arrives during the final model round as the next turn', async () => {
-		let releaseFirstRound!: () => void;
-		const firstRoundHeld = new Promise<void>((resolve) => {
-			releaseFirstRound = resolve;
-		});
-		let announceFirstRound!: () => void;
-		const firstRoundStarted = new Promise<void>((resolve) => {
-			announceFirstRound = resolve;
-		});
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return { _tag: 'Success', value: modelCatalog };
-				if (request._tag !== 'Turn') throw new Error('expected an AI turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					announceFirstRound();
-					await firstRoundHeld;
-				}
-				return {
-					_tag: 'Success',
-					value: {
-						output: assistantText(`answer-${turns.length}`, `final-answer-${turns.length}`)
-					}
-				};
-			}
-		};
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
-		const conversationId = 'queued-after-final-check';
-		const first = harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue:first'),
-				adminSubject,
-				'web',
-				conversationId,
-				'turn-first',
-				Agents.userAgentInput('First.')
-			)
-		);
-		await firstRoundStarted;
-		expect(
-			(
-				await harness.runtime.runPromise(
-					agents.enqueue(
-						harness.effectId('enqueue:second'),
-						adminSubject,
-						'web',
-						conversationId,
-						'turn-second',
-						Agents.userAgentInput('Second.')
-					)
-				)
-			).status
-		).toBe('pending');
-		releaseFirstRound();
-		await first;
-
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Second.');
 		expect(
 			await harness.database.query(
-				`select status from agent_run where conversation_id = $1 order by generation`,
-				[conversationId]
+				`select input_through_sequence, status from agent_run where task_id = $1`,
+				[taskId]
 			)
-		).toEqual([{ status: 'completed' }, { status: 'completed' }]);
+		).toEqual([{ input_through_sequence: 1, status: 'succeeded' }]);
+	});
+
+	it('claims a steering directive ahead of an older normal directive', async () => {
+		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
+		harness = await makeBoltTestRuntime(undefined, {
+			ai: successfulAI((request) => {
+				generated.push(request);
+				return assistantText('Steering applied.');
+			})
+		});
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const taskId = TaskId.make('00000000-0000-4000-8000-000000000502');
+		await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('priority:normal'),
+				adminSubject,
+				taskRequest(taskId, 'Normal work.')
+			)
+		);
+		const steering = await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('priority:steer'),
+				adminSubject,
+				taskRequest(taskId, 'Do this first.', 'steer')
+			)
+		);
+		await harness.runtime.runPromise(
+			agents.execute(harness.effectId('priority:execute'), adminSubject, taskId)
+		);
+
+		expect(generated).toHaveLength(1);
+		expect(JSON.stringify(generated[0]?.messages)).toContain('Do this first.');
+		expect(
+			await harness.database.query(
+				`select id, sequence, priority, state
+				 from agent_inbox where task_id = $1 order by sequence`,
+				[taskId]
+			)
+		).toEqual([
+			expect.objectContaining({ sequence: 1, priority: 'normal', state: 'queued' }),
+			{ id: steering.directiveId, sequence: 2, priority: 'steer', state: 'settled' }
+		]);
 	});
 });

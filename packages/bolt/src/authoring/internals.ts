@@ -13,9 +13,13 @@ export const defineModels = <const M extends Readonly<Record<string, ModelDeclar
 	models: M
 ): M => models;
 
-type RelationshipColumn = import('drizzle-orm/pg-core').AnyPgColumnBuilder & {
-	readonly through: (column: import('drizzle-orm/pg-core').AnyPgColumnBuilder) => unknown;
-};
+/**
+ * An endpoint names a column and nothing more. There is no `.through(...)`: a many-to-many is two
+ * ordinary edges on its join collection, which is a first-class collection here — the helper
+ * proxies never implemented traversal, so a type that offered it crashed at compile time in the
+ * one place the types said it would work.
+ */
+type RelationshipColumn = import('drizzle-orm/pg-core').AnyPgColumnBuilder;
 type RelationshipCollection<
 	M extends Readonly<Record<string, ModelDeclaration>>,
 	Name extends keyof M & string

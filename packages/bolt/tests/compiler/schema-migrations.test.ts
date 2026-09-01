@@ -12,16 +12,42 @@ import {
 	text,
 	uuid
 } from '../../src/authoring/index.js';
-import { collection, workspace } from '../../src/authoring/workspace-schema.js';
-import { describeModelColumns } from '../../src/authoring/model-introspection.js';
+import {
+	collection,
+	workspace
+} from '../../src/authoring/workspace-schema.js';
+import {
+	compileWorkspaceAuthoring,
+	describeModelColumns
+} from '../../src/authoring/model-introspection.js';
 import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import {
 	compileHostModelSchema,
 	orderGeneratedColumnDependencies,
-	planWorkspaceMigration,
+	planWorkspaceMigration as planCompiledMigration,
 	type WorkspaceSnapshot
 } from '../../src/compiler/schema-migrations.js';
+
+const planWorkspaceMigration = (input: {
+	readonly models: Readonly<Record<string, ModelDeclaration>>;
+	readonly relationships: () => Record<never, never>;
+	readonly previous: WorkspaceSnapshot | undefined;
+	readonly name?: string;
+	readonly at?: Date;
+}) =>
+	planCompiledMigration({
+		authoring: compileWorkspaceAuthoring({
+			models: input.models,
+			sourcePaths: Object.fromEntries(
+				Object.keys(input.models).map((name) => [name, `fixture:${name}`])
+			),
+			relationships: input.relationships
+		}),
+		previous: input.previous,
+		...(input.name === undefined ? {} : { name: input.name }),
+		...(input.at === undefined ? {} : { at: input.at })
+	});
 
 /**
  * Bolt's schema plan can only say `create table if not exists`, so anything removed from a model
@@ -43,7 +69,7 @@ const snapshotOf = async (
 	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<WorkspaceSnapshot> => {
 	const migration = await Effect.runPromise(
-		planWorkspaceMigration({ models, relations: [], previous: undefined })
+		planWorkspaceMigration({ models, relationships: () => ({}), previous: undefined })
 	);
 	if (migration === undefined)
 		throw new Error('a schema built from nothing must produce a migration');
@@ -135,21 +161,20 @@ describe('schema plan scope', () => {
 		// The lineage calls `bolt_instant` in generated columns and indexes with `gin_trgm_ops`; both
 		// come from here, and `bolt:` ids sort before `collection:` ids so they exist first.
 		expect(ids.some((id) => id.startsWith('bolt:extension-'))).toBe(true);
-		expect(ids).toContain('collection:bolt_sync_outbox');
+		expect(ids).not.toContain('collection:bolt_sync_outbox');
+		expect(ids.some((id) => id.startsWith('sync-trigger:'))).toBe(false);
 	});
 });
 
 describe('Bolt Drizzle-driven schema migration', () => {
-	it('refuses a model that redeclares a platform column', async () => {
-		await expect(
-			Effect.runPromise(
-				planWorkspaceMigration({
-					models: { invalid: defineModel({ id: text(), name: text() }) },
-					relations: [],
-					previous: undefined
-				})
-			)
-		).rejects.toThrow('A model cannot redeclare platform columns: id');
+	it('refuses a model that redeclares a platform column', () => {
+		expect(() =>
+			planWorkspaceMigration({
+				models: { invalid: defineModel({ id: text(), name: text() }) },
+				relationships: () => ({}),
+				previous: undefined
+			})
+		).toThrow('A model cannot redeclare platform columns: id');
 	});
 
 	it('drops a removed column', async () => {
@@ -157,7 +182,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: withColumn({}),
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -171,7 +196,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: withColumn({ leave_year_start_month: numeric() }),
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -198,7 +223,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: withColumn({}),
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -209,7 +234,11 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const models = withColumn({ leave_year_start_month: numeric() });
 		expect(
 			await Effect.runPromise(
-				planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) })
+				planWorkspaceMigration({
+					models,
+					relationships: () => ({}),
+					previous: await snapshotOf(models)
+				})
 			)
 		).toBeUndefined();
 	});
@@ -224,12 +253,23 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: withColumn({ label: text().generatedAlwaysAs(sql`upper("code")`) }),
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
 		expect(migration?.statements[0]).toContain('GENERATED ALWAYS AS');
 		expect(migration?.statements[0]).toContain('STORED');
+	});
+
+	it('carries exact array storage from CompiledAuthoring into migration DDL', async () => {
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({ tags: text().array() }),
+				relationships: () => ({}),
+				previous: undefined
+			})
+		);
+		expect(migration?.statements.join('\n')).toContain('"tags" text[]');
 	});
 
 	it('adds ordinary dependencies before a generated column declared ahead of them', async () => {
@@ -242,7 +282,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						.generatedAlwaysAs(sql`upper("origin")`),
 					origin: text().notNull().default('human')
 				}),
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -290,7 +330,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						{ recordLabel: 'name' }
 					)
 				},
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -317,7 +357,11 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const models = { jurisdictions: defineModel({ code: text(), name: text({ search: true }) }) };
 		expect(
 			await Effect.runPromise(
-				planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) })
+				planWorkspaceMigration({
+					models,
+					relationships: () => ({}),
+					previous: await snapshotOf(models)
+				})
 			)
 		).toBeUndefined();
 
@@ -325,7 +369,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const created = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: unopted,
-				relations: [],
+				relationships: () => ({}),
 				previous: undefined
 			})
 		);
@@ -342,7 +386,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						{ embedding: { fields: ['title', 'body'], dimensions: 384 } }
 					)
 				},
-				relations: [],
+				relationships: () => ({}),
 				previous: undefined
 			})
 		);
@@ -372,7 +416,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						{ indexes: [{ columns: ['payslip_id', 'source'], unique: true }] }
 					)
 				},
-				relations: [],
+				relationships: () => ({}),
 				previous: undefined
 			})
 		);
@@ -401,7 +445,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						owner: reference({ NODE: 'nodes', GROUP: 'groups' }).onDelete('cascade')
 					})
 				},
-				relations: [],
+				relationships: () => ({}),
 				previous: undefined
 			})
 		);
@@ -432,7 +476,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 								.onDelete('set null')
 						})
 					},
-					relations: [],
+					relationships: () => ({}),
 					previous: undefined
 				})
 			)
@@ -449,7 +493,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 							})
 						})
 					},
-					relations: [],
+					relationships: () => ({}),
 					previous: undefined
 				})
 			)
@@ -481,7 +525,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 						})
 					})
 				},
-				relations: [],
+				relationships: () => ({}),
 				previous
 			})
 		);
@@ -496,7 +540,7 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		const removed = await Effect.runPromise(
 			planWorkspaceMigration({
 				models: previousModels,
-				relations: [],
+				relationships: () => ({}),
 				previous: migration.snapshot
 			})
 		);

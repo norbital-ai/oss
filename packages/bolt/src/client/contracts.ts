@@ -4,7 +4,11 @@ import type {
 	InvocationScope,
 	SyncOutcome
 } from '@norbital-ai/bolt-protocol';
-import type { CollectionMutationSettlementStatus, RemoteQuery } from '@norbital-ai/std/collection';
+import type {
+	CollectionMutationPendingApproval,
+	CollectionMutationSettlementStatus,
+	RemoteQuery
+} from '@norbital-ai/std/collection';
 import type { Schema } from 'effect';
 import type { ClientState } from './sync/machine.js';
 import type { SyncClient } from './sync/index.js';
@@ -22,13 +26,13 @@ export type BoltTransport = Readonly<{
 /** The typed browser command seam; every internal workflow immediately adapts it into Effect. */
 export type BoltClient = Readonly<{
 	readonly scope: InvocationScope;
-	readonly command: <S extends Schema.ConstraintDecoder<unknown>>(
+	readonly command: <S extends Schema.Top>(
 		command: string,
 		input: Schema.Json,
 		output: S,
 		signal?: AbortSignal,
 		headers?: Readonly<Record<string, string>>
-	) => Promise<S['Type']>; // repository-health:allow EFF2 -- BoltClient is the public browser command seam; every internal workflow immediately adapts it with Effect.tryPromise.
+	) => Promise<Schema.Schema.Type<S>>; // repository-health:allow EFF2 -- BoltClient is the public browser command seam; every internal workflow immediately adapts it with Effect.tryPromise.
 }>;
 
 export type { RemoteQuery };
@@ -40,6 +44,7 @@ export type MutationSettlement = Readonly<
 			readonly kind: 'accepted';
 			readonly idempotencyKey: string;
 			readonly settledAtEpochMs: number;
+			readonly pendingApproval?: CollectionMutationPendingApproval;
 	  }
 	| {
 			readonly kind: 'rebased';

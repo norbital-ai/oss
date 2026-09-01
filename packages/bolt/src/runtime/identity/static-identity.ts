@@ -37,7 +37,7 @@ export const automationPrincipalId = (automationName: string): string =>
  *   ceiling for everybody — a linked contractor who administers the web app reaches exactly what an
  *   anonymous sender reaches, no more.
  * - **Identity is the sender's, and only narrows.** `userId` becomes the matched account's, so a
- *   grant carrying `${requestor.id}` resolves to that person and returns *their* rows where
+ *   grant carrying `subject.id` resolves to that person and returns *their* rows where
  *   the bare principal would match none. A narrowing, never a widening.
  * - **`admin` is dropped.** Administrative status selects narrow built-in controls that do not
  *   belong to an envoy turn. Carrying it across would widen the declared envoy principal even

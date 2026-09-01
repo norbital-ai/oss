@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decidePolicies } from '../../src/runtime/access/policy-compiler.js';
+import { decidePolicies } from '../../src/runtime/access/access-control.js';
 
 const subject = { userId: 'u1', tenantId: 't1', policies: [], teamPath: ['member'] };
 

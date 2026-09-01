@@ -97,7 +97,7 @@ describe('automation stoppage facility guard', () => {
 		const ops = guardedOperations(calls, guards);
 		const attempts = [
 			ops.mutate('people', { id: recordId('mutate'), name: 'mutate' }),
-			ops.infer({ schema: Schema.Struct({}), prompt: 'infer' }),
+			ops.infer({ schema: Schema.Struct({}), prompt: 'infer', model: 'test/language' }),
 			ops.readFileAsset({
 				storage_key: 'file',
 				file_name: 'file',

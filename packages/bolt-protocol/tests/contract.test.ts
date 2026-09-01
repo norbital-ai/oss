@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Effect, Schema } from 'effect';
+import * as Protocol from '../src/index.js';
 import {
 	ARTIFACT_ASSET_DIRECTORY,
 	ARTIFACT_BUNDLE_FILE,
@@ -9,11 +10,14 @@ import {
 	AssetIndexEntry,
 	BundleManifest,
 	canonicalTenantReleaseEncoding,
+	COMPILED_MANIFEST_VERSION,
 	decodeBoltBundleModule,
+	ManifestDestination,
 	missingFacilities,
 	PROTOCOL_VERSION,
 	tenantReleaseObjects,
 	TenantRelease,
+	WorkspaceAuthoringManifest,
 	type FacilityBindings
 } from '../src/index.js';
 
@@ -23,9 +27,51 @@ const schemaPlan = {
 } as const;
 
 describe('facility contract', () => {
+	it('exports only the versioned live-query protocol', () => {
+		for (const symbol of [
+			'SyncAnswer',
+			'SyncPageAnswer',
+			'SyncCursor',
+			'SyncHeldCoordinate',
+			'SyncPatch',
+			'SyncApplyPatch',
+			'SyncPrefixApplyFrame',
+			'SyncAdvanceRefusal',
+			'MAX_SYNC_HELD_IDS'
+		])
+			expect(Object.hasOwn(Protocol, symbol)).toBe(false);
+		expect(Object.keys(Protocol.SyncApplyFrame.fields)).toEqual(['updates', 'resets', 'outcomes']);
+	});
+
+	it('exports the current compiled-manifest contract as runtime protocol values', () => {
+		expect(COMPILED_MANIFEST_VERSION).toBe(2);
+		expect(
+			Schema.decodeUnknownSync(ManifestDestination)({
+				kind: 'system',
+				surface: 'automations',
+				selection: 'nightly'
+			})
+		).toEqual({ kind: 'system', surface: 'automations', selection: 'nightly' });
+		expect(
+			Schema.decodeUnknownSync(WorkspaceAuthoringManifest)({
+				name: 'fixture',
+				version: '1',
+				collections: [],
+				apps: [],
+				policies: [],
+				automations: [],
+				envoys: [],
+				integrations: [],
+				principals: [],
+				requiredFacilities: []
+			}).name
+		).toBe('fixture');
+	});
+
 	it('reports required facility bindings deterministically', () => {
 		const manifest: BundleManifest = {
 			protocolVersion: PROTOCOL_VERSION,
+			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: schemaPlan.fingerprint,
@@ -44,6 +90,7 @@ describe('facility contract', () => {
 	it('treats transport as a host facility distinct from communication', () => {
 		const manifest: BundleManifest = {
 			protocolVersion: PROTOCOL_VERSION,
+			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -65,6 +112,7 @@ describe('facility contract', () => {
 	it('validates an unknown dynamic bundle module', async () => {
 		const manifest: BundleManifest = {
 			protocolVersion: PROTOCOL_VERSION,
+			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -85,6 +133,89 @@ describe('facility contract', () => {
 			})
 		);
 		expect(decoded.manifest.artifactId).toBe('fixture');
+	});
+
+	it('carries the current projection version without refusing runtime rollback of older bundles', () => {
+		const manifest = {
+			protocolVersion: PROTOCOL_VERSION,
+			artifactId: 'fixture',
+			artifactVersion: '1',
+			schemaFingerprint: 'sha256:test',
+			schemaPlan,
+			requiredFacilities: [],
+			browserAssets: [],
+			serverAssets: [],
+			integrations: []
+		};
+
+		expect(Schema.decodeUnknownResult(BundleManifest)(manifest)._tag).toBe('Success');
+		expect(
+			Schema.decodeUnknownResult(BundleManifest)({
+				...manifest,
+				compiledManifestVersion: COMPILED_MANIFEST_VERSION - 1
+			})._tag
+		).toBe('Success');
+		expect(
+			Schema.decodeUnknownResult(BundleManifest)({
+				...manifest,
+				compiledManifestVersion: COMPILED_MANIFEST_VERSION
+			})._tag
+		).toBe('Success');
+	});
+
+	/**
+	 * `Schema.Struct` drops keys it does not name, so an undeclared key is not an error — it is a
+	 * silent deletion on the way out of dispatch. The runtime has always sent `principals`, and the
+	 * manifest contract did not carry it, so every client got a manifest with the list removed.
+	 */
+	it('carries the static identities the runtime can mint', () => {
+		const decoded = Schema.decodeUnknownSync(WorkspaceAuthoringManifest)({
+			name: 'fixture',
+			version: '1',
+			collections: [],
+			apps: [],
+			policies: [],
+			automations: [],
+			envoys: [],
+			integrations: [],
+			principals: [
+				{ id: 'colony-system', label: 'Colony', kind: 'host', policies: [] },
+				{ id: 'envoy:support', label: 'support', kind: 'envoy', policies: ['member'] }
+			],
+			requiredFacilities: []
+		});
+		expect(decoded.principals.map(({ id }) => id)).toEqual(['colony-system', 'envoy:support']);
+	});
+
+	it('rejects a current authored entity without its compiler-projected source path', () => {
+		const manifest = {
+			name: 'fixture',
+			version: '1',
+			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
+			collections: [],
+			apps: [{ name: 'billing', label: 'Billing', origin: 'authored' }],
+			policies: [],
+			automations: [],
+			envoys: [],
+			integrations: [],
+			principals: [],
+			requiredFacilities: []
+		};
+
+		expect(Schema.decodeUnknownResult(WorkspaceAuthoringManifest)(manifest)._tag).toBe('Failure');
+		expect(
+			Schema.decodeUnknownResult(WorkspaceAuthoringManifest)({
+				...manifest,
+				apps: [
+					{
+						name: 'billing',
+						label: 'Billing',
+						origin: 'authored',
+						sourcePath: 'src/apps/+billing.svelte'
+					}
+				]
+			})._tag
+		).toBe('Success');
 	});
 });
 
@@ -115,6 +246,7 @@ describe('artifact asset index', () => {
 	it('splits browser assets from server assets in the manifest itself', () => {
 		const manifest = Schema.decodeUnknownSync(BundleManifest)({
 			protocolVersion: PROTOCOL_VERSION,
+			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -133,6 +265,7 @@ describe('artifact asset index', () => {
 		expect(
 			Schema.decodeUnknownResult(BundleManifest)({
 				protocolVersion: PROTOCOL_VERSION,
+				compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 				artifactId: 'fixture',
 				artifactVersion: '1',
 				schemaFingerprint: 'sha256:test',

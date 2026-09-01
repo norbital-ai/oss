@@ -450,10 +450,10 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				pipeline: (effectId, collection, record) => {
 					const declared = authored.pipelines[collection]?.import;
 					if (declared === undefined) return undefined;
-					// One record per call, so a pipeline that refuses a record costs that record. The `input` it
-					// receives is an array of one, which is the shape `Collections.import` already hands it.
+					// One source document per call, matching the collection import surface exactly. A pipeline
+					// that refuses this document costs this record and cannot partially settle a hidden batch.
 					const api = integrationAuthoringApi(effectId);
-					return runAuthoredHandler(() => declared.handler({ input: [record], api })).pipe(
+					return runAuthoredHandler(() => declared.handler({ input: record }, api)).pipe(
 						Effect.flatMap(decodePipelineRows),
 						Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
 					);

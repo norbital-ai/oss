@@ -75,40 +75,10 @@ test('every fixture loads once, with absolute sources for receipts', async () =>
 	const loaded = await loadPatternFiles(PACKAGE_ROOT, 'tests/fixtures/patterns/*.yml');
 	assert.deepEqual(
 		loaded.rules.map((rule) => rule.id).sort(),
-		['CLAMPKIT', 'EXPORTEDFETCH', 'HYBRIDSQL', 'LOOPEDAWAIT', 'RAWFETCH', 'SEMRETRY']
+		['CLAMPKIT', 'EXPORTEDFETCH', 'HYBRIDSQL', 'LOOPEDAWAIT', 'RAWFETCH']
 	);
-	assert.equal(loaded.sources.length, 6);
+	assert.equal(loaded.sources.length, 5);
 	assert.ok(loaded.sources.every((source) => isAbsolute(source)));
-});
-
-test('pseudocode halves become queries; defaults apply where no threshold is stated', async () => {
-	const loaded = await loadPatternFiles(PACKAGE_ROOT, 'tests/fixtures/patterns/*.yml');
-
-	const retry = loaded.queries.find((query) => query.ruleId === 'SEMRETRY');
-	assert.ok(retry !== undefined);
-	assert.equal(retry.threshold, 0.84);
-	assert.match(retry.text, /backoff/);
-
-	const hybrid = loaded.queries.find((query) => query.ruleId === 'HYBRIDSQL');
-	assert.ok(hybrid !== undefined);
-	assert.equal(hybrid.threshold, 0.7);
-
-	// Both halves of a combined rule arrive: the structural rule above and its query beside it.
-	assert.ok(loaded.rules.some((rule) => rule.id === 'HYBRIDSQL'));
-});
-
-test('a pseudocode-only rule lands in the catalogue but never fires structurally', async (context) => {
-	const root = repository('inert', {
-		'src/index.ts': 'export const run = (): number => 1;\n'
-	});
-	context.after(() => rmSync(root, { recursive: true, force: true }));
-
-	const loaded = await loadPatternFiles(
-		PACKAGE_ROOT,
-		'tests/fixtures/patterns/semantic-retry.yml'
-	);
-	const findings = runRules({ root, rules: loaded.rules, files: ['src/index.ts'] });
-	assert.equal(findings.filter((finding) => finding.rule === 'SEMRETRY').length, 0);
 });
 
 test('a loaded yaml rule reports against a repository like an authored one', async (context) => {
@@ -116,13 +86,12 @@ test('a loaded yaml rule reports against a repository like an authored one', asy
 		'patterns/raw.yml':
 			'id: TMPRAW\nsummary: raw fetch bypasses the http client\nseverity: error\nprinciples: [modularity]\nrule: fetch($...ARGS)\n',
 		'patterns/hybrid.yml':
-			'id: TMPHYBRID\nsummary: sql assembled as text\nseverity: error\nprinciples: [type-safety]\nrule: query($SQL)\npseudocode: sql built from concatenated strings\nthreshold: 0.7\n',
+			'id: TMPHYBRID\nsummary: sql assembled as text\nseverity: error\nprinciples: [type-safety]\nrule: query($SQL)\n',
 		'src/app.ts': `await fetch('/api/items');\nquery('SELECT * FROM users');\n`
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const loaded = await loadPatternFiles(root, '**/*.yml');
-	assert.deepEqual(loaded.queries.map((query) => query.ruleId), ['TMPHYBRID']);
 
 	const findings = runRules({ root, rules: loaded.rules, files: ['src/app.ts'] });
 	assert.deepEqual(
@@ -210,14 +179,13 @@ test('bad input throws naming the file and the problem', async (context) => {
 		'patterns/missing-principles.yml': 'id: BADREQ\nsummary: x\nseverity: error\n',
 		'patterns/foreign-principle.yml':
 			'id: BADPRIN\nsummary: x\nseverity: error\nprinciples: [speed]\n',
-		'patterns/threshold-range.yml': `${plain('BADRANGE')}pseudocode: something\nthreshold: 1.5\n`,
 		'patterns/detect-without-prefer.yml': `${plain('BADDETECT')}detect: clamp\n`,
 		'patterns/prefer-malformed.yml': `${plain('BADPREF')}detect: clamp\nprefer: es-toolkit\n`,
-		'patterns/prefer-without-detect.yml': `${plain('BADLONE')}prefer: es-toolkit#clamp\n`,
+		'patterns/prefer-without-detect.yml': `${plain('BADLONE')}rule: fetch($A)\nprefer: es-toolkit#clamp\n`,
 		'patterns/unknown-shape.yml': `${plain('BADSHAPE')}detect: flatten\nprefer: es-toolkit#flatten\n`,
 		'patterns/rule-and-detect.yml': `${plain('BADBOTH')}rule: fetch($A)\ndetect: clamp\nprefer: es-toolkit#clamp\n`,
-		'patterns/when-with-rule.yml': `${plain('BADWHEN')}rule: fetch($A)\nwhen: [CallExpression]\n`,
-		'patterns/unknown-kind.yml': `${plain('BADKIND')}pseudocode: something\nwhen: [CalExpression]\n`,
+		'patterns/missing-claim.yml': `${plain('BADNONE')}`,
+		'patterns/unknown-kind.yml': `${plain('BADKIND')}pseudocode: something\n`,
 		'patterns/threshold-alone.yml': `${plain('BADALONE')}threshold: 0.5\n`,
 		'patterns/bad-id.yml': 'id: 9BAD\nsummary: x\nseverity: error\nprinciples: [simplicity]\n',
 		'patterns/bad-severity.yml': 'id: BADSEV\nsummary: x\nseverity: warn\nprinciples: [simplicity]\n',
@@ -242,15 +210,14 @@ test('bad input throws naming the file and the problem', async (context) => {
 	await rejects('unknown-field', /unknown field "ruls"/);
 	await rejects('missing-principles', /missing required field "principles"/);
 	await rejects('foreign-principle', /"speed" is not a principle/);
-	await rejects('threshold-range', /"threshold" must be a number between 0 and 1/);
 	await rejects('detect-without-prefer', /"detect" requires "prefer"/);
 	await rejects('prefer-malformed', /"prefer" must read owner#member/);
 	await rejects('prefer-without-detect', /"prefer" belongs beside "detect"/);
 	await rejects('unknown-shape', /"detect" must be one of/);
 	await rejects('rule-and-detect', /two structural claims/);
-	await rejects('when-with-rule', /"when" is decided by the matcher/);
-	await rejects('unknown-kind', /"CalExpression" is not a syntax kind/);
-	await rejects('threshold-alone', /"threshold" belongs beside "pseudocode"/);
+	await rejects('missing-claim', /"rule" or "detect" is required/);
+	await rejects('unknown-kind', /unknown field "pseudocode"/);
+	await rejects('threshold-alone', /unknown field "threshold"/);
 	await rejects('bad-id', /is not a valid rule id/);
 	await rejects('bad-severity', /"severity" must be "error" or "hint"/);
 	await rejects('self-dominates', /cannot include the rule's own id/);

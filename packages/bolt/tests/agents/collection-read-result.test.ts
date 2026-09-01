@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	boundedCollectionReadResult,
 	READ_COLLECTION_RESULT_BYTE_LIMIT
-} from '../../src/runtime/agents/platform-tools.js';
+} from '../../src/runtime/agents/capability-catalog.js';
 
 const encodedBytes = (value: unknown): number =>
 	new TextEncoder().encode(JSON.stringify(value)).byteLength;

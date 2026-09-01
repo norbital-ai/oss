@@ -1,8 +1,10 @@
 import {
 	SYNC_CONNECTION_HEADER,
-	type CollectionMutateRequest,
+	SyncConnectRequest,
 	SyncConnectResponse,
-	type SyncConnectRequest
+	SyncExtendPrefixResponse,
+	type CollectionMutateRequest,
+	type SyncExtendPrefixRequest
 } from '@norbital-ai/bolt-protocol';
 import { Schema } from 'effect';
 
@@ -21,23 +23,29 @@ export class SyncHttpError extends Error {
 export type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutateRequest>;
 
 export type SyncHttpDriver = Readonly<{
-	readonly connect: (
+	readonly register: (
 		connectionId: string,
 		request: SyncConnectRequest,
 		signal?: AbortSignal
 	) => Promise<SyncConnectResponse>;
+	readonly extend: (
+		connectionId: string,
+		request: SyncExtendPrefixRequest,
+		signal?: AbortSignal
+	) => Promise<SyncExtendPrefixResponse>;
 	readonly push: (request: SyncPushRequest, signal?: AbortSignal) => Promise<void>;
 }>;
 
 export type SyncHttpDriverOptions = Readonly<{
-	readonly connectUrl: string;
+	readonly registrationUrl: string;
+	readonly extensionUrl: string;
 	readonly fetch?: typeof fetch;
-	/** Host/runtime-owned command encoding receives the server-issued connection id. */
+	readonly authorization?: () => string;
 	readonly push: (request: SyncPushRequest, signal?: AbortSignal) => Promise<void>;
 }>;
 
 const terminalStatus = (status: number): boolean =>
-	status === 401 || status === 403 || status === 409 || status === 410 || status === 426;
+	status === 401 || status === 403 || status === 410 || status === 426;
 
 const responseMessage = async (response: Response): Promise<string> => {
 	try {
@@ -47,35 +55,53 @@ const responseMessage = async (response: Response): Promise<string> => {
 			if (typeof message === 'string' && message.length > 0) return message;
 		}
 	} catch {
-		// The status text remains the bounded diagnostic for non-JSON host failures.
+		/* non-JSON host failures use status text */
 	}
 	return response.statusText || `HTTP ${response.status}`;
 };
 
-/** Connect/revalidate HTTP driver. Writes stay host-encoded but share the connection header. */
+const post = async (
+	request: typeof fetch,
+	url: string,
+	connectionId: string,
+	body: unknown,
+	authorization: string | undefined,
+	signal?: AbortSignal
+): Promise<unknown> => {
+	const response = await request(url, {
+		method: 'POST',
+		credentials: 'include',
+		headers: {
+			'content-type': 'application/json',
+			[SYNC_CONNECTION_HEADER]: connectionId,
+			...(authorization === undefined || authorization.length === 0
+				? {}
+				: { authorization })
+		},
+		body: JSON.stringify(body),
+		...(signal === undefined ? {} : { signal })
+	});
+	if (!response.ok) {
+		throw new SyncHttpError(
+			await responseMessage(response),
+			response.status,
+			terminalStatus(response.status)
+		);
+	}
+	return response.json();
+};
+
 export const createSyncHttpDriver = (options: SyncHttpDriverOptions): SyncHttpDriver => {
 	const request = options.fetch ?? fetch;
 	return {
-		connect: async (connectionId, input, signal) => {
-			const response = await request(options.connectUrl, {
-				method: 'POST',
-				credentials: 'include',
-				headers: {
-					'content-type': 'application/json',
-					[SYNC_CONNECTION_HEADER]: connectionId
-				},
-				body: JSON.stringify(input),
-				...(signal === undefined ? {} : { signal })
-			});
-			if (!response.ok) {
-				throw new SyncHttpError(
-					await responseMessage(response),
-					response.status,
-					terminalStatus(response.status)
-				);
-			}
-			return Schema.decodeUnknownSync(SyncConnectResponse)(await response.json());
-		},
+		register: async (connectionId, input, signal) =>
+			Schema.decodeUnknownSync(SyncConnectResponse)(
+				await post(request, options.registrationUrl, connectionId, input, options.authorization?.(), signal)
+			),
+		extend: async (connectionId, input, signal) =>
+			Schema.decodeUnknownSync(SyncExtendPrefixResponse)(
+				await post(request, options.extensionUrl, connectionId, input, options.authorization?.(), signal)
+			),
 		push: options.push
 	};
 };

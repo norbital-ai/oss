@@ -14,7 +14,6 @@ import type {
 	WebhookSignatureSpec
 } from './contracts-schema.js';
 import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
-import type { PolicySqlPredicate } from './policy-sql.js';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
@@ -209,8 +208,8 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history: boolean;
-	/** Whether writes to this collection are captured into the live-query changelog. Defaults to true. */
-	readonly sync?: boolean;
+	/** Compiled expression used to title a record in collection surfaces. */
+	readonly recordLabel?: string;
 	/**
 	 * What the collection is, and the icon a host surface lists it under.
 	 *
@@ -248,7 +247,6 @@ interface CollectionOptions<Fields extends Readonly<Record<string, FieldDefiniti
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history?: boolean;
-	readonly sync?: boolean;
 	readonly description?: string;
 	readonly icon?: string;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
@@ -279,6 +277,122 @@ export interface RelationDefinition {
 	 * over attendance — and a declaration that reads as meaningful meant nothing at all.
 	 */
 	readonly cascade?: boolean;
+}
+
+/** The renderer vocabulary retained from the authored column builder. */
+export type FieldPresentationKind =
+	| 'text' | 'phone' | 'enum' | 'integer' | 'numeric' | 'boolean' | 'instant'
+	| 'instant_range' | 'uuid' | 'geolocation' | 'file' | 'json' | 'money' | 'reference'
+	| string;
+
+export interface CompiledFieldDefinition extends FieldDefinition {
+	readonly presentationKind: FieldPresentationKind;
+	/** PostgreSQL array storage declared through a Drizzle builder's `.array()` modifier. */
+	readonly array?: true;
+	/**
+	 * Physical NOT NULL state, including generated columns that are never required mutation input.
+	 * `required` remains the write-contract fact; migration compilation consumes this one.
+	 */
+	readonly databaseNotNull?: true;
+}
+
+export interface CompiledCollection
+	extends CollectionDefinition<Readonly<Record<string, CompiledFieldDefinition>>> {
+	readonly sourcePath: string;
+}
+
+export interface CustomTypeReference {
+	readonly collection: string;
+	readonly field: string;
+	readonly name: string;
+}
+
+export interface CompiledSkillPackage {
+	readonly name: string;
+	readonly description: string;
+	readonly digest: string;
+	readonly files: ReadonlyArray<{
+		readonly path: string;
+		readonly sha256: string;
+		readonly byteLength: number;
+	}>;
+}
+
+export interface EnvironmentReference {
+	readonly env: string;
+}
+
+export interface PersonalSecretReference {
+	readonly personalSecret: string;
+}
+
+/** Declarative data accepted from one `src/capabilities/mcp/+<name>.ts` module. */
+export const McpRegistrationDefinition = Schema.Struct({
+	endpoint: Schema.Union([
+		Schema.String.check(Schema.isPattern(/^https?:\/\//)),
+		Schema.Struct({ env: Schema.String.check(Schema.isPattern(/^[A-Z][A-Z0-9_]*$/)) })
+	]),
+	authentication: Schema.optionalKey(
+		Schema.Union([
+			Schema.Struct({ env: Schema.String.check(Schema.isPattern(/^[A-Z][A-Z0-9_]*$/)) }),
+			Schema.Struct({
+				personalSecret: Schema.NonEmptyString.check(Schema.isMaxLength(128))
+			})
+		])
+	)
+});
+export interface McpRegistrationDefinition
+	extends Schema.Schema.Type<typeof McpRegistrationDefinition> {}
+
+export interface CompiledMcpRegistration {
+	readonly name: string;
+	readonly digest: string;
+	readonly protocol: '2026-07-28';
+	readonly transport: Readonly<{
+		readonly kind: 'streamable-http';
+		readonly endpoint: string | EnvironmentReference;
+	}>;
+	readonly authentication?: EnvironmentReference | PersonalSecretReference;
+}
+
+export interface CompiledTenantCapabilities {
+	readonly skills: ReadonlyArray<CompiledSkillPackage>;
+	readonly mcp: ReadonlyArray<CompiledMcpRegistration>;
+}
+
+/** Canonical build-time semantics for one authored workspace. */
+export interface CompiledAuthoring {
+	readonly collections: ReadonlyArray<CompiledCollection>;
+	readonly relationships: ReadonlyArray<RelationDefinition>;
+	readonly customTypeReferences: ReadonlyArray<CustomTypeReference>;
+	readonly capabilities: CompiledTenantCapabilities;
+}
+
+type CollectionCatalogRelation = Readonly<{
+	readonly name: string;
+	readonly target: string;
+	readonly cardinality: 'one' | 'many';
+}>;
+
+export interface CollectionCatalogField {
+	readonly name: string;
+	readonly kind: string;
+	readonly array?: boolean;
+	readonly nullable: boolean;
+	readonly readOnly?: boolean;
+	readonly search?: boolean;
+	readonly values?: ReadonlyArray<string>;
+	readonly currencies?: ReadonlyArray<string>;
+	readonly precision?: 'day' | 'minute';
+	readonly mimeTypes?: ReadonlyArray<string>;
+	readonly relation?: CollectionCatalogRelation;
+}
+
+export interface CollectionCatalogEntry {
+	readonly name: string;
+	readonly recordLabel?: string;
+	readonly fields: ReadonlyArray<CollectionCatalogField>;
+	readonly relationships: ReadonlyArray<CollectionCatalogRelation & { readonly cascade?: true }>;
 }
 /** Owns collection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const collection = <const Fields extends Readonly<Record<string, FieldDefinition>>>(
@@ -869,7 +983,7 @@ export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 export interface RuntimePolicyGrant {
 	readonly collection: string;
 	readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
-	readonly where?: Readonly<Record<string, unknown>> | PolicySqlPredicate;
+	readonly where?: Readonly<Record<string, unknown>>;
 	readonly fields?: ReadonlyArray<string>;
 	/** Additional linking collections; compiler-derived predicate edges remain authoritative. */
 	readonly dependencies?: ReadonlyArray<string>;
@@ -1077,7 +1191,7 @@ export interface WorkspaceDefinition {
 	 * widens no existing holder.
 	 */
 	readonly tools: ReadonlyArray<ToolDeclaration>;
-	/** Every compiled Skill under `src/capabilities/skills/`. Granted the same way tools are. */
+	/** Runtime Skill declarations; shared package bytes are named by the release capability index. */
 	readonly skills: ReadonlyArray<SkillDeclaration>;
 	readonly automations: ReadonlyArray<AutomationDeclaration>;
 	readonly envoys: ReadonlyArray<EnvoyDeclaration>;

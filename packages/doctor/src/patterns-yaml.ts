@@ -5,9 +5,8 @@
  * this repository — the compiler checks the syntax kinds and the examples run in the suite. It is
  * the wrong surface for a consumer that wants to add a rule without owning a build of this package,
  * so this module translates a documented YAML dialect onto the same machinery: a `rule` field goes
- * to `defineRule` untouched exactly as an ast-grep config would state it, a `detect`/`prefer` pair
- * delegates to the overlap detectors in `overlaps.ts`, and a `pseudocode` half is held out of the
- * syntactic tier entirely and returned as a `SemanticQuery` for the embedding pass.
+ * to `defineRule` untouched exactly as an ast-grep config would state it, and a `detect`/`prefer`
+ * pair delegates to the overlap detectors in `overlaps.ts`.
  *
  * Strictness is the contract. A misspelled field, a principle outside `PRINCIPLE_ORDER`, or a glob
  * that matches nothing throws at load time with the file named — never a rule that silently reports
@@ -16,7 +15,6 @@
  */
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import ts from 'typescript';
 import { parse as parseYaml } from 'yaml';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
@@ -26,23 +24,14 @@ import { defineRule, type Matcher } from './pattern.js';
 import {
 	PRINCIPLE_ORDER,
 	type Confidence,
-	type NodeKind,
 	type Principle,
 	type Rule,
 	type Severity
 } from './rules.js';
 
-export type SemanticQuery = Readonly<{
-	readonly ruleId: string;
-	readonly text: string;
-	readonly threshold: number;
-}>;
-
 type LoadedPatterns = Readonly<{
 	/** Rules ready to feed runRules() alongside pack/authored rules. */
 	readonly rules: ReadonlyArray<Rule>;
-	/** Pseudocode halves awaiting evaluation against the embedding index (later phase). */
-	readonly queries: ReadonlyArray<SemanticQuery>;
 	/** Absolute paths loaded, for receipts. */
 	readonly sources: ReadonlyArray<string>;
 }>;
@@ -53,32 +42,17 @@ const FIELDS: ReadonlyArray<string> = [
 	'severity',
 	'principles',
 	'confidence',
-	'when',
 	'files',
 	'ignore',
 	'dominates',
 	'detect',
 	'prefer',
 	'module',
-	'rule',
-	'pseudocode',
-	'threshold'
+	'rule'
 ];
 
 /** A rule file is YAML; `.yaml` is accepted beside `.yml` because globs do not distinguish them. */
 const RULE_FILE = /\.ya?ml$/;
-
-/** The threshold the semantic pass compares at when a rule states none. */
-const DEFAULT_THRESHOLD = 0.84;
-
-/**
- * The dispatch kinds of a pseudocode-only rule.
- *
- * Such a rule makes no structural claim, but a `Rule` must listen somewhere. The file-end token is
- * the cheapest node in every file, and the check stays silent whatever reaches it: the rule exists
- * so its id and severity land in the catalogue while its pseudocode travels to the semantic pass.
- */
-const INERT_KINDS: ReadonlyArray<NodeKind> = ['EndOfFileToken'];
 
 /**
  * `defineRule` demands inline examples for a matcher rule and discards them before the `Rule` is
@@ -142,13 +116,6 @@ function readPrinciples(file: string, value: unknown): ReadonlyArray<Principle> 
 		if (!PRINCIPLE_ORDER.includes(principle as Principle))
 			fail(file, `"${principle}" is not a principle; choose from ${PRINCIPLE_ORDER.join(', ')}`);
 	return listed as ReadonlyArray<Principle>;
-}
-
-function readWhen(file: string, value: unknown): ReadonlyArray<NodeKind> {
-	const kinds = readStringArray(file, 'when', value);
-	for (const kind of kinds)
-		if (ts.SyntaxKind[kind as NodeKind] === undefined) fail(file, `"${kind}" is not a syntax kind`);
-	return kinds as ReadonlyArray<NodeKind>;
 }
 
 /** Split an `owner#member` binding at the last `#`; an owner may name a scope such as `effect/Number`. */
@@ -245,7 +212,6 @@ function loadFile(
 	file: string,
 	absolute: string,
 	rules: Array<Rule>,
-	queries: Array<SemanticQuery>,
 	declared: Map<string, string>
 ): void {
 	let document: unknown;
@@ -283,12 +249,11 @@ function loadFile(
 		fail(file, `"confidence" must be "high" or "medium", received ${JSON.stringify(yaml.confidence)}`);
 	const confidence = yaml.confidence as Confidence | undefined;
 
-	const when = yaml.when === undefined ? undefined : readWhen(file, yaml.when);
-
 	const hasRule = yaml.rule !== undefined;
 	const hasDetect = yaml.detect !== undefined;
 	if (hasRule && hasDetect)
 		fail(file, '"rule" and "detect" are two structural claims; state one');
+	if (!hasRule && !hasDetect) fail(file, '"rule" or "detect" is required');
 
 	if (yaml.prefer !== undefined && !hasDetect) fail(file, '"prefer" belongs beside "detect"');
 	if (yaml.module !== undefined && !hasDetect) fail(file, '"module" belongs beside "detect"');
@@ -296,15 +261,6 @@ function loadFile(
 		if (typeof yaml.detect !== 'string' || !OVERLAP_SHAPES.includes(yaml.detect as OverlapShape))
 			fail(file, `"detect" must be one of ${OVERLAP_SHAPES.join(', ')}`);
 		if (yaml.prefer === undefined) fail(file, '"detect" requires "prefer" as owner#member');
-	}
-
-	let threshold: number | undefined;
-	if (yaml.threshold !== undefined) {
-		const stated = yaml.threshold;
-		if (typeof stated !== 'number' || !Number.isFinite(stated) || stated < 0 || stated > 1)
-			fail(file, '"threshold" must be a number between 0 and 1');
-		if (yaml.pseudocode === undefined) fail(file, '"threshold" belongs beside "pseudocode"');
-		threshold = stated;
 	}
 
 	const common = {
@@ -324,37 +280,25 @@ function loadFile(
 	declared.set(id, file);
 
 	if (hasRule) {
-		if (when !== undefined)
-			fail(file, '"when" is decided by the matcher; remove it, or drop "rule" to write a visitor by hand');
 		if (
 			typeof yaml.rule !== 'string' &&
 			(typeof yaml.rule !== 'object' || yaml.rule === null || Array.isArray(yaml.rule))
 		)
 			fail(file, '"rule" must be a pattern string or a matcher object');
 		rules.push(defineRule({ ...common, rule: yaml.rule as Matcher, examples: DELEGATED_EXAMPLES }));
-	} else if (hasDetect) {
-		if (when !== undefined) fail(file, '"when" is decided by the detector; remove it');
-		const { owner, member } = readPrefer(file, yaml.prefer);
-		const module =
-			yaml.module === undefined ? undefined : readString(file, 'module', yaml.module);
-		const produced = overlapRules([
-			{ shape: yaml.detect as OverlapShape, owner, member, module, severity, id }
-		])[0];
-		if (produced === undefined) fail(file, `detector "${yaml.detect}" produced no rule`);
-		// The detector fixes its own summary, principles and confidence; YAML owns the identity
-		// fields, so the detector's dispatch and check are kept and the description is rebuilt
-		// around them through the ordinary visitor form of defineRule.
-		rules.push(defineRule({ ...common, when: produced.when, check: produced.check }));
-	} else {
-		rules.push(defineRule({ ...common, when: when ?? INERT_KINDS, check: () => {} }));
+		return;
 	}
 
-	if (yaml.pseudocode !== undefined)
-		queries.push({
-			ruleId: id,
-			text: readString(file, 'pseudocode', yaml.pseudocode),
-			threshold: threshold ?? DEFAULT_THRESHOLD
-		});
+	const { owner, member } = readPrefer(file, yaml.prefer);
+	const module = yaml.module === undefined ? undefined : readString(file, 'module', yaml.module);
+	const produced = overlapRules([
+		{ shape: yaml.detect as OverlapShape, owner, member, module, severity, id }
+	])[0];
+	if (produced === undefined) fail(file, `detector "${yaml.detect}" produced no rule`);
+	// The detector fixes its own summary, principles and confidence; YAML owns the identity
+	// fields, so the detector's dispatch and check are kept and the description is rebuilt
+	// around them through the ordinary visitor form of defineRule.
+	rules.push(defineRule({ ...common, when: produced.when, check: produced.check }));
 }
 
 type PatternLoadOptions = Readonly<{
@@ -371,9 +315,7 @@ type PatternLoadOptions = Readonly<{
  * Load YAML-authored pattern rules from a repository.
  *
  * Patterns are repository-relative globs (`**`, `*`, or literal paths); each file holds exactly one
- * rule. Structural halves become ordinary `Rule`s indistinguishable from authored ones; pseudocode
- * halves come back as `SemanticQuery`s for the embedding pass, whether alone or beside a structural
- * half.
+ * rule. A `rule` or `detect` half becomes an ordinary `Rule` indistinguishable from an authored one.
  */
 export async function loadPatternFiles(
 	root: string,
@@ -382,13 +324,12 @@ export async function loadPatternFiles(
 ): Promise<LoadedPatterns> {
 	const described = typeof patterns === 'string' ? [patterns] : patterns;
 	const rules: Array<Rule> = [];
-	const queries: Array<SemanticQuery> = [];
 	const sources: Array<string> = [];
 	const declared = new Map<string, string>();
 	for (const file of expandPatterns(root, described, options.implicit ?? false)) {
 		const absolute = join(root, file);
 		sources.push(absolute);
-		loadFile(file, absolute, rules, queries, declared);
+		loadFile(file, absolute, rules, declared);
 	}
-	return { rules, queries, sources };
+	return { rules, sources };
 }

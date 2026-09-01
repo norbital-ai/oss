@@ -1,106 +1,250 @@
-/**
- * The pure rules behind Studio's Workbench, Review, and administrator Operations surfaces.
- *
- * These decide what the environment selector offers, whether the tenant database is ready, which
- * release operations are legal right now, which entities the tree lists, and what Operations can
- * honestly claim to have measured. Keeping them out of the components is what lets the
- * chrome be asserted without mounting anything — Studio's workbench controls are exactly where
- * a wrong answer is expensive.
- */
-
-import { Schema } from 'effect';
-import { humanize } from '@norbital-ai/std/string';
+import { Result, Schema } from 'effect';
+import {
+	COMPILED_MANIFEST_VERSION,
+	EnvoyStatus as EnvoyStatusContract,
+	ManifestDestination as ManifestDestinationSchema,
+	SecretsStatus,
+	WorkspaceAuthoringManifest
+} from '@norbital-ai/bolt-protocol';
 import type { CodeEditorLanguage } from '@norbital-ai/ui/code-editor';
 import type { ProductIconName } from '@norbital-ai/ui/product-icon';
 
-export type MatrixEntry = Readonly<{
-	readonly tenantId: string;
-	readonly environmentId: string;
-	readonly releaseId: string;
-	readonly artifactId: string;
-	readonly ownerEpoch: string;
-}>;
+const UsageEstimateMeterSchema = Schema.Struct({
+	kind: Schema.String,
+	monthToDateQuantity: Schema.Number,
+	projectedQuantity: Schema.Number,
+	monthToDateMicroSgd: Schema.Number,
+	projectedMicroSgd: Schema.Number,
+	method: Schema.String
+});
 
-export type FacilityState = Readonly<{ readonly name: string; readonly available: boolean }>;
+const UsageEstimateSchema = Schema.Struct({
+	periodStartMillis: Schema.Number,
+	periodEndMillis: Schema.Number,
+	asOfMillis: Schema.Number,
+	meters: Schema.Array(UsageEstimateMeterSchema),
+	monthToDateMicroSgd: Schema.Number,
+	projectedMicroSgd: Schema.Number
+});
 
-export type UsageObservation = Readonly<{
-	readonly id: string;
-	readonly tenantId: string;
-	readonly kind: string;
-	readonly quantity: number;
-}>;
+const sgd = new Intl.NumberFormat('en-SG', {
+	style: 'currency',
+	currency: 'SGD',
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2
+});
 
-export type SourceSnapshot = Readonly<{
-	readonly tenantId: string;
-	readonly workspaceKey: string;
-	readonly baseCommit: string;
-	readonly commit: string;
-	readonly files: Readonly<Record<string, string>>;
-}>;
+export const formatMicroSgd = (microSgd: number): string => sgd.format(microSgd / 1_000_000);
 
-type SourceFileChange = Readonly<{
-	readonly path: string;
-	readonly before: string | null;
-	readonly after: string;
-}>;
+export const WorkbenchBuildReceiptSchema = Schema.Struct({
+	effectId: Schema.String,
+	commit: Schema.String,
+	startedAt: Schema.String,
+	completedAt: Schema.String,
+	outcome: Schema.Literals(['succeeded', 'failed', 'migration_required']),
+	cache: Schema.Literals(['hit', 'miss', 'not_reached']),
+	phase: Schema.Literals(['prepare', 'checks', 'publish', 'provision', 'complete']),
+	summary: Schema.String,
+	stdout: Schema.optionalKey(Schema.String),
+	stderr: Schema.optionalKey(Schema.String)
+});
+export type WorkbenchBuildReceipt = typeof WorkbenchBuildReceiptSchema.Type;
 
-export type SourceCommit = Readonly<{
-	readonly commit: string;
-	readonly parent: string;
-	readonly changes: ReadonlyArray<SourceFileChange>;
-}>;
+const SourceFileChangeSchema = Schema.Struct({
+	path: Schema.NonEmptyString,
+	before: Schema.NullOr(Schema.String),
+	after: Schema.String
+});
 
-type ReleaseSchemaPlan = Readonly<{
-	readonly fingerprint: string;
-	readonly steps: ReadonlyArray<Readonly<{ readonly id: string; readonly sql: string }>>;
-}>;
+export const HostSnapshotSchema = Schema.Struct({
+	capabilities: Schema.Struct({ canDecideReview: Schema.Boolean }),
+	entries: Schema.Array(
+		Schema.Struct({
+			tenantId: Schema.String,
+			environmentId: Schema.String,
+			releaseId: Schema.String,
+			artifactId: Schema.String,
+			ownerEpoch: Schema.String
+		})
+	),
+	usage: Schema.Array(
+		Schema.Struct({
+			id: Schema.String,
+			tenantId: Schema.String,
+			kind: Schema.String,
+			quantity: Schema.Number
+		})
+	),
+	usageEstimate: Schema.NullOr(UsageEstimateSchema),
+	capacity: Schema.Struct({
+		limit: Schema.Number,
+		active: Schema.Number,
+		queued: Schema.Number,
+		queueLimit: Schema.Number,
+		tenantQueueLimit: Schema.Number
+	}),
+	source: Schema.Struct({
+		tenantId: Schema.String,
+		workspaceKey: Schema.String,
+		baseCommit: Schema.NonEmptyString,
+		commit: Schema.NonEmptyString,
+		files: Schema.Record(Schema.String, Schema.String)
+	}),
+	sourceHistory: Schema.Array(
+		Schema.Struct({
+			commit: Schema.NonEmptyString,
+			parent: Schema.NonEmptyString,
+			changes: Schema.Array(SourceFileChangeSchema)
+		})
+	),
+	conflicts: Schema.Array(Schema.NonEmptyString),
+	releaseRequests: Schema.Array(
+		Schema.Struct({
+			id: Schema.NonEmptyString,
+			tenantId: Schema.NonEmptyString,
+			environmentId: Schema.NonEmptyString,
+			workspaceKey: Schema.NonEmptyString,
+			authorId: Schema.NonEmptyString,
+			commit: Schema.NonEmptyString,
+			baseCommit: Schema.NonEmptyString,
+			previewEnvironmentId: Schema.NonEmptyString,
+			baseReleaseId: Schema.NullOr(Schema.NonEmptyString),
+			releaseId: Schema.NonEmptyString,
+			artifactId: Schema.NonEmptyString,
+			checksum: Schema.NonEmptyString,
+			schemaPlan: Schema.Struct({
+				fingerprint: Schema.NonEmptyString,
+				steps: Schema.Array(
+					Schema.Struct({ id: Schema.NonEmptyString, sql: Schema.NonEmptyString })
+				)
+			}),
+			status: Schema.Literals(['open', 'approving', 'approved', 'changes_requested', 'rejected']),
+			reason: Schema.NullOr(Schema.String),
+			createdAt: Schema.String,
+			updatedAt: Schema.String,
+			buildReceipt: Schema.Struct({
+				effectId: Schema.String,
+				commit: Schema.String,
+				outcome: Schema.Literals(['succeeded', 'failed', 'migration_required']),
+				summary: Schema.String
+			}),
+			changedFiles: Schema.Array(SourceFileChangeSchema)
+		})
+	),
+	needsRebase: Schema.Boolean,
+	preview: Schema.NullOr(
+		Schema.Struct({
+			workspaceKey: Schema.NonEmptyString,
+			commit: Schema.NonEmptyString,
+			baseCommit: Schema.NonEmptyString,
+			previewEnvironmentId: Schema.NonEmptyString,
+			releaseId: Schema.NonEmptyString,
+			artifactId: Schema.NonEmptyString,
+			expiresAtEpochMs: Schema.Number
+		})
+	),
+	deploymentHistory: Schema.Array(Schema.NonEmptyString),
+	facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean })),
+	buildReceipt: Schema.optionalKey(WorkbenchBuildReceiptSchema)
+});
+export type HostSnapshot = typeof HostSnapshotSchema.Type;
+export type MatrixEntry = HostSnapshot['entries'][number];
+type UsageObservation = HostSnapshot['usage'][number];
+type SourceSnapshot = HostSnapshot['source'];
+export type ReleaseRequest = HostSnapshot['releaseRequests'][number];
+type ReleaseRequestStatus = ReleaseRequest['status'];
 
-type ReleaseRequestStatus = 'open' | 'approving' | 'approved' | 'changes_requested' | 'rejected';
-
-export type ReleaseRequest = Readonly<{
-	readonly id: string;
-	readonly tenantId: string;
-	readonly environmentId: string;
-	readonly workspaceKey: string;
-	readonly authorId: string;
-	readonly commit: string;
-	readonly baseCommit: string;
-	readonly previewEnvironmentId: string;
-	readonly baseReleaseId: string | null;
-	readonly releaseId: string;
-	readonly artifactId: string;
-	readonly checksum: string;
-	readonly schemaPlan: ReleaseSchemaPlan;
-	readonly status: ReleaseRequestStatus;
-	readonly reason: string | null;
-	readonly changedFiles: ReadonlyArray<SourceFileChange>;
-}>;
-
-type StudioEnvironment = Readonly<{
-	readonly id: string;
-	readonly label: string;
-	readonly releaseId: string;
-	readonly artifactId: string;
-}>;
-
-/**
- * Root Studio chrome, and the nested views Workbench and Review open on.
- *
- * Workbench is read as Manifest (the structured overview) or
- * Editor (the authored source); Review as the open release requests or the history behind them.
- * Both nested rails live in the shell's chrome rather than inside their panes, because they sit on
- * the same row of the page and a pane that draws its own tab strip drifts out of that row.
- */
-export type StudioRootTab = 'workbench' | 'review' | 'runs' | 'operations';
+export type StudioRootTab = 'workbench' | 'review';
 export type WorkbenchView = 'manifest' | 'editor';
-export type StudioReviewTab = 'requests' | 'history' | 'schema';
 
-/**
- * One row the Editor's file tree can draw: a folder to open, or a file to load into CodeMirror.
- *
- * The host snapshot is a flat path map. This is the shaped view of that map at one directory, so
- * the tree never invents a file the snapshot does not hold and never needs a second read to expand.
- */
+type ReviewFreshness = 'current' | 'live_advanced' | 'terminal';
+type ReviewNextOwner = 'author' | 'reviewer' | 'complete';
+type WorkbenchPreviewState = 'missing' | 'expired' | 'stale' | 'current';
+
+export const workbenchPreviewState = (input: {
+	readonly preview:
+		null | undefined | Readonly<{ readonly commit: string; readonly expiresAtEpochMs: number }>;
+	readonly sourceCommit: string | undefined;
+	readonly nowEpochMs: number;
+}): WorkbenchPreviewState => {
+	if (input.preview == null) return 'missing';
+	if (input.preview.expiresAtEpochMs <= input.nowEpochMs) return 'expired';
+	return input.preview.commit === input.sourceCommit ? 'current' : 'stale';
+};
+
+export const reviewFreshness = (
+	request: ReleaseRequest,
+	currentReleaseId: string | undefined
+): ReviewFreshness =>
+	request.status === 'approved' ||
+	request.status === 'changes_requested' ||
+	request.status === 'rejected'
+		? 'terminal'
+		: request.baseReleaseId === (currentReleaseId ?? null)
+			? 'current'
+			: 'live_advanced';
+
+export const reviewNextOwner = (
+	status: ReleaseRequestStatus,
+	freshness: ReviewFreshness = 'current'
+): ReviewNextOwner => {
+	if (freshness === 'live_advanced' && (status === 'open' || status === 'approving'))
+		return 'author';
+	if (status === 'changes_requested') return 'author';
+	if (status === 'open' || status === 'approving') return 'reviewer';
+	return 'complete';
+};
+
+export const reviewStatusMessageKey = (status: ReleaseRequestStatus) => {
+	if (status === 'open') return 'bolt.studio.reviewStatus.open';
+	if (status === 'approving') return 'bolt.studio.reviewStatus.approving';
+	if (status === 'approved') return 'bolt.studio.reviewStatus.approved';
+	if (status === 'changes_requested') return 'bolt.studio.reviewStatus.changesRequested';
+	return 'bolt.studio.reviewStatus.rejected';
+};
+
+export const reviewFreshnessMessageKey = (
+	request: ReleaseRequest,
+	currentReleaseId: string | undefined
+) => {
+	const freshness = reviewFreshness(request, currentReleaseId);
+	if (freshness === 'current') return 'bolt.studio.current';
+	if (freshness === 'live_advanced') return 'bolt.studio.liveAdvanced';
+	return reviewStatusMessageKey(request.status);
+};
+
+export const reviewOwnerMessageKey = (
+	request: ReleaseRequest,
+	currentReleaseId: string | undefined
+) => {
+	const owner = reviewNextOwner(request.status, reviewFreshness(request, currentReleaseId));
+	if (owner === 'author') return 'bolt.studio.author';
+	if (owner === 'reviewer') return 'bolt.studio.reviewer';
+	return 'bolt.studio.complete';
+};
+
+type ReviewRelativeTime = Readonly<{
+	readonly messageKey:
+		| 'bolt.studio.timeUnavailable'
+		| 'bolt.studio.justNow'
+		| 'bolt.studio.minutesAgo'
+		| 'bolt.studio.hoursAgo'
+		| 'bolt.studio.daysAgo';
+	readonly count?: number;
+}>;
+
+export const reviewRelativeTime = (iso: string, nowEpochMs: number): ReviewRelativeTime => {
+	const then = Date.parse(iso);
+	if (!Number.isFinite(then)) return { messageKey: 'bolt.studio.timeUnavailable' };
+	const elapsed = Math.max(0, nowEpochMs - then);
+	const minutes = Math.floor(elapsed / 60_000);
+	if (minutes < 1) return { messageKey: 'bolt.studio.justNow' };
+	if (minutes < 60) return { messageKey: 'bolt.studio.minutesAgo', count: minutes };
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return { messageKey: 'bolt.studio.hoursAgo', count: hours };
+	return { messageKey: 'bolt.studio.daysAgo', count: Math.floor(hours / 24) };
+};
+
 export type SourceTreeEntry = Readonly<{
 	readonly name: string;
 	readonly type: 'directory' | 'file';
@@ -113,12 +257,6 @@ const compareSourceEntries = (left: SourceTreeEntry, right: SourceTreeEntry): nu
 	return left.name.localeCompare(right.name);
 };
 
-/**
- * Immediate children of `directory` (empty string is the workspace root).
- *
- * Directories come first, then files, both A–Z — the same order a VS Code explorer draws, so a
- * reader who already knows the tree does not have to re-learn it here.
- */
 export const sourceTreeChildren = (
 	files: ReadonlyArray<string>,
 	directory = '',
@@ -144,7 +282,6 @@ export const sourceTreeChildren = (
 	return [...seen.values()].sort(compareSourceEntries);
 };
 
-/** Files whose path contains `query`, for the tree's filter. Empty query is no filter. */
 export const sourceTreeMatches = (
 	files: ReadonlyArray<string>,
 	query: string,
@@ -152,8 +289,6 @@ export const sourceTreeMatches = (
 ): ReadonlyArray<SourceTreeEntry> => {
 	const needle = query.trim().toLowerCase();
 	if (needle === '') return [];
-	// One pass: the filter runs on every keystroke over the whole source tree, so matching and
-	// projecting together avoids walking it twice before the sort walks it again.
 	const matches: Array<SourceTreeEntry> = [];
 	for (const path of files) {
 		if (!path.toLowerCase().includes(needle)) continue;
@@ -162,498 +297,206 @@ export const sourceTreeMatches = (
 	return matches.sort((left, right) => left.path.localeCompare(right.path));
 };
 
-/**
- * The CodeMirror language the Editor can actually highlight for this path.
- *
- * The shared editor ships JavaScript, JSON, YAML, markdown and plaintext. Svelte and TS live in the
- * JS grammar because that is the highlighting the surface has, not because they are JavaScript.
- */
 export const editorLanguage = (path: string): CodeEditorLanguage => {
 	const file = path.split('/').pop()?.toLowerCase() ?? '';
-	if (file.endsWith('.json')) return 'json';
-	if (file.endsWith('.yaml') || file.endsWith('.yml')) return 'yaml';
-	if (file.endsWith('.md') || file.endsWith('.mdx') || file.endsWith('.markdown')) {
-		return 'markdown';
-	}
-	if (
-		file.endsWith('.ts') ||
-		file.endsWith('.mts') ||
-		file.endsWith('.cts') ||
-		file.endsWith('.js') ||
-		file.endsWith('.mjs') ||
-		file.endsWith('.cjs') ||
-		file.endsWith('.tsx') ||
-		file.endsWith('.jsx') ||
-		file.endsWith('.svelte')
-	) {
+	const ends = (...suffixes: string[]) => suffixes.some((suffix) => file.endsWith(suffix));
+	if (ends('.json')) return 'json';
+	if (ends('.yaml', '.yml')) return 'yaml';
+	if (ends('.md', '.mdx', '.markdown')) return 'markdown';
+	if (ends('.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx', '.svelte'))
 		return 'javascript';
-	}
 	return 'plaintext';
 };
 
-const LIVE = 'live';
-
-/**
- * The routed release Operations summarizes above the full tenant matrix.
- *
- * `live` is a conventional environment name, not a protocol value. Colony's configured environment
- * is `development` by default, so requiring the literal name made a successfully built tenant read as
- * "No live release" while the matrix immediately below showed its release and artifact. Prefer Live
- * when a host exposes it, then fall back to the first release the host actually routed.
- */
 export const currentRoutedRelease = (
 	entries: ReadonlyArray<MatrixEntry>
 ): MatrixEntry | undefined => {
 	const routed = entries.filter((entry) => entry.releaseId !== '');
-	return routed.find((entry) => entry.environmentId === LIVE) ?? routed[0];
+	return routed.find((entry) => entry.environmentId === 'live') ?? routed[0];
 };
 
-/**
- * One option per routed environment, Live first.
- *
- * A tenant with no routed environment yet still gets a Live option so the selector is never empty
- * and never silently implies the workspace is unrouted when it is merely new.
- */
-export const studioEnvironments = (
-	entries: ReadonlyArray<MatrixEntry>
-): ReadonlyArray<StudioEnvironment> => {
-	const seen = new Map<string, StudioEnvironment>();
-	for (const entry of entries) {
-		if (seen.has(entry.environmentId)) continue;
-		seen.set(entry.environmentId, {
-			id: entry.environmentId,
-			// Live is named as itself; anything else is a workbench identifier shown as words.
-			label: entry.environmentId === LIVE ? 'Live' : humanize(entry.environmentId),
-			releaseId: entry.releaseId,
-			artifactId: entry.artifactId
-		});
-	}
-	if (seen.size === 0) {
-		return [
-			{
-				id: LIVE,
-				label: 'Live',
-				releaseId: '',
-				artifactId: ''
-			}
-		];
-	}
-	return [...seen.values()].sort((left, right) => {
-		if (left.id === LIVE) return -1;
-		if (right.id === LIVE) return 1;
-		return left.label.localeCompare(right.label);
-	});
-};
-
-/** Facilities the operator should see as missing, in the order the panel lists them. */
-export const unavailableFacilities = (
-	facilities: ReadonlyArray<FacilityState>
-): ReadonlyArray<string> =>
-	facilities.filter((facility) => !facility.available).map((facility) => facility.name);
-
-/**
- * The one sentence the Studio says about a read-only environment, in one place.
- *
- * Colony has no operation that creates a non-live environment: `studioEnvironments` derives its
- * options from routes the gateway already resolved, and every host operation takes its
- * environment from the trusted route header. So the product's "open My workbench" instruction is
- * not actionable here, and the banner says what is true rather than pointing at a door that is
- * not there.
- */
 export type ReleaseControls = Readonly<{
-	/** Generating DDL, checking, bundling, and provisioning this personal workbench commit. */
 	readonly canPreview: boolean;
-	/** Sending the exact built Preview into Review. */
 	readonly canRequestReview: boolean;
-	/** Stepping the environment's deployment history back one release — `rollback`. */
 	readonly canRollback: boolean;
-	/** Why the controls are disabled, when they are. */
-	readonly reason?: string;
+	readonly reasonKey?: 'bolt.studio.controlBusy';
 }>;
 
-type ReleaseControlInput = Readonly<{
-	readonly busy: boolean;
-	readonly hasRelease: boolean;
-}>;
-
-/**
- * What an operator may do to this environment right now.
- *
- * Nothing is actionable while Studio is loading or a command is in flight. Preview and Review
- * always operate on the personal workbench; rollback operates on the routed environment when it
- * has a release.
- */
-export const releaseControls = (input: ReleaseControlInput): ReleaseControls => {
+export const releaseControls = (
+	input: Readonly<{ busy: boolean; hasRelease: boolean }>
+): ReleaseControls => {
 	if (input.busy) {
 		return {
 			canPreview: false,
 			canRequestReview: false,
 			canRollback: false,
-			reason: 'Studio is loading or a command is already running.'
+			reasonKey: 'bolt.studio.controlBusy'
 		};
 	}
 	return { canPreview: true, canRequestReview: true, canRollback: input.hasRelease };
 };
 
-/**
- * What the workspace declares, as `workspace.authoringManifest` publishes it.
- *
- * This is the authored workspace model, never runtime-owned collections. The command is restricted
- * to administrators, who already have complete workspace access unless they are actively previewing
- * a team.
- * `description` and `icon` are decoded because the projection now carries them and they are what
- * names a collection to a reader; the field extras are decoded because the Model tab is the only
- * surface that can show an enum's members or mark a searchable column.
- */
-export const ManifestSchema = Schema.Struct({
-	name: Schema.String,
-	version: Schema.String,
-	collections: Schema.Array(
-		Schema.Struct({
-			name: Schema.String,
-			history: Schema.Boolean,
-			hooks: Schema.optionalKey(Schema.Array(Schema.String)),
-			description: Schema.optionalKey(Schema.String),
-			icon: Schema.optionalKey(Schema.String),
-			sourcePath: Schema.optionalKey(Schema.String),
-			fields: Schema.Array(
-				Schema.Struct({
-					name: Schema.String,
-					type: Schema.String,
-					required: Schema.Boolean,
-					generated: Schema.Boolean,
-					search: Schema.optionalKey(Schema.Boolean),
-					values: Schema.optionalKey(Schema.Array(Schema.String)),
-					customType: Schema.optionalKey(Schema.String)
-				})
-			),
-			relations: Schema.Array(
-				Schema.Struct({ name: Schema.String, target: Schema.String, cardinality: Schema.String })
-			)
-		})
-	),
-	apps: Schema.Array(
-		Schema.Struct({
-			name: Schema.String,
-			label: Schema.String,
-			icon: Schema.optionalKey(Schema.String),
-			description: Schema.optionalKey(Schema.String),
-			banner: Schema.optionalKey(Schema.String),
-			thumbnail: Schema.optionalKey(Schema.String)
-		})
-	),
-	policies: Schema.Array(
-		Schema.Struct({
-			name: Schema.String,
-			description: Schema.String,
-			grants: Schema.Array(
-				Schema.Struct({
-					collection: Schema.String,
-					action: Schema.Literals(['read', 'create', 'update', 'delete', 'history']),
-					fields: Schema.optionalKey(Schema.Array(Schema.String)),
-					dependencies: Schema.optionalKey(Schema.Array(Schema.String)),
-					where: Schema.optionalKey(Schema.Json),
-					approval: Schema.optionalKey(Schema.Boolean),
-					authorization: Schema.optionalKey(Schema.Boolean)
-				})
-			),
-			capabilities: Schema.Struct({
-				apps: Schema.Array(Schema.String),
-				tools: Schema.Array(Schema.String),
-				mcp: Schema.Array(Schema.String),
-				skills: Schema.Array(Schema.String)
-			})
-		})
-	),
-	automations: Schema.Array(
-		Schema.Struct({
-			name: Schema.String,
-			description: Schema.optionalKey(Schema.String),
-			trigger: Schema.Union([
-				Schema.Struct({ _tag: Schema.Literal('Manual') }),
-				Schema.Struct({ _tag: Schema.Literal('Schedule'), cron: Schema.String }),
-				Schema.Struct({
-					_tag: Schema.Literal('Change'),
-					collection: Schema.String,
-					event: Schema.Literals(['created', 'updated', 'deleted'])
-				})
-			]),
-			policies: Schema.Array(Schema.String)
-		})
-	),
-	/**
-	 * Every envoy, with what it is and where it is reached — not a bare name.
-	 *
-	 * The manifest used to project a channel as `{ name }` alone, so nothing downstream could say
-	 * which transport it spoke to or who could reach it, and the Studio had to write a paragraph
-	 * explaining that it could not know. It carries `transport` and `audience` now, so it can.
-	 */
-	envoys: Schema.Array(
-		Schema.Struct({
-			name: Schema.String,
-			transport: Schema.String,
-			audience: Schema.String,
-			groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
-			delegation: Schema.Literals(['enabled', 'disabled'])
-		})
-	),
-	integrations: Schema.Array(Schema.Struct({ name: Schema.String })),
-	requiredFacilities: Schema.Array(Schema.String)
-});
+export type ManifestDestination = typeof ManifestDestinationSchema.Type;
+export const ManifestSchema = WorkspaceAuthoringManifest;
 export type WorkspaceManifest = typeof ManifestSchema.Type;
 export type ManifestCollection = WorkspaceManifest['collections'][number];
 
-/**
- * What the workspace's `+env.ts` declares, as `secrets.status` reports it.
- *
- * Names and whether each is configured, never a value — there is deliberately no read command, so
- * this is the whole of what a browser can learn about the vault, and the Studio cannot show a
- * value even by mistake.
- */
-export const EnvironmentStatusSchema = Schema.Array(
-	Schema.Struct({
-		name: Schema.String,
-		label: Schema.String,
-		description: Schema.optionalKey(Schema.String),
-		secret: Schema.Boolean,
-		configured: Schema.Boolean,
-		default: Schema.optionalKey(Schema.String),
-		updatedAt: Schema.optionalKey(Schema.String)
-	})
-);
+export const manifestInspectionState = (
+	manifest: WorkspaceManifest | undefined
+): 'current' | 'rebuild_required' =>
+	manifest?.compiledManifestVersion === COMPILED_MANIFEST_VERSION ? 'current' : 'rebuild_required';
+
+export const EnvironmentStatusSchema = SecretsStatus;
 export type EnvironmentVariable = (typeof EnvironmentStatusSchema.Type)[number];
 
-/** One row under a section: the entity's name, what distinguishes it, and where it was authored. */
+export const EnvoyStatusSchema = EnvoyStatusContract;
+export type EnvoyStatus = typeof EnvoyStatusSchema.Type;
+
+export const decodeManifest = (value: unknown): WorkspaceManifest | undefined => {
+	const decoded = Schema.decodeUnknownResult(ManifestSchema)(value);
+	return Result.isSuccess(decoded) ? decoded.success : undefined;
+};
+
+export const decodeEnvironmentStatus = (value: unknown): ReadonlyArray<EnvironmentVariable> => {
+	const decoded = Schema.decodeUnknownResult(EnvironmentStatusSchema)(value);
+	return Result.isSuccess(decoded) ? decoded.success : [];
+};
+
+export const decodeEnvoyStatus = (value: unknown): EnvoyStatus | undefined => {
+	const decoded = Schema.decodeUnknownResult(EnvoyStatusSchema)(value);
+	return Result.isSuccess(decoded) ? decoded.success : undefined;
+};
+
 type ManifestEntry = Readonly<{
 	readonly name: string;
-	readonly detail?: string;
-	readonly sourcePath?: string | undefined;
-	/** Collections carry an authored icon; every other kind takes its section's. */
 	readonly icon?: string | undefined;
 }>;
 
-/** One branch of the authoring tree. The count a branch shows is `entries.length`. */
+export const MANIFEST_SECTION_MESSAGES = {
+	collections: [
+		'bolt.studio.section.collections',
+		'bolt.studio.section.collectionsSummary',
+		'bolt.studio.noCollections'
+	],
+	apps: ['bolt.studio.section.apps', 'bolt.studio.section.appsSummary', 'bolt.studio.noApps'],
+	policies: [
+		'bolt.studio.section.policies',
+		'bolt.studio.section.policiesSummary',
+		'bolt.studio.noPolicies'
+	],
+	envoys: [
+		'bolt.studio.section.envoys',
+		'bolt.studio.section.envoysSummary',
+		'bolt.studio.noEnvoys'
+	],
+	automations: [
+		'bolt.studio.section.automations',
+		'bolt.studio.section.automationsSummary',
+		'bolt.studio.noAutomations'
+	],
+	remotes: [
+		'bolt.studio.section.remotes',
+		'bolt.studio.section.remotesSummary',
+		'bolt.studio.noRemotes'
+	],
+	environment: [
+		'bolt.studio.section.environment',
+		'bolt.studio.section.environmentSummary',
+		'bolt.studio.noEnvironment'
+	]
+} as const;
+type ManifestSectionId = keyof typeof MANIFEST_SECTION_MESSAGES;
+
 export type ManifestSection = Readonly<{
-	readonly id: string;
-	readonly label: string;
-	/** A `product:*` reference, so a branch wears the same mark as the rest of the product. */
+	readonly id: ManifestSectionId;
 	readonly icon: ProductIconName;
-	/** What the branch is, shown when it is selected rather than one of its members. */
-	readonly summary: string;
-	/**
-	 * Whether the navigator opens the branch to its members.
-	 *
-	 * Only Collections does. Every other kind is read as a whole in its own panel, and duplicating
-	 * that list into the tree gave a reader two places to click for the same page.
-	 */
-	readonly expandable: boolean;
 	readonly entries: ReadonlyArray<ManifestEntry>;
 }>;
 
-/** Counts a noun the way an English reader expects, so no branch label reads "1 fields". */
-const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`;
-
-/**
- * Every declarable kind, in a fixed order, whether or not the workspace declares any.
- *
- * A branch that disappears when its count is zero cannot say "this workspace has no automations" —
- * it says nothing, and an operator reads that as the Studio having failed to load. So the branches
- * are constant and only their counts move.
- *
- * Integrations are deliberately absent: an integration binds to one collection, so it belongs
- * under that collection's own Integrations tab rather than in a flat list beside it. Environment is
- * the workspace's
- * declared `+env.ts` names, which arrive from `secrets.status` rather than the manifest — the vault
- * is the only thing that knows which of them are actually set.
- */
 export const manifestSections = (
 	manifest: WorkspaceManifest | undefined,
-	environment: ReadonlyArray<{ readonly name: string; readonly configured: boolean }> = []
-): ReadonlyArray<ManifestSection> => [
-	{
-		id: 'collections',
-		label: 'Collections',
-		icon: 'collections',
-		summary: 'The records this workspace stores, and everything declared around them.',
-		expandable: true,
-		entries: (manifest?.collections ?? []).map((collection) => {
-			const hooks = collection.hooks?.length ?? 0;
-			return {
-				name: collection.name,
-				detail: `${plural(collection.fields.length, 'field')}${hooks === 0 ? '' : ` · ${plural(hooks, 'hook')}`}`,
-				sourcePath: collection.sourcePath,
-				icon: collection.icon
-			};
-		})
-	},
-	{
-		id: 'apps',
-		label: 'Apps',
-		icon: 'apps',
-		summary: 'The authored surfaces this workspace mounts under /app.',
-		expandable: false,
-		entries: (manifest?.apps ?? []).map((app) => ({
-			name: app.name,
-			...(app.label === '' || app.label === app.name ? {} : { detail: app.label })
-		}))
-	},
-	{
-		id: 'policies',
-		label: 'Policies',
-		icon: 'policies',
-		summary: 'Who may read and write what. Every collection query passes through these.',
-		expandable: false,
-		entries: (manifest?.policies ?? []).map((policy) => ({
-			name: policy.name,
-			detail: plural(
-				policy.grants.length + Object.values(policy.capabilities).flat().length,
-				'grant'
-			)
-		}))
-	},
-	{
-		id: 'envoys',
-		label: 'Envoys',
-		icon: 'agent',
-		summary: 'The agents this workspace exposes on a transport, and what each one is reached on.',
-		expandable: false,
-		entries: (manifest?.envoys ?? []).map(({ name, transport, audience }) => ({
-			name,
-			detail: `${transport} · ${audience}`
-		}))
-	},
-	{
-		id: 'automations',
-		label: 'Automations',
-		icon: 'automations',
-		summary: 'Work the runtime schedules for itself, without a caller.',
-		expandable: false,
-		entries: (manifest?.automations ?? []).map(({ name, description }) => ({
-			name,
-			...(description === undefined ? {} : { detail: description })
-		}))
-	},
-	{
-		id: 'remotes',
-		label: 'Remotes',
-		icon: 'remotes',
-		summary: 'Authored functions callable as invoke.<name>.',
-		expandable: false,
-		entries: []
-	},
-	{
-		id: 'environment',
-		label: 'Environment',
-		icon: 'environment',
-		summary:
-			'Names the workspace declares in +env.ts. Values live in the vault and are never read here.',
-		expandable: false,
-		entries: environment.map((variable) => ({
-			name: variable.name,
-			detail: variable.configured ? 'Set' : 'Not set'
-		}))
-	}
-];
-
-/**
- * What `envoys.status` answers, and the whole of what it answers.
- *
- * `received` and `replied` are cumulative receipt counts with no time dimension. Connectivity is
- * host transport state and sender registration is an address-to-identity claim, so neither can be
- * inferred from these counters. Decoding the shape here stops the surface inventing a field the
- * runtime never sends.
- */
-export const EnvoyStatusSchema = Schema.Struct({
-	envoy: Schema.String,
-	received: Schema.Number,
-	replied: Schema.Number
-});
-
-/**
- * Why no envoy row can show a green "connected" light *from the runtime*.
- *
- * Across the whole runtime there is no command, facility tag or type that reports a transport's
- * state: `Communication` is `VerifyInbound`/`Send`/`Notify`/`Wake` with no probe, and
- * `envoys.status` never touches it. A reachable and an unreachable envoy therefore read identically
- * here. The host *does* know — it holds the socket — and the Envoys settings page asks it; that
- * answer is host state and deliberately does not come back into the tenant.
- */
-export const ENVOY_CONNECTION_UNREPORTABLE =
-	'Runtime status reports traffic receipts, not transport connectivity. Nothing here probes the provider, so a live and a dead transport read the same; the host holds the socket and answers that question on the Envoys settings page.';
-
-/** One tool a policy may grant, and the file whose name declared it. */
-export type StudioTool = Readonly<{ readonly name: string; readonly sourcePath: string }>;
-
-/** One envoy, as the Studio renders it: what the manifest says, plus the file that declared it. */
-export type StudioEnvoy = Readonly<{
-	readonly name: string;
-	readonly transport: string;
-	readonly audience: string;
-	readonly delegation: 'enabled' | 'disabled';
-	readonly sourcePath?: string | undefined;
-}>;
-
-/** `src/capabilities/tools/+<name>.ts` — the filename *is* the tool name. */
-const TOOL_FILE = /(?:^|\/)capabilities\/tools\/\+([^/]+)\.ts$/;
-/** `src/envoys/+<name>.ts` — likewise the only part of the file that survives. */
-const ENVOY_FILE = /(?:^|\/)envoys\/\+([^/]+)\.ts$/;
-
-/**
- * The envoys this workspace declares, each with the file that declared it.
- *
- * There is no grouping under an agent, because there is no agent to group under: an envoy *is* one.
- * This used to return `StudioAgent` — one node per synthesized agent, with every channel and every
- * tool hung beneath it — and the synthesis meant the tree always had exactly one node above the
- * things anybody wanted to read.
- *
- * The manifest now carries `transport`, `audience` and the required delegation boundary, so the
- * note that used to explain what the Studio could not know is gone with the projection that made
- * it true.
- */
-export const workspaceEnvoys = (
-	manifest: WorkspaceManifest | undefined,
-	files: ReadonlyArray<string> = []
-): ReadonlyArray<StudioEnvoy> => {
-	const source = new Map(
-		files.flatMap((path) => {
-			const name = ENVOY_FILE.exec(path)?.[1];
-			return name === undefined ? [] : [[name, path] as const];
-		})
-	);
-	return (manifest?.envoys ?? []).map(({ name, transport, audience, delegation }) => {
-		const sourcePath = source.get(name);
-		return { name, transport, audience, delegation, sourcePath };
-	});
+	environment: ReadonlyArray<{ readonly name: string }> = []
+): ReadonlyArray<ManifestSection> => {
+	if (manifest !== undefined && manifestInspectionState(manifest) === 'rebuild_required') return [];
+	const applications = [...(manifest?.apps ?? []), ...(manifest?.appGroups ?? [])];
+	const envoys = manifest?.envoys ?? [];
+	return [
+		{
+			id: 'collections',
+			icon: 'collections',
+			entries: (manifest?.collections ?? []).map(({ name, icon }) => ({ name, icon }))
+		},
+		{ id: 'apps', icon: 'apps', entries: applications.map(({ name }) => ({ name })) },
+		{
+			id: 'policies',
+			icon: 'policies',
+			entries: (manifest?.policies ?? []).map(({ name }) => ({ name }))
+		},
+		{ id: 'envoys', icon: 'agent', entries: envoys.map(({ name }) => ({ name })) },
+		{
+			id: 'automations',
+			icon: 'automations',
+			entries: (manifest?.automations ?? []).map(({ name }) => ({ name }))
+		},
+		{
+			id: 'remotes',
+			icon: 'remotes',
+			entries: (manifest?.remotes ?? []).map(({ name }) => ({ name }))
+		},
+		{ id: 'environment', icon: 'environment', entries: environment.map(({ name }) => ({ name })) }
+	];
 };
 
-/**
- * Every tool this workspace authored, by the file that declared it.
- *
- * A flat list, not an agent's. A tool reaches a turn when a policy the subject holds names it, so
- * "whose tool is this" has no single answer — and hanging them under an agent asserted one.
- */
-export const workspaceTools = (files: ReadonlyArray<string> = []): ReadonlyArray<StudioTool> =>
-	files.flatMap((path) => {
-		const name = TOOL_FILE.exec(path)?.[1];
-		return name === undefined ? [] : [{ name, sourcePath: path }];
-	});
+export const workspaceEnvoys = (
+	manifest: WorkspaceManifest | undefined
+): WorkspaceManifest['envoys'] =>
+	manifest !== undefined && manifestInspectionState(manifest) === 'rebuild_required'
+		? []
+		: (manifest?.envoys ?? []);
+
+type HookSummaryMessageKey =
+	| 'bolt.studio.hook.mutatePrepare'
+	| 'bolt.studio.hook.mutateBefore'
+	| 'bolt.studio.hook.mutateAfter'
+	| 'bolt.studio.hook.deleteBefore';
+
+export const hookSummaryKey = (name: string): HookSummaryMessageKey | undefined => {
+	if (name === 'mutate.prepare') return 'bolt.studio.hook.mutatePrepare';
+	if (name === 'mutate.before') return 'bolt.studio.hook.mutateBefore';
+	if (name === 'mutate.after') return 'bolt.studio.hook.mutateAfter';
+	if (name === 'delete.before') return 'bolt.studio.hook.deleteBefore';
+	return undefined;
+};
+
+type IntegrationBinding = NonNullable<
+	WorkspaceManifest['integrations'][number]['bindings']
+>[number];
+
+export const integrationBindingSummary = (binding: IntegrationBinding): string => {
+	const timing =
+		binding.schedule === undefined
+			? binding.events === undefined || binding.events.length === 0
+				? undefined
+				: binding.events.join(', ')
+			: binding.schedule;
+	return `${binding.method} ${binding.path}${timing === undefined ? '' : ` · ${timing}`}`;
+};
 
 type StudioMetric = Readonly<{
 	readonly id: string;
-	readonly label: string;
+	readonly labelKey:
+		| 'bolt.studio.metric.hostDisk'
+		| 'bolt.studio.metric.database'
+		| 'bolt.studio.metric.objectStorage';
 	readonly icon: string;
-	/**
-	 * `undefined` when the host reports no measurement.
-	 *
-	 * A metric nobody measured is not zero. Rendering it as `0 B` is the difference between "this
-	 * tenant stores nothing" and "nothing counted", and an operator cannot tell those apart after
-	 * the fact.
-	 */
 	readonly value: string | undefined;
-	readonly detail: string;
+	readonly detailKey:
+		| 'bolt.studio.metric.hostDiskDetail'
+		| 'bolt.studio.metric.databaseDetail'
+		| 'bolt.studio.metric.objectStorageDetail';
+	readonly detailValues?: Readonly<Record<string, string | number>>;
 }>;
 
-/** Bytes in the units an operator reads them in, never more precision than the number carries. */
 const formatBytes = (bytes: number): string => {
 	const units = ['B', 'KB', 'MB', 'GB'];
 	let value = bytes;
@@ -670,19 +513,10 @@ const meteredQuantity = new Intl.NumberFormat('en', {
 	useGrouping: false
 });
 
-/**
- * Operations' resource tiles, each backed by something the host actually reported.
- *
- * Host disk is the authored source the tenant is holding, which the snapshot carries in full, so
- * it is measured here rather than asked for. The database and object-storage tiles read the
- * tenant's own metered usage; a kind the meter never observed yields `undefined` rather than a
- * zero, because this host meters lazily and an unobserved tenant is not an empty one.
- */
 export const studioMetrics = (input: {
 	readonly usage: ReadonlyArray<UsageObservation>;
 	readonly source: SourceSnapshot | undefined;
 }): ReadonlyArray<StudioMetric> => {
-	/** Totals one meter kind, staying `undefined` when the meter observed the tenant not at all. */
 	const metered = (kind: string): number | undefined =>
 		input.usage
 			.filter((observation) => observation.kind === kind)
@@ -697,24 +531,28 @@ export const studioMetrics = (input: {
 	return [
 		{
 			id: 'host-disk',
-			label: 'Tenant host disk',
+			labelKey: 'bolt.studio.metric.hostDisk',
 			icon: 'lucide:hard-drive',
 			value: input.source === undefined ? undefined : formatBytes(sourceBytes),
-			detail: `Personal workbench at commit ${input.source?.commit.slice(0, 12) ?? 'none'}, ${plural(files.length, 'file')}.`
+			detailKey: 'bolt.studio.metric.hostDiskDetail',
+			detailValues: {
+				commit: input.source?.commit.slice(0, 12) ?? '—',
+				count: files.length
+			}
 		},
 		{
 			id: 'database',
-			label: 'Database',
+			labelKey: 'bolt.studio.metric.database',
 			icon: 'lucide:database',
 			value: database === undefined ? undefined : meteredQuantity.format(database),
-			detail: 'Metered database usage for this tenant. Byte-level storage is not reported.'
+			detailKey: 'bolt.studio.metric.databaseDetail'
 		},
 		{
 			id: 'object-storage',
-			label: 'Object storage',
+			labelKey: 'bolt.studio.metric.objectStorage',
 			icon: 'lucide:package-open',
 			value: objects === undefined ? undefined : meteredQuantity.format(objects),
-			detail: 'Metered file usage for this tenant. The object store reports no size.'
+			detailKey: 'bolt.studio.metric.objectStorageDetail'
 		}
 	];
 };

@@ -1,16 +1,27 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
-import { Context, Duration, Effect, Option, Result, Schema } from 'effect';
-import type { AIImageAssetPart, EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import { Context, Duration, Effect, Layer, Option, Result, Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
+import {
+	AIRequest,
+	EffectId,
+	ImageAsset,
+	ModelId,
+	ProviderCallId,
+	type EffectId as EffectIdType
+} from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import type { Interface as CollectionsInterface } from './collections.contract.js';
-import type * as Automations from '#lib/runtime/automations/automations.js';
-import type { AIInterface, FilesInterface } from '#lib/runtime/facilities/services.js';
+import * as Collections from './collections.js';
+import * as Automations from '#lib/runtime/automations/automations.js';
+import { AI, Files, type AIInterface, type FilesInterface } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { DispatchError } from '#lib/runtime/workspace.js';
 import { readFileAsset, type FileAsset } from './file-assets.js';
 import { nearestQueryInput, queryInput } from './query-input.js';
 import { HookEffectIds } from './hooks/boundary.js';
@@ -61,12 +72,12 @@ export type AuthoredCollectionHookModule = Readonly<{
 type AuthoredPipelineModule = Readonly<{
 	readonly export?: Readonly<{
 		readonly description: string;
-		readonly handler: (context: unknown) => unknown;
+		handler(context: unknown, api: unknown): unknown;
 	}>;
 	readonly import?: Readonly<{
 		readonly description: string;
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly handler: (context: unknown) => unknown;
+		handler(context: unknown, api: unknown): unknown;
 	}>;
 }>;
 
@@ -274,12 +285,6 @@ type AuthoredInferenceImage = Readonly<{
 	readonly detail?: 'auto' | 'low' | 'high';
 }>;
 
-/** Provider-neutral search controls carried from an authored inference to its host adapter. */
-type AuthoredInferenceWebSearch = Readonly<{
-	readonly maxResults: number;
-	readonly allowedDomains?: ReadonlyArray<string>;
-}>;
-
 /**
  * One authored inference as the ops surface carries it: the schema the answer must decode to, and
  * the picture words to judge against.
@@ -291,8 +296,7 @@ type AuthoredInferenceWebSearch = Readonly<{
 type InferenceRequest = Readonly<{
 	readonly schema: Schema.Codec<unknown, unknown>;
 	readonly prompt: string;
-	readonly model?: string;
-	readonly webSearch?: AuthoredInferenceWebSearch;
+	readonly model: string;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
 }>;
 
@@ -325,32 +329,24 @@ type RuntimeAutomationApi = RuntimeAuthoringApi &
 const MAX_INFERENCE_IMAGES = 8;
 const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 
-/** Leaves grounded structured turns enough room to finish the required JSON instead of returning null. */
+/** Leaves schema-constrained inference enough room to finish one complete JSON value. */
 const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
 
 /**
- * The user turn `api.infer` sends, with the authored images attached to it.
+ * The provider-neutral ImageAsset descriptors an authored `api.infer` sends beside its Effect
+ * message. Bytes remain host-only and provider dialect remains Colony-only.
  *
- * A prompt on its own is a plain string, which is what every provider means by a text-only turn. An
- * `images` list makes it a content-part array carrying small `image_asset` descriptors. The trusted
- * host resolves those tenant-scoped keys into provider data URLs after the isolate crossing. Bytes
- * must not be read or base64-expanded here: a 1 MiB JPEG becomes a request larger than the facility
- * bridge's 1 MiB ceiling, and encoding a review batch consumes the isolate's whole CPU budget.
- *
- * The declaration sat in the authoring contract for a long time with nothing behind it: the turn was
- * built as `[{ role: 'user', content: prompt }]` and `images` was read nowhere, so a vision
- * automation asking a model to judge a photograph it never received answered confidently about
- * nothing at all.
+ * Bytes must not be read or base64-expanded here: a 1 MiB JPEG becomes a request larger than the
+ * facility bridge's 1 MiB ceiling, and encoding a review batch consumes the isolate's CPU budget.
  */
-const inferenceTurnContent = (
-	prompt: string,
+const inferenceImageAssets = (
 	images: ReadonlyArray<AuthoredInferenceImage> | undefined
-): Effect.Effect<Schema.Json, Database.FacilityError> =>
+): Effect.Effect<ReadonlyArray<ImageAsset>, Database.FacilityError> =>
 	Effect.gen(function* () {
-		if (images === undefined || images.length === 0) return prompt;
+		if (images === undefined || images.length === 0) return [];
 		const refuse = (code: string, message: string) =>
 			new Database.FacilityError({
-				operation: 'ai.turn',
+				operation: 'ai.generate',
 				code,
 				message,
 				retryable: false,
@@ -362,7 +358,7 @@ const inferenceTurnContent = (
 				`An inference turn carries at most ${MAX_INFERENCE_IMAGES} images; ${images.length} were passed.`
 			);
 		}
-		const parts: Array<Schema.Json> = [{ type: 'text', text: prompt }];
+		const assets: Array<ImageAsset> = [];
 		let total = 0;
 		for (const image of images) {
 			const file = image.file;
@@ -391,18 +387,17 @@ const inferenceTurnContent = (
 					`The images on one inference turn total more than ${MAX_INFERENCE_IMAGE_BYTES} bytes.`
 				);
 			}
-			parts.push({
-				type: 'image_asset',
-				image_asset: {
+			assets.push(
+				ImageAsset.make({
 					key: file.storage_key,
 					name: file.file_name,
 					mimeType: file.mime_type,
 					size: file.file_size,
-					detail: image.detail ?? 'auto'
-				}
-			} satisfies AIImageAssetPart);
+					...(image.detail === undefined ? {} : { detail: image.detail })
+				})
+			);
 		}
-		return parts;
+		return assets;
 	});
 
 /**
@@ -413,69 +408,102 @@ const inferenceTurnContent = (
  * `'30 seconds'` and the rest of the vocabulary durations are written in everywhere else here. An
  * unreadable string answers `undefined` — the caller refuses the automation through its typed
  * channel, naming the string, which is where a mistyped duration surfaces rather than being read
- * as "no delay" or swallowed as a defect. The single `as Duration.Input` is the boundary assert:
- * `Duration.Input` types a duration string as `${number} Unit`, which TypeScript cannot prove from a
- * value an authored handler passed, and `Duration.fromInput` is the decode that checks it at run
- * time.
+ * as "no delay" or swallowed as a defect.
  */
+const durationUnits = new Set<string>([
+	'nano',
+	'nanos',
+	'micro',
+	'micros',
+	'milli',
+	'millis',
+	'second',
+	'seconds',
+	'minute',
+	'minutes',
+	'hour',
+	'hours',
+	'day',
+	'days',
+	'week',
+	'weeks'
+]);
+
+const isDurationInputString = (
+	value: string
+): value is `${number} ${Duration.Unit}` | 'Infinity' | '-Infinity' => {
+	if (value === 'Infinity' || value === '-Infinity') return true;
+	const separator = value.lastIndexOf(' ');
+	if (separator <= 0) return false;
+	const amount = value.slice(0, separator);
+	const unit = value.slice(separator + 1);
+	return amount.trim() !== '' && Number.isFinite(Number(amount)) && durationUnits.has(unit);
+};
+
 export const afterMillisOf = (after: string | number | undefined): number | undefined => {
 	if (after === undefined) return 0;
 	if (typeof after === 'number') return after;
-	const decoded = Duration.fromInput(after as Duration.Input);
+	if (!isDurationInputString(after)) return undefined;
+	const decoded = Duration.fromInput(after);
 	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
 };
-
-/** The one field the grounding pass reads back off a research turn. Built once, not per turn. */
-const decodeResearchText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
 
 /**
  * The `infer` member of the authoring api, owned in one place.
  *
- * Structured inference is one behaviour — an optional grounding turn whose prose is fed back in as
- * evidence, then the schema-constrained turn that has to answer in the author's shape. Image bytes
- * are resolved by the host from the asset descriptors this operation emits.
+ * The authored schema remains the local decode authority. The provider receives one encoded Effect
+ * message and the host resolves any image descriptors before its provider call.
  */
 export const inferOp =
 	(effectId: EffectIdType, ai: AIInterface): AuthoringOps['infer'] =>
 	(input) =>
 		Effect.gen(function* () {
-			const content = yield* inferenceTurnContent(input.prompt, input.images);
-			const model = input.model ?? 'gpt-5';
-			const responseSchema = Schema.decodeUnknownSync(Schema.Json)(
-				Schema.toJsonSchemaDocument(input.schema).schema
+			const refusal = (code: string, message: string) =>
+				new Database.FacilityError({
+					operation: 'ai.generate',
+					code,
+					message,
+					retryable: false,
+					outcome: 'known'
+				});
+			const unsupportedKeys = Object.keys(input).filter(
+				(key) => key !== 'schema' && key !== 'prompt' && key !== 'model' && key !== 'images'
 			);
-			const groundedMessages =
-				input.webSearch === undefined
-					? [{ role: 'user' as const, content }]
-					: yield* ai
-							.execute(effectId, {
-								_tag: 'Turn',
-								model,
-								messages: [{ role: 'user', content }],
-								tools: [],
-								maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-								webSearch: input.webSearch
-							})
-							.pipe(
-								Effect.map((research) => [
-									{ role: 'user' as const, content },
-									{ role: 'assistant' as const, content: decodeResearchText(research.output).text },
-									{
-										role: 'user' as const,
-										content:
-											'Encode the grounded research above as the requested JSON value. Preserve its evidence and do not add new claims.'
-									}
-								])
-							);
-			const response = yield* ai.execute(effectId, {
-				_tag: 'Turn',
-				model,
-				messages: groundedMessages,
-				tools: [],
-				maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-				responseSchema
-			});
-			return Schema.decodeUnknownSync(input.schema)(response.output);
+			if (unsupportedKeys.length > 0) {
+				return yield* refusal(
+					'ai.request_invalid',
+					'api.infer received unsupported request fields.'
+				);
+			}
+			const modelId = yield* Schema.decodeUnknownEffect(ModelId)(input.model).pipe(
+				Effect.mapError(() => refusal('ai.model_invalid', 'api.infer requires a non-empty model id.'))
+			);
+			const imageAssets = yield* inferenceImageAssets(input.images);
+			const jsonSchema = Schema.toJsonSchemaDocument(input.schema).schema;
+			const message = yield* Schema.encodeEffect(Prompt.Message)(
+				Prompt.userMessage({ content: [Prompt.textPart({ text: input.prompt })] })
+			).pipe(
+				Effect.mapError(() => refusal('ai.message_invalid', 'The Effect prompt could not be encoded.'))
+			);
+			const response = yield* ai.generate(
+				effectId,
+				AIRequest.cases.Generate.make({
+					callId: ProviderCallId.make(`${effectId}:infer`),
+					modelId,
+					messages: [message],
+					maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
+					output: { _tag: 'Object', objectName: 'inference', jsonSchema },
+					...(imageAssets.length === 0 ? {} : { imageAssets })
+				})
+			);
+			if (response.result._tag !== 'Object') {
+				return yield* refusal('ai.response_invalid', 'The AI provider returned the wrong output kind.');
+			}
+			return yield* Schema.decodeUnknownEffect(input.schema)(response.result.value).pipe(
+				Effect.mapError(() =>
+					refusal('ai.response_invalid', 'The AI provider response does not match the authored schema.')
+				)
+			);
 		});
 
 /**
@@ -498,7 +526,7 @@ const databaseApi = (
 	allowedCollections: ReadonlySet<string>,
 	collection: (name: string) => Readonly<Record<string, unknown>>
 ): object =>
-	new Proxy(Object.create(null) as object, {
+	new Proxy({}, {
 		get: (_target, property) =>
 			typeof property === 'string' && allowedCollections.has(property)
 				? collection(property)
@@ -612,3 +640,83 @@ export const makeBoundAuthoringOps = (
 		readFileAsset: readAsset
 	};
 };
+
+type RuntimeRemoteApi = Pick<RuntimeAuthoringApi, 'db' | 'infer' | 'readFileAsset'>;
+export type RuntimeRemoteHandler = ReturnType<
+	() => (input: unknown, api: RuntimeRemoteApi) => unknown
+>;
+
+/** Merges authored remotes and tools once; ambiguous exact membership is a bundle-construction error. */
+export const mergeRuntimeHandlers = (
+	remotes: Readonly<Record<string, RuntimeRemoteHandler>>,
+	tools: Readonly<Record<string, RuntimeRemoteHandler>>
+): Readonly<Record<string, RuntimeRemoteHandler>> => {
+	const merged: Record<string, RuntimeRemoteHandler> = { ...remotes };
+	for (const [name, handler] of Object.entries(tools)) {
+		if (name.length === 0) throw new Error('An authored command name may not be empty');
+		if (merged[name] !== undefined)
+			throw new Error(`Duplicate authored command: ${name}`);
+		merged[name] = handler;
+	}
+	return Object.freeze(merged);
+};
+
+export type RuntimeRemoteRegistry = Readonly<{
+	readonly names: ReadonlySet<string>;
+	readonly invoke: (
+		name: string,
+		input: unknown,
+		subject: Identity.Subject,
+		effectId: EffectId
+	) => Effect.Effect<Schema.Json, DispatchError | AuthoredRefusal>;
+}>;
+
+export const RemoteRegistry = Context.Service<RuntimeRemoteRegistry>(
+	'@norbital-ai/bolt/RemoteRegistry'
+);
+
+/** Exact authored-command membership and Effect-native execution, co-owned with its narrowed API. */
+export const remoteRegistryLayer = (
+	handlers: Readonly<Record<string, RuntimeRemoteHandler>>
+) =>
+	Layer.effect(
+		RemoteRegistry,
+		Effect.gen(function* () {
+			const collections = yield* Collections.Service;
+			const ai = yield* AI.Service;
+			const files = yield* Files.Service;
+			const automations = yield* Automations.Service;
+			const names = new Set(Object.keys(handlers));
+			if (names.has('')) throw new Error('An authored command name may not be empty');
+			return RemoteRegistry.of({
+				names,
+				invoke: Effect.fn('RemoteRegistry.invoke')(function* (name, input, subject, effectId) {
+					const handler = handlers[name];
+					if (handler === undefined)
+						return yield* new DispatchError({
+							code: 'unknown_command',
+							message: `Unknown workspace command: ${name}`
+						});
+					const api: RuntimeRemoteApi = makeAuthoringApi(
+						makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
+					);
+					const output = yield* runAuthoredHandler(() => handler(input, api)).pipe(
+						Effect.mapError((cause) =>
+							cause instanceof AuthoredRefusal
+								? cause
+								: DispatchError.from('remote_failed', cause)
+						)
+					);
+					return yield* Schema.decodeUnknownEffect(Schema.Json)(output).pipe(
+						Effect.mapError(
+							() =>
+								new DispatchError({
+									code: 'invalid_command_output',
+									message: `Workspace command ${name} returned a non-JSON value`
+								})
+						)
+					);
+				})
+			});
+		})
+	);

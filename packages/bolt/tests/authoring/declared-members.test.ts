@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { defineModel, enums, text } from '../../src/authoring/index.js';
 import type { SystemRow } from '../../src/authoring/contracts-schema.js';
-import { describeModel } from '../../src/authoring/model-introspection.js';
-import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
+import {
+	collectionCatalogEntry,
+	compileModel,
+	describeModel
+} from '../../src/authoring/model-introspection.js';
+import { collection } from '../../src/authoring/workspace-schema.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 import { SYSTEM_COLUMN_NAMES } from '../../src/authoring/system-row-model.js';
 
 /**
@@ -18,11 +23,6 @@ const model = defineModel({
 	title: enums(['a']).notNull(),
 	reference: enums(['x', 'y']).default('x')
 });
-
-const source = `export default defineModel({
-	status: enums(['active', 'draft']),
-	lifecycle: enums(['DRAFT', 'PAID'], { search: true })
-});`;
 
 describe('enums() members', () => {
 	/**
@@ -50,12 +50,19 @@ describe('enums() members', () => {
 	});
 
 	/**
-	 * The divergence the introspection rewrite existed to end: the regex catalog the client reads
-	 * recovered the members from source while the declaration-read path could not, so the two halves
-	 * of one declaration disagreed with nothing to say so. Pinned to each other here.
+	 * The catalog and schema description must be projections of the same executed declaration.
 	 */
-	it('agrees with the members the client catalog recovers from source', () => {
-		const catalog = extractCollectionCatalog('payroll_runs', source, []);
+	it('agrees with the members the client catalog projects', () => {
+		const catalog = collectionCatalogEntry(
+			compileModel(
+				collection({ name: 'payroll_runs', fields: {} }),
+				defineModel({
+					status: enums(['active', 'draft']),
+					lifecycle: enums(['DRAFT', 'PAID'], { search: true })
+				})
+			),
+			[]
+		);
 		const declared = describeModel(model);
 		for (const field of catalog.fields) {
 			expect(declared[field.name]?.values).toEqual(field.values);
@@ -75,8 +82,10 @@ describe('enums() members', () => {
 	it('changes no DDL — the column is still text', async () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
-				models: { payroll_runs: model },
-				relations: [],
+				authoring: compileWorkspaceAuthoring({
+					models: { payroll_runs: model },
+					sourcePaths: { payroll_runs: 'fixture:payroll_runs' }
+				}),
 				previous: undefined
 			})
 		);
@@ -94,15 +103,17 @@ describe('enums() members', () => {
 	it('leaves a lineage written before the fix converged', async () => {
 		const before = await Effect.runPromise(
 			planWorkspaceMigration({
-				models: {
-					payroll_runs: defineModel({
-						status: text(),
-						lifecycle: text({ search: true }),
-						title: text().notNull(),
-						reference: text().default('x')
-					})
-				},
-				relations: [],
+				authoring: compileWorkspaceAuthoring({
+					models: {
+						payroll_runs: defineModel({
+							status: text(),
+							lifecycle: text({ search: true }),
+							title: text().notNull(),
+							reference: text().default('x')
+						})
+					},
+					sourcePaths: { payroll_runs: 'fixture:payroll_runs' }
+				}),
 				previous: undefined
 			})
 		);
@@ -112,8 +123,10 @@ describe('enums() members', () => {
 		expect(
 			await Effect.runPromise(
 				planWorkspaceMigration({
-					models: { payroll_runs: model },
-					relations: [],
+					authoring: compileWorkspaceAuthoring({
+						models: { payroll_runs: model },
+						sourcePaths: { payroll_runs: 'fixture:payroll_runs' }
+					}),
 					previous: before.snapshot
 				})
 			)

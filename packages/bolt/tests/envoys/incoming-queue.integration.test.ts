@@ -1,22 +1,48 @@
-import { Effect } from 'effect';
+import { Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
-import type {
-	AIRequest,
-	AIResponse,
-	CommunicationRequest,
-	CommunicationResponse,
-	FacilityBinding
+import {
+	ModelId,
+	type AIRequest,
+	type AIResponse,
+	type CommunicationRequest,
+	type CommunicationResponse,
+	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
-import { assistantText, assistantToolCall } from '../agents/canonical-ai-fixture.js';
 
-let harness: BoltTestRuntime | undefined;
-afterEach(async () => {
-	await harness?.dispose();
-	harness = undefined;
-});
+const languageModelId = ModelId.make('test:language');
+const embeddingModelId = ModelId.make('test:embedding');
+const encodeMessage = Schema.encodeSync(Prompt.Message);
+const catalog = {
+	_tag: 'Catalog',
+	languageModels: [{ id: languageModelId }],
+	defaultLanguageModelId: languageModelId,
+	embeddingModels: [{ id: embeddingModelId }],
+	defaultEmbeddingModelId: embeddingModelId
+} satisfies AIResponse;
+
+const generated = (
+	request: Extract<AIRequest, { readonly _tag: 'Generate' }>,
+	text: string
+): Extract<AIResponse, { readonly _tag: 'Generated' }> => {
+	if (request.output._tag !== 'Message') throw new Error('expected Message generation');
+	return {
+		_tag: 'Generated',
+		result: {
+			_tag: 'Message',
+			message: encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }))
+		},
+		observation: {
+			callId: request.callId,
+			provider: 'test',
+			model: request.modelId,
+			operation: 'language'
+		}
+	};
+};
 
 const definition = workspace({
 	name: 'envoy-incoming-queue',
@@ -62,13 +88,6 @@ const delivery = (messageId: string, text: string): Envoys.EnvoyDelivery => ({
 	attachments: []
 });
 
-const modelCatalog: AIResponse = {
-	output: {
-		defaultModel: 'test-model',
-		options: [{ id: 'test-model', contextLength: 128_000 }]
-	}
-};
-
 const seedSender = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
 		`insert into "user" ("id", "name", "email", "tenantId", "channels")
@@ -76,37 +95,22 @@ const seedSender = (runtime: BoltTestRuntime) =>
 		[JSON.stringify([{ type: 'whatsapp', address: '+65 9123 4567', verified: true }])]
 	);
 
-describe('envoy incoming queue and interruption', () => {
-	it('edits the active WhatsApp bubble with a queue preview and reads the message next round', async () => {
-		let releaseFirstRound!: () => void;
-		const firstRoundHeld = new Promise<void>((resolve) => {
-			releaseFirstRound = resolve;
-		});
-		let announceFirstRound!: () => void;
-		const firstRoundStarted = new Promise<void>((resolve) => {
-			announceFirstRound = resolve;
-		});
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
+let harness: BoltTestRuntime | undefined;
+afterEach(async () => {
+	await harness?.dispose();
+	harness = undefined;
+});
+
+describe('Envoy inbound Task queue', () => {
+	it('claims one deterministic batch, executes one Task, and settles only that batch', async () => {
+		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const sends: Array<CommunicationRequest> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return { _tag: 'Success', value: modelCatalog };
-				if (request._tag !== 'Turn') throw new Error('expected an AI turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					announceFirstRound();
-					await firstRoundHeld;
-					return {
-						_tag: 'Success',
-						value: { output: assistantToolCall('describe_workspace', {}, 'envoy-describe') }
-					};
-				}
-				return {
-					_tag: 'Success',
-					value: {
-						output: assistantText('Both updates recorded.', `envoy-answer-${turns.length}`)
-					}
-				};
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				generations.push(request);
+				return { _tag: 'Success', value: generated(request, 'Both updates recorded.') };
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
@@ -118,43 +122,40 @@ describe('envoy incoming queue and interruption', () => {
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
-		await harness.runtime.runPromise(
-			envoys.receive(
-				harness.effectId('receive:first'),
-				'field_ops_whatsapp',
-				delivery('one', 'Start.')
-			)
-		);
-		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
-		const drain = harness.runtime.runPromise(
-			envoys.drain(harness.effectId('drain:first'), 'field_ops_whatsapp', conversationId)
-		);
-		await firstRoundStarted;
-
 		expect(
-			(
-				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:queued'),
-						'field_ops_whatsapp',
-						delivery('two', 'Also include the pump reading.')
-					)
-				)
-			).status
+			(await harness.runtime.runPromise(
+				envoys.receive(harness.effectId('receive:one'), 'field_ops_whatsapp', delivery('one', 'Start.'))
+			)).status
 		).toBe('buffered');
-		expect(sends[1]).toMatchObject({
-			_tag: 'Send',
-			payload: {
-				updateOf: 'wire-1',
-				text: expect.stringContaining('Queued · Also include the pump reading.')
-			}
-		});
-		releaseFirstRound();
-		await drain;
+		expect(
+			(await harness.runtime.runPromise(
+				envoys.receive(
+					harness.effectId('receive:two'),
+					'field_ops_whatsapp',
+					delivery('two', 'Also include the pump reading.')
+				)
+			)).status
+		).toBe('buffered');
 
-		expect(turns).toHaveLength(3);
-		expect(JSON.stringify(turns[1]?.messages)).not.toContain('Also include the pump reading.');
-		expect(JSON.stringify(turns[2]?.messages)).toContain('Also include the pump reading.');
+		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
+		expect(
+			await harness.runtime.runPromise(
+				envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
+			)
+		).toMatchObject({ drained: 2, status: 'answered' });
+		expect(generations).toHaveLength(1);
+		const prompt = JSON.stringify(generations[0]?.messages);
+		expect(prompt).toContain('INBOUND BATCH');
+		expect(prompt).toContain('Start.');
+		expect(prompt).toContain('Also include the pump reading.');
+		expect(sends).toEqual([
+			{
+				_tag: 'Send',
+				channel: 'whatsapp',
+				recipient: '6591234567@s.whatsapp.net',
+				payload: { text: 'Both updates recorded.' }
+			}
+		]);
 		expect(
 			await harness.database.query(
 				`select external_message_id, status from bolt_envoy_inbound
@@ -165,101 +166,48 @@ describe('envoy incoming queue and interruption', () => {
 			{ external_message_id: 'one', status: 'answered' },
 			{ external_message_id: 'two', status: 'answered' }
 		]);
+		expect(
+			await harness.database.query(
+				`select status, agent_id, audience from agent_task`
+			)
+		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
 	});
 
-	it('treats /steer as explicit preemption and never publishes the stale answer', async () => {
-		let releaseInterruptedRound!: () => void;
-		const interruptedRoundHeld = new Promise<void>((resolve) => {
-			releaseInterruptedRound = resolve;
-		});
-		let announceInterruptedRound!: () => void;
-		const interruptedRoundStarted = new Promise<void>((resolve) => {
-			announceInterruptedRound = resolve;
-		});
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
-		const sends: Array<CommunicationRequest> = [];
+	it('deduplicates provider receipts and records /steer as Task priority without the command prefix', async () => {
+		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return { _tag: 'Success', value: modelCatalog };
-				if (request._tag !== 'Turn') throw new Error('expected an AI turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					announceInterruptedRound();
-					await interruptedRoundHeld;
-					return {
-						_tag: 'Success',
-						value: { output: assistantText('Stale answer.', 'stale-answer') }
-					};
-				}
-				return {
-					_tag: 'Success',
-					value: { output: assistantText('Priority handled.', 'priority-answer') }
-				};
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				generations.push(request);
+				return { _tag: 'Success', value: generated(request, 'Safety alarm handled.') };
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async (_metadata, request) => {
-				sends.push(request);
-				return { _tag: 'Success', value: { receipt: { id: `wire-${sends.length}` } } };
-			}
+			call: async () => ({ _tag: 'Success', value: {} })
 		};
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
-		await harness.runtime.runPromise(
-			envoys.receive(
-				harness.effectId('receive:first'),
-				'field_ops_whatsapp',
-				delivery('one', 'Start.')
-			)
-		);
-		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
-		const drain = harness.runtime.runPromise(
-			envoys.drain(harness.effectId('drain:first'), 'field_ops_whatsapp', conversationId)
-		);
-		await interruptedRoundStarted;
-
-		await harness.runtime.runPromise(
-			envoys.receive(
-				harness.effectId('receive:steer'),
-				'field_ops_whatsapp',
-				delivery('two', '/steer Handle the safety alarm first.')
-			)
-		);
-		expect(sends).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					_tag: 'Send',
-					payload: expect.objectContaining({
-						updateOf: 'wire-1',
-						text: expect.stringContaining('Steering · Handle the safety alarm first.')
-					})
-				})
-			])
-		);
-		releaseInterruptedRound();
-		await drain;
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Handle the safety alarm first.');
-		expect(JSON.stringify(turns[1]?.messages)).not.toContain('/steer');
-		expect(sends).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					_tag: 'Send',
-					payload: { text: 'Priority handled.', updateOf: 'wire-1' }
-				})
-			])
-		);
-		expect(JSON.stringify(sends)).not.toContain('Stale answer.');
+		const steered = delivery('priority', '/steer Handle the safety alarm first.');
 		expect(
-			await harness.database.query(
-				`select status, disposition from agent_run
-				 where conversation_id = $1 order by generation`,
-				[conversationId]
-			)
-		).toEqual([
-			{ status: 'aborted', disposition: 'superseded' },
-			{ status: 'completed', disposition: null }
-		]);
+			(await harness.runtime.runPromise(
+				envoys.receive(harness.effectId('receive:first'), 'field_ops_whatsapp', steered)
+			)).status
+		).toBe('buffered');
+		expect(
+			(await harness.runtime.runPromise(
+				envoys.receive(harness.effectId('receive:duplicate'), 'field_ops_whatsapp', steered)
+			)).status
+		).toBe('duplicate');
+		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
+		await harness.runtime.runPromise(
+			envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
+		);
+		expect(JSON.stringify(generations[0]?.messages)).toContain('Handle the safety alarm first.');
+		expect(JSON.stringify(generations[0]?.messages)).not.toContain('/steer');
+		expect(
+			await harness.database.query(`select priority from agent_inbox`)
+		).toEqual([{ priority: 'steer' }]);
 	});
 });

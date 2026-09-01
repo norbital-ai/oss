@@ -66,7 +66,8 @@ const forgedSubject = {
 	policies: []
 };
 
-const command = (name: string, credential: string, input: unknown = null) =>
+/** `{}`, not `null`: `secrets.status` declares `EmptyInput`, decoded before authority is resolved. */
+const command = (name: string, credential: string, input: unknown = {}) =>
 	Invocation.cases.Command.make({
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}`),
@@ -114,9 +115,8 @@ const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 /**
  * Every command that decodes a `Subject` out of its own input.
  *
- * Written out rather than sampled: the two the issue reported are the two somebody happened to
- * look at, and the same decode appears in twenty-nine more. `invoke.*` is a prefix, so one name
- * stands for every authored remote a workspace declares.
+ * Written out rather than sampled so every authenticated payload boundary stays covered.
+ * `invoke.*` is a prefix, so one name stands for every authored remote a workspace declares.
  */
 const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'invoke.anything',
@@ -128,16 +128,17 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.withdraw',
 	'approvals.capabilities',
 	'approvals.status',
-	'agents.enqueue',
-	'agents.open',
-	'agents.stop',
-	'agents.resume',
+	'tasks.submit',
+	'tasks.control',
 	'workspace.manifest',
 	'workspace.authoringManifest',
 	'collections.history',
 	'collections.mutate',
 	'collections.import',
-	'collections.export'
+	'collections.export',
+	// Same `CollectionQueryRequest` input and the same read policy as `collections.export`, so it
+	// belongs on the same boundary. It reached the catalogue after this list was written.
+	'collections.count'
 ];
 
 /**

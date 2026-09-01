@@ -9,11 +9,11 @@ describe('Workbench status presentation', () => {
 				busy: false,
 				previewReady: false
 			})
-		).toMatchObject({ label: 'Loading workspace', loading: true, variant: 'outline' });
+		).toMatchObject({ labelKey: 'bolt.studio.status.loading', loading: true, variant: 'outline' });
 
 		expect(
 			presentWorkbenchStatus({ hostStatus: 'Ready', busy: true, previewReady: true })
-		).toMatchObject({ label: 'Updating workspace', loading: true, variant: 'outline' });
+		).toMatchObject({ labelKey: 'bolt.studio.status.updating', loading: true, variant: 'outline' });
 	});
 
 	it('shows readiness only when the current Preview can be reviewed', () => {
@@ -22,7 +22,11 @@ describe('Workbench status presentation', () => {
 		).toBeUndefined();
 		expect(
 			presentWorkbenchStatus({ hostStatus: 'Ready', busy: false, previewReady: true })
-		).toMatchObject({ label: 'Ready for review', loading: false, variant: 'success' });
+		).toMatchObject({
+			labelKey: 'bolt.studio.status.readyForReview',
+			loading: false,
+			variant: 'success'
+		});
 	});
 
 	it('normalizes host errors and recoverable blockers without losing their detail', () => {
@@ -32,7 +36,7 @@ describe('Workbench status presentation', () => {
 			previewReady: false
 		});
 		expect(unavailable).toMatchObject({
-			label: 'Host unavailable',
+			labelKey: 'bolt.studio.status.hostUnavailable',
 			detail: 'Unavailable: connection refused',
 			variant: 'destructive'
 		});
@@ -43,6 +47,6 @@ describe('Workbench status presentation', () => {
 				busy: false,
 				previewReady: false
 			})
-		).toMatchObject({ label: 'Action required', variant: 'warning' });
+		).toMatchObject({ labelKey: 'bolt.studio.status.actionRequired', variant: 'warning' });
 	});
 });

@@ -1,9 +1,9 @@
 // repository-health:allow SEM_PARALLEL -- access-control consumes the system-collections registry
 // over the #lib alias (SYSTEM_COLLECTION_NAMES), so the pair is linked, not parallel.
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { asc, ilike, inArray } from 'drizzle-orm';
-import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import type { PolicyDeclaration, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
@@ -17,20 +17,307 @@ import {
 	type Decision,
 	type Invocation
 } from './invocation.js';
-import {
-	compileRowPredicate,
-	decidePolicies as decide,
-	matchesPolicy,
-	subjectHasPolicy
-} from './policy-compiler.js';
-import type { RowPredicate } from './predicate.js';
+import { compileStructuredPredicate, mergePredicateSemantics } from './effective-plan.js';
+import type { PredicateSemantics, RowPredicate, RowPredicateExpression } from './predicate.js';
 
 export { AccessDenied } from './invocation.js';
 export type { Invocation } from './invocation.js';
-export { grantScopeProblems } from './policy-compiler.js';
+export {
+	compileEffectiveQueryPlan,
+	EffectivePlanError,
+	policyIndexRequirements,
+	resolveCompiledRelationship
+} from './effective-plan.js';
+export { compileStructuredPredicate };
+export type {
+	EffectiveFieldRequirement,
+	EffectiveProjection,
+	EffectiveQueryPlan
+} from './effective-plan.js';
 export { predicateExpression, predicateIsUnrestricted, predicateStatement } from './predicate.js';
 export type { RowPredicate } from './predicate.js';
 export { unrestricted } from './policy-surface.js';
+
+const isJson = Schema.is(Schema.Json);
+
+type PolicyDecision = Readonly<{
+	readonly allowed: boolean;
+	readonly reason: string;
+}>;
+
+/** Whether this policy belongs to the subject before action/resource matching. */
+export const subjectHasPolicy = (
+	policy: PolicyDeclaration,
+	subject: Identity.Subject,
+	held: ReadonlySet<string>
+): boolean => {
+	if (policy.system === true) return subject.system === true;
+	if (policy.administrator === true) return subject.admin === true && subject.system !== true;
+	if (policy.authenticated === true) return subject.system !== true;
+	return held.has(policy.name.toLocaleLowerCase());
+};
+
+/** Matches one policy against a fully resolved subject and policy coordinate. */
+export const matchesPolicy = (
+	policy: PolicyDeclaration,
+	subject: Identity.Subject,
+	action: string,
+	resource: string,
+	held: ReadonlySet<string>
+): boolean => {
+	if (!subjectHasPolicy(policy, subject, held)) return false;
+	const grants = policy.grants ?? [];
+	if (grants.length > 0 && action === 'agent') return (policy.capabilities?.apps ?? []).length > 0;
+	if (grants.length > 0)
+		return grants.some((grant) => grant.collection === resource && grant.action === action);
+	const actions = policy.actions ?? [];
+	return (
+		(actions.includes(action) || actions.includes('*')) &&
+		((policy.capabilities?.apps ?? []).includes(resource) ||
+			(policy.capabilities?.apps ?? []).includes('*'))
+	);
+};
+
+/** Applies deny precedence to one access coordinate. */
+export const decidePolicies = (
+	policies: ReadonlyArray<PolicyDeclaration>,
+	subject: Identity.Subject,
+	action: string,
+	resource: string,
+	held: ReadonlySet<string>
+): PolicyDecision => {
+	const applicable = policies.filter((policy) =>
+		matchesPolicy(policy, subject, action, resource, held)
+	);
+	if (applicable.some(({ effect }) => effect === 'deny'))
+		return { allowed: false, reason: 'explicit deny' };
+	if (applicable.some(({ effect }) => effect !== 'deny'))
+		return { allowed: true, reason: 'explicit allow' };
+	return { allowed: false, reason: 'no matching allow policy' };
+};
+
+const approvalReadExpression = (
+	resource: string,
+	subject: Identity.Subject
+): RowPredicateExpression => {
+	const team = subject.teamPath[0];
+	return team === undefined
+		? { kind: 'constant', value: false }
+		: { kind: 'approval-read', resource, team: team.toLocaleLowerCase() };
+};
+
+const isActorBoundWhere = (value: unknown): boolean => {
+	if (Array.isArray(value)) return value.some(isActorBoundWhere);
+	if (value === null || typeof value !== 'object') return false;
+	if (typeof Reflect.get(value, '$subject') === 'string') return true;
+	return Object.values(value).some(isActorBoundWhere);
+};
+
+type GrantScopeProblem = Readonly<{
+	readonly policy: string;
+	readonly collection: string;
+	readonly action: string;
+	readonly column: string;
+	readonly message: string;
+}>;
+
+const collectionSemantics = (collection: string): PredicateSemantics => ({
+	dependencies: [collection],
+	reversePaths: [],
+	indexRequirements: [],
+	routing: [],
+	fields: [],
+	subjectOperands: [],
+	opaque: false
+});
+
+/** Reports authored row scopes whose bare column references could bind to an outer relation. */
+export const grantScopeProblems = (
+	definition: WorkspaceDefinition
+): ReadonlyArray<GrantScopeProblem> => {
+	const problems: Array<GrantScopeProblem> = [];
+	const inspectionSubject: Identity.Subject = {
+		userId: 'policy-inspection',
+		tenantId: 'policy-inspection',
+		teamPath: ['policy-inspection'],
+		policies: [],
+		email: 'policy-inspection@example.invalid',
+		admin: false
+	};
+	for (const policy of definition.policies) {
+		for (const grant of policy.grants ?? []) {
+			if (grant.where === undefined) continue;
+			const compiled = compileStructuredPredicate({
+				definition,
+				rootCollection: grant.collection,
+				where: grant.where,
+				subject: inspectionSubject,
+				node: `policy.${policy.name}.${grant.collection}.${grant.action}`
+			});
+			if (Result.isSuccess(compiled)) continue;
+			problems.push({
+				policy: policy.name,
+				collection: grant.collection,
+				action: grant.action,
+				column: compiled.failure.node,
+				message: compiled.failure.message
+			});
+		}
+	}
+	return problems;
+};
+
+/** Reads one grant through the canonical effective-plan compiler. */
+const grantScope = (
+	where: NonNullable<PolicyDeclaration['grants']>[number]['where'],
+	subject: Identity.Subject,
+	resource: string,
+	definition: WorkspaceDefinition
+): Readonly<{
+	readonly expression: RowPredicateExpression;
+	readonly semantics: PredicateSemantics;
+	readonly invalidReason?: string;
+}> => {
+	if (where === undefined)
+		return {
+			expression: { kind: 'constant', value: true },
+			semantics: collectionSemantics(resource)
+		};
+	const compiled = compileStructuredPredicate({
+		definition,
+		rootCollection: resource,
+		where,
+		subject,
+		node: `policy.${resource}.where`
+	});
+	return Result.isSuccess(compiled)
+		? { expression: compiled.success.expression, semantics: compiled.success.semantics }
+		: {
+				expression: { kind: 'constant', value: false },
+				semantics: collectionSemantics(resource),
+				invalidReason: compiled.failure.message
+			};
+};
+
+type CompiledGrant = Readonly<{
+	readonly grant: NonNullable<PolicyDeclaration['grants']>[number];
+	readonly expression: RowPredicateExpression;
+	readonly semantics: PredicateSemantics;
+	readonly invalidReason?: string;
+	readonly actorBound: boolean;
+}>;
+
+const grantResult = (
+	compiled: ReadonlyArray<CompiledGrant>,
+	expression: RowPredicateExpression
+): RowPredicate => {
+	const fields = compiled.flatMap(({ grant }) => grant.fields ?? []);
+	const authorization = compiled[0]?.grant.authorization;
+	const approval = compiled.find(({ grant }) => grant.approval !== undefined)?.grant.approval;
+	const semantics = mergePredicateSemantics(compiled.map(({ semantics: value }) => value));
+	return {
+		allowed: true,
+		reason: 'matching authored grant',
+		expression,
+		actorBound: compiled.some(({ actorBound }) => actorBound),
+		semantics,
+		fields: fields.length === 0 ? undefined : [...new Set(fields)],
+		authorization:
+			authorization === undefined
+				? undefined
+				: isJson(authorization)
+					? authorization
+					: String(authorization),
+		approval: approval === undefined ? undefined : isJson(approval) ? approval : String(approval)
+	};
+};
+
+/** Unions matching authored grants into the predicate and write metadata used by execution. */
+export const compileRowPredicate = (
+	policies: ReadonlyArray<PolicyDeclaration>,
+	subject: Identity.Subject,
+	action: string,
+	resource: string,
+	held: ReadonlySet<string>,
+	definition: WorkspaceDefinition
+): RowPredicate => {
+	const rootSemantics = collectionSemantics(resource);
+	const applicable = policies.filter((policy) =>
+		matchesPolicy(policy, subject, action, resource, held)
+	);
+	const grants = applicable.flatMap(
+		(policy) =>
+			policy.grants?.filter((grant) => grant.collection === resource && grant.action === action) ??
+			[]
+	);
+	if (applicable.some(({ effect }) => effect === 'deny'))
+		return {
+			allowed: false,
+			reason: 'explicit deny',
+			expression: { kind: 'constant', value: false },
+			actorBound: false,
+			semantics: rootSemantics
+		};
+	if (grants.length === 0) {
+		const decision = decidePolicies(policies, subject, action, resource, held);
+		return {
+			...decision,
+			expression: { kind: 'constant', value: decision.allowed },
+			actorBound: false,
+			semantics: rootSemantics
+		};
+	}
+	if (grants.length > 1)
+		return {
+			allowed: false,
+			reason: `overlapping grants for ${action} ${resource}`,
+			expression: { kind: 'constant', value: false },
+			actorBound: false,
+			semantics: rootSemantics
+		};
+	const compiled = grants.map((grant) => {
+		const planned = grantScope(grant.where, subject, resource, definition);
+		const approvalSemantics: PredicateSemantics = {
+			dependencies: ['approval_request'],
+			reversePaths: [],
+			indexRequirements: [],
+			routing: [],
+			fields: [],
+			subjectOperands: ['team'],
+			opaque: false
+		};
+		return {
+			grant,
+			...planned,
+			semantics:
+				action === 'read'
+					? mergePredicateSemantics([planned.semantics, approvalSemantics])
+					: planned.semantics,
+			actorBound: isActorBoundWhere(grant.where)
+		};
+	});
+	const invalid = compiled.find(({ invalidReason }) => invalidReason !== undefined)?.invalidReason;
+	if (invalid !== undefined)
+		return {
+			allowed: false,
+			reason: invalid,
+			expression: { kind: 'constant', value: false },
+			actorBound: compiled.some(({ actorBound }) => actorBound),
+			semantics: mergePredicateSemantics(compiled.map(({ semantics }) => semantics))
+		};
+	if (
+		action !== 'read' &&
+		compiled.some(({ expression }) => expression.kind === 'constant' && expression.value)
+	)
+		return grantResult(compiled, { kind: 'constant', value: true });
+	const branches = compiled.map(({ expression }) => expression);
+	if (action === 'read') branches.push(approvalReadExpression(resource, subject));
+	const first = branches[0] ?? { kind: 'constant' as const, value: false };
+	return grantResult(
+		compiled,
+		branches.length === 1 ? first : { kind: 'or', expressions: branches }
+	);
+};
 
 /**
  * Everything a subject may call, as opposed to everything it may read.
@@ -298,7 +585,7 @@ export const layer = Layer.effect(
 				decision: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
-						: decide(workspace.definition.policies, subject, action, resource, subjectHeld),
+						: decidePolicies(workspace.definition.policies, subject, action, resource, subjectHeld),
 				predicate: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
@@ -321,12 +608,13 @@ export const layer = Layer.effect(
 		});
 		/** Team preview is an explicit policy coordinate, always evaluated for the real actor. */
 		const mayImpersonate = (actor: Identity.Subject): boolean =>
-			decide(workspace.definition.policies, actor, 'impersonate', 'identity', held(actor)).allowed;
+			decidePolicies(workspace.definition.policies, actor, 'impersonate', 'identity', held(actor))
+				.allowed;
 		/**
 		 * The same person, belonging to one team instead of their own.
 		 *
 		 * Identity is deliberately left alone. `userId`, `tenantId` and `email` stay the actor's, so an
-		 * `Employee` preview resolves `${requestor.email}` to the administrator's *own* employee row
+		 * `Employee` preview resolves `subject.email` to the administrator's *own* employee row
 		 * rather than opening a colleague's. Previewing a team asks what the workspace looks like to
 		 * that team, and answering it by borrowing a real person's identity would disclose that
 		 * person's records to answer a question that never named them — that is what
@@ -454,7 +742,7 @@ export const layer = Layer.effect(
 			explain: (subject, action, resource) =>
 				administratorBypasses(subject, action, resource)
 					? administratorPredicate()
-					: decide(workspace.definition.policies, subject, action, resource, held(subject)),
+					: decidePolicies(workspace.definition.policies, subject, action, resource, held(subject)),
 			capabilities: (subject) => {
 				if (isAdministrator(subject)) {
 					return {

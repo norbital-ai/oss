@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { build, type Plugin } from 'vite';
-import { tenantRuntimeBoundary } from '../../src/compiler/workspace-build.js';
+import {
+	lowerLiteralDynamicImports,
+	tenantRuntimeBoundary
+} from '../../src/compiler/workspace-build.js';
 
 const virtualTenant = (source: string): Plugin => ({
 	name: 'virtual-tenant-fixture',
@@ -13,6 +16,28 @@ const virtualTenant = (source: string): Plugin => ({
 });
 
 describe('tenant runtime compilation boundary', () => {
+	it('lowers only literal dynamic imports across nested and attributed syntax', async () => {
+		const source = [
+			"const nested = () => import('./nested.js').then(() => import('./nested.js'));",
+			"const attributed = import('./data.json', { with: { type: 'json' } });",
+			"const computed = import('./' + name + '.js');",
+			"const metadata = import.meta.url;",
+			"const prose = 'import(\\\"./false-positive.js\\\")';",
+			"// import('./commented.js')"
+		].join('\n');
+		const lowered = await lowerLiteralDynamicImports(source);
+		expect(lowered).not.toBeNull();
+		expect(lowered).toContain("import * as __bolt_static_import_0 from \"./nested.js\";");
+		expect(lowered).toContain("import * as __bolt_static_import_1 from \"./data.json\";");
+		expect(lowered?.match(/Promise\.resolve\(__bolt_static_import_0\)/g)).toHaveLength(2);
+		expect(lowered).toContain('Promise.resolve(__bolt_static_import_1)');
+		expect(lowered).not.toContain("with: { type: 'json' }");
+		expect(lowered).toContain("import('./' + name + '.js')");
+		expect(lowered).toContain('import.meta.url');
+		expect(lowered).toContain('false-positive.js');
+		expect(lowered).toContain("// import('./commented.js')");
+	});
+
 	it('rejects executable node:crypto before Vite can emit a createHash external', async () => {
 		const compilation = build({
 			configFile: false,

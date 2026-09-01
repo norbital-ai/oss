@@ -60,8 +60,8 @@ HMAC-verified host signature → `SystemPrincipal.systemSubject`. `userId = 'col
 
 Authority is `COLONY_SYSTEM_POLICY`: `manage` on `schema` and `identity` only — `schema.migrate`
 and `identity.admitFounder`. It cannot read tenant rows or approve. Used for provisioning.
-`identity.continueSession` and `identity.bootstrapFounder` are also host-signed
-(`SYSTEM_ONLY_COMMANDS` in `dispatch.ts`); they are not extra policy grants.
+`identity.continueSession` and `identity.bootstrapFounder` are host-signed
+system-principal bindings in `runtime/commands.ts`; they are not extra policy grants.
 
 ### Automation
 
@@ -93,7 +93,7 @@ the host's own connection and never crosses authorization.
 A policy is `src/access/policies/+<name>.ts`. The filename is the only name. `grants` is an object
 keyed by collection; presence is the rule, absence is denial.
 
-- Read / history: `{ where?, fields?, dependencies? }`
+- Read / history: `{ where?, fields? }` — relation dependencies are compiler-derived, not authored
 - Mutate: `{ new?: { fields?, authorize?, approval? }, existing?: { fields?, authorize?, approval? } }`
   — omit `new` to block new rows while allowing changes to existing rows; see
   [approvals](./approvals.md)
@@ -102,12 +102,12 @@ keyed by collection; presence is the rule, absence is denial.
 `mutate.new` and `mutate.existing` are the only mutation spellings. The former collection keys
 `create` and `update` are unknown and refused.
 
-`where` is normally the same structured field predicate used by collection reads. A relation scope
-that cannot be expressed structurally uses `policySql(statement)`, a policy-only serialized
-predicate; it is deliberately absent from `api.db.*` query configuration. Both forms bind
-`${requestor.id}`, `${requestor.email}`, and `${requestor.team_scope_users}`. `authorize` is a
-server-only function over the prepared candidate. `capabilities` grants apps, tools, MCP, skills.
-`limits` are rate rules.
+`where` is the same structured field predicate used by collection reads. The compiler turns it
+into an effective plan; there is no SQL authoring helper. Subject bindings are
+`{ eq: { $subject: 'id' } }` and `{ teamScopeUsers: true }`. Approval-party scope is
+`{ approvalParty: true }` on `approval_request.id` or `requestor.approval_request_id`.
+`authorize` is a server-only function over the prepared candidate. `capabilities` grants apps,
+tools, MCP, skills. `limits` are rate rules.
 
 **Membership is a row; authority is source.**
 
@@ -122,6 +122,19 @@ A `team` row has **no policy column**. `policiesHeld` resolves `teamPath[0]` aga
 Approval eligibility uses `teamPath[0]` only.
 
 Static envoys and automations name policy arrays in their declarations and are never `user` rows.
+
+---
+
+## Command admission
+
+`runtime/dispatch.ts` mints the subject, then `runtime/commands.ts` runs the binding. See
+[runtime](../runtime/README.md) for the full catalogue.
+
+- Authored `invoke.<name>` requires a session or host HMAC in the invocation tenant. There is no
+  separate `invoke:<name>` grant. Collection, file, and approval checks inside the function still
+  use the minted principal.
+- A Data Browser plugin with no credential is **403** `AccessDenied`. Other plugins with no
+  credential are **401**. `trustedContext` is not a credential.
 
 ---
 

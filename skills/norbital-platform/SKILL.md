@@ -38,14 +38,19 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 | Scheduled or event-triggered work                                                    | `src/automations/+<name>.ts`               |
 | Structured domain values (money is platform-owned)                                   | `src/datatypes/<name>/+definition.ts`      |
 | Extra tools                                                                          | `src/capabilities/tools/+<name>.ts`        |
-| Extra skills                                                                         | `src/capabilities/skills/<name>/+skill.md` |
+| Shared tenant Skills (active RFC target; toolchain cutover pending)                 | `.norbital/shared/<name>/SKILL.md`         |
+| Personal Skills (active RFC target; never a tenant source or release input)         | `.norbital/personal/<name>/SKILL.md`       |
 | Remote MCP servers                                                                   | `src/capabilities/mcp/+<name>.ts`          |
 | Shared web/envoy prompt                                                              | `src/+agents.md`                           |
 | Reachable transport agents                                                           | `src/envoys/+<name>.ts`                    |
 | Query/command functions                                                              | `src/functions/+<name>.ts`                 |
 
 Compiled output lands in `.norbital/` and is never hand-edited, except authored
-`.norbital/config/` (doctor extensions) and committed `.norbital/migrations`.
+`.norbital/config/` (doctor extensions), committed `.norbital/migrations`, and — after the
+toolchain cutover — committed `.norbital/shared/**` Skill packages. `.norbital/personal/**` is
+per-subject materialized source: it is ignored, never a release input, and never edited by the
+tenant compiler. Until that cutover lands, the compiler retains its legacy Skill reader; do not
+create a parallel tenant Skill tree.
 
 Runtime data — users, teams, team membership, records — lives in the database and is edited in the
 app. The line between the two matters, and it runs straight through the middle of "teams": _which

@@ -1,58 +1,25 @@
 import { Schema } from 'effect';
 
-/**
- * One record on its way into a collection, and the one thing that makes it a graph rather than a row.
- *
- * The keys are the collection's own columns, except where a key names a `many` relation the
- * workspace declared in `+relationship.ts`: that one carries an array of the records that belong to
- * this one, and each of those is a `CollectionWriteValues` in its own right, down to the depth the
- * runtime bounds at.
- *
- * That nesting is admitted rather than described, because `Schema.Json` already permits it and the
- * only party that can tell a relation name from a misspelt column is the one holding the workspace's
- * relations — which is the server. Describing it here would be a second, weaker copy of a check that
- * has to happen there anyway, and the runtime *refuses* an unrecognised key rather than dropping it,
- * so nothing is lost by leaving the discrimination where the answer is.
- */
 export const CollectionWriteValues = Schema.Record(Schema.String, Schema.Json).annotate({
 	identifier: 'BoltCollectionWriteValues'
 });
 export type CollectionWriteValues = typeof CollectionWriteValues.Type;
 
-/**
- * A client-generated idempotency key for one logical mutation.
- *
- * It is deliberately independent of an invocation id: transports are allowed to retry with a new
- * invocation, while the tenant database deduplicates this value under the authenticated scope. The
- * length cap keeps an attacker-controlled key from becoming an unbounded index entry.
- */
 export const CollectionMutationIdempotencyKey = Schema.NonEmptyString.check(
 	Schema.isMaxLength(256),
 	Schema.makeFilter((value: string) => !value.includes('\u0000') || 'must not contain a NUL byte')
 ).pipe(Schema.brand('BoltCollectionMutationIdempotencyKey'));
 export type CollectionMutationIdempotencyKey = typeof CollectionMutationIdempotencyKey.Type;
 
-/** Row versions begin at one and advance once for every canonical update. */
 export const CollectionBaseRowVersion = Schema.Number.check(
 	Schema.isInt(),
 	Schema.isGreaterThanOrEqualTo(1)
 );
 export type CollectionBaseRowVersion = typeof CollectionBaseRowVersion.Type;
 
-/** Maximum age at which a missing server dedup record may still authorize a retry. */
 export const COLLECTION_MUTATION_RETRY_HORIZON_MILLIS = 24 * 60 * 60 * 1000;
-
-/**
- * How long a quarantined mutation's ledger row is kept before cleanup may drop its key.
- *
- * This is intentionally longer than the transport retry horizon above, which answers whether a
- * missing dedup row may be recreated. Once this horizon elapses, a re-push of the same key runs
- * again rather than replaying the quarantine — the only safe answer after the schema the write was
- * stated against is gone.
- */
 export const COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS = 14 * 24 * 60 * 60 * 1000;
 
-/** One authoritative whole-row version captured before an optimistic graph was overlaid. */
 export const CollectionMutationBaseVersion = Schema.Struct({
 	row: Schema.Struct({
 		collection: Schema.NonEmptyString,
@@ -64,23 +31,9 @@ export type CollectionMutationBaseVersion = typeof CollectionMutationBaseVersion
 
 const CollectionMutationRetryIdentity = {
 	idempotencyKey: CollectionMutationIdempotencyKey,
-	/**
-	 * When the client first minted the key. A server accepts a missing dedup row only inside its
-	 * bounded retry horizon, so pruning old rows can never turn a very late retry into a new write.
-	 */
 	issuedAtEpochMs: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isFinite())
 };
 
-/**
- * The declarative graph submitted for one mutation.
- *
- * Keeping the verb inside the graph makes the surrounding push envelope stable. The graph is
- * the mutation-visible payload; it cannot rewrite the idempotency key, authenticated partition
- * binding, or the versions against which it reconciles.
- * Client-authored creates carry their client-minted identity inside `values`; the authoritative
- * runtime validates and preserves those identities because only it knows which nested values are
- * relationship rows.
- */
 export const CollectionMutationGraph = Schema.Union([
 	Schema.Struct({
 		action: Schema.Literal('create'),
@@ -100,15 +53,6 @@ export const CollectionMutationGraph = Schema.Union([
 ]).annotate({ identifier: 'BoltCollectionMutationGraph' });
 export type CollectionMutationGraph = typeof CollectionMutationGraph.Type;
 
-/**
- * One declarative mutation push. Retry identity fields are immutable facts from the original
- * client submission.
- *
- * `partitionKey` is a client-chosen coordinate included in the canonical request digest. It is not
- * a database selector and confers no authority; tenant, environment, actor, effective subject and
- * impersonation are authenticated separately. `baseVersions` is a whole-row vector covering every
- * existing row the submitted graph may update or explicitly remove.
- */
 export const CollectionMutationPush = Schema.Struct({
 	protocolVersion: Schema.Literal(2),
 	...CollectionMutationRetryIdentity,
@@ -119,28 +63,16 @@ export const CollectionMutationPush = Schema.Struct({
 }).annotate({ identifier: 'BoltCollectionMutationPush' });
 export type CollectionMutationPush = typeof CollectionMutationPush.Type;
 
-/**
- * The sole client mutation request. Subject, tenant, environment and authority are intentionally
- * absent: the authenticated command boundary supplies them. The client-chosen partition coordinate
- * participates in idempotency but grants no authority.
- */
 export const CollectionMutateRequest = CollectionMutationPush.annotate({
 	identifier: 'BoltCollectionMutateRequest'
 });
 export type CollectionMutateRequest = typeof CollectionMutateRequest.Type;
 
-/** One row exactly as the database holds it, defaults and generated columns included. */
 export const StoredRecord = Schema.Record(Schema.String, Schema.Json).annotate({
 	identifier: 'BoltStoredRecord'
 });
 export type StoredRecord = typeof StoredRecord.Type;
 
-/**
- * The explicit model-backed search command.
- *
- * Both modes are explicit discriminated commands. Keeping semantic search in a separate arm makes
- * it impossible for ordinary type-ahead traffic to reach the embedder by accident.
- */
 export const CollectionLexicalSearch = Schema.Struct({
 	mode: Schema.Literal('lexical'),
 	term: Schema.NonEmptyString
@@ -160,21 +92,290 @@ export interface CollectionSemanticSearch extends Schema.Schema.Type<
 export const CollectionSearch = Schema.Union([
 	CollectionLexicalSearch,
 	CollectionSemanticSearch
-]).annotate({ identifier: 'BoltCollectionSearch' });
+]).annotate({
+	identifier: 'BoltCollectionSearch'
+});
 export type CollectionSearch = typeof CollectionSearch.Type;
 
-/**
- * The collection read accepted by the browser command boundary.
- *
- * `where` is the predicate authored by the workspace. `userFilter` is the independently
- * canonicalized narrowing supplied by a generic surface. Keeping the two on the wire preserves
- * those independently authored constraints. `after` and `columns` deliberately remain request
- * concerns: neither is part of live-query identity.
- */
+export const COLLECTION_PREDICATE_SUBJECTS = [
+	'id',
+	'email',
+	'team',
+	'teamIds',
+	'tenantId',
+	'admin'
+] as const;
+export const CollectionPredicateSubject = Schema.Literals(COLLECTION_PREDICATE_SUBJECTS).annotate({
+	identifier: 'BoltCollectionPredicateSubject'
+});
+export type CollectionPredicateSubject = typeof CollectionPredicateSubject.Type;
+
+export const CollectionSubjectOperand = Schema.Struct({
+	$subject: CollectionPredicateSubject
+}).annotate({
+	identifier: 'BoltCollectionSubjectOperand'
+});
+export interface CollectionSubjectOperand extends Schema.Schema.Type<
+	typeof CollectionSubjectOperand
+> {}
+
+export const COLLECTION_PREDICATE_FIELD_OPERATORS = [
+	'eq',
+	'ne',
+	'gt',
+	'gte',
+	'lt',
+	'lte',
+	'in',
+	'notIn',
+	'like',
+	'ilike',
+	'notLike',
+	'notIlike',
+	'caseFoldEq',
+	'caseFoldIn',
+	'contains',
+	'arrayContains',
+	'arrayContained',
+	'arrayOverlaps',
+	'isNull',
+	'isNotNull',
+	'contains_date',
+	'overlaps',
+	'jsonPath',
+	'jsonArraySome',
+	'kind',
+	'approvalParty'
+] as const;
+export const COLLECTION_PREDICATE_RELATION_QUANTIFIERS = ['some', 'none', 'every'] as const;
+export const MAX_COLLECTION_PREDICATE_DEPTH = 4;
+
+const FIELD_OPERATORS = new Set<string>(COLLECTION_PREDICATE_FIELD_OPERATORS);
+const RELATION_QUANTIFIERS = new Set<string>(COLLECTION_PREDICATE_RELATION_QUANTIFIERS);
+const SUBJECT_OPERANDS = new Set<string>(COLLECTION_PREDICATE_SUBJECTS);
+const JSON_PATH_TYPES = new Set(['string', 'number', 'boolean', 'instant', 'json']);
+const JSON_PATH_KEYS = new Set([
+	'path',
+	'type',
+	'transform',
+	'eq',
+	'ne',
+	'gt',
+	'gte',
+	'lt',
+	'lte',
+	'in',
+	'notIn',
+	'isNull',
+	'isNotNull'
+]);
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+	value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const isSubjectOperand = (value: unknown): boolean => {
+	if (!isRecord(value)) return false;
+	const keys = Object.keys(value);
+	return (
+		keys.length === 1 && keys[0] === '$subject' && SUBJECT_OPERANDS.has(value['$subject'] as string)
+	);
+};
+
+const operandProblem = (value: unknown): string | undefined => {
+	if (isSubjectOperand(value)) return undefined;
+	return Schema.is(Schema.Json)(value) ? undefined : 'contains a non-JSON predicate operand';
+};
+
+const scalarOperandProblem = (value: unknown): string | undefined =>
+	isRecord(value) && value['$subject'] === 'teamIds'
+		? 'uses set-valued subject.teamIds with a scalar operator'
+		: operandProblem(value);
+
+const setOperandProblem = (value: unknown): string | undefined => {
+	if (isRecord(value) && value['$subject'] === 'teamIds') return undefined;
+	if (!Array.isArray(value)) return 'requires an array or subject.teamIds';
+	for (const member of value) {
+		const problem = scalarOperandProblem(member);
+		if (problem !== undefined) return problem;
+	}
+	return undefined;
+};
+
+const unexpectedKey = (
+	value: Readonly<Record<string, unknown>>,
+	allowed: ReadonlySet<string>
+): string | undefined => Object.keys(value).find((key) => !allowed.has(key));
+
+const exclusiveOperator = (
+	value: Readonly<Record<string, unknown>>,
+	reserved: ReadonlyArray<string>
+): string | undefined => {
+	const operators = Object.keys(value).filter((key) => !reserved.includes(key));
+	return operators.length === 1 ? operators[0] : undefined;
+};
+
+const pathSegmentsProblem = (path: unknown, requireNonEmpty: boolean): string | undefined => {
+	if (path === undefined && !requireNonEmpty) return undefined;
+	if (!Array.isArray(path) || (requireNonEmpty && path.length === 0))
+		return 'must be a non-empty array of path segments';
+	return path.some((part) => typeof part !== 'string' || part.length === 0)
+		? 'must be a non-empty array of path segments'
+		: undefined;
+};
+
+const jsonPathProblem = (value: unknown): string | undefined => {
+	if (!isRecord(value)) return 'jsonPath must be an object';
+	const unexpected = unexpectedKey(value, JSON_PATH_KEYS);
+	if (unexpected !== undefined) return `jsonPath has unsupported ${unexpected}`;
+	const pathProblem = pathSegmentsProblem(value['path'], true);
+	if (pathProblem !== undefined) return `jsonPath.path ${pathProblem}`;
+	if (!JSON_PATH_TYPES.has(value['type'] as string)) return 'jsonPath.type is unsupported';
+	if (value['transform'] !== undefined && value['transform'] !== 'case-fold')
+		return 'jsonPath.transform is unsupported';
+	const operator = exclusiveOperator(value, ['path', 'type', 'transform']);
+	if (operator === undefined) return 'jsonPath requires exactly one comparison';
+	if (operator === 'isNull' || operator === 'isNotNull')
+		return typeof value[operator] === 'boolean' ? undefined : `${operator} requires a boolean`;
+	return operator === 'in' || operator === 'notIn'
+		? setOperandProblem(value[operator])
+		: scalarOperandProblem(value[operator]);
+};
+
+const jsonArraySomeProblem = (value: unknown): string | undefined => {
+	if (!isRecord(value)) return 'jsonArraySome must be an object';
+	const unexpected = unexpectedKey(value, new Set(['path', 'transform', 'eq', 'in']));
+	if (unexpected !== undefined) return `jsonArraySome has unsupported ${unexpected}`;
+	if (value['path'] !== undefined) {
+		const pathProblem = pathSegmentsProblem(value['path'], false);
+		if (pathProblem !== undefined) return `jsonArraySome.path ${pathProblem}`;
+	}
+	if (value['transform'] !== undefined && value['transform'] !== 'case-fold')
+		return 'jsonArraySome.transform is unsupported';
+	const operator = exclusiveOperator(value, ['path', 'transform']);
+	if (operator === undefined) return 'jsonArraySome requires exactly one of eq or in';
+	return operator === 'in'
+		? setOperandProblem(value[operator])
+		: scalarOperandProblem(value[operator]);
+};
+
+const fieldPredicateProblem = (value: unknown): string | undefined => {
+	if (isSubjectOperand(value)) return scalarOperandProblem(value);
+	if (!isRecord(value)) return operandProblem(value);
+	const entries = Object.entries(value);
+	if (entries.length === 0) return 'a field condition must name an operator';
+	for (const [operator, operand] of entries) {
+		if (!FIELD_OPERATORS.has(operator)) return `has unsupported operator ${operator}`;
+		if (operator === 'jsonPath') {
+			const problem = jsonPathProblem(operand);
+			if (problem !== undefined) return problem;
+			continue;
+		}
+		if (operator === 'jsonArraySome') {
+			const problem = jsonArraySomeProblem(operand);
+			if (problem !== undefined) return problem;
+			continue;
+		}
+		if (operator === 'approvalParty') {
+			if (operand !== true) return 'approvalParty accepts only true';
+			continue;
+		}
+		if (operator === 'isNull' || operator === 'isNotNull') {
+			if (typeof operand !== 'boolean') return `${operator} requires a boolean`;
+			continue;
+		}
+		if (operator === 'in' || operator === 'notIn' || operator === 'caseFoldIn') {
+			const problem = setOperandProblem(operand);
+			if (problem !== undefined) return problem;
+			continue;
+		}
+		if (operator === 'kind') {
+			if (!isRecord(operand)) return 'kind must be an object';
+			const kindEntries = Object.entries(operand);
+			if (
+				kindEntries.length !== 1 ||
+				(kindEntries[0]?.[0] !== 'eq' && kindEntries[0]?.[0] !== 'ne') ||
+				typeof kindEntries[0]?.[1] !== 'string'
+			)
+				return 'kind requires exactly eq or ne with a string discriminator';
+			continue;
+		}
+		const problem = scalarOperandProblem(operand);
+		if (problem !== undefined) return problem;
+	}
+	return undefined;
+};
+
+const predicateProblem = (value: unknown, depth = 0): string | undefined => {
+	if (!isRecord(value)) return 'a predicate must be an object';
+	if (depth > MAX_COLLECTION_PREDICATE_DEPTH) return 'predicate nesting exceeds the maximum depth';
+	for (const [node, condition] of Object.entries(value)) {
+		if (node === 'AND' || node === 'OR') {
+			if (!Array.isArray(condition)) return `${node} must be an array`;
+			for (const branch of condition) {
+				const problem = predicateProblem(branch, depth);
+				if (problem !== undefined) return `${node} ${problem}`;
+			}
+			continue;
+		}
+		if (node === 'NOT') {
+			const problem = predicateProblem(condition, depth);
+			if (problem !== undefined) return `NOT ${problem}`;
+			continue;
+		}
+		if (isRecord(condition)) {
+			const quantifiers = Object.keys(condition).filter((key) => RELATION_QUANTIFIERS.has(key));
+			if (quantifiers.length > 0) {
+				if (quantifiers.length !== 1 || Object.keys(condition).length !== 1)
+					return `${node} relation requires exactly one quantifier`;
+				const problem = predicateProblem(condition[quantifiers[0] ?? ''], depth + 1);
+				if (problem !== undefined) return `${node}.${quantifiers[0]} ${problem}`;
+				continue;
+			}
+		}
+		const problem = fieldPredicateProblem(condition);
+		if (problem !== undefined) return `${node} ${problem}`;
+	}
+	return undefined;
+};
+
+export const CollectionPredicate = Schema.Json.check(
+	Schema.makeFilter((value) => predicateProblem(value))
+).annotate({
+	identifier: 'BoltCollectionPredicate'
+});
+export type CollectionPredicate = typeof CollectionPredicate.Type;
+
+export const CollectionRelationshipSegment = Schema.Struct({
+	relationship: Schema.NonEmptyString,
+	segment: Schema.NonEmptyString,
+	fromCollection: Schema.NonEmptyString,
+	fromField: Schema.NonEmptyString,
+	toCollection: Schema.NonEmptyString,
+	toField: Schema.NonEmptyString
+}).annotate({ identifier: 'BoltCollectionRelationshipSegment' });
+export interface CollectionRelationshipSegment extends Schema.Schema.Type<
+	typeof CollectionRelationshipSegment
+> {}
+
+export const CollectionReversePath = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	segments: Schema.Array(CollectionRelationshipSegment)
+}).annotate({ identifier: 'BoltCollectionReversePath' });
+export interface CollectionReversePath extends Schema.Schema.Type<typeof CollectionReversePath> {}
+
+export const CollectionIndexRequirement = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	field: Schema.NonEmptyString,
+	reason: Schema.Literals(['relationship', 'routing'])
+}).annotate({ identifier: 'BoltCollectionIndexRequirement' });
+export interface CollectionIndexRequirement extends Schema.Schema.Type<
+	typeof CollectionIndexRequirement
+> {}
+
 export const CollectionQueryRequestFields = {
 	collection: Schema.NonEmptyString,
-	where: Schema.optionalKey(Schema.Json),
-	userFilter: Schema.optionalKey(Schema.Json),
+	where: Schema.optionalKey(CollectionPredicate),
+	userFilter: Schema.optionalKey(CollectionPredicate),
 	search: Schema.optionalKey(CollectionSearch),
 	with: Schema.optionalKey(Schema.Json),
 	orderBy: Schema.optionalKey(Schema.Json),
@@ -187,41 +388,37 @@ export const CollectionQueryRequest = Schema.Struct(CollectionQueryRequestFields
 });
 export interface CollectionQueryRequest extends Schema.Schema.Type<typeof CollectionQueryRequest> {}
 
-const { limit: _limit, after: _after, ...CollectionGroupedQueryBaseFields } =
-	CollectionQueryRequestFields;
+const {
+	limit: _limit,
+	after: _after,
+	...CollectionGroupedQueryBaseFields
+} = CollectionQueryRequestFields;
 
-/** Exact server-side grouping requested by a board-like collection surface. */
 export const CollectionGroup = Schema.Struct({
 	by: Schema.NonEmptyString,
 	lanes: Schema.optionalKey(Schema.Array(Schema.Json))
 }).annotate({ identifier: 'BoltCollectionGroup' });
 export interface CollectionGroup extends Schema.Schema.Type<typeof CollectionGroup> {}
 
-/**
- * A grouped query is one complete authoritative aggregate, not a hidden 500-row page.
- *
- * It therefore accepts neither a page cursor nor a page size. `columns` remains a read-time
- * projection and is excluded from canonical identity just as it is for ordinary page windows.
- */
 export const CollectionGroupedQueryRequestFields = {
 	...CollectionGroupedQueryBaseFields,
 	group: CollectionGroup
 };
 export const CollectionGroupedQueryRequest = Schema.Struct(
 	CollectionGroupedQueryRequestFields
-).annotate({ identifier: 'BoltCollectionGroupedQueryRequest' });
+).annotate({
+	identifier: 'BoltCollectionGroupedQueryRequest'
+});
 export interface CollectionGroupedQueryRequest extends Schema.Schema.Type<
 	typeof CollectionGroupedQueryRequest
 > {}
 
-/** The explicit server-side classification returned for one declarative mutation push. */
 export const CollectionMutationSettlement = Schema.Union([
 	Schema.Struct({
 		resolution: Schema.Literal('accepted'),
 		mutationId: CollectionMutationIdempotencyKey,
 		schemaFingerprint: Schema.NonEmptyString,
 		records: Schema.Array(StoredRecord),
-		/** Present when policy accepted the mutation into an approval flow but has not committed it. */
 		pendingApproval: Schema.optionalKey(
 			Schema.Struct({
 				requestId: Schema.NonEmptyString,

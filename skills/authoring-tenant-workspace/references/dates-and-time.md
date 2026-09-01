@@ -82,6 +82,12 @@ Client controls accept the user's local perspective and convert instant operands
 the query crosses the server boundary. Server roles, fixtures, functions, and direct API callers
 must already provide canonical wire values. Never make the server guess a timezone.
 
+In particular, a day picker label such as `2026-07-03` is presentation state, not an equality value
+for `instant({ precision: 'day' })`. Resolve it in the named business timezone to the full canonical
+UTC instant used by stored rows before issuing `{ eq: ... }`; comparing the label directly can make a
+healthy relation-backed view look empty. Every query projection must also include every value its
+renderer, join map, and sort reads — an omitted field is not a valid empty fallback.
+
 For `custom('instant_range')` filters, `contains_date` starts from the viewer's calendar date and resolves it
 through the viewer timezone. `overlaps` uses UTC range bounds. Client and server evaluation
 must receive identical operands so optimistic results cannot disagree with confirmed results.

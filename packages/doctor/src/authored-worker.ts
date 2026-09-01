@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCrossFile } from './cross-file.js';
 import { runRules, sourceFiles, svelteScript } from './runner.js';
-import { runSemanticTier } from './semantic/run.js';
 import { runTypeAware } from './type-aware.js';
 import { applyAllowances } from './allowances.js';
 import { ignoredRule } from '../engine/scripts/ignore.mjs';
@@ -17,16 +16,10 @@ type WorkerRequest = Readonly<{
 	root: string;
 	includeTests: boolean;
 	paths: ReadonlyArray<string>;
-	semanticDisabled: boolean;
 }>;
 
 const request = workerData as WorkerRequest;
-const loaded = await loadConfig(request.root);
-// A caller-level decline sits above configuration, the way --include-tests sits beside it: the
-// API answers to its invoker first.
-const config = request.semanticDisabled
-	? { ...loaded, semantic: { ...loaded.semantic, disabled: true } }
-	: loaded;
+const config = await loadConfig(request.root);
 const allFiles = sourceFiles(request.root, { includeTests: request.includeTests });
 const selectedFiles = sourceFiles(request.root, {
 	includeTests: request.includeTests,
@@ -94,21 +87,6 @@ const crossFile = runCrossFile({ root: request.root, files: parsed, consumers })
  */
 const typeAware = runTypeAware({ root: request.root, files: selectedFiles });
 
-/*
- * The semantic tier runs last: it needs the whole file set for its Merkle diff, and a failure —
- * no credential, unreachable provider, corrupt index — must surface as exit-2 evidence rather
- * than an all-clear, so nothing here catches on its behalf.
- *
- * Findings are filtered to the selection like the cross-file ones; the index itself always spans
- * `allFiles`, because "what does this repository say?" is a whole-repository question.
- */
-const semantic = await runSemanticTier({
-	root: request.root,
-	config,
-	rules: config.rules,
-	allFiles
-});
-
 const rules = config.rules
 	.map((rule) => ({
 		id: rule.id,
@@ -126,36 +104,26 @@ const ruleSetDigest = `sha256:${createHash('sha256')
 	.update(JSON.stringify({ packs: config.packs, rules }))
 	.digest('hex')}`;
 
-const selected = (location: string): boolean =>
-	request.paths.length === 0 || selectedFiles.some((file) => location.startsWith(`${file}:`));
-
 parentPort?.postMessage({
-	packs: config.packs,
-	// `.doctorignore` rule scoping answers every pass, not just the per-file runner: a
-	// rule-scoped exception is a statement about a family of findings wherever they were
-	// produced, and a cross-file finding that ignores the repository's own scoping would
-	// make the catalogue disagree with the configuration it was produced from.
-	findings: applyAllowances(request.root, [
-		...findings,
-		...crossFile,
-		...typeAware.findings,
-		...semantic.findings.filter((finding) => selected(finding.location))
-	].filter((finding) => {
-		const [file] = finding.location.split(':');
-		return file === undefined || !ignoredRule(request.root, file, finding.rule);
-	})),
-	ruleCount: config.rules.length,
-	ruleSetDigest,
-	allFiles,
-	selectedFiles,
-	queries: config.queries,
-	typeAware,
-	semantic: {
-		ran: semantic.ran,
-		embedderId: semantic.embedderId,
-		indexDigest: semantic.indexDigest,
-		stats: semantic.stats,
-		clusterCount: semantic.clusterCount,
-		singletonCount: semantic.singletonCount
+	type: 'authored-result',
+	result: {
+		packs: config.packs,
+		// `.doctorignore` rule scoping answers every pass, not just the per-file runner: a
+		// rule-scoped exception is a statement about a family of findings wherever they were
+		// produced, and a cross-file finding that ignores the repository's own scoping would
+		// make the catalogue disagree with the configuration it was produced from.
+		findings: applyAllowances(request.root, [
+			...findings,
+			...crossFile,
+			...typeAware.findings
+		].filter((finding) => {
+			const [file] = finding.location.split(':');
+			return file === undefined || !ignoredRule(request.root, file, finding.rule);
+		})),
+		ruleCount: config.rules.length,
+		ruleSetDigest,
+		allFiles,
+		selectedFiles,
+		typeAware
 	}
 });

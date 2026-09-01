@@ -5,73 +5,31 @@
  * entry was a sentence. Everything the surfaces are for (who holds which role, whether an invitation
  * has expired, who changed what and when) had nowhere to live.
  */
-import { Schema } from 'effect';
-import { TeamNodeSchema } from '#lib/client/ui/settings/team-hierarchy.js';
-
-const MemberRoleSchema = Schema.Literals(['admin', 'manager', 'basic']);
-type MemberRole = typeof MemberRoleSchema.Type;
-const MemberStatusSchema = Schema.Literals(['active', 'suspended', 'invited']);
-
-const MemberRowSchema = Schema.Struct({
-	id: Schema.String,
-	email: Schema.String,
-	name: Schema.String,
-	role: MemberRoleSchema,
-	status: MemberStatusSchema,
-	/**
-	 * The one team this person belongs to, absent for somebody nobody has placed.
-	 *
-	 * Singular, because `user.team_id` is one team and the projection reports one name.
-	 * This was a `teams` array, and nothing ever filled it: `workspaceAccess` answers `team`, so the
-	 * decoder read a key that is not on the wire, every member rendered with an em dash, and the
-	 * surface said the workspace had nobody on any team.
-	 */
-	team: Schema.optionalKey(Schema.String)
-});
-export type MemberRow = typeof MemberRowSchema.Type;
-
-const InvitationStatusSchema = Schema.Literals(['pending', 'accepted', 'revoked', 'expired']);
-type InvitationStatus = typeof InvitationStatusSchema.Type;
-
-const InvitationRowSchema = Schema.Struct({
-	id: Schema.String,
-	email: Schema.String,
-	role: MemberRoleSchema,
-	status: InvitationStatusSchema,
-	invitedBy: Schema.optionalKey(Schema.String),
-	/** ISO instant; absent when the invitation never expires. */
-	expiresAt: Schema.optionalKey(Schema.String)
-});
-export type InvitationRow = typeof InvitationRowSchema.Type;
-
-const AuditRowSchema = Schema.Struct({
-	id: Schema.String,
-	action: Schema.String,
-	actor: Schema.String,
-	subject: Schema.optionalKey(Schema.String),
-	/** ISO instant. */
-	at: Schema.String
-});
-export type AuditRow = typeof AuditRowSchema.Type;
+import { Result, Schema } from 'effect';
+import { WorkspaceAccess as WorkspaceAccessContract } from '@norbital-ai/bolt-protocol';
 
 /**
  * The People surface's one payload: who is a member, which invitations are open, the distinct
  * teams those members carry, and the access events the runtime has recorded.
  */
-export const WorkspaceAccessSchema = Schema.Struct({
-	members: Schema.Array(MemberRowSchema),
-	invitations: Schema.Array(InvitationRowSchema),
-	teams: Schema.Array(TeamNodeSchema),
-	events: Schema.Array(AuditRowSchema)
-});
-
+export const WorkspaceAccessSchema = WorkspaceAccessContract;
 export type WorkspaceAccess = typeof WorkspaceAccessSchema.Type;
+export type MemberRow = WorkspaceAccess['members'][number];
+export type InvitationRow = WorkspaceAccess['invitations'][number];
+export type AuditRow = WorkspaceAccess['events'][number];
+type MemberRole = MemberRow['role'];
+type InvitationStatus = InvitationRow['status'];
 
 export const EMPTY_WORKSPACE_ACCESS: WorkspaceAccess = {
 	members: [],
 	invitations: [],
 	teams: [],
 	events: []
+};
+
+export const decodeWorkspaceAccess = (value: unknown): WorkspaceAccess | undefined => {
+	const decoded = Schema.decodeUnknownResult(WorkspaceAccessSchema)(value);
+	return Result.isSuccess(decoded) ? decoded.success : undefined;
 };
 
 /**

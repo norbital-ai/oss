@@ -2,10 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { defineModel, numeric, reference, text } from '../../src/authoring/index.js';
 import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 import {
-	planWorkspaceMigration,
+	planWorkspaceMigration as planCompiledMigration,
 	type WorkspaceSnapshot
 } from '../../src/compiler/schema-migrations.js';
+
+const planWorkspaceMigration = (input: {
+	readonly models: Readonly<Record<string, ModelDeclaration>>;
+	readonly previous: WorkspaceSnapshot | undefined;
+}) =>
+	planCompiledMigration({
+		authoring: compileWorkspaceAuthoring({
+			models: input.models,
+			sourcePaths: Object.fromEntries(
+				Object.keys(input.models).map((name) => [name, `fixture:${name}`])
+			)
+		}),
+		previous: input.previous
+	});
 
 /**
  * A restructure removes and adds in the same step, and until the two-pass split it could not be
@@ -29,7 +44,7 @@ const snapshotOf = async (
 	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<WorkspaceSnapshot> => {
 	const migration = await Effect.runPromise(
-		planWorkspaceMigration({ models, relations: [], previous: undefined })
+		planWorkspaceMigration({ models, previous: undefined })
 	);
 	if (migration === undefined)
 		throw new Error('a schema built from nothing must produce a migration');
@@ -41,7 +56,7 @@ const migrate = async (
 	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<ReadonlyArray<string>> => {
 	const migration = await Effect.runPromise(
-		planWorkspaceMigration({ models, relations: [], previous })
+		planWorkspaceMigration({ models, previous })
 	);
 	if (migration === undefined) throw new Error('a restructure must produce a migration');
 	return migration.statements;
@@ -221,7 +236,7 @@ describe('a restructure that removes and adds in one step', () => {
 		const models = { keep, other: defineModel({ name: text() }, { recordLabel: 'name' }) };
 		expect(
 			await Effect.runPromise(
-				planWorkspaceMigration({ models, relations: [], previous: await snapshotOf(models) })
+				planWorkspaceMigration({ models, previous: await snapshotOf(models) })
 			)
 		).toBeUndefined();
 	});

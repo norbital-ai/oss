@@ -4,13 +4,7 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { workspaceSyncNotices, type WorkspaceSyncNotice } from './sync-status-presentation.js';
 
-	let {
-		state,
-		onReload = () => window.location.reload()
-	}: {
-		state: ClientState | undefined;
-		onReload?: () => void;
-	} = $props();
+	let { state }: { state: ClientState | undefined } = $props();
 
 	const notices = $derived(workspaceSyncNotices(state));
 
@@ -40,13 +34,6 @@
 				<Stack gap="xs" class="min-w-0">
 					<p class="text-xs font-semibold leading-5 text-popover-foreground">{notice.title}</p>
 					<p class="text-micro leading-4 text-muted-foreground">{notice.description}</p>
-					{#if notice.key === 'reload'}
-						<button
-							type="button"
-							class="w-fit rounded-md bg-destructive px-2.5 py-1.5 text-xs font-semibold text-destructive-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							onclick={onReload}>Reload workspace</button
-						>
-					{/if}
 				</Stack>
 			</Inline>
 		{/each}

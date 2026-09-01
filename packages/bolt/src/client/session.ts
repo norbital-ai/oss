@@ -1,5 +1,4 @@
 import type { BoltTransport } from '#lib/client/contracts.js';
-import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 import { Effect, MutableRef } from 'effect';
 
 /**
@@ -37,19 +36,6 @@ export type WorkspaceFilesHost = Readonly<{
 	readonly urlFor: (key: string) => string;
 }>;
 
-/** Byte transport for documents whose authority is one chat session, never the generic file key. */
-type WorkspaceChatDocumentsHost = Readonly<{
-	readonly store: (
-		conversationId: string,
-		storageKey: string,
-		file: File,
-		onProgress?: (progress: { readonly loaded: number; readonly total: number }) => void,
-		signal?: AbortSignal
-	) => Promise<ChatDocumentRef>;
-	readonly remove: (conversationId: string, storageKey: string) => Promise<void>;
-	readonly urlFor: (conversationId: string, storageKey: string) => string;
-}>;
-
 /**
  * The host's own release operations, which are not tenant commands.
  *
@@ -73,9 +59,15 @@ export type WorkspaceOperationsHost = Readonly<{
 }>;
 
 export type WorkspaceSession = Readonly<{
+	readonly workspaceId: string;
 	readonly tenantId: string;
 	readonly environment: string;
 	readonly releaseId: string;
+	/**
+	 * Stable host-wide identity used only for one-user browser Sync ownership across workspace tabs.
+	 * It is opaque to Bolt policy and never substitutes for the tenant-local authenticated subject.
+	 */
+	readonly syncPrincipal: string;
 	/**
 	 * The host-proven, stable identity of the signed-in principal.
 	 *
@@ -105,7 +97,6 @@ export type WorkspaceSession = Readonly<{
 	 */
 	readonly syncStreamUrl: string;
 	readonly files: WorkspaceFilesHost;
-	readonly chatDocuments: WorkspaceChatDocumentsHost;
 	readonly operations: WorkspaceOperationsHost;
 }>;
 

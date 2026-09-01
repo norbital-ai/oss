@@ -17,11 +17,4 @@ const encode = (value: unknown, preserveObjectOrder = false): string => {
 		.join(',')}}`;
 };
 
-/**
- * Collision-free component identity for one live question.
- *
- * JSON object key order is immaterial except for `orderBy`: authors use that object's insertion
- * order to state SQL term precedence. The browser key is intentionally not the host query hash;
- * each side canonicalizes for its own purpose and no credential enters this value.
- */
 export const stableKey = (input: SyncQueryInput | Schema.Json): string => encode(input);

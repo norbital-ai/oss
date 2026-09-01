@@ -4,94 +4,123 @@ import type {
 	FacilityBinding,
 	FacilityResult
 } from '@norbital-ai/bolt-protocol';
-import type { ModelMessage } from '@tanstack/ai';
+import { ModelId } from '@norbital-ai/bolt-protocol';
 import { Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
 
-type JsonModelMessage = ModelMessage & Schema.JsonObject;
+type GenerateRequest = Extract<AIRequest, { readonly _tag: 'Generate' }>;
 
-export const TEST_MODEL = 'test-model';
+const encodeMessage = Schema.encodeSync(Prompt.Message);
+
+export const TEST_MODEL = ModelId.make('test-provider/test-language-model');
+export const TEST_EMBEDDING_MODEL = ModelId.make('test-provider/test-embedding-model');
 
 export const modelCatalogResponse = (): Promise<FacilityResult<AIResponse>> =>
 	Promise.resolve({
 		_tag: 'Success',
 		value: {
-			output: {
-				defaultModel: TEST_MODEL,
-				options: [{ id: TEST_MODEL, contextLength: 128_000 }]
-			}
+			_tag: 'Catalog',
+			languageModels: [{ id: TEST_MODEL }],
+			defaultLanguageModelId: TEST_MODEL,
+			embeddingModels: [{ id: TEST_EMBEDDING_MODEL }],
+			defaultEmbeddingModelId: TEST_EMBEDDING_MODEL
 		}
 	});
 
-export const assistantText = (content: string, id?: string): JsonModelMessage =>
-	({
-		...(id === undefined ? {} : { id }),
-		role: 'assistant',
-		content
-	}) as unknown as JsonModelMessage;
+export const assistantText = (content: string): Prompt.MessageEncoded =>
+	encodeMessage(
+		Prompt.assistantMessage({
+			content: [Prompt.textPart({ text: content })]
+		})
+	);
 
 export const assistantToolCall = (
 	name: string,
 	input: unknown,
 	id: string,
 	content = ''
-): JsonModelMessage =>
-	({
-		id: `assistant-${id}`,
-		role: 'assistant',
-		content,
-		toolCalls: [
-			{
-				id,
-				type: 'function',
-				function: { name, arguments: JSON.stringify(input) }
-			}
-		]
-	}) as unknown as JsonModelMessage;
+): Prompt.MessageEncoded =>
+	encodeMessage(
+		Prompt.assistantMessage({
+			content: [
+				...(content === '' ? [] : [Prompt.textPart({ text: content })]),
+				Prompt.toolCallPart({
+					id,
+					name,
+					params: input,
+					providerExecuted: false
+				})
+			]
+		})
+	);
 
 export const successfulAI = (
-	turn: (
-		request: Extract<AIRequest, { readonly _tag: 'Turn' }>,
+	generate: (
+		request: GenerateRequest,
 		index: number
-	) => AIResponse
+	) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>
 ): FacilityBinding<AIRequest, AIResponse> => {
 	let index = 0;
 	return {
-		call: (_metadata, request) => {
-			if (request._tag === 'Models') return modelCatalogResponse();
-			if (request._tag !== 'Turn') {
-				return Promise.resolve({
+		call: async (_metadata, request) => {
+			if (request._tag === 'Catalog') return modelCatalogResponse();
+			if (request._tag !== 'Generate') {
+				return {
 					_tag: 'Failure',
 					error: {
 						code: 'unsupported',
-						message: 'The fixture only supports model catalog and chat turns.',
+						message: 'The fixture only supports language catalog and generation.',
 						retryable: false,
 						outcome: 'known'
 					}
-				});
+				};
 			}
-			const value = turn(request, index);
+			if (request.output._tag !== 'Message') {
+				return {
+					_tag: 'Failure',
+					error: {
+						code: 'unexpected_generation_output',
+						message: 'The chat fixture requires Message generation output.',
+						retryable: false,
+						outcome: 'known'
+					}
+				};
+			}
+			const message = await generate(request, index);
 			index += 1;
-			return Promise.resolve({ _tag: 'Success', value });
+			return {
+				_tag: 'Success',
+				value: {
+					_tag: 'Generated',
+					result: { _tag: 'Message', message },
+					observation: {
+						callId: request.callId,
+						provider: 'test-provider',
+						model: request.modelId,
+						operation: 'language'
+					}
+				}
+			};
 		}
 	};
 };
 
 export const modelMessages = (
-	request: Extract<AIRequest, { readonly _tag: 'Turn' }>
-): ReadonlyArray<ModelMessage> =>
-	request.messages as unknown as ReadonlyArray<ModelMessage>;
+	request: GenerateRequest
+): ReadonlyArray<Prompt.MessageEncoded> => request.messages;
 
 export const lastToolResult = (
-	request: Extract<AIRequest, { readonly _tag: 'Turn' }>
+	request: GenerateRequest
 ): Readonly<Record<string, unknown>> | undefined => {
-	const message = modelMessages(request).findLast((candidate) => candidate.role === 'tool');
-	if (message?.role !== 'tool' || typeof message.content !== 'string') return undefined;
-	try {
-		const decoded: unknown = JSON.parse(message.content);
-		return typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)
-			? (decoded as Readonly<Record<string, unknown>>)
-			: undefined;
-	} catch {
-		return undefined;
+	for (const message of request.messages.toReversed()) {
+		if (message.role !== 'tool' || typeof message.content === 'string') continue;
+		for (const part of message.content.toReversed()) {
+			if (part.type !== 'tool-result') continue;
+			const result = part.result;
+			if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+				return result as Readonly<Record<string, unknown>>;
+			}
+		}
 	}
+	return undefined;
 };

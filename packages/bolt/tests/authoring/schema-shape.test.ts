@@ -25,7 +25,7 @@ import {
 	type WorkspaceShape
 } from '../../src/authoring/schema-registry.js';
 import type { RelationDefinition } from '../../src/authoring/workspace-schema.js';
-import { selectedColumnNames } from '../../src/runtime/collections/with-clause.js';
+import { selectedColumnNames } from '../../src/runtime/access/effective-plan.js';
 
 /**
  * That `schema()` is a real Effect `Schema` of exactly the shape its declaration named.
@@ -88,8 +88,8 @@ const relations: ReadonlyArray<RelationDefinition> = [
 		source: 'employments',
 		target: 'time_entries',
 		cardinality: 'many',
-		from: { collection: 'time_entries', column: 'employment_id' },
-		to: { collection: 'employments', column: 'id' }
+		from: { collection: 'employments', column: 'id' },
+		to: { collection: 'time_entries', column: 'employment_id' }
 	}
 ];
 
@@ -369,15 +369,18 @@ describe('schema() as a schema', () => {
 	});
 
 	/**
-	 * `with-clause.ts` owns the inclusive/exclusive rule; `selectedColumnNames` is the one statement of
-	 * it, and both a read and a shape call it. This drives the rule with the same clause the shape is
+	 * Effective-plan owns the inclusive/exclusive rule; `selectedColumnNames` is its one statement,
+	 * and both a read and a shape call it. This drives the rule with the same clause the shape is
 	 * declared with and asserts they agree — that narrowing a related record and building a nested
 	 * struct route through that one rule rather than one of them growing a reading of its own.
 	 */
 	it('narrows a nested record to the same columns a read keeps', () => {
 		register();
 		expect(selectedColumnNames(['id', 'code', 'active'], { code: true })).toEqual(['code']);
-		expect(selectedColumnNames(['id', 'code', 'active'], { active: false })).toEqual(['id', 'code']);
+		expect(selectedColumnNames(['id', 'code', 'active'], { active: false })).toEqual([
+			'id',
+			'code'
+		]);
 
 		const declared = schema('time_entries', {
 			columns: { work_date: true },

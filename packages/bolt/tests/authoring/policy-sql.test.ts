@@ -1,90 +1,67 @@
 import { describe, expect, it } from 'vitest';
-import { policySql, type PolicyDefinition } from '../../src/authoring/index.js';
+import * as authoring from '../../src/authoring/index.js';
 import { describePolicy } from '../../src/authoring/policy-introspection.js';
 
-interface TestSchema {
-	readonly tables: {
-		readonly articles: {
-			readonly $inferSelect: { readonly id: string; readonly owner_id: string };
-			readonly $inferInsert: { readonly owner_id: string };
-		};
-	};
-	readonly relations: { readonly articles: Readonly<Record<string, never>> };
-}
-
-const declaration = {
-	description: 'Reads only rows selected by trusted policy SQL.',
-	grants: {
-		articles: {
-			read: { where: policySql('"owner_id" = ${requestor.id}') },
-			history: { where: policySql('"owner_id" = ${requestor.id}') }
+describe('closed structured policy language', () => {
+	it('removes the SQL authoring helper and refuses serialized SQL tokens', () => {
+		expect('policySql' in authoring).toBe(false);
+		const serializedSqlToken = { kind: 'policy-sql', statement: '"owner_id" = true' };
+		for (const action of ['read', 'history']) {
+			expect(() =>
+				describePolicy('article-owner', {
+					description: 'Serialized SQL cannot become a row policy.',
+					grants: { articles: { [action]: { where: serializedSqlToken } } }
+				})
+			).toThrow(/administrative one-shot SQL/u);
 		}
-	}
-} satisfies PolicyDefinition<TestSchema>;
-
-const refusedWriteWhere = () => {
-	const invalid = {
-		description: 'A write cannot acquire a SQL where escape.',
-		grants: {
-			articles: {
-				mutate: {
-					new: {
-						// @ts-expect-error policySql is limited to read and history grants
-						where: policySql('true')
-					}
-				}
-			}
-		}
-	} satisfies PolicyDefinition<TestSchema>;
-	return invalid;
-};
-
-describe('policySql', () => {
-	it('authors a frozen discriminated JSON predicate and survives policy introspection', () => {
-		const predicate = policySql('"owner_id" = ${requestor.id}');
-		expect(predicate).toEqual({
-			kind: 'policy-sql',
-			statement: '"owner_id" = ${requestor.id}'
-		});
-		expect(Object.isFrozen(predicate)).toBe(true);
-		expect(JSON.parse(JSON.stringify(predicate))).toEqual(predicate);
-
-		const described = describePolicy('article-owner', declaration);
-		expect(described.grants?.map(({ where }) => where)).toEqual([predicate, predicate]);
 	});
 
-	it('refuses empty statements, legacy syntax, and malformed serialized predicates', () => {
-		expect(() => policySql('   ')).toThrow(/non-empty SQL statement/u);
+	it('refuses every legacy policy SQL spelling', () => {
 		expect(() =>
 			describePolicy('legacy', {
 				description: 'Legacy raw predicate.',
 				grants: { articles: { read: { where: { $sql: 'true' } } } }
 			})
-		).toThrow(/removed \$sql policy syntax/u);
+		).toThrow(/closed structured predicate language/u);
 		expect(() =>
-			describePolicy('empty', {
-				description: 'Empty trusted predicate.',
-				grants: {
-					articles: { read: { where: { kind: 'policy-sql', statement: '  ' } } }
-				}
-			})
-		).toThrow(/non-empty string/u);
-		expect(() =>
-			describePolicy('extra', {
-				description: 'Predicate with an unsupported key.',
+			describePolicy('empty-serialized', {
+				description: 'Empty serialized administrative token.',
 				grants: {
 					articles: {
-						read: {
-							where: { kind: 'policy-sql', statement: 'true', parameters: [] }
-						}
+						read: { where: { kind: 'policy-sql', statement: '   ' } }
 					}
 				}
 			})
-		).toThrow(/unsupported parameters key/u);
+		).toThrow(/administrative one-shot SQL/u);
 	});
 
-	it('keeps the write-only type refusal in the compilation corpus', () => {
-		expect(typeof refusedWriteWhere).toBe('function');
+	it('accepts structured read/history predicates and rejects authored dependencies', () => {
+		const described = describePolicy('article-owner', {
+			description: 'Reads only records owned by the subject.',
+			grants: {
+				articles: {
+					read: { where: { owner_id: { eq: { $subject: 'id' } } } },
+					history: { where: { owner_id: { eq: { $subject: 'id' } } } }
+				}
+			}
+		});
+		expect(described.grants?.map(({ where }) => where)).toEqual([
+			{ owner_id: { eq: { $subject: 'id' } } },
+			{ owner_id: { eq: { $subject: 'id' } } }
+		]);
+		const scoped = describePolicy('team-subtree', {
+			description: 'Reads records owned by users in the subject team subtree.',
+			grants: { articles: { read: { where: { owner_id: { teamScopeUsers: true } } } } }
+		});
+		expect(scoped.grants?.[0]?.where).toEqual({ owner_id: { teamScopeUsers: true } });
+		expect(() =>
+			describePolicy('manual-dependency', {
+				description: 'Dependencies must be compiler-derived.',
+				grants: {
+					articles: { read: { where: { owner_id: 'owner' }, dependencies: ['users'] } }
+				}
+			})
+		).toThrow(/unsupported dependencies key/u);
 	});
 
 	it('flattens the two authored mutation branches to runtime actions', () => {

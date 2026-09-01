@@ -1,7 +1,7 @@
-export const protocolVersion = 7;
+export const protocolVersion = 8;
 
 export const manifest = {
-	protocolVersion: 7,
+	protocolVersion: 8,
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
@@ -63,33 +63,51 @@ export const dispatch = async (invocation, _facilities, signal) => {
 			};
 		}
 		if (invocation.command === 'sync.connect') {
-			// The handshake evaluation: registrations and answers-where-stale, computed from the
-			// credential the invocation presented. The fixture answers everything as changed.
+			// Initial versioned prefixes are computed from current truth under the presented credential.
 			lastAdvance = null;
 			const request = invocation.input;
 			return ok({
 				status: 200,
 				headers: {},
 				value: {
-					head: { sequence: 1 },
 					results: (request.queries ?? []).map((query) => ({
-						key: query.key,
+						key: query.queryKey,
 						input: query.input,
-						policyHash: 'fixture-policy',
+						planKey: `fixture:${query.input.collection}`,
+						version: 1,
+						prefixKeys: [{ id: 'note-1', order: ['note-1'] }],
+						loadedPrefix: 1,
+						prefixBytes: 20,
+						authorityFingerprint: 'fixture-policy',
 						dependencies: ['fixture-notes'],
-						policyDependencies: [],
-						heldIds: [],
-						digestOnly: false,
-						digest: 'fixture-digest-1',
-						changed: true,
-						answer: [{ id: 'note-1' }]
+						routing: [],
+						rows: [{ id: 'note-1' }]
 					})),
 					outcomes: []
 				}
 			});
 		}
+		if (invocation.command === 'sync.extendPrefix') {
+			const { request, state } = invocation.input;
+			return ok({
+				status: 200,
+				headers: {},
+				value: {
+					queryKey: request.queryKey,
+					version: request.version,
+					fromPrefix: request.loadedPrefix,
+					toPrefix: request.requestedPrefix,
+					rows: [{ id: 'note-2' }],
+					retainedBytes: 40,
+					prefixKeys: [
+						...state.prefixKeys,
+						{ id: 'note-2', order: ['note-2'] }
+					]
+				}
+			});
+		}
 		if (invocation.command === 'sync.advance') {
-			// One full answer per affected subscription; the writer's pending ledger ids settle here.
+			// One version-fenced prefix delta per affected plan; writer ledger ids settle alongside it.
 			// The real runtime admits this command only from a host-signed system principal. The
 			// fixture mirrors that gate so an unsigned advance cannot hide behind a fake guest.
 			lastAdvance = {
@@ -114,19 +132,26 @@ export const dispatch = async (invocation, _facilities, signal) => {
 				status: 200,
 				headers: {},
 				value: {
-					head: { sequence: 2 },
-					updates: (request.subscriptions ?? []).map((subscription, index) => ({
+					updates: (request.subscriptions ?? []).map((subscription) => ({
 						subId: subscription.subId,
-						from: subscription.digest,
-						to: `fixture-digest-${index + 2}`,
-						patch: { op: 'answer', answer: [{ id: 'note-1' }, { id: 'note-2' }] },
-						heldIds: ['note-1', 'note-2'],
-						digestOnly: false,
-						policyHash: subscription.policyHash,
-						dependencies: ['fixture-notes'],
-						policyDependencies: []
+						fromVersion: subscription.version,
+						toVersion: subscription.version + 1,
+						prefixKeys: [
+							{ id: 'note-1', order: ['note-1'] },
+							{ id: 'note-2', order: ['note-2'] }
+						],
+						prefixBytes: 40,
+						deltas: subscription.viewerPrefixes.map((loadedPrefix) => ({
+							loadedPrefix,
+							delta: {
+								removeIds: [],
+								put: [{ id: 'note-1', index: 0, row: { id: 'note-1', revised: true } }]
+							}
+						})),
+						authorityFingerprint: subscription.authorityFingerprint,
+						dependencies: ['fixture-notes']
 					})),
-					refused: [],
+					resets: [],
 					outcomes: (request.pending ?? []).map((id) => ({
 						id,
 						status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
@@ -143,7 +168,15 @@ export const dispatch = async (invocation, _facilities, signal) => {
 				status: 200,
 				headers: {},
 				value: { mutationId: idempotencyKey ?? null },
-				changes: [{ collection: 'fixture-notes', recordId: 'note-2', mutationId: idempotencyKey }]
+				changes: [
+					{
+						collection: 'fixture-notes',
+						id: 'note-2',
+						operation: 'insert',
+						after: { id: 'note-2' },
+						mutationId: idempotencyKey
+					}
+				]
 			});
 		}
 		return ok({

@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	TaskId
+} from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
-import { sandboxToolSpecs } from '../../src/runtime/agents/sandbox-tools.js';
+import { subagentToolSpec } from '../../src/runtime/agents/capability-catalog.js';
 import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
@@ -10,6 +16,7 @@ import {
 import {
 	assistantText,
 	assistantToolCall,
+	lastToolResult,
 	successfulAI
 } from './canonical-ai-fixture.js';
 
@@ -66,66 +73,69 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('envoy delegation boundary', () => {
-	it('omits every sandbox tool and terminalizes a disabled envoy requesting one', async () => {
-		const requests: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
+const submit = (
+	agents: Agents.Interface,
+	runtime: BoltTestRuntime,
+	taskId: TaskId,
+	agentId: 'ingress' | 'desk'
+) =>
+	runtime.runtime.runPromise(
+		agents.submit(runtime.effectId(`${agentId}:submit`), subject, {
+			taskId,
+			agentId: AgentId.make(agentId),
+			message: Agents.userAgentInput('Handle this Task.'),
+			mode: DirectiveMode.make('agent'),
+			priority: DirectivePriority.make('normal')
+		})
+	);
+
+describe('envoy Task delegation boundary', () => {
+	it('fails a disabled subagent aperture closed and admits a child only for an enabled envoy', async () => {
+		const requests: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const ai = successfulAI((request, index) => {
 			requests.push(request);
-			return {
-				output:
-					index === 0
-						? assistantToolCall(
-								'spawn_agent',
-								{ task: 'Do work outside this ingress boundary.' },
-								'disabled-spawn'
-							)
-						: assistantText('Handled without delegation.', `answer-${index}`)
-			};
+			if (index === 0 || index === 2) {
+				return assistantToolCall(
+					'subagent',
+					{
+						action: 'spawn',
+						agentId: 'ingress',
+						instruction: 'Record the bounded child update.'
+					},
+					index === 0 ? 'disabled-subagent' : 'enabled-subagent'
+				);
+			}
+			return assistantText('Delegation decision handled.');
 		});
 		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
+		const disabledTask = TaskId.make('00000000-0000-4000-8000-000000000601');
+		await submit(agents, harness, disabledTask, 'ingress');
 		const disabled = await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('disabled-envoy-turn'),
-				subject,
-				'ingress',
-				'ingress-conversation',
-				'disabled-input',
-				Agents.userAgentInput('Handle this envoy turn')
-			)
+			agents.execute(harness.effectId('ingress:execute'), subject, disabledTask)
 		);
-		expect(disabled.status).toBe('completed');
-
-		const sandboxNames = sandboxToolSpecs.map(({ name }) => name);
-		const disabledOffer = requests[0]?.tools.map(
-			(entry) => (entry as { readonly name: string }).name
-		);
-		expect(disabledOffer?.filter((name) => sandboxNames.includes(name))).toEqual([]);
-		const toolAnswer = requests[1]?.messages.find(
-			(message) =>
-				typeof message === 'object' &&
-				message !== null &&
-				(message as { readonly role?: string }).role === 'tool'
-		) as { readonly content?: string } | undefined;
-		expect(toolAnswer?.content).toContain('spawn_agent');
-		expect(toolAnswer?.content?.toLowerCase()).toMatch(/unknown|not (found|allowed)/);
+		expect(disabled.status).toBe('done');
+		expect(subagentToolSpec.name).toBe('subagent');
+		expect(JSON.stringify(lastToolResult(requests[1]!))).toContain('subagent');
 		expect(
-			await harness.database.query('select count(*)::int as count from chat_session where parent_id is not null')
+			await harness.database.query(
+				'select count(*)::int as count from agent_task where parent_id = $1',
+				[disabledTask]
+			)
 		).toEqual([{ count: 0 }]);
 
-		await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enabled-envoy-turn'),
-				subject,
-				'desk',
-				'desk-conversation',
-				'enabled-input',
-				Agents.userAgentInput('Handle this envoy turn')
+		const enabledTask = TaskId.make('00000000-0000-4000-8000-000000000602');
+		await submit(agents, harness, enabledTask, 'desk');
+		const enabled = await harness.runtime.runPromise(
+			agents.execute(harness.effectId('desk:execute'), subject, enabledTask)
+		);
+		expect(enabled.status).toBe('waiting');
+		expect(
+			await harness.database.query(
+				`select parent_id, agent_id, status
+				 from agent_task where parent_id = $1`,
+				[enabledTask]
 			)
-		);
-		const enabledOffer = requests.at(-1)?.tools.map(
-			(entry) => (entry as { readonly name: string }).name
-		);
-		expect(enabledOffer).toEqual(expect.arrayContaining(sandboxNames));
+		).toEqual([{ parent_id: enabledTask, agent_id: 'ingress', status: 'ready' }]);
 	});
 });

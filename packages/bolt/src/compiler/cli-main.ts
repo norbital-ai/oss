@@ -8,8 +8,7 @@ const { positionals, values: options } = parseArgs({
 		root: { type: 'string' },
 		name: { type: 'string' },
 		json: { type: 'boolean' },
-		watch: { type: 'boolean' },
-		'no-semantic': { type: 'boolean' }
+		watch: { type: 'boolean' }
 	},
 	allowPositionals: true,
 	strict: true
@@ -20,18 +19,6 @@ const workspaceRoot = resolve(rootValue ?? process.cwd());
 const nameValue = options.name;
 const json = options.json ?? false;
 const watch = options.watch ?? false;
-/**
- * Declines the audit's semantic tier for this run.
- *
- * The tier embeds source through a model provider, so it needs a credential and a network. Absent
- * either, it fails loudly on purpose — a semantic pass that quietly did nothing would be a green
- * audit that proved less than it claimed. But a caller can *know* the tier is unreachable: the
- * authoring sandbox runs with no host environment and no network at all, by construction. Saying so
- * is what this flag is for. It states the decline where the capability is missing, which is neither
- * weakening the audit everywhere by disabling the tier in a committed config, nor handing a
- * credential to a sandbox built to have none.
- */
-const noSemantic = options['no-semantic'] ?? false;
 
 const report = (commandName: string, result: SyncResult): void => {
 	if (json) {
@@ -88,7 +75,6 @@ const run = (): Promise<void> => {
 				'  --name <name>  migration name (defaults to "auto")',
 				'  --json         emit the result as JSON',
 				'  --watch        rerun sync when authored source changes',
-				"  --no-semantic  decline the audit's semantic tier (no credential, no network)",
 				''
 			].join('\n')
 		);
@@ -128,12 +114,7 @@ const run = (): Promise<void> => {
 				process.exitCode = 1;
 				return;
 			}
-			const result = yield* Effect.promise(() =>
-				probe.audit({
-					root: workspaceRoot,
-					...(noSemantic ? { semantic: { disabled: true } } : {})
-				})
-			);
+			const result = yield* Effect.promise(() => probe.audit({ root: workspaceRoot }));
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
 			} else {

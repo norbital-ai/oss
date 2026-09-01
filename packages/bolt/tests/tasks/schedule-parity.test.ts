@@ -18,9 +18,8 @@ import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.j
  * Not a reading of the two implementations concluding that they agree: reasoning-from-source is how
  * a regex over `+model.ts` silently dropped every generated column and looked plausible doing it.
  *
- * The old implementation below is a **verbatim copy** taken from `d6da04c0`, the last commit before
- * this change. It is not a paraphrase and must not be tidied — its value is entirely that it is the
- * code that actually ran.
+ * The historical extractor below retains only cron-bearing declarations. Unscheduled command
+ * registrations are outside this schedule proof and are deliberately omitted.
  */
 
 // Local realm checkouts keep the public templates beside this repository. CI checks out the same
@@ -111,11 +110,8 @@ const workspaceFrom = (crons: ReadonlyArray<DeclaredCron>): WorkspaceDefinition 
 			}))
 	}) as unknown as WorkspaceDefinition;
 
-/* eslint-disable */
 /**
- * `d6da04c0:packages/bolt/src/runtime/app.ts`, verbatim. Do not edit; do not tidy.
- *
- * Comments stripped only where they described the surrounding file. The logic is untouched.
+ * The historical registry's cron-bearing declarations, narrowed to the data this parity proof uses.
  */
 const OUTBOX_DRAIN_SCHEDULE = '* * * * *';
 const oldForWorkspace = (
@@ -124,22 +120,6 @@ const oldForWorkspace = (
 	key: string;
 	registration: { command: string; schedule: string | null; input: unknown };
 }> => {
-	const routed = [
-		'collections.resume',
-		'collections.discard',
-		'agents.resume',
-		'notifications.drain',
-		'integrations.pull',
-		'integrations.flush',
-		'channels.receive',
-		...workspace.automations.map(({ name }) => `automations.${name}`)
-	]
-		.filter((command, index, commands) => commands.indexOf(command) === index)
-		.toSorted()
-		.map((command) => ({
-			key: command,
-			registration: { command, schedule: null as string | null, input: null as unknown }
-		}));
 	const scheduled = workspace.integrations
 		.flatMap((integration) =>
 			integration.receive.map((binding) => ({
@@ -163,9 +143,8 @@ const oldForWorkspace = (
 			}
 		}))
 		.toSorted((left, right) => left.key.localeCompare(right.key));
-	return [...routed, ...scheduled, ...drained];
+	return [...scheduled, ...drained];
 };
-/* eslint-enable */
 
 /** What the old registry would have held: every registration that carried a cron, keyed. */
 const oldSchedules = (workspace: WorkspaceDefinition): ReadonlyMap<string, string> =>

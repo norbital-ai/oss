@@ -1,18 +1,64 @@
+import { Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ModelId,
+	TaskId,
+	type AIRequest,
+	type AIResponse,
+	type FacilityBinding
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
 
-const catalog: AIResponse = {
-	output: {
-		defaultModel: 'test-model',
-		options: [{ id: 'test-model', contextLength: 128_000 }]
-	}
+const languageModelId = ModelId.make('test:language');
+const embeddingModelId = ModelId.make('test:embedding');
+const encodeMessage = Schema.encodeSync(Prompt.Message);
+
+const catalog = {
+	_tag: 'Catalog',
+	languageModels: [{ id: languageModelId }],
+	defaultLanguageModelId: languageModelId,
+	embeddingModels: [{ id: embeddingModelId }],
+	defaultEmbeddingModelId: embeddingModelId
+} satisfies AIResponse;
+
+const generated = (
+	request: Extract<AIRequest, { readonly _tag: 'Generate' }>,
+	text: string
+): Extract<AIResponse, { readonly _tag: 'Generated' }> => {
+	if (request.output._tag !== 'Message') throw new Error('expected Message generation');
+	return {
+		_tag: 'Generated',
+		result: {
+			_tag: 'Message',
+			message: encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }))
+		},
+		observation: {
+			callId: request.callId,
+			provider: 'test',
+			model: request.modelId,
+			operation: 'language'
+		}
+	};
 };
+
+const submit = (agents: Agents.Interface, runtime: BoltTestRuntime, taskId: TaskId, text: string) =>
+	agents.submit(runtime.effectId(`submit:${taskId}`), adminSubject, {
+		taskId,
+		agentId: AgentId.make('web'),
+		message: Agents.userAgentInput(text),
+		mode: DirectiveMode.make('agent'),
+		priority: DirectivePriority.make('normal')
+	});
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -20,145 +66,82 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('agent lane resume and stop boundaries', () => {
-	it('lets stop beat an in-flight provider completion without committing stale output', async () => {
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => (release = resolve));
-		let started!: () => void;
-		const providerStarted = new Promise<void>((resolve) => (started = resolve));
+describe('Task stop and run-fence boundaries', () => {
+	it('lets stop invalidate an in-flight provider completion before it can persist output', async () => {
+		let releaseProvider!: () => void;
+		const providerHeld = new Promise<void>((resolve) => (releaseProvider = resolve));
+		let announceProvider!: () => void;
+		const providerStarted = new Promise<void>((resolve) => (announceProvider = resolve));
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return { _tag: 'Success', value: catalog };
-				started();
-				await held;
-				return {
-					_tag: 'Success',
-					value: { output: { role: 'assistant', content: 'stale provider answer' } }
-				};
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				announceProvider();
+				await providerHeld;
+				return { _tag: 'Success', value: generated(request, 'stale provider answer') };
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const conversationId = 'stop-provider-boundary';
+		const taskId = TaskId.make(recordId('task-stop-provider-boundary'));
+		await harness.runtime.runPromise(submit(agents, harness, taskId, 'Start the work.'));
+
 		const running = harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue'),
-				adminSubject,
-				'web',
-				conversationId,
-				'input',
-				Agents.userAgentInput('Start the work.')
-			)
+			agents.execute(harness.effectId('execute'), adminSubject, taskId)
 		);
 		await providerStarted;
-		await harness.runtime.runPromise(
-			agents.stop(harness.effectId('stop'), adminSubject, conversationId)
-		);
-		release();
-		expect((await running).status).toBe('failed');
 		expect(
-			await harness.database.query(
-				`select lane.state, run.status, run.disposition
-				 from agent_lane lane join agent_run run on run.conversation_id = lane.conversation_id
-				 where lane.conversation_id = $1`,
-				[conversationId]
+			await harness.runtime.runPromise(
+				agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
 			)
-		).toEqual([{ state: 'stopped', status: 'aborted', disposition: 'stopped' }]);
+		).toEqual({ taskId, status: 'stopped' });
+		releaseProvider();
+		await expect(running).rejects.toMatchObject({ _tag: 'Bolt.TaskRuntime.Error' });
+
 		expect(
 			await harness.database.query(
-				`select count(*)::int as count from chat_message
-				 where conversation_id = $1 and role = 'assistant'`,
-				[conversationId]
+				`select task.status as task_status, run.status as run_status
+				 from agent_task task join agent_run run on run.task_id = task.id
+				 where task.id = $1`,
+				[taskId]
+			)
+		).toEqual([{ task_status: 'stopped', run_status: 'stopped' }]);
+		expect(
+			await harness.database.query(
+				`select count(*)::int as count from agent_message
+				 where task_id = $1 and author->>'kind' = 'agent'`,
+				[taskId]
 			)
 		).toEqual([{ count: 0 }]);
 	});
 
-	it('only continues a stopped active run through explicit resume', async () => {
+	it('refuses ordinary admission into a stopped Task', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) =>
-				request._tag === 'Models'
+				request._tag === 'Catalog'
 					? { _tag: 'Success', value: catalog }
-					: { _tag: 'Success', value: { output: { role: 'assistant', content: 'Resumed.' } } }
+					: request._tag === 'Generate'
+						? { _tag: 'Success', value: generated(request, 'done') }
+						: {
+								_tag: 'Failure',
+								error: {
+									code: 'unsupported',
+									message: 'embedding is not bound',
+									retryable: false,
+									outcome: 'known'
+								}
+							}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
-		const conversationId = 'resume-active-run';
-		const runId = 'stopped-run';
-		await harness.database.query(
-			`insert into chat_session
-				(conversation_id, agent_name, user_id, sandbox_key, visibility)
-			 values ($1, 'web', $2, $2, 'personal')`,
-			[conversationId, adminSubject.userId]
-		);
-		await harness.database.query(
-			`insert into chat_message
-				(message_id, conversation_id, role, content_kind, content_text, search_text, semantic_hash)
-				 values ('resume-input', $1, 'user', 'text', 'Continue safely.', 'Continue safely.', 'resume-hash')`,
-			[conversationId]
-		);
-		const sequenceRows = await harness.database.query(
-			'select sequence from chat_message where message_id = $1',
-			['resume-input']
-		);
-		const sequence = sequenceRows[0]?.sequence;
-		if (typeof sequence !== 'number') throw new Error('missing input boundary');
-		await harness.database.query(
-			`insert into agent_run
-				(run_id, conversation_id, generation, status, started_at, cause, input_boundary,
-				 subject_snapshot, authority_fingerprint, agent_release_id, resolved_model, depth)
-			 values ($1, $2, 1, 'running', 1, 'input', $3, $4::jsonb, 'authority', 'release',
-				 $5::jsonb, 0)`,
-			[
-				runId,
-				conversationId,
-				sequence,
-				JSON.stringify(adminSubject),
-				JSON.stringify({ id: 'test-model', contextTokens: 128_000 })
-			]
-		);
-		await harness.database.query(
-			`insert into agent_lane
-				(conversation_id, state, active_run_id, active_generation, requested_generation)
-			 values ($1, 'active', $2, 1, 1)`,
-			[conversationId, runId]
-		);
 		const agents = await harness.runtime.runPromise(Agents.Service);
+		const taskId = TaskId.make(recordId('task-stopped-admission'));
+		await harness.runtime.runPromise(submit(agents, harness, taskId, 'Initial work.'));
 		await harness.runtime.runPromise(
-			agents.stop(harness.effectId('stop-before-resume'), adminSubject, conversationId)
+			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
 		);
-		expect(
-			await harness.database.query(
-				'select state, active_run_id from agent_lane where conversation_id = $1',
-				[conversationId]
-			)
-		).toEqual([{ state: 'stopped', active_run_id: runId }]);
-		await harness.runtime.runPromise(
-			agents.resume(harness.effectId('resume'), adminSubject, conversationId)
-		);
-		expect(
-			await harness.database.query(
-				`select run_id, status, disposition, cause, driver_epoch from agent_run
-				 where conversation_id = $1 order by generation`,
-				[conversationId]
-			)
-		).toEqual([
-			{ run_id: runId, status: 'aborted', disposition: 'stopped', cause: 'input', driver_epoch: 0 },
-			{
-				run_id: `run:resume:${harness.effectId('resume')}`,
-				status: 'completed',
-				disposition: null,
-				cause: 'resume',
-				driver_epoch: 1
-			}
-		]);
-		expect(
-			await harness.database.query(
-				`select role, content_text from chat_message
-				 where conversation_id = $1 order by sequence`,
-				[conversationId]
-			)
-		).toEqual([
-			{ role: 'user', content_text: 'Continue safely.' },
-			{ role: 'assistant', content_text: 'Resumed.' }
-		]);
+
+		await expect(
+			harness.runtime.runPromise(submit(agents, harness, taskId, 'This is not a resume.'))
+		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
 	});
 });

@@ -65,7 +65,7 @@
 	setStorageScope(() => model.activeOrganization.id);
 
 	const mobileTitle = $derived(
-		[...model.system, ...model.applications].find((item) => item.active)?.label ??
+		model.sections.flatMap((section) => section.items).find((item) => item.active)?.label ??
 			model.activeOrganization.name
 	);
 	let switchingOrganization = $state<WorkspaceOrganizationOption | null>(null);

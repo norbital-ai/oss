@@ -22,11 +22,15 @@ import {
 import { type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { Cause, Clock, Deferred, Effect, Layer, Result, Schema, SchemaAST } from 'effect';
 import {
+	AIRequest,
 	CollectionMutationBaseVersion,
 	CollectionMutationIdempotencyKey,
 	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
+	compactSyncChanges,
 	EffectId,
+	ModelId,
+	ProviderCallId,
 	type CollectionMutateRequest,
 	type CollectionMutationSettlement,
 	type SyncChange,
@@ -34,6 +38,13 @@ import {
 	type SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
+import {
+	compileCollectionPredicate,
+	compileOrderTerms,
+	policyIndexRequirements,
+	WhereCompileError,
+	type OrderTerm
+} from '#lib/runtime/access/effective-plan.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { refusalOf } from '#lib/authoring/refusal.js';
@@ -63,14 +74,6 @@ import {
 	watchesOperation,
 	type SendSubscription
 } from '#lib/runtime/integrations/outbox.js';
-import {
-	compileOrderTerms,
-	compileWhere,
-	makeWhereContext,
-	WhereCompileError,
-	type OrderTerm,
-	type WhereContext
-} from '#lib/runtime/collections/read/where.js';
 import {
 	SEARCH_DOCUMENT_COLUMN,
 	prepareSearchPlan,
@@ -118,7 +121,16 @@ import {
 	type PrepareDeclarativeGraphPorts,
 	type RelationshipSnapshot
 } from '#lib/runtime/collections/write/declarative-prepare.js';
-import { writeRecordKey, type WritableManyRelation } from '#lib/runtime/collections/write/plan.js';
+import {
+	MAX_ORDINARY_MUTATION_CHANGED_ROWS,
+	captureFieldsForWorkspace,
+	ordinaryMutationChangedRowCount,
+	projectLinkAndRouteValues,
+	writeOperationChangesRow,
+	writeRecordKey,
+	type DeclaredCaptureFields,
+	type WritableManyRelation
+} from '#lib/runtime/collections/write/plan.js';
 import {
 	statementPlanFor,
 	type PredicateAssertionExpectation,
@@ -176,7 +188,7 @@ export type {
 	QueryRow,
 	ResumeError
 } from './collections.contract.js';
-import { collectionQueryTable, relationalSchema } from '#lib/compiler/relational-schema.js';
+import { collectionQueryTable, relationalSchema } from '#lib/runtime/schema/relational-schema.js';
 import {
 	decodeReferenceRow,
 	encodeReferenceValues,
@@ -738,23 +750,66 @@ const writableValues = (
  */
 const compiledFilter = (
 	input: QueryInput,
-	context: WhereContext
+	definition: WorkspaceDefinition,
+	qualifier?: string
 ): Effect.Effect<SQL, WhereCompileError> => {
 	const authored =
-		input.where === undefined ? Result.succeed(sql`true`) : compileWhere(input.where, context);
+		input.where === undefined
+			? Result.succeed(sql`true`)
+			: Result.map(
+					compileCollectionPredicate({
+						definition,
+						collection: input.collection,
+						where: input.where,
+						...(qualifier === undefined ? {} : { qualifier }),
+						node: 'query.where'
+					}),
+					({ sql: statement }) => statement
+				);
 	if (Result.isFailure(authored)) return Effect.fail(authored.failure);
 	if (input.userFilter === undefined) return Effect.succeed(authored.success);
-	const narrowed = compileWhere(input.userFilter, context);
+	const narrowed = Result.map(
+		compileCollectionPredicate({
+			definition,
+			collection: input.collection,
+			where: input.userFilter,
+			...(qualifier === undefined ? {} : { qualifier }),
+			node: 'query.userFilter'
+		}),
+		({ sql: statement }) => statement
+	);
 	return Result.isFailure(narrowed)
 		? Effect.fail(narrowed.failure)
 		: Effect.succeed(and(authored.success, narrowed.success) ?? authored.success);
 };
 
-export const layerWith = (randomId: () => string = () => globalThis.crypto.randomUUID()) =>
+/** Projects the canonical effective-plan relation/routing manifest into the write-capture shape. */
+const effectivePlanCaptureManifest = (
+	definition: WorkspaceDefinition
+): DeclaredCaptureFields => {
+	const manifest = new Map<string, Set<string>>();
+	for (const collection of definition.collections) manifest.set(collection.name, new Set());
+	for (const requirement of policyIndexRequirements(definition)) {
+		const fields = manifest.get(requirement.collection) ?? new Set<string>();
+		fields.add(requirement.field);
+		manifest.set(requirement.collection, fields);
+	}
+	return Object.fromEntries(
+		[...manifest].map(([collection, fields]) => [collection, [...fields].toSorted()])
+	);
+};
+
+export const layerWith = (
+	randomId: () => string = () => globalThis.crypto.randomUUID()
+) =>
 	Layer.effect(
 		Service,
 		Effect.gen(function* () {
 			const workspace = yield* Workspace.Service;
+			const captureFields = captureFieldsForWorkspace(
+				workspace.definition,
+				effectivePlanCaptureManifest(workspace.definition)
+			);
 			const tenant = yield* TenantScope.Service;
 			const access = yield* AccessControl.Service;
 			const database = yield* Database.Service;
@@ -1861,22 +1916,39 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// asks for; exactly one model call per explicit semantic request, none for any string.
 				const embed = (term: string): Promise<ReadonlyArray<number>> =>
 					Effect.runPromise(
-						Effect.map(
-							ai.execute(EffectId.make(`${effectId}:semantic-query`), {
-								_tag: 'Embed',
-								model: definition.embedding?.model ?? 'default',
-								inputs: [{ content: [{ type: 'text', text: term }] }],
-								...(definition.embedding?.dimensions === undefined
-									? {}
-									: { dimensions: definition.embedding.dimensions })
-							}),
-							(response) => {
-								const output = response.output;
-								return Array.isArray(output) && Array.isArray(output[0])
-									? (output[0] as ReadonlyArray<number>)
-									: [];
+						Effect.gen(function* () {
+							const embedding = definition.embedding;
+							if (embedding?.model === undefined) {
+								return yield* Effect.fail(
+									refusal({
+										field: 'search',
+										message: `Collection '${definition.name}' requires an explicit embedding model for semantic search.`
+									})
+								);
 							}
-						)
+							const callScope = `${effectId}:semantic-query`;
+							const response = yield* ai.embed(
+								EffectId.make(callScope),
+								AIRequest.cases.Embed.make({
+									callId: ProviderCallId.make(callScope),
+									modelId: ModelId.make(embedding.model),
+									inputs: [term],
+									...(embedding.dimensions === undefined
+										? {}
+										: { dimensions: embedding.dimensions })
+								})
+							);
+							const vector = response.embeddings[0];
+							if (vector === undefined || vector.length === 0) {
+								return yield* Effect.fail(
+									refusal({
+										field: 'search.probe',
+										message: 'The embedder returned no vector probe.'
+									})
+								);
+							}
+							return vector;
+						})
 					);
 				const planned = yield* Effect.promise(() => prepareSearchPlan(input, context, embed));
 				return Result.isFailure(planned)
@@ -1901,17 +1973,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const readAccess = yield* policy.read(subject, input.collection);
 				const refusal = afterAuthorization?.();
 				if (refusal !== undefined) return yield* refusal;
-				const context = makeWhereContext(
-					input.collection,
-					definition.fields,
-					workspace.definition,
-					qualifier
-				);
 				return {
 					definition,
 					policy,
-					context,
-					compiled: yield* compiledFilter(input, context),
+					compiled: yield* compiledFilter(input, workspace.definition, qualifier),
 					searched: yield* searchPlan(
 						EffectId.make(`${effectId}:search`),
 						definition,
@@ -1959,7 +2024,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				subject: Identity.Subject,
 				input: QueryInput
 			) {
-				const { context, policy, compiled, searched, visibility } = yield* prepareRead(
+				const { policy, compiled, searched, visibility } = yield* prepareRead(
 					effectId,
 					subject,
 					input,
@@ -1972,7 +2037,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						message:
 							'Ranked search pagination requires a cursor carrying the lexical rank or semantic distance.'
 					});
-				const ordering = compileOrderTerms(input.orderBy, context);
+				const ordering = compileOrderTerms(
+					workspace.definition,
+					input.collection,
+					input.orderBy
+				);
 				const seekResult = compileCollectionCursorSeek(
 					input.after,
 					ordering,
@@ -2064,8 +2133,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				if (input.maxDistance !== undefined && !Number.isFinite(input.maxDistance)) {
 					return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
 				}
-				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
-				const compiled = yield* compiledFilter(input, context);
+				const compiled = yield* compiledFilter(input, workspace.definition);
 				const visibility = readAccess.predicate;
 				const limit = Math.min(500, Math.max(1, Math.trunc(input.limit ?? 100)));
 				const table = queryTableFor(input.collection, definition.fields);
@@ -2801,7 +2869,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					.join(' union all ');
 				const captureStatement = transactionSql(
 					captureSql.length > 0
-						? `${captureSql} order by "__bolt_graph_ordinal"`
+						? `with captured as materialized (${captureSql}), capture_guard as materialized (select bolt_assert((select count(*) = ${capturedOperations.length} from captured), 'The ordinary mutation capture omitted an expected row.')) select captured.* from capture_guard left join captured on true where captured."__bolt_graph_ordinal" is not null order by captured."__bolt_graph_ordinal"`
 						: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
 					captureParameters
 				);
@@ -2897,6 +2965,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					})
 				);
 				const records = new Map<string, Readonly<Record<string, unknown>>>();
+				const capturedRows = new Map<string, Readonly<Record<string, Schema.Json>>>();
 				for (const row of result.rows) {
 					if (!isJsonObject(row)) continue;
 					const ordinal = row['__bolt_graph_ordinal'];
@@ -2904,14 +2973,70 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (typeof ordinal !== 'number' || !isJsonObject(record)) continue;
 					const operation = capturedOperations[ordinal];
 					if (operation === undefined) continue;
+					const key = `${operation.collection}\u0000${operation.id}`;
+					capturedRows.set(key, record);
 					records.set(
-						`${operation.collection}\u0000${operation.id}`,
+						key,
 						decodeReferenceRow(record, operation.definition.fields) as Readonly<
 							Record<string, unknown>
 						>
 					);
 				}
-				return { operations, records } satisfies AppliedDeclarativeGraph;
+				const snapshotRow = (
+					operation: GraphPreparedOperation
+				): Readonly<Record<string, unknown>> | undefined => {
+					if (operation.snapshot === undefined) return operation.previous;
+					try {
+						const decoded: unknown = JSON.parse(operation.snapshot);
+						return isJsonObject(decoded) ? decoded : operation.previous;
+					} catch {
+						return operation.previous;
+					}
+				};
+				const changes = compactSyncChanges(
+					operations.flatMap((operation): ReadonlyArray<SyncChange> => {
+						if (!writeOperationChangesRow(operation)) return [];
+						const fields = captureFields.get(operation.collection) ?? new Set<string>();
+						const key = `${operation.collection}\u0000${operation.id}`;
+						const afterRow = capturedRows.get(key);
+						const beforeRow = snapshotRow(operation);
+						const mutationId = browserMutation?.idempotencyKey;
+						const common = {
+							collection: operation.collection,
+							id: operation.id,
+							...(mutationId === undefined ? {} : { mutationId })
+						};
+						if (operation.action === 'create')
+							return afterRow === undefined
+								? []
+								: [
+										{
+											...common,
+											operation: 'insert',
+											after: projectLinkAndRouteValues(afterRow, fields)
+										}
+									];
+						if (operation.action === 'delete')
+							return [
+								{
+									...common,
+									operation: 'delete',
+									before: projectLinkAndRouteValues(beforeRow ?? {}, fields)
+								}
+							];
+						return afterRow === undefined
+							? []
+							: [
+									{
+										...common,
+										operation: 'update',
+										before: projectLinkAndRouteValues(beforeRow ?? {}, fields),
+										after: projectLinkAndRouteValues(afterRow, fields)
+									}
+								];
+					})
+				);
+				return { operations, records, batch: { changes } } satisfies AppliedDeclarativeGraph;
 			});
 
 			type GraphApprovalContext = Readonly<{
@@ -3077,7 +3202,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						};
 					});
 					const firstRoot = roots[0];
-					if (firstRoot === undefined) return { records: [], changes: [] };
+					if (firstRoot === undefined) return { records: [], batch: { changes: [] } };
 					const browserMutation = options?.approval?.browserMutation ?? options?.browserMutation;
 
 					const preparedGraphs: Array<{
@@ -3376,12 +3501,19 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									if (preparedGraphs.length === 0) return;
 									const approvedRoot = options?.approval?.approved === true ? roots[0] : undefined;
 									const operations = preparedGraphs.flatMap((graph) => graph.operations);
+									const changedRows = ordinaryMutationChangedRowCount(operations);
+									if (changedRows > MAX_ORDINARY_MUTATION_CHANGED_ROWS)
+										return yield* graphRefusal(
+											collection,
+											firstRoot.rootAction,
+											`An ordinary mutation may change at most ${MAX_ORDINARY_MUTATION_CHANGED_ROWS} rows; this graph changes ${changedRows}.`
+										);
 									// PREPARE already owns graph discovery and normalization. COMMIT only orders the
 									// resulting operations and proves that every operation has one loud guard.
 									const compiled = statementPlanFor(operations, {
 										...(browserMutation === undefined ? {} : { ledgerClaim: browserMutation })
 									});
-									applied = yield* applyDeclarativeGraph(
+									const committedGraph = yield* applyDeclarativeGraph(
 										effectId,
 										subject,
 										compiled,
@@ -3430,6 +3562,25 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 											})
 										)
 									);
+									applied = committedGraph;
+									if (committedGraph.batch.changes.length > 0) {
+										const committed = committedGraph.operations
+											.filter(writeOperationChangesRow)
+											.map((operation) => operation.id);
+										yield* syncCommit
+											.publish(EffectId.make(`${effectId}:publish`), committedGraph.batch)
+											.pipe(
+												Effect.mapError((error) =>
+													mutationPhaseFailure(
+														'settle',
+														committedGraph.batch.changes[0]?.collection ?? collection,
+														committed,
+														error,
+														'sync-commit'
+													)
+												)
+											);
+									}
 								})
 							);
 						const settleAppliedGraph = () =>
@@ -3524,18 +3675,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							);
 						}
 					}
-					const changes: Array<{ collection: string; recordId: string }> = [];
-					const seenChanges = new Set<string>();
-					for (const operation of applied?.operations ?? []) {
-						const key = `${operation.collection}\u0000${operation.id}`;
-						if (seenChanges.has(key)) continue;
-						seenChanges.add(key);
-						changes.push({ collection: operation.collection, recordId: operation.id });
-					}
-					// A long-running automation or agent keeps this invocation open while later writes
-					// commit. Publish this checkpoint now so mounted collection queries repaint per
-					// committed message part/record instead of receiving the whole turn at its end.
-					yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), { changes });
 					return {
 						records: roots.map(
 							(root) =>
@@ -3544,7 +3683,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									id: root.rootId
 								}
 						),
-						changes
+						batch: applied?.batch ?? { changes: [] }
 					};
 				});
 			const count = Effect.fn('Collections.count')(function* (effectId, subject, input) {
@@ -3587,7 +3726,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 */
 			const findGrouped: Interface['findGrouped'] = Effect.fn('Collections.findGrouped')(
 				function* (effectId, subject, input) {
-					const { definition, policy, context, compiled, searched, visibility } =
+					const { definition, policy, compiled, searched, visibility } =
 						yield* prepareRead(effectId, subject, input, ROOT_ALIAS, () =>
 							input.lanes.length > GROUPED_RESULT_LIMIT
 								? new WhereCompileError({
@@ -3616,7 +3755,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						where:
 							and(compiled, searched.predicate, AccessControl.predicateExpression(visibility)) ??
 							always(),
-						ordering: compileOrderTerms(input.orderBy, context),
+						ordering: compileOrderTerms(
+							workspace.definition,
+							input.collection,
+							input.orderBy
+						),
 						searchOrdering:
 							searched.mode === 'lexical'
 								? desc(searched.rank)
@@ -4018,10 +4161,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const settlement = yield* settleOutcome(committed);
 				return {
 					...settlement,
-					changes: written.success.changes.map((change) => ({
-						...change,
-						mutationId: input.idempotencyKey
-					}))
+					changes: written.success.batch.changes
 				};
 			});
 			/** The history/audit gate: the current row must remain visible under the history-capable subject. */
@@ -4072,12 +4212,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							cause.outcome._tag === 'Committed'
 								? Effect.succeed({
 										records: [{ id: cause.outcome.id }],
-										changes: [
-											{
-												collection: cause.outcome.collection,
-												recordId: cause.outcome.id
-											}
-										]
+										batch: { changes: [] }
 									})
 								: Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
 						)
@@ -4096,7 +4231,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						Effect.catchIf(isBrowserMutationReplay, () =>
 							Effect.succeed({
 								records: [],
-								changes: [{ collection, recordId: id }]
+								batch: { changes: [] }
 							})
 						),
 						Effect.catchIf(
@@ -4182,7 +4317,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						 */
 						const document = inputs[0]?.values;
 						const rows = yield* runAuthoredHandler(() =>
-							declared.handler({ input: document, api })
+							declared.handler({ input: document }, api)
 						);
 						if (!Array.isArray(rows)) {
 							return yield* new AccessControl.AccessDenied({
@@ -4238,7 +4373,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (declared !== undefined) {
 						const api = authoringApi(effectId, subject);
 						const records = yield* findMany(effectId, subject, input);
-						return yield* runAuthoredHandler(() => declared.handler({ records, api }));
+						return yield* runAuthoredHandler(() => declared.handler({ records }, api));
 					}
 					return yield* findMany(effectId, subject, input);
 				}) as Interface['export'],

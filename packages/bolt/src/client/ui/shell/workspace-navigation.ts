@@ -1,6 +1,8 @@
 import { Result } from 'effect';
+import type { ManifestDestination } from '@norbital-ai/bolt-protocol';
 import type {
 	WorkspaceNavigationItem,
+	WorkspaceNavigationSection,
 	WorkspaceOrganizationOption
 } from '@norbital-ai/ui/workspace-shell';
 import type { AppDeclaration } from '#lib/authoring/workspace-schema.js';
@@ -10,37 +12,70 @@ type NavigationLabelResolver = {
 	t(key: string, vars?: { readonly [name: string]: string | number }): string;
 };
 
+type ShellMessageKey =
+	| 'bolt.shell.people'
+	| 'bolt.shell.settings'
+	| 'bolt.shell.approvals'
+	| 'bolt.shell.automations'
+	| 'bolt.shell.operations'
+	| 'bolt.shell.administration'
+	| 'bolt.shell.applications'
+	| 'bolt.shell.workspaceStudio'
+	| 'bolt.shell.organization'
+	| 'bolt.shell.agents'
+	| 'bolt.shell.secrets';
+
 export type HostPlugin = Readonly<{
 	readonly key: string;
 	readonly label: string;
 	readonly icon: string | null;
 	readonly entry: string;
-	readonly placement?: 'sidebar' | 'settings' | 'footer';
+	readonly placement?: 'operations' | 'administration' | 'settings' | 'sidebar' | 'footer';
 	readonly adminOnly?: boolean;
 }>;
 
 export const WORKSPACE_SETTINGS_PATH = '/people';
 export const APPROVALS_PATH = '/approvals';
+export const AUTOMATIONS_PATH = '/automations';
 const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
 export const AGENT_PATH = '/agent';
 
-const NavigationText = {
-	humanize: (value: string): string =>
-		value.replaceAll(/[-_]/g, ' ').replaceAll(/\b\w/g, (character) => character.toUpperCase())
-};
+const humanize = (value: string): string =>
+	value.replaceAll(/[-_]/g, ' ').replaceAll(/\b\w/g, (character) => character.toUpperCase());
 
 const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
 export const ENVOYS_SETTINGS_PATH = hostPluginSurfaceHref('envoys');
+export const ENVIRONMENT_SETTINGS_PATH = hostPluginSurfaceHref('environment_secrets');
 
-/**
- * The surface a `/__host/…` path names, or `null` if the path names none.
- *
- * The inverse of `hostPluginSurfaceHref`, declared beside it so the two cannot drift. The host used
- * to carry its own copy of this — a private `resolveHostPluginKey` that re-derived the prefix and
- * the decoding rules, and would have kept working while silently disagreeing about an encoded key.
- */
+const applicationHref = (name: string): string => `/app/${name}`;
+
+export const automationsHref = (selection?: string): string => {
+	if (selection === undefined || selection === '') return AUTOMATIONS_PATH;
+	return `${AUTOMATIONS_PATH}?${new URLSearchParams({ automation: selection }).toString()}`;
+};
+
+export const studioSourceHref = (sourcePath: string): string => {
+	const query = new URLSearchParams({ source: sourcePath });
+	return `${hostPluginSurfaceHref('workspace-studio')}?${query.toString()}`;
+};
+
+export const studioSourceFromSearch = (search: string): string | undefined => {
+	const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+	const source = params.get('source')?.trim();
+	return source === undefined || source === '' ? undefined : source;
+};
+
+export const manifestDestinationHref = (destination: ManifestDestination): string | null => {
+	if (destination.kind === 'app') return applicationHref(destination.name);
+	if (destination.surface === 'approvals') return APPROVALS_PATH;
+	if (destination.surface === 'automations') return automationsHref(destination.selection);
+	if (destination.surface === 'envoys') return ENVOYS_SETTINGS_PATH;
+	if (destination.surface === 'environment') return ENVIRONMENT_SETTINGS_PATH;
+	return null;
+};
+
 export const hostPluginKeyFromPath = (pathname: string): string | null => {
 	const prefix = `${HOST_PLUGIN_SURFACE_PREFIX}/`;
 	if (!pathname.startsWith(prefix)) return null;
@@ -52,21 +87,13 @@ export const hostPluginKeyFromPath = (pathname: string): string | null => {
 	);
 };
 
-/**
- * The surfaces a compiled workspace offers beside its own apps, declared once.
- *
- * This list existed twice — as `DEFAULT_PLUGINS` inside the shell component and again as
- * `HOST_PLUGINS` inside the host's own shell, which passed its copy in as a prop. Two lists of the
- * same four surfaces, and only the host's decided what the sidebar showed, so editing the one that
- * reads like the default changed nothing at all.
- */
 export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 	{
 		key: 'workspace-studio',
 		label: 'Workspace Studio',
 		icon: 'product:studio',
 		entry: hostPluginSurfaceHref('workspace-studio'),
-		placement: 'sidebar',
+		placement: 'administration',
 		adminOnly: true
 	},
 	{
@@ -78,10 +105,6 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		adminOnly: true
 	},
 	{
-		// Named for the thing it configures. It used to be "Agents", which was a level of hierarchy
-		// with one node — every channel pointed at the single synthesized agent — so the page listed
-		// one card whose only content was the channels beneath it. An envoy *is* an agent on a
-		// transport, and the row is the envoy.
 		key: 'envoys',
 		label: 'Envoys',
 		icon: 'lucide:bot',
@@ -90,10 +113,6 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		adminOnly: true
 	},
 	{
-		// Split from the envoys: a transport is how a workspace talks, a secret is a value it needs to
-		// talk at all. Putting both behind one label meant neither had a form — one page cannot be
-		// driven by declared envoys and declared environment at once. "Environment secrets" is the
-		// name the vault has: it is backed by the workspace's own reserved root `+env.ts`.
 		key: 'environment_secrets',
 		label: 'Environment secrets',
 		icon: 'lucide:key-round',
@@ -118,19 +137,8 @@ const resolveNavigationLabel = (
 	return key === undefined ? fallback : i18n.t(key);
 };
 
-/**
- * Resolve built-in shell copy without exposing an untranslated key.
- *
- * `I18nApi.t` intentionally returns the key when a catalog does not contain it, so a nullish
- * fallback after `t(...)` can never run. Shell navigation may briefly combine a newer navigation
- * model with an older compiled catalog during local linking or a rolling release; checking `has`
- * preserves readable chrome in that state while still using the active locale when it is present.
- */
-const resolveShellLabel = (
-	i18n: NavigationLabelResolver | undefined,
-	key: string,
-	fallback: string
-): string => (i18n?.has(key) === true ? i18n.t(key) : fallback);
+const resolveShellLabel = (i18n: NavigationLabelResolver, key: ShellMessageKey): string =>
+	i18n.t(key);
 
 export const resolveAppHeaderTitle = (
 	i18n: NavigationLabelResolver | undefined,
@@ -203,14 +211,6 @@ export const appAccessAllowed = (
 	});
 };
 
-/**
- * The containers an entry sits inside, nearest first.
- *
- * Two sources, because hosts build the tree two ways: an entry may declare `parent` outright, and a
- * nested app's name is already a path (`hr_controller/leave`) whose own prefix names the group even
- * when nothing declared the link. The walk is bounded and refuses to revisit a name, so a workspace
- * that manages to declare a cycle produces a short chain instead of hanging the sidebar.
- */
 const containersOf = (
 	app: ShellApp,
 	byName: ReadonlyMap<string, ShellApp>
@@ -228,26 +228,10 @@ const containersOf = (
 	return chain;
 };
 
-/**
- * The entries a subject may see, containers included.
- *
- * The access list names *declared* apps, and a group is not one of them: it is a `+group.ts` sitting
- * beside the app files, so `AccessControl.visibleApps` answers a policy written as
- * `apps: ['hr_controller']` with the eight leaves underneath and never with the group itself.
- * Filtering the host's navigation entries one by one against that list therefore deleted the very
- * heading the grant was written on, and the sidebar came back flat — eight orphaned children
- * promoted to top level, which is precisely the tree this module exists to avoid.
- *
- * So a container survives on its children's behalf: kept while anything beneath it is allowed,
- * dropped only when nothing is. That is what hides "HR Controller" from an employee while leaving it
- * intact, with its children nested under it, for someone in HR.
- */
 export const filterAccessibleApps = <App extends ShellApp>(
 	apps: ReadonlyArray<App>,
 	accessibleAppNames: ReadonlyArray<string> | null | undefined
 ): ReadonlyArray<App> => {
-	// `null`/absent stays "the host has not restricted anything" — the only honest reading when the
-	// host never had a list to give. Every caller that predates access filtering keeps its behaviour.
 	const accessible = accessibleAppNames ?? null;
 	if (accessible === null) return apps;
 	const byName = new Map(apps.map((app) => [app.name, app] as const));
@@ -262,7 +246,6 @@ export const filterAccessibleApps = <App extends ShellApp>(
 
 type ShellApp = AppDeclaration & {
 	readonly icon?: string | undefined;
-	/** `null` when the app declares none — distinct from "not yet normalised". */
 	readonly description?: string | null | undefined;
 	readonly thumbnail?: string | null | undefined;
 	readonly banner?: string | undefined;
@@ -272,11 +255,6 @@ type ShellApp = AppDeclaration & {
 
 type ApplicationNavigationInput = Readonly<{
 	readonly apps: ReadonlyArray<ShellApp>;
-	/**
-	 * What `AccessControl.visibleApps` answered for this session, or `null`/absent when the host has
-	 * no such list. Absent is unrestricted, not empty: a host that never asked must keep the sidebar
-	 * it had, and a host that asked and got nothing back is saying something quite different.
-	 */
 	readonly accessibleAppNames?: ReadonlyArray<string> | null;
 	readonly currentPath: string;
 	readonly i18n?: NavigationLabelResolver;
@@ -285,8 +263,9 @@ type ApplicationNavigationInput = Readonly<{
 type SystemNavigationInput = Readonly<{
 	readonly plugins?: ReadonlyArray<HostPlugin>;
 	readonly isAdmin: boolean;
+	readonly canAccessAutomations?: boolean;
 	readonly currentPath: string;
-	readonly i18n?: NavigationLabelResolver;
+	readonly i18n: NavigationLabelResolver;
 }>;
 
 const toApplicationItem = (
@@ -307,21 +286,14 @@ const toApplicationItem = (
 					(child) =>
 						child.key === `${app.name}/${app.defaultChild}` || child.key === app.defaultChild
 				) ?? children[0]);
-	const href = landing?.href ?? `/app/${app.name}`;
+	const href = landing?.href ?? applicationHref(app.name);
 	return {
 		key: app.name,
-		label: resolveNavigationLabel(
-			input.i18n,
-			app.name,
-			app.label || NavigationText.humanize(app.name)
-		),
+		label: resolveNavigationLabel(input.i18n, app.name, app.label || humanize(app.name)),
 		icon: app.icon ?? 'lucide:layout-grid',
 		href,
 		active: isUnder(input.currentPath, href) || children.some((child) => child.active === true),
 		featureColor: 'customApps',
-		// The item type documents both of these as what the finder and the overview cards show, and
-		// nothing set either — so every card printed "Open <label>" over the same placeholder gradient
-		// while the workspace had published a description and a thumbnail for each one.
 		...(app.description == null ? {} : { description: app.description }),
 		...(app.thumbnail == null ? {} : { thumbnail: app.thumbnail }),
 		...(children.length > 0 ? { children } : {})
@@ -356,21 +328,31 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 	const visible = plugins.filter(
 		(plugin) => plugin.placement !== 'footer' && (input.isAdmin || plugin.adminOnly !== true)
 	);
-	/*
-	 * Every plugin entry wears a badge naming its provenance: a plugin is a surface the *host*
-	 * provided, and the entry beside it — the workspace's own People page — is the tenant's own.
-	 * The badge is the host's mark, drawn as an icon so it never truncates a label; a text pill
-	 * measuring "Colony" once clipped "Environment secrets" in a 218px sidebar row.
-	 */
+	const pluginSection = (plugin: HostPlugin): 'operations' | 'administration' | 'settings' => {
+		if (plugin.placement === 'operations') return 'operations';
+		if (plugin.placement === 'settings') return 'settings';
+		return 'administration';
+	};
 	const pluginItem = (plugin: HostPlugin): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
+		const labelKey: ShellMessageKey | undefined =
+			plugin.key === 'workspace-studio'
+				? 'bolt.shell.workspaceStudio'
+				: plugin.key === 'organization'
+					? 'bolt.shell.organization'
+					: plugin.key === 'envoys'
+						? 'bolt.shell.agents'
+						: plugin.key === 'environment_secrets'
+							? 'bolt.shell.secrets'
+							: undefined;
 		return {
 			key: plugin.key,
-			label: plugin.label,
+			label: labelKey === undefined ? plugin.label : resolveShellLabel(input.i18n, labelKey),
 			icon: plugin.icon,
 			href,
 			active: isUnder(input.currentPath, href),
-			badge: 'product:colony'
+			badge: 'product:colony',
+			section: pluginSection(plugin)
 		};
 	};
 	const settingsChildren: WorkspaceNavigationItem[] = [
@@ -378,14 +360,15 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 			? [
 					{
 						key: 'workspace-people',
-						label: resolveShellLabel(input.i18n, 'bolt.shell.people', 'People'),
+						label: resolveShellLabel(input.i18n, 'bolt.shell.people'),
 						icon: 'lucide:users',
 						href: WORKSPACE_SETTINGS_PATH,
-						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
+						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH),
+						section: 'settings'
 					} satisfies WorkspaceNavigationItem
 				]
 			: []),
-		...visible.filter((plugin) => plugin.placement === 'settings').map(pluginItem)
+		...visible.filter((plugin) => pluginSection(plugin) === 'settings').map(pluginItem)
 	];
 	const settings: WorkspaceNavigationItem[] =
 		settingsChildren.length === 0
@@ -393,27 +376,72 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 			: [
 					{
 						key: 'settings',
-						label: resolveShellLabel(input.i18n, 'bolt.shell.settings', 'Settings'),
+						label: resolveShellLabel(input.i18n, 'bolt.shell.settings'),
 						icon: 'lucide:settings',
 						href: settingsChildren[0]?.href ?? WORKSPACE_SETTINGS_PATH,
 						active: settingsChildren.some((item) => item.active),
-						children: settingsChildren
+						children: settingsChildren,
+						section: 'administration'
 					}
 				];
 	return [
 		...settings,
 		{
 			key: 'approvals',
-			label: resolveShellLabel(input.i18n, 'bolt.shell.approvals', 'Approvals'),
+			label: resolveShellLabel(input.i18n, 'bolt.shell.approvals'),
 			icon: 'lucide:shield-check',
 			href: APPROVALS_PATH,
-			active: isUnder(input.currentPath, APPROVALS_PATH)
+			active: isUnder(input.currentPath, APPROVALS_PATH),
+			section: 'operations'
 		},
-		...visible.filter((plugin) => plugin.placement !== 'settings').map(pluginItem)
+		...(input.canAccessAutomations === true
+			? [
+					{
+						key: 'automations',
+						label: resolveShellLabel(input.i18n, 'bolt.shell.automations'),
+						icon: 'product:automations',
+						href: AUTOMATIONS_PATH,
+						active: isUnder(input.currentPath, AUTOMATIONS_PATH),
+						section: 'operations'
+					} satisfies WorkspaceNavigationItem
+				]
+			: []),
+		...visible.filter((plugin) => pluginSection(plugin) !== 'settings').map(pluginItem)
 	];
 };
 
-/** Returns the host plugin whose surface matches the current path, or null. */
+const namedSection = (
+	key: WorkspaceNavigationSection['key'],
+	label: string,
+	items: ReadonlyArray<WorkspaceNavigationItem>,
+	href?: string
+): WorkspaceNavigationSection[] =>
+	items.length === 0 ? [] : [{ key, label, items, ...(href === undefined ? {} : { href }) }];
+
+export const buildWorkspaceNavigationSections = (input: {
+	readonly system: ReadonlyArray<WorkspaceNavigationItem>;
+	readonly applications: ReadonlyArray<WorkspaceNavigationItem>;
+	readonly applicationsHref?: string | undefined;
+	readonly i18n: NavigationLabelResolver;
+}): WorkspaceNavigationSection[] => [
+	...namedSection(
+		'operations',
+		resolveShellLabel(input.i18n, 'bolt.shell.operations'),
+		input.system.filter((item) => item.section === 'operations')
+	),
+	...namedSection(
+		'administration',
+		resolveShellLabel(input.i18n, 'bolt.shell.administration'),
+		input.system.filter((item) => item.section === 'administration')
+	),
+	...namedSection(
+		'applications',
+		resolveShellLabel(input.i18n, 'bolt.shell.applications'),
+		input.applications,
+		input.applicationsHref
+	)
+];
+
 export const resolveHostPluginSurface = (
 	currentPath: string,
 	plugins: ReadonlyArray<{ readonly key: string; readonly entry: string }>

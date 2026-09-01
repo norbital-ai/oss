@@ -1,74 +1,86 @@
 import { describe, expect, it } from 'vitest';
 import {
-	formatSessionCost,
-	toPanelUsage,
-	toSessionTotals
+	aggregateTaskCharges,
+	formatTaskCharge,
+	projectAgentUsage
 } from '../../src/client/ui/agent/transcript.js';
 
-const messages = {
-	messages: [
-		{
-			usage: { inputTokens: 4_000, outputTokens: 200, totalTokens: 4_200, costUsd: 0.01 }
-		},
-		{
-			delegated: true,
-			usage: { inputTokens: 90_000, outputTokens: 900, totalTokens: 90_900, costUsd: 0.24 }
-		}
-	]
-};
+const rootRun = '00000000-0000-4000-8000-000000000301';
+const childRun = '00000000-0000-4000-8000-000000000302';
 
-const session = {
-	usage_cost_usd: 0.25,
-	usage_cost_micro_units: 650_000,
-	usage_cost_currency: 'SGD',
-	usage_total_tokens: 95_100,
-	usage_turns_counted: 2,
-	usage_turns_unreported: 0
-};
+const usageRows = [
+	{
+		call_id: 'call-1',
+		run_id: rootRun,
+		provider: 'openrouter',
+		model: 'openrouter/model-a',
+		operation: 'language',
+		usage: null,
+		charge: { currency: 'USD', coefficient: '1250', scale: 6 },
+		charge_source: 'provider',
+		pricing_version: 'provider-2026-09-01',
+		settlement_id: 'settlement-1',
+		settlement_state: 'settled'
+	},
+	{
+		call_id: 'call-2',
+		run_id: rootRun,
+		provider: 'openrouter',
+		model: 'openrouter/model-a',
+		operation: 'language',
+		usage: null,
+		charge: { currency: 'USD', coefficient: '75', scale: 4 },
+		charge_source: 'price-table',
+		pricing_version: 'prices-4',
+		settlement_id: 'settlement-2',
+		settlement_state: 'settled'
+	},
+	{
+		call_id: 'call-attention',
+		run_id: rootRun,
+		provider: 'openrouter',
+		model: 'openrouter/model-a',
+		operation: 'language',
+		usage: null,
+		charge: { currency: 'USD', coefficient: '999', scale: 2 },
+		charge_source: 'provider',
+		pricing_version: 'provider-2026-09-01',
+		settlement_id: 'settlement-attention',
+		settlement_state: 'attention'
+	},
+	{
+		call_id: 'call-child',
+		run_id: childRun,
+		provider: 'openrouter',
+		model: 'openrouter/model-a',
+		operation: 'language',
+		usage: null,
+		charge: { currency: 'SGD', coefficient: '65', scale: 2 },
+		charge_source: 'price-table',
+		pricing_version: 'prices-4',
+		settlement_id: 'settlement-child',
+		settlement_state: 'settled'
+	}
+];
 
-describe('conversation usage', () => {
-	it('reports the durable conversation total, delegated work included', () => {
-		expect(toSessionTotals(session)).toEqual({
-			costUsd: 0.25,
-			costMicroUnits: 650_000,
-			currency: 'SGD',
-			totalTokens: 95_100,
-			turnsCounted: 2,
-			turnsUnreported: 0
-		});
+describe('exact Task charges', () => {
+	it('aggregates only settled charges for the selected run set with integer arithmetic', () => {
+		const rows = projectAgentUsage(usageRows);
+		expect(aggregateTaskCharges(rows, new Set([rootRun]))).toEqual([
+			{ currency: 'USD', coefficient: 8750n, scale: 6 }
+		]);
+		expect(aggregateTaskCharges(rows, new Set([rootRun, childRun]))).toEqual([
+			{ currency: 'SGD', coefficient: 65n, scale: 2 },
+			{ currency: 'USD', coefficient: 8750n, scale: 6 }
+		]);
 	});
 
-	it('measures the parent window rather than a delegated agent window', () => {
-		expect(toPanelUsage(messages.messages, 200_000).contextTokens).toBe(4_000);
-	});
-
-	it('says nothing when no turn has settled', () => {
-		expect(
-			toSessionTotals({
-				...session,
-				usage_cost_usd: 0,
-				usage_cost_micro_units: 0,
-				usage_cost_currency: null,
-				usage_total_tokens: 0,
-				usage_turns_counted: 0
-			})
-		).toBeNull();
-	});
-
-	it('shows the host invoice amount', () => {
-		expect(formatSessionCost(toSessionTotals(session))).toBe('SGD 0.6500');
-	});
-
-	it('marks incomplete pricing as a floor', () => {
-		expect(
-			formatSessionCost({
-				costUsd: 0.25,
-				costMicroUnits: 650_000,
-				currency: 'SGD',
-				totalTokens: 95_100,
-				turnsCounted: 3,
-				turnsUnreported: 1
-			})
-		).toBe('≥SGD 0.6500');
+	it('formats exact decimal charges only at the display boundary', () => {
+		expect(formatTaskCharge({ currency: 'USD', coefficient: 8750n, scale: 6 })).toBe(
+			'USD 0.00875'
+		);
+		expect(formatTaskCharge({ currency: 'SGD', coefficient: -6500n, scale: 4 })).toBe(
+			'SGD -0.65'
+		);
 	});
 });

@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
 	AIRequest,
-	AIImageAssetPart,
+	AIResponse,
 	FacilityName,
+	ImageAsset,
 	Invocation,
 	PROTOCOL_VERSION,
 	TaskRequest,
@@ -13,62 +14,59 @@ import {
 
 describe('Bolt protocol schemas', () => {
 	it('carries a provider-neutral image asset without carrying its bytes', () => {
-		const part = Schema.decodeUnknownSync(AIImageAssetPart)({
-			type: 'image_asset',
-			image_asset: {
-				key: 'evidence/large.jpg',
-				name: 'large.jpg',
-				mimeType: 'image/jpeg',
-				size: 1_042_884,
-				detail: 'low'
-			}
+		const asset = Schema.decodeUnknownSync(ImageAsset)({
+			key: 'evidence/large.jpg',
+			name: 'large.jpg',
+			mimeType: 'image/jpeg',
+			size: 1_042_884,
+			detail: 'low'
 		});
-		expect(part.image_asset.key).toBe('evidence/large.jpg');
-		expect(JSON.stringify(part)).not.toContain('base64');
+		expect(asset.key).toBe('evidence/large.jpg');
+		expect(JSON.stringify(asset)).not.toContain('base64');
 	});
 
-	it('carries bounded provider-neutral web search and a response schema on AI turns', () => {
+	it('carries only the canonical Effect model boundary and exact provider observation', () => {
 		const decoded = Schema.decodeUnknownSync(AIRequest)({
-			_tag: 'Turn',
-			model: 'provider/model',
+			_tag: 'Generate',
+			callId: 'call-1',
+			modelId: 'provider/model',
 			messages: [{ role: 'user', content: 'Check the current filing.' }],
-			tools: [],
 			maxOutputTokens: 1_024,
-			webSearch: { maxResults: 5, allowedDomains: ['acra.gov.sg'] },
-			responseSchema: {
-				type: 'object',
-				properties: { changed: { type: 'boolean' } },
-				required: ['changed'],
-				additionalProperties: false
-			}
+			output: { _tag: 'Message' },
+			imageAssets: [
+				{ key: 'evidence/filing.pdf', name: 'filing.pdf', mimeType: 'application/pdf', size: 42 }
+			]
 		});
 		expect(decoded).toMatchObject({
-			_tag: 'Turn',
-			webSearch: { maxResults: 5, allowedDomains: ['acra.gov.sg'] },
-			responseSchema: { type: 'object' }
+			_tag: 'Generate',
+			callId: 'call-1',
+			modelId: 'provider/model'
 		});
-		for (const maxResults of [0, 26, 1.5]) {
-			expect(
-				Schema.decodeUnknownResult(AIRequest)({
-					_tag: 'Turn',
-					model: 'provider/model',
-					messages: [],
-					tools: [],
-					maxOutputTokens: 1,
-					webSearch: { maxResults }
-				})._tag
-			).toBe('Failure');
-		}
-		expect(
-			Schema.decodeUnknownResult(AIRequest)({
-				_tag: 'Turn',
+		expect(Object.keys(AIRequest.cases.Generate.fields)).toEqual([
+			'_tag',
+			'callId',
+			'modelId',
+			'messages',
+			'maxOutputTokens',
+			'output',
+			'imageAssets'
+		]);
+		const response = Schema.decodeUnknownSync(AIResponse)({
+			_tag: 'Generated',
+			result: {
+				_tag: 'Message',
+				message: { role: 'assistant', content: 'The filing changed.' }
+			},
+			observation: {
+				callId: 'call-1',
+				provider: 'fixture',
 				model: 'provider/model',
-				messages: [],
-				tools: [],
-				maxOutputTokens: 1,
-				webSearch: { maxResults: 5, allowedDomains: [''] }
-			})._tag
-		).toBe('Failure');
+				operation: 'language',
+				charge: { currency: 'USD', coefficient: '125', scale: 6 },
+				chargeSource: 'provider'
+			}
+		});
+		expect(response._tag).toBe('Generated');
 	});
 
 	it('rejects an unsupported protocol version', () => {
@@ -97,10 +95,10 @@ describe('Bolt protocol schemas', () => {
 				taskId: 'agent-turn-1'
 			});
 		}
-		// 7 adds durable task attempts, claim leases and retry classification to host scheduling. The literal is
+		// 8 is the clean Effect task/model and versioned-prefix Sync cut. The literal is
 		// asserted rather than the constant compared to itself: a bump is a deliberate act, and a
 		// release that changes shape without one is the failure this pins.
-		expect(PROTOCOL_VERSION).toBe(7);
+		expect(PROTOCOL_VERSION).toBe(8);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

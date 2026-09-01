@@ -16,7 +16,7 @@ import {
 	requestedColumns,
 	requestedRelations,
 	selectedColumnNames
-} from '../runtime/collections/with-clause.js';
+} from '../runtime/access/effective-plan.js';
 
 /**
  * States the shape of a record the way a read of it is already stated.
@@ -256,10 +256,9 @@ const hydratedReference = (
  * a relational read writes into a row, and the reason they are asked here rather than guessed from
  * the name.
  *
- * A name that resolves to neither a reference column nor a declared relation is refused. The read
- * path leaves such an entry off, which is right for a read — a surface renders its own fallback rather
- * than a wrong record — and wrong for a shape: the type says the key is there, so a struct that
- * quietly lacked it would make `Schema.Type` a promise the schema does not keep.
+ * A name that resolves to neither a reference column nor a declared relation is refused by both the
+ * shape compiler and the read plan. Missing descriptors and cardinality disagreements also fail
+ * closed; neither path silently omits a requested relationship.
  */
 const relationSchema = (
 	collection: string,

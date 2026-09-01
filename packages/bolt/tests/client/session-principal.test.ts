@@ -6,9 +6,11 @@ import {
 import { describe, expect, it } from 'vitest';
 
 const declare = (principal: string, credential: string): WorkspaceSession => ({
+	workspaceId: 'principal-contract',
 	tenantId: 'principal-contract',
 	environment: 'development',
 	releaseId: 'local',
+	syncPrincipal: 'global-person-17',
 	principal,
 	accessScope: 'operator',
 	credential,
@@ -18,16 +20,6 @@ const declare = (principal: string, credential: string): WorkspaceSession => ({
 		store: async () => '',
 		remove: async () => undefined,
 		urlFor: (key) => key
-	},
-	chatDocuments: {
-		store: async (_conversation, key, file) => ({
-			storage_key: key,
-			file_name: file.name,
-			file_size: file.size,
-			mime_type: file.type || 'application/octet-stream'
-		}),
-		remove: async () => undefined,
-		urlFor: (_conversation, key) => key
 	},
 	operations: { read: async () => null, run: async () => null }
 });

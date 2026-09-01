@@ -1,5 +1,12 @@
 export { defineBoltHost } from './host.js';
-export type { BoltHostConfig, ColonyBoltHostConfig, SelfHostedBoltHostConfig } from './host.js';
+export type {
+	BoltAIConfig,
+	BoltHostConfig,
+	ColonyBoltHostConfig,
+	EmbeddingModelRegistry,
+	LanguageModelRegistry,
+	SelfHostedBoltHostConfig
+} from './host.js';
 export {
 	createBoltClient,
 	createHttpBoltTransport,

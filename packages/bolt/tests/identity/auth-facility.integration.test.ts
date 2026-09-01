@@ -5,7 +5,7 @@ import { vector } from '@electric-sql/pglite-pgvector';
 import { Effect } from 'effect';
 import { AUTH_MODELS } from '../../src/authoring/system-models.js';
 import { workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
 	DEVELOPMENT_SIGN_IN_CODE,

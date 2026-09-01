@@ -3,7 +3,7 @@ import { custom, defineModel, text } from '../../src/authoring/index.js';
 import { app, collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { discoverWorkspace } from '../../src/compiler/compiler.js';
-import { buildSchemaPlan, fingerprintSchemaSteps } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan, fingerprintSchemaSteps } from '../../src/runtime/schema/schema-plan.js';
 
 const fixture = workspace({
 	name: 'fixture',
@@ -78,7 +78,9 @@ describe('Bolt compiler owners', () => {
 		expect(first).toEqual(second);
 		// `people` is authored, so the drizzle lineage renders its table and the plan renders nothing.
 		expect(first.steps.map(({ id }) => id)).not.toContain('collection:people');
-		expect(first.steps.map(({ id }) => id)).toContain('collection:bolt_sync_outbox');
+		// The sync engine streams the canonical collection history and has no retired sync outbox.
+		expect(first.steps.map(({ id }) => id)).not.toContain('collection:bolt_sync_outbox');
+		expect(first.steps.map(({ id }) => id)).toContain('collection:bolt_collection_history');
 		expect(first.steps.find(({ id }) => id === 'collection:approval_request')?.sql).toContain(
 			'"approval_request"'
 		);
@@ -87,12 +89,16 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.map(({ id }) => id).some((id) => id.startsWith('bolt:drop-'))).toBe(false);
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':zz-'))).toBe(false);
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':column:'))).toBe(false);
-		expect(first.steps.map(({ id }) => id)).toContain('collection:agent_run');
-		for (const collection of ['chat_message_part', 'agent_lane', 'agent_inbox']) {
+		for (const collection of [
+			'agent_task',
+			'agent_plan',
+			'agent_message',
+			'agent_inbox',
+			'agent_run',
+			'agent_usage'
+		]) {
 			expect(first.steps.map(({ id }) => id)).toContain(`collection:${collection}`);
 		}
-		expect(first.steps.map(({ id }) => id)).not.toContain('collection:agent_mailbox');
-		expect(first.steps.map(({ id }) => id)).not.toContain('bolt:hard-cut-agent-task-state');
 		expect(first.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
 	});
 

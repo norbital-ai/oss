@@ -46,7 +46,10 @@ const command = (name: string, credential: string) =>
 		scope,
 		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
-		input: null,
+		// Every `schema.*` contract declares `EmptyInput` (`Schema.Struct({})`), so the empty payload
+		// is `{}`. `null` fails the contract decode, which happens before authority is consulted, and
+		// would turn every refusal below into an `invalid_input` that proves nothing about access.
+		input: {},
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
 
@@ -157,10 +160,17 @@ describe('schema.* access control', () => {
 		const forged = {
 			subject: { userId: 'user-forged', tenantId: 'test-tenant', policies: [], teamPath: ['admin'] }
 		};
-		for (const input of [null, forged]) {
+		// Both payloads are refused, by the two gates a `Task` meets in order. An empty one never gets
+		// past provenance — `schema.migrate` declares no `Task` origin — while one naming a subject is
+		// stopped a step earlier, at the claim itself. Asserting a single reason for both would have to
+		// pick one gate and would pass while the other was gone.
+		for (const { input, reason } of [
+			{ input: {}, reason: 'Task provenance does not authorize this route' },
+			{ input: forged, reason: 'no credential' }
+		]) {
 			const failure = await failureOf(harness, task('schema.migrate', input));
-			expect(failure).toBeInstanceOf(AccessControl.AccessDenied);
-			expect((failure as AccessControl.AccessDenied).reason).toContain('no credential');
+			expect(failure, reason).toBeInstanceOf(AccessControl.AccessDenied);
+			expect((failure as AccessControl.AccessDenied).reason).toContain(reason);
 		}
 	});
 });

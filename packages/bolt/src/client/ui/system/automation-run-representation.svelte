@@ -3,8 +3,14 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { cn } from '@norbital-ai/ui/utils';
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import {
+		presentAutomationStatus,
+		type AutomationRunStatus
+	} from './automation-presentation.js';
 
 	let { record }: { record: Record<string, unknown> | null; close: () => void } = $props();
+	const { t } = useI18n();
 	const text = (name: string): string | undefined => {
 		const value = record?.[name];
 		return typeof value === 'string' && value.trim() !== '' ? value : undefined;
@@ -21,6 +27,11 @@
 		};
 	});
 	const status = $derived(text('status') ?? 'unknown');
+	const statusLabel = $derived(
+		status === 'pending' || status === 'running' || status === 'done' || status === 'failed'
+			? t(presentAutomationStatus(status satisfies AutomationRunStatus).messageKey)
+			: t('bolt.automations.status.unknown')
+	);
 	const result = $derived(record?.['result']);
 	const error = $derived(text('error'));
 	const printableResult = $derived(
@@ -47,7 +58,7 @@
 		</div>
 		<Stack gap="xs" class="min-w-0">
 			<p class="truncate text-base font-semibold text-foreground">
-				{text('name') ?? 'Automation run'}
+				{text('name') ?? t('bolt.automations.run')}
 			</p>
 			<span
 				class={cn(
@@ -58,46 +69,46 @@
 					!['done', 'running', 'failed'].includes(status) && 'bg-muted text-muted-foreground'
 				)}
 			>
-				{status}
+				{statusLabel}
 			</span>
 		</Stack>
 	</Inline>
 
 	<Stack gap="sm" class="rounded-lg border bg-card p-4">
 		<Inline justify="between" align="center" gap="md">
-			<h3 class="text-sm font-semibold text-foreground">Current progress</h3>
+			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.currentProgress')}</h3>
 			<span class="text-sm font-semibold tabular-nums text-foreground"
 				>{progress?.percent ?? 0}%</span
 			>
 		</Inline>
 		<Progress value={progress?.percent ?? 0} class="h-2" />
 		<p class="text-sm text-muted-foreground">
-			{progress?.message ?? 'No progress message reported.'}
+			{progress?.message ?? t('bolt.automations.noProgressMessage')}
 		</p>
 	</Stack>
 
 	<Stack gap="sm">
-		<h3 class="text-sm font-semibold text-foreground">Run details</h3>
+		<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.runDetails')}</h3>
 		<dl class="grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-			<dt class="text-muted-foreground">Task ID</dt>
+			<dt class="text-muted-foreground">{t('bolt.automations.taskId')}</dt>
 			<dd class="break-all font-mono text-xs text-foreground">{text('task_id') ?? '—'}</dd>
-			<dt class="text-muted-foreground">Started</dt>
+			<dt class="text-muted-foreground">{t('bolt.automations.started')}</dt>
 			<dd class="text-foreground">{timestamp('created_at')}</dd>
-			<dt class="text-muted-foreground">Last update</dt>
+			<dt class="text-muted-foreground">{t('bolt.automations.lastUpdate')}</dt>
 			<dd class="text-foreground">{timestamp('progress_updated_at')}</dd>
-			<dt class="text-muted-foreground">Checkpoints</dt>
+			<dt class="text-muted-foreground">{t('bolt.automations.checkpoints')}</dt>
 			<dd class="tabular-nums text-foreground">{String(record?.['progress_sequence'] ?? 0)}</dd>
 		</dl>
 	</Stack>
 
 	{#if error}
 		<Stack gap="xs" class="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
-			<h3 class="text-sm font-semibold text-destructive">Failure</h3>
+			<h3 class="text-sm font-semibold text-destructive">{t('bolt.automations.failure')}</h3>
 			<p class="whitespace-pre-wrap text-sm text-destructive">{error}</p>
 		</Stack>
 	{:else if printableResult}
 		<Stack gap="xs">
-			<h3 class="text-sm font-semibold text-foreground">Result</h3>
+			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.result')}</h3>
 			<pre
 				class="max-h-72 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs text-foreground">{printableResult}</pre>
 		</Stack>

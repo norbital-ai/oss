@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { ModelMetadata } from '../../src/authoring/models-schema.js';
+import type { ModelEmbedding, ModelMetadata } from '../../src/authoring/models-schema.js';
 import { file, text, vector } from '../../src/authoring/models-schema.js';
 
 /**
@@ -18,7 +18,7 @@ import { file, text, vector } from '../../src/authoring/models-schema.js';
  * a function that demonstrably reads it, or in `acceptedButUnread` with the reason it survives
  * unread. There is no third answer, and "I forgot" is not one of them.
  *
- * This is the `SystemRow` mapped type in `src/compiler/schema-plan.ts` applied to options rather
+ * This is the `SystemRow` mapped type in `src/runtime/schema/schema-plan.ts` applied to options rather
  * than columns: the same trick of making a type the thing that fails.
  */
 
@@ -50,10 +50,15 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 	recordLabel: '',
 	icon: '',
 	history: true,
-	sync: true,
 	indexes: [],
 	exclusions: [],
 	embedding: { fields: [] }
+};
+
+const MODEL_EMBEDDING: Required<ModelEmbedding> = {
+	fields: [],
+	model: '',
+	dimensions: 1
 };
 
 /** `text()`, `phone()` and `enums()` share one bag, so one witness covers all three. */
@@ -78,22 +83,27 @@ const WITNESSES: ReadonlyArray<Witness> = [
 		authoring: 'ModelMetadata',
 		options: MODEL_METADATA,
 		readBy: {
-			// Gates the `bolt_collection_history` writes in `Collections`. The collection descriptor
-			// hardcodes `history: true`, so this lift is what makes `history: false` mean anything —
-			// without it the option was accepted and the revision trail written anyway.
-			history: 'renderArtifact',
-			sync: 'compileModel',
+			// `compileModel` is the one metadata projection into `CompiledAuthoring`; renderers consume it.
+			history: 'compileModel',
 			indexes: 'authoredIndex',
-			exclusions: 'renderArtifact',
-			recordLabel: 'extractCollectionCatalog',
-			// Two readers, one declaration: `compileModelTable` renders the embedding/staleness columns
-			// and `recordEmbeddingIndexes` its HNSW index, so a declared embedding reaches the lineage
-			// as both. Named here by the one that owns the column.
-			embedding: 'recordEmbeddingColumns',
+			exclusions: 'compileModel',
+			recordLabel: 'compileModel',
+			// `compileModel` lifts the declaration into CompiledAuthoring; migration and runtime consume it.
+			embedding: 'compileModel',
 			// Lifted off `model.metadata` onto the collection descriptor beside `exclusions`, then
 			// projected by `workspace.manifest` so a host surface can read them.
-			description: 'renderArtifact',
-			icon: 'renderArtifact'
+			description: 'compileModel',
+			icon: 'compileModel'
+		},
+		acceptedButUnread: {}
+	},
+	{
+		authoring: 'ModelEmbedding',
+		options: MODEL_EMBEDDING,
+		readBy: {
+			fields: 'recordEmbeddingInput',
+			model: 'embedRecords',
+			dimensions: 'embedRecords'
 		},
 		acceptedButUnread: {}
 	},

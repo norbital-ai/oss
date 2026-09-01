@@ -9,6 +9,7 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { subject } from '../../src/authoring/index.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
@@ -47,8 +48,11 @@ const scope = {
  * The header is the channel: `/api/bolt/command` copies the request's headers onto the invocation,
  * and stamps this one from the trusted route it resolved. Nothing about the header is trusted here,
  * which is the whole of what the refusal tests below prove.
+ *
+ * The default input is `{}` rather than `null`: `apps.visible` and `access.impersonation` declare
+ * `EmptyInput` (`Schema.Struct({})`), and the contract decode runs before authority is resolved.
  */
-const command = (name: string, credential: string, input: unknown = null, team?: string) =>
+const command = (name: string, credential: string, input: unknown = {}, team?: string) =>
 	Invocation.cases.Command.make({
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${credential}-${team ?? 'self'}`),
@@ -98,7 +102,7 @@ const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 
 const visibleApps = async (runtime: BoltTestRuntime, credential: string, team?: string) => {
 	const response = await runtime.runtime.runPromise(
-		dispatchInvocation(command('apps.visible', credential, null, team))
+		dispatchInvocation(command('apps.visible', credential, {}, team))
 	);
 	const apps =
 		response.value === null || typeof response.value !== 'object'
@@ -142,7 +146,7 @@ const hrWorkspace = workspace({
 				{
 					collection: 'notices',
 					action: 'read',
-					where: { owner_id: { eq: '${requestor.id}' } }
+					where: { owner_id: { eq: subject.id } }
 				}
 			]
 		}),
@@ -264,7 +268,7 @@ describe('team impersonation', () => {
 			team: 'Employee'
 		});
 
-		const claimed = await failureOf(harness, command('apps.visible', 'employee-token', null, 'HR'));
+		const claimed = await failureOf(harness, command('apps.visible', 'employee-token', {}, 'HR'));
 		expect(claimed).toBeInstanceOf(AccessControl.AccessDenied);
 		expect(claimed).toMatchObject({ action: 'impersonate', reason: 'impersonation not permitted' });
 
@@ -291,7 +295,7 @@ describe('team impersonation', () => {
 
 		const refused = await failureOf(
 			harness,
-			command('apps.visible', 'admin-token', null, 'L1 Manager')
+			command('apps.visible', 'admin-token', {}, 'L1 Manager')
 		);
 		// "No team", not "no policy": a preview names a `team` row now, so an undeclared name is
 		// refused by the lookup rather than by the policy ladder.
@@ -327,7 +331,7 @@ describe('team impersonation', () => {
 		expect(offered).toEqual(expect.arrayContaining(['admin', 'Employee', 'HR']));
 
 		const active = await harness.runtime.runPromise(
-			dispatchInvocation(command('access.impersonation', 'admin-token', null, 'Employee'))
+			dispatchInvocation(command('access.impersonation', 'admin-token', {}, 'Employee'))
 		);
 		expect(active.value).toMatchObject({
 			isAdmin: true,

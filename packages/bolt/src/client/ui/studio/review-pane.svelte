@@ -1,260 +1,278 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
-	import { Cluster, Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import type {
-		ReleaseRequest,
-		SourceCommit,
-		StudioReviewTab
+	import { useI18n } from '@norbital-ai/ui/i18n';
+	import {
+		reviewFreshness,
+		reviewFreshnessMessageKey,
+		reviewOwnerMessageKey,
+		reviewRelativeTime,
+		type ReleaseRequest
 	} from '#lib/client/ui/studio/studio-state.js';
 
-	/** The exact Preview diff, its schema plan, and durable release history. */
 	let {
-		tab = 'requests',
 		releaseRequests = [],
 		selectedRequestId,
-		sourceHistory = [],
-		deploymentHistory = [],
+		currentReleaseId,
 		busy = false,
 		canDecide = false,
+		failure,
 		onpreview,
 		onapprove,
 		onrequestchanges,
 		onreject
 	}: {
-		tab?: StudioReviewTab;
 		releaseRequests?: ReadonlyArray<ReleaseRequest>;
 		selectedRequestId?: string | undefined;
-		sourceHistory?: ReadonlyArray<SourceCommit>;
-		deploymentHistory?: ReadonlyArray<string>;
+		currentReleaseId?: string | undefined;
 		busy?: boolean;
 		canDecide?: boolean;
+		failure?: string | undefined;
 		onpreview?: ((requestId: string) => void) | undefined;
 		onapprove?: ((requestId: string) => void) | undefined;
 		onrequestchanges?: ((requestId: string, reason: string) => void) | undefined;
 		onreject?: ((requestId: string, reason: string) => void) | undefined;
 	} = $props();
+	const { t } = useI18n();
 
 	const selected = $derived(
 		releaseRequests.find((request) => request.id === selectedRequestId) ?? releaseRequests.at(-1)
 	);
+	const freshness = $derived(
+		selected === undefined ? undefined : reviewFreshness(selected, currentReleaseId)
+	);
+	const canActOnReview = $derived(
+		selected?.status === 'open' && canDecide && freshness === 'current'
+	);
 	let reviewReason = $state('');
-	const statusLabel = (status: ReleaseRequest['status']): string => status.replaceAll('_', ' ');
-
-	const plan = $derived(selected?.schemaPlan);
+	let filesOpen = $state(false);
+	let schemaOpen = $state(false);
+	const relativeTimeLabel = (iso: string): string => {
+		const relative = reviewRelativeTime(iso, Date.now());
+		return relative.count === undefined
+			? t(relative.messageKey)
+			: t(relative.messageKey, { count: relative.count });
+	};
 </script>
 
-{#snippet empty(icon: string, heading: string, body: string)}
-	<Stack gap="sm" fill align="center" justify="center" class="px-6 text-center">
-		<Icon {icon} class="size-10 text-muted-foreground/30" />
-		<p class="text-sm font-medium text-foreground">{heading}</p>
-		<p class="max-w-sm text-xs leading-relaxed text-muted-foreground">{body}</p>
-	</Stack>
+{#snippet disclosure(label: string, open: boolean, id: string, toggle: () => void)}
+	<Button
+		type="button"
+		variant="ghost"
+		class="h-auto w-full justify-between px-0 py-0 text-xs font-semibold"
+		aria-expanded={open}
+		aria-controls={id}
+		onclick={toggle}
+	>
+		<span>{label}</span>
+		<Icon icon={open ? 'lucide:chevron-up' : 'lucide:chevron-down'} class="size-3.5" />
+	</Button>
 {/snippet}
 
-{#if tab === 'requests'}
-	{#if selected === undefined}
-		{@render empty(
-			'lucide:git-compare',
-			'No Review selected',
-			'Preview your workbench, then request review.'
-		)}
-	{:else}
-		<Scroll name="Release review" grow>
-			<Stack gap="lg" class="p-4 sm:p-6" data-testid="studio-release-review">
-				<Stack gap="xs">
-					<Cluster gap="sm" align="center">
-						<h3 class="text-sm font-medium text-foreground">
-							Commit {selected.commit.slice(0, 12)}
-						</h3>
-						<span
-							class="rounded-full border border-border/70 bg-muted px-2 py-0.5 text-micro text-muted-foreground"
-							data-testid="studio-release-request-status"
-						>
-							{statusLabel(selected.status)}
-						</span>
-					</Cluster>
-					<p class="text-micro text-muted-foreground">
-						Based on Live commit {selected.baseCommit.slice(0, 12)}.
-					</p>
-					<Cluster gap="xs">
+{#if selected === undefined}
+	<Stack gap="sm" fill align="center" justify="center" class="px-6 text-center">
+		<Icon icon="lucide:git-compare" class="size-9 text-muted-foreground/30" />
+		<p class="text-sm font-medium text-foreground">{t('bolt.studio.noReviews')}</p>
+	</Stack>
+{:else}
+	<Scroll name={t('bolt.studio.reviews')} grow>
+		<Stack gap="lg" class="p-4 sm:p-6" data-testid="studio-release-review">
+			{#if failure !== undefined}
+				<p class="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+					{failure}
+				</p>
+			{/if}
+			<Stack as="header" gap="sm" class="border-b border-border/60 pb-4">
+				<Inline align="start" gap="sm" class="flex-wrap sm:flex-nowrap">
+					<Stack gap="xs" grow class="min-w-0">
+						<Cluster gap="xs">
+							<h2 class="text-sm font-semibold text-foreground">
+								{t('bolt.studio.commitValue', { commit: selected.commit.slice(0, 12) })}
+							</h2>
+							<span
+								class="rounded-full border border-border/70 bg-muted px-2 py-0.5 text-micro text-foreground"
+								data-testid="studio-release-request-status"
+							>
+								{t(reviewFreshnessMessageKey(selected, currentReleaseId))}
+							</span>
+						</Cluster>
+						<p class="text-micro text-muted-foreground">
+							{t('bolt.studio.reviewMetadata', {
+								author: selected.authorId,
+								base: selected.baseCommit.slice(0, 12),
+								created: relativeTimeLabel(selected.createdAt),
+								updated: relativeTimeLabel(selected.updatedAt),
+								next: t(reviewOwnerMessageKey(selected, currentReleaseId))
+							})}
+						</p>
+						<p class="text-micro text-muted-foreground">
+							{t('bolt.studio.reviewCounts', {
+								files: selected.changedFiles.length,
+								steps: selected.schemaPlan.steps.length
+							})}
+						</p>
+					</Stack>
+					{#if selected.status === 'open'}
 						<Button
 							type="button"
 							size="sm"
 							variant="outline"
+							class="w-full sm:w-auto"
 							disabled={busy}
 							onclick={() => onpreview?.(selected.id)}
 						>
 							<Icon icon="lucide:scan-eye" class="size-3.5" />
-							Open Preview
+							{t('bolt.studio.openPreview')}
 						</Button>
-					</Cluster>
-				</Stack>
+					{/if}
+				</Inline>
+			</Stack>
 
-				<Stack gap="sm">
-					<h4 class="text-xs font-semibold text-foreground">
-						{selected.changedFiles.length} changed file{selected.changedFiles.length === 1
-							? ''
-							: 's'}
-					</h4>
-					{#if selected.changedFiles.length === 0}
-						<p class="text-xs text-muted-foreground">No text files changed.</p>
-					{:else}
-						{#each selected.changedFiles as file (file.path)}
-							<Stack gap="none" class="overflow-hidden rounded-md border border-border/70">
-								<p
-									class="border-b border-border/70 bg-muted/40 px-3 py-2 font-mono text-micro text-foreground"
-								>
-									{file.path}
-								</p>
-								<Grid
-									minimum="compact"
-									gap="none"
-									class="divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
-								>
-									<Stack gap="xs" class="min-w-0 p-3">
-										<span class="text-micro font-medium text-rose-500">Before</span>
-										<pre
-											class="whitespace-pre-wrap font-mono text-micro text-foreground">{file.before ??
-												'∅'}</pre>
+			{#if selected.reason !== null}
+				<p class="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+					{selected.reason}
+				</p>
+			{/if}
+
+			<Stack gap="none" class="divide-y divide-border/50 border-y border-border/50">
+				<Stack as="section" gap="sm" class="py-3">
+					{@render disclosure(
+						t('bolt.studio.changedFiles', { count: selected.changedFiles.length }),
+						filesOpen,
+						'review-file-diffs',
+						() => (filesOpen = !filesOpen)
+					)}
+					{#if filesOpen}
+						<Stack id="review-file-diffs" gap="sm">
+							{#if selected.changedFiles.length === 0}
+								<p class="text-meta">{t('bolt.studio.noChangedFiles')}</p>
+							{:else}
+								{#each selected.changedFiles as file (file.path)}
+									<Stack
+										gap="none"
+										class="max-w-full overflow-hidden rounded-md border border-border/70"
+									>
+										<p
+											class="border-b border-border/70 bg-muted/40 px-3 py-2 font-mono text-micro text-foreground"
+										>
+											{file.path}
+										</p>
+										<Grid
+											minimum="compact"
+											gap="none"
+											class="divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
+										>
+											<Stack gap="xs" class="min-w-0 overflow-auto p-3">
+												<span class="text-micro font-medium text-foreground"
+													>{t('bolt.studio.before')}</span
+												>
+												<pre
+													class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.before ??
+														'∅'}</pre>
+											</Stack>
+											<Stack gap="xs" class="min-w-0 overflow-auto p-3">
+												<span class="text-micro font-medium text-foreground"
+													>{t('bolt.studio.after')}</span
+												>
+												<pre
+													class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.after}</pre>
+											</Stack>
+										</Grid>
 									</Stack>
-									<Stack gap="xs" class="min-w-0 p-3">
-										<span class="text-micro font-medium text-emerald-500">After</span>
-										<pre
-											class="whitespace-pre-wrap font-mono text-micro text-foreground">{file.after}</pre>
-									</Stack>
-								</Grid>
-							</Stack>
-						{/each}
+								{/each}
+							{/if}
+						</Stack>
 					{/if}
 				</Stack>
 
-				{#if selected.reason !== null}
-					<p
-						class="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-					>
-						{selected.reason}
-					</p>
-				{/if}
+				<Stack as="section" gap="sm" class="py-3">
+					{@render disclosure(
+						t('bolt.studio.schemaPlan', { count: selected.schemaPlan.steps.length }),
+						schemaOpen,
+						'review-schema-plan',
+						() => (schemaOpen = !schemaOpen)
+					)}
+					{#if schemaOpen}
+						<Stack id="review-schema-plan" gap="sm">
+							<p class="break-all font-mono text-micro text-muted-foreground">
+								{selected.schemaPlan.fingerprint}
+							</p>
+							{#if selected.schemaPlan.steps.length === 0}
+								<p class="text-meta">{t('bolt.studio.noSchemaSteps')}</p>
+							{:else}
+								<ul
+									class="max-h-96 overflow-auto divide-y divide-border/50 rounded-md border border-border/70"
+								>
+									{#each selected.schemaPlan.steps as step (step.id)}
+										<li class="px-3 py-2">
+											<p class="text-micro text-muted-foreground">{step.id}</p>
+											<pre
+												class="whitespace-pre-wrap break-all font-mono text-micro text-foreground">{step.sql}</pre>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</Stack>
+					{/if}
+				</Stack>
+			</Stack>
 
-				{#if selected.status === 'open' && canDecide}
-					<Stack gap="sm" class="rounded-md border border-border/70 p-3">
-						<h4 class="text-xs font-semibold text-foreground">Decision</h4>
-						<Textarea
-							bind:value={reviewReason}
-							rows={3}
-							placeholder="Add a reason to request changes or close the review"
-							aria-label="Release review reason"
-						/>
-						<Cluster gap="xs">
-							<Button
-								type="button"
-								size="sm"
-								disabled={busy}
-								onclick={() => onapprove?.(selected.id)}
-							>
-								Approve and release
-							</Button>
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={busy || reviewReason.trim() === ''}
-								onclick={() => onrequestchanges?.(selected.id, reviewReason.trim())}
-							>
-								Request changes
-							</Button>
-						</Cluster>
+			{#if canActOnReview}
+				<Stack gap="sm" class="rounded-md border border-border/70 p-3">
+					<h3 class="text-xs font-semibold text-foreground">{t('bolt.studio.decision')}</h3>
+					<Textarea
+						bind:value={reviewReason}
+						rows={3}
+						placeholder={t('bolt.studio.reviewReason')}
+						aria-label={t('bolt.studio.reviewReasonAria')}
+					/>
+					<Cluster gap="xs">
 						<Button
 							type="button"
 							size="sm"
-							variant="ghost"
-							class="w-fit px-0 text-destructive hover:text-destructive"
-							disabled={busy || reviewReason.trim() === ''}
-							onclick={() => onreject?.(selected.id, reviewReason.trim())}
+							disabled={busy}
+							onclick={() => onapprove?.(selected.id)}
 						>
-							Close review
+							{t('bolt.studio.approveRelease')}
 						</Button>
-					</Stack>
-				{:else if selected.status === 'open'}
-					<p class="text-xs text-muted-foreground" role="status">Waiting for an administrator.</p>
-				{:else if selected.status === 'approving'}
-					<p class="text-xs text-amber-500" role="status">
-						Release is applying the exact reviewed Preview. Repeating approval resumes it.
-					</p>
-				{/if}
-			</Stack>
-		</Scroll>
-	{/if}
-{:else if tab === 'history'}
-	<Scroll name="Release history" grow>
-		<Stack gap="lg" class="p-4 sm:p-6" data-testid="studio-release-history">
-			<Stack gap="sm">
-				<h3 class="text-sm font-medium text-foreground">Workbench commits</h3>
-				{#if sourceHistory.length === 0}
-					<p class="text-xs text-muted-foreground">No workbench commits yet.</p>
-				{:else}
-					<ol class="divide-y divide-border/60 rounded-md border border-border/70">
-						{#each [...sourceHistory].reverse() as entry (entry.commit)}
-							<li class="px-3 py-2">
-								<p class="text-xs font-medium text-foreground">
-									Commit {entry.commit.slice(0, 12)}
-								</p>
-								<p class="font-mono text-micro text-muted-foreground">
-									{entry.changes.map((change) => change.path).join(', ') || 'No text changes'}
-								</p>
-							</li>
-						{/each}
-					</ol>
-				{/if}
-			</Stack>
-			<Stack gap="sm">
-				<h3 class="text-sm font-medium text-foreground">Deployment history</h3>
-				{#if deploymentHistory.length === 0}
-					<p class="text-xs text-muted-foreground">No release is routed.</p>
-				{:else}
-					<ol class="divide-y divide-border/60 rounded-md border border-border/70">
-						{#each [...deploymentHistory].reverse() as releaseId, index (releaseId)}
-							<li class="px-3 py-2 font-mono text-micro text-foreground">
-								{releaseId}{index === 0 ? ' · current' : ''}
-							</li>
-						{/each}
-					</ol>
-				{/if}
-			</Stack>
-		</Stack>
-	</Scroll>
-{:else}
-	<Stack gap="md" class="p-4 sm:p-6">
-		<Stack as="section" gap="sm" data-testid="review-schema-plan">
-			<Stack gap="xs">
-				<h3 class="text-sm font-medium text-foreground">Schema</h3>
-				<p class="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-					The exact ordered DDL for this Preview. Release verifies it before routing Live.
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={busy || reviewReason.trim() === ''}
+							onclick={() => onrequestchanges?.(selected.id, reviewReason.trim())}
+						>
+							{t('bolt.studio.requestChanges')}
+						</Button>
+					</Cluster>
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						class="w-fit px-0 text-destructive hover:text-destructive"
+						disabled={busy || reviewReason.trim() === ''}
+						onclick={() => onreject?.(selected.id, reviewReason.trim())}
+					>
+						{t('bolt.studio.closeReview')}
+					</Button>
+				</Stack>
+			{:else if selected.status === 'open' && freshness === 'live_advanced'}
+				<p class="text-xs text-amber-700 dark:text-amber-300">
+					{t('bolt.studio.rebaseRequired')}
 				</p>
-			</Stack>
-			{#if plan === undefined}
-				<p class="text-meta">Select a release request to inspect its compiled schema plan.</p>
-			{:else}
-				<p class="font-mono text-micro break-all text-foreground">{plan.fingerprint}</p>
-				<p class="text-meta">
-					{plan.steps.length} step{plan.steps.length === 1 ? '' : 's'} in the plan
+			{:else if selected.status === 'open'}
+				<p class="text-xs text-muted-foreground">{t('bolt.studio.waitingReviewer')}</p>
+			{:else if selected.status === 'approving'}
+				<p class="text-xs text-amber-700 dark:text-amber-300">
+					{t('bolt.studio.applyingPreview')}
+				</p>
+			{:else if selected.status === 'changes_requested' || selected.status === 'rejected'}
+				<p class="text-xs text-muted-foreground">
+					{t('bolt.studio.updateAfterReview')}
 				</p>
 			{/if}
 		</Stack>
-		{#if plan !== undefined && plan.steps.length > 0}
-			<Scroll name="Schema plan" class="max-h-96 rounded-md border border-border/70">
-				<ul class="divide-y divide-border/50">
-					{#each plan.steps as step (step.id)}
-						<li class="px-3 py-2">
-							<!-- repository-health:allow UI17 -- a schema-plan step id IS its operator-facing label; it encodes apply order and a step has no other name -->
-							<p class="text-micro text-muted-foreground">{step.id}</p>
-							<pre class="whitespace-pre-wrap font-mono text-micro text-foreground">{step.sql}</pre>
-						</li>
-					{/each}
-				</ul>
-			</Scroll>
-		{/if}
-	</Stack>
+	</Scroll>
 {/if}

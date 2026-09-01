@@ -2,6 +2,7 @@ import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import {
 	defineAutomation,
+	defineAgentTool,
 	defineCommandHandler,
 	defineConnection,
 	defineModel,
@@ -12,7 +13,6 @@ import {
 	text,
 	vector
 } from '../../src/authoring/index.js';
-import { defineAgentTool } from '../../src/authoring/agent-tools.js';
 
 describe('Bolt authoring contracts', () => {
 	it('makes manual invocation inherent and keeps automatic-trigger authoring closed', () => {

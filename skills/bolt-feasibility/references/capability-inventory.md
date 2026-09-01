@@ -38,12 +38,17 @@ same primitive under a different name.
 | Envoy chat agents for external, accountless users (a declared transport, e.g. WhatsApp/Telegram), scoped to their own records | `src/envoys/+<name>.ts`                    | field-operations contractor WhatsApp, crm sales desk (Telegram) |
 | Shared prompt for the reserved web agent and envoys                                                                           | `src/+agents.md`                           | all templates                                                   |
 | Custom agent tools                                                                                                            | `src/capabilities/tools/+<name>.ts`        | —                                                               |
-| Workspace agent skills                                                                                                        | `src/capabilities/skills/<name>/+skill.md` | —                                                               |
+| Shared tenant Skills (active RFC target; toolchain cutover pending)                                                         | `.norbital/shared/<name>/SKILL.md`         | —                                                               |
+| Personal Skills (active RFC target; ignored, subject-scoped source)                                                         | `.norbital/personal/<name>/SKILL.md`       | —                                                               |
 | Remote MCP servers, granted by policy                                                                                         | `src/capabilities/mcp/+<name>.ts`          | —                                                               |
 | Structured AI inference (`api.infer`): prompt → typed output, optional images; bounded in hooks, durable in automations       | `api.infer`                                | field-operations photo identity                                 |
 | Email and messaging via host communication facility                                                                           | facility                                   | —                                                               |
 | Environment variables and server-only secrets, entered in the vault                                                           | `+env.ts`                                  | field-operations (geocoding key, export signing secret)         |
 | File and asset storage, upload, server-side reads                                                                             | files facility, `api.readFileAsset`        | field-operations photo evidence                                 |
+
+The current compiler still has its legacy tenant Skill reader. Feasibility work should plan the
+single `.norbital/shared/<name>/SKILL.md` cutover with the toolchain prerequisite, never a dual
+authoring layout; `.norbital/personal/**` remains outside the tenant build and release.
 
 ## External world (mediated surfaces)
 

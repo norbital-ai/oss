@@ -8,7 +8,6 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { policySql } from '../../src/authoring/policy-sql.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -22,13 +21,13 @@ import {
 /**
  * "A salesperson sees their own; their manager sees everyone under them", written once.
  *
- * The whole point of `${requestor.team_scope_users}` is that the *same* grant answers differently at
+ * The whole point of `teamScopeUsers` is that the *same* grant answers differently at
  * each level, so an organisation does not author one policy per rank. That property is only visible
  * with three subjects against one rule — a suite that checked a single level would pass just as well
  * against a predicate matching only the subject's own team, and would prove nothing about the walk.
  *
  * It also exists because `team` descent alone does not produce this. Descent hands a manager
- * every *policy* their reports hold, but a grant scoped `${requestor.id}` re-evaluates
+ * every *policy* their reports hold, but a grant scoped with `subject.id` re-evaluates
  * against whoever is asking — so inheriting a self-scoped policy shows the manager their own records
  * and nobody else's. The hierarchy has to be in the predicate, which is what this token puts there.
  *
@@ -77,7 +76,7 @@ const scopedWorkspace = workspace({
 				{
 					collection: 'deals',
 					action: 'read',
-					where: policySql('"owner_id"::text IN ${requestor.team_scope_users}')
+					where: { owner_id: { teamScopeUsers: true } }
 				}
 			]
 		})

@@ -89,8 +89,6 @@ export interface ModelMetadata<Field extends string = string> {
 	readonly recordLabel?: string | ReadonlyArray<string>;
 	readonly icon?: string;
 	readonly history?: boolean;
-	/** Whether writes to this collection are captured into the live-query changelog. Defaults to true. */
-	readonly sync?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
 	/** One platform-maintained vector over the named fields. See `ModelEmbedding`. */
@@ -303,11 +301,17 @@ const ColumnAuthoring = {
 		if (config !== null && typeof config === 'object') Reflect.set(config, 'boltSearch', true);
 		return builder;
 	},
+	presentedAs: <T>(builder: T, kind: string): T => {
+		const config = Reflect.get(builder as object, 'config');
+		if (config !== null && typeof config === 'object')
+			Reflect.set(config, 'boltPresentationKind', kind);
+		return builder;
+	},
 	text: (options: { readonly search?: boolean } = {}) =>
-		ColumnAuthoring.searchable(pgText(), options),
+		ColumnAuthoring.presentedAs(ColumnAuthoring.searchable(pgText(), options), 'text'),
 	// No `variant`. It was accepted and discarded, and no workspace in any template repository ever
 	// declared one — so there is nothing to preserve and nothing to implement against.
-	numeric: () => pgNumeric({ mode: 'number' }),
+	numeric: () => ColumnAuthoring.presentedAs(pgNumeric({ mode: 'number' }), 'numeric'),
 	/**
 	 * One absolute point in time, stored as PostgreSQL `timestamptz` at the database's full
 	 * precision. `precision` is deliberately application metadata only: it narrows the picker and
@@ -321,21 +325,24 @@ const ColumnAuthoring = {
 		const config = Reflect.get(builder, 'config');
 		if (config !== null && typeof config === 'object' && options.precision !== undefined)
 			Reflect.set(config, 'boltInstantPrecision', options.precision);
-		return builder;
+		return ColumnAuthoring.presentedAs(builder, 'instant');
 	},
 	/**
 	 * A contiguous run of wall-clock time with no calendar-day meaning, distinct from
 	 * `instantRange` (below) which is anchored to instants. See ISO 8601 'time range'.
 	 */
 	geolocation: () =>
-		jsonb().$type<{
-			readonly geometry: { readonly lon: number; readonly lat: number } | null;
-			readonly formatted_address: string;
-			readonly type: 'Point';
-			readonly srid: number;
-		}>(),
+		ColumnAuthoring.presentedAs(
+			jsonb().$type<{
+				readonly geometry: { readonly lon: number; readonly lat: number } | null;
+				readonly formatted_address: string;
+				readonly type: 'Point';
+				readonly srid: number;
+			}>(),
+			'geolocation'
+		),
 	phone: (options: { readonly search?: boolean } = {}) =>
-		ColumnAuthoring.searchable(pgText(), options),
+		ColumnAuthoring.presentedAs(ColumnAuthoring.searchable(pgText(), options), 'phone'),
 	/**
 	 * An uploaded file, stored as the file rather than as a pointer to one.
 	 *
@@ -362,7 +369,10 @@ const ColumnAuthoring = {
 	 */
 	file: fileColumn,
 	vector: (options: { readonly dimensions: number }) =>
-		pgVector({ dimensions: decodeVectorDimensions(options.dimensions) }),
+		ColumnAuthoring.presentedAs(
+			pgVector({ dimensions: decodeVectorDimensions(options.dimensions) }),
+			'json'
+		),
 	hexToBinaryEmbedding: (hex: string): Array<number> => {
 		if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0)
 			throw new Error('hexToBinaryEmbedding expects an even-length hexadecimal string.');
@@ -389,7 +399,10 @@ const ColumnAuthoring = {
 	 * template a type error.
 	 */
 	enums: (values: readonly [string, ...string[]], options: { readonly search?: boolean } = {}) =>
-		ColumnAuthoring.searchable(pgText({ enum: values }), options)
+		ColumnAuthoring.presentedAs(
+			ColumnAuthoring.searchable(pgText({ enum: values }), options),
+			'enum'
+		)
 };
 
 /**
@@ -437,6 +450,7 @@ function fileColumn(
 	const builder = options.multiple === true ? manyFilesColumn() : oneFileColumn();
 	const config = Reflect.get(builder, 'config');
 	if (config !== null && typeof config === 'object') {
+		Reflect.set(config, 'boltPresentationKind', 'file');
 		if (options.mimeTypes !== undefined)
 			Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
 		Reflect.set(config, 'boltFile', true);
@@ -557,8 +571,8 @@ const customTypeColumn = {
 	 * refused, and the damage only showed up much later as columns generated from them reading null.
 	 *
 	 * The name is the generated union of platform types and this workspace's discovered datatypes.
-	 * Sync performs the same check over source before it emits that augmentation, so neither a type
-	 * cast nor an out-of-date generated file can smuggle an undeclared name into the artifact.
+	 * CompiledAuthoring validates the executed declaration against the same discovered set, so neither
+	 * a type cast nor an out-of-date generated file can smuggle an undeclared name into the artifact.
 	 */
 	create: <const Name extends CustomTypeName, const Arguments extends CustomArguments<Name>>(
 		name: Name,
@@ -577,6 +591,7 @@ const customTypeColumn = {
 		const config = Reflect.get(builder, 'config');
 		if (config !== null && typeof config === 'object') {
 			Reflect.set(config, 'boltCustomType', name);
+			Reflect.set(config, 'boltPresentationKind', name);
 			if (options !== undefined) Reflect.set(config, 'boltCustomTypeOptions', options);
 			const precision = options === undefined ? undefined : Reflect.get(options, 'precision');
 			if (precision === 'day' || precision === 'minute')
@@ -759,6 +774,12 @@ export const platformCustomTypes = Object.freeze({
 });
 
 export const cascade = CustomTypeAuthoring.cascade;
+
+/** Read only by authoring introspection after the relationship declaration has executed. */
+export const relationshipCascades = (value: unknown): boolean =>
+	value !== null &&
+	typeof value === 'object' &&
+	Reflect.get(value, relationshipDelete) === 'cascade';
 
 /**
  * What a `group()` declaration may say about a group of apps.

@@ -1,29 +1,19 @@
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import { compactSyncChanges, type SyncAdvanceSubscription } from '@norbital-ai/bolt-protocol';
+import { applyPrefixDelta } from '../../src/client/live-query/project.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
-import { changelogSince } from '../../src/runtime/sync/changelog.js';
+import {
+	advanceActivePrefix,
+	extendActivePrefix,
+	resolveInitialPrefix
+} from '../../src/runtime/sync/delta-engine.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	testWorkspace,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
-
-/**
- * The sync engine's durable facts, over a real database.
- *
- * The engine is stateless now: a commit appends `bolt_sync_outbox` rows through the capture
- * trigger — collection name, transaction xid and a per-row sequence — and
- * reconnects are answered by `changelogSince` from those rows alone. These tests
- * pin the row shape the trigger writes and the reconnect contract computed from it, because both
- * are invisible to a green unit suite: a trigger that stopped firing, or a horizon that swallowed
- * fresh rows, raises nothing anywhere else.
- */
-
-const OutboxRow = Schema.Struct({
-	xid: Schema.Number,
-	sequence: Schema.Number,
-	collection_name: Schema.String
-});
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -31,95 +21,186 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const mutatePerson = (name: string) => {
-	const h = harness;
-	if (h === undefined) throw new Error('harness missing');
-	return h.runtime.runPromise(
+const seedPeople = (h: BoltTestRuntime) =>
+	h.runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
 			collections.mutate(
-				h.effectId(`mutate:${name}`),
+				h.effectId('seed'),
 				adminSubject,
 				'people',
-				[{ name, team: 'core' }],
+				[
+					{ name: 'Ada', team: 'core' },
+					{ name: 'Grace', team: 'core' },
+					{ name: 'Linus', team: 'edge' }
+				],
 				false,
 				0
 			)
 		)
 	);
-};
 
-describe('sync engine durable facts', () => {
-	it('captures a commit as collection-granular outbox rows and reports the written changes', async () => {
-		harness = await makeBoltTestRuntime();
-		const written = await mutatePerson('Ada');
-
-		// The commit answers with what changed: the engine result the dispatch boundary maps into
-		// `DispatchResponse.changes`, one coordinate per written record.
-		expect(written.changes).toEqual([
-			{ collection: 'people', recordId: written.records[0]?.['id'] }
+describe('clean-cut sync engine', () => {
+	it('compacts first-before/final-after facts without a collection changelog', () => {
+		expect(
+			compactSyncChanges([
+				{
+					collection: 'people',
+					id: 'p1',
+					operation: 'update',
+					before: { team: 'core' },
+					after: { team: 'edge' }
+				},
+				{
+					collection: 'people',
+					id: 'p1',
+					operation: 'update',
+					before: { team: 'edge' },
+					after: { team: 'ops' }
+				}
+			])
+		).toEqual([
+			{
+				collection: 'people',
+				id: 'p1',
+				operation: 'update',
+				before: { team: 'core' },
+				after: { team: 'ops' }
+			}
 		]);
-		expect(written.records[0]?.['name']).toBe('Ada');
-
-		const rows = await harness.database.query(
-			`select xid, sequence, collection_name from bolt_sync_outbox
-			 where collection_name = 'people' order by sequence`
-		);
-		expect(rows.length).toBeGreaterThanOrEqual(1);
-		for (const row of rows) {
-			const decoded = Schema.decodeUnknownSync(OutboxRow)(row);
-			expect(decoded.collection_name).toBe('people');
-			expect(decoded.xid).toBeGreaterThan(0);
-			expect(decoded.sequence).toBeGreaterThan(0);
-		}
-
-		// The narrowed table is the whole record: the replica-era payload columns are gone, and a
-		// re-merge that reintroduced them would silently double every commit's row size.
-		const staleColumns = await harness.database.query(
-			`select column_name from information_schema.columns
-			 where table_name = 'bolt_sync_outbox'
-			   and column_name in ('record_id', 'operation', 'before_record', 'after_record', 'invalidated_collections', 'mutation_id')`
-		);
-		expect(staleColumns).toEqual([]);
 	});
 
-	it('answers a reconnect from the changelog: head, changed collections, and truncation', async () => {
-		harness = await makeBoltTestRuntime();
-		const empty = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since:empty'), undefined)
+	it('derives an exact bounded keyed delta from the committed ChangeBatch', async () => {
+		const h = await makeBoltTestRuntime(testWorkspace());
+		harness = h;
+		await seedPeople(h);
+		const input = {
+			kind: 'findMany' as const,
+			collection: 'people',
+			orderBy: { name: 'asc' as const },
+			limit: 3
+		};
+		const initial = await h.runtime.runPromise(
+			resolveInitialPrefix(h.effectId('open'), adminSubject, input, 3)
 		);
-		expect(empty.head.sequence).toBe(0);
+		const committed = await h.runtime.runPromise(
+			Effect.flatMap(Collections.Service, (collections) =>
+				collections.mutate(
+					h.effectId('insert'),
+					adminSubject,
+					'people',
+					[{ name: 'Aaron', team: 'core' }],
+					false,
+					0
+				)
+			)
+		);
+		const state: SyncAdvanceSubscription = {
+			subId: 'people-plan',
+			input,
+			planKey: initial.plan.effectivePlan.fingerprint,
+			version: 0,
+			prefixKeys: initial.keys,
+			prefixBytes: initial.retainedBytes,
+			viewerPrefixes: [3],
+			credential: 'host-opaque',
+			authorityFingerprint: initial.plan.effectivePlan.authority.fingerprint
+		};
+		const update = await h.runtime.runPromise(
+			advanceActivePrefix(
+				h.effectId('advance'),
+				adminSubject,
+				state,
+				committed.batch
+			)
+		);
+		expect(update).toBeDefined();
+		if (update === undefined) throw new Error('Expected the inserted row to change the live prefix');
+		const delta = update.deltas[0]?.delta;
+		expect(delta).toBeDefined();
+		const applied = applyPrefixDelta(initial.rows, delta ?? { removeIds: [], put: [] });
+		const fresh = await h.runtime.runPromise(
+			Effect.flatMap(Collections.Service, (collections) =>
+				collections.findMany(h.effectId('fresh'), adminSubject, input)
+			)
+		);
+		expect(applied).toEqual(fresh);
+		expect(update).toMatchObject({ fromVersion: 0, toVersion: 1 });
+		expect(update).not.toHaveProperty('digest');
+		expect(update).not.toHaveProperty('patch');
+	});
 
-		await mutatePerson('Ada');
-		await mutatePerson('Grace');
-		const atHead = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since:head'), undefined)
+	it('does not advance a prefix when the authoritative answer is unchanged', async () => {
+		const h = await makeBoltTestRuntime(testWorkspace());
+		harness = h;
+		await seedPeople(h);
+		const input = {
+			kind: 'findMany' as const,
+			collection: 'people',
+			orderBy: { name: 'asc' as const },
+			limit: 3
+		};
+		const initial = await h.runtime.runPromise(
+			resolveInitialPrefix(h.effectId('open-empty'), adminSubject, input, 3)
 		);
-		const head = atHead.head;
-		expect(head.sequence).toBeGreaterThan(0);
+		const update = await h.runtime.runPromise(
+			advanceActivePrefix(
+				h.effectId('advance-empty'),
+				adminSubject,
+				{
+					subId: 'shared-plan',
+					input,
+					planKey: initial.plan.effectivePlan.fingerprint,
+					version: 7,
+					prefixKeys: initial.keys,
+					prefixBytes: initial.retainedBytes,
+					viewerPrefixes: [1, 3],
+					credential: 'host-opaque',
+					authorityFingerprint: initial.plan.effectivePlan.authority.fingerprint
+				},
+				{ changes: [] }
+			)
+		);
+		expect(update).toBeUndefined();
+	});
 
-		// A client reconnecting from the previous head is told which collections moved and where the
-		// new head is — collection-granular, never row payloads.
-		const since = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since'), empty.head)
+	it('extends a prefix monotonically without manufacturing a version', async () => {
+		const h = await makeBoltTestRuntime(testWorkspace());
+		harness = h;
+		await seedPeople(h);
+		const input = {
+			kind: 'findMany' as const,
+			collection: 'people',
+			orderBy: { name: 'asc' as const },
+			limit: 3
+		};
+		const initial = await h.runtime.runPromise(
+			resolveInitialPrefix(h.effectId('open-extension'), adminSubject, input, 1)
 		);
-		expect(since).toMatchObject({ collections: ['people'], truncated: false });
-		expect(since.head.sequence).toBe(head.sequence);
-
-		// A client at the head has nothing to replay, and one from beyond the retained window — or
-		// with no cursor at all — is told to re-resolve rather than being handed a partial answer.
-		const current = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since:current'), head)
+		const evaluation = await h.runtime.runPromise(
+			extendActivePrefix(
+				h.effectId('extension'),
+				adminSubject,
+				{
+					subId: 'extension-plan',
+					input,
+					planKey: initial.plan.effectivePlan.fingerprint,
+					version: 4,
+					prefixKeys: initial.keys,
+					prefixBytes: initial.retainedBytes,
+					viewerPrefixes: [1],
+					credential: 'host-opaque',
+					authorityFingerprint: initial.plan.effectivePlan.authority.fingerprint
+				},
+				{ queryKey: 'people', version: 4, loadedPrefix: 1, requestedPrefix: 3 }
+			)
 		);
-		expect(current).toMatchObject({ collections: [], truncated: false });
-
-		const absent = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since:absent'), undefined)
-		);
-		expect(absent.truncated).toBe(true);
-
-		const beyond = await harness.runtime.runPromise(
-			changelogSince(harness.effectId('since:beyond'), { sequence: head.sequence + 1000 })
-		);
-		expect(beyond.truncated).toBe(true);
+		expect(evaluation).toMatchObject({
+			queryKey: 'people',
+			version: 4,
+			fromPrefix: 1,
+			toPrefix: 3
+		});
+		expect(evaluation.rows).toHaveLength(2);
+		expect(evaluation.prefixKeys).toHaveLength(3);
 	});
 });

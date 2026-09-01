@@ -7,7 +7,7 @@ import {
 	emitChangeEventsMany,
 	type ChangeEventPorts
 } from '../../src/runtime/collections/services/change-events.js';
-import { recordEmbeddingParts } from '../../src/runtime/collections/services/embeddings.js';
+import { recordEmbeddingInput } from '../../src/runtime/collections/services/embeddings.js';
 
 const COLLECTIONS = join(import.meta.dirname, '../../src/runtime/collections/collections.ts');
 
@@ -21,10 +21,10 @@ const definedInCollections = (symbol: string): boolean =>
 		readFileSync(COLLECTIONS, 'utf8')
 	);
 
-describe('collection-lifecycle P2 carve-out', () => {
+describe('collection module boundaries', () => {
 	it('does not keep moved implementations in collections.ts', () => {
 		expect(definedInCollections('embedRecords')).toBe(false);
-		expect(definedInCollections('recordEmbeddingParts')).toBe(false);
+		expect(definedInCollections('recordEmbeddingInput')).toBe(false);
 		expect(definedInCollections('emitChangeEventsMany')).toBe(false);
 		expect(definedInCollections('readRelational')).toBe(false);
 		expect(definedInCollections('prepareDelete')).toBe(false);
@@ -75,14 +75,9 @@ describe('collection-lifecycle P2 carve-out', () => {
 		expect(started).toBe(0);
 	});
 
-	it('skips empty and missing fields when assembling embedding parts', async () => {
+	it('fails closed when every declared embedding field is empty or missing', async () => {
 		const parts = await Effect.runPromise(
-			recordEmbeddingParts(
-				{
-					database: { execute: () => Effect.die('database') },
-					ai: { execute: () => Effect.die('ai') },
-					collections: []
-				},
+			recordEmbeddingInput(
 				{
 					name: 'photos',
 					fields: { caption: { type: 'string' }, photo: { type: 'json' } },
@@ -91,17 +86,15 @@ describe('collection-lifecycle P2 carve-out', () => {
 				{ caption: '  ', photo: null }
 			)
 		);
-		expect(parts).toEqual([]);
+		expect(parts).toEqual({
+			_tag: 'Invalid',
+			issue: 'photos contains no embeddable source value'
+		});
 	});
 
 	it('carries image asset references across the isolate instead of base64 bytes', async () => {
 		const parts = await Effect.runPromise(
-			recordEmbeddingParts(
-				{
-					database: { execute: () => Effect.die('database') },
-					ai: { execute: () => Effect.die('ai') },
-					collections: []
-				},
+			recordEmbeddingInput(
 				{
 					name: 'photos',
 					fields: { photo: { type: 'json' } },
@@ -117,16 +110,17 @@ describe('collection-lifecycle P2 carve-out', () => {
 				}
 			)
 		);
-		expect(parts).toEqual([
-			{
-				type: 'image_asset',
-				image_asset: {
+		expect(parts).toEqual({
+			_tag: 'Ready',
+			input: '',
+			imageAssets: [
+				{
 					key: 'tenant/photos/evidence.jpg',
 					name: 'evidence.jpg',
 					mimeType: 'image/jpeg',
 					size: 1_042_884
 				}
-			}
-		]);
+			]
+		});
 	});
 });

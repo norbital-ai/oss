@@ -31,15 +31,20 @@ export type {
 	EnvoyDefinition,
 	PolicyDecisionApi,
 	PolicyDefinition,
+	PredicateSubjectName,
+	PredicateSubjectOperand,
 	SchemaQueryConfig,
 	SchemaNearestConfig,
 	SchemaQueryRow,
 	TeamName,
 	Teams
 } from './contracts-schema.js';
+export { subject } from './contracts-schema.js';
 
-export { policySql } from './policy-sql.js';
-export type { PolicySqlPredicate } from './policy-sql.js';
+export type {
+	EnvironmentReference,
+	PersonalSecretReference
+} from './workspace-schema.js';
 
 export { schema, schemaFor } from './schema.js';
 export type { SchemaShape, SchemaShapeConfig, SchemaShapeRow } from './schema.js';
@@ -87,8 +92,7 @@ export {
 	defineConnection,
 	definePull,
 	defineWebhook,
-	McpServerDefinition,
-	McpToolRoute,
+	McpRegistrationDefinition,
 	SkillDeclaration
 } from './workspace-schema.js';
 

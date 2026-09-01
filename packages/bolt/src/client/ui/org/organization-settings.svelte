@@ -50,6 +50,7 @@
 	let hostFailure = $state<string | null>(null);
 	let activeTab = $state('general');
 	const manifestQuery = $derived(client.system.workspace.manifest({}));
+	const defaultOrganizationName = $derived(manifestQuery.current?.name);
 	/** Whether the Stripe-backed figures have been asked for. They are fetched at most once. */
 	let billingLoaded = $state(false);
 
@@ -89,7 +90,7 @@
 	<GeneralPane
 		bind:profile
 		slug={tenantId}
-		defaultName={manifestQuery.current?.name}
+		defaultName={defaultOrganizationName}
 		loading={hostLoading}
 		loadFailure={hostFailure}
 	/>

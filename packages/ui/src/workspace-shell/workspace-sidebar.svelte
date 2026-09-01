@@ -52,14 +52,6 @@
 		onSearch?: () => void;
 		searchLabel?: string;
 		searchShortcut?: string;
-		/**
-		 * The workspace agent's trigger, rendered at the top of the navigation.
-		 *
-		 * A snippet, like `notifications`, because the agent's own state (thinking, failed) belongs to
-		 * the runtime driving it — the shell only owns where it sits. It sits *here*, in the flow of the
-		 * sidebar, rather than floating over the content: a fixed button covers whatever is beneath it,
-		 * and the bottom-right corner of a table is exactly where the last row and the pagination live.
-		 */
 		agent?: Snippet<[{ expanded: boolean }]>;
 	} = $props();
 
@@ -67,6 +59,18 @@
 	const sidebar = Sidebar.useSidebar()();
 	const displayExpanded = $derived(sidebar.isMobile || sidebar.open);
 	let signOutPending = $state(false);
+	const runPending = (
+		action: () => void | Effect.Effect<void, unknown>,
+		setPending: (pending: boolean) => void
+	): void => {
+		setPending(true);
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.suspend(() => action() ?? Effect.void),
+				Effect.sync(() => setPending(false))
+			)
+		);
+	};
 	const organizationOptions = $derived(
 		model.organizations.map((organization) => ({
 			value: organization.id,
@@ -88,28 +92,15 @@
 		) {
 			return;
 		}
-		switchingOrganizationId = organizationId;
-		Effect.runFork(
-			Effect.ensuring(
-				Effect.suspend(() => onOrganizationChange(organizationId) ?? Effect.void),
-				Effect.sync(() => {
-					switchingOrganizationId = null;
-				})
-			)
+		runPending(
+			() => onOrganizationChange(organizationId),
+			(pending) => (switchingOrganizationId = pending ? organizationId : null)
 		);
 	}
 
 	function signOut(): void {
 		if (!onSignOut || signOutPending) return;
-		signOutPending = true;
-		Effect.runFork(
-			Effect.ensuring(
-				Effect.suspend(() => onSignOut() ?? Effect.void),
-				Effect.sync(() => {
-					signOutPending = false;
-				})
-			)
-		);
+		runPending(onSignOut, (pending) => (signOutPending = pending));
 	}
 
 	const impersonationAvailable = $derived(
@@ -129,48 +120,29 @@
 		i18n.setLocale(nextLocale);
 	}
 
-	/**
-	 * Detected again on mount: the server has no `navigator`, so it always renders the `Ctrl` label,
-	 * and a Mac would keep reading it until something else forced an update.
-	 */
 	let shortcutModifier = $state(detectShortcutModifier());
 	onMount(() => {
 		shortcutModifier = detectShortcutModifier();
 	});
 	const sidebarShortcut = $derived(formatShortcut(shortcutModifier, 'B'));
 
-	/** Both controls name what the click switches *to*, matching the language row beside them. */
 	const isDark = $derived(mode.current === 'dark');
 	const nextThemeLabel = $derived(t(isDark ? 'misc.themeName.light' : 'misc.themeName.dark'));
 
-	/** An icon-only control has no visible label, so its tooltip carries the name and the key. */
 	const withShortcut = (label: string, key: string | undefined): string =>
 		key ? `${label} · ${key}` : label;
 
 	function selectImpersonationTeam(teamId: string): void {
 		if (impersonationBusy || teamId === impersonationActiveTeamId || !onImpersonate) return;
-		impersonationBusy = true;
-		Effect.runFork(
-			Effect.ensuring(
-				Effect.suspend(() => onImpersonate(teamId) ?? Effect.void),
-				Effect.sync(() => {
-					impersonationBusy = false;
-				})
-			)
+		runPending(
+			() => onImpersonate(teamId),
+			(pending) => (impersonationBusy = pending)
 		);
 	}
 
 	function stopImpersonating(): void {
 		if (impersonationBusy || !onStopImpersonating) return;
-		impersonationBusy = true;
-		Effect.runFork(
-			Effect.ensuring(
-				Effect.suspend(() => onStopImpersonating() ?? Effect.void),
-				Effect.sync(() => {
-					impersonationBusy = false;
-				})
-			)
-		);
+		runPending(onStopImpersonating, (pending) => (impersonationBusy = pending));
 	}
 </script>
 
@@ -196,8 +168,6 @@
 
 {#snippet organizationSwitcher()}
 	{#key sidebar.isMobile}
-		<!-- The whole outlined trigger is the organization switch affordance. A chevron adds a
-			second, falsely active control and competes with the adjacent shell controls. -->
 		{@const { id: activeOrganizationId } = model.activeOrganization}
 		<Combobox
 			value={activeOrganizationId}
@@ -249,11 +219,7 @@
 	<Inline gap="xs" class="h-8">
 		{#if displayExpanded}
 			<div class="min-w-0 flex-1">{@render organizationSwitcher()}</div>
-			<!-- Search is an icon here rather than a row below: the agent now holds the one full-width
-				slot at the top of the navigation, and two competing full rows read as two primary actions. -->
 			{@render searchIcon('')}
-			<!-- The key is only offered on desktop: on mobile this closes the drawer, and a modifier
-				chord is not a gesture that surface has. -->
 			<Tooltip
 				side="bottom"
 				text={sidebar.isMobile
@@ -278,7 +244,6 @@
 				>
 					{@render organizationSwitcher()}
 				</div>
-				<!-- Hover-only expand affordance; keyboard users keep the org combobox + Cmd/Ctrl+B. -->
 				<Sidebar.Trigger
 					target="expansion"
 					tabindex={-1}
@@ -291,13 +256,6 @@
 </Sidebar.Header>
 
 <Sidebar.Content class="text-xs">
-	<!--
-		Notifications sit with the agent rather than down in the account footer: both are inbound
-		workspace attention, and the bell buried under the user card read as an account setting.
-		The group drops its bottom padding so "Platform" follows on the section gap alone — with
-		`pb-1` plus the section's own `pt-2` on top of it, the label floated a third of an inch
-		below a two-row group.
-	-->
 	{#if agent || notifications}
 		<Sidebar.Group class="pb-0">
 			<Sidebar.Menu>
@@ -311,22 +269,17 @@
 			</Sidebar.Menu>
 		</Sidebar.Group>
 	{/if}
-	<WorkspaceSidebarNavigationSection
-		label={t('misc.platform')}
-		items={model.system}
-		open={displayExpanded}
-		class={agent || notifications ? 'pt-0' : undefined}
-		{onNavigate}
-		{onPrefetch}
-	/>
-	<WorkspaceSidebarNavigationSection
-		label={t('misc.applications')}
-		items={model.applications}
-		open={displayExpanded}
-		href={model.applicationsHref}
-		{onNavigate}
-		{onPrefetch}
-	/>
+	{#each model.sections as section, index (section.key)}
+		<WorkspaceSidebarNavigationSection
+			label={section.label}
+			items={section.items}
+			open={displayExpanded}
+			href={section.href}
+			class={index === 0 && (agent || notifications) ? 'pt-0' : undefined}
+			{onNavigate}
+			{onPrefetch}
+		/>
+	{/each}
 </Sidebar.Content>
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
@@ -400,8 +353,6 @@
 							{t(`misc.localeName.${nextLocale}` as UiKeys)}
 						</span>
 					</Button>
-					<!-- Appearance belongs beside language: both are personal display preferences, and
-						neither is a workspace action worth a permanent seat in the header. -->
 					<Button
 						type="button"
 						variant="ghost"
@@ -416,15 +367,6 @@
 					</Button>
 					{#if impersonationAvailable}
 						<DropdownMenu.Separator />
-						<!--
-							The same element and the same class as ACCOUNT above, rather than `DropdownMenu.Label`
-							with an override. The override did not take: the label's base class is `text-sm`, the
-							override asks for `text-tiny`, and `text-tiny` is a project font size that
-							tailwind-merge does not know belongs to the font-size group — so it cancelled nothing,
-							both survived, and this one heading rendered a step larger than every sibling.
-							Sharing the constant makes the three section headings the same by construction instead
-							of by three spellings that happened to agree.
-						-->
 						<div class="px-2 pt-2 pb-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
 							{t('misc.impersonate')}
 						</div>
@@ -455,9 +397,6 @@
 						{/if}
 					{/if}
 					<DropdownMenu.Separator />
-					<!-- Same box as language and appearance above it: without `h-9 px-2` this row kept the
-						button's default padding, so its icon started a few pixels right of theirs and the
-						column of glyphs bent at the last item. -->
 					<Button
 						type="button"
 						variant="ghost"

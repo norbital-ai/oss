@@ -29,10 +29,10 @@
 		"ws": "^8.21.3"
 	},
 	"peerDependencies": {
-		"effect": "4.0.0-rc.111"
+		"effect": "4.0.0-rc.112"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.111",
+		"@effect/vitest": "4.0.0-rc.112",
 		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",

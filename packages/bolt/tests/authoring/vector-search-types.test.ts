@@ -29,8 +29,15 @@ interface TestSchema {
 			};
 			$inferInsert: { sha256: string; perceptual_embedding: number[] };
 		};
+		readonly album: {
+			$inferSelect: { id: string; title: string };
+			$inferInsert: { title: string };
+		};
 	};
-	readonly relations: { readonly photo_evidence: Record<string, never> };
+	readonly relations: {
+		readonly photo_evidence: { readonly album: { readonly target: 'album' } };
+		readonly album: Record<string, never>;
+	};
 }
 
 declare const photos: Api<TestSchema>['db']['photo_evidence'];
@@ -47,7 +54,10 @@ const admitted = () => {
 		// Excluding the probe's own row is the ordinary where clause. There is no `excludeIds`,
 		// because a filter that could exclude by id and by nothing else was a second vocabulary for a
 		// question `where` already answers.
-		where: { id: { ne: 'self' } }
+		where: {
+			id: { ne: 'self' },
+			album: { some: { title: { caseFoldEq: 'Archive' } } }
+		}
 	});
 	return nearest;
 };

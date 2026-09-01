@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
+import { Prompt, Response } from 'effect/unstable/ai';
 import { InvocationScope } from './invocation.js';
-import { SyncChange } from './sync.js';
+import { ChangeBatch } from './sync.js';
 import { EffectId, FacilityCall, FacilityResult, ReleaseId } from './wire.js';
 
 export const DatabaseRequest = Schema.TaggedUnion({
@@ -41,277 +42,162 @@ export const FileResponse = Schema.Struct({
 });
 export interface FileResponse extends Schema.Schema.Type<typeof FileResponse> {}
 
-/** Provider-neutral controls for a model-operated web search. */
-export const AIWebSearch = Schema.Struct({
-	maxResults: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 25 })),
-	allowedDomains: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
-});
-export interface AIWebSearch extends Schema.Schema.Type<typeof AIWebSearch> {}
+const UUID = Schema.String.check(Schema.isUUID());
 
-/**
- * One workspace-owned image that the trusted host resolves immediately before an AI provider call.
- *
- * The object-store key is deliberately carried instead of the bytes. Tenant code runs behind a
- * bounded facility bridge; base64-expanding a photograph inside that bridge both spends isolate CPU
- * and turns an ordinary 1 MiB JPEG into a request larger than the bridge's 1 MiB ceiling. The host
- * already owns the tenant scope and the file facility, so it is the only correct place to resolve
- * the key and construct the provider's data URL.
- */
-export const AIImageAsset = Schema.Struct({
+export const TaskId = UUID.pipe(Schema.brand('AgentTaskId'));
+export type TaskId = typeof TaskId.Type;
+export const PlanId = UUID.pipe(Schema.brand('AgentPlanId'));
+export type PlanId = typeof PlanId.Type;
+export const MessageId = UUID.pipe(Schema.brand('AgentMessageId'));
+export type MessageId = typeof MessageId.Type;
+export const DirectiveId = UUID.pipe(Schema.brand('AgentDirectiveId'));
+export type DirectiveId = typeof DirectiveId.Type;
+export const RunId = UUID.pipe(Schema.brand('AgentRunId'));
+export type RunId = typeof RunId.Type;
+export const WorkbenchId = Schema.NonEmptyString.pipe(Schema.brand('AgentWorkbenchId'));
+export type WorkbenchId = typeof WorkbenchId.Type;
+export const SubjectId = Schema.NonEmptyString.pipe(Schema.brand('AgentSubjectId'));
+export type SubjectId = typeof SubjectId.Type;
+export const AgentId = Schema.NonEmptyString.pipe(Schema.brand('AgentId'));
+export type AgentId = typeof AgentId.Type;
+export const ModelId = Schema.NonEmptyString.pipe(Schema.brand('AgentModelId'));
+export type ModelId = typeof ModelId.Type;
+export const ProviderCallId = Schema.NonEmptyString.pipe(Schema.brand('AgentProviderCallId'));
+export type ProviderCallId = typeof ProviderCallId.Type;
+
+export const TaskAudience = Schema.Literals(['personal', 'workbench']);
+export type TaskAudience = typeof TaskAudience.Type;
+export const TaskStatus = Schema.Literals([
+	'ready',
+	'running',
+	'waiting',
+	'stopped',
+	'attention',
+	'done',
+	'failed'
+]);
+export type TaskStatus = typeof TaskStatus.Type;
+export const PlanStatus = Schema.Literals(['active', 'verified', 'stalled', 'superseded']);
+export type PlanStatus = typeof PlanStatus.Type;
+export const DirectiveMode = Schema.Literals(['agent', 'plan', 'compact']);
+export type DirectiveMode = typeof DirectiveMode.Type;
+export const DirectivePriority = Schema.Literals(['normal', 'steer']);
+export type DirectivePriority = typeof DirectivePriority.Type;
+export const DirectiveState = Schema.Literals(['queued', 'claimed', 'settled', 'cancelled']);
+export type DirectiveState = typeof DirectiveState.Type;
+export const RunPhase = Schema.Literals(['model', 'tool', 'children', 'verify']);
+export type RunPhase = typeof RunPhase.Type;
+export const RunStatus = Schema.Literals(['running', 'waiting', 'succeeded', 'stopped', 'failed']);
+export type RunStatus = typeof RunStatus.Type;
+
+/** Descriptor-sized binary evidence. Only the trusted host resolves and verifies its bytes. */
+export const ImageAsset = Schema.Struct({
 	key: Schema.NonEmptyString,
 	name: Schema.NonEmptyString,
 	mimeType: Schema.NonEmptyString,
-	size: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	size: Schema.Natural,
 	detail: Schema.optionalKey(Schema.Literals(['auto', 'low', 'high']))
 });
-export interface AIImageAsset extends Schema.Schema.Type<typeof AIImageAsset> {}
+export interface ImageAsset extends Schema.Schema.Type<typeof ImageAsset> {}
 
-/** Provider-neutral content part expanded by the host before the request reaches an AI adapter. */
-export const AIImageAssetPart = Schema.Struct({
-	type: Schema.Literal('image_asset'),
-	image_asset: AIImageAsset
+/** Named exact billable units emitted by an adapter when Effect usage is insufficient. */
+const ProviderUsage = Schema.Struct({
+	billableUnits: Schema.Record(Schema.NonEmptyString, Schema.BigIntFromString)
 });
-export interface AIImageAssetPart extends Schema.Schema.Type<typeof AIImageAssetPart> {}
+export const ProviderUsageEncoded = Schema.toEncoded(ProviderUsage);
+export interface ProviderUsageEncoded extends Schema.Schema.Type<typeof ProviderUsageEncoded> {}
 
+export const UsageObservation = Schema.Union([
+	Schema.toEncoded(Response.Usage),
+	ProviderUsageEncoded
+]);
+export type UsageObservation = typeof UsageObservation.Type;
+
+export const ExactCharge = Schema.Struct({
+	currency: Schema.NonEmptyString,
+	coefficient: Schema.BigIntFromString,
+	scale: Schema.Natural
+});
+export interface ExactCharge extends Schema.Schema.Type<typeof ExactCharge> {}
+
+export const ProviderObservation = Schema.Struct({
+	callId: ProviderCallId,
+	provider: Schema.NonEmptyString,
+	model: Schema.NonEmptyString,
+	operation: Schema.Literals(['language', 'embedding']),
+	usage: Schema.optionalKey(UsageObservation),
+	charge: Schema.optionalKey(ExactCharge),
+	chargeSource: Schema.optionalKey(Schema.Literals(['provider', 'price-table'])),
+	pricingVersion: Schema.optionalKey(Schema.NonEmptyString)
+});
+export interface ProviderObservation extends Schema.Schema.Type<typeof ProviderObservation> {}
+
+export const ModelCatalogEntry = Schema.Struct({ id: ModelId });
+export interface ModelCatalogEntry extends Schema.Schema.Type<typeof ModelCatalogEntry> {}
+
+export const PlanVerdict = Schema.Struct({
+	complete: Schema.Boolean,
+	summary: Schema.NonEmptyString,
+	gaps: Schema.Array(Schema.NonEmptyString)
+});
+export interface PlanVerdict extends Schema.Schema.Type<typeof PlanVerdict> {}
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+export const AIGenerationOutput = Schema.TaggedUnion({
+	Message: {},
+	PlanVerdict: {},
+	Object: {
+		objectName: Schema.NonEmptyString,
+		jsonSchema: JsonObject
+	}
+});
+export type AIGenerationOutput = typeof AIGenerationOutput.Type;
+
+export const AIGenerationResult = Schema.TaggedUnion({
+	Message: { message: Schema.toEncoded(Prompt.Message) },
+	PlanVerdict: { verdict: PlanVerdict },
+	Object: { value: Schema.Json }
+});
+export type AIGenerationResult = typeof AIGenerationResult.Type;
+
+/** Thin Effect-message/model boundary. It owns no queue, provider dialect, or usage accumulator. */
 export const AIRequest = Schema.TaggedUnion({
-	Models: {},
-	Turn: {
-		model: Schema.NonEmptyString,
-		/** Pinned TanStack ModelMessage values plus mechanical system-prompt wire entries. */
-		messages: Schema.Array(Schema.Json),
-		tools: Schema.Array(Schema.Json),
+	Catalog: {},
+	Generate: {
+		callId: ProviderCallId,
+		modelId: ModelId,
+		messages: Schema.Array(Schema.toEncoded(Prompt.Message)),
 		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
-		webSearch: Schema.optionalKey(AIWebSearch),
-		responseSchema: Schema.optionalKey(Schema.Json)
+		output: AIGenerationOutput,
+		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset))
 	},
-	/**
-	 * One embedding call over multimodal inputs.
-	 *
-	 * `inputs` carries OpenAI-compatible content-part arrays — a `text` part, an `image_url` part
-	 * with a `data:` URL, or both — so one request can embed a photograph, a caption, or the two
-	 * jointly. `dimensions` asks the provider for a truncated vector when the model supports
-	 * Matryoshka output; the provider's default dimensionality is used when it is absent.
-	 */
 	Embed: {
-		model: Schema.NonEmptyString,
+		callId: ProviderCallId,
+		modelId: ModelId,
 		inputs: Schema.Array(Schema.Json),
-		dimensions: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)))
+		dimensions: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
+		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset))
 	}
 });
 export type AIRequest = typeof AIRequest.Type;
 
-/**
- * What one model call consumed, as the host that paid for it reported.
- *
- * Provider adapters normalise their dialect before crossing the facility boundary. The wire uses
- * this schema directly, so every consumer receives the same typed record and no downstream caller
- * has to repair an `unknown` provider response.
- *
- * `costUsd` is the provider's own charge, never a figure derived from token counts and a price list:
- * a number a reader takes for a bill has to be the bill. Token counts travel beside it because they
- * are what makes the charge auditable, and because the panel needs input tokens to say how much of
- * the context window a conversation is occupying.
- */
-export const AIUsage = Schema.Struct({
-	// Non-exact optional so the normaliser can hold an absent field as an explicit `undefined`; the
-	// wire never carries those, and it is the normaliser that decides presence, not the reader.
-	model: Schema.optional(Schema.String),
-	inputTokens: Schema.optional(Schema.Natural),
-	cachedInputTokens: Schema.optional(Schema.Natural),
-	outputTokens: Schema.optional(Schema.Natural),
-	reasoningTokens: Schema.optional(Schema.Natural),
-	totalTokens: Schema.optional(Schema.Natural),
-	costUsd: Schema.optional(
-		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	/**
-	 * What the host will charge its tenant for this call, in millionths of one major currency unit.
-	 *
-	 * Separate from `costUsd` because they are different facts. `costUsd` is what the provider took;
-	 * this is what the tenant owes, and a host billing in another currency does not make them the
-	 * same number — showing the provider's figure to the person paying understates it silently.
-	 * Micro-units rather than cents because one agent turn routinely costs a fraction of a cent.
-	 *
-	 * Absent when the host has no rate card of its own, in which case the provider charge is the only
-	 * honest figure there is and consumers fall back to it.
-	 */
-	costMicroUnits: Schema.optional(Schema.Natural),
-	/** ISO 4217 code the charge above is denominated in. Meaningless without the micro-unit amount. */
-	costCurrency: Schema.optional(Schema.NonEmptyString)
-});
-export interface AIUsage extends Schema.Schema.Type<typeof AIUsage> {}
-
-/** First finite non-negative number among the spellings one provider field is known by. */
-const usageNumber = (
-	source: Readonly<Record<string, unknown>>,
-	keys: ReadonlyArray<string>
-): number | undefined => {
-	for (const key of keys) {
-		const value = source[key];
-		if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+export const AIResponse = Schema.TaggedUnion({
+	Catalog: {
+		languageModels: Schema.Array(ModelCatalogEntry),
+		defaultLanguageModelId: ModelId,
+		embeddingModels: Schema.Array(ModelCatalogEntry),
+		defaultEmbeddingModelId: ModelId
+	},
+	Generated: {
+		result: AIGenerationResult,
+		observation: ProviderObservation
+	},
+	Embedded: {
+		embeddings: Schema.Array(Schema.Array(Schema.Number)),
+		observation: ProviderObservation
 	}
-	return undefined;
-};
-
-const usageNatural = (
-	source: Readonly<Record<string, unknown>>,
-	keys: ReadonlyArray<string>
-): number | undefined => {
-	const value = usageNumber(source, keys);
-	return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
-};
-
-const usageRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
-
-/**
- * Normalises a provider response to the canonical record above.
- *
- * Providers spell the same three numbers at least three ways each, and OpenAI-compatible endpoints
- * nest them under `usage` while some gateways hoist them to the top level. Normalising here is what
- * lets the runtime, the meter, and the panel agree on one record instead of each learning the
- * dialects separately. Only the provider adapter calls this; the facility wire itself is typed.
- *
- * Returns `undefined` when nothing usage-shaped is present. That is not zero: a turn whose usage was
- * never reported is a turn whose cost is unknown, and the two must not read alike.
- */
-export const readAIUsage = (value: unknown): AIUsage | undefined => {
-	const outer = usageRecord(value);
-	if (outer === undefined) return undefined;
-	const inner = usageRecord(outer['usage']) ?? outer;
-	const details =
-		usageRecord(inner['prompt_tokens_details']) ?? usageRecord(inner['inputTokensDetails']);
-	const completion =
-		usageRecord(inner['completion_tokens_details']) ?? usageRecord(inner['outputTokensDetails']);
-	const inputTokens = usageNatural(inner, [
-		'inputTokens',
-		'input_tokens',
-		'promptTokens',
-		'prompt_tokens'
-	]);
-	const outputTokens = usageNatural(inner, [
-		'outputTokens',
-		'output_tokens',
-		'completionTokens',
-		'completion_tokens'
-	]);
-	const computedTotal = (inputTokens ?? 0) + (outputTokens ?? 0);
-	const totalTokens = usageNatural(inner, ['totalTokens', 'total_tokens']) ??
-		(inputTokens === undefined && outputTokens === undefined || !Number.isSafeInteger(computedTotal)
-			? undefined
-			: computedTotal);
-	const cachedInputTokens =
-		usageNatural(inner, ['cachedInputTokens', 'cached_input_tokens']) ??
-		(details === undefined ? undefined : usageNatural(details, ['cachedTokens', 'cached_tokens']));
-	const reasoningTokens =
-		usageNatural(inner, ['reasoningTokens', 'reasoning_tokens']) ??
-		(completion === undefined
-			? undefined
-			: usageNatural(completion, ['reasoningTokens', 'reasoning_tokens']));
-	const costUsd = usageNumber(inner, ['costUsd', 'cost_usd', 'cost', 'totalCost', 'total_cost']);
-	// Read only under its canonical name: no provider reports what *this host* charges, so a dialect
-	// list here would be inviting some field of the provider's to be mistaken for the tenant's bill.
-	const reportedCostMicroUnits = usageNatural(inner, ['costMicroUnits']);
-	const costCurrency =
-		typeof inner['costCurrency'] === 'string' && inner['costCurrency'].length > 0
-			? inner['costCurrency']
-			: undefined;
-	const costMicroUnits = costCurrency === undefined ? undefined : reportedCostMicroUnits;
-	const model =
-		typeof inner['model'] === 'string'
-			? inner['model']
-			: typeof outer['model'] === 'string'
-				? outer['model']
-				: undefined;
-	const usage: AIUsage = {
-		model,
-		inputTokens,
-		cachedInputTokens,
-		outputTokens,
-		reasoningTokens,
-		totalTokens,
-		costUsd,
-		costMicroUnits,
-		// The charge's denomination is only meaningful beside the charge itself; without a rate card
-		// there is nothing to label.
-		costCurrency: costMicroUnits === undefined ? undefined : costCurrency
-	};
-	return Object.values(usage).every((value) => value === undefined) ? undefined : usage;
-};
-
-/**
- * Adds one turn's usage to a running total.
- *
- * A conversation's spend is the sum of every model call it caused, including the ones its subagents
- * made, so the accumulator is the shape that has to be depth-agnostic: callers fold child totals in
- * exactly as they fold their own turns. `model` is dropped on purpose — a total spanning two models
- * has no single model, and reporting the last one would be a lie a reader could act on.
- */
-export const addAIUsage = (
-	total: AIUsage | undefined,
-	next: AIUsage | undefined
-): AIUsage | undefined => {
-	const validateUsage = (usage: AIUsage | undefined) => {
-		if (usage === undefined) return;
-		for (const field of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningTokens',
-			'totalTokens', 'costMicroUnits'] as const) {
-			const value = usage[field];
-			if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
-				throw new TypeError(`AI usage ${field} must be a non-negative safe integer`);
-			}
-		}
-		if (usage.costUsd !== undefined && (!Number.isFinite(usage.costUsd) || usage.costUsd < 0)) {
-			throw new TypeError('AI provider cost must be a finite non-negative USD amount');
-		}
-		const hasAmount = usage.costMicroUnits !== undefined;
-		const hasCurrency = usage.costCurrency !== undefined;
-		if (hasAmount !== hasCurrency) throw new TypeError('AI tenant charge requires both amount and currency');
-	};
-	validateUsage(total);
-	validateUsage(next);
-	if (next === undefined) return total;
-	if (total === undefined) return { ...next };
-	const sum = (left: number | undefined, right: number | undefined): number | undefined =>
-		left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
-	const naturalSum = (left: number | undefined, right: number | undefined): number | undefined => {
-		const value = sum(left, right);
-		if (value !== undefined && !Number.isSafeInteger(value)) {
-			throw new TypeError('AI usage total exceeds the exact integer range');
-		}
-		return value;
-	};
-	const inputTokens = naturalSum(total.inputTokens, next.inputTokens);
-	const cachedInputTokens = naturalSum(total.cachedInputTokens, next.cachedInputTokens);
-	const outputTokens = naturalSum(total.outputTokens, next.outputTokens);
-	const reasoningTokens = naturalSum(total.reasoningTokens, next.reasoningTokens);
-	const totalTokens = naturalSum(total.totalTokens, next.totalTokens);
-	const costUsd = sum(total.costUsd, next.costUsd);
-	const costMicroUnits = naturalSum(total.costMicroUnits, next.costMicroUnits);
-	if (total.costCurrency !== undefined && next.costCurrency !== undefined &&
-		total.costCurrency !== next.costCurrency) {
-		throw new TypeError(`Cannot add AI tenant charges in ${total.costCurrency} and ${next.costCurrency}`);
-	}
-	const costCurrency =
-		total.costCurrency ?? next.costCurrency;
-	return {
-		inputTokens,
-		cachedInputTokens,
-		outputTokens,
-		reasoningTokens,
-		totalTokens,
-		costUsd,
-		costMicroUnits,
-		costCurrency: costMicroUnits === undefined ? undefined : costCurrency
-	};
-};
-
-export const AIResponse = Schema.Struct({
-	output: Schema.Json,
-	usage: Schema.optionalKey(AIUsage)
 });
-export interface AIResponse extends Schema.Schema.Type<typeof AIResponse> {}
+export type AIResponse = typeof AIResponse.Type;
 
 export const CommunicationRequest = Schema.TaggedUnion({
 	VerifyInbound: { channel: Schema.NonEmptyString, envelope: Schema.Json },
@@ -391,16 +277,7 @@ export const TaskRequest = Schema.TaggedUnion({
 	/** Releases the host's ephemeral task-to-invocation association after the attempt settles. */
 	Settled: { taskId: Schema.NonEmptyString },
 	/** Accelerates a durable stop by terminating only the invocation running this task. */
-	Interrupt: { taskId: Schema.NonEmptyString },
-	/**
-	 * Runs one already-admitted delegated agent turn through a fresh host Conductor invocation.
-	 * The host learns no agent semantics; it routes these two durable coordinates to the typed
-	 * `host.agents.executeChild` command and returns that command's JSON answer.
-	 */
-	Delegate: {
-		conversationId: Schema.NonEmptyString,
-		turnId: Schema.NonEmptyString
-	}
+	Interrupt: { taskId: Schema.NonEmptyString }
 });
 export type TaskRequest = typeof TaskRequest.Type;
 export const TaskResponse = Schema.Struct({ output: Schema.optionalKey(Schema.Json) });
@@ -524,9 +401,10 @@ export interface TransportResponse extends Schema.Schema.Type<typeof TransportRe
  * alive. Browser mutations return their change list with the command response; long-running agent,
  * automation, and hook invocations need this commit hook so each committed step can fan out now.
  */
-export const SyncCommitRequest = Schema.Struct({ changes: Schema.Array(SyncChange) });
+export const SyncCommitRequest = ChangeBatch;
 export interface SyncCommitRequest extends Schema.Schema.Type<typeof SyncCommitRequest> {}
-export const SyncCommitResponse = Schema.Struct({ accepted: Schema.Boolean });
+/** Completion of the facility call is the acknowledgement that host delivery settled. */
+export const SyncCommitResponse = Schema.Struct({});
 export interface SyncCommitResponse extends Schema.Schema.Type<typeof SyncCommitResponse> {}
 
 /**

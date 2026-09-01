@@ -1,22 +1,19 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { ModelMessage } from '@tanstack/ai';
-import { and, asc, count, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ImageAsset,
+	type TaskId
+} from '@norbital-ai/bolt-protocol/facilities';
+import { and, asc, count, eq, gt, inArray } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
-import * as ChatDocuments from '#lib/runtime/agents/documents.js';
-import {
-	chatDocumentStorageKey,
-	inboundAgentInput,
-	type ChatAttachment,
-	type InboundBatchMessage
-} from '#lib/runtime/agents/agent-runtime.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
-import { PendingApproval } from '#lib/runtime/collections/collections.js';
-import type { WhereCompileError } from '#lib/runtime/collections/read/where.js';
-import { Communication } from '#lib/runtime/facilities/services.js';
+import { Communication, Files } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
@@ -25,8 +22,6 @@ import * as TenantScope from '#lib/runtime/tenant.js';
 import { canonicalTransportIdentity } from '#lib/runtime/envoys/transport-identity.js';
 import { envoyPrincipalId, envoySubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { AuthoredRefusal } from '#lib/authoring/refusal.js';
-import * as InvocationBudget from '#lib/runtime/budget.js';
 import {
 	composer,
 	dbNow,
@@ -37,7 +32,6 @@ import {
 } from '#lib/runtime/persistence.js';
 
 const {
-	chat_session: chatSession,
 	bolt_task: boltTaskTable,
 	bolt_envoy_inbound: boltEnvoyInbound,
 	bolt_envoy_receipts: boltEnvoyReceipts,
@@ -139,7 +133,6 @@ const DrainReport = Schema.Struct({
 interface DrainReport extends Schema.Schema.Type<typeof DrainReport> {}
 
 const DRAIN_DEBOUNCE_MS = 3_000;
-const DRAIN_LEASE_SECONDS = 120;
 const MAX_DRAIN_MESSAGES = 32;
 const REGISTRATION_NOTICE_LIMITS = {
 	'envoys.registration': [{ window: '15 minutes', limit: 1, key: 'sender' as const }]
@@ -160,12 +153,7 @@ const InboundRow = Schema.Struct({
 		Schema.Struct({
 			provider: Schema.NonEmptyString,
 			attachmentId: Schema.NonEmptyString,
-			file: Schema.Struct({
-				storage_key: Schema.NonEmptyString,
-				file_name: Schema.NonEmptyString,
-				file_size: Schema.Number,
-				mime_type: Schema.NonEmptyString
-			})
+			asset: ImageAsset
 		})
 	),
 	subject: Identity.Subject,
@@ -190,26 +178,12 @@ const ProcessingRecipient = Schema.Struct({
 	envoy_name: Schema.NonEmptyString,
 	transport_conversation_id: Schema.NonEmptyString
 });
-const TransportSurfaceRow = Schema.Struct({
-	transport_message_key: Schema.NullOr(Schema.String),
-	transport_progress: Schema.NullOr(Schema.String)
-});
-
 type EnvoyFailure =
 	| EnvoyError
-	| Agents.AgentExecutionError
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
 	| Database.FacilityError
-	| ChatDocuments.ChatDocumentError
-	| Agents.SkillError
-	| Agents.ToolNotAllowed
-	| ApprovalConflict
-	| PendingApproval
-	| WhereCompileError
-	| RateLimits.RateLimited
-	| AuthoredRefusal
-	| InvocationBudget.NestingLimitExceeded;
+	| RateLimits.RateLimited;
 
 export type Interface = Readonly<{
 	readonly receive: (
@@ -278,9 +252,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 		Effect.gen(function* () {
 			const workspace = yield* Workspace.Service;
 			const agents = yield* Agents.Service;
-			const documents = yield* ChatDocuments.Service;
 			const identity = yield* Identity.Service;
 			const communication = yield* Communication.Service;
+			const files = yield* Files.Service;
 			const database = yield* Database.Service;
 			const queue = yield* TaskQueue.Service;
 			const rateLimits = yield* RateLimits.Service;
@@ -299,14 +273,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 			};
 
-			const releaseLease = (effectId: EffectId, conversationId: string) =>
-				executeBuilt(
-					effectId,
-					database,
-					composer
-						.update(chatSession)
-						.set({ drain_lease_until: null })
-						.where(eq(chatSession.conversation_id, conversationId))
+			const extensionOf = (fileName: string): string => {
+				const candidate = fileName.includes('.')
+					? fileName.slice(fileName.lastIndexOf('.') + 1)
+					: '';
+				return /^[a-z0-9]{1,12}$/i.test(candidate) ? `.${candidate.toLowerCase()}` : '';
+			};
+
+			const stagingAttachmentKey = (
+				envoyName: string,
+				conversationId: string,
+				messageId: string,
+				index: number,
+				fileName: string
+			): string =>
+				[
+					'envoy-inbound',
+					encodeURIComponent(envoyName),
+					encodeURIComponent(conversationId),
+					`${encodeURIComponent(`${messageId}:${index}`)}${extensionOf(fileName)}`
+				].join('/');
+
+			const taskFailure = (envoyName: string, operation: string) =>
+				Effect.mapError(
+					(failure: unknown) =>
+						new EnvoyError({
+							envoy: envoyName,
+							message: `${operation} failed: ${
+								failure instanceof Error ? failure.message : String(failure)
+							}`
+						})
 				);
 
 			/**
@@ -663,79 +659,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				};
 			});
 
-			const truncatePreview = (value: string, limit = 96): string => {
-				const compact = value.replace(/\s+/g, ' ').trim();
-				return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
-			};
-
-			const progressBody = (messages: ReadonlyArray<ModelMessage>): string => {
-				const completed = new Set(
-					messages.flatMap((message) =>
-						message.role === 'tool' && message.toolCallId !== undefined
-							? [message.toolCallId]
-							: []
-					)
-				);
-				const activeTool = messages
-					.flatMap((message) => (message.role === 'assistant' ? (message.toolCalls ?? []) : []))
-					.toReversed()
-					.find((call) => !completed.has(call.id));
-				if (activeTool !== undefined) {
-					return `Working · ${activeTool.function.name.replaceAll('_', ' ')}`;
-				}
-				const last = messages.at(-1);
-				if (last?.role === 'tool' && last.name !== undefined)
-					return `Working · finished ${last.name.replaceAll('_', ' ')}`;
-				const thought = last?.role === 'assistant' ? last.thinking?.at(-1)?.content : undefined;
-				if (thought !== undefined && thought.trim().length > 0) {
-					return `Working · ${truncatePreview(thought, 72)}`;
-				}
-				return 'Working…';
-			};
-
-			const readSurface = Effect.fn('Envoys.readSurface')(function* (
-				effectId: EffectId,
-				conversationId: string
-			) {
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							transport_message_key: chatSession.transport_message_key,
-							transport_progress: chatSession.transport_progress
-						})
-						.from(chatSession)
-						.where(eq(chatSession.conversation_id, conversationId))
-						.limit(1)
-				);
-				const decoded = Schema.decodeUnknownOption(TransportSurfaceRow)(result.rows[0]);
-				return decoded._tag === 'Some'
-					? decoded.value
-					: { transport_message_key: null, transport_progress: null };
-			});
-
-			const writeSurface = (
-				effectId: EffectId,
-				conversationId: string,
-				messageKey: string | null,
-				progress: string | null
-			) =>
-				executeBuilt(
-					effectId,
-					database,
-					composer
-						.update(chatSession)
-						.set({ transport_message_key: messageKey, transport_progress: progress })
-						.where(eq(chatSession.conversation_id, conversationId))
-				);
+			const assistantText = (message: Prompt.MessageEncoded): string =>
+				typeof message.content === 'string'
+					? message.content
+					: message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
 
 			const settleDelivery = Effect.fn('Envoys.settleDelivery')(function* (
 				effectId: EffectId,
 				envoy: EnvoyDefinition & { readonly name: string },
 				conversationId: string,
 				output: Schema.Json,
-				progressKey: string | null
+				progressKey: string | null,
+				rowIds?: ReadonlyArray<string>
 			) {
 				const processing = yield* executeBuilt(
 					EffectId.make(`${effectId}:processing`),
@@ -750,7 +685,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						.where(
 							and(
 								eq(boltEnvoyInbound.conversation_id, conversationId),
-								eq(boltEnvoyInbound.status, 'processing')
+								eq(boltEnvoyInbound.status, 'processing'),
+								...(rowIds === undefined ? [] : [inArray(boltEnvoyInbound.id, rowIds)])
 							)
 						)
 						.orderBy(asc(boltEnvoyInbound.sent_at))
@@ -784,66 +720,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							)
 						)
 				);
-				yield* writeSurface(EffectId.make(`${effectId}:surface-clear`), conversationId, null, null);
 				return { envoy: envoy.name, conversationId, drained: rows.length, status };
-			});
-
-			const makeTurnSurface = Effect.fn('Envoys.makeTurnSurface')(function* (
-				effectId: EffectId,
-				envoy: EnvoyDefinition & { readonly name: string },
-				conversationId: string,
-				recipient: string
-			) {
-				const stored = yield* readSurface(EffectId.make(`${effectId}:read`), conversationId);
-				let currentKey = stored.transport_message_key;
-				let currentBody = stored.transport_progress;
-				return {
-					observe: (messages: ReadonlyArray<ModelMessage>) =>
-						Effect.gen(function* () {
-							const body = progressBody(messages);
-							if (body === currentBody) return;
-							const sent = yield* deliver(effectId, envoy, recipient, { text: body }, currentKey);
-							if (!sent.delivered) return;
-							currentKey = sent.key ?? currentKey;
-							currentBody = body;
-							yield* writeSurface(
-								EffectId.make(`${effectId}:write`),
-								conversationId,
-								currentKey,
-								body
-							);
-						}),
-					currentKey: () => currentKey,
-					complete: (output: Schema.Json) =>
-						settleDelivery(effectId, envoy, conversationId, output, currentKey).pipe(Effect.asVoid)
-				} satisfies Agents.AgentSurface;
-			});
-
-			const showQueuedPreview = Effect.fn('Envoys.showQueuedPreview')(function* (
-				effectId: EffectId,
-				envoy: EnvoyDefinition & { readonly name: string },
-				conversationId: string,
-				recipient: string,
-				message: string,
-				mode: 'queued' | 'steer' = 'queued'
-			) {
-				const state = yield* readSurface(EffectId.make(`${effectId}:read`), conversationId);
-				const label = mode === 'steer' ? 'Steering' : 'Queued';
-				const body = `${state.transport_progress ?? 'Working…'}\n\n${label} · ${truncatePreview(message)}`;
-				const sent = yield* deliver(
-					EffectId.make(`${effectId}:send`),
-					envoy,
-					recipient,
-					{ text: body },
-					state.transport_message_key
-				);
-				if (!sent.delivered) return;
-				yield* writeSurface(
-					EffectId.make(`${effectId}:write`),
-					conversationId,
-					sent.key ?? state.transport_message_key,
-					state.transport_progress ?? 'Working…'
-				);
 			});
 
 			return Service.of({
@@ -958,13 +835,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					}
 
 					const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
-					yield* agents.open(
-						EffectId.make(`${effectId}:conversation`),
-						subject,
-						envoyName,
-						conversationId
-					);
-
 					const claim = yield* executeBuilt(
 						EffectId.make(`${effectId}:claim`),
 						database,
@@ -980,7 +850,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								sender_display_name: delivery.sender?.displayName ?? null,
 								sent_at: delivery.sentAt,
 								invocation: delivery.invocation,
-								text: inboundText,
+								text: delivery.text,
 								attachments: JSON.stringify([]),
 								subject: JSON.stringify(subject),
 								addressed,
@@ -998,7 +868,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						};
 					}
 
-					const stored: Array<ChatAttachment> = [];
+					const stored: Array<Agents.InboundAttachment> = [];
 					const finishBuffer = Effect.gen(function* () {
 						for (const [index, attachment] of delivery.attachments.entries()) {
 							const bytes = bytesOf(attachment.bytesBase64);
@@ -1008,27 +878,28 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									message: `attachment ${attachment.attachmentId} did not match its declared byte length`
 								});
 							}
-							const storageKey = chatDocumentStorageKey(
+							const storageKey = stagingAttachmentKey(
+								envoyName,
 								conversationId,
-								`${delivery.messageId}:${index}`,
+								delivery.messageId,
+								index,
 								attachment.fileName
 							);
-							const file = {
-								storage_key: storageKey,
-								file_name: attachment.fileName,
-								file_size: bytes.byteLength,
-								mime_type: attachment.mimeType
-							};
-							yield* documents.write(
-								EffectId.make(`${effectId}:attachment:${index}`),
-								conversationId,
-								file,
+							const asset = ImageAsset.make({
+								key: storageKey,
+								name: attachment.fileName,
+								mimeType: attachment.mimeType,
+								size: bytes.byteLength
+							});
+							yield* files.execute(EffectId.make(`${effectId}:attachment:${index}`), {
+								_tag: 'Write',
+								key: storageKey,
 								bytes
-							);
+							});
 							stored.push({
 								provider: attachment.provider,
 								attachmentId: attachment.attachmentId,
-								file
+								asset
 							});
 						}
 						yield* executeBuilt(
@@ -1043,12 +914,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					yield* finishBuffer.pipe(
 						Effect.onError(() =>
 							Effect.all([
-								...stored.map(({ file }, index) =>
-									documents.remove(
-										EffectId.make(`${effectId}:abandon-document:${index}`),
-										conversationId,
-										file.storage_key
-									)
+								...stored.map(({ asset }, index) =>
+									files.execute(EffectId.make(`${effectId}:abandon-document:${index}`), {
+										_tag: 'Delete',
+										key: asset.key
+									})
 								),
 								executeBuilt(
 									EffectId.make(`${effectId}:abandon`),
@@ -1059,62 +929,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						)
 					);
 					if (addressed) {
-						const running = yield* agents.running(
-							EffectId.make(`${effectId}:running`),
-							conversationId
-						);
-						if (running) {
-							yield* executeBuilt(
-								EffectId.make(`${effectId}:processing`),
-								database,
-								composer
-									.update(boltEnvoyInbound)
-									.set({ status: 'processing' })
-									.where(eq(boltEnvoyInbound.id, claimed.value.id))
-							);
-							const batch = inboundAgentInput([
-									{
-										sender: {
-											...(senderId === undefined ? {} : { id: senderId }),
-											...(delivery.sender?.displayName === undefined
-												? {}
-												: { displayName: delivery.sender.displayName })
-										},
-										sentAt: delivery.sentAt,
-										messageId: delivery.messageId,
-										text: inboundText,
-										attachments: stored,
-										invocation: delivery.invocation
-									}
-								]);
-							const admitted = yield* agents.enqueue(
-								EffectId.make(`${effectId}:turn`),
-								subject,
-								envoyName,
-								conversationId,
-								`${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
-								batch,
-								undefined,
-								undefined,
-								steerRequested ? 'steer' : 'queue',
-								'envoy'
-							);
-							if (admitted.status === 'pending') {
-								yield* showQueuedPreview(
-									EffectId.make(`${effectId}:queue-preview`),
-									envoy,
-									conversationId,
-									delivery.conversationId,
-									inboundText,
-									steerRequested ? 'steer' : 'queued'
-								);
-							}
-							return {
-								status: 'buffered' as const,
-								envoy: envoyName,
-								conversationId: delivery.conversationId
-							};
-						}
 						const now = yield* Clock.currentTimeMillis;
 						yield* enqueueDrain(
 							EffectId.make(`${effectId}:enqueue`),
@@ -1132,27 +946,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 
 				drain: Effect.fn('Envoys.drain')(function* (effectId, envoyName, conversationId) {
 					const envoy = yield* requireEnvoy(envoyName);
-					const lease = yield* executeBuilt(
-						EffectId.make(`${effectId}:lease`),
-						database,
-						composer
-							.update(chatSession)
-							.set({ drain_lease_until: dbNowPlusSeconds(DRAIN_LEASE_SECONDS) })
-							.where(
-								and(
-									eq(chatSession.conversation_id, conversationId),
-									or(
-										isNull(chatSession.drain_lease_until),
-										lt(chatSession.drain_lease_until, dbNow())
-									)
-								)
-							)
-							.returning({ id: chatSession.id })
-					);
-					if (lease.rows.length === 0) {
-						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-					}
-
 					const pendingIds = composer
 						.select({ id: boltEnvoyInbound.id })
 						.from(boltEnvoyInbound)
@@ -1191,73 +984,137 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							const decoded = decodeInboundRow(row);
 							return decoded._tag === 'Some' ? [decoded.value] : [];
 						})
-						.toSorted((left, right) => left.sent_at.localeCompare(right.sent_at));
+						.toSorted(
+							(left, right) =>
+								left.sent_at.localeCompare(right.sent_at) || left.id.localeCompare(right.id)
+						);
 					if (rows.length === 0) {
-						yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
 						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
 					}
+					const rowIds = rows.map(({ id }) => id);
+					const restore = executeBuilt(
+						EffectId.make(`${effectId}:restore`),
+						database,
+						composer
+							.update(boltEnvoyInbound)
+							.set({ status: 'pending' })
+							.where(inArray(boltEnvoyInbound.id, rowIds))
+					).pipe(Effect.ignore);
 					const trigger = [...rows].reverse().find(({ addressed }) => addressed);
 					if (trigger === undefined) {
-						yield* executeBuilt(
-							EffectId.make(`${effectId}:restore`),
-							database,
-							composer
-								.update(boltEnvoyInbound)
-								.set({ status: 'pending' })
-								.where(
-									inArray(
-										boltEnvoyInbound.id,
-										rows.map(({ id }) => id)
-									)
-								)
-						);
-						yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+						yield* restore;
 						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
 					}
 
-					const messages: Array<InboundBatchMessage> = rows.map((row) => ({
-						sender: {
-							...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
-							...(row.sender_display_name === null ? {} : { displayName: row.sender_display_name })
-						},
-						sentAt: row.sent_at,
-						messageId: row.external_message_id,
-						text: row.text,
-						attachments: row.attachments,
-						invocation: row.invocation
-					}));
-					const batch = inboundAgentInput(messages);
-					const turnId = String(effectId);
-					const surface = yield* makeTurnSurface(
-						EffectId.make(`${effectId}:surface`),
-						envoy,
-						conversationId,
-						trigger.transport_conversation_id
-					);
-					// Inbound chat is direct execution: admission is durable first, then this same I/O
-					// invocation drains the serial lane. The surface edits one transport bubble after every
-					// durable step and replaces it with the final answer.
-					yield* agents
-						.enqueue(
-							effectId,
-							trigger.subject,
-							envoyName,
-							conversationId,
-							turnId,
-							batch,
-							undefined,
-							surface
-						)
-						.pipe(
-							Effect.mapError(
-								(failure) =>
-									new EnvoyError({
+					const taskId: TaskId = Agents.taskIdFor(`envoy:${conversationId}:${rowIds.join(':')}`);
+					const steerPattern = /^\s*\/steer(?:\s|$)/i;
+					const priority = rows.some(({ addressed, text }) => addressed && steerPattern.test(text))
+						? DirectivePriority.make('steer')
+						: DirectivePriority.make('normal');
+					const stagingKeys: Array<string> = [];
+					const executeTask = Effect.gen(function* () {
+						const messages: Array<Agents.InboundBatchMessage> = [];
+						for (const row of rows) {
+							const attachments: Array<Agents.InboundAttachment> = [];
+							for (const [index, attachment] of row.attachments.entries()) {
+								const response = yield* files.execute(
+									EffectId.make(`${effectId}:read-attachment:${row.id}:${index}`),
+									{ _tag: 'Read', key: attachment.asset.key }
+								);
+								if (
+									response.bytes === undefined ||
+									response.bytes.byteLength !== attachment.asset.size
+								) {
+									return yield* new EnvoyError({
 										envoy: envoyName,
-										message: `Direct agent execution failed: ${failure.message}`
-									})
-							)
+										message: `attachment ${attachment.attachmentId} is missing or changed before Task admission`
+									});
+								}
+								const asset = ImageAsset.make({
+									...attachment.asset,
+									key: Agents.taskAssetStorageKey(
+										taskId,
+										`${row.external_message_id}:${index}`,
+										attachment.asset.name
+									)
+								});
+								yield* files.execute(
+									EffectId.make(`${effectId}:materialize-attachment:${row.id}:${index}`),
+									{ _tag: 'Write', key: asset.key, bytes: response.bytes }
+								);
+								stagingKeys.push(attachment.asset.key);
+								attachments.push({
+									provider: attachment.provider,
+									attachmentId: attachment.attachmentId,
+									asset
+								});
+							}
+							messages.push({
+								sender: {
+									...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
+									...(row.sender_display_name === null
+										? {}
+										: { displayName: row.sender_display_name })
+								},
+								sentAt: row.sent_at,
+								messageId: row.external_message_id,
+								text: row.text.replace(steerPattern, '').trimStart(),
+								attachments,
+								invocation: row.invocation
+							});
+						}
+
+						const batch = Agents.inboundAgentInput(messages);
+						yield* agents
+							.submit(effectId, trigger.subject, {
+								taskId,
+								agentId: AgentId.make(envoyName),
+								message: batch,
+								mode: DirectiveMode.make('agent'),
+								priority
+							})
+							.pipe(taskFailure(envoyName, 'Task submission'));
+						const executed = yield* agents
+							.execute(EffectId.make(`${effectId}:execute`), trigger.subject, taskId)
+							.pipe(taskFailure(envoyName, 'Task execution'));
+						if (executed.status !== 'done' && executed.status !== 'failed') {
+							return yield* new EnvoyError({
+								envoy: envoyName,
+								message: `Task ${taskId} paused as ${executed.status}; durable Envoy continuation routing is not available`
+							});
+						}
+						if (executed.output === undefined) {
+							return yield* new EnvoyError({
+								envoy: envoyName,
+								message: `Task ${taskId} settled without a transport answer`
+							});
+						}
+						const text = assistantText(executed.output).trim();
+						if (text === '') {
+							return yield* new EnvoyError({
+								envoy: envoyName,
+								message: `Task ${taskId} settled without textual transport content`
+							});
+						}
+						const settled = yield* settleDelivery(
+							EffectId.make(`${effectId}:deliver`),
+							envoy,
+							conversationId,
+							{ text },
+							null,
+							rowIds
 						);
-					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+						yield* Effect.forEach(stagingKeys, (key, index) =>
+							files
+								.execute(EffectId.make(`${effectId}:clear-staging:${index}`), {
+									_tag: 'Delete',
+									key
+								})
+								.pipe(Effect.ignore)
+						);
+						return settled;
+					});
+					const settled = yield* executeTask.pipe(Effect.onError(() => restore));
 
 					const remaining = yield* executeBuilt(
 						EffectId.make(`${effectId}:remaining`),
@@ -1284,12 +1141,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							now
 						);
 					}
-					return {
-						envoy: envoyName,
-						conversationId,
-						drained: rows.length,
-						status: 'queued' as const
-					};
+					return settled;
 				}),
 
 				complete: Effect.fn('Envoys.complete')(

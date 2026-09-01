@@ -80,8 +80,8 @@ const definition = workspace({
 			source: 'orders',
 			target: 'order_lines',
 			cardinality: 'many',
-			from: { collection: 'order_lines', column: 'order_id' },
-			to: { collection: 'orders', column: 'id' }
+			from: { collection: 'orders', column: 'id' },
+			to: { collection: 'order_lines', column: 'order_id' }
 		}
 	],
 	apps: [app({ name: 'wire', label: 'Wire' })],
@@ -242,15 +242,16 @@ const syncConnect = async (
 	input: Readonly<{
 		readonly pending?: ReadonlyArray<string>;
 		readonly queries?: ReadonlyArray<{
-			readonly key: string;
+			readonly queryKey: string;
 			readonly input: Readonly<Record<string, unknown>>;
+			readonly requestedPrefix: number;
 		}>;
 	}> = {}
 ) =>
 	post(runtime, 'sync.connect', {
 		head: { sequence: 0 },
 		queries: input.queries ?? [],
-		released: [],
+		detached: [],
 		pending: input.pending ?? []
 	});
 
@@ -388,8 +389,9 @@ describe('collections.mutate over the wire', () => {
 		const authoritative = await syncConnect(harness, {
 			queries: [
 				{
-					key: 'orders',
-					input: { kind: 'findMany', collection: 'orders', limit: 100 }
+					queryKey: 'orders',
+					input: { kind: 'findMany', collection: 'orders', limit: 100 },
+					requestedPrefix: 100
 				}
 			],
 			pending: ['m4-accepted-once']

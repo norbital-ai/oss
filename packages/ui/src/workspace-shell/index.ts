@@ -10,6 +10,7 @@ export type {
 	WorkspaceImpersonationTeam,
 	WorkspaceNavigationItem,
 	WorkspaceNavigationModel,
+	WorkspaceNavigationSection,
 	WorkspaceOrganizationOption,
 	WorkspaceUserSummary
 } from './workspace-shell.types.js';

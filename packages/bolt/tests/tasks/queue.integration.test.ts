@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { Effect } from 'effect';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import {
 	makeQueue,
 	recoverStatements,

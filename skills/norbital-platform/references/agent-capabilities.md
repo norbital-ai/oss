@@ -14,16 +14,20 @@ Bolt's platform tools include:
 | `list_skills` / `read_skill` | Lists or reads the host and policy-granted workspace skills available to this subject                                                                                                                              |
 | `read_collection`            | Reads records through the subject's policies                                                                                                                                                                       |
 | `write_collection`           | Creates, updates, or deletes records through the same policies, hooks, and approvals as the UI                                                                                                                     |
-| sandbox tools                | `spawn_subagent`, `list_sandbox_agents`, `read_sandbox_agent`, `message_sandbox_agent`, `await_sandbox_agent`                                                                                                      |
+| agent coordination tools     | `spawn_agent`, `list_agents`, `read_agent`, `message_agent`, `await_agent`, `steer_agent`, `stop_agent`, `resume_agent`                                                                                            |
 
-A workspace declares authored tools in `src/capabilities/tools/+<name>.ts`, MCP servers in
-`src/capabilities/mcp/+<name>.ts`, and skills in
-`src/capabilities/skills/<name>/+skill.md`. Declaring one does not grant it: policies name the tools,
-MCP servers, and skills their holders may use.
+A workspace declares authored tools in `src/capabilities/tools/+<name>.ts` and MCP registrations in
+`src/capabilities/mcp/+<name>.ts`. The active toolchain/Effect RFC target replaces the legacy
+workspace Skill reader with committed tenant packages at `.norbital/shared/<name>/SKILL.md` and
+per-subject, ignored packages at `.norbital/personal/<name>/SKILL.md`. That is a pending cutover:
+until it lands, authors must not maintain both tenant Skill trees. Declaring a capability does not
+grant it: policies name the tools, MCP registrations, and Skills their holders may use.
 
-MCP tools are offered as `<server>:<tool>` (each half has its own `:` replaced by `_`) only when an
-effective policy grants the declared server. If a tool returns `input_required`, tell the user what
-was asked; do not invent the answer.
+MCP is `2026-07-28` only. A granted registration authorizes discovery; the runtime uses the official
+SDK's `server/discover` result as the offered names and schemas for that run. Never hard-code a
+`<server>:<tool>` label, cache a remote schema as a local declaration, or negotiate a 2025/session
+fallback. If the server returns an input request or an error, relay the actual request or failure;
+do not invent an answer.
 
 ## Tool funnel
 

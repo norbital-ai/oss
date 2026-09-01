@@ -11,14 +11,16 @@ import {
 	SYNC_CONNECTION_HEADER,
 	SyncAdvanceResponse,
 	SyncCommitResponse,
-	SyncConnectEvaluation,
 	SyncConnectRequest,
+	SyncConnectEvaluation,
+	SyncExtendPrefixEvaluation,
+	SyncExtendPrefixRequest,
 	TransportRequest,
 	success,
 	type FacilityBindings,
 	type RealtimeOutput,
-	type SyncApplyFrame,
-	type SyncReadyFrame
+	type SyncScope,
+	type SyncScopedApplyFrame
 } from '@norbital-ai/bolt-protocol';
 import {
 	Clock,
@@ -102,6 +104,17 @@ const makeUuidGenerationLayer = (nextUuid: () => string) =>
 	});
 
 export const uuidGenerationLayer = makeUuidGenerationLayer(randomUUID);
+
+/** The successful facility result is emitted only after the sync lane has fully settled the commit. */
+export const makeSyncCommitFacility = (
+	sync: Pick<SyncInterface, 'committed'>,
+	scope: SyncScope
+): NonNullable<FacilityBindings['syncCommit']> => ({
+	call: async (_metadata, { changes }) => {
+		await sync.committed({ scope, changes, pending: [] });
+		return success(SyncCommitResponse.make({}));
+	}
+});
 
 /** The payload shape a host plugin may send, decoded once instead of field-guessed. */
 const PluginInput = Schema.Struct({
@@ -265,19 +278,18 @@ const writeDispatchResult = (response: ServerResponse, result: BundleResult): vo
 	}
 };
 
-/** The live-query wire, per §1.4: one ready event, then exclusively apply events. */
+/** The live-query wire carries only canonical version transitions and resets. */
 const SYNC_KEEPALIVE_MILLIS = 25_000;
 const sseEncoder = new TextEncoder();
-const sseReadyBytes = (ready: SyncReadyFrame): Uint8Array =>
-	sseEncoder.encode(`event: ready\ndata: ${JSON.stringify(ready)}\n\n`);
-const sseApplyBytes = (frame: SyncApplyFrame): Uint8Array =>
+const sseApplyBytes = (frame: SyncScopedApplyFrame): Uint8Array =>
 	sseEncoder.encode(`event: apply\ndata: ${JSON.stringify(frame)}\n\n`);
 
 /**
- * The opaque credential a connection carries.
+ * The opaque bearer proof a self-hosted connection carries.
  *
- * The host never derives a subject from it — the guest authenticates it afresh on every handshake
- * and every advance, which is what makes revocation and policy drift visible on a wake.
+ * This host does not decode identity claims itself. The proof is the physical stream's principal
+ * authority and the logical scope's guest credential; the guest authenticates it on registration
+ * and again during advancement so revocation and policy drift remain visible.
  */
 const bearerCredential = (headers: Record<string, Array<string>>): string => {
 	const value = headers['authorization']?.[0];
@@ -453,9 +465,8 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		return;
 	}
 
-	// The live-query wire (§1.4). The standing stream is opened first — its first event hands the
-	// client the connection id — and the one handshake request joins every later control call to
-	// that connection by header. After the handshake answers, everything is push.
+	// The live-query wire. One browser profile allocates one physical connection id before opening
+	// EventSource; scope-qualified registrations and monotonic extensions join beneath that transport.
 	if (url.pathname === '/sync/stream') {
 		if (request.method !== 'GET') {
 			response.statusCode = 405;
@@ -463,12 +474,16 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			response.end();
 			return;
 		}
-		const credential = bearerCredential(rawRequestHeaders(request));
-		if (credential.length === 0) {
+		const principal = bearerCredential(rawRequestHeaders(request));
+		if (principal.length === 0) {
 			writeJson(response, 401, { code: 'bolt_server.sync_credential_required' });
 			return;
 		}
-		const connectionId = (yield* UuidGeneration).next();
+		const connectionId = url.searchParams.get('connectionId')?.trim() ?? '';
+		if (connectionId.length === 0) {
+			writeJson(response, 400, { code: 'bolt_server.sync_connection_required' });
+			return;
+		}
 		let live = true;
 		let keepalive: ReturnType<typeof setInterval> | undefined;
 		const sink: SyncSink = {
@@ -476,8 +491,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				live && !response.destroyed && !response.writableEnded && !response.writableNeedDrain,
 			write: (frame) => {
 				if (!sink.writable()) return false;
-				response.write(sseApplyBytes(frame));
-				return true;
+				return response.write(sseApplyBytes(frame));
 			},
 			close: () => {
 				if (!live) return;
@@ -486,13 +500,17 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				response.end();
 			}
 		};
-		sync.open({ connectionId, credential, sink });
+		sync.open({ connectionId, principal, sink });
+		response.once('close', () => sync.detach(connectionId));
 		response.writeHead(200, {
 			'content-type': 'text/event-stream; charset=utf-8',
 			'cache-control': 'no-store',
 			connection: 'keep-alive',
 			'x-accel-buffering': 'no'
 		});
+		// Sending the SSE headers is the transport-ready signal. Registration remains a separate
+		// control request and no protocol frame is manufactured for stream readiness.
+		response.flushHeaders();
 		keepalive = setInterval(() => {
 			// A stream the kernel has not drained for a full interval is a dead consumer: detach it
 			// so the registry stops holding state for a tab nobody is reading.
@@ -503,9 +521,6 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			response.write(sseEncoder.encode(': keepalive\n\n'));
 		}, SYNC_KEEPALIVE_MILLIS);
 		keepalive.unref();
-		if (!response.write(sseReadyBytes({ connectionId }))) sync.ready(connectionId);
-		response.on('drain', () => sync.ready(connectionId));
-		response.once('close', () => sync.detach(connectionId));
 		return;
 	}
 
@@ -527,11 +542,11 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			return;
 		}
 		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const decodedRequest = body === undefined
+		const registration = body === undefined
 			? yield* Effect.fail(
 					new CommandInputError({
 						code: 'malformed_json',
-						message: 'Bolt sync connect requires a body'
+						message: 'Bolt sync registration requires a body'
 					})
 				)
 			: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncConnectRequest))(
@@ -541,12 +556,31 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 						() =>
 							new CommandInputError({
 								code: 'malformed_json',
-								message: 'Bolt sync connect body is not a valid sync connect request'
+								message: 'Bolt sync registration body is invalid'
 							})
-					)
+						)
 				);
+		if (
+			registration.queries.some(
+				({ input, requestedPrefix }) => input.kind === 'findFirst' && requestedPrefix !== 1
+			)
+		) {
+			return yield* Effect.fail(
+				new CommandInputError({
+					code: 'invalid_json_value',
+					message: 'Bolt sync findFirst registration requires a one-row prefix'
+				})
+			);
+		}
 		const connected = yield* Effect.tryPromise({
-			try: () => sync.connect({ connectionId, credential, request: decodedRequest }),
+			try: () =>
+				sync.connect({
+					connectionId,
+					principal: credential,
+					scope: configuration.scope,
+					credential,
+					request: registration
+				}),
 			catch: (cause) => cause
 		}).pipe(Effect.result);
 		if (Result.isFailure(connected)) {
@@ -558,14 +592,8 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 					message: failure.message
 				});
 			} else if (failure instanceof SyncConnectionUnavailable) {
-				// The releaseId fence. This host pins exactly one release — `configuration.scope` —
-				// and a standing connection lives only inside the process that pinned it, so a
-				// connection the registry cannot re-handshake is one minted by a release this
-				// process no longer serves. That is Colony's `SyncConnectionUnavailable` → 410
-				// (the route there words it identically): the client driver classifies 410 as
-				// terminal and the Machine answers needsReload, so a tab served by an older
-				// release reloads instead of silently re-handshaking across a release boundary.
-				// 404 would read as retryable and strand the tab on stale code forever.
+				// A connection belongs to exactly one process and pinned release. Losing either is
+				// terminal for this client instance; it closes instead of crossing release authority.
 				writeJson(response, 410, {
 					code: 'bolt_server.sync_connection_unavailable',
 					message: 'sync connection or its pinned release is no longer available'
@@ -576,6 +604,80 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			return;
 		}
 		writeJson(response, 200, connected.success);
+		return;
+	}
+
+	if (url.pathname === '/sync/extend') {
+		if (request.method !== 'POST') {
+			response.statusCode = 405;
+			response.setHeader('allow', 'POST');
+			response.end();
+			return;
+		}
+		const headers = rawRequestHeaders(request);
+		const connectionId = headers[SYNC_CONNECTION_HEADER]?.[0]?.trim() ?? '';
+		if (connectionId.length === 0) {
+			writeJson(response, 400, { code: 'bolt_server.sync_connection_required' });
+			return;
+		}
+		const credential = bearerCredential(headers);
+		if (credential.length === 0) {
+			writeJson(response, 401, { code: 'bolt_server.sync_credential_required' });
+			return;
+		}
+		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
+		const extension = body === undefined
+			? yield* Effect.fail(
+					new CommandInputError({
+						code: 'malformed_json',
+						message: 'Bolt sync prefix extension requires a body'
+					})
+				)
+			: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncExtendPrefixRequest))(
+					new TextDecoder().decode(body)
+				).pipe(
+					Effect.mapError(
+						() =>
+							new CommandInputError({
+								code: 'malformed_json',
+								message: 'Bolt sync prefix extension body is invalid'
+							})
+					)
+				);
+		const extended = yield* Effect.tryPromise({
+			try: () =>
+				sync.extendPrefix({
+					connectionId,
+					principal: credential,
+					scope: configuration.scope,
+					credential,
+					request: extension
+				}),
+			catch: (cause) => cause
+		}).pipe(Effect.result);
+		if (Result.isFailure(extended)) {
+			const failure = extended.failure;
+			if (failure instanceof SyncGuestRejected) {
+				writeJson(response, failure.status, {
+					code: 'bolt_server.sync_guest_rejected',
+					command: failure.command,
+					message: failure.message
+				});
+			} else if (failure instanceof SyncConnectionUnavailable) {
+				writeJson(response, 410, {
+					code: 'bolt_server.sync_connection_unavailable',
+					message: 'sync connection or its pinned release is no longer available'
+				});
+			} else {
+				// The lane has already emitted the canonical reset and released this query.
+				writeJson(response, 409, {
+					code: 'bolt_server.sync_prefix_reset',
+					message: failure instanceof Error ? failure.message : 'sync prefix extension reset'
+				});
+			}
+			return;
+		}
+		writeJson(response, 200, extended.success);
 		return;
 	}
 
@@ -735,20 +837,22 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			const pending = mutationIdsFrom(command, input, result.response);
 			if ((result.response.changes?.length ?? 0) > 0 || pending.length > 0) {
 				const headers = rawRequestHeaders(request);
-				yield* Effect.tryPromise({
+					yield* Effect.tryPromise({
 					try: () =>
 						sync.committed({
+							scope: configuration.scope,
 							writerConnectionId: headers[SYNC_CONNECTION_HEADER]?.[0]?.trim() || undefined,
 							writerCredential: bearerCredential(headers),
 							changes: result.response.changes ?? [],
 							pending
 						}),
-					catch: (cause) => cause
-				}).pipe(
-					Effect.catch((cause) =>
-						Effect.logError(`bolt-server: sync delivery after ${command} failed`, cause)
-					)
-				);
+					catch: (cause) =>
+						new ServerTransportError({
+							operation: 'BoltServer.Server.acceptSyncCommit',
+							message: `Sync lane refused the committed transition after ${command}`,
+							cause
+						})
+				});
 			}
 		}
 		writeDispatchResult(response, result);
@@ -895,13 +999,13 @@ const startServerEffect = <E>(
 		let liveFacilities: FacilityBindings;
 
 		/**
-		 * The guest half of the wire: the two sync commands, dispatched through the one invocation
-		 * path and decoded once. `sync.connect` presents the connection's credential as the caller's
-		 * own authorization — the guest authenticates it afresh; nothing is carried over.
-		 * `sync.advance` is system-only: the host signs it the same way it signs `host.schedules.*`.
+		 * The guest half of the wire, dispatched through one invocation path and decoded once.
+		 * Registration authenticates the connection credential directly. Prefix extension and commit
+		 * advance carry host-filed state and are therefore system-signed.
 		 */
 		const dispatchSyncCommand = (
-			command: 'sync.connect' | 'sync.advance',
+			command: 'sync.connect' | 'sync.extendPrefix' | 'sync.advance',
+			scope: SyncScope,
 			input: Schema.Json,
 			headers: Record<string, Array<string>>
 		): Effect.Effect<unknown, SyncGuestRejected | BundleLoadError | AdmissionStopped | ServerTransportError, RuntimeServices> =>
@@ -910,7 +1014,7 @@ const startServerEffect = <E>(
 				const invocation = Invocation.cases.Command.make({
 					protocolVersion: PROTOCOL_VERSION,
 					id: (yield* UuidGeneration).next(),
-					scope: configuration.scope,
+					scope,
 					deadlineEpochMs: now + configuration.invocationTimeoutMillis,
 					command,
 					input,
@@ -929,9 +1033,9 @@ const startServerEffect = <E>(
 				return result.response.value ?? null;
 			});
 		const syncBridge: SyncGuestBridge = {
-			connect: async ({ credential, request }) => {
+			connect: async ({ scope, credential, request }) => {
 				const unsafe = await runtime.runPromise(
-					dispatchSyncCommand('sync.connect', request, {
+					dispatchSyncCommand('sync.connect', scope, request, {
 						authorization: [`Bearer ${credential}`]
 					})
 				);
@@ -941,18 +1045,41 @@ const startServerEffect = <E>(
 					)
 				);
 			},
-			advance: async ({ request }) => {
+			extendPrefix: async ({ scope, state, request }) => {
+				const input = { state, request };
+				const headers = await runtime.runPromise(
+					systemCommandHeaders(
+						configuration.gatewaySecret,
+						'sync.extendPrefix',
+						scope.tenantId,
+						input
+					).pipe(
+						Effect.mapError(() => new SyncGuestRejected(503, 'sync.extendPrefix'))
+					)
+				);
+				const unsafe = await runtime.runPromise(
+					dispatchSyncCommand('sync.extendPrefix', scope, input, headers)
+				);
+				return await Effect.runPromise(
+					Schema.decodeUnknownEffect(SyncExtendPrefixEvaluation)(unsafe).pipe(
+						Effect.mapError(() => new SyncGuestRejected(502, 'sync.extendPrefix'))
+					)
+				);
+			},
+			advance: async ({ scope, request }) => {
 				const headers = await runtime.runPromise(
 					systemCommandHeaders(
 						configuration.gatewaySecret,
 						'sync.advance',
-						configuration.scope.tenantId,
+						scope.tenantId,
 						request
 					).pipe(
 						Effect.mapError(() => new SyncGuestRejected(503, 'sync.advance'))
 					)
 				);
-				const unsafe = await runtime.runPromise(dispatchSyncCommand('sync.advance', request, headers));
+				const unsafe = await runtime.runPromise(
+					dispatchSyncCommand('sync.advance', scope, request, headers)
+				);
 				return await Effect.runPromise(
 					Schema.decodeUnknownEffect(SyncAdvanceResponse)(unsafe).pipe(
 						Effect.mapError(() => new SyncGuestRejected(502, 'sync.advance'))
@@ -963,14 +1090,7 @@ const startServerEffect = <E>(
 		const sync = makeSyncHost(syncBridge);
 		liveFacilities = {
 			...facilities,
-			syncCommit: {
-				call: (_metadata, { changes }) => {
-					void sync.committed({ changes, pending: [] }).catch((cause) =>
-						console.error('bolt-server: mid-invocation sync delivery failed', cause)
-					);
-					return Promise.resolve(success(SyncCommitResponse.make({ accepted: true })));
-				}
-			}
+			syncCommit: makeSyncCommitFacility(sync, configuration.scope)
 		};
 
 		const server = createServer((request, response) => {
@@ -1145,7 +1265,7 @@ const startServerEffect = <E>(
 			}
 			websocketServer.close();
 			// A restart is a registry loss by design (§2.6): the standing streams drop, every client
-			// re-handshakes, and nothing replays.
+			// reconnects and registers from current truth, and nothing replays.
 			server.closeAllConnections();
 			yield* Fiber.join(listener);
 		});

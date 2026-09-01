@@ -24,15 +24,27 @@ const root = '/workspace';
 const artifactWithPrompt = (prompt: string): string =>
 	renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		collections: [
-			{
-				name: 'orders',
-				path: `${root}/src/collections/orders/+model.ts`,
-				sourcePath: 'src/collections/orders/+model.ts',
-				fields: { title: { type: 'string', required: true, indexed: false } }
-			}
-		],
-		relations: [],
+		compiledAuthoring: {
+			collections: [
+				{
+					name: 'orders',
+					sourcePath: 'src/collections/orders/+model.ts',
+					fields: {
+						title: {
+							type: 'string',
+							presentationKind: 'text',
+							required: true,
+							indexed: false
+						}
+					},
+					history: true
+				}
+			],
+			relationships: [],
+			customTypeReferences: [],
+			capabilities: { skills: [], mcp: [] }
+		},
+		collectionHooks: [],
 		apps: [],
 		policies: [],
 		functions: [],
@@ -41,7 +53,6 @@ const artifactWithPrompt = (prompt: string): string =>
 		automations: [],
 		automationFiles: [],
 		pipelineFiles: [],
-		skills: [],
 		prompt,
 		root,
 		assetIndex: { browser: [], server: [] },

@@ -341,8 +341,262 @@ export const SyncSchemaFacts = Schema.Struct({
 }).annotate({ identifier: 'BoltSyncSchemaFacts' });
 export interface SyncSchemaFacts extends Schema.Schema.Type<typeof SyncSchemaFacts> {}
 
+/**
+ * Version of the compiler-owned authoring manifest consumed by Workspace Studio.
+ *
+ * This is deliberately independent of the bundle protocol and workspace package versions. An old
+ * release may remain runnable while its authoring projection is too old to inspect safely; Studio
+ * fails that case closed and asks for a rebuild instead of reconstructing source paths.
+ */
+export const COMPILED_MANIFEST_VERSION = 2 as const;
+
+/** Meaning carried by an artifact and resolved by the Bolt shell's shared navigation builder. */
+export const ManifestDestination = Schema.Union([
+	Schema.Struct({ kind: Schema.Literal('app'), name: Schema.NonEmptyString }),
+	Schema.Struct({
+		kind: Schema.Literal('system'),
+		surface: Schema.Literals(['approvals', 'automations', 'data', 'envoys', 'environment']),
+		selection: Schema.optionalKey(Schema.NonEmptyString)
+	})
+]).annotate({ identifier: 'BoltManifestDestination' });
+export type ManifestDestination = typeof ManifestDestination.Type;
+
+/** Distinguishes authored declarations from generated/runtime-owned manifest facts. */
+export const ManifestOrigin = Schema.Literals(['authored', 'system']).annotate({
+	identifier: 'BoltManifestOrigin'
+});
+export type ManifestOrigin = Schema.Schema.Type<typeof ManifestOrigin>;
+
+const ManifestAuthoredEntryFields = {
+	sourcePath: Schema.optionalKey(Schema.NonEmptyString),
+	origin: Schema.optionalKey(ManifestOrigin)
+} as const;
+const ManifestHook = Schema.Struct({
+	name: Schema.NonEmptyString,
+	description: Schema.optionalKey(Schema.String),
+	...ManifestAuthoredEntryFields
+});
+const ManifestPipeline = Schema.Struct({
+	name: Schema.NonEmptyString,
+	description: Schema.optionalKey(Schema.String),
+	...ManifestAuthoredEntryFields
+});
+const ManifestStudioIntegrationBinding = Schema.Struct({
+	name: Schema.NonEmptyString,
+	direction: Schema.Literals(['receive', 'send']),
+	method: Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+	path: Schema.NonEmptyString,
+	schedule: Schema.optionalKey(Schema.NonEmptyString),
+	events: Schema.optionalKey(Schema.Array(Schema.Literals(['create', 'update', 'delete']))),
+	targetCollection: Schema.optionalKey(Schema.NonEmptyString),
+	source: Schema.NonEmptyString
+});
+const ManifestEnvoy = Schema.Struct({
+	name: Schema.NonEmptyString,
+	transport: Schema.NonEmptyString,
+	audience: Schema.NonEmptyString,
+	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
+	delegation: Schema.Literals(['enabled', 'disabled']),
+	...ManifestAuthoredEntryFields,
+	destination: Schema.optionalKey(ManifestDestination)
+});
+
+/** Read-only compiler projection returned by `workspace.authoringManifest`. */
+const WorkspaceAuthoringManifestShape = Schema.Struct({
+	name: Schema.NonEmptyString,
+	version: Schema.NonEmptyString,
+	// Optional only so Studio can identify an older release and render one fail-closed state.
+	compiledManifestVersion: Schema.optionalKey(Schema.Number),
+	collections: Schema.Array(
+		Schema.Struct({
+			name: Schema.NonEmptyString,
+			history: Schema.Boolean,
+			hooks: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+			hookDeclarations: Schema.optionalKey(Schema.Array(ManifestHook)),
+			description: Schema.optionalKey(Schema.String),
+			icon: Schema.optionalKey(Schema.String),
+			...ManifestAuthoredEntryFields,
+			destination: Schema.optionalKey(ManifestDestination),
+			pipelines: Schema.optionalKey(Schema.Array(ManifestPipeline)),
+			fields: Schema.Array(
+				Schema.Struct({
+					name: Schema.NonEmptyString,
+					type: Schema.NonEmptyString,
+					required: Schema.Boolean,
+					generated: Schema.Boolean,
+					search: Schema.optionalKey(Schema.Boolean),
+					values: Schema.optionalKey(Schema.Array(Schema.String)),
+					customType: Schema.optionalKey(Schema.String),
+					mimeTypes: Schema.optionalKey(Schema.Array(Schema.String))
+				})
+			),
+			relations: Schema.Array(
+				Schema.Struct({
+					name: Schema.NonEmptyString,
+					target: Schema.NonEmptyString,
+					cardinality: Schema.NonEmptyString
+				})
+			)
+		})
+	),
+	apps: Schema.Array(
+		Schema.Struct({
+			name: Schema.NonEmptyString,
+			label: Schema.String,
+			icon: Schema.optionalKey(Schema.String),
+			description: Schema.optionalKey(Schema.String),
+			banner: Schema.optionalKey(Schema.String),
+			thumbnail: Schema.optionalKey(Schema.String),
+			...ManifestAuthoredEntryFields,
+			destination: Schema.optionalKey(ManifestDestination)
+		})
+	),
+	appGroups: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				name: Schema.NonEmptyString,
+				label: Schema.String,
+				description: Schema.optionalKey(Schema.String),
+				icon: Schema.optionalKey(Schema.String),
+				defaultChild: Schema.optionalKey(Schema.String),
+				...ManifestAuthoredEntryFields,
+				destination: Schema.optionalKey(ManifestDestination)
+			})
+		)
+	),
+	policies: Schema.Array(
+		Schema.Struct({
+			name: Schema.NonEmptyString,
+			description: Schema.String,
+			...ManifestAuthoredEntryFields,
+			destination: Schema.optionalKey(ManifestDestination),
+			grants: Schema.Array(
+				Schema.Struct({
+					collection: Schema.NonEmptyString,
+					action: Schema.Literals(['read', 'create', 'update', 'delete', 'history']),
+					fields: Schema.optionalKey(Schema.Array(Schema.String)),
+					dependencies: Schema.optionalKey(Schema.Array(Schema.String)),
+					where: Schema.optionalKey(Schema.Json),
+					approval: Schema.optionalKey(Schema.Boolean),
+					authorization: Schema.optionalKey(Schema.Boolean)
+				})
+			),
+			capabilities: Schema.Struct({
+				apps: Schema.Array(Schema.String),
+				tools: Schema.Array(Schema.String),
+				mcp: Schema.Array(Schema.String),
+				skills: Schema.Array(Schema.String)
+			})
+		})
+	),
+	automations: Schema.Array(
+		Schema.Struct({
+			name: Schema.NonEmptyString,
+			description: Schema.optionalKey(Schema.String),
+			...ManifestAuthoredEntryFields,
+			destination: Schema.optionalKey(ManifestDestination),
+			trigger: Schema.Union([
+				Schema.Struct({ _tag: Schema.Literal('Manual') }),
+				Schema.Struct({ _tag: Schema.Literal('Schedule'), cron: Schema.String }),
+				Schema.Struct({
+					_tag: Schema.Literal('Change'),
+					collection: Schema.String,
+					event: Schema.Literals(['created', 'updated', 'deleted'])
+				})
+			]),
+			policies: Schema.Array(Schema.String)
+		})
+	),
+	envoys: Schema.Array(ManifestEnvoy),
+	integrations: Schema.Array(
+		Schema.Struct({
+			name: Schema.NonEmptyString,
+			collection: Schema.optionalKey(Schema.String),
+			description: Schema.optionalKey(Schema.String),
+			...ManifestAuthoredEntryFields,
+			bindings: Schema.optionalKey(Schema.Array(ManifestStudioIntegrationBinding))
+		})
+	),
+	remotes: Schema.optionalKey(
+		Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, ...ManifestAuthoredEntryFields }))
+	),
+	environment: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				name: Schema.NonEmptyString,
+				label: Schema.String,
+				description: Schema.optionalKey(Schema.String),
+				secret: Schema.Boolean,
+				default: Schema.optionalKey(Schema.String),
+				...ManifestAuthoredEntryFields,
+				destination: Schema.optionalKey(ManifestDestination)
+			})
+		)
+	),
+	/**
+	 * Every static identity this release can mint, with the label to render it as.
+	 *
+	 * `bolt_audit.subject_id` and `bolt_collection_history.subject_id` are plain `text` with no
+	 * foreign key, so `envoy:support` and `automation:payroll_close` are valid authors with no
+	 * shadow user row behind them — and a client holding one of those ids has nothing but the id to
+	 * show unless the manifest names it. The runtime has always sent this list; the contract did not
+	 * declare it, and `Schema.Struct` drops undeclared keys, so it was stripped on the way out.
+	 */
+	principals: Schema.Array(
+		Schema.Struct({
+			id: Schema.NonEmptyString,
+			label: Schema.NonEmptyString,
+			kind: Schema.Literals(['host', 'seed', 'envoy', 'automation']),
+			policies: Schema.Array(Schema.String)
+		})
+	),
+	requiredFacilities: Schema.Array(Schema.String)
+});
+
+const authoredManifestSourcePathProblem = (
+	manifest: Schema.Schema.Type<typeof WorkspaceAuthoringManifestShape>
+): string | undefined => {
+	if (manifest.compiledManifestVersion !== COMPILED_MANIFEST_VERSION) return undefined;
+	const missing: Array<string> = [];
+	const requirePath = (
+		kind: string,
+		entry: Readonly<{
+			readonly name: string;
+			readonly origin?: ManifestOrigin;
+			readonly sourcePath?: string;
+		}>
+	): void => {
+		if (entry.origin === 'authored' && entry.sourcePath === undefined) {
+			missing.push(`${kind}:${entry.name}`);
+		}
+	};
+	for (const collection of manifest.collections) {
+		requirePath('collection', collection);
+		for (const hook of collection.hookDeclarations ?? []) requirePath('hook', hook);
+		for (const pipeline of collection.pipelines ?? []) requirePath('pipeline', pipeline);
+	}
+	for (const app of manifest.apps) requirePath('app', app);
+	for (const group of manifest.appGroups ?? []) requirePath('app-group', group);
+	for (const policy of manifest.policies) requirePath('policy', policy);
+	for (const automation of manifest.automations) requirePath('automation', automation);
+	for (const envoy of manifest.envoys) requirePath('envoy', envoy);
+	for (const integration of manifest.integrations) requirePath('integration', integration);
+	for (const remote of manifest.remotes ?? []) requirePath('remote', remote);
+	for (const environment of manifest.environment ?? []) requirePath('environment', environment);
+	return missing.length === 0
+		? undefined
+		: `current compiled manifest is missing authored source paths for ${missing.join(', ')}`;
+};
+
+export const WorkspaceAuthoringManifest = WorkspaceAuthoringManifestShape.check(
+	Schema.makeFilter((manifest) => authoredManifestSourcePathProblem(manifest))
+).annotate({ identifier: 'BoltWorkspaceAuthoringManifest' });
+export type WorkspaceAuthoringManifest = typeof WorkspaceAuthoringManifest.Type;
+
 export const BundleManifest = Schema.Struct({
 	protocolVersion: ProtocolVersion,
+	/** Optional for runtime rollback of artifacts built before Studio's versioned projection. */
+	compiledManifestVersion: Schema.optionalKey(Schema.Number),
 	artifactId: Schema.NonEmptyString,
 	artifactVersion: Schema.NonEmptyString,
 	schemaFingerprint: Schema.NonEmptyString,

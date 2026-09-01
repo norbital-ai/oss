@@ -2,9 +2,9 @@
  * Configuration discovery and loading.
  *
  * A repository configures norbital-doctor under `.norbital/config/doctor/`. The surface is
- * deliberately small: curated `packs` by name, YAML extensions beside the config, and the semantic
- * tier's provider settings. Everything else — the neutral baseline of graph, type-aware and metric
- * analysis — runs whether or not a config exists, so the easiest config to write is no config.
+ * deliberately small: curated `packs` by name and YAML extensions beside the config. Everything
+ * else — the neutral baseline of graph, type-aware and metric analysis — runs whether or not a
+ * config exists.
  *
  * ```ts
  * // .norbital/config/doctor/doctor.config.ts
@@ -25,8 +25,7 @@ import { registerHooks } from 'node:module';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadRegisteredPack } from './packs/registry.js';
-import { loadPatternFiles, type SemanticQuery } from './patterns-yaml.js';
-import type { EmbedKind } from './semantic/embedder.js';
+import { loadPatternFiles } from './patterns-yaml.js';
 import { definePack, type Pack, type Rule } from './rules.js';
 
 export type { OverlapBinding } from './overlaps.js';
@@ -40,29 +39,6 @@ const DEFAULT_PATTERN_GLOBS: ReadonlyArray<string> = [
 	`${DOCTOR_CONFIG_DIRECTORY}/**/*.yml`
 ];
 
-/**
- * The semantic tier's configuration.
- *
- * Only names live here. The credential is the NAME of an environment variable, never its value —
- * a config file is committed, an environment is not, and the two must never swap roles. Values
- * are resolved from the invoking environment at audit time, which is why a template repository
- * can ship this file anywhere without shipping anyone's key with it.
- */
-type ProbeSemanticConfig = Readonly<{
-	/** `'openrouter'` today; or an inline `(texts, kind) => vectors` function for anything else. */
-	readonly provider?: string | ((texts: ReadonlyArray<string>, kind: EmbedKind) => Promise<number[][]>);
-	/** Defaults to `qwen/qwen3-embedding-8b`. */
-	readonly model?: string | undefined;
-	/** Defaults to 4096 (the model's native width). */
-	readonly dimensions?: number | undefined;
-	/** Environment variable NAME holding the API key. Defaults to `NORBITAL_AI_CREDENTIAL`. */
-	readonly credential?: string | undefined;
-	/** Endpoint override for proxies and tests. */
-	readonly endpoint?: string | undefined;
-	/** Decline the semantic tier explicitly. Absent means it runs and fails loudly if it cannot. */
-	readonly disabled?: boolean | undefined;
-}>;
-
 export type ProbeConfig = Readonly<{
 	/**
 	 * Curated rule sets to run beside the neutral baseline, by registry name (`'norbital'`) or as
@@ -74,8 +50,6 @@ export type ProbeConfig = Readonly<{
 	readonly patterns?: string | ReadonlyArray<string> | undefined;
 	/** Rules authored inline or imported directly — the pack-maintainer surface, not the public one. */
 	readonly rules?: ReadonlyArray<Rule> | undefined;
-	/** Semantic-tier settings. Omit for defaults; set `{ disabled: true }` to decline the tier. */
-	readonly semantic?: ProbeSemanticConfig | undefined;
 	/** Authored, pack, or pattern rule ids to switch off. */
 	readonly disable?: ReadonlyArray<string> | undefined;
 }>;
@@ -154,10 +128,7 @@ async function importDefault(specifier: string, root: string): Promise<unknown> 
 export type LoadedConfig = Readonly<{
 	readonly configPath: string | undefined;
 	readonly rules: ReadonlyArray<Rule>;
-	/** Pseudocode halves from YAML patterns, awaiting the embedding pass. */
-	readonly queries: ReadonlyArray<SemanticQuery>;
 	readonly packs: ReadonlyArray<string>;
-	readonly semantic: ProbeSemanticConfig | undefined;
 }>;
 
 /**
@@ -176,11 +147,7 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 		return {
 			configPath: undefined,
 			rules: patterns.rules,
-			queries: patterns.queries,
-			packs: [],
-			// Absent configuration is a decision too: the tier runs on defaults and fails loudly
-			// when no credential resolves. Declining it is always one explicit line away.
-			semantic: {}
+			packs: []
 		};
 	}
 
@@ -237,8 +204,6 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	return {
 		configPath,
 		rules: resolved,
-		queries: patterns.queries.filter((query) => !disabled.has(query.ruleId)),
-		packs: packNames,
-		semantic: config.semantic ?? {}
+		packs: packNames
 	};
 }

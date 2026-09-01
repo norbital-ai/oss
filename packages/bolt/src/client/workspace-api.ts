@@ -1,9 +1,16 @@
 import { Effect, Result, Schema } from 'effect';
 import {
 	ApprovalState,
+	CollectionGroupedQueryRequest,
 	CollectionMutationIdempotencyKey,
 	CollectionMutateRequest,
+	CollectionQueryRequest,
+	FixedCommandCatalogue,
 	SyncQueryInput,
+	WorkspaceInvokeContract,
+	type CommandContract,
+	type FixedCommandContract,
+	type FixedCommandName,
 	type CollectionMutationBaseVersion,
 	type CollectionMutationGraph,
 	type StoredRecord,
@@ -15,15 +22,17 @@ import type {
 	RemoteQuery,
 	WorkspaceClientRuntime
 } from '#lib/client/contracts.js';
+import { decodeUnknownSchema } from '#lib/schema-decode.js';
 import type { ClientState, QueryState } from './sync/index.js';
 import { project } from './live-query/index.js';
 import { createMachineQuery, createRemoteQuery } from './remote-query.svelte.js';
 import { CollectionMutationState } from './collection-mutation.svelte.js';
 import { AutomationExecutionState, AutomationTaskSnapshot } from './automation-client.svelte.js';
-import { createSystemClient } from './system-client.js';
 
 export interface CollectionPageQuery<Value> extends RemoteQuery<Value> {
 	readonly nextCursor: string | null | undefined;
+	/** Grows a live contiguous prefix at its current version; anchored pages do not extend. */
+	readonly extend: (requestedPrefix: number) => void;
 }
 
 export type CollectionCatalogField = Readonly<{
@@ -62,7 +71,7 @@ export type WorkspaceApiVisibility = Readonly<{
 	readonly system?: boolean;
 }>;
 
-/** Nests a CollectionTable filter path into the JSON where compileWhere already understands. */
+/** Nests a CollectionTable filter path into the declarative predicate grammar. */
 const filterToWhere = (filter: CollectionFilter): Schema.Json => {
 	const leaf = filter.path[filter.path.length - 1];
 	if (leaf === undefined) return {};
@@ -115,44 +124,29 @@ const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => 
 	return record;
 };
 
-const rowListOf = (value: unknown): ReadonlyArray<StoredRecord> | undefined =>
-	Array.isArray(value) && value.every((row) => typeof row === 'object' && row !== null)
-		? (value as ReadonlyArray<StoredRecord>)
-		: undefined;
-
-/**
- * The row-shaped answers a collection read may hold: a plain list, or the cursored-page arm whose
- * `nextCursor` slot rides beside the rows (§1.7 keeps `after`/`nextCursor` answered). A findFirst
- * singleton is deliberately not unwrapped here — an authored row is free to carry fields of those
- * names, and only a cursored findMany answers the arm.
- */
-const pageAnswerOf = (
-	value: unknown
-):
-	| Readonly<{ readonly rows: ReadonlyArray<StoredRecord>; readonly nextCursor: string | null }>
-	| undefined => {
-	if (Array.isArray(value)) {
-		const rows = rowListOf(value);
-		return rows === undefined ? undefined : { rows, nextCursor: null };
-	}
-	if (value === null || typeof value !== 'object') return undefined;
-	const record = value as Readonly<Record<string, unknown>>;
-	const rows = rowListOf(record['rows']);
-	if (rows === undefined) return undefined;
-	const nextCursor = record['nextCursor'];
-	return typeof nextCursor === 'string' || nextCursor === null ? { rows, nextCursor } : undefined;
-};
+const CollectionAnchoredPage = Schema.Struct({
+	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+	nextCursor: Schema.NullOr(Schema.String)
+});
+const CollectionOptionalRecord = Schema.NullOr(Schema.Record(Schema.String, Schema.Json));
+const CollectionCount = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
+const CollectionGroupedRows = Schema.Record(
+	Schema.String,
+	Schema.Array(Schema.Record(Schema.String, Schema.Json))
+);
+const JsonRows = Schema.Array(Schema.Json);
+const JsonGroupedRows = Schema.Record(Schema.String, Schema.Array(Schema.Json));
 
 /** Validates the wire-shaped query input the browser just built; a malformed input fails loudly. */
 const syncInputOf = (input: Record<string, Schema.Json>): SyncQueryInputType =>
 	Schema.decodeUnknownSync(SyncQueryInput)(input);
 
-const decodedCommandEffect = <Output extends Schema.ConstraintDecoder<Schema.Json>>(
+const decodedCommandEffect = <Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,
 	command: string,
 	input: Schema.Json,
 	output: Output
-): Effect.Effect<Output['Type'], unknown> =>
+): Effect.Effect<Schema.Schema.Type<Output>, unknown> =>
 	Effect.tryPromise({
 		try: () => runtime.bolt.command(command, input, output),
 		catch: (cause) => cause
@@ -172,32 +166,17 @@ const rowVersionOf = (row: StoredRecord): number | undefined => {
 	return Number.isSafeInteger(parsed) ? parsed : undefined;
 };
 
-const answerRows = (query: QueryState): ReadonlyArray<StoredRecord> => {
-	const answer = query.answer;
-	if (answer === undefined || answer === null || typeof answer === 'number') return [];
-	switch (query.input.kind) {
-		case 'count':
-			return [];
-		case 'findFirst':
-			return Array.isArray(answer) ? answer : [answer as StoredRecord];
-		case 'findMany':
-			if (Array.isArray(answer)) return answer;
-			return rowListOf(Reflect.get(answer, 'rows')) ?? [];
-		case 'findGrouped':
-			if (Array.isArray(answer)) return [];
-			return Object.values(answer).flatMap((rows) => rowListOf(rows) ?? []);
-	}
-};
+const prefixRows = (query: QueryState): ReadonlyArray<StoredRecord> => query.prefix?.rows ?? [];
 
 /**
- * The newest whole-row version already held by this browser for each authoritative coordinate.
- * Multiple live views may hold the same row; choosing the greatest observed version avoids
+ * The newest whole-row version currently rendered by this browser for each mutation target.
+ * Multiple live views may render the same row; choosing the greatest observed version avoids
  * manufacturing a conflict from a retained older page while the server still remains final.
  */
 const authoritativeVersions = (state: ClientState): ReadonlyMap<string, number> => {
 	const versions = new Map<string, number>();
 	for (const query of state.queries.values()) {
-		for (const row of answerRows(query)) {
+		for (const row of prefixRows(query)) {
 			const id = row['id'];
 			const version = rowVersionOf(row);
 			if (typeof id !== 'string' || id.length === 0 || version === undefined) continue;
@@ -258,11 +237,10 @@ const queryAt = (state: ClientState, key: string): QueryState | undefined => sta
 const liveQueryOf = <Value>(
 	runtime: WorkspaceClientRuntime,
 	input: SyncQueryInputType,
-	read: (state: ClientState, key: string) => Value | undefined,
-	oneshot = false
+	read: (state: ClientState, key: string) => Value | undefined
 ): RemoteQuery<Value> => {
 	const mounted = runtime.sync.mount(input);
-	return createMachineQuery(runtime.sync, mounted, (state) => read(state, mounted.key), oneshot);
+	return createMachineQuery(runtime.sync, mounted, (state) => read(state, mounted.key));
 };
 
 const pageQueryOf = (
@@ -271,28 +249,56 @@ const pageQueryOf = (
 	input: Schema.Json = {},
 	options?: CollectionFilterOptions
 ): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
-	const request = syncInputOf({
-		kind: 'findMany',
+	const requestFields: Readonly<Record<string, Schema.Json>> = {
 		collection,
 		...mergeWhere(asJsonRecord(input), options)
+	};
+	const after = requestFields['after'];
+	if (after !== undefined) {
+		const request = Schema.decodeUnknownSync(Schema.Json)(
+			Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields)
+		);
+		let nextCursor: string | null | undefined;
+		const query = createRemoteQuery(
+			() =>
+				decodedCommandEffect(runtime, 'collections.findMany', request, CollectionAnchoredPage).pipe(
+					Effect.map((page) => {
+						nextCursor = page.nextCursor;
+						return project(page.rows, pendingGraphs(runtime.sync.current()), collection);
+					})
+				),
+			JsonRows
+		);
+		return {
+			get current() {
+				return query.current;
+			},
+			get error() {
+				return query.error;
+			},
+			get loading() {
+				return query.loading;
+			},
+			then: query.then,
+			get nextCursor() {
+				void query.current;
+				return nextCursor;
+			},
+			extend: () => {
+				throw new Error('Anchored collection pages are one-shot and cannot extend a live prefix');
+			}
+		};
+	}
+
+	const request = syncInputOf({
+		kind: 'findMany',
+		...requestFields
 	});
-	// A cursored read is one-shot, never live (RFC §2.3): it is mounted, answered once at the
-	// handshake or as a one-entry connect, then released — the unmounted control message still
-	// fires, so the host stops computing for the page after RETAIN_MS. The growing-window list
-	// that needs more rows re-asks with a larger limit; it never tiles cursored pages.
-	const cursored = request.kind === 'findMany' && request.after !== undefined;
-	let nextCursor: string | null = null;
-	const query = liveQueryOf(
-		runtime,
-		request,
-		(state, key) => {
-			const page = pageAnswerOf(queryAt(state, key)?.answer);
-			if (page === undefined) return undefined;
-			nextCursor = page.nextCursor;
-			return project(page.rows, pendingGraphs(state), collection);
-		},
-		cursored
-	);
+	const mounted = runtime.sync.mount(request);
+	const query = createMachineQuery(runtime.sync, mounted, (state) => {
+		const rows = queryAt(state, mounted.key)?.prefix?.rows;
+		return rows === undefined ? undefined : project(rows, pendingGraphs(state), collection);
+	});
 	return {
 		get current() {
 			return query.current;
@@ -304,14 +310,8 @@ const pageQueryOf = (
 			return query.loading;
 		},
 		then: query.then,
-		get nextCursor() {
-			// `nextCursor` is filled by the same Machine projection as `current`, but this wrapper's
-			// local variable is deliberately not a second Svelte state store. Reading `current` here
-			// subscribes callers to that publication, so a pagination bar first painted while the
-			// query was pending is invalidated when the answered page supplies its continuation.
-			void query.current;
-			return nextCursor;
-		}
+		nextCursor: null,
+		extend: mounted.extend
 	};
 };
 
@@ -319,17 +319,30 @@ const firstQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
 	input: Schema.Json = {}
-): RemoteQuery<Schema.Json | undefined> =>
-	liveQueryOf(
+): RemoteQuery<Schema.Json | undefined> => {
+	const requestFields: Readonly<Record<string, Schema.Json>> = {
+		collection,
+		...asJsonRecord(input)
+	};
+	if (requestFields['after'] !== undefined) {
+		return commandQueryOf(
+			runtime,
+			'collections.findFirst',
+			Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields),
+			CollectionQueryRequest,
+			CollectionOptionalRecord
+		);
+	}
+	return liveQueryOf(
 		runtime,
-		syncInputOf({ kind: 'findFirst', collection, ...asJsonRecord(input) }),
+		syncInputOf({ kind: 'findFirst', ...requestFields }),
 		(state, key) => {
-			const answer = queryAt(state, key)?.answer;
-			if (answer === undefined || answer === null || typeof answer === 'number') return undefined;
-			const rows = Array.isArray(answer) ? answer : [answer];
+			const rows = queryAt(state, key)?.prefix?.rows;
+			if (rows === undefined) return undefined;
 			return project(rows, pendingGraphs(state), collection)[0];
 		}
 	);
+};
 
 const countQueryOf = (
 	runtime: WorkspaceClientRuntime,
@@ -337,17 +350,15 @@ const countQueryOf = (
 	input: Schema.Json = {},
 	options?: CollectionFilterOptions
 ): RemoteQuery<number> =>
-	liveQueryOf(
+	commandQueryOf(
 		runtime,
-		syncInputOf({
-			kind: 'count',
+		'collections.count',
+		Schema.decodeUnknownSync(CollectionQueryRequest)({
 			collection,
 			...mergeWhere(asJsonRecord(input), options)
 		}),
-		(state, key) => {
-			const answer = queryAt(state, key)?.answer;
-			return typeof answer === 'number' ? answer : undefined;
-		}
+		CollectionQueryRequest,
+		CollectionCount
 	);
 
 const groupedQueryOf = (
@@ -356,45 +367,42 @@ const groupedQueryOf = (
 	input: Schema.Json,
 	options?: CollectionFilterOptions
 ): RemoteQuery<Readonly<Record<string, ReadonlyArray<Schema.Json>>>> =>
-	liveQueryOf(
-		runtime,
-		syncInputOf({
-			kind: 'findGrouped',
+	createRemoteQuery(() => {
+		const request = Schema.decodeUnknownSync(CollectionGroupedQueryRequest)({
 			collection,
 			...mergeWhere(asJsonRecord(input), options)
-		}),
-		(state, key) => {
-			const answer = queryAt(state, key)?.answer;
-			if (answer === undefined || answer === null || typeof answer === 'number') return undefined;
-			if (Array.isArray(answer)) return undefined;
-			const groups: Record<string, ReadonlyArray<Schema.Json>> = {};
-			for (const [name, rows] of Object.entries(answer)) {
-				const held = rowListOf(rows);
-				if (held === undefined) return undefined;
-				groups[name] = project(held, pendingGraphs(state), collection);
-			}
-			return groups;
-		}
-	);
+		});
+		return decodedCommandEffect(
+			runtime,
+			'collections.findGrouped',
+			request,
+			CollectionGroupedRows
+		).pipe(
+			Effect.map((answer) => {
+				const groups: Record<string, ReadonlyArray<Schema.Json>> = {};
+				for (const [name, rows] of Object.entries(answer)) {
+					groups[name] = project(rows, pendingGraphs(runtime.sync.current()), collection);
+				}
+				return groups;
+			})
+		);
+	}, JsonGroupedRows);
 
 /** --- one-shot command reads: answered once over the transport, never registered live --- */
 
-const commandQueryOf = <
-	Input extends Schema.ConstraintDecoder<Schema.Json>,
-	Output extends Schema.ConstraintDecoder<Schema.Json>
->(
+const commandQueryOf = <Input extends Schema.Top, Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,
 	command: string,
-	input: Input['Type'],
+	input: unknown,
 	inputSchema: Input,
 	outputSchema: Output,
 	signal?: AbortSignal
-): RemoteQuery<Output['Type']> =>
+): RemoteQuery<Schema.Schema.Type<Output>> =>
 	createRemoteQuery(
 		() =>
 			Effect.gen(function* () {
-				const checked = yield* Schema.decodeUnknownEffect(inputSchema)(input);
-				const payload = yield* Schema.decodeUnknownEffect(Schema.Json)(checked);
+				const checked = yield* decodeUnknownSchema(inputSchema, input);
+				const payload = Schema.decodeUnknownSync(Schema.Json)(checked);
 				return yield* Effect.tryPromise({
 					try: () => runtime.bolt.command(command, payload, outputSchema, signal),
 					catch: (cause) => cause
@@ -402,6 +410,112 @@ const commandQueryOf = <
 			}),
 		outputSchema
 	);
+
+type InputOf<Contract extends CommandContract> = Schema.Schema.Type<Contract['input']>;
+type OkValue<Contract extends CommandContract> = Extract<
+	Contract['responses'][number],
+	{ readonly status: 200 }
+>['value'];
+type OutputOf<Contract extends CommandContract> = Schema.Schema.Type<OkValue<Contract>>;
+type ContractFor<Name extends FixedCommandName> = Extract<
+	FixedCommandContract,
+	Readonly<{ name: Name }>
+>;
+type ClientContract = Extract<FixedCommandContract, { readonly clientPath: ReadonlyArray<string> }>;
+type ClientLeaf<Contract extends ClientContract> = Contract['clientMode'] extends 'query'
+	? (input: InputOf<Contract>, signal?: AbortSignal) => RemoteQuery<OutputOf<Contract>>
+	: (input: InputOf<Contract>, signal?: AbortSignal) => Effect.Effect<OutputOf<Contract>, unknown>;
+type Nest<Path extends ReadonlyArray<string>, Value> = Path extends readonly [
+	infer Head extends string,
+	...infer Tail extends ReadonlyArray<string>
+]
+	? Readonly<Record<Head, Nest<Tail, Value>>>
+	: Value;
+type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => void : never) extends (
+	value: infer Intersection
+) => void
+	? Intersection
+	: never;
+type ProjectContract<Contract extends ClientContract> = Contract extends unknown
+	? Nest<Contract['clientPath'], ClientLeaf<Contract>>
+	: never;
+export type SystemClientApi = UnionToIntersection<ProjectContract<ClientContract>>;
+
+const clientResponse = <Contract extends CommandContract>(contract: Contract): OkValue<Contract> => {
+	const declared = contract.responses.find(({ status }) => status === 200);
+	if (declared === undefined)
+		throw new Error(`Client-visible command ${contract.name} declares no 200 response`);
+	return declared.value as OkValue<Contract>;
+};
+
+const fixedContract = <Name extends FixedCommandName>(name: Name): ContractFor<Name> => {
+	const contract = FixedCommandCatalogue.find((candidate) => candidate.name === name);
+	if (contract === undefined) throw new Error(`Missing fixed command contract: ${name}`);
+	return contract as ContractFor<Name>;
+};
+
+const commandPayload = <S extends Schema.Top>(schema: S, input: unknown): Schema.Json =>
+	Schema.decodeUnknownSync(Schema.Json)(Effect.runSync(decodeUnknownSchema(schema, input)));
+
+const commandEffectOf = <Name extends FixedCommandName>(
+	runtime: WorkspaceClientRuntime,
+	name: Name,
+	input: InputOf<ContractFor<Name>>,
+	signal?: AbortSignal
+): Effect.Effect<OutputOf<ContractFor<Name>>, unknown> => {
+	const contract = fixedContract(name);
+	const output = clientResponse(contract);
+	return Effect.tryPromise({
+		try: () => runtime.bolt.command(name, commandPayload(contract.input, input), output, signal),
+		catch: (cause) => cause
+	});
+};
+
+const commandQueryFromContract = <Name extends FixedCommandName>(
+	runtime: WorkspaceClientRuntime,
+	name: Name,
+	input: InputOf<ContractFor<Name>>,
+	signal?: AbortSignal
+): RemoteQuery<OutputOf<ContractFor<Name>>> => {
+	const contract = fixedContract(name);
+	return commandQueryOf(runtime, name, input, contract.input, clientResponse(contract), signal);
+};
+
+/** Builds browser commands directly from the protocol catalogue; no client-local schema map exists. */
+const createSystemClient = (runtime: WorkspaceClientRuntime): SystemClientApi => {
+	const root: Record<string, unknown> = {};
+	for (const contract of FixedCommandCatalogue) {
+		if (!('clientPath' in contract) || contract.clientPath === undefined) continue;
+		let parent = root;
+		for (const segment of contract.clientPath.slice(0, -1)) {
+			const current = parent[segment];
+			if (current !== undefined && (typeof current !== 'object' || current === null))
+				throw new Error(`Client command path collides at ${segment}`);
+			if (current === undefined) parent[segment] = {};
+			parent = parent[segment] as Record<string, unknown>;
+		}
+		const leaf = contract.clientPath.at(-1);
+		if (leaf === undefined || leaf.length === 0 || parent[leaf] !== undefined)
+			throw new Error(`Invalid or duplicate client command path for ${contract.name}`);
+		const output = clientResponse(contract);
+		parent[leaf] =
+			contract.clientMode === 'query'
+				? (input: Schema.Json, signal?: AbortSignal) =>
+						commandQueryOf(runtime, contract.name, input, contract.input, output, signal)
+				: (input: Schema.Json, signal?: AbortSignal) =>
+						Effect.tryPromise({
+							try: () =>
+								runtime.bolt.command(
+									contract.name,
+									commandPayload(contract.input, input),
+									output,
+									signal
+								),
+							catch: (cause) => cause
+						});
+	}
+	return root as SystemClientApi;
+};
 
 /** --- collection surfaces --- */
 
@@ -519,8 +633,6 @@ const enqueueDeletion = (
 
 /** --- automations --- */
 
-const AutomationStartResponse = Schema.Struct({ taskId: Schema.NonEmptyString });
-const AutomationStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
 const AutomationRunRow = Schema.Struct({
 	task_id: Schema.NonEmptyString,
 	status: Schema.Literals(['pending', 'running', 'done', 'failed']),
@@ -565,7 +677,7 @@ const automationRunQuery = (
 		})
 	);
 	return createMachineQuery(runtime.sync, mounted, (state) => {
-		const rows = rowListOf(queryAt(state, mounted.key)?.answer);
+		const rows = queryAt(state, mounted.key)?.prefix?.rows;
 		if (rows === undefined) return undefined;
 		const row = rows[0];
 		if (row === undefined) return null;
@@ -585,21 +697,12 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 				const existing = surfaces.get(property);
 				if (existing !== undefined) return existing;
 				const state = new AutomationExecutionState(
-					(input) =>
-						decodedCommandEffect(
-							runtime,
-							'automations.start',
-							{ name: property, input },
-							AutomationStartResponse
-						),
+					(input) => commandEffectOf(runtime, 'automations.start', { name: property, input }),
 					(taskId) => automationRunQuery(runtime, taskId),
 					(taskId) =>
-						decodedCommandEffect(
-							runtime,
-							'automations.stop',
-							{ name: property, taskId },
-							AutomationStopResponse
-						).pipe(Effect.asVoid)
+						commandEffectOf(runtime, 'automations.stop', { name: property, taskId }).pipe(
+							Effect.asVoid
+						)
 				);
 				const created = {
 					run: state.run,
@@ -621,17 +724,6 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 /** --- the workspace API proxy --- */
 
 type InvokeMethod = (input: Schema.Json) => RemoteQuery<Schema.Json>;
-
-const ApprovalCapabilityInput = Schema.Struct({ requestId: Schema.NonEmptyString });
-const ApprovalCapabilityRows = Schema.Array(
-	Schema.Struct({
-		id: Schema.NonEmptyString,
-		status: Schema.NonEmptyString,
-		canDecide: Schema.Boolean,
-		canSupersede: Schema.Boolean,
-		canWithdraw: Schema.Boolean
-	})
-);
 
 /** Groups workspace API construction with the query factories it exposes. */
 const WorkspaceApis = {
@@ -660,7 +752,13 @@ const WorkspaceApis = {
 					get: (_target, property) =>
 						typeof property === 'string'
 							? (input: Schema.Json) =>
-									commandQueryOf(runtime, `invoke.${property}`, { input }, Schema.Json, Schema.Json)
+									commandQueryOf(
+										runtime,
+										`invoke.${property}`,
+										{ input },
+										WorkspaceInvokeContract.input,
+										WorkspaceInvokeContract.responses[0].value
+									)
 							: undefined
 				}
 			),
@@ -683,24 +781,17 @@ const WorkspaceApis = {
 			history: {
 				findMany: (collection: string, recordId: string) => {
 					assertCollectionAllowed(collection);
-					return commandQueryOf(
-						runtime,
-						'collections.history',
-						{ collection, id: recordId },
-						Schema.Json,
-						Schema.Json
-					);
+					return commandQueryFromContract(runtime, 'collections.history', {
+						collection,
+						id: recordId
+					});
 				}
 			},
 			approvals: {
 				findMany: (approvalId: string) =>
-					commandQueryOf(
-						runtime,
-						'approvals.capabilities',
-						{ requestId: approvalId },
-						ApprovalCapabilityInput,
-						ApprovalCapabilityRows
-					),
+					commandQueryFromContract(runtime, 'approvals.capabilities', {
+						requestId: approvalId
+					}),
 				process: (input: {
 					readonly approvalRequestId: string;
 					readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
@@ -708,12 +799,9 @@ const WorkspaceApis = {
 				}) =>
 					Effect.runPromise(
 						Effect.gen(function* () {
-							const state = yield* decodedCommandEffect(
-								runtime,
-								'approvals.status',
-								{ requestId: input.approvalRequestId },
-								Schema.Json
-							);
+							const state = yield* commandEffectOf(runtime, 'approvals.status', {
+								requestId: input.approvalRequestId
+							});
 							const decision =
 								input.action === 'SUPERSEDED'
 									? 'supersede'
@@ -724,35 +812,24 @@ const WorkspaceApis = {
 											: 'reject';
 							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
 							if (Result.isFailure(decodedState)) return;
-							yield* decodedCommandEffect(
-								runtime,
-								'approvals.decide',
-								{
-									state: decodedState.success,
-									decision,
-									...(input.comments === undefined ? {} : { reason: input.comments })
-								},
-								Schema.Json
-							);
+							yield* commandEffectOf(runtime, 'approvals.decide', {
+								state: decodedState.success,
+								decision,
+								...(input.comments === undefined ? {} : { reason: input.comments })
+							});
 						})
 					),
 				withdraw: (approvalRequestId: string) =>
 					Effect.runPromise(
 						Effect.gen(function* () {
-							const state = yield* decodedCommandEffect(
-								runtime,
-								'approvals.status',
-								{ requestId: approvalRequestId },
-								Schema.Json
-							);
+							const state = yield* commandEffectOf(runtime, 'approvals.status', {
+								requestId: approvalRequestId
+							});
 							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
 							if (Result.isFailure(decodedState)) return;
-							yield* decodedCommandEffect(
-								runtime,
-								'approvals.withdraw',
-								{ state: decodedState.success },
-								Schema.Json
-							);
+							yield* commandEffectOf(runtime, 'approvals.withdraw', {
+								state: decodedState.success
+							});
 						})
 					)
 			}
@@ -760,9 +837,7 @@ const WorkspaceApis = {
 		if (visibility.system === false) return publicApi;
 		return {
 			...publicApi,
-			system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
-				commandQueryOf(runtime, command, input, inputSchema, outputSchema, signal)
-			)
+			system: createSystemClient(runtime)
 		};
 	}
 };

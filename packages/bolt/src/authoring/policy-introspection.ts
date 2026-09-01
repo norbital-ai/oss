@@ -1,4 +1,5 @@
 import { Result, Schema } from 'effect';
+import { CollectionPredicate } from '@norbital-ai/bolt-protocol/collections';
 import type { PolicyDeclaration, RuntimePolicyGrant } from './workspace-schema.js';
 import {
 	resolvePolicyLimits,
@@ -22,16 +23,14 @@ const READ_ACTIONS = new Set<PolicyAction>(['read', 'history']);
 const POLICY_KEYS = new Set(['description', 'grants', 'capabilities', 'limits']);
 const COLLECTION_GRANT_KEYS = new Set(['read', 'history', 'mutate', 'delete']);
 const MUTATE_KEYS = new Set(['new', 'existing']);
-const READ_GRANT_KEYS = new Set(['where', 'fields', 'dependencies']);
+const READ_GRANT_KEYS = new Set(['where', 'fields']);
 const DELETE_GRANT_KEYS = new Set(['authorize', 'approval']);
 const WRITE_GRANT_KEYS = new Set(['fields', 'authorize', 'approval']);
 const APPROVAL_KEYS = new Set(['flow', 'superceded_by']);
-const POLICY_SQL_KEYS = new Set(['kind', 'statement']);
 
 const AuthoredActionGrant = Schema.Struct({
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 	fields: Schema.optionalKey(Schema.Array(Schema.String)),
-	dependencies: Schema.optionalKey(Schema.Array(Schema.String)),
 	authorize: Schema.optionalKey(Schema.Unknown),
 	approval: Schema.optionalKey(Schema.Unknown)
 });
@@ -116,21 +115,6 @@ const validateGrantFields = (grant: Record<string, unknown>, location: string): 
 	}
 };
 
-const validateGrantDependencies = (grant: Record<string, unknown>, location: string): void => {
-	if (!('dependencies' in grant)) return;
-	if (
-		!Array.isArray(grant.dependencies) ||
-		grant.dependencies.some(
-			(dependency) => typeof dependency !== 'string' || dependency.trim() === ''
-		)
-	) {
-		throw new TypeError(`${location}.dependencies must be an array of collection names.`);
-	}
-	if (new Set(grant.dependencies).size !== grant.dependencies.length) {
-		throw new TypeError(`${location}.dependencies cannot repeat a collection.`);
-	}
-};
-
 const validateGrantApproval = (grant: Record<string, unknown>, location: string): void => {
 	if (!('approval' in grant)) return;
 	requireExactKeys(grant.approval, APPROVAL_KEYS, `${location}.approval`);
@@ -147,18 +131,42 @@ const validateGrantApproval = (grant: Record<string, unknown>, location: string)
 	}
 };
 
-const rejectLegacyPolicySql = (value: unknown, location: string): void => {
+const rejectLegacySqlTokens = (value: unknown, location: string): void => {
 	if (value === null || typeof value !== 'object') return;
 	if (Array.isArray(value)) {
-		value.forEach((entry, index) => rejectLegacyPolicySql(entry, `${location}[${index}]`));
+		value.forEach((entry, index) => rejectLegacySqlTokens(entry, `${location}[${index}]`));
 		return;
 	}
 	for (const [key, nested] of Object.entries(value)) {
 		if (key === '$sql') {
-			throw new TypeError(`${location} uses removed $sql policy syntax; use policySql(statement).`);
+			throw new TypeError(
+				`${location} uses removed $sql policy syntax; use the closed structured predicate language.`
+			);
 		}
-		rejectLegacyPolicySql(nested, `${location}.${key}`);
+		rejectLegacySqlTokens(nested, `${location}.${key}`);
 	}
+};
+
+/**
+ * The protocol query grammar deliberately excludes policy-only operators. Validate their exact
+ * authored shape here, then substitute an inert member of the same field-filter branch solely for
+ * closed-grammar decoding. The original predicate remains the runtime declaration.
+ */
+const policyGrammarProjection = (value: unknown, location: string): unknown => {
+	if (Array.isArray(value)) {
+		return value.map((entry, index) => policyGrammarProjection(entry, `${location}[${index}]`));
+	}
+	if (value === null || typeof value !== 'object') return value;
+	const entries = Object.entries(value);
+	if (entries.some(([key]) => key === 'teamScopeUsers')) {
+		if (entries.length !== 1 || Reflect.get(value, 'teamScopeUsers') !== true) {
+			throw new TypeError(`${location}.teamScopeUsers must be the sole field operator with value true.`);
+		}
+		return { in: [] };
+	}
+	return Object.fromEntries(
+		entries.map(([key, nested]) => [key, policyGrammarProjection(nested, `${location}.${key}`)])
+	);
 };
 
 const validateGrantWhere = (grant: Record<string, unknown>, location: string): void => {
@@ -170,14 +178,19 @@ const validateGrantWhere = (grant: Record<string, unknown>, location: string): v
 		!Array.isArray(where) &&
 		Reflect.get(where, 'kind') === 'policy-sql'
 	) {
-		requireExactKeys(where, POLICY_SQL_KEYS, `${location}.where`);
-		const statement = Reflect.get(where, 'statement');
-		if (typeof statement !== 'string' || statement.trim() === '') {
-			throw new TypeError(`${location}.where policySql statement must be a non-empty string.`);
-		}
-		return;
+		throw new TypeError(
+			`${location}.where uses administrative one-shot SQL in a read/history policy; use the closed structured predicate language.`
+		);
 	}
-	rejectLegacyPolicySql(where, `${location}.where`);
+	rejectLegacySqlTokens(where, `${location}.where`);
+	const decoded = Schema.decodeUnknownResult(CollectionPredicate)(
+		policyGrammarProjection(where, `${location}.where`)
+	);
+	if (Result.isFailure(decoded)) {
+		throw new TypeError(
+			`${location}.where must use the closed structured predicate language: ${String(decoded.failure)}`
+		);
+	}
 };
 
 const validateGrantShape = (
@@ -195,7 +208,6 @@ const validateGrantShape = (
 	}
 	validateGrantFields(grant, location);
 	if (READ_ACTIONS.has(action)) {
-		validateGrantDependencies(grant, location);
 		validateGrantWhere(grant, location);
 	}
 	validateGrantApproval(grant, location);
@@ -265,10 +277,7 @@ const describeGrant = (
 		collection,
 		action,
 		...(where === undefined ? {} : { where }),
-		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> }),
-		...(grant.dependencies === undefined
-			? {}
-			: { dependencies: grant.dependencies as ReadonlyArray<string> })
+		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> })
 	};
 	if (typeof grant.authorize === 'function') {
 		const id = policyAuthorizationId(policyName, collection, action);

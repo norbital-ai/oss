@@ -46,11 +46,13 @@ Every mutation also appends to `bolt_audit` (`sequence, kind, subject_id, payloa
 attributable event log: who acted, on what kind of event, with what payload. This is separate from
 temporal history: history tells you what the row _was_, audit tells you _who acted_ and when.
 
-## Sync and the client replica
+## Sync and the browser client
 
-Clients hold a local replica of the data they are allowed to see — policy-scoped, so the replica
-never contains rows the user could not query directly. Mutations apply optimistically against the
-replica and reconcile with the server.
+The browser holds current live prefixes in memory only. There is no policy-scoped replica, no
+IndexedDB tenant database, and no changelog to replay. `findMany` / `findFirst` with a contiguous
+limit are registered on `sync.connect` and kept current by version-fenced keyed deltas (or a reset
+that forces re-registration). Mutations apply optimistically over those in-memory prefixes and
+reconcile when the host's apply frame carries the write outcome.
 
 Approval state propagates the same way. An optimistic client mutation can reconcile to an open
 approval: a held new-row mutation has no server domain row, while an existing-row mutation/delete

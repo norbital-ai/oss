@@ -29,8 +29,8 @@ The gallery card image and Open Graph image share **one** file:
 - Drop that file. Do **not** also put a `thumbnail` (or legacy `banner`) field in
   `norbital.template.json` unless the image lives at a different path.
 - The website resolves `assets/thumbnail.svg` by convention (`TEMPLATE_DEFAULT_THUMBNAIL`).
-- Optionally reference the same path from the README (`![…](assets/thumbnail.svg)`) so GitHub's
-  preview matches the website — that is a pointer to the same file, not a second configuration.
+- Optionally embed that same `assets/thumbnail.svg` path from the README so GitHub's preview matches
+  the website — that is a pointer to the same file, not a second configuration.
 - Target about 1600×900. Prefer SVG or a light raster committed under `assets/`.
 
 | Kind                         | How you declare it                                              | Consumed by                                       |

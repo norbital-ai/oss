@@ -1,9 +1,10 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import { TaskId } from '@norbital-ai/bolt-protocol';
 import * as Collections from '../../src/runtime/collections/collections.js';
-import * as Database from '../../src/runtime/facilities/database.js';
 import { HostTools } from '../../src/runtime/facilities/services.js';
-import { executePlatformTool } from '../../src/runtime/agents/platform-tools.js';
+import * as Agents from '../../src/runtime/agents/agents.js';
+import { executeSystemTool } from '../../src/runtime/agents/capability-catalog.js';
 import * as Workspace from '../../src/runtime/workspace.js';
 import {
 	adminSubject,
@@ -17,47 +18,82 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('envoy history search scope', () => {
-	it('takes no conversation id, gates envoy-wide reach, and pages nearest-first', async () => {
+const insertTask = async (
+	runtime: BoltTestRuntime,
+	taskId: TaskId,
+	workbenchId: string,
+	agentId: string,
+	audience: 'personal' | 'workbench'
+) => {
+	await runtime.database.query(
+		`insert into agent_task
+		 (id, workbench_id, subject_id, agent_id, audience, status, epoch)
+		 values ($1, $2, $3, $4, $5, 'ready', 0)`,
+		[taskId, workbenchId, adminSubject.userId, agentId, audience]
+	);
+};
+
+const insertMessage = async (
+	runtime: BoltTestRuntime,
+	messageId: string,
+	taskId: TaskId,
+	sequence: number,
+	text: string
+) => {
+	await runtime.database.query(
+		`insert into agent_message
+		 (id, task_id, sequence, author, message, semantic_hash)
+		 values ($1, $2, $3, $4, $5, $6)`,
+		[
+			messageId,
+			taskId,
+			sequence,
+			{ kind: 'human', id: adminSubject.userId },
+			Agents.userAgentInput(text),
+			`hash:${messageId}`
+		]
+	);
+};
+
+describe('Task history search scope', () => {
+	it('defaults to one Task and expands only to Tasks in the same workbench', async () => {
 		harness = await makeBoltTestRuntime();
-		for (const conversationId of ['desk:dm:first', 'desk:dm:second']) {
-			await harness.database.query(
-				`insert into chat_session
-				 (conversation_id, agent_name, user_id, sandbox_key, visibility, envoy_key)
-				 values ($1, 'desk', $2, 'envoy:desk', 'envoy_dm', 'desk')`,
-				[conversationId, adminSubject.userId]
-			);
-		}
-		await harness.database.query(
-			`insert into chat_message
-			 (message_id, conversation_id, role, content_kind, content_text, search_text, semantic_hash, created_at)
-			 values ('history-first', $1, 'user', 'text', $2, $2, 'hash-first', '2026-08-24T10:00:00.000Z'),
-			 ('history-second', $3, 'user', 'text', $4, $4, 'hash-second', '2026-08-24T10:05:00.000Z')`,
-			[
-				'desk:dm:first',
-				'first marker',
-				'desk:dm:second',
-				'second marker'
-			]
+		const firstTask = TaskId.make('00000000-0000-4000-8000-000000000701');
+		const secondTask = TaskId.make('00000000-0000-4000-8000-000000000702');
+		await insertTask(harness, firstTask, 'field-workbench', 'desk', 'workbench');
+		await insertTask(harness, secondTask, 'field-workbench', 'desk', 'workbench');
+		await insertMessage(
+			harness,
+			'00000000-0000-4000-8000-000000000711',
+			firstTask,
+			1,
+			'first marker'
+		);
+		await insertMessage(
+			harness,
+			'00000000-0000-4000-8000-000000000712',
+			secondTask,
+			1,
+			'second marker'
 		);
 
-		const run = (envoyWideHistory: boolean, input: Parameters<typeof executePlatformTool>[1]) =>
+		const run = (input: Parameters<typeof executeSystemTool>[1]) =>
 			harness!.runtime.runPromise(
 				Effect.gen(function* () {
-					const database = yield* Database.Service;
 					const workspace = yield* Workspace.Service;
 					const collections = yield* Collections.Service;
 					const hostTools = yield* HostTools.Service;
-					return yield* executePlatformTool('search_envoy_history', input, {
-						effectId: harness!.effectId('search'),
+					return yield* executeSystemTool('search_task_history', input, {
+						effectId: harness!.effectId('history:search'),
 						subject: adminSubject,
-						agentName: 'desk',
-						conversationId: 'desk:dm:first',
-						database,
-						envoyWideHistory,
+						agentId: 'desk',
+						taskId: firstTask,
+						workbenchId: 'field-workbench',
 						skills: [],
-						toolNames: ['search_envoy_history'],
+						toolNames: ['search_task_history'],
 						collectionNames: [],
+						readableCollectionNames: [],
+						writableCollectionNames: [],
 						workspace,
 						collections,
 						hostTools
@@ -65,69 +101,57 @@ describe('envoy history search scope', () => {
 				})
 			);
 
-		await expect(run(false, { scope: 'this_envoy' })).rejects.toThrow(/not allowed/i);
-		const local = (await run(false, {})) as { readonly messages: ReadonlyArray<unknown> };
+		const local = (await run({})) as { readonly messages: ReadonlyArray<unknown> };
 		expect(JSON.stringify(local.messages)).toContain('first marker');
 		expect(JSON.stringify(local.messages)).not.toContain('second marker');
 
-		const wide = (await run(true, {
-			scope: 'this_envoy',
-			nearestTo: '2026-08-24T10:04:30.000Z',
+		const workbench = (await run({
+			scope: 'workbench',
+			query: 'second marker',
 			limit: 1
-		})) as {
-			readonly messages: ReadonlyArray<{ readonly content: string }>;
-			readonly nextCursor: string | null;
-		};
-		expect(wide.messages[0]?.content).toContain('second marker');
-		expect(wide.nextCursor).toBe('1');
-		if (wide.nextCursor === null) throw new Error('expected a second history page');
-		const next = (await run(true, {
-			scope: 'this_envoy',
-			nearestTo: '2026-08-24T10:04:30.000Z',
-			limit: 1,
-			cursor: wide.nextCursor
-		})) as { readonly messages: ReadonlyArray<{ readonly content: string }> };
-		expect(next.messages[0]?.content).toContain('first marker');
+		})) as { readonly messages: ReadonlyArray<unknown> };
+		expect(JSON.stringify(workbench.messages)).toContain('second marker');
+		expect(JSON.stringify(workbench.messages)).not.toContain('first marker');
 	});
 
-	it('lets the web agent search its complete conversation, including a queued follow-up', async () => {
+	it('searches every complete Effect message persisted for one Task', async () => {
 		harness = await makeBoltTestRuntime();
-		await harness.database.query(
-			`insert into chat_session
-				(conversation_id, agent_name, user_id, sandbox_key, visibility)
-			 values ('web-history', 'web', $1, 'person:admin-1', 'personal')`,
-			[adminSubject.userId]
+		const taskId = TaskId.make('00000000-0000-4000-8000-000000000703');
+		await insertTask(harness, taskId, taskId, 'web', 'personal');
+		await insertMessage(
+			harness,
+			'00000000-0000-4000-8000-000000000713',
+			taskId,
+			1,
+			'older searchable marker'
 		);
-		await harness.database.query(
-			`insert into chat_message
-			 (message_id, conversation_id, role, content_kind, content_text, search_text, semantic_hash, created_at)
-			 values ('history-old', 'web-history', 'user', 'text', $1, $1, 'hash-old', '2026-08-01T10:00:00.000Z'),
-			 ('history-pending', 'web-history', 'user', 'text', $2, $2, 'hash-pending', '2026-08-31T10:00:00.000Z')`,
-			[
-				'older searchable marker',
-				'incoming queued marker'
-			]
+		await insertMessage(
+			harness,
+			'00000000-0000-4000-8000-000000000714',
+			taskId,
+			2,
+			'incoming queued marker'
 		);
 
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				const database = yield* Database.Service;
 				const workspace = yield* Workspace.Service;
 				const collections = yield* Collections.Service;
 				const hostTools = yield* HostTools.Service;
-				return yield* executePlatformTool(
-					'search_envoy_history',
-					{ limit: 50 },
+				return yield* executeSystemTool(
+					'search_task_history',
+					{ limit: 50, query: 'marker' },
 					{
-						effectId: harness!.effectId('search:web'),
+						effectId: harness!.effectId('history:web'),
 						subject: adminSubject,
-						agentName: 'web',
-						conversationId: 'web-history',
-						database,
-						envoyWideHistory: false,
+						agentId: 'web',
+						taskId,
+						workbenchId: taskId,
 						skills: [],
-						toolNames: ['search_envoy_history'],
+						toolNames: ['search_task_history'],
 						collectionNames: [],
+						readableCollectionNames: [],
+						writableCollectionNames: [],
 						workspace,
 						collections,
 						hostTools

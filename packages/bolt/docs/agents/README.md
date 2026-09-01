@@ -1,130 +1,249 @@
 # Agents
 
-The interactive agent is either reserved `web` (the signed-in person) or one declared envoy. It
-runs a TanStack AI chat loop under a **subject snapshot** stored on the run and inbox rows.
-Automations and functions are not agents.
+Bolt agents run as durable Tasks coordinated by Effect v4. PostgreSQL holds the complete Task state;
+Effect AI owns prompts, model calls, typed tools, response parts, structured output, retries, scopes,
+and interruption. Web and Envoy callers use the same Task submission and control commands.
 
-Source: `src/runtime/agents/agents.ts`, `agent-runtime.ts`, `sandbox-tools.ts`,
-`platform-tools.ts`, and `src/runtime/envoys/envoys.ts`.
+Source: `src/runtime/agents/agents.ts`, `src/runtime/agents/capability-catalog.ts`,
+and `src/runtime/envoys/envoys.ts`.
 
-How those subjects are minted: [access](../access/README.md). A gated write comes back pending:
-[approvals](../access/approvals.md).
-
----
-
-## Prompt and principals
-
-`src/+agents.md` is required. It is the workspace-wide system message for every turn (web and
-envoy). An envoy adds its `task` string from `src/envoys/+<name>.ts`. There is no `+agent.ts`.
-
-| Kind           | Authority                                                                 | Trigger                                     |
-| -------------- | ------------------------------------------------------------------------- | ------------------------------------------- |
-| **Web agent**  | The signed-in person                                                      | User message                                |
-| **Envoy**      | Declaration's policies (ceiling). Linked sender may narrow `userId` only. | Inbound Telegram / WhatsApp                 |
-| **Automation** | `automationSubject` — never the caller's subject                          | Schedule, change, integration, manual       |
-| **Function**   | Requestor's subject                                                       | `client.invoke` — request/response, no loop |
-
-The root task's conversation ID is its workbench and sandbox key. Spawned tasks get their own task
-IDs, store their direct parent, and inherit that root workbench key. Unrelated tasks owned by the
-same person or Envoy therefore cannot discover or message one another. A linked sender may still
-narrow `userId` on the subject; capability stays the Envoy's declared ceiling.
+How subjects and collection visibility are resolved: [access](../access/README.md). A gated write
+returns the ordinary collection-mutation approval state: [approvals](../access/approvals.md).
 
 ---
 
-## Tools
-
-One assembly path (`allowedTools`):
-
-1. **Platform** (always considered): `describe_workspace`, `list_skills`, `read_skill`,
-   `search_envoy_history`, `load_media`, `read_collection`, `write_collection`. Envoy-wide history
-   scope still requires its explicit policy grant.
-2. `write_collection` only if the subject has any `mutate.new`, `mutate.existing`, or `delete`
-   grant on any collection.
-3. **Authored** `defineAgentTool` — only when a policy names the tool.
-4. **MCP** — only when a policy names the server. Wire names fold `:` to `_`.
-5. **Sandbox** (unless `delegation: disabled`): `spawn_agent`, `list_agents`, `read_agent`,
-   `message_agent`, `await_agent`, `steer_agent`, `stop_agent`, `resume_agent`. Structural;
-   they do not grant workspace data authority.
-6. **Host tools** — only if a policy names them. The host implements the dangerous side.
-
-Denied tools return `{ error }` in the loop (`ToolNotAllowed`). There is no "missing means all"
-fallback and no per-agent deny list.
-
-`api.infer` (hooks, automations, functions) is one schema-validated call: no transcript, no
-sandbox, no tools.
-
----
-
-## Messages, inbox, lane, and runs
+## Runtime shape
 
 ```text
-  agents.enqueue
-		│  authorize and resolve the exact agent/model envelope
-		│  atomically persist one canonical user message + inbox receipt
-		│  claim a compatible FIFO prefix when the lane is active and idle
-		▼
-  TanStack chat loop   one run, several provider/tool iterations
-		│  middleware projects a compact provider view; durable history stays whole
-		│  commit the complete assistant/tool-call batch before effects
-		│  execute calls sequentially and persist canonical tool-result messages
-		│  check the run/generation/driver fence at every safe boundary
-		│  verify the durable goal and append a canonical verdict
-		▼
-  settle run + exact usage; atomically promote input or a bounded goal continuation
+tasks.submit
+     │  atomically admit Task + complete user message + inbox directive
+     ▼
+claim directive
+     │  increment Task epoch + create fenced run + snapshot capabilities
+     ▼
+Effect Prompt → language model → complete assistant message
+     │                              │
+     │                              └─ tool calls commit before effects begin
+     ▼
+Effect Toolkit handlers run sequentially → complete tool-result messages
+     │
+     ├─ Plan verification phase
+     ├─ required-child barrier
+     └─ exact provider observation per call
+     ▼
+settle run and Task, or persist a waiting/attention boundary
 ```
 
-`chat_message` and `chat_message_part` are the canonical TanStack `ModelMessage` store. A provider
-iteration is one assistant message; tool results are their own canonical messages. The client
-derives TanStack `UIMessage` and panel controls from those rows rather than maintaining a second
-transcript shape.
+Every model iteration loads durable rows, projects an Effect `Prompt`, calls the selected Effect
+model, folds response parts into one complete assistant message, and commits that message before
+executing any tool call. Calls run sequentially through the evaluated Effect `Toolkit`; each result
+is encoded as a typed tool-result part and committed before the next model iteration.
 
-`agent_inbox` is the only durable input queue and `agent_lane` is the only active-run pointer.
-Ordinary input never joins a run after claim. Steer requests a successor generation at the next
-safe boundary; stop leaves the lane stopped; resume replays committed work as a typed `resume` run
-and may claim a compatible pending prefix. Provider failure is terminal for that run—there is no
-implicit retry ladder and no automatic agent recovery. Explicit `resume` is the only way to
-continue stopped work. Nesting of delegated agents and automations remains capped
-(`DEFAULT_NESTING_LIMIT = 8`).
-
-A `chat_session` is the durable task; its conversation ID is also its stable `taskId`. Goal-bearing
-tasks store a verifier contract that the implementing agent sees from its first turn. After each
-implementation run, a separate structured-output call with no tenant tools appends a canonical
-`kind: goal` user message. A passing verdict completes the task. An incomplete verdict remains
-model-visible and is atomically admitted through `agent_inbox` as a bounded `cause: goal` run.
-
-The context middleware keeps complete tool-call/result units under 60% of the selected model's
-reported context window, prunes old tool payloads, filters transcript-only records, and folds the
-prefix at the newest summary checkpoint. Compaction changes only `providerMessages`; canonical
-durable history remains intact. Plan intent adds a planning instruction and exposes only read-only
-planning tools. Missing context metadata is an error; the runtime does not guess a model cap.
-
-**Metering.** Every implementation, verifier, planning, embedding, and tool-loop provider call has
-one facility effect identity and one billing observation. Provider `costUsd` remains an audit fact;
-the invoice authority is the separate non-negative integer `costMicroUnits` plus currency. Exact
-facility-reported usage is cumulative on the run and settles once onto every session in its lineage;
-currency mixing fails closed, and any unreported provider segment keeps `usage_unreported` true.
+Streaming response parts are temporary presentation data. Reconnection always resumes from the last
+complete committed message.
 
 ---
 
-## What an agent can and cannot do
+## Public commands
 
-**Can** (when policy grants): read/write collections through the same engine as the UI; read
-granted skills; call granted MCP and authored tools; delegate via sandbox tools; attach chat
-documents.
+The fixed command catalogue exposes:
 
-**Cannot:** exceed policy; use a tool not in `allowedTools`; `write_collection` with no write
-grant anywhere; nest past the depth limit; bypass approval gates (a gated write comes back
-**202 pending** — success, not a refusal); run an automation under the caller's authority.
+```ts
+tasks.submit({
+  taskId,
+  agentId,
+  message,
+  mode: "agent" | "plan" | "compact",
+  priority: "normal" | "steer",
+});
 
-`write_collection` is unelevated. A permission failure is information about the subject's access,
-not evidence that the platform lacks the feature.
+tasks.editMessage({ taskId, messageId, message });
 
-`describe_workspace` returns **names**, subject-scoped — not implementation bodies or live rows.
+tasks.control({ taskId, action: "stop" | "resume" });
+```
+
+`tasks.editMessage` appends a revision of one of the subject's own user messages and queues the
+Agent directive that continues from it. The original row is not edited or deleted; the new row
+names it in `supersedes_id`. Only the author may revise, and only the newest revision of a message
+may be revised again.
+
+`taskId` is the caller-minted idempotency key. Its first submission atomically creates the root
+Task, canonical message, and directive. A later submission must match the immutable Task subject,
+agent, and audience, then appends its message and directive atomically. Completed and failed Tasks
+do not accept more work.
+
+`steer` is directive priority, not a separate execution path. Stop takes effect at a safe boundary.
+Resume is explicit and is admitted only for a stopped or attention Task after subject, agent,
+model, capability, and access checks run again; it creates a new directive and execution fence.
+
+Only the `subagent` tool creates a child Task. The runtime stamps its parent and keeps every
+descendant in the root Task's workbench.
 
 ---
 
-## Honesty rules (runtime contract)
+## Six durable collections
 
-- Never claim a read or write succeeded without its tool result.
-- Report `ToolNotAllowed` and `AccessDenied` as capability facts.
-- A pending approval is a written, locked row. Name the team the compiled flow asked for.
+These ordinary Bolt system collections are the complete logical agent store:
+
+| Collection      | Durable responsibility |
+| --------------- | ---------------------- |
+| `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence |
+| `agent_run`     | One claimed directive, mode, phase, input boundary, model, immutable capability snapshot, status, and matching epoch |
+| `agent_message` | One complete encoded Effect `Prompt.Message`, ordered by Task sequence, with author, semantic hash, optional run, and Compact or Plan-verdict annotation |
+| `agent_inbox`   | The Task's only queue: ordered message directives with mode, priority, claim state, and claimed run |
+| `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state |
+| `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity |
+
+`agent_task.epoch` and `agent_run.epoch` form the write fence. Claiming work increments the Task
+epoch and installs the active run atomically. Every later append, tool effect, usage observation, and
+settlement checks that same run and epoch, so stale execution cannot write or spend.
+
+Task ownership is explicit. `subject_id` names the signed-in person or Envoy principal; `agent_id`
+names the selected agent; `audience` controls personal versus workbench visibility; `parent_id`
+forms the bounded child tree. Transport delivery and receipt state remain in Envoy transport
+collections rather than being copied into Task rows.
+
+---
+
+## Durable Effect messages
+
+`agent_message.message` stores one encoded Effect `Prompt.Message`. Text, reasoning, file/image,
+tool-call, and tool-result parts remain inside Effect's typed part union and codec. There is no
+second parts store or provider-specific transcript shape.
+
+The ordering contract is strict:
+
+1. append the complete assistant message containing a tool call;
+2. check the Task/run epoch;
+3. execute the Effect tool handler with the tool-call ID;
+4. append one complete Effect tool-result message;
+5. start the next model iteration.
+
+`semantic_hash` gives immutable replay identity. Generated indexes may expose searchable message or
+annotation fields, but those indexes are projections of the encoded message rather than another
+message model.
+
+---
+
+## Agent, Plan, and Compact modes
+
+Agent mode performs ordinary implementation or conversation work. If a Plan is active, its exact
+revision is included in the prompt and governs execution.
+
+Plan mode creates one `agent_plan` revision containing the objective, implementation approach, and
+verification criteria. It receives only the read-oriented planning capability set and does not
+perform implementation writes. A newer Plan atomically supersedes the active revision while prior
+revisions remain queryable.
+
+After an Agent run implements an active Plan, the same Task runtime enters its `verify` phase and
+makes a separate tool-free structured-output call. A complete verdict verifies the Plan. An
+incomplete verdict appends its gaps and admits a bounded successor Agent directive. The production
+runtime permits three verification attempts before marking the Plan stalled and the Task attention.
+Plan and Compact runs do not enter this phase.
+
+Compact mode appends an annotated system message containing the summary, cutoff sequence, and
+explicitly retained message IDs. It never edits or deletes durable messages. Manual Compact uses a
+normal `tasks.submit` directive with `mode: "compact"`. Agent mode also performs one automatic
+Compact checkpoint when its projected prompt exceeds 64 KiB and no checkpoint has yet been written
+for that run. Both paths preserve the active Plan, current instruction, decisions, constraints,
+receipts, unresolved work, and child outcomes needed to continue.
+
+Prompt projection uses the current system contract, active Plan, newest applicable Compact
+checkpoint and retained messages, messages after the checkpoint, and the run's immutable capability
+snapshot. Full history remains available to ordinary queries and audit policy.
+
+---
+
+## Todo progress
+
+`todo` is an Effect tool. One call replaces the ordered logical checklist with stable IDs and
+`pending`, `doing`, or `done` states. Duplicate IDs, empty text, multiple doing items, and regression
+of a completed ID fail validation.
+
+The call and result are canonical `agent_message` rows. The latest successful `todo` result in the
+active run is the current projection; the last terminal run remains visible until another directive
+starts. There is no Todo collection. Todo is progress evidence, while Plan verification remains the
+completion authority.
+
+---
+
+## Child Tasks and barriers
+
+The `subagent` tool supports spawn, read, message, await, steer, stop, and resume inside one root
+workbench. Child depth uses the host-stamped invocation budget and is bounded by the platform limit.
+Cross-workbench and cross-tenant discovery or messaging are refused.
+
+Every directly spawned child is a required join. Before a parent can settle, its child barrier is:
+
+- `waiting` while any required child is non-terminal;
+- `consume` when terminal child results have not yet been appended as canonical tool results;
+- `clear` only after every child is terminal and consumed.
+
+A waiting barrier commits `phase: "children"` and waiting Task/run state, then releases the host
+invocation. Child completion readies the parent through the ordinary durable scheduler. Re-entry
+increments the Task/run epoch, preserves the run's immutable capability snapshot, replays the
+unresolved subagent call, and appends its single result before continuing. Messages entering a child
+from its caller use `parent-agent` attribution.
+
+---
+
+## Capabilities and tools
+
+Each run stores an immutable snapshot of qualified Tool, Skill, and MCP capability IDs and content
+digests. Capabilities come from system, host, tenant, and personal tiers, are filtered by the current
+subject and mode, and are compiled into Effect `Tool` and `Toolkit` handlers. A capability body or
+credential is never copied into the run snapshot.
+
+Platform collection tools use the same policy engine and approval behavior as UI mutations.
+Authored tools, MCP tools, sandbox operations, and host tools appear only when the effective policy
+and run mode allow them. A missing grant is a typed tool failure, never implicit access.
+
+---
+
+## Ordinary sync engine reads
+
+Agent state has no special event stream or client queue. UI and Envoy consumers issue ordinary
+declarative queries such as:
+
+```ts
+client.db.agent_task.findMany({ where: { id: { eq: taskId } } });
+client.db.agent_message.findMany({
+  where: { task_id: { eq: taskId } },
+  orderBy: { sequence: "asc" },
+});
+client.db.agent_plan.findMany({
+  where: { task_id: { eq: taskId } },
+  orderBy: { revision: "desc" },
+});
+client.db.agent_task.findMany({ where: { parent_id: { eq: taskId } } });
+```
+
+A browser client's one physical multiplexed Sync v2 connection keeps every admitted query live
+across tabs and workspaces. Agent mutations enter the same committed change batches and precise
+prefix deltas as any other collection. Field masks hide capability snapshots, provider details, and
+internal failures when the viewer lacks permission.
+
+The primary Task view renders the ordered durable messages. Plan state, Compact checkpoints, Todo
+progress, current run diagnostics, exact usage, and child Tasks are projections of these same live
+queries. A child view recursively renders that child's Task and transcript.
+
+---
+
+## Exact metering
+
+Every language or embedding provider attempt receives a deterministic `call_id` before dispatch and
+produces one `agent_usage` row. Plan creation, Plan verification, manual and automatic Compact,
+ordinary Agent iterations, retries, fallbacks, embeddings, and child calls all follow this path.
+
+The row records provider, model, operation, provider-authoritative integer usage units, and an exact
+charge encoded as integer coefficient plus decimal scale. It also records whether the charge came
+from the provider or a versioned price table. Currency is never accumulated with floating-point
+arithmetic.
+
+`settlement_id` is exactly `ai:${callId}` and is replay-safe. A complete observation starts pending
+settlement; missing usage, charge, source, or pricing version marks the row attention. A settled row
+is valid only when all four are present. Task totals are exact aggregations of visible usage rows or
+the billing ledger and are converted to presentation decimals only at the UI boundary.
+
+Provider calls and external tool effects run outside database transactions. The immutable usage row
+and idempotent ledger settlement ensure a retry cannot silently double-charge or settle an estimate.

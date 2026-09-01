@@ -131,7 +131,7 @@
 	},
 	"peerDependencies": {
 		"@norbital-ai/std": "workspace:*",
-		"effect": "4.0.0-rc.111",
+		"effect": "4.0.0-rc.112",
 		"svelte": "^5.56.10"
 	},
 	"peerDependenciesMeta": {

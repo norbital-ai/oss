@@ -173,8 +173,7 @@ export default definePack({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({ semantic: { disabled: true },
-	rules: [noFetch],
+export default defineConfig({ 	rules: [noFetch],
 	packs: ['./dr/packs/house.ts']
 });
 `
@@ -195,7 +194,7 @@ const make = (id) => defineRule({
 	id, severity: 'error', summary: 's', principles: ['simplicity'],
 	when: ['CallExpression'], check() {}
 });
-export default defineConfig({ semantic: { disabled: true }, rules: [make('KEEP'), make('DROP')], disable: ['DROP'] });
+export default defineConfig({  rules: [make('KEEP'), make('DROP')], disable: ['DROP'] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -316,7 +315,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({ semantic: { disabled: true }, rules: [noFetch] });
+export default defineConfig({  rules: [noFetch] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -342,8 +341,7 @@ test('authored findings merge into the built-in authenticated catalogue', async 
 		'package.json': '{"name":"merged-evidence","type":"module"}',
 		'src/a.ts': 'export const value = 1;\n',
 		'doctor.config.ts': `import { defineConfig, defineRule } from '${packageRoot}build/index.js';
-export default defineConfig({ semantic: { disabled: true },
-	rules: [defineRule({
+export default defineConfig({ 	rules: [defineRule({
 		id: 'ACME_MERGE', severity: 'error', summary: 'authored merge fixture',
 		principles: ['testability'], when: ['VariableDeclaration'], files: ['src/a.ts'],
 		check(node, context) { context.report(node); }
@@ -379,7 +377,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import rule from './${rulePath}';
-export default defineConfig({ semantic: { disabled: true }, rules: [rule] });
+export default defineConfig({  rules: [rule] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -405,7 +403,7 @@ test('the default CLI command accepts options before an explicit command', (cont
 		// and a clean scan reads as clean.
 		'scripts/run.ts': 'export const value = 1;\n',
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
-export default defineConfig({ semantic: { disabled: true },});
+export default defineConfig({ });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -429,7 +427,7 @@ test('a malformed receipt is an error, never a quietly empty result', async () =
 		root: '/tmp/x',
 		scope: 'all',
 		includeTests: false,
-		tiers: { syntactic: true, graph: true, typeAware: false, semantic: false },
+		tiers: { syntactic: true, graph: true, typeAware: false },
 		files: 12,
 		findings: 'findings.tsv',
 		sourceInventoryDigest: 'sha256:0',

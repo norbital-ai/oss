@@ -13,7 +13,6 @@ import type { RateLimitKey, RateLimitRule, RateLimitRules } from './rate-limits-
 import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
 import type { AuthoredRefusal } from './refusal.js';
 import type { AuthoredCollectionHookModule } from '../runtime/collections/authored.js';
-import type { PolicySqlPredicate } from './policy-sql.js';
 import type { CollectionSearch } from '@norbital-ai/std/collection';
 
 /** A pull or webhook connection's environment binding, validated by `defineConnection`. */
@@ -224,7 +223,7 @@ export type AppName = DeclaredName<'appName'>;
 type DeclaredToolName = DeclaredName<'toolName'>;
 /** An MCP server, by its `src/capabilities/mcp/+<name>.ts` file. */
 type McpServerName = DeclaredName<'mcpServerName'>;
-/** A skill, by its `src/capabilities/skills/<name>/` directory. */
+/** A release-indexed skill declared from `.norbital/shared/<name>/SKILL.md`. */
 type DeclaredSkillName = DeclaredName<'skillName'>;
 
 /**
@@ -247,24 +246,98 @@ export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables']
 type SchemaReferences<S extends AnySchema, N extends TableName<S>> = NonNullable<
 	S['tables'][N]['$references']
 >;
+type SchemaRelations<S extends AnySchema, N extends TableName<S>> = N extends keyof S['relations']
+	? NonNullable<S['relations'][N]>
+	: Readonly<Record<never, never>>;
 type QueryScalar = string | number | boolean | bigint | Date | null;
-type QueryOperand<Value> =
+type ScalarQueryOperand<Value> =
 	Exclude<Value, undefined> extends QueryScalar ? Exclude<Value, undefined> | Date : unknown;
-type SchemaFieldFilter<Value> = {
-	readonly eq?: QueryOperand<Value>;
-	readonly ne?: QueryOperand<Value>;
-	readonly gt?: QueryOperand<Value>;
-	readonly gte?: QueryOperand<Value>;
-	readonly lt?: QueryOperand<Value>;
-	readonly lte?: QueryOperand<Value>;
-	readonly in?: ReadonlyArray<QueryOperand<Value>>;
-	readonly notIn?: ReadonlyArray<QueryOperand<Value>>;
-	readonly like?: string;
-	readonly ilike?: string;
-	readonly contains?: unknown;
-	readonly contains_date?: string;
+
+export type PredicateSubjectName =
+	| 'id'
+	| 'email'
+	| 'team'
+	| 'teamIds'
+	| 'tenantId'
+	| 'admin';
+export type PredicateSubjectOperand<Name extends PredicateSubjectName = PredicateSubjectName> =
+	Readonly<{ readonly $subject: Name }>;
+
+type PredicateScalarSubjectName = Exclude<PredicateSubjectName, 'teamIds'>;
+
+/** Typed operands for read policies; they are values, never arbitrary subject-property paths. */
+export const subject = Object.freeze({
+	id: Object.freeze({ $subject: 'id' as const }),
+	email: Object.freeze({ $subject: 'email' as const }),
+	team: Object.freeze({ $subject: 'team' as const }),
+	teamIds: Object.freeze({ $subject: 'teamIds' as const }),
+	tenantId: Object.freeze({ $subject: 'tenantId' as const }),
+	admin: Object.freeze({ $subject: 'admin' as const })
+});
+
+type PredicateOperand<Value, AllowSubject extends boolean> =
+	| ScalarQueryOperand<Value>
+	| (AllowSubject extends true ? PredicateSubjectOperand<PredicateScalarSubjectName> : never);
+
+type PredicateSetOperand<Value, AllowSubject extends boolean> =
+	| ReadonlyArray<PredicateOperand<Value, AllowSubject>>
+	| (AllowSubject extends true ? PredicateSubjectOperand<'teamIds'> : never);
+
+type JsonPathFilter<AllowSubject extends boolean> = Readonly<{
+	readonly path: readonly [string, ...string[]];
+	readonly type: 'string' | 'number' | 'boolean' | 'instant' | 'json';
+	readonly transform?: 'case-fold';
+	readonly eq?: PredicateOperand<unknown, AllowSubject>;
+	readonly ne?: PredicateOperand<unknown, AllowSubject>;
+	readonly gt?: PredicateOperand<unknown, AllowSubject>;
+	readonly gte?: PredicateOperand<unknown, AllowSubject>;
+	readonly lt?: PredicateOperand<unknown, AllowSubject>;
+	readonly lte?: PredicateOperand<unknown, AllowSubject>;
+	readonly in?: PredicateSetOperand<unknown, AllowSubject>;
+	readonly notIn?: PredicateSetOperand<unknown, AllowSubject>;
 	readonly isNull?: boolean;
 	readonly isNotNull?: boolean;
+}>;
+
+type JsonArraySomeFilter<AllowSubject extends boolean> = Readonly<{
+	readonly path?: ReadonlyArray<string>;
+	readonly transform?: 'case-fold';
+	readonly eq?: PredicateOperand<unknown, AllowSubject>;
+	readonly in?: PredicateSetOperand<unknown, AllowSubject>;
+}>;
+
+type SchemaFieldFilter<Value, AllowSubject extends boolean = false> = {
+	readonly eq?: PredicateOperand<Value, AllowSubject>;
+	readonly ne?: PredicateOperand<Value, AllowSubject>;
+	readonly gt?: PredicateOperand<Value, AllowSubject>;
+	readonly gte?: PredicateOperand<Value, AllowSubject>;
+	readonly lt?: PredicateOperand<Value, AllowSubject>;
+	readonly lte?: PredicateOperand<Value, AllowSubject>;
+	readonly in?: PredicateSetOperand<Value, AllowSubject>;
+	readonly notIn?: PredicateSetOperand<Value, AllowSubject>;
+	readonly like?: string;
+	readonly ilike?: string;
+	readonly notLike?: string;
+	readonly notIlike?: string;
+	readonly caseFoldEq?: PredicateOperand<Value, AllowSubject>;
+	readonly caseFoldIn?: PredicateSetOperand<Value, AllowSubject>;
+	readonly contains?: unknown;
+	readonly arrayContains?: unknown;
+	readonly arrayContained?: unknown;
+	readonly arrayOverlaps?: unknown;
+	readonly contains_date?: string;
+	readonly overlaps?: Readonly<{
+		readonly start: PredicateOperand<Value, AllowSubject>;
+		readonly end: PredicateOperand<Value, AllowSubject>;
+	}>;
+	readonly isNull?: boolean;
+	readonly isNotNull?: boolean;
+	readonly jsonPath?: JsonPathFilter<AllowSubject>;
+	readonly jsonArraySome?: JsonArraySomeFilter<AllowSubject>;
+	/** Policy-only membership in users attached to the subject's team subtree. */
+	readonly teamScopeUsers?: AllowSubject extends true ? true : never;
+	/** Runtime-owned approval membership; valid only on an approval request identity field. */
+	readonly approvalParty?: true;
 };
 type ReferenceHandleKind<Value> =
 	Exclude<Value, null | undefined> extends {
@@ -272,9 +345,17 @@ type ReferenceHandleKind<Value> =
 	}
 		? Kind
 		: never;
-type SchemaReferenceFilter<Value> = {
-	readonly eq?: Exclude<Value, null | undefined>;
-	readonly ne?: Exclude<Value, null | undefined>;
+type SchemaReferenceFilter<Value, AllowSubject extends boolean = false> = {
+	readonly eq?:
+		| Exclude<Value, null | undefined>
+		| (AllowSubject extends true
+				? PredicateSubjectOperand<PredicateScalarSubjectName>
+				: never);
+	readonly ne?:
+		| Exclude<Value, null | undefined>
+		| (AllowSubject extends true
+				? PredicateSubjectOperand<PredicateScalarSubjectName>
+				: never);
 	readonly in?: ReadonlyArray<Exclude<Value, null | undefined>>;
 	readonly notIn?: ReadonlyArray<Exclude<Value, null | undefined>>;
 	readonly kind?: Readonly<{
@@ -284,23 +365,78 @@ type SchemaReferenceFilter<Value> = {
 	readonly isNull?: boolean;
 	readonly isNotNull?: boolean;
 };
-type SchemaWhere<Row extends object, References extends object = Readonly<Record<never, never>>> = {
+type ScalarWhere<
+	Row extends object,
+	References extends object = Readonly<Record<never, never>>,
+	AllowSubject extends boolean = false
+> = {
 	readonly [K in keyof Row]?: K extends keyof References
-		? SchemaReferenceFilter<Row[K]>
-		: SchemaFieldFilter<Row[K]> | QueryOperand<Row[K]>;
-} & {
-	readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
-	readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
-	readonly NOT?: SchemaWhere<Row, References>;
+		? SchemaReferenceFilter<Row[K], AllowSubject>
+		: SchemaFieldFilter<Row[K], AllowSubject> | PredicateOperand<Row[K], AllowSubject>;
 };
 
-/** A structured row filter or one explicitly trusted, serialized policy SQL statement. */
-type PolicyWhere<Row extends object> = SchemaWhere<Row> | PolicySqlPredicate;
+type PredicateDepth = 0 | 1 | 2 | 3 | 4;
+type PreviousDepth = readonly [0, 0, 1, 2, 3];
+type RelationTarget<
+	S extends AnySchema,
+	Relation
+> = Relation extends { readonly target: infer Target extends TableName<S> } ? Target : never;
+type RelationWhere<
+	S extends AnySchema,
+	N extends TableName<S>,
+	AllowSubject extends boolean,
+	Depth extends PredicateDepth
+> = Depth extends 0
+	? Readonly<Record<never, never>>
+	: {
+			readonly [K in keyof SchemaRelations<S, N>]?: Readonly<{
+				readonly some?: SchemaWhereFor<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					PreviousDepth[Depth]
+				>;
+				readonly none?: SchemaWhereFor<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					PreviousDepth[Depth]
+				>;
+				readonly every?: SchemaWhereFor<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					PreviousDepth[Depth]
+				>;
+			}>;
+		};
+
+type SchemaWhereFor<
+	S extends AnySchema,
+	N extends TableName<S>,
+	AllowSubject extends boolean = false,
+	Depth extends PredicateDepth = 4
+> = ScalarWhere<SchemaRow<S, N>, SchemaReferences<S, N>, AllowSubject> &
+	RelationWhere<S, N, AllowSubject, Depth> & {
+		readonly AND?: ReadonlyArray<SchemaWhereFor<S, N, AllowSubject, Depth>>;
+		readonly OR?: ReadonlyArray<SchemaWhereFor<S, N, AllowSubject, Depth>>;
+		readonly NOT?: SchemaWhereFor<S, N, AllowSubject, Depth>;
+	};
+
+type SchemaWhere<Row extends object, References extends object = Readonly<Record<never, never>>> =
+	ScalarWhere<Row, References> & {
+		readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
+		readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
+		readonly NOT?: SchemaWhere<Row, References>;
+	};
+
+/** The closed structured row-filter language available to authored policies. */
+type PolicyWhere<S extends AnySchema, N extends TableName<S>> = SchemaWhereFor<S, N, true>;
 
 export type { CollectionSearch } from '@norbital-ai/std/collection';
 
 export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> {
-	readonly where?: SchemaWhere<SchemaRow<S, N>, SchemaReferences<S, N>>;
+	readonly where?: SchemaWhereFor<S, N>;
 	readonly search?: CollectionSearch;
 	readonly columns?: Partial<Readonly<Record<keyof SchemaRow<S, N>, boolean>>>;
 	readonly orderBy?: Partial<
@@ -545,7 +681,7 @@ export interface SchemaNearestConfig<
 	N extends TableName<S>,
 	Col extends VectorColumnName<S, N>
 > {
-	readonly where?: SchemaWhere<SchemaRow<S, N>, SchemaReferences<S, N>>;
+	readonly where?: SchemaWhereFor<S, N>;
 	readonly columns?: Partial<Readonly<Record<keyof SchemaRow<S, N>, boolean>>>;
 	readonly limit?: number;
 	readonly column: Col;
@@ -617,19 +753,11 @@ interface ApprovalRequestQuery {
  * reads the object it names, inlines the bytes on the turn, and refuses a non-image, more than
  * eight of them, or more than 20 MiB in total rather than dropping any silently.
  *
- * `webSearch` is provider-neutral on purpose. An author can bound result count and sources without
- * naming the host's gateway or its server-tool dialect; the host adapter owns that translation.
  */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
 	readonly model?: string;
-	readonly webSearch?: Readonly<{
-		/** Maximum results returned by each search call. */
-		readonly maxResults: number;
-		/** Optional allow-list of domains the provider may search. */
-		readonly allowedDomains?: ReadonlyArray<string>;
-	}>;
 	readonly images?: ReadonlyArray<{
 		readonly file: FileRef;
 		readonly detail?: 'auto' | 'low' | 'high';
@@ -1497,18 +1625,8 @@ type PolicyGrantFields<S extends AnySchema, N extends TableName<S>> = ReadonlyAr
  * `history` sits here for the same reason: reading what a record used to be is still reading.
  */
 type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
-	readonly where?: PolicyWhere<SchemaRow<S, N>>;
+	readonly where?: PolicyWhere<S, N>;
 	readonly fields?: PolicyGrantFields<S, N>;
-	/**
-	 * Additional collections whose rows can change this grant's visible row set.
-	 *
-	 * This metadata is additive: the compiler also derives every relationship traversal it can see,
-	 * and this list cannot remove those edges. A write to any resulting linking collection advances
-	 * this collection's visibility generation even though no row in this collection was written.
-	 * Opaque `policySql` predicates conservatively depend on every synced collection because a
-	 * declaration cannot prove which tables arbitrary SQL does not read.
-	 */
-	readonly dependencies?: ReadonlyArray<TableName<S>>;
 };
 
 /**

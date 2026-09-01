@@ -3,8 +3,7 @@ import {
 	InvocationScope,
 	ReleaseId,
 	SYNC_CONNECTION_HEADER,
-	TenantId,
-	type SyncOutcome
+	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '#lib/client.js';
 import type {
@@ -16,13 +15,20 @@ import type {
 	MutationSettlements,
 	WorkspaceClientRuntime
 } from '#lib/client/contracts.js';
-import { createSyncClient, createSyncHttpDriver, type SyncClient } from './sync/index.js';
+import {
+	createBrowserSyncBroker,
+	createSyncClient,
+	createSyncHttpDriver,
+	type BrowserSyncScope,
+	type SyncClient
+} from './sync/index.js';
+import { mutationSettlementOf } from './mutation-settlement.js';
 import type { ClientState } from './sync/machine.js';
 import { workspaceSession } from './session.js';
 import { databaseOf } from './workspace-api.js';
 import { createSyncStatusView } from './sync-status.svelte.js';
 
-export type { SystemClientApi } from './system-client.js';
+export type { SystemClientApi } from './workspace-api.js';
 export type { BrowserWorkspaceRuntimeOptions } from '#lib/client/contracts.js';
 export type { RemoteQuery } from '#lib/client/contracts.js';
 export {
@@ -37,39 +43,6 @@ export {
 } from './workspace-api.js';
 
 /** --- writes: one graph per mutation, settled asynchronously through the Machine --- */
-
-const settlementOf = (outcome: SyncOutcome, at: number): MutationSettlement => {
-	const status = outcome.status;
-	switch (status.resolution) {
-		case 'accepted':
-			return { kind: 'accepted', idempotencyKey: outcome.id, settledAtEpochMs: at };
-		case 'rebased':
-			return {
-				kind: 'rebased',
-				idempotencyKey: outcome.id,
-				fromSchemaFingerprint: status.fromSchemaFingerprint,
-				toSchemaFingerprint: status.toSchemaFingerprint,
-				settledAtEpochMs: at
-			};
-		case 'rejected':
-			return {
-				kind: 'rejected',
-				idempotencyKey: outcome.id,
-				code: status.code,
-				message: status.message,
-				settledAtEpochMs: at
-			};
-		case 'quarantined':
-			// The wire carries the quarantine's reason only; the authoring-contract shape (std) adds
-			// the stable code and the settlement instant the handle reports.
-			return {
-				kind: 'quarantined',
-				idempotencyKey: outcome.id,
-				quarantine: { code: 'quarantined', message: status.reason, atEpochMs: at },
-				settledAtEpochMs: at
-			};
-	}
-};
 
 /**
  * The promise side of the write path. Every observable write phase stays in the Machine; these
@@ -105,7 +78,7 @@ const createMutationSettlements = (machine: () => SyncClient): MutationSettlemen
 				const queue = waiters.get(outcome.id);
 				if (queue === undefined) continue;
 				waiters.delete(outcome.id);
-				const settlement = settlementOf(outcome, at);
+				const settlement = mutationSettlementOf(outcome, at);
 				for (const resolve of queue) resolve(settlement);
 			}
 		}
@@ -124,11 +97,11 @@ const browserTransport: BoltTransport = {
 	command: (command, input, signal) => workspaceSession().transport.command(command, input, signal)
 };
 
-/** The host's connect route pairs with the stream route: same prefix, one segment swapped. */
-const connectUrlOf = (streamUrl: string): string =>
+/** Sync controls share the stream route's host-owned prefix. */
+const syncControlUrlOf = (streamUrl: string, control: 'connect' | 'extend'): string =>
 	streamUrl.endsWith('/stream')
-		? `${streamUrl.slice(0, -'/stream'.length)}/connect`
-		: `${streamUrl.replace(/\/$/, '')}/connect`;
+		? `${streamUrl.slice(0, -'/stream'.length)}/${control}`
+		: `${streamUrl.replace(/\/$/, '')}/${control}`;
 
 /**
  * Creates the browser runtime for the session the host declared.
@@ -151,20 +124,44 @@ export const createBrowserWorkspaceRuntime = (
 		releaseId: ReleaseId.make(options.releaseId ?? session.releaseId)
 	});
 	const bolt = createBoltClient(scope, options.transport ?? browserTransport);
-	const sync: SyncClient = createSyncClient({
+	const syncScope: BrowserSyncScope = { workspaceId: session.workspaceId, ...scope };
+	let acceptSettlements: (outcomes: Parameters<MutationSettlements['accept']>[0]) => void =
+		() => undefined;
+	const machine = createSyncClient({
+		scope: syncScope,
+		onOutcomes: (outcomes) => acceptSettlements(outcomes),
+		onError: (cause) => console.warn('[bolt] sync', cause)
+	});
+	const settlements = createMutationSettlements(() => machine);
+	acceptSettlements = settlements.accept;
+	const broker = createBrowserSyncBroker({
+		election: { syncPrincipal: session.syncPrincipal },
 		streamUrl: session.syncStreamUrl,
-		http: createSyncHttpDriver({
-			connectUrl: connectUrlOf(session.syncStreamUrl),
+		onError: (cause) => console.warn('[bolt] sync broker', cause)
+	});
+	const binding = broker.attachWorkspace({
+		scope: syncScope,
+		controls: createSyncHttpDriver({
+			registrationUrl: syncControlUrlOf(session.syncStreamUrl, 'connect'),
+			extensionUrl: syncControlUrlOf(session.syncStreamUrl, 'extend'),
+			authorization: () => `Bearer ${workspaceSession().credential}`,
 			push: async ({ connectionId, ...request }, signal) => {
 				await session.transport.command('collections.mutate', request, signal, {
 					[SYNC_CONNECTION_HEADER]: connectionId
 				});
 			}
-		}),
-		onOutcomes: (outcomes) => settlements.accept(outcomes),
-		onError: (cause) => console.warn('[bolt] sync', cause)
+		})
 	});
-	const settlements = createMutationSettlements(() => sync);
+	const detach = machine.attach(binding.attachment);
+	const sync: SyncClient = {
+		...machine,
+		shutdown: (message) => {
+			machine.shutdown(message);
+			detach();
+			binding.close();
+			broker.close();
+		}
+	};
 	sync.start();
 	const runtime: {
 		bolt: BoltClient;

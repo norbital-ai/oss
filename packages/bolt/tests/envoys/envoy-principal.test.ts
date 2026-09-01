@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import {
 	automationSubject,
 	envoyPrincipalId,
@@ -54,7 +54,7 @@ describe('An envoy decides who answers, never what they may reach', () => {
 	 * The invariant, asserted from both directions.
 	 *
 	 * An envoy's declared policies are the complete answer to what any turn on it may reach. Matching
-	 * a sender to an account changes who the turn *is* — so that `${requestor.id}` narrows
+	 * a sender to an account changes who the turn *is* — so that `subject.id` narrows
 	 * to their own rows — and must change nothing about capability. `policies` and `teamPath` are the
 	 * only fields `AccessControl` resolves authority from, which is why they are what this asserts on.
 	 */
@@ -285,19 +285,43 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 	});
 
 	/**
-	 * The two columns `conversation-selector.ts` has always read and nothing ever wrote.
-	 *
-	 * `chat_session` carried neither, so `visibility` was always `undefined`, the group bucket
-	 * was permanently empty, and a public envoy's threads never reached the admin inbox they were
-	 * routed to. A default of `personal` *is* the backfill: every conversation that already exists is
-	 * a web-agent one.
+	 * A Task owns durable agent authority; transport tables own provider delivery and progress.
+	 * An Envoy Task is attributed by `subject_id` and `agent_id`, routed by its typed audience and
+	 * workbench, and never carries transport cursor state inside the Task lifecycle row.
 	 */
-	it('creates visibility, envoy ownership, and transport progress on chat_session', () => {
+	it('creates Task ownership and keeps transport progress in Envoy projections', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		const sql = steps.find(({ id }) => id === 'collection:chat_session')?.sql ?? '';
-		expect(sql).toContain('"visibility" text default \'personal\' not null');
-		expect(sql).toContain('"envoy_key" text');
-		expect(sql).toContain('"transport_message_key" text');
-		expect(sql).toContain('"transport_progress" text');
+		const task = steps.find(({ id }) => id === 'collection:agent_task')?.sql ?? '';
+		for (const field of [
+			'"workbench_id" text not null',
+			'"subject_id" text not null',
+			'"agent_id" text not null',
+			'"audience" text not null',
+			'"parent_id" uuid',
+			'"status" text not null',
+			'"epoch" integer not null'
+		])
+			expect(task).toContain(field);
+		expect(task).not.toContain('"transport_conversation_id"');
+		expect(task).not.toContain('"external_message_id"');
+		expect(task).not.toContain('"receipt_key"');
+
+		const inbound = steps.find(({ id }) => id === 'collection:bolt_envoy_inbound')?.sql ?? '';
+		for (const field of [
+			'"envoy_name" text not null',
+			'"conversation_id" text not null',
+			'"transport_conversation_id" text not null',
+			'"external_message_id" text not null',
+			'"receipt_key" text not null',
+			'"status" text default \'pending\' not null',
+			'"answered_at" timestamp with time zone'
+		])
+			expect(inbound).toContain(field);
+
+		const receipts = steps.find(({ id }) => id === 'collection:bolt_envoy_receipts')?.sql ?? '';
+		expect(receipts).toContain('"envoy_name" text not null');
+		expect(receipts).toContain('"conversation_id" text not null');
+		expect(receipts).toContain('"direction" text not null');
+		expect(receipts).toContain('"receipt_key" text');
 	});
 });

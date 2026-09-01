@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { policySql } from '../../src/authoring/policy-sql.js';
-import { approvalRefusal } from '../../src/compiler/approval-checks.js';
+import { approvalRefusal } from '../../src/authoring/approval-validation.js';
 import { grantScopeProblems } from '../../src/runtime/access/access-control.js';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
 
@@ -59,7 +58,7 @@ describe('an authored grant’s row scope', () => {
 			policy: 'employee',
 			collection: 'time_entries',
 			action: 'read',
-			column: 'employee_id'
+			column: 'policy.employee.time_entries.read.employee_id'
 		});
 	});
 
@@ -71,7 +70,7 @@ describe('an authored grant’s row scope', () => {
 		expect(refusal).toContain('time_entries');
 	});
 
-	it('accepts a declared column, a system column, and a reference’s storage column', () => {
+	it('accepts declared fields, system columns, and a structured logical reference', () => {
 		expect(
 			grantScopeProblems(
 				workspace([
@@ -84,22 +83,22 @@ describe('an authored grant’s row scope', () => {
 					{
 						collection: 'time_entries',
 						action: 'delete',
-						where: { source__employment_id: 'e1' }
+						where: { source: { kind: { eq: 'EMPLOYMENT' } } }
 					}
 				])
 			)
 		).toEqual([]);
 	});
 
-	/**
-	 * A polymorphic reference has no single persisted column, so naming the *field* would compile to
-	 * an identifier the table does not carry — precisely the case that used to fail loudly.
-	 */
-	it('refuses a polymorphic reference named by its field instead of its storage column', () => {
+	it('refuses generated reference storage columns at the authored policy boundary', () => {
 		const problems = grantScopeProblems(
-			workspace([{ collection: 'time_entries', action: 'read', where: { source: 'e1' } }])
+			workspace([
+				{ collection: 'time_entries', action: 'read', where: { source__employment_id: 'e1' } }
+			])
 		);
-		expect(problems.map(({ column }) => column)).toEqual(['source']);
+		expect(problems.map(({ column }) => column)).toEqual([
+			'policy.employee.time_entries.read.source__employment_id'
+		]);
 	});
 
 	it('reads through AND, OR and NOT to the columns underneath them', () => {
@@ -117,24 +116,23 @@ describe('an authored grant’s row scope', () => {
 				}
 			])
 		);
-		expect(problems.map(({ column }) => column)).toEqual(['missing_column']);
+		expect(problems.map(({ column }) => column)).toEqual([
+			'policy.employee.time_entries.read.AND[1].OR[1].NOT.missing_column'
+		]);
 	});
 
-	/**
-	 * A `policySql` predicate brings its own tables and aliases — `"team" t`, `me."id"` — so nothing here
-	 * can tell one of its identifiers from a column of the collection. Checking it would refuse
-	 * correct policies; qualifying it would rewrite SQL the author wrote. It is the author's, and
-	 * the check says so by leaving it alone.
-	 */
-	it('leaves a policySql predicate alone, and still checks structured predicates', () => {
+	it('rejects every serialized SQL token key and structured unknown fields', () => {
 		const problems = grantScopeProblems(
 			workspace([
 				{
 					collection: 'time_entries',
 					action: 'read',
-					where: policySql(
-						'"id" in (select u."id" from "user" u where u."team_id" = ${requestor.id})'
-					)
+					where: { kind: 'policy-sql', statement: '"id" is not null' }
+				},
+				{
+					collection: 'time_entries',
+					action: 'read',
+					where: { statement: '"id" is not null', kind: 'policy-sql' }
 				},
 				{
 					collection: 'time_entries',
@@ -143,15 +141,24 @@ describe('an authored grant’s row scope', () => {
 				}
 			])
 		);
-		expect(problems.map(({ column }) => column)).toEqual(['nonexistent']);
+		expect(problems.map(({ column }) => column)).toEqual([
+			'policy.employee.time_entries.read.kind',
+			'policy.employee.time_entries.read.statement',
+			'policy.employee.time_entries.read.nonexistent'
+		]);
 	});
 
-	it('says nothing about a grant on a collection this workspace does not declare', () => {
-		expect(
-			grantScopeProblems(
-				workspace([{ collection: 'invented', action: 'read', where: { anything: 1 } }])
-			)
-		).toEqual([]);
+	it('fails closed for a grant on a collection this workspace does not declare', () => {
+		const problems = grantScopeProblems(
+			workspace([{ collection: 'invented', action: 'read', where: { anything: 1 } }])
+		);
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toMatchObject({
+			policy: 'employee',
+			collection: 'invented',
+			action: 'read',
+			column: 'policy.employee.invented.read'
+		});
 	});
 
 	it('accepts a grant with no row scope at all', () => {

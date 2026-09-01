@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defineModel, file } from '../../src/authoring/index.js';
-import { describeModel } from '../../src/authoring/model-introspection.js';
-import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
+import { defineModel, file, text } from '../../src/authoring/index.js';
+import {
+	collectionCatalogEntry,
+	compileModel,
+	describeModel
+} from '../../src/authoring/model-introspection.js';
+import { collection } from '../../src/authoring/workspace-schema.js';
 
 /**
  * Two more options a workspace declared and the compiler discarded.
@@ -40,13 +44,25 @@ describe('file({ mimeTypes })', () => {
 		);
 		expect(fields.contract?.type).toBe('json');
 	});
+
+	it('projects the accept list into the client catalog', () => {
+		const compiled = compileModel(
+			collection({ name: 'documents', fields: {} }),
+			defineModel({ contract: file({ mimeTypes: ['application/pdf'] }) })
+		);
+		expect(collectionCatalogEntry(compiled, []).fields[0]?.mimeTypes).toEqual([
+			'application/pdf'
+		]);
+	});
 });
 
 describe('recordLabel', () => {
-	const catalogFor = (label: string) =>
-		extractCollectionCatalog(
-			'payslips',
-			`export default defineModel({ code: text(), name: text() }, { recordLabel: ${label}, icon: 'lucide:receipt' });`,
+	const catalogFor = (label: string | ReadonlyArray<string>) =>
+		collectionCatalogEntry(
+			compileModel(
+				collection({ name: 'payslips', fields: {} }),
+				defineModel({ code: text(), name: text() }, { recordLabel: label })
+			),
 			[]
 		).recordLabel;
 
@@ -57,7 +73,7 @@ describe('recordLabel', () => {
 	 * whichever column came first.
 	 */
 	it('recovers the multi-column form its own type permits', () => {
-		expect(catalogFor(`['code', 'name']`)).toBe("code + ' · ' + name");
+		expect(catalogFor(['code', 'name'])).toBe("code + ' · ' + name");
 	});
 
 	/**
@@ -66,18 +82,18 @@ describe('recordLabel', () => {
 	 * whole title. A bare list would reach it as one expression it cannot parse.
 	 */
 	it('joins terms the way the resolver splits them', () => {
-		expect(/\s\+\s'\s·\s'\s\+\s/.test(catalogFor(`['a', 'b', 'c']`) ?? '')).toBe(true);
+		expect(/\s\+\s'\s·\s'\s\+\s/.test(catalogFor(['a', 'b', 'c']) ?? '')).toBe(true);
 	});
 
 	it('leaves the single-column form exactly as declared', () => {
-		expect(catalogFor(`'month'`)).toBe('month');
-		expect(catalogFor(`"month"`)).toBe('month');
+		expect(catalogFor('month')).toBe('month');
 	});
 
 	it('reports no label when a model declares none', () => {
-		expect(
-			extractCollectionCatalog('payslips', 'export default defineModel({ code: text() });', [])
-				.recordLabel
-		).toBeUndefined();
+		const compiled = compileModel(
+			collection({ name: 'payslips', fields: {} }),
+			defineModel({ code: text() })
+		);
+		expect(collectionCatalogEntry(compiled, []).recordLabel).toBeUndefined();
 	});
 });

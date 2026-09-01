@@ -65,7 +65,7 @@ export const live = (): number => keep(1);
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	assert.equal(result.receipt.tiers.typeAware, true);
 	assert.equal(rules(result.findings, 'LEGACY2'), 0);
 });
@@ -84,7 +84,7 @@ export const three = (value: Stale): number => value.id;
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	const found = result.findings.filter((finding) => finding.rule === 'LEGACY2');
 	assert.equal(found.length, 3);
 	assert.match(found[0]?.location ?? '', /^src\/main\.ts:3: .*\[symbol=stale declared=/);
@@ -105,7 +105,7 @@ test('a repository with no program source says the tier did not run rather than 
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	// `.svelte` is outside the tier: the compiler cannot put a component in a program. The flag
 	// reports that honestly instead of claiming coverage the tier does not have.
 	assert.equal(result.receipt.tiers.typeAware, false);
@@ -115,7 +115,7 @@ test('an exact, reasoned allowance suppresses its rule and nothing else', async 
 	const root = repository('allowance-exact', {
 		'package.json': '{"name":"al","type":"module","exports":"./src/main.ts"}',
 		'doctor.config.ts': `import { defineConfig } from '@norbital-ai/doctor';
-export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] });
+export default defineConfig({ packs: ['norbital'] });
 `,
 		'src/main.ts': `export const speak = (): void => {
 	// repository-health:allow LOG1 -- this CLI writes its report to stdout by contract
@@ -126,7 +126,7 @@ export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] 
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	const found = result.findings.filter((finding) => finding.rule === 'LOG1');
 	assert.equal(found.length, 1);
 	assert.match(found[0]?.location ?? '', /^src\/main\.ts:4: /);
@@ -136,7 +136,7 @@ test('a blanket, prefix-matched or unexplained allowance suppresses nothing', as
 	const root = repository('allowance-invalid', {
 		'package.json': '{"name":"al","type":"module","exports":"./src/main.ts"}',
 		'doctor.config.ts': `import { defineConfig } from '@norbital-ai/doctor';
-export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] });
+export default defineConfig({ packs: ['norbital'] });
 `,
 		'src/main.ts': `export const speak = (): void => {
 	// repository-health:allow LOG1
@@ -153,7 +153,7 @@ export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] 
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	assert.equal(rules(result.findings, 'LOG1'), 4);
 });
 
@@ -161,7 +161,7 @@ test('an allowance on the reported line itself counts', async (context) => {
 	const root = repository('allowance-trailing', {
 		'package.json': '{"name":"al","type":"module","exports":"./src/main.ts"}',
 		'doctor.config.ts': `import { defineConfig } from '@norbital-ai/doctor';
-export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] });
+export default defineConfig({ packs: ['norbital'] });
 `,
 		'src/main.ts': `export const speak = (): void => {
 	console.log('report'); // repository-health:allow LOG1 -- stdout is this command's output
@@ -170,6 +170,6 @@ export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] 
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root, semantic: { disabled: true } });
+	const result = await audit({ root });
 	assert.equal(rules(result.findings, 'LOG1'), 0);
 });

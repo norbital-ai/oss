@@ -7,8 +7,10 @@ import {
 	type CollectionHooks,
 	type MutateGraph
 } from '../../src/authoring/contracts-schema.js';
+import { AuthoredRefusal } from '../../src/authoring/refusal.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -33,7 +35,7 @@ const definition = workspace({
 		collection({
 			name: 'order_lines',
 			fields: {
-				order_id: field.string({ required: true }),
+				order_id: field.string({ required: false }),
 				sku: field.string({ required: true })
 			}
 		})
@@ -44,8 +46,9 @@ const definition = workspace({
 			source: 'orders',
 			target: 'order_lines',
 			cardinality: 'many',
-			from: { collection: 'order_lines', column: 'order_id' },
-			to: { collection: 'orders', column: 'id' }
+			from: { collection: 'orders', column: 'id' },
+			to: { collection: 'order_lines', column: 'order_id' },
+			cascade: true
 		}
 	],
 	apps: [app({ name: 'nested', label: 'Nested' })],
@@ -64,8 +67,12 @@ const definition = workspace({
 			effect: 'allow',
 			grants: [
 				{ collection: 'orders', action: 'create' },
+				{ collection: 'orders', action: 'update' },
+				{ collection: 'orders', action: 'delete' },
 				{ collection: 'orders', action: 'read' },
 				{ collection: 'order_lines', action: 'create' },
+				{ collection: 'order_lines', action: 'update' },
+				{ collection: 'order_lines', action: 'delete' },
 				{ collection: 'order_lines', action: 'read' }
 			]
 		})
@@ -92,12 +99,12 @@ interface NestedWriteSchema {
 		readonly order_lines: {
 			readonly $inferSelect: {
 				readonly id: string;
-				readonly order_id: string;
+				readonly order_id: string | null;
 				readonly sku: string;
 			};
 			readonly $inferInsert: {
 				readonly id?: string;
-				readonly order_id: string;
+				readonly order_id?: string | null;
 				readonly sku: string;
 			};
 		};
@@ -146,6 +153,72 @@ const write = (values: Record<string, unknown>) =>
 		return yield* collections.mutate(EffectId.make('nested-1'), adminSubject, 'orders', [values]);
 	});
 
+const createLine = (runtime: BoltTestRuntime, effectId: string, values: Record<string, unknown>) =>
+	runtime.runtime.runPromise(
+		Effect.gen(function* () {
+			const collections = yield* Collections.Service;
+			const result = yield* collections.mutate(
+				EffectId.make(effectId),
+				adminSubject,
+				'order_lines',
+				[values]
+			);
+			const id = result.records[0]?.['id'];
+			if (typeof id !== 'string') throw new Error('created line has no id');
+			return id;
+		})
+	);
+
+const createOrder = (runtime: BoltTestRuntime, effectId: string, reference: string) =>
+	runtime.runtime.runPromise(
+		Effect.gen(function* () {
+			const collections = yield* Collections.Service;
+			const result = yield* collections.mutate(EffectId.make(effectId), adminSubject, 'orders', [
+				{ reference }
+			]);
+			const id = result.records[0]?.['id'];
+			if (typeof id !== 'string') throw new Error('created order has no id');
+			return id;
+		})
+	);
+
+const claimLinesAuthored = (lineIds: ReadonlyArray<string>, refuseSku?: string) => ({
+	...emptyAuthoredRuntime,
+	hooks: {
+		orders: authoredHooks<NestedWriteSchema, 'orders'>({
+			mutate: {
+				perRecord: {
+					before: {
+						description: 'Attaches explicitly selected existing lines to the new order.',
+						handler: ({ input }) =>
+							({
+								...input,
+								order_line_order: lineIds.map((id) => ({ id }))
+							}) as MutateGraph<NestedWriteSchema, 'orders'>
+					}
+				}
+			}
+		}),
+		...(refuseSku === undefined
+			? {}
+			: {
+					order_lines: authoredHooks<NestedWriteSchema, 'order_lines'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Refuses the selected stored line to prove graph rollback.',
+									handler: ({ input, existing }) =>
+										existing?.sku === refuseSku
+											? Effect.fail(new AuthoredRefusal({ message: 'claimed line refused' }))
+											: Effect.succeed(input)
+								}
+							}
+						}
+					})
+				})
+	}
+});
+
 describe('a nested write', () => {
 	it('commits the parent and its children in one transaction', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
@@ -166,6 +239,62 @@ describe('a nested write', () => {
 		// The link the author never wrote: filled from the parent's assigned id.
 		expect(lines.map((row) => row['order_id'])).toEqual([orders[0]!['id'], orders[0]!['id']]);
 		expect(writes).toBeLessThan(5);
+	}, 60_000);
+
+	it('captures every nested create and cascade delete from the committed graph', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored });
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const syncCommit = yield* SyncCommit.Service;
+				const created = yield* collections.mutate(
+					EffectId.make('nested-capture-create'),
+					adminSubject,
+					'orders',
+					[{ reference: 'ORD-CAPTURE' }]
+				);
+				const createBatch = yield* syncCommit.drainChanges;
+				const orderId = String(created.records[0]?.['id']);
+				yield* collections.delete(
+					EffectId.make('nested-capture-delete'),
+					adminSubject,
+					'orders',
+					orderId
+				);
+				const deleteBatch = yield* syncCommit.drainChanges;
+				return { orderId, createBatch, deleteBatch };
+			})
+		);
+
+		expect(result.createBatch).toHaveLength(3);
+		expect(result.createBatch).toContainEqual({
+			collection: 'orders',
+			id: result.orderId,
+			operation: 'insert',
+			after: {}
+		});
+		const createdLines = result.createBatch.filter((change) => change.collection === 'order_lines');
+		expect(createdLines).toHaveLength(2);
+		expect(
+			createdLines.every(
+				(change) => change.operation === 'insert' && change.after?.['order_id'] === result.orderId
+			)
+		).toBe(true);
+
+		expect(result.deleteBatch).toHaveLength(3);
+		expect(result.deleteBatch).toContainEqual({
+			collection: 'orders',
+			id: result.orderId,
+			operation: 'delete',
+			before: {}
+		});
+		const deletedLines = result.deleteBatch.filter((change) => change.collection === 'order_lines');
+		expect(deletedLines).toHaveLength(2);
+		expect(
+			deletedLines.every(
+				(change) => change.operation === 'delete' && change.before?.['order_id'] === result.orderId
+			)
+		).toBe(true);
 	}, 60_000);
 
 	it('refuses a key that is neither a column nor a declared relation, rather than dropping it', async () => {
@@ -204,6 +333,137 @@ describe('a nested write', () => {
 		// And nothing was written, because the refusal happened before the transaction.
 		const orders = await harness.database.query('select id from orders');
 		expect(orders).toHaveLength(0);
+	}, 60_000);
+
+	it('lets a trusted authored graph claim a null-owned child without overwriting omitted fields', async () => {
+		const claimedIds: Array<string> = [];
+		harness = await makeBoltTestRuntime(definition, {
+			authored: claimLinesAuthored(claimedIds)
+		});
+		const lineId = await createLine(harness, 'claim-null-owned-seed', {
+			sku: 'attendance-only-facts'
+		});
+		const before = await harness.database.query(
+			'select id, order_id, sku from order_lines where id = $1',
+			[lineId]
+		);
+		expect(before).toEqual([{ id: lineId, order_id: null, sku: 'attendance-only-facts' }]);
+		claimedIds.push(lineId);
+
+		const orderId = await createOrder(harness, 'claim-null-owned', 'ROSTER-2026-01');
+		expect(
+			await harness.database.query('select id, order_id, sku from order_lines where id = $1', [
+				lineId
+			])
+		).toEqual([{ id: lineId, order_id: orderId, sku: 'attendance-only-facts' }]);
+	}, 60_000);
+
+	it('refuses a browser-supplied attempt to claim a null-owned child', async () => {
+		harness = await makeBoltTestRuntime(definition);
+		const lineId = await createLine(harness, 'browser-claim-seed', { sku: 'must-stay-unowned' });
+
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(write({ reference: 'BROWSER-CLAIM', order_line_order: [{ id: lineId }] }))
+		);
+
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+		expect(
+			await harness.database.query('select order_id, sku from order_lines where id = $1', [lineId])
+		).toEqual([{ order_id: null, sku: 'must-stay-unowned' }]);
+	}, 60_000);
+
+	it('refuses a trusted authored graph that names a child owned by another parent', async () => {
+		const claimedIds: Array<string> = [];
+		harness = await makeBoltTestRuntime(definition, {
+			authored: claimLinesAuthored(claimedIds)
+		});
+		const existingOwnerId = await createOrder(harness, 'owned-elsewhere-parent', 'OWNER');
+		const lineId = await createLine(harness, 'owned-elsewhere-line', {
+			order_id: existingOwnerId,
+			sku: 'owned-elsewhere'
+		});
+		claimedIds.push(lineId);
+
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('owned-elsewhere-claim'),
+						adminSubject,
+						'orders',
+						[{ reference: 'ATTEMPTED-NEW-OWNER' }]
+					);
+				})
+			)
+		);
+
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id, reference from orders')).toEqual([
+			{ id: existingOwnerId, reference: 'OWNER' }
+		]);
+		expect(
+			await harness.database.query('select order_id from order_lines where id = $1', [lineId])
+		).toEqual([{ order_id: existingOwnerId }]);
+	}, 60_000);
+
+	it('refuses a nonexistent explicit child id instead of forging a nested create', async () => {
+		const missingId = '00000000-0000-4000-8000-000000000404';
+		harness = await makeBoltTestRuntime(definition, {
+			authored: claimLinesAuthored([missingId])
+		});
+
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('missing-child-claim'),
+						adminSubject,
+						'orders',
+						[{ reference: 'MISSING-CHILD' }]
+					);
+				})
+			)
+		);
+
+		expect(outcome._tag).toBe('Failure');
+		expect(JSON.stringify(outcome)).toContain('cannot be claimed');
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+		expect(await harness.database.query('select id from order_lines')).toEqual([]);
+	}, 60_000);
+
+	it('rolls back every claim and the parent when any claimed child hook refuses', async () => {
+		const lineIds: Array<string> = [];
+		harness = await makeBoltTestRuntime(definition, {
+			authored: claimLinesAuthored(lineIds, 'refuse-this-line')
+		});
+		lineIds.push(
+			await createLine(harness, 'claim-rollback-first', { sku: 'would-have-been-claimed' }),
+			await createLine(harness, 'claim-rollback-second', { sku: 'refuse-this-line' })
+		);
+
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('claim-rollback-parent'),
+						adminSubject,
+						'orders',
+						[{ reference: 'MUST-ROLL-BACK' }]
+					);
+				})
+			)
+		);
+
+		expect(outcome._tag).toBe('Failure');
+		expect(JSON.stringify(outcome)).toContain('claimed line refused');
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+		expect(
+			await harness.database.query('select order_id, sku from order_lines order by sku')
+		).toEqual([
+			{ order_id: null, sku: 'refuse-this-line' },
+			{ order_id: null, sku: 'would-have-been-claimed' }
+		]);
 	}, 60_000);
 });
 

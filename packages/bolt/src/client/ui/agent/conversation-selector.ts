@@ -1,152 +1,85 @@
-import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
-import type { PlatformEnvoy } from '#lib/client/ui/state/platform.js';
+import { Option, Schema } from 'effect';
+import {
+	AgentId,
+	PlanId,
+	RunId,
+	TaskAudience,
+	TaskId,
+	TaskStatus
+} from '@norbital-ai/bolt-protocol';
 
-/**
- * The web agent's own tab, and a name `envoy()` refuses so nothing can shadow it.
- *
- * It is not an envoy and has no declaration: the web agent is defined entirely by who is using it.
- * This constant is the selector's entry for its threads, and the reason an envoy called `web` is a
- * build error rather than a tab that silently never appears.
- */
+/** Stable ID of the browser-owned system agent. */
 export const WEB_AGENT_ID = 'web';
 
-const SELECTOR_LABEL_KEYS = ['web', 'users', 'groups', 'envoyFallback'] as const;
-/**
- * The three kinds of thread, and the column that finally carries them.
- *
- * `chat_session` had neither `visibility` nor `envoy_key` — so every session read as
- * `undefined`, the group bucket was permanently empty, and a public envoy's threads never reached
- * the admin inbox this file routes them to. Both columns exist now and `Agents.openConversation`
- * writes them, which is what makes every branch below reachable.
- */
-const CONVERSATION_VISIBILITIES = new Set<string>(['personal', 'envoy_dm', 'envoy_group']);
+const AgentTask = Schema.Struct({
+	id: TaskId,
+	agent_id: AgentId,
+	audience: TaskAudience,
+	parent_id: Schema.NullOr(TaskId),
+	status: TaskStatus,
+	active_plan_id: Schema.NullOr(PlanId),
+	active_run_id: Schema.NullOr(RunId)
+});
+export type AgentTask = typeof AgentTask.Type;
 
-type SelectorLabels = Record<(typeof SELECTOR_LABEL_KEYS)[number], string>;
+const decodeAgentTask = Schema.decodeUnknownOption(AgentTask);
 
-/**
- * The `chat_session` fields the web agent's selector reads.
- *
- * Composed from the platform row rather than redeclared: the wire already types this row, and a
- * second shape beside it would drift (it once promised `platform` and `external_thread_id`, which
- * the model never carried — so every tab there fell back to the default glyph, and every search
- * appended two always-empty parts).
- */
-type ConversationSession = Pick<
-	CollectionRegistryFor<PlatformSchema>['chat_session']['row'],
-	'conversation_id' | 'user_id' | 'title' | 'visibility' | 'envoy_key'
->;
-
-type ConversationScope = Readonly<{
-	readonly scopeUserId: string | null;
-	readonly currentUserId: string | null;
-	readonly isAdmin: boolean;
-	readonly publicEnvoyKeys: ReadonlySet<string>;
-}>;
-
-type AccessibleEnvoysInput = Readonly<{
-	readonly sessions: readonly ConversationSession[];
-	readonly labels: SelectorLabels;
-	readonly declaredEnvoys: readonly PlatformEnvoy[];
-	readonly scope: ConversationScope;
-}>;
-
-/** Tab id for a session: personal stays on web, otherwise the envoy it arrived on. */
-export function sessionEnvoyId(
-	session: ConversationSession,
-	labels: Pick<SelectorLabels, 'envoyFallback'>
-): string {
-	if (session.visibility === 'personal') return WEB_AGENT_ID;
-	return session.envoy_key ?? labels.envoyFallback;
-}
-
-/** Whether this session belongs in the current admin/member conversation scope. */
-export function sessionVisibleInScope(
-	session: ConversationSession,
-	scope: ConversationScope
-): boolean {
-	if (!CONVERSATION_VISIBILITIES.has(session.visibility)) return false;
-	const isPublicEnvoy = session.envoy_key != null && scope.publicEnvoyKeys.has(session.envoy_key);
-	if (isPublicEnvoy) {
-		return scope.isAdmin && scope.scopeUserId === scope.currentUserId;
-	}
-	if (session.visibility === 'envoy_group') {
-		return !scope.isAdmin;
-	}
-	if (session.visibility === 'personal' && scope.scopeUserId == null) return true;
-	return scope.scopeUserId != null && session.user_id === scope.scopeUserId;
-}
-
-/**
- * The declared envoys an outsider can reach without an account.
- *
- * Split out of the panel so the rule sits with the other envoy rules and can be exercised on its
- * own: an envoy's `audience` is the only thing that decides whether its threads belong in the admin
- * inbox, and the panel used to derive that set inline from a manifest projection that was always
- * empty.
- */
-export function publicEnvoyNames(envoys: readonly PlatformEnvoy[]): ReadonlySet<string> {
-	return new Set(envoys.filter((envoy) => envoy.audience === 'public').map(({ name }) => name));
-}
-
-/** Tabs the current scope may inspect: Web, allowed manifest entries, plus any scoped thread. */
-export function listAccessibleEnvoys(input: AccessibleEnvoysInput) {
-	const tabs = new Map<
-		string,
-		{ readonly id: string; readonly label: string; readonly icon: string }
-	>([
-		[
-			WEB_AGENT_ID,
-			{ id: WEB_AGENT_ID, label: input.labels.web, icon: envoyIcon(WEB_AGENT_ID, null) }
-		]
-	]);
-
-	for (const envoy of input.declaredEnvoys) {
-		const publicOnlyOnOwnAdminInbox =
-			envoy.audience === 'public' &&
-			!(input.scope.isAdmin && input.scope.scopeUserId === input.scope.currentUserId);
-		if (envoy.name === WEB_AGENT_ID || publicOnlyOnOwnAdminInbox) continue;
-		tabs.set(envoy.name, {
-			id: envoy.name,
-			label: envoy.name,
-			icon: envoyIcon(envoy.name, envoy.transport)
-		});
-	}
-
-	for (const session of input.sessions) {
-		if (!CONVERSATION_VISIBILITIES.has(session.visibility)) continue;
-		const id = sessionEnvoyId(session, input.labels);
-		if (tabs.has(id)) continue;
-		tabs.set(id, {
-			id,
-			label: id === WEB_AGENT_ID ? input.labels.web : id,
-			icon: envoyIcon(id, null)
-		});
-	}
-
-	return [...tabs.values()].sort((left, right) => {
-		if (left.id === WEB_AGENT_ID) return -1;
-		if (right.id === WEB_AGENT_ID) return 1;
-		return left.label.localeCompare(right.label);
+/** Rejects rows that do not satisfy the one canonical durable Task shape. */
+export function projectAgentTasks(rows: readonly unknown[]): AgentTask[] {
+	return rows.flatMap((row) => {
+		const decoded = decodeAgentTask(row);
+		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
 }
 
-/** Groups scoped sessions into envoy tabs and per-tab conversation rows. */
-export function buildConversationSelector(input: {
-	readonly sessions: readonly ConversationSession[];
-	readonly labels: SelectorLabels;
-}) {
-	const byEnvoy = new Map<string, ConversationSession[]>();
-	for (const session of input.sessions) {
-		if (!CONVERSATION_VISIBILITIES.has(session.visibility)) continue;
-		const id = sessionEnvoyId(session, input.labels);
-		byEnvoy.set(id, [...(byEnvoy.get(id) ?? []), session]);
+type TaskSelectorLabels = Readonly<{
+	personal: string;
+	workbench: string;
+}>;
+
+type TaskSelectorAgent = Readonly<{
+	id: string;
+	label: string;
+	icon: string;
+}>;
+
+type TaskSelectorHeading = Readonly<{
+	kind: 'heading';
+	id: string;
+	label: string;
+}>;
+
+type TaskSelectorTask = Readonly<{
+	kind: 'task';
+	id: string;
+	title: string;
+	icon: string;
+	searchText: string;
+	audience: 'personal' | 'workbench';
+}>;
+
+type TaskSelectorRow = TaskSelectorHeading | TaskSelectorTask;
+
+export type TaskSelectorModel = Readonly<{
+	agents: readonly TaskSelectorAgent[];
+	rowsByAgent: Readonly<Record<string, readonly TaskSelectorRow[]>>;
+}>;
+
+/** Groups policy-filtered root Tasks by canonical agent and audience. */
+export function buildTaskSelector(input: {
+	readonly tasks: readonly AgentTask[];
+	readonly labels: TaskSelectorLabels;
+}): TaskSelectorModel {
+	const byAgent = new Map<string, AgentTask[]>();
+	for (const task of input.tasks) {
+		byAgent.set(task.agent_id, [...(byAgent.get(task.agent_id) ?? []), task]);
 	}
 
-	const tabs = [...byEnvoy.entries()]
-		.map(([id]) => ({
+	const agents = [...byAgent.keys()]
+		.map((id) => ({
 			id,
-			label: id === WEB_AGENT_ID ? input.labels.web : id,
-			icon: envoyIcon(id, null)
+			label: id === WEB_AGENT_ID ? 'Web' : id,
+			icon: id === WEB_AGENT_ID ? 'lucide:monitor' : 'lucide:bot'
 		}))
 		.sort((left, right) => {
 			if (left.id === WEB_AGENT_ID) return -1;
@@ -154,70 +87,49 @@ export function buildConversationSelector(input: {
 			return left.label.localeCompare(right.label);
 		});
 
-	const rowsByEnvoy = Object.fromEntries(
-		tabs.map((tab) => {
-			const sessions = byEnvoy.get(tab.id) ?? [];
-			const audiences = [
-				{
-					audience: 'user',
-					label: input.labels.users,
-					sessions: sessions.filter(
-						(session) => session.visibility === 'personal' || session.visibility === 'envoy_dm'
-					)
-				},
-				{
-					audience: 'group',
-					label: input.labels.groups,
-					sessions: sessions.filter((session) => session.visibility === 'envoy_group')
-				}
-			] as const;
-			const showHeadings = audiences.every((audience) => audience.sessions.length > 0);
-			const rows = audiences.flatMap((audience) => [
-				...(showHeadings && audience.sessions.length > 0
-					? [
-							{
-								kind: 'heading' as const,
-								id: `heading:${tab.id}:${audience.audience}s`,
-								label: audience.label,
-								level: 0 as const
-							}
-						]
-					: []),
-				...audience.sessions.map((session) => ({
-					kind: 'conversation' as const,
-					id: session.conversation_id,
-					title: session.title,
-					icon: audience.audience === 'group' ? 'lucide:users-round' : 'lucide:message-square',
-					searchText: [session.title, session.envoy_key]
-						.filter((part): part is string => Boolean(part && part.length > 0))
-						.join(' '),
-					audience: audience.audience
-				}))
-			]);
-			return [tab.id, rows] as const;
-		})
-	);
-
-	return {
-		envoys: tabs,
-		showTabs: tabs.length > 1,
-		rowsByEnvoy
-	};
-}
-
-export type ConversationSelectorModel = ReturnType<typeof buildConversationSelector>;
-
-/** Icon for a tab: web chrome, or the transport's mark. */
-function envoyIcon(tabId: string, platform: string | null): string {
-	if (tabId === WEB_AGENT_ID) return 'lucide:monitor';
-	switch (platform) {
-		case 'telegram':
-			return 'lucide:send';
-		case 'whatsapp':
-			return 'lucide:phone';
-		case 'discord':
-			return 'lucide:hash';
-		default:
-			return 'lucide:messages-square';
+	const rowsByAgent: Record<string, TaskSelectorRow[]> = {};
+	for (const agent of agents) {
+		const tasks = byAgent.get(agent.id) ?? [];
+		const personal = tasks.filter((task) => task.audience === 'personal');
+		const workbench = tasks.filter((task) => task.audience === 'workbench');
+		const showHeadings = personal.length > 0 && workbench.length > 0;
+		const rows: TaskSelectorRow[] = [];
+		if (showHeadings) {
+			rows.push({
+				kind: 'heading',
+				id: `heading:${agent.id}:personal`,
+				label: input.labels.personal
+			});
+		}
+		for (const task of personal) {
+			rows.push({
+				kind: 'task',
+				id: task.id,
+				title: `${task.status} · ${task.id.slice(0, 8)}`,
+				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
+				searchText: `${task.id} ${task.status} ${task.agent_id}`,
+				audience: 'personal'
+			});
+		}
+		if (showHeadings) {
+			rows.push({
+				kind: 'heading',
+				id: `heading:${agent.id}:workbench`,
+				label: input.labels.workbench
+			});
+		}
+		for (const task of workbench) {
+			rows.push({
+				kind: 'task',
+				id: task.id,
+				title: `${task.status} · ${task.id.slice(0, 8)}`,
+				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
+				searchText: `${task.id} ${task.status} ${task.agent_id}`,
+				audience: 'workbench'
+			});
+		}
+		rowsByAgent[agent.id] = rows;
 	}
+
+	return { agents, rowsByAgent };
 }

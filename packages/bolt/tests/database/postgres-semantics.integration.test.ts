@@ -10,7 +10,7 @@ import { custom, defineModel, text } from '../../src/authoring/models-schema.js'
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { provisioningStatements } from '../support/bolt-test-layer.js';
-import { compileWhere, makeWhereContext } from '../../src/runtime/collections/read/where.js';
+import { compileCollectionPredicate } from '../../src/runtime/access/effective-plan.js';
 
 /** A stable UUID for a readable fixture name — records are keyed by `id uuid`. */
 const rid = (name: string): string => {
@@ -179,8 +179,8 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 	 * Postgres answers `operator does not exist: text = uuid`. That is what took Leave → Overview down:
 	 * every seasonality read scoped to a company failed, and only the unscoped one worked.
 	 *
-	 * The SQL comes from `compileWhere` rather than being written here, so this cannot pass against a
-	 * join the compiler no longer emits.
+	 * The SQL comes from the effective-plan predicate compiler rather than being written here, so
+	 * this cannot pass against a join the compiler no longer emits.
 	 */
 	it('filters through a relation whose foreign key the plan renders as uuid', async () => {
 		const database = new PGlite({ extensions: { pg_trgm, btree_gist, vector } });
@@ -251,13 +251,15 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			otherEmployment
 		]);
 
-		const compiled = compileWhere(
-			{ leave_request_employment: { company_id: { eq: company } } },
-			makeWhereContext('leave_requests', leaveRequests.fields, definition)
-		);
+		const compiled = compileCollectionPredicate({
+			definition,
+			collection: 'leave_requests',
+			where: { leave_request_employment: { company_id: { eq: company } } },
+			qualifier: 'leave_requests'
+		});
 		if (Result.isFailure(compiled))
-			throw new Error(`compileWhere failed: ${compiled.failure.message}`);
-		const rendered = compiled.success.toQuery({
+			throw new Error(`compileCollectionPredicate failed: ${compiled.failure.message}`);
+		const rendered = compiled.success.sql.toQuery({
 			escapeName: (name) => `"${name.replaceAll('"', '""')}"`,
 			escapeParam: (index) => `$${index + 1}`,
 			escapeString: (value) => `'${value.replaceAll("'", "''")}'`

@@ -1,12 +1,12 @@
 import { Record as EffectRecord } from 'effect';
 import { compileModel } from '#lib/authoring/model-introspection.js';
-import { policySql } from '#lib/authoring/policy-sql.js';
 import { SYSTEM_COLLECTION_MODELS } from '#lib/authoring/system-models.js';
 import {
 	collection,
 	type CollectionDefinition,
 	type FieldDefinition,
-	type PolicyDeclaration
+	type PolicyDeclaration,
+	type RelationDefinition
 } from '#lib/authoring/workspace-schema.js';
 import { COLONY_SYSTEM_POLICY } from '#lib/runtime/access/system-principal.js';
 
@@ -44,12 +44,12 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	...IDENTITY_COLLECTIONS,
 	collections.approval_request,
 	collections.requestor,
-	collections.chat_session,
-	collections.chat_message,
-	collections.chat_message_part,
-	collections.agent_run,
-	collections.agent_lane,
+	collections.agent_task,
+	collections.agent_plan,
+	collections.agent_message,
 	collections.agent_inbox,
+	collections.agent_run,
+	collections.agent_usage,
 	collections.automation_run,
 	collections.bolt_notifications
 ]);
@@ -63,145 +63,179 @@ const SYSTEM_COLLECTIONS_BY_NAME = new Map(
 	SYSTEM_COLLECTIONS.map((definition) => [definition.name, definition] as const)
 );
 
-/**
- * The approval requests this subject raised.
- *
- * The `requestor` join table is the only record of who that was: `approval_request` carries the
- * collection, the record, the action and the status, and no requestor column at all, so "is this
- * mine" cannot be answered from the row itself. `Approvals.gate` writes exactly one `requestor`
- * row per request, in the same block that projects the `approval_request` row.
- *
- * `${requestor.id}` is **not** interpolated by JavaScript here — these are single-quoted
- * strings, so the literal token reaches the policy compiler, which binds `subject.userId` as a
- * parameter. `party` rather than `requestor` as the alias only because the table and the token
- * prefix share a spelling and a reader should not have to work out which is which.
- */
-const RAISED_BY_SUBJECT =
-	'select party."approval_request_id" from requestor party ' +
-	'where party."user_id" = ${requestor.id}';
+const SUBJECT_ID = Object.freeze({ $subject: 'id' as const });
+const OWN_TASK = Object.freeze({ subject_id: { eq: SUBJECT_ID } });
+const WORKBENCH_TASK = Object.freeze({ audience: { eq: 'workbench' } });
+const OWN_TASK_RELATION = Object.freeze({
+	task: { some: OWN_TASK }
+});
+const WORKBENCH_TASK_RELATION = Object.freeze({
+	task: { some: WORKBENCH_TASK }
+});
+const OWN_USAGE = Object.freeze({
+	run: { some: OWN_TASK_RELATION }
+});
+const WORKBENCH_USAGE = Object.freeze({
+	run: { some: WORKBENCH_TASK_RELATION }
+});
+const OWN_OR_WORKBENCH_TASK = Object.freeze({ OR: [OWN_TASK, WORKBENCH_TASK] });
+const OWN_OR_WORKBENCH_TASK_RELATION = Object.freeze({
+	OR: [OWN_TASK_RELATION, WORKBENCH_TASK_RELATION]
+});
+const OWN_OR_WORKBENCH_USAGE = Object.freeze({ OR: [OWN_USAGE, WORKBENCH_USAGE] });
+const OWN_NOTIFICATION = Object.freeze({ recipient: { eq: SUBJECT_ID } });
+const READABLE_APPROVAL_REQUEST = Object.freeze({ id: { approvalParty: true } });
+const READABLE_REQUESTOR = Object.freeze({ approval_request_id: { approvalParty: true } });
 
-/**
- * The name of this subject's one team, folded.
- *
- * This must come from the invocation subject, not from `user.team_id`. An administrator previewing
- * another team keeps their own persisted user row and changes `subject.teamPath`; reading the row
- * here made that preview's application grants move while its approval inbox stayed on the
- * administrator's real team. `${requestor.team}` is a bound operand sourced from `teamPath[0]`, the
- * same value `Approvals.decide` checks. A subject with no team resolves the token to `null`, so the
- * approver leg matches nothing. Absence narrows, which is the safe direction for it to go.
- *
- * The subject's own team and not the whole of `teamPath`. `Approvals.decide` matches
- * `step.approvers` against `teamPath[0]` — the subject's own team — so anything wider here would
- * show a member approvals they are not eligible to decide, and `teamPath` runs *downward* through
- * the hierarchy unconditionally, which is the opposite of "their higher ups".
- */
-const SUBJECT_TEAM_NAME = 'lower(${requestor.team})';
+const systemRelationship = (definition: RelationDefinition): RelationDefinition =>
+	Object.freeze({
+		...definition,
+		...(definition.from === undefined ? {} : { from: Object.freeze({ ...definition.from }) }),
+		...(definition.to === undefined ? {} : { to: Object.freeze({ ...definition.to }) })
+	});
 
-/**
- * The approval requests this subject's team is named as an approver of — the "higher ups" leg.
- *
- * **Read from `bolt_approvals`, not from `approval_request.steps`, and that is not a preference.**
- * `steps` is a *cursor*, not a configuration: `Approvals.projectRequest` writes
- * `[{ step: <n> }]` while a request is pending and `[]` once it closes, and no approver name has
- * ever been in that column. A containment test over it would compile, run, and match nothing —
- * silently withholding from approvers the very requests they exist to decide.
- *
- * The approver names live in the durable state `Approvals.gate` embeds at request time, under
- * `state.operation.approval` — the whole `ApprovalConfiguration` the subject's own grant carried,
- * copied into the row so that a later release changing the grant cannot restate an in-flight
- * request. `Approvals.decide` resolves the same path (`approvalConfigurations.resolve`) before it
- * decides eligibility, so read scope and decide eligibility are two readings of one value.
- *
- * `jsonb_typeof(...) = 'array'` guards both unnests rather than trusting persisted bytes: malformed
- * state whose `steps` is not an array would otherwise raise
- * `cannot extract elements from an object` from inside a permission check, which turns a narrowing
- * into an outage. Folded comparison, because every other comparison of a team name in this runtime
- * is folded — `TEAM_LOOKUP_SQL`, `policiesHeldByTeam`, `Approvals.decide` — and two spellings must
- * not mean two teams.
- */
-const APPROVED_BY_SUBJECT_TEAM =
-	'select approval.request_id from bolt_approvals approval ' +
-	'cross join lateral jsonb_array_elements(' +
-	"case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array' " +
-	"then approval.state #> '{operation,approval,steps}' else '[]'::jsonb end" +
-	') as approval_step(step_value) ' +
-	'cross join lateral jsonb_array_elements_text(' +
-	"case when jsonb_typeof(step_value->'approvers') = 'array' " +
-	"then step_value->'approvers' else '[]'::jsonb end" +
-	') as approver(team_name) ' +
-	'where lower(team_name) = (' +
-	SUBJECT_TEAM_NAME +
-	')';
-
-/** Configured teams that may supersede the concrete flow also need inbox discovery. */
-const SUPERSEDED_BY_SUBJECT_TEAM =
-	'select approval.request_id from bolt_approvals approval ' +
-	'cross join lateral jsonb_array_elements_text(' +
-	"case when jsonb_typeof(approval.state #> '{operation,approval,superceded_by}') = 'array' " +
-	"then approval.state #> '{operation,approval,superceded_by}' else '[]'::jsonb end" +
-	') as approver(team_name) ' +
-	'where lower(team_name) = (' +
-	SUBJECT_TEAM_NAME +
-	')';
-
-/**
- * An approval request is readable by its parties and by whoever may decide it. Workspace
- * administrators are included because every administrator may supersede every pending flow by
- * definition; this does not grant them any authored tenant collection.
- *
- * Written against unqualified column names on purpose: the same predicate is compiled into every
- * statement that evaluates it — the direct read path and each sync evaluation of a live query —
- * and those statements need not alias the table the same way, while an unqualified reference
- * resolves to the outer row in all of them. Nothing inside either subquery declares a `id`, so the
- * correlation cannot be captured by them.
- */
-const READABLE_APPROVAL_REQUEST = policySql(
-	'${requestor.admin} = true or "id"::text in (' +
-		RAISED_BY_SUBJECT +
-		') or "id"::text in (' +
-		APPROVED_BY_SUBJECT_TEAM +
-		') or "id"::text in (' +
-		SUPERSEDED_BY_SUBJECT_TEAM +
-		')'
-);
-
-/**
- * Who raised a request is readable exactly when the request is — one rule, expressed once.
- *
- * Left unconditional this leaks the membership of every approval in the workspace: `requestor` is
- * two columns, one of which is a person, so a member who may not read a single `approval_request`
- * row could still enumerate who had raised each one.
- *
- * Scoped by `approval_request_id` rather than by `user_id = ${requestor.id}`. The narrower
- * form would answer "which requests did I raise" and hide the parties of a request the subject may
- * legitimately read as an approver — and would silently start hiding rows the day anything writes a
- * second requestor for one request.
- */
-const READABLE_REQUESTOR = policySql(
-	'${requestor.admin} = true or "approval_request_id" in (' +
-		RAISED_BY_SUBJECT +
-		') or "approval_request_id" in (' +
-		APPROVED_BY_SUBJECT_TEAM +
-		') or "approval_request_id" in (' +
-		SUPERSEDED_BY_SUBJECT_TEAM +
-		')'
-);
-
-const OWN_CONVERSATION = policySql('"user_id" = ${requestor.id}');
-const OWN_CONVERSATION_MESSAGE = policySql(
-	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
-		'where owned."user_id" = ${requestor.id})'
-);
-const OWN_CONVERSATION_MESSAGE_PART = policySql(
-	'"message_id" in (select message."message_id" from chat_message message ' +
-		'join chat_session owned on owned."conversation_id" = message."conversation_id" ' +
-		'where owned."user_id" = ${requestor.id})'
-);
-const OWN_AGENT_STATE = policySql(
-	'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
-		'where owned."user_id" = ${requestor.id})'
-);
-const OWN_NOTIFICATION = policySql('"recipient" = ${requestor.id}');
+/** Exact runtime relationship identities consumed by the same compiler as authored relationships. */
+export const SYSTEM_RELATIONSHIPS: ReadonlyArray<RelationDefinition> = Object.freeze([
+	systemRelationship({
+		name: 'requestors',
+		source: 'approval_request',
+		target: 'requestor',
+		cardinality: 'many',
+		from: { collection: 'approval_request', column: 'id' },
+		to: { collection: 'requestor', column: 'approval_request_id' }
+	}),
+	systemRelationship({
+		name: 'approvalRequest',
+		source: 'requestor',
+		target: 'approval_request',
+		cardinality: 'one',
+		from: { collection: 'requestor', column: 'approval_request_id' },
+		to: { collection: 'approval_request', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'parentTask',
+		source: 'agent_task',
+		target: 'agent_task',
+		cardinality: 'one',
+		from: { collection: 'agent_task', column: 'parent_id' },
+		to: { collection: 'agent_task', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'children',
+		source: 'agent_task',
+		target: 'agent_task',
+		cardinality: 'many',
+		from: { collection: 'agent_task', column: 'id' },
+		to: { collection: 'agent_task', column: 'parent_id' }
+	}),
+	systemRelationship({
+		name: 'activePlan',
+		source: 'agent_task',
+		target: 'agent_plan',
+		cardinality: 'one',
+		from: { collection: 'agent_task', column: 'active_plan_id' },
+		to: { collection: 'agent_plan', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'activeRun',
+		source: 'agent_task',
+		target: 'agent_run',
+		cardinality: 'one',
+		from: { collection: 'agent_task', column: 'active_run_id' },
+		to: { collection: 'agent_run', column: 'id' }
+	}),
+	...(
+		[
+			['plans', 'agent_plan'],
+			['messages', 'agent_message'],
+			['directives', 'agent_inbox'],
+			['runs', 'agent_run']
+		] as const
+	).map(([name, target]) =>
+		systemRelationship({
+			name,
+			source: 'agent_task',
+			target,
+			cardinality: 'many' as const,
+			from: { collection: 'agent_task', column: 'id' },
+			to: { collection: target, column: 'task_id' }
+		})
+	),
+	...['agent_plan', 'agent_message', 'agent_inbox', 'agent_run'].map((source) =>
+		systemRelationship({
+			name: 'task',
+			source,
+			target: 'agent_task',
+			cardinality: 'one' as const,
+			from: { collection: source, column: 'task_id' },
+			to: { collection: 'agent_task', column: 'id' }
+		})
+	),
+	systemRelationship({
+		name: 'run',
+		source: 'agent_message',
+		target: 'agent_run',
+		cardinality: 'one',
+		from: { collection: 'agent_message', column: 'run_id' },
+		to: { collection: 'agent_run', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'supersedes',
+		source: 'agent_message',
+		target: 'agent_message',
+		cardinality: 'one',
+		from: { collection: 'agent_message', column: 'supersedes_id' },
+		to: { collection: 'agent_message', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'message',
+		source: 'agent_inbox',
+		target: 'agent_message',
+		cardinality: 'one',
+		from: { collection: 'agent_inbox', column: 'message_id' },
+		to: { collection: 'agent_message', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'claimedRun',
+		source: 'agent_inbox',
+		target: 'agent_run',
+		cardinality: 'one',
+		from: { collection: 'agent_inbox', column: 'claimed_run_id' },
+		to: { collection: 'agent_run', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'directive',
+		source: 'agent_run',
+		target: 'agent_inbox',
+		cardinality: 'one',
+		from: { collection: 'agent_run', column: 'directive_id' },
+		to: { collection: 'agent_inbox', column: 'id' }
+	}),
+	systemRelationship({
+		name: 'messages',
+		source: 'agent_run',
+		target: 'agent_message',
+		cardinality: 'many',
+		from: { collection: 'agent_run', column: 'id' },
+		to: { collection: 'agent_message', column: 'run_id' }
+	}),
+	systemRelationship({
+		name: 'usage',
+		source: 'agent_run',
+		target: 'agent_usage',
+		cardinality: 'many',
+		from: { collection: 'agent_run', column: 'id' },
+		to: { collection: 'agent_usage', column: 'run_id' }
+	}),
+	systemRelationship({
+		name: 'run',
+		source: 'agent_usage',
+		target: 'agent_run',
+		cardinality: 'one',
+		from: { collection: 'agent_usage', column: 'run_id' },
+		to: { collection: 'agent_run', column: 'id' }
+	})
+]);
 
 /**
  * Reading runtime state is allowed for any authenticated subject; writing never is, because the
@@ -298,67 +332,40 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			fields: ['id', 'name']
 		},
 		{
-			collection: collections.chat_session.name,
+			collection: collections.agent_task.name,
 			action: 'read' as const,
-			where: OWN_CONVERSATION
+			where: OWN_OR_WORKBENCH_TASK
 		},
-		{
-			collection: collections.chat_message.name,
-			action: 'read' as const,
-			where: OWN_CONVERSATION_MESSAGE
-		},
-		{
-			collection: collections.chat_message_part.name,
-			action: 'read' as const,
-			where: OWN_CONVERSATION_MESSAGE_PART
-		},
+		...[collections.agent_plan, collections.agent_message, collections.agent_inbox].map(
+			(systemCollection) => ({
+				collection: systemCollection.name,
+				action: 'read' as const,
+				where: OWN_OR_WORKBENCH_TASK_RELATION
+			})
+		),
 		{
 			collection: collections.agent_run.name,
 			action: 'read' as const,
-			where: OWN_AGENT_STATE,
+			where: OWN_OR_WORKBENCH_TASK_RELATION,
 			fields: [
 				'id',
-				'run_id',
-				'conversation_id',
-				'generation',
+				'task_id',
+				'directive_id',
+				'epoch',
+				'mode',
+				'phase',
+				'input_through_sequence',
+				'model_id',
 				'status',
-				'started_at',
-				'finished_at',
-				'error',
-				'usage',
-				'cause',
-				'disposition',
-				'depth',
 				'created_at',
 				'updated_at',
 				'row_version'
 			]
 		},
 		{
-			collection: collections.agent_lane.name,
+			collection: collections.agent_usage.name,
 			action: 'read' as const,
-			where: OWN_AGENT_STATE
-		},
-		{
-			collection: collections.agent_inbox.name,
-			action: 'read' as const,
-			where: OWN_AGENT_STATE,
-			fields: [
-				'id',
-				'conversation_id',
-				'message_id',
-				'receipt_sequence',
-				'source_kind',
-				'source_message_id',
-				'requested_mode',
-				'state',
-				'claimed_by_run_id',
-				'claimed_at',
-				'rejected_reason',
-				'created_at',
-				'updated_at',
-				'row_version'
-			]
+			where: OWN_OR_WORKBENCH_USAGE
 		},
 		{
 			collection: collections.automation_run.name,
@@ -415,6 +422,7 @@ export const withSystemCollections = <
 			CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 		>;
 		readonly policies: ReadonlyArray<PolicyDeclaration>;
+		readonly relations?: ReadonlyArray<RelationDefinition>;
 	}
 >(
 	definition: T
@@ -435,10 +443,18 @@ export const withSystemCollections = <
 	const missing = SYSTEM_COLLECTIONS.filter(({ name }) => !authored.has(name));
 	const declared = new Set(definition.policies.map(({ name }) => name));
 	const absent = BUILT_IN_POLICIES.filter(({ name }) => !declared.has(name));
-	if (missing.length === 0 && absent.length === 0) return definition;
+	const relationKeys = new Set(
+		(definition.relations ?? []).map((relation) => `${relation.source}\u0000${relation.name}`)
+	);
+	const missingRelations = SYSTEM_RELATIONSHIPS.filter(
+		(relation) => !relationKeys.has(`${relation.source}\u0000${relation.name}`)
+	);
+	if (missing.length === 0 && absent.length === 0 && missingRelations.length === 0)
+		return definition;
 	return {
 		...definition,
 		collections: [...definition.collections, ...missing],
-		policies: [...definition.policies, ...absent]
-	};
+		policies: [...definition.policies, ...absent],
+		relations: [...(definition.relations ?? []), ...missingRelations]
+	} as T;
 };

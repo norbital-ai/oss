@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
-import { discoverAuthoredSource } from '../../src/compiler/workspace-build.js';
+import { custom, defineModel } from '../../src/authoring/models-schema.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
+import {
+	compileTenantCapabilities,
+	discoverAuthoredSource
+} from '../../src/compiler/workspace-build.js';
 
 /**
  * What the compiler finds, and — the half that is new — what it refuses to find.
@@ -15,6 +20,16 @@ import { discoverAuthoredSource } from '../../src/compiler/workspace-build.js';
  * spelled twice.
  */
 const roots: Array<string> = [];
+
+const dynamicCustomTypeDoesNotCompile = (name: string): void => {
+	// @ts-expect-error — custom types are a generated closed union, not a dynamic string.
+	custom(name);
+};
+void dynamicCustomTypeDoesNotCompile;
+const customByRuntimeName = custom as unknown as (
+	name: string
+) => ReturnType<typeof custom>;
+
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -41,8 +56,7 @@ describe('Bolt authored source discovery', () => {
 			['src', 'functions'],
 			['src', 'datatypes', 'risk_score'],
 			['src', 'capabilities', 'tools'],
-			['src', 'capabilities', 'mcp'],
-			['src', 'capabilities', 'skills', 'triage']
+			['src', 'capabilities', 'mcp']
 		])
 			await mkdir(join(root, ...directory), { recursive: true });
 
@@ -78,9 +92,8 @@ describe('Bolt authored source discovery', () => {
 		);
 		await writeFile(
 			join(root, 'src', 'capabilities', 'mcp', '+search.ts'),
-			'export default { url: "https://mcp.example", tools: ["lookup"] }'
+			'export default { endpoint: "https://mcp.example" }'
 		);
-		await writeFile(join(root, 'src', 'capabilities', 'skills', 'triage', '+skill.md'), '# Triage');
 
 		const discovered = await Effect.runPromise(discoverAuthoredSource(root));
 		expect(discovered.collectionNames).toEqual(['tickets']);
@@ -92,11 +105,7 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.functions).toEqual(['desk_dashboard']);
 		expect(discovered.datatypeNames).toEqual(['risk_score']);
 		expect(discovered.mcpServerNames).toEqual(['search']);
-		expect(discovered.skillNames).toEqual(['triage']);
 		expect(discovered.mcpFiles).toEqual([join(root, 'src', 'capabilities', 'mcp', '+search.ts')]);
-		expect(discovered.skillFiles).toEqual([
-			join(root, 'src', 'capabilities', 'skills', 'triage', '+skill.md')
-		]);
 		// A policy is named by its file and nothing else, so a file called `+agent.ts` under
 		// `access/policies/` is a policy called `agent`. There is no suffix left to carry the kind.
 		expect(discovered.policies).toEqual(['agent']);
@@ -104,6 +113,62 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.anonymousLimitFile).toBe(join(root, 'src', 'access', '+anonymous_limits.ts'));
 		expect(discovered.environmentFile).toBe(join(root, 'src', '+env.ts'));
 		expect(discovered.prompt).toContain('Answer from tickets.');
+	});
+
+	it('compiles shared skill packages and data-only MCP registrations', async () => {
+		const root = await workspaceRoot();
+		const skill = join(root, '.norbital', 'shared', 'triage');
+		const personal = join(root, '.norbital', 'personal', 'private-triage');
+		const mcp = join(root, 'src', 'capabilities', 'mcp', '+search.ts');
+		await mkdir(join(skill, 'references'), { recursive: true });
+		await mkdir(personal, { recursive: true });
+		await mkdir(join(root, 'src', 'capabilities', 'mcp'), { recursive: true });
+		await writeFile(
+			join(skill, 'SKILL.md'),
+			'---\nname: triage\ndescription: Resolve incoming tickets\n---\n\n# Triage\n'
+		);
+		await writeFile(join(skill, 'references', 'routing.md'), '# Routing\n');
+		await writeFile(
+			join(personal, 'SKILL.md'),
+			'---\nname: private-triage\ndescription: Personal instructions\n---\n'
+		);
+		await writeFile(
+			mcp,
+			'export default { endpoint: { env: "SEARCH_MCP_URL" }, authentication: { personalSecret: "search-token" } };\n'
+		);
+
+		const capabilities = await Effect.runPromise(compileTenantCapabilities(root, [mcp]));
+		expect(capabilities.skills[0]).toMatchObject({
+			name: 'triage',
+			description: 'Resolve incoming tickets',
+			files: [{ path: 'SKILL.md' }, { path: 'references/routing.md' }]
+		});
+		expect(capabilities.skills.map(({ name }) => name)).toEqual(['triage']);
+		expect(capabilities.mcp[0]).toMatchObject({
+			name: 'search',
+			protocol: '2026-07-28',
+			transport: { kind: 'streamable-http', endpoint: { env: 'SEARCH_MCP_URL' } },
+			authentication: { personalSecret: 'search-token' }
+		});
+	});
+
+	it('compiles an absent shared root as an empty shared capability set', async () => {
+		const root = await workspaceRoot();
+
+		await expect(Effect.runPromise(compileTenantCapabilities(root, []))).resolves.toEqual({
+			skills: [],
+			mcp: []
+		});
+	});
+
+	it('refuses the retired src/capabilities/skills +skill.md reader', async () => {
+		const root = await workspaceRoot();
+		const legacy = join(root, 'src', 'capabilities', 'skills', 'triage');
+		await mkdir(legacy, { recursive: true });
+		await writeFile(join(legacy, '+skill.md'), '# Triage\n');
+		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
+			/src\/capabilities\/skills\/triage\/\+skill\.md/
+		);
 	});
 
 	/**
@@ -137,39 +202,19 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.envoyNames).toEqual([]);
 	});
 
-	it('seals custom() names to platform and discovered tenant datatypes', async () => {
-		const root = await workspaceRoot();
-		const model = join(root, 'src', 'collections', 'tickets', '+model.ts');
-		await writeFile(
-			model,
-			"export default defineModel({\n  price: custom('money'),\n  risk: custom('risk_score')\n});"
-		);
-		await mkdir(join(root, 'src', 'datatypes', 'risk_score'), { recursive: true });
-		await writeFile(
-			join(root, 'src', 'datatypes', 'risk_score', '+definition.ts'),
-			'export default {}'
-		);
-		await expect(Effect.runPromise(discoverAuthoredSource(root))).resolves.toMatchObject({
-			datatypeNames: ['risk_score']
-		});
+	it('seals executed custom() names to platform and discovered tenant datatypes', () => {
+		const compile = (name: string) =>
+			compileWorkspaceAuthoring({
+				models: { tickets: defineModel({ risk: customByRuntimeName(name) }) },
+				sourcePaths: { tickets: 'src/collections/tickets/+model.ts' },
+				customTypeNames: ['risk_score']
+			});
 
-		await writeFile(model, "export default defineModel({\n  risk: custom('missing_score')\n});");
-		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
-			'custom() declarations that are not sealed'
-		);
-		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
+		expect(compile('risk_score').customTypeReferences).toEqual([
+			{ collection: 'tickets', field: 'risk', name: 'risk_score' }
+		]);
+		expect(() => compile('missing_score')).toThrow(
 			'undeclared datatype "missing_score"'
-		);
-	});
-
-	it('refuses a dynamic custom() name because no schema or renderer can be proven', async () => {
-		const root = await workspaceRoot();
-		await writeFile(
-			join(root, 'src', 'collections', 'tickets', '+model.ts'),
-			'const kind = "risk_score";\nexport default defineModel({\n  risk: custom(kind)\n});'
-		);
-		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
-			'calls custom() with a non-literal name'
 		);
 	});
 

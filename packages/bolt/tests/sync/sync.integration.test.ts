@@ -4,7 +4,7 @@ import {
 	SyncAdvanceResponse,
 	SyncChange,
 	SyncConnectEvaluation,
-	SyncCursor
+	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
 import * as Sync from '../../src/runtime/sync/sync.js';
 import {
@@ -13,133 +13,108 @@ import {
 	testWorkspace
 } from '../support/bolt-test-layer.js';
 
-/**
- * The sync wire shapes, pinned at their schema.
- *
- * The changelog is collection-granular and sequence-addressed: a cursor is one integer, the
- * reconnect hint names collections rather than records, and a committed coordinate rides with the
- * write's idempotency key. The wire schema stays strict — PostgreSQL bigint text is normalized by
- * the changelog's own row decoders, never on the wire — so a client that sent `'42'` is refused
- * rather than silently interpreted.
- */
-describe('Sync owner', () => {
-	it('decodes a sequence cursor and rejects positions the wire schema does not own', () => {
-		expect(Schema.decodeUnknownSync(SyncCursor)({ sequence: 9 })).toEqual({ sequence: 9 });
-		expect(() => Schema.decodeUnknownSync(SyncCursor)({ sequence: '9' })).toThrow();
-		expect(() => Schema.decodeUnknownSync(SyncCursor)({ sequence: -1 })).toThrow();
-		expect(() => Schema.decodeUnknownSync(SyncCursor)({ sequence: 1.5 })).toThrow();
-	});
-
-	it('rejects malformed committed coordinates', () =>
-		expect(() =>
-			Schema.decodeUnknownSync(SyncChange)({
-				collection: '',
-				recordId: '',
-				mutationId: 'not-a-key'
-			})
-		).toThrow());
-
-	it('accepts a committed coordinate that names its mutation', () =>
+describe('sync engine owner', () => {
+	it('accepts only exact ChangeBatch row transitions', () => {
 		expect(
 			Schema.decodeUnknownSync(SyncChange)({
 				collection: 'people',
-				recordId: 'p1',
+				id: 'p1',
+				operation: 'update',
+				before: { team: 'core' },
+				after: { team: 'edge' },
 				mutationId: '11111111-1111-5111-8111-111111111111'
 			})
 		).toEqual({
 			collection: 'people',
-			recordId: 'p1',
+			id: 'p1',
+			operation: 'update',
+			before: { team: 'core' },
+			after: { team: 'edge' },
 			mutationId: '11111111-1111-5111-8111-111111111111'
-		}));
+		});
+		expect(() =>
+			Schema.decodeUnknownSync(SyncChange)({
+				collection: 'people',
+				id: 'p1',
+				operation: 'update',
+				after: { team: 'edge' }
+			})
+		).toThrow();
+	});
 
-	it('keeps the connect and advance answers on one head shape', () => {
-		const head = { sequence: 7 };
+	it('admits only contiguous findMany/findFirst live shapes', () => {
+		expect(
+			Schema.decodeUnknownSync(SyncQueryInput)({
+				kind: 'findMany',
+				collection: 'people',
+				orderBy: { name: 'asc' },
+				limit: 100
+			})
+		).toMatchObject({ kind: 'findMany', collection: 'people' });
+		expect(() =>
+			Schema.decodeUnknownSync(SyncQueryInput)({ kind: 'count', collection: 'people' })
+		).toThrow();
+	});
+
+	it('keeps connect and advance on versioned prefix facts only', () => {
 		expect(
 			Schema.decodeUnknownSync(SyncConnectEvaluation)({
-				head,
 				results: [
 					{
 						key: 'people',
-						input: {
-							kind: 'findMany',
-							collection: 'people',
-							where: {},
-							orderBy: [],
-							limit: 100
-						},
-						policyHash: 'sha256:abc',
+						input: { kind: 'findMany', collection: 'people', limit: 100 },
+						planKey: 'sha256:plan',
+						version: 0,
+						prefixKeys: [],
+						loadedPrefix: 0,
+						prefixBytes: 0,
+						authorityFingerprint: 'sha256:policy',
 						dependencies: ['people'],
-						policyDependencies: [],
-						heldIds: [],
-						digestOnly: false,
-						digest: 'sha256:def',
-						changed: true,
-						answer: []
+						routing: [],
+						rows: []
 					}
 				],
 				outcomes: []
 			})
-		).toMatchObject({ head, outcomes: [] });
+		).toMatchObject({ results: [{ version: 0, prefixKeys: [] }], outcomes: [] });
 		expect(
-			Schema.decodeUnknownSync(SyncAdvanceResponse)({
-				head,
-				updates: [],
-				refused: [],
-				outcomes: []
-			})
-		).toEqual({ head, updates: [], refused: [], outcomes: [] });
+			Schema.decodeUnknownSync(SyncAdvanceResponse)({ updates: [], resets: [], outcomes: [] })
+		).toEqual({ updates: [], resets: [], outcomes: [] });
 	});
 
-	/**
-	 * The registration surface the host files, §2.2. `policyDependencies` is the drift set (identity
-	 * and approval collections, so the write that moves a subject reaches the registry) and
-	 * `dependencies` adds the query's own collections — never the runtime collections whose writes
-	 * cannot touch the answer, or every agent chat message would wake and re-resolve every
-	 * subscription in the tenant.
-	 */
-	it('registers a query with the narrowed policy surface', async () => {
+	it('opens one admitted plan with version zero and no digest-era state', async () => {
 		const harness = await makeBoltTestRuntime(testWorkspace());
 		try {
 			const evaluation = await harness.runtime.runPromise(
 				Effect.flatMap(Sync.Service, (sync) =>
 					sync.connect(harness.effectId('connect'), adminSubject, adminSubject, null, {
-						queries: [{ key: 'people', input: { kind: 'findMany', collection: 'people' } }],
-						released: [],
+						queries: [
+							{
+								queryKey: 'people',
+								input: { kind: 'findMany', collection: 'people', limit: 100 },
+								requestedPrefix: 100
+							}
+						],
+						detached: [],
 						pending: []
 					})
 				)
 			);
 			const first = evaluation.results[0];
-			expect(first?.policyDependencies).toEqual([
-				'account',
-				'approval_request',
-				'auth_config',
-				'session',
-				'team',
-				'user',
-				'verification'
-			]);
-			expect(first?.dependencies).toEqual([
-				'account',
-				'approval_request',
-				'auth_config',
-				'people',
-				'session',
-				'team',
-				'user',
-				'verification'
-			]);
-			expect(first?.policyHash).toMatch(/^sha256:/);
-			const repeat = await harness.runtime.runPromise(
-				Effect.flatMap(Sync.Service, (sync) =>
-					sync.connect(harness.effectId('connect:repeat'), adminSubject, adminSubject, null, {
-						queries: [{ key: 'people', input: { kind: 'findMany', collection: 'people' } }],
-						released: [],
-						pending: []
-					})
-				)
-			);
-			expect(repeat.results[0]?.policyHash).toBe(first?.policyHash);
+			expect(first).toMatchObject({
+				key: 'people',
+				version: 0,
+				loadedPrefix: 0,
+				prefixKeys: [],
+				prefixBytes: 0,
+				rows: []
+			});
+			expect(first?.planKey).toMatch(/^sha256:/);
+			expect(first?.authorityFingerprint).toMatch(/^sha256:/);
+			expect(first?.dependencies).toContain('people');
+			expect(first).not.toHaveProperty('digest');
+			expect(first).not.toHaveProperty('heldIds');
+			expect(first).not.toHaveProperty('answer');
 		} finally {
 			await harness.dispose();
 		}

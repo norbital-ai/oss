@@ -35,11 +35,11 @@ const YAML_RULE = [
 ].join('\n');
 
 const CONFIG = `import { defineConfig } from '${packageRoot}build/index.js';
-export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] });
+export default defineConfig({ packs: ['norbital'] });
 `;
 
 const REACTIVE_CONFIG = `import { defineConfig } from '${packageRoot}build/index.js';
-export default defineConfig({ semantic: { disabled: true }, packs: ['norbital/reactive'] });
+export default defineConfig({ packs: ['norbital/reactive'] });
 `;
 
 test('findConfig prefers .norbital/config/doctor over a root-level file', () => {

@@ -74,16 +74,12 @@ export type ScannerReceipt = Readonly<{
 		syntactic: boolean;
 		graph: boolean;
 		typeAware: boolean;
-		semantic: boolean;
 	}>;
 	files: number;
 	findings: string;
 	sourceInventoryDigest: string;
 	ruleSetDigest: string;
 	catalogueDigest: string;
-	embedderId?: string | undefined;
-	indexDigest?: string | undefined;
-	indexing?: ScannerIndexing | undefined;
 	counts: Readonly<{
 		error: unknown;
 		warning: unknown;
@@ -92,18 +88,6 @@ export type ScannerReceipt = Readonly<{
 		principles: Readonly<Record<string, unknown>>;
 	}>;
 	complete: boolean;
-}>;
-
-/** The semantic tier's spend, as a receipt records it. Token/cost fields may be absent when the provider reports nothing. */
-export type ScannerIndexing = Readonly<{
-	filesTotal: number;
-	filesEmbedded: number;
-	filesUnchanged: number;
-	filesDeleted: number;
-	apiRequests: number;
-	promptTokens?: number | undefined;
-	costUsd?: number | undefined;
-	durationMs: number;
 }>;
 
 /** One authenticated root: its receipt, its catalogue rows, and the recomputed inventory. */
@@ -196,18 +180,7 @@ export function scannerCatalogues(
 			'sourceInventoryDigest',
 			'tiers'
 		];
-		// The semantic tier writes its identity and bill beside the core fields; a declined tier
-		// writes none of them. Partial presence means a half-written receipt, which is corruption.
-		const semanticFieldsPresent = ['embedderId', 'indexDigest', 'indexing'].filter((field) =>
-			Object.prototype.hasOwnProperty.call(record, field)
-		);
-		if (
-			semanticFieldsPresent.length !== 0 &&
-			semanticFieldsPresent.length !== 3
-		)
-			throw new Error(`scanner receipt fields do not match schema: ${receiptPath}`);
-		const expectedFields = [...fields, ...semanticFieldsPresent].sort();
-		if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(expectedFields))
+		if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify([...fields].sort()))
 			throw new Error(`scanner receipt fields do not match schema: ${receiptPath}`);
 		if (
 			record.schemaVersion !== RECEIPT_SCHEMA_VERSION ||
@@ -221,20 +194,14 @@ export function scannerCatalogues(
 			tiers === null ||
 			(tiers as Record<string, unknown>).syntactic !== true ||
 			typeof (tiers as Record<string, unknown>).graph !== 'boolean' ||
-			typeof (tiers as Record<string, unknown>).typeAware !== 'boolean' ||
-			typeof (tiers as Record<string, unknown>).semantic !== 'boolean'
+			typeof (tiers as Record<string, unknown>).typeAware !== 'boolean'
 		)
 			throw new Error(`scanner receipt does not record tier coverage: ${receiptPath}`);
 		const tierCoverage = tiers as {
 			syntactic: boolean;
 			graph: boolean;
 			typeAware: boolean;
-			semantic: boolean;
 		};
-		if (tierCoverage.semantic && semanticFieldsPresent.length === 0)
-			throw new Error(`scanner receipt claims semantics without its evidence: ${receiptPath}`);
-		if (semanticFieldsPresent.length === 3)
-			decodeIndexing(record.indexing, receiptPath);
 		if (
 			record.scope !== 'all' ||
 			record.includeTests !== false ||
@@ -338,13 +305,6 @@ export function scannerCatalogues(
 				sourceInventoryDigest: record.sourceInventoryDigest as string,
 				ruleSetDigest: record.ruleSetDigest as string,
 				catalogueDigest: record.catalogueDigest as string,
-				...(semanticFieldsPresent.length === 3
-					? {
-							embedderId: record.embedderId as string,
-							indexDigest: record.indexDigest as string,
-							indexing: decodeIndexing(record.indexing, receiptPath)
-						}
-					: {}),
 				counts: receiptCounts as ScannerReceipt['counts'],
 				complete: true
 			},
@@ -360,43 +320,6 @@ export function scannerCatalogues(
 		ordered.push(found);
 	}
 	return ordered;
-}
-
-/**
- * Validate the semantic tier's recorded spend, or throw.
- *
- * Counters must be non-negative integers; the token and cost fields may be `undefined` because a
- * provider that reports nothing is a fact, but anything present must be a number — a string cost
- * or a NaN token count would be a receipt lying in the direction of its reader.
- */
-function decodeIndexing(value: unknown, receiptPath: string): ScannerIndexing {
-	const record =
-		typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-	const int = (name: string): number => {
-		const field = record?.[name];
-		if (typeof field !== 'number' || !Number.isSafeInteger(field) || field < 0)
-			throw new Error(`invalid scanner indexing.${name}: ${receiptPath}`);
-		return field;
-	};
-	const optional = (name: string): number | undefined => {
-		const field = record?.[name];
-		if (field === undefined) return undefined;
-		if (typeof field !== 'number' || !Number.isFinite(field) || field < 0)
-			throw new Error(`invalid scanner indexing.${name}: ${receiptPath}`);
-		return field;
-	};
-	if (record === undefined)
-		throw new Error(`scanner receipt claims semantics without its bill: ${receiptPath}`);
-	return {
-		filesTotal: int('filesTotal'),
-		filesEmbedded: int('filesEmbedded'),
-		filesUnchanged: int('filesUnchanged'),
-		filesDeleted: int('filesDeleted'),
-		apiRequests: int('apiRequests'),
-		promptTokens: optional('promptTokens'),
-		costUsd: optional('costUsd'),
-		durationMs: int('durationMs')
-	};
 }
 
 /** Import verified scanner catalogues and attach each static violation to its owning concept. */

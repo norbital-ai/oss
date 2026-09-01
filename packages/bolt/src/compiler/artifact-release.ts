@@ -258,26 +258,13 @@ export const readLockfileProvenance = async (
 	}
 };
 
-/**
- * Reads the latest generated schema snapshot without loading an authored module.
- *
- * A workspace with no snapshot still gets deterministic, compiler-known schema identity from the
- * supplied static descriptor. Neither branch executes guest code.
- */
+/** Reads the latest committed schema snapshot without loading or reinterpreting authored modules. */
 export const readSchemaProvenance = async (
 	workspaceRoot: string,
-	migrations: ReadonlyArray<WorkspaceMigrationEntry>,
-	fallback: unknown
+	migrations: ReadonlyArray<WorkspaceMigrationEntry>
 ): Promise<Omit<TenantReleaseInput['schema'], 'fingerprint'>> => {
 	const latest = migrations.at(-1);
-	if (latest !== undefined) {
-		const path = `.norbital/migrations/${latest.tag}/snapshot.json`;
-		try {
-			return { path, bytes: await readFile(join(workspaceRoot, path)) };
-		} catch (cause) {
-			if (!(typeof cause === 'object' && cause !== null && Reflect.get(cause, 'code') === 'ENOENT'))
-				throw cause;
-		}
-	}
-	return { path: 'compiler-schema.json', bytes: jsonBytes(fallback) };
+	if (latest === undefined) throw new Error('release requires a committed migration lineage');
+	const path = `.norbital/migrations/${latest.tag}/snapshot.json`;
+	return { path, bytes: await readFile(join(workspaceRoot, path)) };
 };

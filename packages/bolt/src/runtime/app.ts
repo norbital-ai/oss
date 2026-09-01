@@ -2,6 +2,7 @@ import { Cause, Clock, Effect, Layer, type Schema } from 'effect';
 import {
 	EffectId,
 	BundleManifest,
+	compactSyncChanges,
 	makeWireError,
 	PROTOCOL_VERSION,
 	type Activation,
@@ -14,7 +15,6 @@ import {
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
-import * as ChatDocuments from '#lib/runtime/agents/documents.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
@@ -24,6 +24,9 @@ import * as Collections from '#lib/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime,
+	mergeRuntimeHandlers,
+	remoteRegistryLayer,
+	type RuntimeRemoteHandler,
 	type AuthoredRuntime
 } from '#lib/runtime/collections/authored.js';
 import { DispatchError, dispatchInvocation } from '#lib/runtime/dispatch.js';
@@ -46,14 +49,9 @@ import { Transport } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { reconcileApproverTeams } from '#lib/runtime/identity/approver-teams.js';
 import { automationSubject } from '#lib/runtime/identity/static-identity.js';
-import { approvalRefusal } from '#lib/compiler/approval-checks.js';
+import { approvalRefusal } from '#lib/authoring/approval-validation.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Notifications from '#lib/runtime/notifications/notifications.js';
-import {
-	mergeRuntimeHandlers,
-	remoteRegistryLayer,
-	type RuntimeRemoteHandler
-} from '#lib/runtime/remotes.js';
 import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
 import { Secrets } from '#lib/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '#lib/runtime/secrets/personal-secrets.js';
@@ -127,8 +125,6 @@ const InvocationLayers = {
 		 * exactly one runtime message, `Wake`, which is why it is bound here beside `database` rather
 		 * than reached for separately by each of those services.
 		 */
-		// Approval projections are system collections, so their state transitions publish through
-		// the same capture trigger as authored collection writes — every commit enters the changelog.
 		const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)));
 		// Whether a sign-in code is random or the fixed development one follows the environment the host
 		// scoped this invocation to — the mode — and not whether a mailer happens to be bound. A mailer
@@ -191,7 +187,6 @@ const InvocationLayers = {
 			// automation would be the second shape of authored code rather than the same one.
 			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
-		const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(Layer.mergeAll(database, files)));
 		const agents = Agents.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
@@ -200,7 +195,6 @@ const InvocationLayers = {
 					collections,
 					ai,
 					database,
-					chatDocuments,
 					taskQueue,
 					tasks,
 					files,
@@ -250,8 +244,7 @@ const InvocationLayers = {
 					access,
 					rateLimits,
 					tenantScope,
-					taskQueue,
-					chatDocuments
+					taskQueue
 				)
 			)
 		);
@@ -357,10 +350,6 @@ export const ActivationCommands = {
 			'integrations.flush',
 			'envoys.receive',
 			'envoys.complete',
-			// The tick, which is the one command a host's timer ever sends. A host that cannot route it
-			// still holds correct data — rows commit, schedules advance, retries are scheduled — it just
-			// loses punctuality, because nothing fires until somebody invokes this.
-			'tasks.tick',
 			...workspace.automations.map(({ name }) => `automations.${name}`)
 		]
 			.filter((command, index, commands) => commands.indexOf(command) === index)
@@ -643,21 +632,11 @@ const BundleDispatch = {
 		};
 		const provided = Effect.gen(function* () {
 			const response = yield* dispatchInvocation(invocation);
-			const changes = [...(response.changes ?? [])];
-			const seen = new Set(changes.map(({ collection, recordId }) => `${collection}\0${recordId}`));
-			for (const change of yield* (yield* Collections.Service).drainChanges) {
-				const key = `${change.collection}\0${change.recordId}`;
-				if (seen.has(key)) continue;
-				seen.add(key);
-				changes.push(change);
-			}
-			for (const change of yield* (yield* SyncCommit.Service).drainChanges) {
-				const key = `${change.collection}\0${change.recordId}`;
-				if (seen.has(key)) continue;
-				seen.add(key);
-				changes.push(change);
-			}
-			return changes.length === 0 ? response : { ...response, changes };
+			const collectionChanges = yield* (yield* Collections.Service).drainChanges;
+			const facilityChanges = yield* (yield* SyncCommit.Service).drainChanges;
+			const emitted = [...(response.changes ?? []), ...collectionChanges, ...facilityChanges];
+			if (emitted.length === 0) return response;
+			return { ...response, changes: compactSyncChanges(emitted) };
 		}).pipe(
 			Effect.provide(
 				invocationLayer(

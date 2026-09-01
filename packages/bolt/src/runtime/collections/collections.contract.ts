@@ -12,6 +12,7 @@ import type {
 	CollectionMutationIdempotencyKey,
 	CollectionMutationSettlement,
 	CollectionSearch,
+	ChangeBatch,
 	EffectId,
 	SyncChange,
 	SyncOutcome,
@@ -24,7 +25,7 @@ import type * as Database from '#lib/runtime/facilities/database.js';
 import type { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import type { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import type { NestingLimitExceeded } from '#lib/runtime/budget.js';
-import type { WhereCompileError } from '#lib/runtime/collections/read/where.js';
+import type { WhereCompileError } from '#lib/runtime/access/effective-plan.js';
 
 export const CollectionAction = Schema.Literals(['create', 'update', 'delete']);
 export type CollectionAction = typeof CollectionAction.Type;
@@ -109,10 +110,10 @@ export type BrowserMutationScope = Readonly<{
 	readonly authorityId: string;
 }>;
 
-/** Read-back roots plus exact committed coordinates for host live-query fan-out. */
+/** Read-back roots plus the complete committed transition batch for host live-query fan-out. */
 export type CollectionMutationCommit = Readonly<{
 	readonly records: ReadonlyArray<Readonly<Record<string, unknown>>>;
-	readonly changes: ReadonlyArray<SyncChange>;
+	readonly batch: ChangeBatch;
 }>;
 
 /** The compact durable answer sufficient to replay a browser mutation without executing it. */
@@ -351,7 +352,13 @@ export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailur
 		phase: MutationPhase,
 		/** The exact post-commit operation, when `phase` is `settle`. */
 		step: Schema.optionalKey(
-			Schema.Literals(['wake', 'after-hook', 'change-events', 'embedding-refresh'])
+			Schema.Literals([
+				'wake',
+				'sync-commit',
+				'after-hook',
+				'change-events',
+				'embedding-refresh'
+			])
 		),
 		collection: Schema.NonEmptyString,
 		committed: Schema.Array(Schema.NonEmptyString),

@@ -3,8 +3,8 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from '#lib/client/ui/agent/composer-chrome.js';
-	import type { ConversationSelectorModel } from '#lib/client/ui/agent/conversation-selector.js';
+	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
+	import type { TaskSelectorModel } from './conversation-selector.js';
 
 	let {
 		model,
@@ -16,35 +16,32 @@
 		onValueChange,
 		icon
 	}: {
-		model: ConversationSelectorModel;
+		model: TaskSelectorModel;
 		value?: string | undefined;
 		placeholder: string;
 		searchPlaceholder: string;
 		ariaLabel: string;
 		emptyLabel: string;
 		onValueChange: (id: string) => void;
-		/** Marks what this picker selects, the way the person and envoy pickers beside it do. */
 		icon?: string;
 	} = $props();
 
 	const options = $derived.by(() => {
-		const rows = model.envoys.flatMap((envoy) => model.rowsByEnvoy[envoy.id] ?? []);
+		const rows = model.agents.flatMap((agent) => model.rowsByAgent[agent.id] ?? []);
 		const groupLabel = new Map<string, string>();
 		for (const row of rows) {
-			if (row.kind !== 'heading') continue;
-			if (row.id.endsWith(':users')) groupLabel.set('user', row.label);
-			else if (row.id.endsWith(':groups')) groupLabel.set('group', row.label);
+			if (row.kind === 'heading') groupLabel.set(row.id.split(':').at(-1) ?? '', row.label);
 		}
 		return rows.flatMap((row) => {
-			if (row.kind !== 'conversation') return [];
+			if (row.kind !== 'task') return [];
 			const type = groupLabel.get(row.audience);
 			return [
 				{
 					value: row.id,
-					label: row.title?.trim() || 'New conversation',
+					label: row.title,
 					icon: row.icon,
 					search_term: row.searchText,
-					...(type ? { type } : {})
+					...(type === undefined ? {} : { type })
 				}
 			];
 		});

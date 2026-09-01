@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { EnvironmentName, ReleaseId, TenantId, type SyncAnswer } from '@norbital-ai/bolt-protocol';
+import {
+	EnvironmentName,
+	ReleaseId,
+	syncJsonByteLength,
+	TenantId,
+	type StoredRecord,
+	type SyncQueryInput
+} from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
@@ -12,7 +19,6 @@ import type {
 	WorkspaceClientRuntime
 } from '../../src/client/contracts.js';
 import type { SyncClient } from '../../src/client/sync/index.js';
-import { setWorkspaceSession } from '#lib/client/session.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -23,47 +29,58 @@ const scope = {
 /**
  * A SyncClient double that answers reads the way the Machine does.
  *
- * `publish` paints one query's answer with the phase the caller names; `released` counts the
- * unmounts, which is what a one-shot read must produce once its answer has landed.
+ * `publish` paints one query's prefix with the phase the caller names; `detached` counts unmounts.
  */
 const fakeSyncClient = () => {
 	let state = initialClientState();
 	const listeners = new Set<(state: ClientState) => void>();
 	const mounted: Array<{ readonly key: string; readonly input: unknown }> = [];
-	let released = 0;
+	let detached = 0;
 	const client = {
 		start: () => undefined,
+		attach: () => () => undefined,
+		shutdown: () => undefined,
 		current: () => state,
 		subscribe: (listener: (state: ClientState) => void) => {
 			listeners.add(listener);
 			listener(state);
 			return () => listeners.delete(listener);
 		},
-		mount: (input: Schema.Json) => {
+		mount: (input: SyncQueryInput) => {
 			const key = stableKey(input);
 			mounted.push({ key, input });
 			return {
 				key,
-				release: () => {
-					released += 1;
+				extend: () => undefined,
+				detach: () => {
+					detached += 1;
 				}
 			};
 		},
 		enqueue: () => undefined,
-		publish: (key: string, answer: SyncAnswer, phase: 'fresh' | 'pending' = 'fresh') => {
+		publish: (
+			key: string,
+			rows: ReadonlyArray<StoredRecord>,
+			phase: 'fresh' | 'pending' = 'fresh'
+		) => {
+			const input = mounted.find((entry) => entry.key === key)?.input as SyncQueryInput | undefined;
+			if (input === undefined) throw new Error(`Unknown mounted query ${key}`);
 			state = {
 				...state,
 				queries: new Map([...state.queries]).set(key, {
-					input: { kind: 'findMany', collection: 'people' },
-					answer,
+					input,
+					prefix: { version: 1, rows, retainedBytes: syncJsonByteLength(rows) },
+					requestedPrefix: input.kind === 'findFirst' ? 1 : (input.limit ?? 100),
 					phase,
+					validating: phase === 'pending',
+					extending: false,
 					subscribers: 1
 				})
 			};
 			for (const listener of listeners) listener(state);
 		}
 	};
-	return { client, mounted, released: () => released };
+	return { client, mounted, detached: () => detached };
 };
 
 /**
@@ -94,35 +111,6 @@ const proxyWith = (sync: ReturnType<typeof fakeSyncClient>) => {
 	return createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 };
 
-beforeEach(() => {
-	setWorkspaceSession({
-		tenantId: 'typed-client-test',
-		environment: 'test',
-		releaseId: 'release',
-		principal: 'operator-1',
-		accessScope: 'operator',
-		credential: 'test-credential',
-		transport: { command: async () => null },
-		syncStreamUrl: '/sync',
-		files: {
-			store: async () => '',
-			remove: async () => undefined,
-			urlFor: (key) => key
-		},
-		chatDocuments: {
-			store: async (_conversation, key, file) => ({
-				storage_key: key,
-				file_name: file.name,
-				file_size: file.size,
-				mime_type: file.type || 'application/octet-stream'
-			}),
-			remove: async () => undefined,
-			urlFor: (_conversation, key) => key
-		},
-		operations: { read: async () => null, run: async () => null }
-	});
-});
-
 describe('collection search handoff', () => {
 	it('carries explicit lexical and semantic commands without inferring a mode', () => {
 		const sync = fakeSyncClient();
@@ -130,12 +118,10 @@ describe('collection search handoff', () => {
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: (input?: object) => { readonly current: unknown };
-			count: (input?: object) => unknown;
 		};
 		employees.findMany({ search: { mode: 'semantic', term: 'similar contracts' } });
 		employees.findMany({ search: { mode: 'lexical', term: 'similar contracts' } });
 		employees.findMany({ search: { mode: 'lexical', term: '>' } });
-		employees.count({ search: { mode: 'semantic', term: 'similar contracts' } });
 		// The browser carries the chosen arm unchanged; it does not decode string conventions.
 		expect(sync.mounted[0]?.input).toEqual({
 			kind: 'findMany',
@@ -152,11 +138,33 @@ describe('collection search handoff', () => {
 			collection: 'employees',
 			search: { mode: 'lexical', term: '>' }
 		});
-		expect(sync.mounted[3]?.input).toEqual({
-			kind: 'count',
-			collection: 'employees',
-			search: { mode: 'semantic', term: 'similar contracts' }
+	});
+
+	it('carries semantic search unchanged through a one-shot count command', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve(7);
+			}
 		});
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, fakeSyncClient().client));
+		const employees = Reflect.get(proxy.db, 'employees') as {
+			count: (input?: object) => PromiseLike<number>;
+		};
+
+		await expect(
+			employees.count({ search: { mode: 'semantic', term: 'similar contracts' } })
+		).resolves.toBe(7);
+		expect(commands).toEqual([
+			{
+				command: 'collections.count',
+				input: {
+					collection: 'employees',
+					search: { mode: 'semantic', term: 'similar contracts' }
+				}
+			}
+		]);
 	});
 
 	it('refuses the removed plain-string search arm', () => {
@@ -170,30 +178,33 @@ describe('collection search handoff', () => {
 		expect(sync.mounted).toHaveLength(0);
 	});
 
-	it('answers a cursored page once, carries its nextCursor, and releases the mount', async () => {
+	it('answers a cursored page once without mounting a live prefix', async () => {
 		const sync = fakeSyncClient();
-		const proxy = proxyWith(sync);
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve({
+					rows: [{ id: 'p1', name: 'Ada' }],
+					nextCursor: 'page-2-token'
+				});
+			}
+		});
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: (input?: object) => PromiseLike<unknown> & { readonly nextCursor: unknown };
 		};
 		const query = employees.findMany({ limit: 1, after: 'page-1-token' });
-		expect(sync.mounted).toHaveLength(1);
-		expect(sync.mounted[0]?.input).toEqual({
-			kind: 'findMany',
-			collection: 'employees',
-			limit: 1,
-			after: 'page-1-token'
-		});
-		// The cursored answer rides the SyncAnswer page arm: rows beside the continuation.
-		sync.client.publish(sync.mounted[0]?.key ?? '', {
-			rows: [{ id: 'p1', name: 'Ada' }],
-			nextCursor: 'page-2-token'
-		});
 		expect(await query).toEqual([{ id: 'p1', name: 'Ada' }]);
 		expect(query.nextCursor).toBe('page-2-token');
-		// Answered once, then released — the §2.3 one-shot: the unmounted control still fires, so
-		// the host stops computing for the page once retention lapses.
-		expect(sync.released()).toBe(1);
+		expect(sync.mounted).toHaveLength(0);
+		expect(sync.detached()).toBe(0);
+		expect(commands).toEqual([
+			{
+				command: 'collections.findMany',
+				input: { collection: 'employees', limit: 1, after: 'page-1-token' }
+			}
+		]);
 	});
 
 	it('resolves an authoritative empty findFirst instead of waiting forever', async () => {
@@ -203,10 +214,9 @@ describe('collection search handoff', () => {
 			findFirst: (input?: object) => PromiseLike<unknown> & { readonly loading: boolean };
 		};
 		const query = people.findFirst({ where: { name: { eq: 'Nobody' } } });
-		sync.client.publish(sync.mounted[0]?.key ?? '', null);
-		// `null` is the authoritative empty set, not a missing answer: the awaited half settles
-		// with undefined (the same value a template reads from `current`), and `loading` is false
-		// because the answer exists — while a pending query keeps waiting.
+		sync.client.publish(sync.mounted[0]?.key ?? '', []);
+		// An empty retained prefix is authoritative: the awaited half settles with undefined and
+		// `loading` is false, while a pending query without current truth keeps waiting.
 		await expect(query).resolves.toBeUndefined();
 		expect(query.loading).toBe(false);
 	});
@@ -219,7 +229,7 @@ describe('collection search handoff', () => {
 		};
 		const query = people.findFirst({});
 		const key = sync.mounted[0]?.key ?? '';
-		sync.client.publish(key, null, 'pending');
+		sync.client.publish(key, [], 'pending');
 		expect(query.loading).toBe(true);
 		let settled = false;
 		void Promise.resolve(query).then(
@@ -230,7 +240,7 @@ describe('collection search handoff', () => {
 		);
 		await Promise.resolve();
 		expect(settled).toBe(false);
-		sync.client.publish(key, { id: 'p1', name: 'Ada' });
+		sync.client.publish(key, [{ id: 'p1', name: 'Ada' }]);
 		expect(await query).toEqual({ id: 'p1', name: 'Ada' });
 	});
 });

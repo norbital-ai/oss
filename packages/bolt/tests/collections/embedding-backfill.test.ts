@@ -1,6 +1,7 @@
 import {
 	AIResponse,
 	EffectId,
+	ProviderObservation,
 	type AIRequest,
 	type DatabaseRequest,
 	type DatabaseResponse
@@ -14,7 +15,7 @@ import {
 import { FacilityError } from '../../src/runtime/facilities/database.js';
 
 describe('record embedding backfill', () => {
-	it('claims 512 rows and drains hundred-row provider requests with bounded parallelism', async () => {
+	it('claims 512 rows and embeds one typed input per record with bounded parallelism', async () => {
 		const rows = Array.from({ length: RECORD_EMBEDDING_BACKFILL_LIMIT }, (_, index) => ({
 			id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
 			updated_at: '2026-08-30T00:00:00.000Z',
@@ -46,15 +47,22 @@ describe('record embedding backfill', () => {
 						}
 					},
 					ai: {
-						execute: (effectId, request) => {
+						embed: (effectId, request) => {
 							aiCalls.push({ id: effectId, request });
 							return Effect.promise(async () => {
 								activeAI += 1;
 								peakAI = Math.max(peakAI, activeAI);
 								await new Promise((resolve) => setTimeout(resolve, 5));
 								activeAI -= 1;
-								if (request._tag !== 'Embed') throw new Error('expected an embedding request');
-								return AIResponse.make({ output: request.inputs.map(() => [0.1, 0.2]) });
+								return AIResponse.cases.Embedded.make({
+									embeddings: request.inputs.map(() => [0.1, 0.2]),
+									observation: ProviderObservation.make({
+										callId: request.callId,
+										provider: 'test',
+										model: request.modelId,
+										operation: 'embedding'
+									})
+								});
 							});
 						}
 					},
@@ -62,7 +70,7 @@ describe('record embedding backfill', () => {
 						{
 							name: 'photo_evidence',
 							fields: { photo: { type: 'json' } },
-							embedding: { fields: ['photo'] }
+							embedding: { fields: ['photo'], model: 'test/embedding' }
 						}
 					]
 				},
@@ -79,13 +87,18 @@ describe('record embedding backfill', () => {
 		expect(select?.request._tag).toBe('Query');
 		if (select?.request._tag !== 'Query') throw new Error('expected a database select');
 		expect(select.request.parameters[0]).toBe(512);
-		expect(aiCalls).toHaveLength(6);
+		expect(aiCalls).toHaveLength(512);
 		expect(
 			aiCalls.map(({ request }) => (request._tag === 'Embed' ? request.inputs.length : 0))
-		).toEqual([100, 100, 100, 100, 100, 12]);
+		).toEqual(Array.from({ length: 512 }, () => 1));
+		expect(
+			aiCalls.every(
+				({ request }) => request._tag === 'Embed' && request.modelId === 'test/embedding'
+			)
+		).toBe(true);
 		expect(peakAI).toBe(4);
 		expect(databaseCalls).toHaveLength(7);
-		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(13);
+		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(519);
 	});
 
 	it('keeps the provider reason when a batch cannot be embedded', async () => {
@@ -113,7 +126,7 @@ describe('record embedding backfill', () => {
 							)
 					},
 					ai: {
-						execute: () =>
+						embed: () =>
 							Effect.fail(
 								new FacilityError({
 									operation: 'ai',
@@ -128,7 +141,7 @@ describe('record embedding backfill', () => {
 						{
 							name: 'photo_evidence',
 							fields: { photo: { type: 'json' } },
-							embedding: { fields: ['photo'] }
+							embedding: { fields: ['photo'], model: 'test/embedding' }
 						}
 					]
 				},

@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { SystemCommandContracts } from '../../../bolt-protocol/src/system.js';
 import { defineEnvironment, describeEnvironment } from '../../src/authoring/environment-schema.js';
 
 /**
@@ -63,15 +63,9 @@ describe('environment declaration', () => {
 
 describe('secrets command surface', () => {
 	it('exposes status and write, and deliberately no read', () => {
-		// The one line that would put every credential a fetch away from a browser. Asserted on the
-		// dispatch source because its absence is the guarantee — a test that only exercised the
-		// commands that exist could never notice one being added.
-		const dispatch = readFileSync(
-			new URL('../../src/runtime/dispatch.ts', import.meta.url),
-			'utf8'
+		const secrets = SystemCommandContracts.map(({ name }) => name).filter((name) =>
+			name.startsWith('secrets.')
 		);
-		expect(dispatch).toContain("case 'secrets.status'");
-		expect(dispatch).toContain("case 'secrets.write'");
-		expect(dispatch).not.toContain("case 'secrets.read'");
+		expect(secrets).toEqual(['secrets.status', 'secrets.write']);
 	});
 });

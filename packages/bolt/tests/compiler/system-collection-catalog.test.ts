@@ -1,5 +1,28 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { systemCollectionCatalog } from '../../src/compiler/model-fields.js';
+import { systemCollectionCatalog } from '../../src/compiler/workspace-build.js';
+
+/**
+ * The six durable agent collections, and the names the Effect cutover retired.
+ *
+ * Shared by the two assertions below because they are the same claim read from two places: the
+ * catalog the client is served, and the durable schema sources it is derived from.
+ */
+const DURABLE_AGENT_COLLECTIONS = [
+	'agent_task',
+	'agent_plan',
+	'agent_message',
+	'agent_inbox',
+	'agent_run',
+	'agent_usage'
+] as const;
+
+const RETIRED_AGENT_COLLECTIONS = [
+	'chat_session',
+	'chat_message',
+	'chat_message_part',
+	'agent_lane'
+] as const;
 
 /**
  * The client catalog has to describe the collections the *platform* declares, not only the ones a
@@ -29,17 +52,46 @@ describe('system collection catalog', () => {
 		for (const name of ['user', 'team', 'session']) expect(byName.has(name)).toBe(true);
 	});
 
-	it('publishes the canonical agent transcript and sole lane scheduler collections', () => {
-		for (const name of [
-			'chat_message',
-			'chat_message_part',
-			'agent_run',
-			'agent_lane',
-			'agent_inbox'
+	it('publishes exactly the six canonical durable agent collections', () => {
+		for (const name of DURABLE_AGENT_COLLECTIONS) expect(byName.has(name)).toBe(true);
+		for (const retired of RETIRED_AGENT_COLLECTIONS) expect(byName.has(retired)).toBe(false);
+	});
+
+	/**
+	 * The same six names one layer down, in the sources the catalog is built from.
+	 *
+	 * The catalog assertion above is satisfied by a schema that still *declares* the retired shapes
+	 * and merely withholds them from the client, which is exactly the compatibility path the Effect
+	 * cutover was meant to leave nothing of. So the durable sources are read directly: a retired
+	 * collection, a retired reference type, or a retired usage entry point reappearing anywhere in
+	 * them fails here rather than surviving behind a filter.
+	 */
+	it('keeps the Effect durable schema cutover flagless', async () => {
+		const sources = await Promise.all(
+			[
+				new URL('../../../bolt-protocol/src/facilities.ts', import.meta.url),
+				new URL('../../../bolt-protocol/src/system.ts', import.meta.url),
+				new URL('../../src/authoring/system-models.ts', import.meta.url),
+				new URL('../../src/runtime/agents/agents.ts', import.meta.url),
+				new URL('../../src/runtime/schema/system-collections.ts', import.meta.url)
+			].map((url) => readFile(url, 'utf8'))
+		);
+		const durableSource = sources.join('\n');
+
+		for (const forbidden of [
+			...RETIRED_AGENT_COLLECTIONS,
+			'agent_message_part',
+			'ChatDocumentRef',
+			'AgentEnqueueResult',
+			'addAIUsage',
+			'readAIUsage',
+			'TurnResult'
 		]) {
-			expect(byName.has(name)).toBe(true);
+			expect(durableSource, forbidden).not.toContain(forbidden);
 		}
-		expect(byName.has('agent_mailbox')).toBe(false);
+		for (const required of DURABLE_AGENT_COLLECTIONS) {
+			expect(durableSource, required).toContain(required);
+		}
 	});
 
 	it('publishes automation observability without queue and retry columns', () => {

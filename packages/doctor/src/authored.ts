@@ -1,7 +1,5 @@
 import { Worker } from 'node:worker_threads';
 import type { Finding } from './index.js';
-import type { SemanticQuery } from './patterns-yaml.js';
-import type { IndexRunStats } from './semantic/embedder.js';
 import type { TypeAwareRun } from './type-aware.js';
 
 type AuthoredRun = Readonly<{
@@ -11,27 +9,20 @@ type AuthoredRun = Readonly<{
 	ruleSetDigest: string;
 	allFiles: ReadonlyArray<string>;
 	selectedFiles: ReadonlyArray<string>;
-	/** Pseudocode halves from YAML patterns; evaluated by the semantic pass. */
-	queries: ReadonlyArray<SemanticQuery>;
 	/** Coverage of the type-aware tier, which always runs. Findings are already merged above. */
 	typeAware: Omit<TypeAwareRun, 'findings'>;
-	/** Coverage and spend of the semantic pass; `ran: false` only when explicitly declined. */
-	semantic: Readonly<{
-		ran: boolean;
-		embedderId: string | undefined;
-		indexDigest: string | undefined;
-		stats: IndexRunStats | undefined;
-		clusterCount: number;
-		singletonCount: number;
-	}>;
 }>;
 
 type AuthoredRequest = Readonly<{
 	root: string;
 	includeTests: boolean;
 	paths: ReadonlyArray<string>;
-	semanticDisabled: boolean;
 	signal?: AbortSignal | undefined;
+}>;
+
+type AuthoredWorkerResult = Readonly<{
+	readonly type: 'authored-result';
+	readonly result: AuthoredRun;
 }>;
 
 /**
@@ -47,8 +38,7 @@ export function runAuthored(request: AuthoredRequest): Promise<AuthoredRun> {
 			workerData: {
 				root: request.root,
 				includeTests: request.includeTests,
-				paths: request.paths,
-				semanticDisabled: request.semanticDisabled
+				paths: request.paths
 			}
 		});
 		const abort = () => {
@@ -60,9 +50,12 @@ export function runAuthored(request: AuthoredRequest): Promise<AuthoredRun> {
 			return;
 		}
 		request.signal?.addEventListener('abort', abort, { once: true });
-		worker.once('message', (result: AuthoredRun) => {
+		worker.on('message', (message: unknown) => {
+			const completed = message as Partial<AuthoredWorkerResult>;
+			if (completed.type !== 'authored-result' || completed.result === undefined) return;
 			request.signal?.removeEventListener('abort', abort);
-			resolve(result);
+			resolve(completed.result);
+			void worker.terminate();
 		});
 		worker.once('error', (error) => {
 			request.signal?.removeEventListener('abort', abort);

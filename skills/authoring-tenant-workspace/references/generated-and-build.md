@@ -16,7 +16,7 @@ templates/* ──────────────────────�
 | Tree                    | Owns                                                                                          |
 | ----------------------- | --------------------------------------------------------------------------------------------- |
 | `oss/packages/*`        | Bolt compiler/runtime/protocol, UI, std, config package source                                |
-| `templates*/*`          | Tenant source, assets, migrations, template metadata                                          |
+| `templates*/*`          | Tenant source, assets, migrations, template metadata; target committed `.norbital/shared` Skill packages |
 | `seed_bank`             | Per-template fixture trees (`<collection>.json` per collection, asset media) loaded by Colony |
 | `norbital/apps/colony`  | Hosting, compilation orchestration, releases, routes, tenant DBs                              |
 | `norbital/apps/website` | Marketing/docs UI; public template pages fetched at build time                                |
@@ -42,26 +42,49 @@ failure, and owns:
 ```
 
 Never edit generated output. Ignore generated paths individually; never ignore `.norbital/` as a
-whole because migrations and doctor configuration are committed. The authored `tsconfig.json` extends
-`.norbital/tsconfig.json`.
+whole because migrations and doctor configuration are committed. The active toolchain/Effect RFCs
+add one more explicit exception: `.norbital/shared/**` is committed tenant Skill source, whereas
+`.norbital/personal/**` remains ignored and is never a build/release input. The compiler does not yet
+accept the new Skill layout, so this is a pending cutover contract, not permission to add a second
+source shape. The authored `tsconfig.json` extends `.norbital/tsconfig.json`.
 
 ## Local package propagation
 
-Local OSS changes cross five boundaries. One command covers the first four:
+Local OSS changes cross package and artifact boundaries. The light command stops after package
+propagation:
 
 ```sh
 pnpm run env -- link
 ```
 
 1. Build `oss/packages/<name>/build`.
-2. Publish that build into the yalc store.
+2. Publish that build into the yalc store and stage it for Colony's guest package overlay.
 3. Copy it into each consumer's `.yalc/`.
 4. Hand `node_modules` back to pnpm (`yalc add --pure` + install) so it re-materializes its
    virtual-store copy.
-5. Run `bolt sync`, then restart Colony so its bootstrap publishes and routes the new artifact.
+
+`env -- link` verifies those package boundaries, but it does not run `bolt sync`, publish a new
+tenant artifact, or change a routed tenant. Use the full command when the running tenant must see a
+change:
+
+```sh
+pnpm --dir norbital run env -- dev --template=<key>
+pnpm --dir norbital run env -- dev --ui --template=<key>
+```
+
+`dev` performs propagation plus template sync/build; `--ui` additionally starts fresh local Colony.
+Without `--ui`, restart/operate Colony through its normal local process after the build completes.
 
 `env -- link` ends by verifying that every workspace resolves through pnpm's store and actually
 imports, so a missed hop fails the command instead of surfacing later as an edit that did nothing.
+
+Colony unit tests can consume the yalc overlay (`file:.yalc/`) while `package.json` still pins the
+last published version. Guest-store flatten compares the local overlay against a **published**
+manifest of the same version. If that version is unpublished (today: local `0.0.14` with no
+registry `0.0.14`), flatten treats every dependency as changed and can fail on nested
+multi-version closures such as `runed@0.25` vs `runed@0.37`. Do not weaken flatten to paper over
+that. Do not Vite-alias Colony at `oss/packages`. `env -- link` is the overlay; `env -- reset`
+destroys tenant databases and is not a refresh.
 
 The realm command performs all five for Colony and templates and also links OSS packages into the
 website:
@@ -83,9 +106,11 @@ registry pins and lockfiles are restored in Colony, the website and both templat
 | -------------------------------------------- | ------------------------------- | --------------------------------------------------- |
 | Colony route/component/server module         | Usually Vite HMR                | Reload; restart for `.env`, bootstrap, dependencies |
 | Website route/component/server module        | Usually Vite HMR                | Reload                                              |
-| Any OSS package consumed by a template       | No                              | realm `env -- dev --ui`; hard-refresh tenant        |
-| OSS `config`, `std`, or `ui` used by website | No                              | `norbital env -- link`; restart website             |
-| Template source, asset, migration, or i18n   | No                              | `pnpm sync`; restart Colony through realm command   |
+| Any OSS package consumed by a template       | No                              | `pnpm --dir norbital run env -- dev --ui`; hard-refresh tenant |
+| OSS `config`, `std`, or `ui` used by website | No                              | `pnpm --dir norbital run env -- link`; restart website |
+| Template source, asset, migration, or i18n   | No                              | `pnpm --dir norbital run env -- dev --ui --template=<key>` |
+| Tenant `.norbital/shared/**` Skill (RFC target) | No                           | same `env -- dev` path after the toolchain cutover  |
+| Personal `.norbital/personal/**` Skill (RFC target) | no tenant artifact         | owner source adapter on the next run; no `env` command |
 | Template manifest / catalogue membership     | No                              | restart Colony                                      |
 | Template README/thumbnail on local website   | No local source path            | publish public template refs; rebuild website       |
 

@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { defineModel, text } from '../../src/authoring/models-schema.js';
-import { compileModel, describeHooks } from '../../src/authoring/model-introspection.js';
+import {
+	defineModel,
+	text,
+	type ModelDeclaration
+} from '../../src/authoring/models-schema.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 /**
  * What `defineModel` metadata survives the crossing into the artifact.
  *
- * `renderArtifact` rebuilds each collection descriptor key by key, so anything it does not name is
- * dropped without an error anywhere — which is how `description` and `icon` came to be declared by
- * templates and read by nothing.
+ * `renderArtifact` embeds the collection descriptors from `CompiledAuthoring` without rebuilding
+ * model semantics in the runtime bundle.
  *
  * The emitted mapping is executed rather than pattern-matched. A test that greps the generated text
  * passes on the spelling of a line; this one passes only if the descriptor actually comes out
@@ -17,42 +20,32 @@ import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 const root = '/workspace';
 
-/** The one statement in the artifact that turns declarations into collection descriptors. */
-const collectionDescriptors = (
-	artifact: string,
-	declaredModels: Readonly<Record<string, unknown>>,
-	declaredWorkspace: {
-		readonly collections: ReadonlyArray<{ readonly name: string; readonly history: boolean }>;
-	}
-): ReadonlyArray<Record<string, unknown>> => {
-	const start = artifact.indexOf('const collections = declaredWorkspace.collections.map(');
-	const end = artifact.indexOf('\n// The authored module is the authority', start);
-	if (start < 0 || end < 0)
-		throw new Error('the artifact no longer maps collections in one statement');
-	const source = `${artifact.slice(start, end)}\nreturn collections;`;
-	return new Function(
-		'declaredWorkspace',
-		'declaredModels',
-		'declaredHooks',
-		'collectionSourcePaths',
-		'compileModel',
-		'describeHooks',
-		source
-	)(declaredWorkspace, declaredModels, {}, {}, compileModel, describeHooks) as ReadonlyArray<
-		Record<string, unknown>
-	>;
+/** Reads the already-compiled collection descriptors embedded in the artifact. */
+const collectionDescriptors = (artifact: string): ReadonlyArray<Record<string, unknown>> => {
+	const start = artifact.indexOf('const declaredWorkspace = ');
+	const end = artifact.indexOf('\n};\n', start) + '\n};'.length;
+	if (start < 0 || end < '\n};'.length)
+		throw new Error('the artifact no longer declares a workspace literal');
+	return (
+		new Function(`${artifact.slice(start, end)}\nreturn declaredWorkspace;`)() as {
+			readonly collections: ReadonlyArray<Record<string, unknown>>;
+		}
+	).collections;
 };
 
-const artifactFor = (collections: ReadonlyArray<string>): string =>
-	renderArtifact({
+const artifactFor = (
+	models: Readonly<Record<string, ModelDeclaration>>
+): string => {
+	const compiledAuthoring = compileWorkspaceAuthoring({
+		models,
+		sourcePaths: Object.fromEntries(
+			Object.keys(models).map((name) => [name, `src/collections/${name}/+model.ts`])
+		)
+	});
+	return renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		collections: collections.map((name) => ({
-			name,
-			path: `${root}/src/collections/${name}/+model.ts`,
-			sourcePath: `src/collections/${name}/+model.ts`,
-			fields: { title: { type: 'string', required: true, indexed: false } }
-		})),
-		relations: [],
+		compiledAuthoring,
+		collectionHooks: [],
 		apps: [],
 		policies: [],
 		functions: [],
@@ -61,7 +54,6 @@ const artifactFor = (collections: ReadonlyArray<string>): string =>
 		automations: [],
 		automationFiles: [],
 		pipelineFiles: [],
-		skills: [],
 		prompt: 'You are the test workspace agent.',
 		root,
 		assetIndex: { browser: [], server: [] },
@@ -70,23 +62,29 @@ const artifactFor = (collections: ReadonlyArray<string>): string =>
 		migrations: [],
 		schemaFingerprint: 'sha256:fixture'
 	});
+};
 
 describe('artifact collection metadata', () => {
+	it('embeds compiled model semantics without importing model declarations', () => {
+		const artifact = artifactFor({ notes: defineModel({ title: text() }) });
+
+		expect(artifact).toContain('src/collections/notes/+model.ts');
+		expect(artifact).not.toMatch(/^import model\d+ from /m);
+		expect(artifact).not.toContain('compileModel');
+		expect(artifact).not.toContain('declaredModels');
+	});
+
 	it('carries every declared metadata option onto the collection descriptor', () => {
-		const artifact = artifactFor(['orders']);
-		const [orders] = collectionDescriptors(
-			artifact,
-			{
-				orders: defineModel(
-					{ title: text() },
-					{
-						description: 'Purchase orders awaiting fulfilment',
-						icon: 'lucide:package'
-					}
-				)
-			},
-			{ collections: [{ name: 'orders', history: true }] }
-		);
+		const artifact = artifactFor({
+			orders: defineModel(
+				{ title: text() },
+				{
+					description: 'Purchase orders awaiting fulfilment',
+					icon: 'lucide:package'
+				}
+			)
+		});
+		const [orders] = collectionDescriptors(artifact);
 
 		expect(orders?.['description']).toBe('Purchase orders awaiting fulfilment');
 		expect(orders?.['icon']).toBe('lucide:package');
@@ -96,12 +94,8 @@ describe('artifact collection metadata', () => {
 	// tests `=== undefined` to decide whether to emit a key at all, so a present-but-empty key would
 	// turn "this workspace said nothing" into "this workspace said nothing, explicitly".
 	it('leaves a collection that declared none of them without the keys', () => {
-		const artifact = artifactFor(['notes']);
-		const [notes] = collectionDescriptors(
-			artifact,
-			{ notes: defineModel({ title: text() }) },
-			{ collections: [{ name: 'notes', history: true }] }
-		);
+		const artifact = artifactFor({ notes: defineModel({ title: text() }) });
+		const [notes] = collectionDescriptors(artifact);
 
 		expect(notes).not.toHaveProperty('description');
 		expect(notes).not.toHaveProperty('icon');
@@ -114,23 +108,17 @@ describe('artifact collection metadata', () => {
 	 * only reachable at all because the migration generator read it for an unrelated purpose.
 	 */
 	it('carries a declared history opt-out onto the collection descriptor', () => {
-		const artifact = artifactFor(['audit_scratch']);
-		const [scratch] = collectionDescriptors(
-			artifact,
-			{ audit_scratch: defineModel({ title: text() }, { history: false }) },
-			{ collections: [{ name: 'audit_scratch', history: true }] }
-		);
+		const artifact = artifactFor({
+			audit_scratch: defineModel({ title: text() }, { history: false })
+		});
+		const [scratch] = collectionDescriptors(artifact);
 
 		expect(scratch?.['history']).toBe(false);
 	});
 
 	it('leaves a collection that declared no history preference tracked', () => {
-		const artifact = artifactFor(['notes']);
-		const [notes] = collectionDescriptors(
-			artifact,
-			{ notes: defineModel({ title: text() }) },
-			{ collections: [{ name: 'notes', history: true }] }
-		);
+		const artifact = artifactFor({ notes: defineModel({ title: text() }) });
+		const [notes] = collectionDescriptors(artifact);
 
 		expect(notes?.['history']).toBe(true);
 	});

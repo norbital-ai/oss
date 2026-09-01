@@ -29,8 +29,13 @@ const toolHandlers = (
 const artifactWithOneTool = (): string =>
 	renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		collections: [],
-		relations: [],
+		compiledAuthoring: {
+			collections: [],
+			relationships: [],
+			customTypeReferences: [],
+			capabilities: { skills: [], mcp: [] }
+		},
+		collectionHooks: [],
 		apps: [],
 		policies: [],
 		functions: [],
@@ -39,7 +44,6 @@ const artifactWithOneTool = (): string =>
 		automations: [],
 		automationFiles: [],
 		pipelineFiles: [],
-		skills: [],
 		prompt: 'You are the test workspace agent.',
 		root,
 		assetIndex: { browser: [], server: [] },

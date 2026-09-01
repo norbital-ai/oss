@@ -90,7 +90,7 @@
 		"@marcbachmann/cel-js": "^8.0.0"
 	},
 	"peerDependencies": {
-		"effect": "4.0.0-rc.111"
+		"effect": "4.0.0-rc.112"
 	},
 	"devDependencies": {
 		"@norbital-ai/config": "workspace:*",

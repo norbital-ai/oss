@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { isSearchableCollectionField } from '@norbital-ai/std/collection';
 import { defineModel, enums, phone, text } from '../../src/authoring/index.js';
+import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
 import { collection } from '../../src/authoring/workspace-schema.js';
-import { compileModel, describeModel } from '../../src/authoring/model-introspection.js';
-import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
+import {
+	collectionCatalogEntry,
+	compileModel,
+	describeModel
+} from '../../src/authoring/model-introspection.js';
 import { Effect } from 'effect';
 import { sql } from 'drizzle-orm';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 
 /**
  * Free-text search is opt-in: only a column authored `text({ search: true })` is ever matched.
@@ -24,6 +29,8 @@ describe('searchable field opt-in', () => {
 		internal_code: text(),
 		contact: phone()
 	});
+	const catalogFor = (name: string, declaration: ModelDeclaration) =>
+		collectionCatalogEntry(compileModel(collection({ name, fields: {} }), declaration), []);
 
 	it('records the opt-in on the builder for every text-ish kind', () => {
 		const fields = describeModel(opted);
@@ -76,12 +83,14 @@ describe('searchable field opt-in', () => {
 	 * yes to. Asserting the flag alone would miss `kind`, which the predicate weighs just as heavily.
 	 */
 	it('emits a catalog the shared searchability predicate agrees with', () => {
-		const source = `export default defineModel({
-	title: text({ search: true }).notNull(),
-	summary: text(),
-	contact: phone()
-});`;
-		const catalog = extractCollectionCatalog('products', source, []);
+		const catalog = catalogFor(
+			'products',
+			defineModel({
+				title: text({ search: true }).notNull(),
+				summary: text(),
+				contact: phone()
+			})
+		);
 
 		expect(catalog.fields.length).toBeGreaterThan(0);
 		expect(catalog.fields.filter(isSearchableCollectionField).map((field) => field.name)).toEqual([
@@ -90,11 +99,10 @@ describe('searchable field opt-in', () => {
 	});
 
 	it('agrees with that predicate that an opted-out collection is unsearchable', () => {
-		const source = `export default defineModel({
-	reference: text().notNull(),
-	contact: phone()
-});`;
-		const catalog = extractCollectionCatalog('invoices', source, []);
+		const catalog = catalogFor(
+			'invoices',
+			defineModel({ reference: text().notNull(), contact: phone() })
+		);
 
 		expect(catalog.fields.length).toBeGreaterThan(0);
 		expect(catalog.fields.filter(isSearchableCollectionField)).toHaveLength(0);
@@ -111,31 +119,23 @@ describe('searchable field opt-in', () => {
 	 * resolver never searches, or a search box over a field absent from the document.
 	 */
 	it('builds one stored document and two indexes from exactly the opted-in fields', async () => {
-		const source = [
-			'export default defineModel({',
-			'\ttitle: text({ search: true }).notNull(),',
-			'\thotline: phone({ search: true }),',
-			"\tstatus: enums(['active', 'draft'], { search: true }),",
-			'\tsummary: text(),',
-			'\tcontact: phone()',
-			'});'
-		].join('\n');
-		const catalog = extractCollectionCatalog('products', source, []);
+		const model = defineModel({
+			title: text({ search: true }).notNull(),
+			hotline: phone({ search: true }),
+			status: enums(['active', 'draft'], { search: true }),
+			summary: text(),
+			contact: phone()
+		});
+		const catalog = catalogFor('products', model);
 		// Read off the drizzle lineage, which is the only renderer of an authored collection's indexes
 		// now. The schema plan used to render them too, from the same `FieldDefinition.search` flag, and
 		// two renderings of one table were free to disagree about far more than search.
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
-				models: {
-					products: defineModel({
-						title: text({ search: true }).notNull(),
-						hotline: phone({ search: true }),
-						status: enums(['active', 'draft'], { search: true }),
-						summary: text(),
-						contact: phone()
-					})
-				},
-				relations: [],
+				authoring: compileWorkspaceAuthoring({
+					models: { products: model },
+					sourcePaths: { products: 'fixture:products' }
+				}),
 				previous: undefined
 			})
 		);
@@ -160,13 +160,15 @@ describe('searchable field opt-in', () => {
 	it('inlines a generated searchable field into the generated document', async () => {
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({
-				models: {
-					products: defineModel({
-						code: text().notNull(),
-						summary: text({ search: true }).generatedAlwaysAs(sql`upper("code")`)
-					})
-				},
-				relations: [],
+				authoring: compileWorkspaceAuthoring({
+					models: {
+						products: defineModel({
+							code: text().notNull(),
+							summary: text({ search: true }).generatedAlwaysAs(sql`upper("code")`)
+						})
+					},
+					sourcePaths: { products: 'fixture:products' }
+				}),
 				previous: undefined
 			})
 		);

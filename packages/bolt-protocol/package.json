@@ -26,6 +26,10 @@
 			"types": "./build/invocation.d.ts",
 			"default": "./build/invocation.js"
 		},
+		"./system": {
+			"types": "./build/system.d.ts",
+			"default": "./build/system.js"
+		},
 		"./wire": {
 			"types": "./build/wire.d.ts",
 			"default": "./build/wire.js"
@@ -42,11 +46,11 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-protocol"
 	},
 	"peerDependencies": {
-		"effect": "4.0.0-rc.111"
+		"effect": "4.0.0-rc.112"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.111",
-		"effect": "4.0.0-rc.111",
+		"@effect/vitest": "4.0.0-rc.112",
+		"effect": "4.0.0-rc.112",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"
 	},

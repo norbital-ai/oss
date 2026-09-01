@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	TaskId
+} from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import {
@@ -59,44 +65,41 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('agent collection discovery', () => {
-	it('does not reveal collection names outside the subject authority', async () => {
+describe('Task collection discovery', () => {
+	it('returns only collection names inside the Task subject authority', async () => {
 		const subject = {
 			userId: 'envoy-like-user',
 			tenantId: 'test-tenant',
 			teamPath: ['field-envoy'],
 			policies: []
 		};
-		const offered: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
+		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		let result: Readonly<Record<string, unknown>> | undefined;
 		const ai = successfulAI((request, index) => {
-			offered.push(request);
+			generated.push(request);
 			if (index > 0) result = lastToolResult(request);
-			return {
-				output:
-					index === 0
-						? assistantToolCall('describe_workspace', {}, 'describe-authority')
-						: assistantText('I can work with job assignments.', 'authority-answer')
-			};
+			return index === 0
+				? assistantToolCall('describe_workspace', {}, 'describe-authority')
+				: assistantText('I can work with job assignments.');
 		});
 		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('collection-discovery'),
-				subject,
-				'whatsapp-field',
-				'conversation-discovery',
-				'collection-discovery-input',
-				Agents.userAgentInput('Describe reachable collections')
-			)
+		const taskId = TaskId.make('00000000-0000-4000-8000-000000000301');
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('collection-discovery:submit'), subject, {
+				taskId,
+				agentId: AgentId.make('whatsapp-field'),
+				message: Agents.userAgentInput('Describe reachable collections'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		const executed = await harness.runtime.runPromise(
+			agents.execute(harness.effectId('collection-discovery:execute'), subject, taskId)
 		);
 
-		expect(admitted.status).toBe('completed');
-		expect(offered).toHaveLength(2);
-		const offeredSurface = JSON.stringify(offered[0]);
-		expect(offeredSurface).toContain('Allowed collections: job_assignments');
-		expect(offeredSurface).not.toContain(hiddenCollection);
+		expect(executed.status).toBe('done');
+		expect(generated).toHaveLength(2);
 		expect(result).toMatchObject({ collections: expect.arrayContaining(['job_assignments']) });
 		expect(JSON.stringify(result)).not.toContain(hiddenCollection);
 	});

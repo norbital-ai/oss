@@ -3,7 +3,7 @@
  *
  * The registry is the whole modularity story: the core never statically imports an opinionated
  * rule into its default rule set, so a repository that names nothing is measured by the neutral
- * baseline alone — graph, type-aware, metrics, semantics — and a pack's code joins the audit only
+ * baseline alone — graph, type-aware, metrics — and a pack's code joins the audit only
  * when some repository's `doctor.config` writes its name. Since the Effect and Norbital packs
  * moved into their own packages (`@norbital-ai/doctor-effect`, `@norbital-ai/doctor-norbital`),
  * a registered name resolves through that package rather than through this one: selecting a name

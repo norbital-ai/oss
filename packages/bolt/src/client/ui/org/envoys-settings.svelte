@@ -98,9 +98,10 @@
 	);
 	const statuses = $derived(
 		Object.fromEntries(
-			statusQueries.flatMap(({ name, query }) =>
-				query.current === undefined ? [] : [[name, query.current] as const]
-			)
+			statusQueries.flatMap(({ name, query }) => {
+				const status = query.current;
+				return status === undefined ? [] : [[name, status] as const];
+			})
 		)
 	);
 	// Kept beside the statuses rather than folded into them: a failed traffic query is not zero

@@ -24,7 +24,11 @@ const digest = (bytes: string | Uint8Array): string =>
 	createHash('sha256').update(bytes).digest('hex');
 
 /** Materializes one workspace tree: a built client, an optional server-asset declaration, media. */
-const workspaceWith = async (files: Readonly<Record<string, string>>, declared?: Array<string>) => {
+const workspaceWith = async (
+	files: Readonly<Record<string, string>>,
+	declared?: Array<string>,
+	capabilities?: Parameters<typeof buildAssetIndex>[3]
+) => {
 	const root = await mkdtemp(join(tmpdir(), 'bolt-asset-index-'));
 	for (const [path, content] of Object.entries(files)) {
 		const absolute = join(root, path);
@@ -39,7 +43,9 @@ const workspaceWith = async (files: Readonly<Record<string, string>>, declared?:
 		);
 	}
 	const artifactDirectory = join(root, ARTIFACT_DIRECTORY);
-	const index = await Effect.runPromise(buildAssetIndex(root, 'fixture', artifactDirectory));
+	const index = await Effect.runPromise(
+		buildAssetIndex(root, 'fixture', artifactDirectory, capabilities)
+	);
 	return { root, artifactDirectory, index };
 };
 
@@ -60,7 +66,7 @@ describe('artifact asset index', () => {
 				'/__bolt/request/api/template-seed-assets/fixture/banner.svg'
 			].toSorted()
 		);
-		expect(index.server).toEqual([]);
+		expect(index.server.map(({ path }) => path)).toEqual(['capabilities/index.json']);
 
 		// The roundtrip that matters: every entry names a file that exists, whose bytes hash to the
 		// digest the entry claims and whose length matches. A host re-verifies exactly this before
@@ -73,7 +79,10 @@ describe('artifact asset index', () => {
 
 		// Asset indexing emits only content-addressed objects. The complete release document written by
 		// `syncWorkspace` is the sole on-disk authority for these two arrays.
-		expect(await readdir(artifactDirectory)).toEqual([ARTIFACT_ASSET_DIRECTORY]);
+		expect(await readdir(artifactDirectory)).toEqual([
+			ARTIFACT_ASSET_DIRECTORY,
+			'capabilities'
+		]);
 	});
 
 	/**
@@ -98,14 +107,15 @@ describe('artifact asset index', () => {
 		expect(index.browser.some(({ path }) => path.includes('pdq'))).toBe(false);
 		// Keyed exactly as declared: the guest's bridge asks `__artifactReadBytes` for this string, so
 		// a leading slash or a URL prefix here is a key nothing can ever match.
-		expect(index.server).toEqual([
-			{
+		expect(index.server.map(({ path }) => path).toSorted()).toEqual(
+			['capabilities/index.json', target].toSorted()
+		);
+		expect(index.server.find(({ path }) => path === target)).toEqual({
 				path: target,
 				contentType: 'application/wasm',
 				sha256: digest('wasm-bytes'),
 				byteLength: 10
-			}
-		]);
+			});
 	});
 
 	it('refuses a declaration the build did not honour', async () => {
@@ -144,8 +154,46 @@ describe('artifact asset index', () => {
 		// Content addressing is not an optimization applied afterwards — the digest *is* the filename,
 		// so two paths with the same bytes cannot produce two files.
 		const blobs = await readdir(join(artifactDirectory, ARTIFACT_ASSET_DIRECTORY));
-		expect(blobs).toHaveLength(new Set(index.browser.map(({ sha256 }) => sha256)).size);
+		expect(blobs).toHaveLength(
+			new Set([...index.browser, ...index.server].map(({ sha256 }) => sha256)).size
+		);
 		expect(blobs).toContain(digest('.same {}'));
+	});
+
+	it('names the compiled capability index and every skill package object', async () => {
+		const skillBody = '---\nname: triage\ndescription: Resolve tickets\n---\n# Triage\n';
+		const { artifactDirectory, index } = await workspaceWith(
+			{
+				[client]: 'export const mountWorkspace = () => {};',
+				'.norbital/shared/triage/SKILL.md': skillBody
+			},
+			undefined,
+			{
+				skills: [{
+					name: 'triage',
+					description: 'Resolve tickets',
+					digest: 'package-digest',
+					files: [{
+						path: 'SKILL.md',
+						sha256: digest(skillBody),
+						byteLength: Buffer.byteLength(skillBody)
+					}]
+				}],
+				mcp: []
+			}
+		);
+
+		expect(index.server.map(({ path }) => path)).toEqual([
+			'capabilities/index.json',
+			'capabilities/skills/triage/SKILL.md'
+		]);
+		const capabilityIndex = JSON.parse(
+			await readFile(join(artifactDirectory, 'capabilities', 'index.json'), 'utf8')
+		) as { readonly format: string; readonly skills: ReadonlyArray<{ readonly name: string }> };
+		expect(capabilityIndex).toMatchObject({
+			format: 'norbital-capabilities-v1',
+			skills: [{ name: 'triage' }]
+		});
 	});
 
 	it('still refuses a build that emitted no client, declaration file or not', async () => {

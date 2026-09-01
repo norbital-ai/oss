@@ -1,6 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { Result, Schema } from 'effect';
-import { WhereCompileError, type OrderTerm } from './where.js';
+import { WhereCompileError, type OrderTerm } from '#lib/runtime/access/effective-plan.js';
 
 /** The scalar ordering values a cursor may carry — a json column has no total SQL order. */
 const CursorValueSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);

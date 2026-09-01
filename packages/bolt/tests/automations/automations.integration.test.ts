@@ -8,6 +8,7 @@ import {
 	PROTOCOL_VERSION,
 	ReleaseId,
 	TenantId,
+	type SyncChange,
 	type TaskRequest
 } from '@norbital-ai/bolt-protocol';
 import * as Automations from '../../src/runtime/automations/automations.js';
@@ -77,9 +78,7 @@ describe('Automations owner', () => {
 
 	it('admits an immediate command without waking the scheduler and rejects deferred work', async () => {
 		const wakes: Array<TaskRequest> = [];
-		const commits: Array<
-			ReadonlyArray<{ readonly collection: string; readonly recordId: string }>
-		> = [];
+		const commits: Array<ReadonlyArray<SyncChange>> = [];
 		const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
 		const callContext = testCallContext('i1');
@@ -99,17 +98,19 @@ describe('Automations owner', () => {
 					for (const statement of requests) {
 						statements.push({ sql: statement.sql, parameters: statement.parameters });
 					}
-					const projectedRun = requests.some(
-						({ sql }) => sql.includes('from "automation_run"') && sql.includes('select "id"')
-					);
 					return Promise.resolve({
 						_tag: 'Success',
 						value: {
-							rows: projectedRun
-								? [{ id: '019f6f10-3000-7000-8000-000000000098' }]
-								: requests.some(({ sql }) => sql.includes('returning "id"'))
-									? [{ id: '019f6f10-3000-7000-8000-000000000099' }]
-									: [],
+							rows: requests.some(({ sql }) => sql.includes('returning "id"'))
+								? [
+										{
+											id: '019f6f10-3000-7000-8000-000000000099',
+											task_id: 'e1:start',
+											name: 'daily',
+											status: 'running'
+										}
+									]
+								: [],
 							affectedRows: 0
 						}
 					});
@@ -121,7 +122,7 @@ describe('Automations owner', () => {
 			{
 				call: (_metadata, request) => {
 					commits.push(request.changes);
-					return Promise.resolve({ _tag: 'Success', value: { accepted: true } });
+					return Promise.resolve({ _tag: 'Success', value: {} });
 				}
 			},
 			callContext
@@ -191,8 +192,8 @@ describe('Automations owner', () => {
 					progress: 0.5,
 					text: 'Halfway'
 				});
-				// Cron progress is projected from bolt_task by a trigger. It still publishes the exact
-				// automation_run id so a mounted history query advances before the invocation settles.
+				// Cron progress is projected from bolt_task by a trigger. That current-row projection cannot
+				// prove an operation or old route, so it waits for Phase 5 central transition capture.
 				yield* automations.progress(EffectId.make('cron:progress'), 'scheduled-task', {
 					progress: 0.25,
 					text: 'Scheduled progress'
@@ -205,9 +206,23 @@ describe('Automations owner', () => {
 		expect(taskId).toBe('e1:start');
 		expect(wakes).toEqual([]);
 		expect(commits).toEqual([
-			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000099' }],
-			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000099' }],
-			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000098' }]
+			[
+				{
+					collection: 'automation_run',
+					id: '019f6f10-3000-7000-8000-000000000099',
+					operation: 'insert',
+					after: { task_id: 'e1:start', name: 'daily', status: 'running' }
+				}
+			],
+			[
+				{
+					collection: 'automation_run',
+					id: '019f6f10-3000-7000-8000-000000000099',
+					operation: 'update',
+					before: { task_id: 'e1:start', name: 'daily', status: 'running' },
+					after: { task_id: 'e1:start', name: 'daily', status: 'running' }
+				}
+			]
 		]);
 		const insert = statements.find(
 			(statement) =>

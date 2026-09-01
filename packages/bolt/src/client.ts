@@ -1,6 +1,7 @@
 import { Effect, Schema } from 'effect';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
 import type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
+import { decodeUnknownSchema } from '#lib/schema-decode.js';
 
 export type {
 	BoltClient,
@@ -18,16 +19,23 @@ export type {
 const ClientFactories = {
 	bolt: (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
 		scope,
-		command: (command, input, output, signal, headers) => {
-			// Built before the request rather than inside the pipe: the decoder belongs to the schema the
-			// caller named, not to the response it happens to be applied to.
-			const decode = Schema.decodeUnknownEffect(output);
-			return Effect.runPromise(
-				Effect.tryPromise({
+		command: <S extends Schema.Top>(
+			command: string,
+			input: Schema.Json,
+			output: S,
+			signal?: AbortSignal,
+			headers?: Readonly<Record<string, string>>
+		): Promise<Schema.Schema.Type<S>> => {
+			const effect = Effect.gen(function* () {
+				const raw = yield* Effect.tryPromise({
 					try: () => transport.command(command, input, signal, headers),
 					catch: (cause) => cause
-				}).pipe(Effect.flatMap(decode))
-			);
+				});
+				return yield* decodeUnknownSchema(output, raw);
+			});
+			return signal === undefined
+				? Effect.runPromise(effect)
+				: Effect.runPromise(effect, { signal });
 		}
 	}),
 	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>

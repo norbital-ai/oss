@@ -20,9 +20,15 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { SyncCommit } from '#lib/runtime/facilities/services.js';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 const { automation_run: automationRun, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
+const automationRunPublication = {
+	id: automationRun.id,
+	task_id: automationRun.task_id,
+	name: automationRun.name,
+	status: automationRun.status
+} as const;
 const StoppedTaskStatus = Schema.Struct({ status: Schema.Literal('stopped') });
 
 export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
@@ -125,7 +131,7 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
-	/** Publishes rows projected by the cron queue's database triggers. */
+	/** Trigger projections await the central transaction-capture seam before they can publish. */
 	readonly publishProjectedRuns: (
 		effectId: EffectIdType,
 		taskIds: ReadonlyArray<string>
@@ -179,34 +185,51 @@ export const layer = Layer.effect(
 		const budget = yield* InvocationBudget.Service;
 		const tenant = yield* TenantScope.Service;
 		const syncCommit = yield* SyncCommit.Service;
-		const runChanges = (rows: ReadonlyArray<unknown>): ReadonlyArray<SyncChange> =>
-			rows.flatMap((row) => {
-				if (row === null || typeof row !== 'object' || Array.isArray(row)) return [];
-				const id = Reflect.get(row, 'id');
-				return typeof id === 'string' && id !== ''
-					? [{ collection: 'automation_run', recordId: id }]
-					: [];
+		const AutomationRunPublicationRow = Schema.Struct({
+			id: Schema.NonEmptyString,
+			task_id: Schema.NonEmptyString,
+			name: Schema.NonEmptyString,
+			status: Schema.NonEmptyString
+		});
+		const decodeAutomationRunPublicationRow = Schema.decodeUnknownOption(
+			AutomationRunPublicationRow
+		);
+		const runChanges = (
+			rows: ReadonlyArray<unknown>,
+			operation: 'insert' | 'update'
+		): ReadonlyArray<SyncChange> =>
+			rows.flatMap((row): ReadonlyArray<SyncChange> => {
+				const decoded = decodeAutomationRunPublicationRow(row);
+				if (decoded._tag === 'None') return [];
+				const { id, ...after } = decoded.value;
+				return operation === 'insert'
+					? [{ collection: 'automation_run', id, operation, after }]
+					: [
+							{
+								// Direct updates require the old status to be running and leave task/name intact.
+								collection: 'automation_run',
+								id,
+								operation,
+								before: { ...after, status: 'running' },
+								after
+							}
+						];
 			});
 		const publishRuns = (
 			effectId: EffectIdType,
-			rows: ReadonlyArray<unknown>
-		): Effect.Effect<void> =>
-			syncCommit.publish(EffectId.make(`${effectId}:publish`), { changes: runChanges(rows) });
+			rows: ReadonlyArray<unknown>,
+			operation: 'insert' | 'update'
+		): Effect.Effect<void, Database.FacilityError> =>
+			syncCommit.publish(EffectId.make(`${effectId}:publish`), {
+				changes: runChanges(rows, operation)
+			});
 		const publishProjectedRuns = Effect.fn('Automations.publishProjectedRuns')(function* (
-			effectId: EffectIdType,
+			_effectId: EffectIdType,
 			taskIds: ReadonlyArray<string>
 		) {
-			const distinct = [...new Set(taskIds)];
-			if (distinct.length === 0) return;
-			const response = yield* executeBuilt(
-				EffectId.make(`${effectId}:rows`),
-				database,
-				composer
-					.select({ id: automationRun.id })
-					.from(automationRun)
-					.where(inArray(automationRun.task_id, distinct))
-			);
-			yield* publishRuns(effectId, response.rows);
+			if (taskIds.length === 0) return;
+			// The trigger projection exposes only current rows: it cannot distinguish insert from update
+			// or recover the old status route. Phase 5 must publish it from central transition capture.
 		});
 		/** Input for request-owned runs exists only as long as the invocation that admitted it. */
 		const directInputs = new Map<
@@ -253,10 +276,10 @@ export const layer = Layer.effect(
 						.insert(automationRun)
 						.values({ task_id: taskId, name, status: 'running' })
 						.onConflictDoNothing({ target: automationRun.task_id })
-						.returning({ id: automationRun.id })
+						.returning(automationRunPublication)
 				)
 			);
-			yield* publishRuns(EffectId.make(`${effectId}:runs`), inserted.rows);
+			yield* publishRuns(EffectId.make(`${effectId}:runs`), inserted.rows, 'insert');
 			for (const item of prepared) directInputs.set(item.taskId, item);
 			return prepared.map(({ name, taskId }) => ({ name, taskId }));
 		});
@@ -328,10 +351,10 @@ export const layer = Layer.effect(
 									}
 						)
 						.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
-						.returning({ id: automationRun.id })
+						.returning(automationRunPublication)
 				)
 			);
-			yield* publishRuns(effectId, settled.rows);
+			yield* publishRuns(effectId, settled.rows, 'update');
 			for (const { taskId } of settlements) directInputs.delete(taskId);
 		});
 
@@ -437,9 +460,9 @@ export const layer = Layer.effect(
 							row_version: increment(automationRun.row_version)
 						})
 						.where(eq(automationRun.status, 'running'))
-						.returning({ id: automationRun.id })
+						.returning(automationRunPublication)
 				]);
-				yield* publishRuns(effectId, recovered.rows);
+				yield* publishRuns(effectId, recovered.rows, 'update');
 			}),
 			register: Effect.fn('Automations.register')(function* (name) {
 				yield* workspace.automation(name);
@@ -483,9 +506,9 @@ export const layer = Layer.effect(
 								row_version: increment(automationRun.row_version)
 							})
 							.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
-							.returning({ id: automationRun.id })
+							.returning(automationRunPublication)
 					);
-					yield* publishRuns(effectId, progressed.rows);
+					yield* publishRuns(effectId, progressed.rows, 'update');
 					return;
 				}
 				yield* queue.progress(effectId, taskId, value);
@@ -512,9 +535,9 @@ export const layer = Layer.effect(
 									eq(automationRun.status, 'running')
 								)
 							)
-							.returning({ id: automationRun.id })
+							.returning(automationRunPublication)
 					);
-					yield* publishRuns(effectId, stopped.rows);
+					yield* publishRuns(effectId, stopped.rows, 'update');
 					yield* queue.interruptActive(EffectId.make(`${effectId}:interrupt`), taskId);
 					return;
 				}

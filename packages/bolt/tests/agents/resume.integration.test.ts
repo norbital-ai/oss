@@ -1,18 +1,54 @@
+import { Schema } from 'effect';
+import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ModelId,
+	TaskId,
+	type AIRequest,
+	type AIResponse,
+	type FacilityBinding
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCall,
-	lastToolResult,
-	modelCatalogResponse,
-	modelMessages
-} from './canonical-ai-fixture.js';
+
+const languageModelId = ModelId.make('test:language');
+const embeddingModelId = ModelId.make('test:embedding');
+const encodeMessage = Schema.encodeSync(Prompt.Message);
+const catalog = {
+	_tag: 'Catalog',
+	languageModels: [{ id: languageModelId }],
+	defaultLanguageModelId: languageModelId,
+	embeddingModels: [{ id: embeddingModelId }],
+	defaultEmbeddingModelId: embeddingModelId
+} satisfies AIResponse;
+
+const generated = (
+	request: Extract<AIRequest, { readonly _tag: 'Generate' }>,
+	text: string
+): Extract<AIResponse, { readonly _tag: 'Generated' }> => {
+	if (request.output._tag !== 'Message') throw new Error('expected Message generation');
+	return {
+		_tag: 'Generated',
+		result: {
+			_tag: 'Message',
+			message: encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }))
+		},
+		observation: {
+			callId: request.callId,
+			provider: 'test',
+			model: request.modelId,
+			operation: 'language'
+		}
+	};
+};
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -20,265 +56,88 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('agent stop and resume controls', () => {
-	it('keeps inputs pending while stopped and resumes their compatible prefix in one run', async () => {
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => (release = resolve));
-		let started!: () => void;
-		const providerStarted = new Promise<void>((resolve) => (started = resolve));
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
+describe('Task resume control', () => {
+	it('creates an explicit durable resume directive and executes it under a new run epoch', async () => {
+		const prompts: Array<ReadonlyArray<unknown>> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return modelCatalogResponse();
-				if (request._tag !== 'Turn') throw new Error('expected a turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					started();
-					await held;
-				}
-				return {
-					_tag: 'Success',
-					value: { output: assistantText(`answer-${turns.length}`, `resume-${turns.length}`) }
-				};
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				prompts.push(request.messages);
+				return { _tag: 'Success', value: generated(request, 'Resumed from durable history.') };
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const conversationId = 'resume-compatible-prefix';
-		const active = harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('active'),
-				adminSubject,
-				'web',
-				conversationId,
-				'active-input',
-				Agents.userAgentInput('Initial work.')
-			)
-		);
-		await providerStarted;
+		const taskId = TaskId.make(recordId('task-explicit-resume'));
 		await harness.runtime.runPromise(
-			agents.stop(harness.effectId('stop'), adminSubject, conversationId)
+			agents.submit(harness.effectId('submit'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Continue this from durable history.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
 		);
-		release();
-		expect((await active).status).toBe('failed');
-		for (const [id, text] of [
-			['first', 'First pending input.'],
-			['second', 'Second pending input.']
-		] as const) {
-			expect(
-				(
-					await harness.runtime.runPromise(
-						agents.enqueue(
-							harness.effectId(`enqueue:${id}`),
-							adminSubject,
-							'web',
-							conversationId,
-							`${id}-input`,
-							Agents.userAgentInput(text)
-						)
-					)
-				).status
-			).toBe('pending');
-		}
 		await harness.runtime.runPromise(
-			agents.resume(harness.effectId('resume'), adminSubject, conversationId)
+			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
 		);
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('First pending input.');
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Second pending input.');
-		expect(
-			await harness.database.query(
-				`select status, disposition from agent_run where conversation_id = $1 order by generation`,
-				[conversationId]
-			)
-		).toEqual([
-			{ status: 'aborted', disposition: 'stopped' },
-			{ status: 'completed', disposition: null }
-		]);
-	});
-
-	it('awaits the exact named child without draining a sibling child', async () => {
-		let parentRound = 0;
-		let newer: Readonly<Record<string, unknown>> | undefined;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return modelCatalogResponse();
-				if (request._tag !== 'Turn') throw new Error('expected a turn');
-				const messages = modelMessages(request);
-				if (
-					messages.some(
-						(message) =>
-							message.role === 'user' && String(message.content).includes('newer child task')
-					)
-				) {
-					return {
-						_tag: 'Success',
-						value: { output: assistantText('newer child finished', 'newer-child-answer') }
-					};
-				}
-				let output;
-				if (parentRound === 0) output = assistantToolCall('spawn_agent', { task: 'older child task' }, 'spawn-older');
-				else if (parentRound === 1) {
-					output = assistantToolCall('spawn_agent', { task: 'newer child task' }, 'spawn-newer');
-				} else if (parentRound === 2) {
-					newer = lastToolResult(request);
-					output = assistantToolCall(
-						'await_agent',
-						{ agentId: String(newer?.agentId), taskId: String(newer?.taskId) },
-						'await-newer'
-					);
-				} else output = assistantText('parent joined newer child', 'parent-joined');
-				parentRound += 1;
-				return { _tag: 'Success', value: { output } };
-			}
-		};
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
-		await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('parent'),
-				adminSubject,
-				'web',
-				'fifo-parent',
-				'parent-input',
-				Agents.userAgentInput('Join only the named child.')
-			)
-		);
-		expect(newer?.agentId).toBeDefined();
-		expect(
-			await harness.database.query(
-				`select session.conversation_id, run.status
-				 from chat_session session join agent_run run on run.conversation_id = session.conversation_id
-				 where session.parent_id = 'fifo-parent' order by session.conversation_id`
-			)
-		).toEqual([
-			{ conversation_id: newer?.agentId, status: 'completed' },
-			{ conversation_id: 'agent:spawn-older', status: 'running' }
-		]);
-	});
-
-	it('executes each separately admitted user input under its own run boundary', async () => {
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return modelCatalogResponse();
-				if (request._tag === 'Turn') turns.push(request);
-				return {
-					_tag: 'Success',
-					value: { output: assistantText(`answer-${turns.length}`, `separate-${turns.length}`) }
-				};
-			}
-		};
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
-		for (const id of ['first', 'second']) {
-			await harness.runtime.runPromise(
-				agents.enqueue(
-					harness.effectId(`enqueue:${id}`),
-					adminSubject,
-					'web',
-					'one-run-per-admission',
-					`${id}-input`,
-					Agents.userAgentInput(id)
-				)
-			);
-		}
-		expect(turns).toHaveLength(2);
-		expect(
-			await harness.database.query(
-				`select status, input_boundary from agent_run
-				 where conversation_id = $1 order by generation`,
-				['one-run-per-admission']
-			)
-		).toEqual([
-			expect.objectContaining({ status: 'completed', input_boundary: expect.any(Number) }),
-			expect.objectContaining({ status: 'completed', input_boundary: expect.any(Number) })
-		]);
-	});
-
-	it('reconstructs the durable canonical input when stopped work is resumed', async () => {
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => (release = resolve));
-		let started!: () => void;
-		const providerStarted = new Promise<void>((resolve) => (started = resolve));
-		const turns: Array<Extract<AIRequest, { readonly _tag: 'Turn' }>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return modelCatalogResponse();
-				if (request._tag !== 'Turn') throw new Error('expected a turn');
-				turns.push(request);
-				if (turns.length === 1) {
-					started();
-					await held;
-				}
-				return {
-					_tag: 'Success',
-					value: { output: assistantText('Continued from rows.', `durable-${turns.length}`) }
-				};
-			}
-		};
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
-		const conversationId = 'fresh-resume';
-		const first = harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue'),
-				adminSubject,
-				'web',
-				conversationId,
-				'durable-input',
-				Agents.userAgentInput('Continue this from durable history.')
-			)
-		);
-		await providerStarted;
-		await harness.runtime.runPromise(
-			agents.stop(harness.effectId('stop'), adminSubject, conversationId)
-		);
-		release();
-		await first;
-		await harness.runtime.runPromise(
-			agents.resume(harness.effectId('resume'), adminSubject, conversationId)
-		);
-		expect(turns).toHaveLength(2);
-		expect(JSON.stringify(turns[1]?.messages)).toContain('Continue this from durable history.');
-	});
-
-	it('does not turn a failed provider invocation into an implicit retry ladder', async () => {
-		let attempts = 0;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Models') return modelCatalogResponse();
-				attempts += 1;
-				return {
-					_tag: 'Failure',
-					error: {
-						code: 'ai.unavailable',
-						message: 'provider unavailable',
-						retryable: true,
-						outcome: 'known'
-					}
-				};
-			}
-		};
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
-		const failed = await harness.runtime.runPromise(
-			agents.enqueue(
-				harness.effectId('enqueue'),
-				adminSubject,
-				'web',
-				'failed-is-terminal',
-				'failed-input',
-				Agents.userAgentInput('Fail once.')
-			)
-		);
-		expect(failed.status).toBe('failed');
-		if (failed.runId === undefined) throw new Error('expected a failed run id');
 		expect(
 			await harness.runtime.runPromise(
-				agents.execute(harness.effectId('execute:again'), failed.conversationId, failed.runId)
+				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
 			)
-		).toMatchObject({ status: 'failed' });
-		expect(attempts).toBe(1);
+		).toEqual({ taskId, status: 'ready' });
+
+		expect(
+			await harness.runtime.runPromise(
+				agents.execute(harness.effectId('execute:resume'), adminSubject, taskId)
+			)
+		).toMatchObject({ taskId, status: 'done' });
+		expect(JSON.stringify(prompts[0])).toContain('Continue this from durable history.');
+		expect(JSON.stringify(prompts[0])).toContain('Resume this Task from durable epoch');
+		expect(
+			await harness.database.query(
+				`select task.status, task.epoch, run.status as run_status, run.epoch as run_epoch
+				 from agent_task task join agent_run run on run.task_id = task.id
+				 where task.id = $1`,
+				[taskId]
+			)
+		).toEqual([{ status: 'done', epoch: 1, run_status: 'succeeded', run_epoch: 1 }]);
+	});
+
+	it('refuses resume for a Task that is not stopped or awaiting attention', async () => {
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) =>
+				request._tag === 'Catalog'
+					? { _tag: 'Success', value: catalog }
+					: request._tag === 'Generate'
+						? { _tag: 'Success', value: generated(request, 'done') }
+						: {
+								_tag: 'Failure',
+								error: {
+									code: 'unsupported',
+									message: 'embedding is not bound',
+									retryable: false,
+									outcome: 'known'
+								}
+							}
+		};
+		harness = await makeBoltTestRuntime(undefined, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const taskId = TaskId.make(recordId('task-invalid-resume'));
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('submit'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Ready work.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		await expect(
+			harness.runtime.runPromise(
+				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
+			)
+		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
 	});
 });

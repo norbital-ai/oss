@@ -34,12 +34,15 @@
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
-	import type { ClientState } from '#lib/client/sync/machine.js';
+	import AutomationRunsPane from '../system/automation-runs-pane.svelte';
 	import {
 		AGENT_PATH,
 		APPROVALS_PATH,
+		AUTOMATIONS_PATH,
+		automationsHref,
 		buildApplicationNavigation,
 		buildSystemNavigation,
+		buildWorkspaceNavigationSections,
 		resolveAppHeaderDescription,
 		resolveAppHeaderTitle,
 		filterAccessibleApps,
@@ -48,6 +51,7 @@
 		WORKSPACE_SETTINGS_PATH,
 		type HostPlugin
 	} from '#lib/client/ui/shell/workspace-navigation.js';
+	import type { ClientState } from '#lib/client/sync/machine.js';
 
 	let {
 		app = 'Bolt',
@@ -143,7 +147,7 @@
 		isAdmin?: boolean;
 		/** Whether user-triggered shell catalog and notification reads may begin. */
 		deferredQueriesReady?: boolean;
-		/** The Machine's one sync state — link, head and unsettled writes; absent is explicitly unverified. */
+		/** The Machine's one sync state — link, versioned prefixes and unsettled writes. */
 		syncStatus?: ClientState | undefined;
 		/**
 		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
@@ -273,6 +277,34 @@
 		name: organization?.name ?? app,
 		logoUrl: organization?.logoUrl ?? null
 	});
+	const canAccessAutomations = $derived(
+		isAdmin === true && !(impersonation?.isActive ?? false)
+	);
+	const systemNavigation = $derived(
+		buildSystemNavigation({
+			plugins,
+			isAdmin: isAdmin === true,
+			canAccessAutomations,
+			currentPath,
+			i18n: { has, t }
+		})
+	);
+	const applicationNavigation = $derived(
+		buildApplicationNavigation({
+			apps: normalizedApps,
+			accessibleAppNames: accessibleApps,
+			currentPath,
+			i18n: { has, t }
+		})
+	);
+	const navigationSections = $derived(
+		buildWorkspaceNavigationSections({
+			system: systemNavigation,
+			applications: applicationNavigation,
+			applicationsHref: '/',
+			i18n: { has, t }
+		})
+	);
 
 	const navigationModel = $derived({
 		activeOrganization,
@@ -281,37 +313,28 @@
 			organizations
 		}),
 		user: user ?? {
-			name: 'Workspace user',
+			name: t('bolt.shell.workspaceUser'),
 			email: '',
-			role: 'Member',
+			role: t('bolt.shell.member'),
 			teamLabels: []
 		},
-		system: buildSystemNavigation({
-			plugins,
-			isAdmin: isAdmin ?? true,
-			currentPath,
-			i18n: { has, t }
-		}),
-		applications: buildApplicationNavigation({
-			apps: normalizedApps,
-			// The unfiltered registry plus the grant list, rather than `visibleApps` already narrowed:
-			// the builder owns this rule for every caller, and handing it both keeps the one place that
-			// decides what a group's survival means from depending on who called it.
-			accessibleAppNames: accessibleApps,
-			currentPath,
-			i18n: { has, t }
-		}),
+		sections: navigationSections,
+		// Compatibility views for the current command finder; both are derived from `sections` above.
+		system: navigationSections
+			.filter((section) => section.key !== 'applications')
+			.flatMap((section) => section.items),
+		applications: applicationNavigation,
 		applicationsHref: '/'
 	} satisfies WorkspaceNavigationModel);
 
 	const statusLabel = $derived.by(() => {
 		if (status !== 'ready') return status;
-		if (syncStatus === undefined) return 'Sync status unavailable';
-		if (syncStatus.link === 'needsReload') return 'Workspace update required';
+		if (syncStatus === undefined) return t('bolt.shell.syncUnavailable');
+		if (syncStatus.link === 'closed') return t('bolt.shell.connectionClosed');
 		if (syncStatus.writes.size > 0)
-			return 'Changes are visible here and awaiting server confirmation';
-		if (syncStatus.link === 'reconnecting') return 'Reconnecting to live updates';
-		return 'Up to date';
+			return t('bolt.shell.changesAwaitingConfirmation');
+		if (syncStatus.link === 'reconnecting') return t('bolt.shell.reconnecting');
+		return t('bolt.shell.upToDate');
 	});
 
 	const onAgentPath = $derived(
@@ -343,10 +366,15 @@
 			: undefined
 	);
 	const manifestQuery = $derived(runtime.client.system.workspace.manifest({}));
-	const declaredEnvoys = $derived(manifestQuery.current?.envoys ?? []);
+	const decodedManifest = $derived(manifestQuery.current);
+	const automationCatalog = $derived(
+		canAccessAutomations ? (decodedManifest?.automations ?? []) : []
+	);
+	const selectedAutomation = $derived(detailUrl.searchParams.get('automation') ?? undefined);
+	const declaredEnvoys = $derived(decodedManifest?.envoys ?? []);
 	// The agent's collection catalog is the manifest's policy-filtered collection names.
 	const finderCollections = $derived(
-		(deferredQueriesReady ? manifestQuery.current?.collections : undefined)?.map(
+		(deferredQueriesReady ? decodedManifest?.collections : undefined)?.map(
 			({ name }) => name
 		) ?? []
 	);
@@ -387,21 +415,6 @@
 	const markNotificationRead = (id: string): void => {
 		void runtime.client.db.bolt_notifications.mutate({ id, read: true });
 	};
-
-	const syncMentionCatalog = (): void => {
-		agentClient.catalog.collections = finderCollections;
-		agentClient.catalog.apps = visibleApps.map((app) => ({
-			key: app.name,
-			label: app.label,
-			href: `/app/${app.name}`,
-			// `'x' in app` is a presence test that leaves the value as `{}`; the type check narrows it.
-			description: app.description
-		}));
-	};
-
-	$effect(() => {
-		syncMentionCatalog();
-	});
 
 	onMount(() => {
 		shortcutModifier = detectShortcutModifier();
@@ -537,16 +550,16 @@
 	<Stack gap="none" fill>
 		<Bound size="full" clip grow>
 			{#if currentPath === '/' || onAgentPath}
-				<Scroll name="Workspace overview" inset>
+				<Scroll name={t('bolt.shell.workspaceOverview')} inset>
 					<Center measure="wide">
 						<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
 							<Stack as="header" gap="xs">
 								<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
-								<p class="text-meta">Pick an application</p>
+								<p class="text-meta">{t('bolt.shell.pickApplication')}</p>
 							</Stack>
 
 							<Stack as="section" gap="sm">
-								<h2 class="text-overline">Applications</h2>
+								<h2 class="text-overline">{t('bolt.shell.applications')}</h2>
 								{#if navigationModel.applications.length === 0}
 									<Stack
 										align="center"
@@ -558,9 +571,9 @@
 											name="lucide:layout-dashboard"
 											class="size-8 text-muted-foreground"
 										/>
-										<span class="text-meta">No applications yet</span>
+										<span class="text-meta">{t('bolt.shell.noApplications')}</span>
 										<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-											Add an application to this workspace to see it here.
+											{t('bolt.shell.addApplication')}
 										</span>
 									</Stack>
 								{:else}
@@ -642,9 +655,9 @@
 								shrink={false}
 								class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
 							>
-								<h1 class="text-heading">Approvals</h1>
+								<h1 class="text-heading">{t('bolt.shell.approvals')}</h1>
 								<p class="max-w-2xl text-meta">
-									Review pending changes before they are applied to workspace records.
+									{t('bolt.shell.approvalsDescription')}
 								</p>
 							</Stack>
 						{/snippet}
@@ -655,8 +668,8 @@
 									client={runtime.client}
 									collection="approval_request"
 									view="bolt:approval-inbox"
-									title="Pending requests"
-									description="Changes awaiting your review, including creates that do not have a provisional record."
+									title={t('bolt.shell.pendingRequests')}
+									description={t('bolt.shell.pendingRequestsDescription')}
 									features={{ create: false }}
 									query={{
 										where: { status: { eq: 'ONGOING' } },
@@ -665,17 +678,35 @@
 									class="min-h-0"
 								>
 									{#snippet columns({ Column })}
-										<Column name="collection_name" label="Collection" card="title" />
-										<Column name="action" label="Action" card="badge" />
-										<Column name="record_id" label="Record" card="subtitle" />
-										<Column name="status" label="Status" />
-										<Column name="proposed_values" label="Proposed change" />
+										<Column name="collection_name" label={t('bolt.shell.collection')} card="title" />
+										<Column name="action" label={t('bolt.shell.action')} card="badge" />
+										<Column name="record_id" label={t('bolt.shell.record')} card="subtitle" />
+										<Column name="status" label={t('bolt.shell.status')} />
+										<Column name="proposed_values" label={t('bolt.shell.proposedChange')} />
 									{/snippet}
 								</CollectionTable>
 							</Bound>
 						</Inline>
 					</Cover>
 				</CollectionNavigationSurface>
+			{:else if currentPath === AUTOMATIONS_PATH || currentPath.startsWith(`${AUTOMATIONS_PATH}/`)}
+				{#if canAccessAutomations}
+					<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+						<AutomationRunsPane
+							client={runtime.client}
+							automations={automationCatalog}
+							selected={selectedAutomation}
+							onselect={(name) => onNavigate?.(automationsHref(name))}
+						/>
+					</CollectionNavigationSurface>
+				{:else}
+					<Stack fill align="center" justify="center" gap="sm" class="px-6 text-center">
+						<IconWrapper name="product:automations" class="size-9 text-muted-foreground/40" />
+						<p class="text-sm font-medium text-foreground">
+							{t('bolt.automations.unavailable')}
+						</p>
+					</Stack>
+				{/if}
 			{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
 				{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
 					<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
@@ -777,7 +808,7 @@
 </Sheet.Root>
 
 {#if status === 'error'}
-	<p class="sr-only" role="alert">The application could not finish loading.</p>
+	<p class="sr-only" role="alert">{t('bolt.shell.applicationLoadFailed')}</p>
 {/if}
 
 <style>

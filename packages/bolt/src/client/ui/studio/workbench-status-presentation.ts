@@ -1,96 +1,77 @@
 type WorkbenchStatusPresentation = Readonly<{
-	label: string;
-	detail: string;
+	labelKey:
+		| 'bolt.studio.status.updating'
+		| 'bolt.studio.status.loading'
+		| 'bolt.studio.status.readyForReview'
+		| 'bolt.studio.status.hostUnavailable'
+		| 'bolt.studio.status.actionFailed'
+		| 'bolt.studio.status.actionRequired'
+		| 'bolt.studio.status.updated';
+	detailKey?: 'bolt.studio.status.updatingDetail' | 'bolt.studio.status.readyForReviewDetail';
+	detail?: string;
 	icon: string;
 	variant: 'outline' | 'success' | 'warning' | 'destructive';
 	loading: boolean;
 	testId: 'studio-host-status' | 'studio-preview-status';
 }>;
 
-/**
- * Reduce host prose to the compact status vocabulary used by the Workbench toolbar.
- *
- * Host messages remain available as detail text, while the visible label is stable across long
- * errors, intermediate operation messages, and narrow viewports. Busy is checked first so a
- * workspace operation never leaves the previous success state visible while it runs.
- */
+const status = (
+	labelKey: WorkbenchStatusPresentation['labelKey'],
+	extra: Partial<Omit<WorkbenchStatusPresentation, 'labelKey'>> = {}
+): WorkbenchStatusPresentation => ({
+	labelKey,
+	icon: 'lucide:circle-alert',
+	variant: 'destructive',
+	loading: false,
+	testId: 'studio-host-status',
+	...extra
+});
+
 export const presentWorkbenchStatus = (input: {
 	readonly hostStatus: string;
 	readonly busy: boolean;
 	readonly previewReady: boolean;
 }): WorkbenchStatusPresentation | undefined => {
 	const { hostStatus, busy, previewReady } = input;
-	if (busy) {
-		return {
-			label: 'Updating workspace',
-			detail: 'A workspace operation is in progress.',
+	if (busy)
+		return status('bolt.studio.status.updating', {
+			detailKey: 'bolt.studio.status.updatingDetail',
 			icon: 'lucide:loader-2',
 			variant: 'outline',
-			loading: true,
-			testId: 'studio-host-status'
-		};
-	}
-	if (hostStatus.startsWith('Loading')) {
-		return {
-			label: 'Loading workspace',
+			loading: true
+		});
+	if (hostStatus.startsWith('Loading'))
+		return status('bolt.studio.status.loading', {
 			detail: hostStatus,
 			icon: 'lucide:loader-2',
 			variant: 'outline',
-			loading: true,
-			testId: 'studio-host-status'
-		};
-	}
-	if (hostStatus === 'Ready') {
+			loading: true
+		});
+	if (hostStatus === 'Ready')
 		return previewReady
-			? {
-					label: 'Ready for review',
-					detail: 'The current workbench matches Preview and can be sent to Review.',
+			? status('bolt.studio.status.readyForReview', {
+					detailKey: 'bolt.studio.status.readyForReviewDetail',
 					icon: 'lucide:circle-check',
 					variant: 'success',
-					loading: false,
 					testId: 'studio-preview-status'
-				}
+				})
 			: undefined;
-	}
 	if (
 		hostStatus.startsWith('Unavailable:') ||
 		hostStatus.includes('trusted Colony routing headers are required')
-	) {
-		return {
-			label: 'Host unavailable',
-			detail: hostStatus,
-			icon: 'lucide:circle-alert',
-			variant: 'destructive',
-			loading: false,
-			testId: 'studio-host-status'
-		};
-	}
-	if (hostStatus.startsWith('Failed:')) {
-		return {
-			label: 'Action failed',
-			detail: hostStatus,
-			icon: 'lucide:circle-alert',
-			variant: 'destructive',
-			loading: false,
-			testId: 'studio-host-status'
-		};
-	}
-	if (hostStatus.startsWith('Resolve ') || hostStatus.startsWith('Migration ready')) {
-		return {
-			label: 'Action required',
+	)
+		return status('bolt.studio.status.hostUnavailable', { detail: hostStatus });
+	if (hostStatus.startsWith('Failed:'))
+		return status('bolt.studio.status.actionFailed', { detail: hostStatus });
+	if (hostStatus.startsWith('Resolve ') || hostStatus.startsWith('Migration ready'))
+		return status('bolt.studio.status.actionRequired', {
 			detail: hostStatus,
 			icon: 'lucide:triangle-alert',
-			variant: 'warning',
-			loading: false,
-			testId: 'studio-host-status'
-		};
-	}
-	return {
-		label: 'Workspace updated',
+			variant: 'warning'
+		});
+	return status('bolt.studio.status.updated', {
 		detail: hostStatus,
 		icon: 'lucide:circle-check',
-		variant: 'success',
-		loading: false,
-		testId: 'studio-host-status'
-	};
+		variant: 'success'
+	});
 };

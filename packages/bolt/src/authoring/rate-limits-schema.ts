@@ -13,7 +13,7 @@
  *
  * **Everything with a holder is declared by that holder.** There is no workspace-wide rate file any
  * more: `src/+ratelimits.ts` mixed `identity.*` — which has no subject yet — with `collections.*` and
- * `agents.enqueue`, which have one, and stating the second kind in one place for everybody meant a
+ * `tasks.submit`, which has one, and stating the second kind in one place for everybody meant a
  * contractor and a controller could not be given different budgets for the same command.
  *
  * The one genuinely separate file is `+anonymous_limits.ts`, and it is separate structurally rather

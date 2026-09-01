@@ -1,9 +1,29 @@
 import { Schema } from 'effect';
 
+export const CommandHeaders = Schema.Record(Schema.String, Schema.Array(Schema.String));
+
+export type CommandResponseContract = Readonly<{
+	readonly status: number;
+	readonly value: Schema.Top;
+	readonly headers: Schema.Top;
+}>;
+
+export type CommandContract<Name extends string = string> = Readonly<{
+	readonly name: Name;
+	readonly input: Schema.Top;
+	readonly responses: ReadonlyArray<CommandResponseContract>;
+	readonly clientPath?: ReadonlyArray<string>;
+	readonly clientMode?: 'operation' | 'query';
+	readonly budgetKey?: string;
+}>;
+
+export const commandContract = <const Contract extends CommandContract>(
+	contract: Contract
+): Contract => contract;
+
 export const HOST_RECOVER_COMMAND = 'host.recover';
 export const HOST_SCHEDULE_DISCOVER_COMMAND = 'host.schedules.discover';
 export const HOST_SCHEDULE_SETTLE_COMMAND = 'host.schedules.settle';
-export const HOST_AGENT_EXECUTE_CHILD_COMMAND = 'host.agents.executeChild';
 
 export const HostRecoverRequest = Schema.Struct({}).annotate({
 	identifier: 'BoltHostRecoverRequest'
@@ -78,10 +98,20 @@ export interface HostScheduleSettleResponse extends Schema.Schema.Type<
 	typeof HostScheduleSettleResponse
 > {}
 
-export const HostAgentExecuteChildRequest = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	turnId: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltHostAgentExecuteChildRequest' });
-export interface HostAgentExecuteChildRequest extends Schema.Schema.Type<
-	typeof HostAgentExecuteChildRequest
-> {}
+export const HostCommandContracts = [
+	commandContract({
+		name: HOST_RECOVER_COMMAND,
+		input: HostRecoverRequest,
+		responses: [{ status: 200, value: HostRecoverResponse, headers: CommandHeaders }]
+	}),
+	commandContract({
+		name: HOST_SCHEDULE_DISCOVER_COMMAND,
+		input: HostScheduleDiscoverRequest,
+		responses: [{ status: 200, value: HostScheduleDiscoverResponse, headers: CommandHeaders }]
+	}),
+	commandContract({
+		name: HOST_SCHEDULE_SETTLE_COMMAND,
+		input: HostScheduleSettleRequest,
+		responses: [{ status: 200, value: HostScheduleSettleResponse, headers: CommandHeaders }]
+	})
+] as const;

@@ -68,8 +68,8 @@ describe('generated declarative mutation types', () => {
 				source: 'parents',
 				target: 'children',
 				cardinality: 'many',
-				from: { collection: 'children', column: 'parent_external_key' },
-				to: { collection: 'parents', column: 'external_key' }
+				from: { collection: 'parents', column: 'external_key' },
+				to: { collection: 'children', column: 'parent_external_key' }
 			}
 		]);
 

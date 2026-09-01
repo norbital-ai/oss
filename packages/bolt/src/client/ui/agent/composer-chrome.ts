@@ -1,10 +1,10 @@
 /**
- * Composer surface tokens, restored verbatim from the Core-era `agent-chat.svelte.ts`.
+ * Shared composer surface tokens for the durable Task panel and shell focus action.
  *
  * Kept as constants rather than inlined so the shell, the editor and the control row stay one
  * decision — which is what let Core's composer read as a single card instead of three stacked ones.
  */
-type AgentChatInput = { readonly message?: string; readonly planMode?: boolean };
+type TaskComposerInput = { readonly message?: string; readonly planMode?: boolean };
 
 export const AGENT_COMPOSER_SHELL_CLASS =
 	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-popover text-popover-foreground shadow-deep';
@@ -20,7 +20,7 @@ export const AGENT_COMPOSER_CONTROL_TEXT_CLASS = 'text-xs font-normal';
  */
 export const AGENT_COMPOSER_FOCUS_EVENT = 'bolt:focus-agent-composer';
 
-export type AgentComposerSeed = Partial<Pick<AgentChatInput, 'message' | 'planMode'>>;
+export type AgentComposerSeed = Partial<Pick<TaskComposerInput, 'message' | 'planMode'>>;
 
 /** Asks the mounted panel to focus the composer after a shell-driven open. */
 export function requestAgentComposerFocus(seed?: AgentComposerSeed): void {

@@ -3,11 +3,12 @@ import { Effect } from 'effect';
 import { defineModel, text } from '../../src/authoring/index.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 import {
 	APPROVAL_REQUEST_ONGOING_INDEX_NAME,
 	buildSchemaPlan,
 	collectionIndexName
-} from '../../src/compiler/schema-plan.js';
+} from '../../src/runtime/schema/schema-plan.js';
 
 /**
  * `field.string({ indexed: true })` reaches DDL in both emitters: the flag is read by the schema
@@ -105,7 +106,15 @@ describe('declared collection indexes', () => {
 			)
 		};
 		const migration = await Effect.runPromise(
-			planWorkspaceMigration({ models, relations: [], previous: undefined })
+			planWorkspaceMigration({
+				authoring: compileWorkspaceAuthoring({
+					models,
+					sourcePaths: Object.fromEntries(
+						Object.keys(models).map((name) => [name, `fixture:${name}`])
+					)
+				}),
+				previous: undefined
+			})
 		);
 
 		expect(
@@ -132,14 +141,30 @@ describe('declared collection indexes', () => {
 			)
 		};
 		const first = await Effect.runPromise(
-			planWorkspaceMigration({ models, relations: [], previous: undefined })
+			planWorkspaceMigration({
+				authoring: compileWorkspaceAuthoring({
+					models,
+					sourcePaths: Object.fromEntries(
+						Object.keys(models).map((name) => [name, `fixture:${name}`])
+					)
+				}),
+				previous: undefined
+			})
 		);
 		if (first === undefined)
 			throw new Error('a schema built from nothing must produce a migration');
 
 		expect(
 			await Effect.runPromise(
-				planWorkspaceMigration({ models, relations: [], previous: first.snapshot })
+				planWorkspaceMigration({
+					authoring: compileWorkspaceAuthoring({
+						models,
+						sourcePaths: Object.fromEntries(
+							Object.keys(models).map((name) => [name, `fixture:${name}`])
+						)
+					}),
+					previous: first.snapshot
+				})
 			)
 		).toBeUndefined();
 	});

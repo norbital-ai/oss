@@ -3,8 +3,7 @@
 The analyzer emits report schema 9 and analyzer version 10. It sorts roots, files, graph edges,
 concepts, services, and findings and emits no timestamp. A repeated scan of the same canonical roots
 and bytes is byte-stable apart from an explicitly chosen output path. Scanner receipts are schema 6
-with scanner version 32, which add the semantic tier's coverage, identity, and spend fields
-(described in `semantic.md`).
+with scanner version 32.
 
 ## Per-root metrics table
 

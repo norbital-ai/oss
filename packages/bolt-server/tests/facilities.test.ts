@@ -388,7 +388,15 @@ it.effect('loads production database and file providers through Effect Config', 
 
 it.effect('adapts AI, communication, connector, task and host-tool providers', () =>
 	Effect.gen(function* () {
-		const ai = makeAiBinding({ call: async () => ({ output: { models: ['test-model'] } }) });
+		const ai = makeAiBinding({
+			call: async () => ({
+				_tag: 'Catalog',
+				languageModels: [{ id: 'test/language' }],
+				defaultLanguageModelId: 'test/language',
+				embeddingModels: [{ id: 'test/embedding' }],
+				defaultEmbeddingModelId: 'test/embedding'
+			})
+		});
 		const communication = makeCommunicationBinding({
 			call: async () => ({ receipt: { id: 'message-1' } })
 		});
@@ -408,7 +416,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		});
 
 		const results = yield* Effect.all([
-			Effect.tryPromise(() => ai.call(metadata, AIRequest.cases.Models.make({}), signal)),
+			Effect.tryPromise(() => ai.call(metadata, AIRequest.cases.Catalog.make({}), signal)),
 			Effect.tryPromise(() =>
 				communication.call(
 					metadata,
@@ -434,7 +442,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 					metadata,
 					TaskRequest.cases.Register.make({
 						releaseId: ReleaseId.make('release-1'),
-						command: 'tasks.tick'
+						command: 'notifications.drain'
 					}),
 					signal
 				)
@@ -458,7 +466,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 			results.map((result) => result._tag),
 			['Success', 'Success', 'Success', 'Success', 'Success', 'Success']
 		);
-		assert.deepStrictEqual(registered, ['tasks.tick']);
+		assert.deepStrictEqual(registered, ['notifications.drain']);
 	})
 );
 

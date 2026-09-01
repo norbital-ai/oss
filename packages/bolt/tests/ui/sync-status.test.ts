@@ -22,6 +22,8 @@ describe('live sync presentation', () => {
 		let current = state({ link: 'reconnecting', reconnectAttempt: 1 });
 		const sync = {
 			start: () => undefined,
+			attach: () => () => undefined,
+			shutdown: () => undefined,
 			current: () => current,
 			subscribe: (listener) => {
 				listener(current);
@@ -47,9 +49,9 @@ describe('live sync presentation', () => {
 			state: 'reconnecting',
 			label: 'Reconnecting'
 		});
-		expect(workspaceSyncIndicator(state({ link: 'needsReload' }))).toMatchObject({
-			state: 'needsReload',
-			label: 'Reload required'
+		expect(workspaceSyncIndicator(state({ link: 'closed' }))).toMatchObject({
+			state: 'closed',
+			label: 'Connection closed'
 		});
 	});
 
@@ -78,9 +80,9 @@ describe('live sync presentation', () => {
 		expect(notice?.description).not.toContain('Durable');
 	});
 
-	it('exposes one reload affordance for a terminal release mismatch', () => {
-		expect(workspaceSyncNotices(state({ link: 'needsReload' }))).toEqual([
-			expect.objectContaining({ key: 'reload', title: 'Workspace update required' })
+	it('exposes one closed-connection notice for a terminal authority mismatch', () => {
+		expect(workspaceSyncNotices(state({ link: 'closed' }))).toEqual([
+			expect.objectContaining({ key: 'closed', title: 'Workspace connection closed' })
 		]);
 	});
 });

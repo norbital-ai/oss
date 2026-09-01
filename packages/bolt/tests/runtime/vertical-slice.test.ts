@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
+	AIGenerationResult,
+	AIResponse,
+	ModelId,
 	PROTOCOL_VERSION,
+	ProviderObservation,
 	type AIRequest,
-	type AIResponse,
 	type Activation,
 	BundleResult,
 	type DatabaseRequest,
@@ -87,7 +90,6 @@ const bundle = makeBundle(definition, manifest, {
 });
 
 const employeeRecordId = '00000000-0000-5000-8000-000000000001';
-let chatMessageId = 0;
 let browserMutationApplied = false;
 type BrowserMutationLedgerRow = Readonly<{
 	request_digest: Schema.Json;
@@ -305,71 +307,12 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				}
 			});
 		}
-		if (
-			request._tag === 'Query' &&
-			request.sql.includes('from "bolt_sync_outbox"') &&
-			request.sql.includes('max(')
-		) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: { rows: [{ xid: 3, sequence: 4 }], affectedRows: 0 }
-			});
-		}
-		if (
-			request._tag === 'Query' &&
-			request.sql.includes('from "bolt_sync_outbox"') &&
-			request.sql.includes('order by')
-		) {
-			const rows = [
-				{
-					cursor: { xid: 3, sequence: 5 },
-					collection: 'employees',
-					recordId: employeeRecordId,
-					operation: 'update',
-					record: { name: 'Ada' }
-				}
-			];
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows,
-					affectedRows: 0
-				}
-			});
-		}
 		if (request._tag === 'Query' && request.sql.includes('to_jsonb("record")')) {
 			const record = { id: employeeRecordId, name: 'Ada', row_version: 1 };
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
 					rows: [{ snapshot: record }],
-					affectedRows: 0
-				}
-			});
-		}
-		if (request._tag === 'Query' && request.sql.includes('insert into "chat_message"')) {
-			chatMessageId += 1;
-			return Promise.resolve({
-				_tag: 'Success',
-				value: { rows: [{ id: `message-${chatMessageId}` }], affectedRows: 1 }
-			});
-		}
-		if (request._tag === 'Query' && request.sql.includes('from "chat_session"')) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows: [
-						{
-							conversation_id: 'conversation-1',
-							agent_name: 'web',
-							title: null,
-							user_id: subject.userId,
-							sandbox_key: subject.userId,
-							visibility: 'personal',
-							envoy_key: null,
-							parent_id: null
-						}
-					],
 					affectedRows: 0
 				}
 			});
@@ -415,18 +358,55 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
 	}
 };
+const languageModelId = ModelId.make('test/language');
+const embeddingModelId = ModelId.make('test/embedding');
 const ai: FacilityBinding<AIRequest, AIResponse> = {
-	call: (_metadata, request) =>
-		Promise.resolve({
-			_tag: 'Success',
-			value: {
-				output:
-					request._tag === 'Models'
-						? // The model catalog the runtime decodes before every turn: one default, one option.
-							{ defaultModel: 'gpt-test', options: [{ id: 'gpt-test', contextLength: 8192 }] }
-						: { text: 'Hello from the HR agent' }
+	call: (_metadata, request) => {
+		const value = (() => {
+			switch (request._tag) {
+				case 'Catalog':
+					return AIResponse.cases.Catalog.make({
+						languageModels: [{ id: languageModelId }],
+						defaultLanguageModelId: languageModelId,
+						embeddingModels: [{ id: embeddingModelId }],
+						defaultEmbeddingModelId: embeddingModelId
+					});
+				case 'Generate':
+					return AIResponse.cases.Generated.make({
+						result:
+							request.output._tag === 'Message'
+								? AIGenerationResult.cases.Message.make({
+										message: {
+											role: 'assistant',
+											content: [{ type: 'text', text: 'Hello from the HR agent' }]
+										}
+									})
+								: request.output._tag === 'PlanVerdict'
+									? AIGenerationResult.cases.PlanVerdict.make({
+											verdict: { complete: true, summary: 'Complete', gaps: [] }
+										})
+									: AIGenerationResult.cases.Object.make({ value: {} }),
+						observation: ProviderObservation.make({
+							callId: request.callId,
+							provider: 'test',
+							model: request.modelId,
+							operation: 'language'
+						})
+					});
+				case 'Embed':
+					return AIResponse.cases.Embedded.make({
+						embeddings: request.inputs.map(() => [0.1, 0.2]),
+						observation: ProviderObservation.make({
+							callId: request.callId,
+							provider: 'test',
+							model: request.modelId,
+							operation: 'embedding'
+						})
+					});
 			}
-		})
+		})();
+		return Promise.resolve({ _tag: 'Success', value });
+	}
 };
 const taskRequests: Array<TaskRequest> = [];
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
@@ -560,12 +540,13 @@ describe('runnable Bolt vertical slice', () => {
 
 	it('refuses an unknown agent name', async () => {
 		expect(
-			await invoke('agents.enqueue', {
+			await invoke('tasks.submit', {
 				subject,
-				agent: 'workspace',
-				conversationId: 'conversation-missing',
-				turnId: 'turn-missing',
-				message: 'Hello'
+				taskId: '00000000-0000-4000-8000-000000000404',
+				agentId: 'workspace',
+				message: { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+				mode: 'agent',
+				priority: 'normal'
 			})
 		).toMatchObject({
 			_tag: 'Failure',
@@ -657,7 +638,16 @@ describe('runnable Bolt vertical slice', () => {
 					mutationId: 'vertical-slice-update-employee',
 					schemaFingerprint: 'sha256:vertical-slice-fixture',
 					records: [{ id: employeeRecordId, name: 'Grace', row_version: 2 }],
-					changes: [{ collection: 'employees', recordId: employeeRecordId }]
+					changes: [
+						{
+							collection: 'employees',
+							id: employeeRecordId,
+							operation: 'update',
+							before: {},
+							after: {},
+							mutationId: 'vertical-slice-update-employee'
+						}
+					]
 				}
 			}
 		});
@@ -708,15 +698,13 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
-				{ command: 'notifications.drain' },
-				// The tick, which is the only command a host's timer ever sends.
-				{ command: 'tasks.tick' }
+				{ command: 'notifications.drain' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(8);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
 	});
 });

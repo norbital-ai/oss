@@ -10,8 +10,10 @@ description: >-
 # Authoring Bolt Tenant Workspaces
 
 Bolt tenant workspaces are plain Vite projects in `norbital-ai/templates` or
-`norbital-ai/templates-private`. Authors write the compiler-owned `+` files under `src/`; the Bolt filesystem
-compiler derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never
+`norbital-ai/templates-private`. Authors write compiler-owned `+` files under `src/`; the Bolt filesystem
+compiler derives the registry, workspace, client, loaders, and local types under `.norbital/`. The
+active toolchain/Effect RFCs reserve `.norbital/shared/` for committed tenant Skill packages and
+`.norbital/personal/` for ignored, subject-owned packages; neither is generated output. Never
 hand-author assembly or generated output. The sealed authoring contract is the
 [Bolt authoring package](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/authoring/index.ts).
 
@@ -21,22 +23,26 @@ hand-author assembly or generated output. The sealed authoring contract is the
 | ----------------------------- | ----------------------------- | ---------------------------------------------------- |
 | `oss/packages/*`              | OSS package source            | package build → consumer install → template artifact |
 | template `src/`, assets, meta | templates / templates-private | `bolt sync` → Colony publish + route                 |
+| tenant `.norbital/shared/**`  | committed tenant Skill source | RFC target: sync → immutable tenant release          |
+| `.norbital/personal/**`       | authenticated subject         | RFC target: owner-scoped source adapter; no release  |
 | `norbital/apps/colony`        | hosting platform              | Colony Vite reload or platform deploy                |
 | `norbital/apps/website`       | marketing/docs site           | website Vite reload or website deploy                |
 
 A tenant page loads an immutable artifact. Template and package source are never tenant HMR inputs.
-For local package/template work, stop Colony and run `pnpm --dir norbital run env -- dev --ui`; it builds OSS,
-`pnpm run env -- link` establishes yalc links in every consumer, materializes them with pnpm, stages those builds for tenant
-sandboxes, syncs templates, then starts a fresh Colony bootstrap that publishes and routes the
-artifacts. Use `--template=<directory|handle>` to narrow template linking and sync.
+From the `norbital` repository, use the one public environment command:
 
-To put every consumer on the local build **without** starting Colony, run
-`pnpm run env -- link`. It publishes once, runs each consumer repository's own linker, and
-then verifies: every managed package in every workspace must resolve through pnpm's virtual store and
-must actually import. A workspace left stale or orphaned fails the command. There is no standalone
-push — writing `.yalc/<name>` on its own reaches nothing that imports the package, and replaces
-`node_modules/<name>` with a link to a directory carrying no `node_modules`, which orphans that
-package's own dependencies.
+```sh
+pnpm run env -- link                         # package overlay only; no tenant artifact refresh
+pnpm run env -- dev --template=<key>         # propagate packages and sync/rebuild that tenant artifact
+pnpm run env -- dev --ui --template=<key>    # same, then start fresh local Colony UI
+```
+
+`env -- link` publishes local packages, materializes them in every consumer, stages them for tenant
+sandboxes, and verifies every managed import. It does **not** sync templates, publish a new tenant
+artifact, or reroute a tenant. Use `env -- dev` when a local OSS or template change must reach a
+tenant; omit `--ui` when Colony is already managed separately. There is no standalone yalc push:
+writing `.yalc/<name>` directly reaches nothing that imports it and can orphan its dependencies.
+Use `--template=<key>` to narrow the `dev` sync/build; `env -- link` is intentionally package-wide.
 
 Yalc reaches a tenant build through a mount, not through its lockfile. A tenant compiles inside a
 microVM that installs `--offline --frozen-lockfile` against Colony's package store, so a linked
@@ -105,7 +111,24 @@ two, and omitted renderer props always select the automatic datatype strategy.
 
 ## Authored filesystem
 
+**Active RFC target — implementation pending.** The current compiler still reads the legacy
+`src/capabilities/skills/<name>/+skill.md` shape. The target below replaces that reader without a
+compatibility path; do not assume `.norbital/shared` is accepted until the toolchain cutover lands.
+The target is documented here so new authoring guidance does not preserve the retired shape.
+
 ```text
+.norbital/
+├── shared/<name>/               # committed tenant Skill package (target)
+│   ├── SKILL.md
+│   ├── references/               # optional
+│   ├── scripts/                  # optional bytes; requires an authorized Tool to execute
+│   └── assets/                   # optional
+└── personal/<name>/             # ignored, current-subject materialization only (target)
+    ├── SKILL.md
+    ├── references/               # optional
+    ├── scripts/                  # optional
+    └── assets/                   # optional
+
 src/
 ├── +agents.md                    # shared workspace prompt for web and envoy turns
 ├── +env.ts                       # optional — declare env vars; private keys are server-only
@@ -116,7 +139,6 @@ src/
 ├── capabilities/
 │   ├── tools/+<name>.ts           # optional workspace tool
 │   ├── mcp/+<name>.ts             # optional remote MCP server
-│   └── skills/<name>/+skill.md    # optional workspace Agent Skill
 ├── collections/
 │   ├── +relationship.ts
 │   └── <collection>/
@@ -262,14 +284,15 @@ collection methods directly.
 desired state: present rows are inserted or updated, stored rows absent from the submitted relationship
 are deleted, and explicitly included relationships synchronize recursively. An omitted relationship is
 untouched. The root and every included relationship reconcile atomically, so submit a relationship only
-when replacement semantics are intended. Authorization, approvals, hooks, history, changelog
+when replacement semantics are intended. Authorization, approvals, hooks, history, SyncChange
 capture, and events all run through this one canonical mutation pipeline.
 
-**How it works under the hood:** every live query is registered once with the host under its
-stable key. When a commit lands (yours or someone else's), the host re-evaluates the queries
-indexed under the changed collections — in the database, under each subscriber's own policy — and
-pushes one apply frame per commit. The fan-out unit is the **collection**. A cursored read
-(`after`) is one-shot: it is answered once and never registered. For the wire contract see
+**How it works under the hood:** every live prefix (`findMany` / `findFirst` with a contiguous
+limit) is registered once with the host under its stable key. When a commit lands (yours or someone
+else's), the host re-evaluates those prefixes — in the database, under each subscriber's own
+policy — and pushes one version-fenced apply frame per commit. `count`, `findGrouped`, a cursored
+`after` page, and semantic search are one-shot. One EventSource is shared per browser profile.
+For the wire contract see
 [the bolt-protocol sync schema](https://github.com/norbital-ai/oss/blob/main/packages/bolt-protocol/src/sync.ts).
 
 ## Apps, layout, and collection surfaces
@@ -477,9 +500,9 @@ for, and a second copy would drift.)
   always deterministic handlers; when one needs model judgement, call `api.infer` with an Effect
   `Schema.Schema` for `schema` (never zod), optional `images` (≤ 8, ≤ 20 MiB, values taken straight
   from a `file()` column), and optional provider-neutral `webSearch`. It offers no tools of any
-  kind, no authoring, no sandbox, and no `write_collection`/`spawn_subagent`, and it does not own a
-  chat transcript. Each run is one admitted function. If the work is not finished, the host calls
-  the same function again.
+  kind, no authoring, no sandbox, and no collection-write or agent-orchestration tools, and it does
+  not own a chat transcript. Each run is one admitted function. If the work is not finished, the
+  host calls the same function again.
 - Functions are imperative request/response methods declared with `defineQueryHandler` /
   `defineCommandHandler`; their payload schema is an Effect `Schema` (e.g. `Schema.Struct`), adapted
   to `~standard` for dispatch validation. Reactive reads belong to `client.db`.

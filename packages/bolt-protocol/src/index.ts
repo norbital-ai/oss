@@ -1,3 +1,16 @@
+import { HostCommandContracts } from './host.js';
+import { SyncCommandContracts } from './sync.js';
+import { SystemCommandContracts } from './system.js';
+
+/** The one protocol-owned fixed command catalogue consumed by runtime and browser projections. */
+export const FixedCommandCatalogue = [
+	...HostCommandContracts,
+	...SyncCommandContracts,
+	...SystemCommandContracts
+] as const;
+export type FixedCommandContract = (typeof FixedCommandCatalogue)[number];
+export type FixedCommandName = FixedCommandContract['name'];
+
 export {
 	CollectionBaseRowVersion,
 	CollectionGroup,
@@ -39,10 +52,13 @@ export {
 	BundleResult,
 	canonicalArtifactCodeGraphIndexEncoding,
 	canonicalTenantReleaseEncoding,
+	COMPILED_MANIFEST_VERSION,
 	decodeBoltBundleModule,
 	DispatchResponse,
 	ManifestIntegration,
 	ManifestIntegrationBinding,
+	ManifestDestination,
+	ManifestOrigin,
 	ManifestPullCursor,
 	ManifestPullPages,
 	ManifestSchemaPlan,
@@ -52,16 +68,23 @@ export {
 	Registration,
 	SyncSchemaFacts,
 	TenantRelease,
-	tenantReleaseObjects
+	tenantReleaseObjects,
+	WorkspaceAuthoringManifest
 } from './bundle.js';
 export type { BoltBundle } from './bundle.js';
 
 export {
-	HOST_AGENT_EXECUTE_CHILD_COMMAND,
+	CommandHeaders,
+	type CommandContract,
+	type CommandResponseContract
+} from './host.js';
+
+
+export {
 	HOST_RECOVER_COMMAND,
 	HOST_SCHEDULE_DISCOVER_COMMAND,
 	HOST_SCHEDULE_SETTLE_COMMAND,
-	HostAgentExecuteChildRequest,
+	HostCommandContracts,
 	HostRecoverRequest,
 	HostRecoverResponse,
 	HostScheduleDiscoverRequest,
@@ -74,44 +97,65 @@ export {
 } from './host.js';
 
 export {
+	ChangeBatch,
+	compactSyncChanges,
+	LinkAndRouteValues,
 	SyncAdvanceRequest,
-	SyncAdvanceRefusal,
+	SyncAdvanceReset,
 	SyncAdvanceResponse,
+	SyncCommandContracts,
 	SyncAdvanceSubscription,
 	SyncAdvanceUpdate,
-	SyncAnswer,
-	SyncPageAnswer,
 	SyncApplyFrame,
-	SyncApplyPatch,
 	SyncChange,
 	SyncConnectRequest,
 	SyncConnectEvaluation,
 	SyncConnectEvaluationResult,
 	SyncConnectResponse,
 	SyncConnectResult,
-	SyncCursor,
-	SyncHeldCoordinate,
+	SyncExtendPrefixEvaluation,
+	SyncExtendPrefixRequest,
+	SyncExtendPrefixResponse,
 	SyncOutcome,
-	SyncPatch,
+	SyncPrefixDelta,
+	SyncPrefixKey,
+	SyncPrefixPut,
+	SyncPrefixReset,
+	SyncPrefixUpdate,
+	SyncQueryKey,
 	SyncQueryInput,
-	SyncReadyFrame,
+	SyncQueryVersion,
+	SyncResetReason,
 	SyncRoutingConstraint,
-	SyncRoutingValue,
+	SyncScope,
+	SyncScopedApplyFrame,
 	SyncSubEntry,
+	SyncViewerPrefixDelta,
 	SyncWriteStatus,
+	syncApplyFrameByteLength,
+	syncScopedApplyFrameByteLength,
+	syncJsonByteLength,
 	SYNC_CONNECTION_HEADER,
-	MAX_SYNC_HELD_IDS
+	DEFAULT_SYNC_LOADED_KEYS,
+	MAX_SYNC_INITIAL_ANSWER_BYTES,
+	MAX_SYNC_LOADED_KEYS,
+	MAX_SYNC_OUTBOUND_FRAME_BYTES,
+	MAX_SYNC_RETAINED_PREFIX_BYTES
 } from './sync.js';
-export { SyncConnectionLane, SyncRegistry, type SyncRegistryConnection } from './sync-registry.js';
+export {
+	SyncConnectionLane,
+	SyncRegistry,
+	type SyncPrefixExtensionDecision,
+	type SyncPrefixViewerState,
+	type SyncRegistryConnection
+} from './sync-registry.js';
 
 export {
-	addAIUsage,
-	AIImageAsset,
-	AIImageAssetPart,
+	AgentId,
+	AIGenerationOutput,
+	AIGenerationResult,
 	AIRequest,
 	AIResponse,
-	AIUsage,
-	AIWebSearch,
 	CommunicationRequest,
 	CommunicationResponse,
 	ChannelSendPayload,
@@ -126,7 +170,6 @@ export {
 	HostToolResponse,
 	IdentityHookRequest,
 	IdentityHookResponse,
-	readAIUsage,
 	TaskRequest,
 	TaskResponse,
 	SyncCommitRequest,
@@ -136,13 +179,52 @@ export {
 	TransportRequest,
 	TransportResponse,
 	ConfigRequest,
-	ConfigResponse
+	ConfigResponse,
+	DirectiveId,
+	DirectiveMode,
+	DirectivePriority,
+	DirectiveState,
+	ExactCharge,
+	ImageAsset,
+	MessageId,
+	ModelCatalogEntry,
+	ModelId,
+	PlanId,
+	PlanVerdict,
+	PlanStatus,
+	ProviderCallId,
+	ProviderObservation,
+	ProviderUsageEncoded,
+	RunId,
+	RunPhase,
+	RunStatus,
+	SubjectId,
+	TaskAudience,
+	TaskId,
+	TaskStatus,
+	UsageObservation,
+	WorkbenchId
 } from './facilities.js';
 export type { FacilityBinding, FacilityBindings } from './facilities.js';
 
 export { Activation, Invocation, InvocationScope, PluginTrustedContext } from './invocation.js';
 
-export { AgentEnqueueResult, ApprovalState, ChatDocumentRef } from './system.js';
+export {
+	ApprovalState,
+	DataBrowserCommandContract,
+	EnvoyStatus,
+	SecretsStatus,
+	SystemCommandContracts,
+	TaskControlRequest,
+	TaskControlResult,
+	TaskEditMessageRequest,
+	TaskEditMessageResult,
+	TaskSubmitRequest,
+	TaskSubmitResult,
+	WorkspaceAccess,
+	WorkspaceAutomationContract,
+	WorkspaceInvokeContract
+} from './system.js';
 
 export {
 	EffectId,

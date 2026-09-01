@@ -6,15 +6,32 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { defineModel, text } from '../../src/authoring/index.js';
 import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
-import type { RelationDefinition } from '../../src/authoring/workspace-schema.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
 import { workspaceSchemaFingerprint } from '../../src/compiler/schema-fingerprint.js';
 import {
 	importWorkspaceModels,
-	planWorkspaceMigration,
+	planWorkspaceMigration as planCompiledMigration,
 	validateWorkspaceMigrationLineage,
 	writeMigration,
 	type WorkspaceSnapshot
 } from '../../src/compiler/schema-migrations.js';
+
+const authoringOf = (models: Readonly<Record<string, ModelDeclaration>>) =>
+	compileWorkspaceAuthoring({
+		models,
+		sourcePaths: Object.fromEntries(Object.keys(models).map((name) => [name, `fixture:${name}`]))
+	});
+
+const planWorkspaceMigration = (input: {
+	readonly models: Readonly<Record<string, ModelDeclaration>>;
+	readonly previous: WorkspaceSnapshot | undefined;
+	readonly name?: string;
+}) =>
+	planCompiledMigration({
+		authoring: authoringOf(input.models),
+		previous: input.previous,
+		...(input.name === undefined ? {} : { name: input.name })
+	});
 
 const validationRoots = new Set<string>();
 
@@ -28,13 +45,12 @@ const currentModels = (): Readonly<Record<string, ModelDeclaration>> => ({
 });
 
 const committedWorkspace = async (
-	models: Readonly<Record<string, ModelDeclaration>>,
-	relations: ReadonlyArray<RelationDefinition> = []
+	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<Readonly<{ root: string; snapshot: WorkspaceSnapshot }>> => {
 	const root = await mkdtemp(join(tmpdir(), 'bolt-lineage-validation-'));
 	validationRoots.add(root);
 	const migration = await Effect.runPromise(
-		planWorkspaceMigration({ models, relations, previous: undefined, name: 'baseline' })
+		planWorkspaceMigration({ models, previous: undefined, name: 'baseline' })
 	);
 	if (migration === undefined) throw new Error('a baseline must produce a snapshot');
 	await Effect.runPromise(
@@ -81,7 +97,7 @@ describe('sync migration-lineage validation', () => {
 
 		await expect(
 			Effect.runPromise(
-				validateWorkspaceMigrationLineage({ workspaceRoot: root, models: changed, relations: [] })
+				validateWorkspaceMigrationLineage({ workspaceRoot: root, authoring: authoringOf(changed) })
 			)
 		).rejects.toThrow('do not agree with the latest committed migration snapshot');
 	});
@@ -93,7 +109,7 @@ describe('sync migration-lineage validation', () => {
 
 		await expect(
 			Effect.runPromise(
-				validateWorkspaceMigrationLineage({ workspaceRoot: root, models, relations: [] })
+				validateWorkspaceMigrationLineage({ workspaceRoot: root, authoring: authoringOf(models) })
 			)
 		).resolves.toEqual({ snapshot, schemaFingerprint });
 	});

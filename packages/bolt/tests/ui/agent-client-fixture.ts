@@ -5,7 +5,7 @@ import type {
 	CollectionType,
 	RemoteQuery
 } from '@norbital-ai/std/collection';
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import type { CollectionRegistryFor, PlatformSchema } from '../../src/authoring/internals.js';
 import type { AgentRuntimeConfig } from '../../src/client/ui/agent/client.svelte.js';
@@ -18,18 +18,27 @@ import type {
 import type { SyncClient } from '../../src/client/sync/index.js';
 import { initialClientState } from '../../src/client/sync/machine.js';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
-import { createSystemClient, type SystemClientApi } from '../../src/client/system-client.js';
-import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
+import {
+	createWorkspaceApiProxy,
+	type SystemClientApi
+} from '../../src/client/workspace-api.js';
 
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,
 	| 'approval_request'
+	| 'requestor'
+	| 'session'
+	| 'account'
+	| 'verification'
+	| 'auth_config'
+	| 'team'
+	| 'agent_task'
+	| 'agent_plan'
+	| 'agent_message'
 	| 'agent_inbox'
-	| 'agent_lane'
 	| 'agent_run'
-	| 'chat_session'
-	| 'chat_message'
-	| 'chat_message_part'
+	| 'agent_usage'
+	| 'automation_run'
 	| 'user'
 	| 'bolt_notifications'
 >;
@@ -65,11 +74,14 @@ const emptyOperations = <T extends CollectionType<object, object>>() =>
  */
 const emptySync: SyncClient = {
 	start: () => undefined,
+	attach: () => () => undefined,
+	shutdown: () => undefined,
 	current: () => initialClientState(),
 	subscribe: () => () => undefined,
 	mount: (input) => ({
 		key: stableKey(input),
-		release: () => undefined
+		extend: () => undefined,
+		detach: () => undefined
 	}),
 	enqueue: () => undefined
 };
@@ -101,34 +113,30 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 		syncStatus: initialClientState(),
 		settlements: emptySettlements
 	};
-	const system: SystemClientApi = createSystemClient(
-		runtime,
-		(name, input, inputSchema, outputSchema, signal) =>
-			createRemoteQuery(
-				() =>
-					Effect.gen(function* () {
-						const checked = yield* Schema.decodeUnknownEffect(inputSchema)(input);
-						const payload = yield* Schema.decodeUnknownEffect(Schema.Json)(checked);
-						return yield* Effect.tryPromise({
-							try: () => runtime.bolt.command(name, payload, outputSchema, signal),
-							catch: (cause) => cause
-						});
-					}),
-				outputSchema
-			)
-	);
+	const api = createWorkspaceApiProxy(runtime, {}, { system: true });
+	if (!('system' in api)) throw new Error('The agent fixture requires the projected system client');
+	const system: SystemClientApi = api.system;
 	return {
+		automations: {},
 		db: {
 			approval_request: emptyOperations<AgentCollections['approval_request']>(),
+			requestor: emptyOperations<AgentCollections['requestor']>(),
+			session: emptyOperations<AgentCollections['session']>(),
+			account: emptyOperations<AgentCollections['account']>(),
+			verification: emptyOperations<AgentCollections['verification']>(),
+			auth_config: emptyOperations<AgentCollections['auth_config']>(),
+			team: emptyOperations<AgentCollections['team']>(),
+			agent_task: emptyOperations<AgentCollections['agent_task']>(),
+			agent_plan: emptyOperations<AgentCollections['agent_plan']>(),
+			agent_message: emptyOperations<AgentCollections['agent_message']>(),
 			agent_inbox: emptyOperations<AgentCollections['agent_inbox']>(),
-			agent_lane: emptyOperations<AgentCollections['agent_lane']>(),
 			agent_run: emptyOperations<AgentCollections['agent_run']>(),
-			chat_session: emptyOperations<AgentCollections['chat_session']>(),
-			chat_message: emptyOperations<AgentCollections['chat_message']>(),
-			chat_message_part: emptyOperations<AgentCollections['chat_message_part']>(),
+			agent_usage: emptyOperations<AgentCollections['agent_usage']>(),
+			automation_run: emptyOperations<AgentCollections['automation_run']>(),
 			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
 		},
+		collections: {},
 		records: {
 			findMany: () => page<CollectionRecord>([])
 		},

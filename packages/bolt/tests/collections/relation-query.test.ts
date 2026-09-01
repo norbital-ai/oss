@@ -10,14 +10,14 @@ import {
 	physicalColumnNames,
 	referenceArmKey,
 	relationalSchema
-} from '../../src/compiler/relational-schema.js';
+} from '../../src/runtime/schema/relational-schema.js';
 import { resolveWritableManyRelation } from '../../src/runtime/collections/collections.js';
 import {
 	planRelations,
 	readRelationalRows,
 	type PlanContext
 } from '../../src/runtime/collections/read/relation-plan.js';
-import { orderingExpressions } from '../../src/runtime/collections/read/where.js';
+import { orderingExpressions } from '../../src/runtime/access/effective-plan.js';
 import { relationalComposer } from '../../src/runtime/persistence.js';
 
 /**
@@ -49,12 +49,14 @@ const definition = {
 			to: { collection: 'employments', column: 'id' }
 		},
 		{
-			// No endpoints of its own: an authoring module puts them on the inverse `one` edge, and the
-			// orientation has to be resolved rather than assumed.
+			// The compiler resolves these from the inverse `one` edge and stores every relation in
+			// source-to-target order; this runtime fixture starts from that canonical compiled shape.
 			name: 'employment_time_entries',
 			source: 'employments',
 			target: 'time_entries',
-			cardinality: 'many'
+			cardinality: 'many',
+			from: { collection: 'employments', column: 'id' },
+			to: { collection: 'time_entries', column: 'employment_id' }
 		}
 	],
 	collections: [
@@ -147,7 +149,11 @@ const render = (collection: string, spec: unknown, using: PlanContext = context)
 	const builders = composer.query as unknown as Readonly<
 		Record<
 			string,
-			{ findMany: (config: unknown) => { toSQL: () => { sql: string; params: ReadonlyArray<unknown> } } }
+			{
+				findMany: (config: unknown) => {
+					toSQL: () => { sql: string; params: ReadonlyArray<unknown> };
+				};
+			}
 		>
 	>;
 	const builder = builders[collection]!;
@@ -230,12 +236,12 @@ describe('relational `with`', () => {
 		const root = rootQueryOnly(sql);
 		// Every predicate is in the statement...
 		expect(sql).toMatch(/"work_date" >= \$\d+/u);
-		expect(sql.match(/"code" = \$\d+/gu)).toHaveLength(2);
+		expect(sql.match(/"code" is not distinct from \$\d+/gu)).toHaveLength(2);
 		// ...and only the root's own is evaluated against the root's rows. A related collection's
 		// predicate surfacing here would be `with` widening what the subject can see, which is the
 		// failure this whole path exists to prevent.
-		expect(root).toMatch(/"code" = \$\d+/u);
-		expect(root.match(/"code" = \$\d+/gu)).toHaveLength(1);
+		expect(root).toMatch(/"code" is not distinct from \$\d+/u);
+		expect(root.match(/"code" is not distinct from \$\d+/gu)).toHaveLength(1);
 		expect(root).not.toMatch(/"work_date"/u);
 		// The related time entries are filtered by their own collection's predicate, in their own
 		// subquery, beside the join condition that correlates them to the parent row.
@@ -246,7 +252,7 @@ describe('relational `with`', () => {
 
 	it('renders a many relation as an aggregate and a one relation as a row', () => {
 		const { sql } = render('employments', nested);
-		expect(sql).toContain("coalesce(json_agg(row_to_json(\"t\".*)), '[]')");
+		expect(sql).toContain('coalesce(json_agg(row_to_json("t".*)), \'[]\')');
 		expect(sql).toContain('row_to_json("t".*) "r"');
 	});
 
@@ -282,15 +288,15 @@ describe('relational `with`', () => {
 		const { sql } = render('employments', { employment_time_entries: true }, shared);
 		const lateral = firstLateral(sql);
 		expect(lateral).toContain('"time_entries" as "d1"');
-		expect(lateral).toMatch(/"id" = \$\d+/u);
+		expect(lateral).toMatch(/"id" is not distinct from \$\d+/u);
 		// Not at the root: the outer row is never what this predicate filters.
-		expect(rootQueryOnly(sql)).not.toMatch(/"id" = \$\d+/u);
+		expect(rootQueryOnly(sql)).not.toMatch(/"id" is not distinct from \$\d+/u);
 		// And the innermost scope really does carry the name, so resolution stops there.
 		const fields = definition.collections.find((entry) => entry.name === 'time_entries')!.fields;
 		expect(physicalColumnNames(fields).has('id')).toBe(true);
 	});
 
-	it('resolves a many edge whose endpoints live on the inverse one edge', () => {
+	it('uses canonical source-to-target endpoints for a resolved many edge', () => {
 		const { sql } = render('employments', { employment_time_entries: true });
 		expect(sql).toContain('"d0"."id" = "d1"."employment_id"');
 	});
@@ -367,13 +373,24 @@ describe('relational `with`', () => {
 			)
 		);
 		expect(Result.isFailure(outcome)).toBe(true);
-		expect(Result.isFailure(outcome) && outcome.failure.message).toMatch(/columns names no column/u);
+		expect(Result.isFailure(outcome) && outcome.failure.message).toMatch(
+			/columns names no column/u
+		);
 	});
 
-	it('leaves a with entry it cannot resolve off the query rather than guessing', () => {
-		const { sql, planned } = render('employments', { invented: true, employment_time_entries: true });
-		expect(planned.with && Object.keys(planned.with)).toEqual(['employment_time_entries']);
-		expect(sql.match(/left join lateral/gi)).toHaveLength(1);
+	it('refuses a with entry it cannot resolve rather than omitting or guessing it', () => {
+		const outcome = Effect.runSync(
+			Effect.result(
+				planRelations(context, 'employments', {
+					invented: true,
+					employment_time_entries: true
+				})
+			)
+		);
+		expect(Result.isFailure(outcome)).toBe(true);
+		expect(Result.isFailure(outcome) && outcome.failure.message).toMatch(
+			/names no compiled relationship/u
+		);
 	});
 });
 
@@ -402,9 +419,7 @@ describe('reading a relational result', () => {
 		expect(row).toEqual({
 			id: 'e1',
 			code: 'ENG',
-			employment_time_entries: [
-				{ work_date: '2026-06-01', time_entry_employment: { code: 'ENG' } }
-			]
+			employment_time_entries: [{ work_date: '2026-06-01', time_entry_employment: { code: 'ENG' } }]
 		});
 	});
 

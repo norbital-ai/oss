@@ -9,7 +9,7 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { policySql } from '../../src/authoring/policy-sql.js';
+import { subject } from '../../src/authoring/contracts-schema.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
@@ -76,7 +76,7 @@ const jobApproval = {
 };
 
 /** Both parties read only their own rows — the narrowing an approver's ordinary grant would have. */
-const ownRowsOnly = policySql('"owner_id"::text = ${requestor.id}');
+const ownRowsOnly = { owner_id: { eq: subject.id } } as const;
 
 const reviewWorkspace = workspace({
 	name: 'test-workspace',

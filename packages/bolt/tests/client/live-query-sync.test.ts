@@ -1,22 +1,25 @@
 import type {
+	CollectionMutationGraph,
 	CollectionMutationIdempotencyKey,
 	CollectionMutateRequest,
-	CollectionMutationGraph,
-	SyncApplyFrame,
+	StoredRecord,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
+import { syncJsonByteLength } from '@norbital-ai/bolt-protocol';
 import { describe, expect, it } from 'vitest';
 import { project } from '../../src/client/live-query/project.js';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
 import {
-	RETAIN_MS,
+	DETACH_GRACE_MS,
 	STALE_WRITE_MS,
 	initialClientState,
 	step
 } from '../../src/client/sync/machine.js';
 
-const query = (orderBy: Record<string, string> = { created_at: 'desc', id: 'asc' }) =>
-	({ kind: 'findMany', collection: 'tasks', orderBy }) as SyncQueryInput;
+const query = (
+	limit = 3,
+	orderBy: Record<string, string> = { created_at: 'desc', id: 'asc' }
+) => ({ kind: 'findMany', collection: 'tasks', limit, orderBy }) as SyncQueryInput;
 
 const writeId = (value: string): CollectionMutationIdempotencyKey =>
 	value as CollectionMutationIdempotencyKey;
@@ -34,13 +37,25 @@ const mutationRequest = (
 	baseVersions: []
 });
 
+const registeredPrefix = (queryKey: string, version: number, rows: StoredRecord[]) => ({
+	queries: [
+		{
+			queryKey,
+			version,
+			rows,
+			retainedBytes: syncJsonByteLength(rows)
+		}
+	],
+	outcomes: []
+});
+
 describe('live query identity and projection', () => {
 	it('deduplicates ordinary object key order but preserves SQL order precedence', () => {
 		expect(stableKey({ kind: 'findMany', collection: 'tasks', limit: 20 } as SyncQueryInput)).toBe(
 			stableKey({ limit: 20, collection: 'tasks', kind: 'findMany' } as SyncQueryInput)
 		);
-		expect(stableKey(query({ created_at: 'desc', id: 'asc' }))).not.toBe(
-			stableKey(query({ id: 'asc', created_at: 'desc' }))
+		expect(stableKey(query(3, { created_at: 'desc', id: 'asc' }))).not.toBe(
+			stableKey(query(3, { id: 'asc', created_at: 'desc' }))
 		);
 	});
 
@@ -73,99 +88,63 @@ describe('live query identity and projection', () => {
 	});
 });
 
-describe('live query Machine', () => {
-	it('revalidates a query mounted after the opening connect snapshot', () => {
+describe('Sync v2 prefix Machine', () => {
+	it('registers a mounted prefix from current database truth', () => {
 		const input = query();
 		const key = stableKey(input);
 		let state = initialClientState(0);
-		const [, openingEffects] = step(state, { kind: 'tick', now: 0 });
-		expect(openingEffects).toMatchObject([{ kind: 'connect', queries: [] }]);
-
 		[state] = step(state, { kind: 'mounted', key, input });
-		const [connected, effects] = step(state, {
-			kind: 'connected',
-			at: 1,
-			response: { head: { sequence: 1 }, results: [], outcomes: [] }
+		const [registering, effects] = step(state, { kind: 'tick', now: 0 });
+
+		expect(registering.queries.get(key)).toMatchObject({
+			requestedPrefix: 3,
+			phase: 'pending',
+			validating: true,
+			subscribers: 1
 		});
-
-		expect(connected.link).toBe('live');
-		expect(connected.queries.get(key)).toMatchObject({ phase: 'pending', subscribers: 1 });
-		expect(effects).toMatchObject([{ kind: 'revalidate', query: { key } }]);
-	});
-
-	it('distinguishes an authoritative null answer from an unchanged handshake', () => {
-		const input = {
-			kind: 'findFirst',
-			collection: 'tasks',
-			limit: 1
-		} as SyncQueryInput;
-		const key = stableKey(input);
-		let state = initialClientState(0);
-		[state] = step(state, { kind: 'mounted', key, input });
-		[state] = step(state, {
-			kind: 'connected',
-			at: 1,
-			response: {
-				head: { sequence: 1 },
-				results: [
-					{
-						key,
-						digestOnly: false,
-						digest: 'empty',
-						changed: true,
-						answer: null
-					}
-				],
-				outcomes: []
+		expect(effects).toEqual([
+			{
+				kind: 'register',
+				request: {
+					queries: [{ queryKey: key, input, requestedPrefix: 3 }],
+					detached: [],
+					pending: []
+				}
 			}
-		});
-		expect(state.queries.get(key)).toMatchObject({
-			answer: null,
-			digest: 'empty',
-			phase: 'fresh'
-		});
+		]);
 	});
 
-	it('presents a malformed handshake error and retries on the connection backoff', () => {
-		const input = query();
+	it('retains an authoritative empty prefix instead of inventing a null answer arm', () => {
+		const input = { kind: 'findFirst', collection: 'tasks', limit: 1 } as SyncQueryInput;
 		const key = stableKey(input);
 		let state = initialClientState(0);
 		[state] = step(state, { kind: 'mounted', key, input });
 		[state] = step(state, {
-			kind: 'connected',
-			at: 10,
-			response: {
-				head: { sequence: 1 },
-				results: [{ key, digestOnly: false, digest: 'd1', changed: false }],
-				outcomes: []
-			}
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 4, [])
 		});
-		expect(state.link).toBe('reconnecting');
+
+		expect(state.link).toBe('live');
 		expect(state.queries.get(key)).toMatchObject({
-			phase: 'failed',
-			error: 'Sync handshake claimed an unchanged query without a local answer'
+			phase: 'fresh',
+			validating: false,
+			prefix: { version: 4, rows: [], retainedBytes: syncJsonByteLength([]) }
 		});
-		const reconnectAt = state.reconnectAt;
-		const [, earlyEffects] = step(state, { kind: 'tick', now: reconnectAt - 1 });
-		expect(earlyEffects).toEqual([]);
-		const [, retryEffects] = step(state, { kind: 'tick', now: reconnectAt });
-		expect(retryEffects).toMatchObject([{ kind: 'connect', queries: [{ key }] }]);
 	});
 
-	it('applies rows and retires the matching overlay in one reducer step', () => {
+	it('applies one version transition and settles its matching write atomically', () => {
 		const input = query();
 		const key = stableKey(input);
+		const original = [{ id: 'a', title: 'old' }];
 		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
 		[state] = step(state, {
-			kind: 'mounted',
-			key,
-			input,
-			seed: { answer: [{ id: 'a', title: 'old' }], digest: 'd1' }
-		});
-		[state] = step(state, {
-			kind: 'connected',
+			kind: 'registered',
 			at: 1,
-			response: { head: { sequence: 1 }, results: [], outcomes: [] }
+			requestedKeys: [key],
+			response: registeredPrefix(key, 7, original)
 		});
 		const id = writeId('w1');
 		[state] = step(state, {
@@ -177,183 +156,205 @@ describe('live query Machine', () => {
 				values: { id: 'a', title: 'new' }
 			})
 		});
-		const frame: SyncApplyFrame = {
-			head: { sequence: 2 },
-			patches: [
-				{
-					key,
-					from: 'd1',
-					to: 'd2',
-					patch: { op: 'replace', recordId: 'a', row: { id: 'a', title: 'new' } }
-				}
-			],
-			outcomes: [{ id, status: { resolution: 'accepted', schemaFingerprint: 'schema' } }]
-		};
-		const [next, effects] = step(state, { kind: 'frame', payload: frame });
-		expect(next.queries.get(key)).toMatchObject({
-			answer: [{ id: 'a', title: 'new' }],
-			digest: 'd2'
+
+		const [next, effects] = step(state, {
+			kind: 'frame',
+			at: 3,
+			payload: {
+				updates: [
+					{
+						queryKey: key,
+						fromVersion: 7,
+						toVersion: 8,
+						delta: {
+							removeIds: [],
+							put: [{ id: 'a', index: 0, row: { id: 'a', title: 'new' } }]
+						}
+					}
+				],
+				resets: [],
+				outcomes: [{ id, status: { resolution: 'accepted', schemaFingerprint: 'schema' } }]
+			}
+		});
+
+		expect(next.queries.get(key)?.prefix).toMatchObject({
+			version: 8,
+			rows: [{ id: 'a', title: 'new' }]
 		});
 		expect(next.writes.has(id)).toBe(false);
 		expect(effects).toEqual([]);
 	});
 
-	it('refuses a broken digest chain and requests exactly one full revalidation', () => {
-		const input = query();
-		const key = stableKey(input);
-		let state = initialClientState(0);
-		[state] = step(state, {
-			kind: 'mounted',
-			key,
-			input,
-			seed: { answer: [{ id: 'a' }], digest: 'd1' }
-		});
-		[state] = step(state, {
-			kind: 'connected',
-			at: 1,
-			response: { head: { sequence: 1 }, results: [], outcomes: [] }
-		});
-		const [next, effects] = step(state, {
-			kind: 'frame',
-			payload: {
-				head: { sequence: 3 },
-				patches: [
-					{
-						key,
-						from: 'missing-d2',
-						to: 'd3',
-						patch: { op: 'remove', recordId: 'a' }
-					}
-				],
-				outcomes: []
-			}
-		});
-		expect(next.queries.get(key)?.answer).toEqual([{ id: 'a' }]);
-		expect(effects).toMatchObject([{ kind: 'revalidate', query: { key, digest: 'd1' } }]);
-	});
-
-	it('applies a boundary seat change at the entrant’s actual rank', () => {
-		const input = query();
-		const key = stableKey(input);
-		let state = initialClientState(0);
-		[state] = step(state, {
-			kind: 'mounted',
-			key,
-			input,
-			seed: { answer: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], digest: 'd1' }
-		});
-		[state] = step(state, {
-			kind: 'connected',
-			at: 1,
-			response: { head: { sequence: 1 }, results: [], outcomes: [] }
-		});
-		const [next, effects] = step(state, {
-			kind: 'frame',
-			payload: {
-				head: { sequence: 2 },
-				patches: [
-					{
-						key,
-						from: 'd1',
-						to: 'd2',
-						patch: {
-							op: 'replace',
-							recordId: 'd',
-							index: 0,
-							displaces: 'c',
-							row: { id: 'd', title: 'entrant' }
-						}
-					}
-				],
-				outcomes: []
-			}
-		});
-		expect(next.queries.get(key)).toMatchObject({
-			answer: [{ id: 'd', title: 'entrant' }, { id: 'a' }, { id: 'b' }],
-			digest: 'd2',
-			phase: 'fresh'
-		});
-		expect(effects).toEqual([]);
-	});
-
-	it('refuses a seat change whose displaced row the answer does not hold', () => {
-		const input = query();
-		const key = stableKey(input);
-		let state = initialClientState(0);
-		[state] = step(state, {
-			kind: 'mounted',
-			key,
-			input,
-			seed: { answer: [{ id: 'a' }], digest: 'd1' }
-		});
-		[state] = step(state, {
-			kind: 'connected',
-			at: 1,
-			response: { head: { sequence: 1 }, results: [], outcomes: [] }
-		});
-		const [next, effects] = step(state, {
-			kind: 'frame',
-			payload: {
-				head: { sequence: 2 },
-				patches: [
-					{
-						key,
-						from: 'd1',
-						to: 'd2',
-						patch: {
-							op: 'replace',
-							recordId: 'x',
-							displaces: 'missing',
-							row: { id: 'x' }
-						}
-					}
-				],
-				outcomes: []
-			}
-		});
-		expect(next.queries.get(key)?.answer).toEqual([{ id: 'a' }]);
-		expect(effects).toMatchObject([{ kind: 'revalidate', query: { key, digest: 'd1' } }]);
-	});
-
-	it('fails pending reads when the link needs a reload instead of stranding them', () => {
+	it('restarts from current truth when an update does not continue the retained version', () => {
 		const input = query();
 		const key = stableKey(input);
 		let state = initialClientState(0);
 		[state] = step(state, { kind: 'mounted', key, input });
-		const [next] = step(state, {
-			kind: 'disconnected',
-			cause: { kind: 'release-mismatch', message: 'release changed', at: 5 }
+		[state] = step(state, {
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 7, [{ id: 'a' }])
 		});
-		expect(next.link).toBe('needsReload');
+
+		const [next, effects] = step(state, {
+			kind: 'frame',
+			at: 2,
+			payload: {
+				updates: [
+					{
+						queryKey: key,
+						fromVersion: 6,
+						toVersion: 7,
+						delta: { removeIds: [], put: [] }
+					}
+				],
+				resets: [],
+				outcomes: []
+			}
+		});
+
+		expect(next.link).toBe('reconnecting');
+		expect(next.queries.get(key)?.prefix).toBeUndefined();
+		expect(effects).toEqual([
+			{ kind: 'restart', message: 'Sync frame does not continue every retained query version' }
+		]);
+	});
+
+	it('re-registers a reset prefix and never applies a second transition arm', () => {
+		const input = query();
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
+		[state] = step(state, {
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 2, [{ id: 'a' }])
+		});
+
+		const [next, effects] = step(state, {
+			kind: 'frame',
+			at: 2,
+			payload: {
+				updates: [],
+				resets: [{ queryKey: key, reason: 'plan-changed' }],
+				outcomes: []
+			}
+		});
+
+		expect(next.queries.get(key)).toMatchObject({
+			phase: 'pending',
+			validating: true,
+			extending: false
+		});
+		expect(next.queries.get(key)?.prefix).toBeUndefined();
+		expect(effects).toMatchObject([
+			{ kind: 'register', request: { queries: [{ queryKey: key }], detached: [] } }
+		]);
+	});
+
+	it('extends only a same-version contiguous prefix', () => {
+		const input = query(1);
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
+		[state] = step(state, {
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 5, [{ id: 'a' }])
+		});
+		let effects: ReturnType<typeof step>[1];
+		[state, effects] = step(state, { kind: 'extendRequested', key, requestedPrefix: 3 });
+		expect(effects).toEqual([
+			{
+				kind: 'extend',
+				request: { queryKey: key, version: 5, loadedPrefix: 1, requestedPrefix: 3 }
+			}
+		]);
+
+		const rows = [{ id: 'a' }, { id: 'b' }];
+		[state, effects] = step(state, {
+			kind: 'extensionAccepted',
+			response: {
+				queryKey: key,
+				version: 5,
+				fromPrefix: 1,
+				toPrefix: 2,
+				rows: [{ id: 'b' }],
+				retainedBytes: syncJsonByteLength(rows)
+			}
+		});
+		expect(state.queries.get(key)?.prefix).toMatchObject({ version: 5, rows });
+		expect(effects).toEqual([
+			{
+				kind: 'extend',
+				request: { queryKey: key, version: 5, loadedPrefix: 2, requestedPrefix: 3 }
+			}
+		]);
+	});
+
+	it('detaches after the grace window and reports the exact query key to the host', () => {
+		const input = query();
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
+		[state] = step(state, {
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 1, [{ id: 'a' }])
+		});
+		[state] = step(state, { kind: 'detached', key, at: 10 });
+		const [next, effects] = step(state, { kind: 'tick', now: 10 + DETACH_GRACE_MS });
+
+		expect(next.queries.has(key)).toBe(false);
+		expect(effects).toEqual([
+			{
+				kind: 'register',
+				request: { queries: [], detached: [key], pending: [] }
+			}
+		]);
+	});
+
+	it('fails pending reads and stops reconnecting after a terminal disconnect', () => {
+		const input = query();
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
+		const [next, effects] = step(state, {
+			kind: 'disconnected',
+			cause: { kind: 'terminal', message: 'release changed', at: 5 }
+		});
+
+		expect(next.link).toBe('closed');
 		expect(next.queries.get(key)).toMatchObject({
 			phase: 'failed',
 			error: 'release changed'
 		});
+		expect(effects).toEqual([]);
 	});
 
-	it('retains unmounted answers briefly, releases them, and re-pushes stale writes', () => {
+	it('re-pushes a stale write while the connection remains live', () => {
 		const input = query();
 		const key = stableKey(input);
 		const id = writeId('w1');
 		let state = initialClientState(0);
 		[state] = step(state, { kind: 'mounted', key, input });
 		[state] = step(state, {
-			kind: 'connected',
-			at: 0,
-			response: { head: { sequence: 0 }, results: [], outcomes: [] }
+			kind: 'registered',
+			at: 1,
+			requestedKeys: [key],
+			response: registeredPrefix(key, 1, [])
 		});
-		[state] = step(state, { kind: 'unmounted', key, at: 10 });
 		[state] = step(state, {
 			kind: 'writeEnqueued',
 			at: 10,
 			request: mutationRequest(id, { action: 'delete', collection: 'tasks', id: 'a' })
 		});
-		const [next, effects] = step(state, {
-			kind: 'tick',
-			now: Math.max(10 + RETAIN_MS, 10 + STALE_WRITE_MS)
-		});
-		expect(next.queries.has(key)).toBe(false);
-		expect(effects).toContainEqual(expect.objectContaining({ kind: 'connect', released: [key] }));
+		const [, effects] = step(state, { kind: 'tick', now: 10 + STALE_WRITE_MS });
+
 		expect(effects).toContainEqual({ kind: 'push', writeId: id });
 	});
 });

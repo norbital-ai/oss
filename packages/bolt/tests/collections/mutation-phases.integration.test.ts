@@ -2,9 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
 import { refuse, AuthoredRefusal } from '../../src/authoring/refusal.js';
 import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
+import { MAX_ORDINARY_MUTATION_CHANGED_ROWS } from '../../src/runtime/collections/write/plan.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	emptyAuthoredRuntime,
 	type AuthoredRuntime
@@ -92,6 +99,45 @@ const hooksRefusingIn = (site: 'before' | 'after'): AuthoredRuntime => ({
 	hooks: { notes: authoredHooks(refusalHook(site)) }
 });
 
+const pendingDefinition = workspace({
+	name: 'pending-phases',
+	version: '1.0.0',
+	collections: [collection({ name: 'notes', fields: { body: field.string({ required: true }) } })],
+	apps: [],
+	teams: { writers: ['writer'], reviewers: [] },
+	automations: [],
+	envoys: [],
+	integrations: [],
+	prompt: 'You are the pending capture test workspace agent.',
+	tools: [],
+	skills: [],
+	requiredFacilities: [],
+	policies: [
+		describePolicy('writer', {
+			description: 'Writers submit notes through review.',
+			grants: {
+				notes: {
+					read: {},
+					mutate: {
+						new: { approval: { flow: () => approveBy('reviewers'), superceded_by: [] } }
+					}
+				}
+			}
+		})
+	]
+});
+const pendingFunctions = policyRuntimeFunctionsFor(pendingDefinition.policies);
+const pendingAuthored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: pendingFunctions.authorizations,
+	approvalFlows: pendingFunctions.approvalFlows
+};
+const pendingSubject = {
+	...adminSubject,
+	admin: false,
+	teamPath: ['writers']
+};
+
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -158,6 +204,96 @@ describe('a batched write that fails', () => {
 		expect(written.records).toHaveLength(2);
 		expect(written.records.map((row) => row['body'])).toEqual(['first', 'second']);
 	}, 60_000);
+
+	it('emits no batch when the database transaction fails', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const syncCommit = yield* SyncCommit.Service;
+				const outcome = yield* Effect.result(
+					collections.mutate(
+						EffectId.make('phases-commit-failure'),
+						adminSubject,
+						'notes',
+						[{}]
+					)
+				);
+				return { outcome, changes: yield* syncCommit.drainChanges };
+			})
+		);
+
+		expect(result.outcome._tag).toBe('Failure');
+		if (result.outcome._tag === 'Failure')
+			expect(result.outcome.failure).toMatchObject({ phase: 'commit', committed: [] });
+		expect(result.changes).toEqual([]);
+		expect(await harness.database.query('select id from notes')).toEqual([]);
+	}, 60_000);
+
+	it('emits no batch while a mutation is pending approval', async () => {
+		harness = await makeBoltTestRuntime(pendingDefinition, { authored: pendingAuthored });
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const syncCommit = yield* SyncCommit.Service;
+				const outcome = yield* Effect.result(
+					collections.mutate(
+						EffectId.make('phases-pending-approval'),
+						pendingSubject,
+						'notes',
+						[{ body: 'Held for review' }]
+					)
+				);
+				return { outcome, changes: yield* syncCommit.drainChanges };
+			})
+		);
+
+		expect(result.outcome._tag).toBe('Failure');
+		if (result.outcome._tag === 'Failure')
+			expect(result.outcome.failure).toBeInstanceOf(Collections.PendingApproval);
+		expect(result.changes).toEqual([]);
+		expect(await harness.database.query('select id from notes')).toEqual([]);
+	}, 60_000);
+
+	it('admits one thousand changed rows and refuses one thousand and one before commit', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const syncCommit = yield* SyncCommit.Service;
+				const admitted = yield* collections.mutate(
+					EffectId.make('phases-boundary-admitted'),
+					adminSubject,
+					'notes',
+					Array.from({ length: MAX_ORDINARY_MUTATION_CHANGED_ROWS }, (_, index) => ({
+						body: `admitted-${index}`
+					}))
+				);
+				const admittedChanges = yield* syncCommit.drainChanges;
+				const refused = yield* Effect.result(
+					collections.mutate(
+						EffectId.make('phases-boundary-refused'),
+						adminSubject,
+						'notes',
+						Array.from({ length: MAX_ORDINARY_MUTATION_CHANGED_ROWS + 1 }, (_, index) => ({
+							body: `refused-${index}`
+						}))
+					)
+				);
+				const refusedChanges = yield* syncCommit.drainChanges;
+				return { admitted, admittedChanges, refused, refusedChanges };
+			})
+		);
+
+		expect(result.admitted.records).toHaveLength(MAX_ORDINARY_MUTATION_CHANGED_ROWS);
+		expect(result.admittedChanges).toHaveLength(MAX_ORDINARY_MUTATION_CHANGED_ROWS);
+		expect(result.refused._tag).toBe('Failure');
+		expect(JSON.stringify(result.refused)).toContain('may change at most 1000 rows');
+		expect(result.refusedChanges).toEqual([]);
+		expect(await harness.database.query('select id from notes')).toHaveLength(
+			MAX_ORDINARY_MUTATION_CHANGED_ROWS
+		);
+	}, 120_000);
 });
 
 describe('unwrapMutationPhase', () => {

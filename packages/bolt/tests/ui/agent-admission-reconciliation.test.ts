@@ -1,57 +1,54 @@
 import { describe, expect, it } from 'vitest';
 import {
 	retryableAdmission,
-	withoutAdmittedDocuments,
-	type UnsettledAgentAdmission
+	type UnsettledTaskAdmission
 } from '../../src/client/ui/agent/admission-reconciliation.js';
-import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
 
-const document = (storageKey: string): ChatDocumentRef => ({
-	storage_key: storageKey,
-	file_name: `${storageKey}.txt`,
-	file_size: 10,
-	mime_type: 'text/plain'
-});
-
-const unsettled: UnsettledAgentAdmission = {
-	conversationId: 'conversation-1',
-	turnId: 'turn-1',
+const unsettled: UnsettledTaskAdmission = {
+	taskId: 'task-1',
+	agentId: 'payroll',
 	message: 'Run payroll',
-	draft: 'Run payroll',
-	createdConversation: true,
-	documentKeys: ['document-1']
+	mode: 'agent',
+	priority: 'normal',
+	draft: 'Run payroll'
 };
 
-describe('agent admission reconciliation', () => {
-	it('reuses a caller-owned turn only for the exact same unknown admission', () => {
+describe('Task admission reconciliation', () => {
+	it('reuses a client-minted Task id only for the exact unknown submission', () => {
 		expect(
 			retryableAdmission(unsettled, {
-				conversationId: 'conversation-1',
+				agentId: 'payroll',
 				message: 'Run payroll',
-				documents: [document('document-1')]
+				mode: 'agent',
+				priority: 'normal'
 			})
 		).toBe(unsettled);
-		expect(
-			retryableAdmission(unsettled, {
-				conversationId: 'conversation-1',
-				message: 'Run payroll again',
-				documents: [document('document-1')]
-			})
-		).toBeNull();
-		expect(
-			retryableAdmission(unsettled, {
-				conversationId: 'conversation-1',
-				message: 'Run payroll',
-				documents: []
-			})
-		).toBeNull();
 	});
 
-	it('clears only documents proven durable by the reconciled turn', () => {
+	it('rejects any changed Task identity instead of retrying a different directive', () => {
 		expect(
-			withoutAdmittedDocuments([document('document-1'), document('document-new')], unsettled).map(
-				({ storage_key }) => storage_key
-			)
-		).toEqual(['document-new']);
+			retryableAdmission(unsettled, {
+				agentId: 'payroll',
+				message: 'Run payroll again',
+				mode: 'agent',
+				priority: 'normal'
+			})
+		).toBeNull();
+		expect(
+			retryableAdmission(unsettled, {
+				agentId: 'payroll',
+				message: 'Run payroll',
+				mode: 'plan',
+				priority: 'normal'
+			})
+		).toBeNull();
+		expect(
+			retryableAdmission(unsettled, {
+				agentId: 'payroll',
+				message: 'Run payroll',
+				mode: 'agent',
+				priority: 'steer'
+			})
+		).toBeNull();
 	});
 });

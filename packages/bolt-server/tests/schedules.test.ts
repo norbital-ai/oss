@@ -18,11 +18,11 @@ import { makeTaskInvocationControl } from '../src/schedules.js';
 /**
  * The tick loop, driven the way the guest expects to be driven.
  *
- * The suite this replaces asserted that a timer fired and never asserted what it said, which is why
- * a host dispatching a command the runtime had deleted stayed green: `tasks.tick` was refused on
- * every fire, the timekeeper backed off on the logged failure, and no scheduled task ran in a
- * self-hosted deployment. Everything below asserts on the conversation — which commands, in which
- * order, carrying what, and what the host does with each answer.
+ * The suite this replaces asserted that a timer fired but never asserted the schedule conversation.
+ * A host could therefore dispatch an obsolete command, back off on the logged refusal, and leave
+ * every scheduled task inert while the suite stayed green. Everything below asserts the real
+ * discover/task/settle conversation — which commands, in which order, carrying what, and what the
+ * host does with each answer.
  */
 
 const GATEWAY_SECRET = 'test-gateway-secret';

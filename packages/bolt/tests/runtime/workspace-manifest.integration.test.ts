@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+	COMPILED_MANIFEST_VERSION,
 	InvocationId,
 	PROTOCOL_VERSION,
 	Invocation,
@@ -8,9 +9,18 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { app, envoy, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import {
+	app,
+	collection,
+	envoy,
+	field,
+	policy,
+	workspace,
+	type WorkspaceDefinition
+} from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import {
@@ -37,7 +47,9 @@ const manifestInvocation = (credential: string, command = 'workspace.manifest') 
 		},
 		deadlineEpochMs: Date.now() + 30_000,
 		command,
-		input: null,
+		// `EmptyInput` is `Schema.Struct({})`. A command whose contract declares no input is invoked
+		// with an empty object, not with `null` — `null` is refused before the handler is reached.
+		input: {},
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
 
@@ -137,6 +149,10 @@ describe('workspace.manifest command', () => {
 	 *
 	 * There is no `agent` key, and its absence is asserted by the exact-equality below. It used to be
 	 * a back-pointer whose value was the one synthesized agent, in every workspace, always.
+	 *
+	 * `origin` is `'system'` and not `'authored'` because this fixture is a hand-written definition
+	 * with no compiler projection behind it, so no `src/envoys/+support.ts` path was ever recorded.
+	 * Claiming `'authored'` without a path is what `WorkspaceAuthoringManifest` refuses.
 	 */
 	it('publishes an envoy transport, audience and delegation boundary', async () => {
 		harness = await makeBoltTestRuntime(
@@ -186,7 +202,9 @@ describe('workspace.manifest command', () => {
 				transport: 'whatsapp',
 				audience: 'public',
 				groupMessages: 'mention_or_reply',
-				delegation: 'enabled'
+				delegation: 'enabled',
+				origin: 'system',
+				destination: { kind: 'system', surface: 'envoys', selection: 'support' }
 			}
 		]);
 	});
@@ -239,7 +257,23 @@ describe('workspace.manifest command', () => {
 				tools: [],
 				skills: [],
 				requiredFacilities: []
-			})
+			}),
+			// `assertCommandNamespace` runs before every Command invocation and requires exact
+			// membership between declared automations and implemented ones, so a fixture that declares
+			// `nightly` has to carry its live half too.
+			{
+				authored: {
+					...emptyAuthoredRuntime,
+					automations: {
+						nightly: {
+							name: 'nightly',
+							policies: ['member'],
+							trigger: { _tag: 'Schedule', cron: '0 0 * * *' },
+							handler: () => undefined
+						}
+					}
+				}
+			}
 		);
 		await seedAdmin(harness);
 		const response = await harness.runtime.runPromise(
@@ -528,8 +562,161 @@ describe('workspace.manifest command', () => {
 				label: 'People directory',
 				description: 'Find everyone in the workspace.',
 				icon: 'lucide:users',
-				thumbnail: '/assets/directory.webp'
+				thumbnail: '/assets/directory.webp',
+				// No compiler ran over this fixture, so no `src/apps/+directory.svelte` path exists to
+				// attribute the app to. `origin: 'system'` states that; `'authored'` would be a claim
+				// the manifest cannot back, and the response contract rejects it.
+				origin: 'system',
+				destination: { kind: 'app', name: 'directory' }
 			}
 		]);
+	});
+
+	/**
+	 * The dispatch-level regression: every workspace, every tenant, a 500.
+	 *
+	 * `withSystemCollections` merges three built-in policies into every definition — they are runtime
+	 * declarations with no authored file behind them — and the manifest projection stamped
+	 * `origin: 'authored'` on every policy it saw. `WorkspaceAuthoringManifest` refuses an authored
+	 * entry that names no `sourcePath`, so `workspace.manifest` failed its own declared response and
+	 * dispatch answered `invalid_command_output` for every caller of both commands.
+	 *
+	 * The filter that catches it only runs when the manifest carries the current
+	 * `compiledManifestVersion`, which is why no fixture reproduced it: a hand-written definition has
+	 * no `manifestProjection`, so the check short-circuited and the contract looked satisfied. This
+	 * fixture supplies the projection a compiled workspace carries, which is what makes the assertion
+	 * below the production path rather than a weaker one.
+	 */
+	describe('response contract', () => {
+		/**
+		 * Attaches the compiler-owned key `WorkspaceDraft` does not name.
+		 *
+		 * `manifestProjection` is written by `workspace-build.ts` and read back off the frozen
+		 * definition by `authoredManifestDeclarations`, so it exists on every compiled workspace and on
+		 * no hand-written one. Naming that asymmetry here is what keeps the fixture below honest.
+		 */
+		const withManifestProjection = (
+			definition: WorkspaceDefinition,
+			manifestProjection: Readonly<Record<string, unknown>>
+		): WorkspaceDefinition => ({ ...definition, manifestProjection }) as WorkspaceDefinition;
+
+		/** A definition shaped the way `workspace-build.ts` emits one: a projection, and paths in it. */
+		const compiledShapedWorkspace = () =>
+			withManifestProjection(
+				workspace({
+					name: 'compiled-workspace',
+					version: '1',
+					collections: [
+						collection({
+							name: 'people',
+							fields: { name: field.string({ required: true }) },
+							description: 'Everyone employed here'
+						})
+					],
+					apps: [app({ name: 'directory', label: 'Directory' })],
+					policies: [
+						policy({
+							name: 'admin',
+							effect: 'allow',
+							actions: ['*'],
+							capabilities: { apps: ['*'] }
+						})
+					],
+					teams: { admin: ['admin'] },
+					automations: [],
+					envoys: [
+						envoy({
+							name: 'support',
+							transport: 'whatsapp',
+							audience: 'public',
+							policies: ['admin'],
+							delegation: 'disabled',
+							task: 'Answer support questions.'
+						})
+					],
+					integrations: [],
+					prompt: 'You are the test workspace agent.',
+					tools: [],
+					skills: [],
+					requiredFacilities: []
+				}),
+				{
+					compiledManifestVersion: COMPILED_MANIFEST_VERSION,
+					appGroups: [],
+					policySourcePaths: { admin: 'src/access/policies/+admin.ts' },
+					remoteSourcePaths: {},
+					envoySourcePaths: { support: 'src/envoys/+support.ts' },
+					automationSourcePaths: {},
+					hookSourcePaths: {},
+					pipelineSourcePaths: {},
+					integrationSourcePaths: {}
+				}
+			);
+
+		it('answers workspace.manifest with a value its own contract accepts', async () => {
+			harness = await makeBoltTestRuntime(compiledShapedWorkspace());
+			await seedAdmin(harness);
+
+			const manifest = value(
+				await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
+			);
+
+			// Response validation replaced the handler's value with the decoded one, so reaching here
+			// at all is the assertion. The rest names what survived it.
+			expect(manifest['compiledManifestVersion']).toBe(COMPILED_MANIFEST_VERSION);
+			const policies = manifest['policies'] as ReadonlyArray<{
+				name: string;
+				origin?: string;
+				sourcePath?: string;
+			}>;
+			// The authored policy keeps its file; the three built-ins are runtime facts and say so.
+			expect(policies.find(({ name }) => name === 'admin')).toMatchObject({
+				origin: 'authored',
+				sourcePath: 'src/access/policies/+admin.ts'
+			});
+			const builtIn = policies.filter(({ name }) => name !== 'admin');
+			expect(builtIn.length).toBeGreaterThan(0);
+			for (const entry of builtIn) {
+				expect(entry.origin).toBe('system');
+				expect(entry).not.toHaveProperty('sourcePath');
+			}
+			// `principals` is declared by the contract now. It used to be stripped by decoding, because
+			// `Schema.Struct` drops keys it does not name.
+			expect(manifest['principals']).toEqual([
+				{ id: 'colony-system', label: 'Colony', kind: 'host', policies: [] },
+				{ id: 'colony-seed', label: 'Sample data', kind: 'seed', policies: [] },
+				{ id: 'envoy:support', label: 'support', kind: 'envoy', policies: ['admin'] }
+			]);
+		});
+
+		it('answers workspace.authoringManifest to an administrator with the same contract', async () => {
+			harness = await makeBoltTestRuntime(compiledShapedWorkspace());
+			await seedSession(harness, {
+				token: 'author-token',
+				user: 'workspace-author',
+				status: ADMIN_STATUS
+			});
+
+			const manifest = value(
+				await harness.runtime.runPromise(
+					dispatchInvocation(manifestInvocation('author-token', 'workspace.authoringManifest'))
+				)
+			);
+
+			expect(
+				(manifest['collections'] as ReadonlyArray<{ name: string }>).map(({ name }) => name)
+			).toEqual(['people']);
+			expect(manifest['envoys']).toEqual([
+				{
+					name: 'support',
+					transport: 'whatsapp',
+					audience: 'public',
+					delegation: 'disabled',
+					origin: 'authored',
+					sourcePath: 'src/envoys/+support.ts',
+					destination: { kind: 'system', surface: 'envoys', selection: 'support' }
+				}
+			]);
+		});
 	});
 });

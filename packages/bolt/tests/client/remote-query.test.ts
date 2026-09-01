@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Effect, Schema } from 'effect';
-import type { StoredRecord } from '@norbital-ai/bolt-protocol';
+import { syncJsonByteLength, type StoredRecord } from '@norbital-ai/bolt-protocol';
 import { createMachineQuery, createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 import {
 	initialClientState,
@@ -40,16 +40,19 @@ describe('remote query failure reporting', () => {
 
 const queryState = (overrides: Partial<QueryState>): QueryState => ({
 	input: { kind: 'findMany', collection: 'jobs' },
+	requestedPrefix: 100,
 	phase: 'fresh',
+	validating: false,
+	extending: false,
 	subscribers: 1,
 	...overrides
 });
 
 /** The projection under test: a row answer becomes the ids the reader sees. */
 const projectIds = (state: ClientState): ReadonlyArray<string> | undefined => {
-	const answer = state.queries.get('jobs')?.answer;
-	if (!Array.isArray(answer)) return undefined;
-	return answer.map((row) => {
+	const rows = state.queries.get('jobs')?.prefix?.rows;
+	if (rows === undefined) return undefined;
+	return rows.map((row) => {
 		const id = row['id'];
 		return typeof id === 'string' ? id : '';
 	});
@@ -59,6 +62,8 @@ const fakeMachine = () => {
 	const listeners = new Set<(state: ClientState) => void>();
 	const client: SyncClient = {
 		start: () => undefined,
+		attach: () => () => undefined,
+		shutdown: () => undefined,
 		current: () => initialClientState(),
 		subscribe: (listener) => {
 			listeners.add(listener);
@@ -67,7 +72,8 @@ const fakeMachine = () => {
 		},
 		mount: (input) => ({
 			key: stableKey(input),
-			release: () => undefined
+			extend: () => undefined,
+			detach: () => undefined
 		}),
 		enqueue: () => undefined
 	};
@@ -82,11 +88,12 @@ const fakeMachine = () => {
 describe('machine-backed query read semantics', () => {
 	it('resolves with the first projected value and repaints the retained answer while loading', async () => {
 		const machine = fakeMachine();
-		let released = 0;
+		let detached = 0;
 		const mounted = {
 			key: 'jobs',
-			release: () => {
-				released += 1;
+			extend: () => undefined,
+			detach: () => {
+				detached += 1;
 			}
 		};
 		const query = createMachineQuery(machine.client, mounted, projectIds);
@@ -96,7 +103,20 @@ describe('machine-backed query read semantics', () => {
 
 		const fresh = (rows: ReadonlyArray<StoredRecord>, phase: 'fresh' | 'pending'): ClientState => ({
 			...initialClientState(),
-			queries: new Map([['jobs', queryState({ phase, answer: [...rows] })]])
+			queries: new Map([
+				[
+					'jobs',
+					queryState({
+						phase,
+						validating: phase === 'pending',
+						prefix: {
+							version: 1,
+							rows: [...rows],
+							retainedBytes: syncJsonByteLength(rows)
+						}
+					})
+				]
+			])
 		});
 
 		machine.publish(fresh([{ id: 'retained' }], 'fresh'));
@@ -113,7 +133,7 @@ describe('machine-backed query read semantics', () => {
 		machine.publish(fresh([{ id: 'newest' }], 'fresh'));
 		expect(query.current).toEqual(['newest']);
 		expect(query.loading).toBe(false);
-		expect(released).toBe(0);
+		expect(detached).toBe(0);
 	});
 
 	it('does not reproject when an unrelated Machine query publishes', () => {
@@ -121,13 +141,21 @@ describe('machine-backed query read semantics', () => {
 		let projections = 0;
 		const query = createMachineQuery(
 			machine.client,
-			{ key: 'jobs', release: () => undefined },
+			{ key: 'jobs', extend: () => undefined, detach: () => undefined },
 			(state) => {
 				projections += 1;
 				return projectIds(state);
 			}
 		);
-		const jobs = queryState({ phase: 'fresh', answer: [{ id: 'stable' }] });
+		const stableRows = [{ id: 'stable' }];
+		const jobs = queryState({
+			phase: 'fresh',
+			prefix: {
+				version: 1,
+				rows: stableRows,
+				retainedBytes: syncJsonByteLength(stableRows)
+			}
+		});
 		const relevant: ClientState = {
 			...initialClientState(),
 			queries: new Map([['jobs', jobs]])
@@ -153,7 +181,7 @@ describe('machine-backed query read semantics', () => {
 		const machine = fakeMachine();
 		const query = createMachineQuery(
 			machine.client,
-			{ key: 'jobs', release: () => undefined },
+			{ key: 'jobs', extend: () => undefined, detach: () => undefined },
 			projectIds
 		);
 		machine.publish({

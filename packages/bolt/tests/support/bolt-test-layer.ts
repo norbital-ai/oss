@@ -40,7 +40,8 @@ import {
 	type WorkspaceMigrationEntry
 } from '../../src/authoring/workspace-schema.js';
 import { policyRuntimeFunctionsFor } from '../../src/authoring/policy-introspection.js';
-import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';
+import { compileWorkspaceAuthoring } from '../../src/authoring/model-introspection.js';
+import { buildSchemaPlan, collectionIndexName } from '../../src/runtime/schema/schema-plan.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
 import {
 	boolean,
@@ -125,17 +126,21 @@ export const provisioningStatements = async (
 	const plan = buildSchemaPlan(definition).steps;
 	const migration = await Effect.runPromise(
 		planWorkspaceMigration({
-			models: Object.fromEntries(
-				definition.collections.map((collection) => [
-					collection.name,
-					{
-						__kind: 'model' as const,
-						columns: drizzleColumns(collection),
-						metadata: { indexes: declaredIndexMetadata(collection) }
-					}
-				])
-			),
-			relations: definition.relations ?? [],
+			authoring: compileWorkspaceAuthoring({
+				models: Object.fromEntries(
+					definition.collections.map((collection) => [
+						collection.name,
+						{
+							__kind: 'model' as const,
+							columns: drizzleColumns(collection),
+							metadata: { indexes: declaredIndexMetadata(collection) }
+						}
+					])
+				),
+				sourcePaths: Object.fromEntries(
+					definition.collections.map(({ name }) => [name, `fixture:${name}`])
+				)
+			}),
 			previous: undefined
 		})
 	);
@@ -151,7 +156,6 @@ export const provisioningStatements = async (
 
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
-import * as ChatDocuments from '../../src/runtime/agents/documents.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as Integrations from '../../src/runtime/integrations/integrations.js';
@@ -162,6 +166,8 @@ import * as Collections from '../../src/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime,
+	remoteRegistryLayer,
+	type RuntimeRemoteHandler,
 	type AuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
 import * as Database from '../../src/runtime/facilities/database.js';
@@ -178,7 +184,6 @@ import {
 	Transport
 } from '../../src/runtime/facilities/services.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
-import { remoteRegistryLayer, type RuntimeRemoteHandler } from '../../src/runtime/remotes.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import * as RateLimits from '../../src/runtime/rate-limits.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
@@ -482,17 +487,21 @@ export const makeBoltTestRuntime = async (
 	for (const step of await provisioningStatements(definition)) await run(step.id, step.sql);
 	const migration = await Effect.runPromise(
 		planWorkspaceMigration({
-			models: Object.fromEntries(
-				definition.collections.map((collection) => [
-					collection.name,
-					{
-						__kind: 'model' as const,
-						columns: drizzleColumns(collection),
-						metadata: { indexes: declaredIndexMetadata(collection) }
-					}
-				])
-			),
-			relations: definition.relations ?? [],
+			authoring: compileWorkspaceAuthoring({
+				models: Object.fromEntries(
+					definition.collections.map((collection) => [
+						collection.name,
+						{
+							__kind: 'model' as const,
+							columns: drizzleColumns(collection),
+							metadata: { indexes: declaredIndexMetadata(collection) }
+						}
+					])
+				),
+				sourcePaths: Object.fromEntries(
+					definition.collections.map(({ name }) => [name, `fixture:${name}`])
+				)
+			}),
 			previous: undefined
 		})
 	);
@@ -602,12 +611,11 @@ export const makeBoltTestRuntime = async (
 		remoteRegistryLayer(bindings.remoteHandlers ?? {}),
 		collections
 	);
-	const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(facilities));
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
 	const agents = Layer.provideMerge(
 		Agents.layer,
-		Layer.mergeAll(remotes, taskQueue, facilities, budget, chatDocuments)
+		Layer.mergeAll(remotes, taskQueue, facilities, budget)
 	);
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
@@ -644,8 +652,7 @@ export const makeBoltTestRuntime = async (
 			taskQueue,
 			automations,
 			rateLimits,
-			tenantScope,
-			chatDocuments
+			tenantScope
 		)
 	);
 	const complete = Layer.provideMerge(

@@ -2,8 +2,7 @@
 	import { onMount } from 'svelte';
 	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
-	import OperationsPane from './operations-pane.svelte';
-	import AutomationRunsPane from './automation-runs-pane.svelte';
+	import ActivityPane from './activity-pane.svelte';
 	import ManifestPane from './manifest-pane.svelte';
 	import ManifestTree from './manifest-tree.svelte';
 	import SourceEditor from './source-editor.svelte';
@@ -11,11 +10,12 @@
 	import ReviewSidebar from './review-sidebar.svelte';
 	import WorkbenchToolbar from './workbench-toolbar.svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Bound, Cluster, Cover, Inline, INSET_X_CLASS, Stack } from '@norbital-ai/ui/layout';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { workspaceSession } from '#lib/client/session.js';
-	import { ENVOYS_SETTINGS_PATH } from '#lib/client/ui/shell/workspace-navigation.js';
+	import { manifestDestinationHref } from '#lib/client/ui/shell/workspace-navigation.js';
 	import {
 		settleSourceCommit,
 		sourceCommitFiles,
@@ -25,161 +25,49 @@
 	} from '#lib/client/ui/studio/source-drafts.js';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import {
+		currentRoutedRelease,
+		HostSnapshotSchema,
 		manifestSections,
 		releaseControls,
-		studioEnvironments,
-		unavailableFacilities,
 		workspaceEnvoys,
-		workspaceTools,
+		workbenchPreviewState,
+		WorkbenchBuildReceiptSchema,
+		type HostSnapshot,
+		type ManifestDestination,
 		type WorkbenchView,
-		type StudioReviewTab,
 		type StudioRootTab
 	} from '#lib/client/ui/studio/studio-state.js';
 
-	/**
-	 * Workspace Studio exposes one authoring path: personal Workbench → Preview → Review → Live.
-	 * Runtime diagnostics remain a secondary administrator-only surface.
-	 */
-
-	/**
-	 * The compiled workspace's own collection client, for the collection Data tab.
-	 *
-	 * Handed in rather than imported: only the workspace entry may name `$bolt/client`. It used to be
-	 * fetched here with a dynamic `import('virtual:colony-client')` — a host-side module that
-	 * resolved a workspace by reading the routed tenant off the document, which is how a Studio
-	 * opened after a client-side organization switch could browse the previous tenant's data.
-	 */
 	let {
 		client,
-		onnavigate
+		onnavigate,
+		initialSource
 	}: {
 		client: WorkspaceClient;
 		onnavigate?: ((href: string) => void) | undefined;
+		initialSource?: string | undefined;
 	} = $props();
+	const { t } = useI18n();
+	const queryMessage = (error: unknown): string | undefined =>
+		error === undefined ? undefined : error instanceof Error ? error.message : String(error);
 
-	const OperationsStateSchema = Schema.Struct({
-		capabilities: Schema.Struct({ canDecideReview: Schema.Boolean }),
-		entries: Schema.Array(
-			Schema.Struct({
-				tenantId: Schema.String,
-				environmentId: Schema.String,
-				releaseId: Schema.String,
-				artifactId: Schema.String,
-				ownerEpoch: Schema.String
-			})
-		),
-		usage: Schema.Array(
-			Schema.Struct({
-				id: Schema.String,
-				tenantId: Schema.String,
-				kind: Schema.String,
-				quantity: Schema.Number
-			})
-		),
-		capacity: Schema.Struct({
-			limit: Schema.Number,
-			active: Schema.Number,
-			queued: Schema.Number,
-			queueLimit: Schema.Number,
-			tenantQueueLimit: Schema.Number
-		}),
-		source: Schema.Struct({
-			tenantId: Schema.String,
-			workspaceKey: Schema.String,
-			baseCommit: Schema.NonEmptyString,
-			commit: Schema.NonEmptyString,
-			files: Schema.Record(Schema.String, Schema.String)
-		}),
-		sourceHistory: Schema.Array(
-			Schema.Struct({
-				commit: Schema.NonEmptyString,
-				parent: Schema.NonEmptyString,
-				changes: Schema.Array(
-					Schema.Struct({
-						path: Schema.NonEmptyString,
-						before: Schema.NullOr(Schema.String),
-						after: Schema.String
-					})
-				)
-			})
-		),
-		conflicts: Schema.Array(Schema.NonEmptyString),
-		releaseRequests: Schema.Array(
-			Schema.Struct({
-				id: Schema.NonEmptyString,
-				tenantId: Schema.NonEmptyString,
-				environmentId: Schema.NonEmptyString,
-				workspaceKey: Schema.NonEmptyString,
-				authorId: Schema.NonEmptyString,
-				commit: Schema.NonEmptyString,
-				baseCommit: Schema.NonEmptyString,
-				previewEnvironmentId: Schema.NonEmptyString,
-				baseReleaseId: Schema.NullOr(Schema.NonEmptyString),
-				releaseId: Schema.NonEmptyString,
-				artifactId: Schema.NonEmptyString,
-				checksum: Schema.NonEmptyString,
-				schemaPlan: Schema.Struct({
-					fingerprint: Schema.NonEmptyString,
-					steps: Schema.Array(
-						Schema.Struct({ id: Schema.NonEmptyString, sql: Schema.NonEmptyString })
-					)
-				}),
-				status: Schema.Literals(['open', 'approving', 'approved', 'changes_requested', 'rejected']),
-				reason: Schema.NullOr(Schema.String),
-				changedFiles: Schema.Array(
-					Schema.Struct({
-						path: Schema.NonEmptyString,
-						before: Schema.NullOr(Schema.String),
-						after: Schema.String
-					})
-				)
-			})
-		),
-		needsRebase: Schema.Boolean,
-		preview: Schema.NullOr(
-			Schema.Struct({
-				workspaceKey: Schema.NonEmptyString,
-				commit: Schema.NonEmptyString,
-				baseCommit: Schema.NonEmptyString,
-				previewEnvironmentId: Schema.NonEmptyString,
-				releaseId: Schema.NonEmptyString,
-				artifactId: Schema.NonEmptyString,
-				expiresAtEpochMs: Schema.Number
-			})
-		),
-		deploymentHistory: Schema.Array(Schema.NonEmptyString),
-		facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean }))
+	const PreviewBuildResponseSchema = Schema.Struct({
+		preview: Schema.Struct({ receipt: WorkbenchBuildReceiptSchema })
 	});
-	type OperationsState = typeof OperationsStateSchema.Type;
 
-	let snapshot = $state<OperationsState | undefined>();
-	/**
-	 * Where the reader is, held as one cell rather than six.
-	 *
-	 * The tab, the sub-views, the selected node, which branches are open and which environment is
-	 * being read only ever change together in response to the same click, and splitting them into
-	 * independent cells is what made a navigation change six separate writes.
-	 */
+	let snapshot = $state<HostSnapshot | undefined>();
 	let view = $state<{
 		rootTab: StudioRootTab;
 		workbench: WorkbenchView;
-		review: StudioReviewTab;
 		selected: string;
-		automation: string | undefined;
 		expanded: ReadonlyArray<string>;
-		environmentId: string | undefined;
 	}>({
 		rootTab: 'workbench',
 		workbench: 'manifest',
-		review: 'requests',
 		selected: 'collections',
-		automation: undefined,
-		expanded: ['collections'],
-		environmentId: undefined
+		expanded: ['collections']
 	});
-	/** The file open in the Editor. Working copies live separately so switching files cannot lose one. */
 	let editor = $state({ path: '', value: '' });
-	/** Every source file changed against the host snapshot, committed together by Preview. */
 	let sourceDrafts = $state<SourceDrafts>({});
 	let browserReady = $state(false);
 	const manifestQuery = $derived(
@@ -187,51 +75,33 @@
 	);
 	const workspace = $derived({
 		manifest: manifestQuery?.current,
-		error:
-			manifestQuery?.error === undefined
-				? undefined
-				: manifestQuery.error instanceof Error
-					? manifestQuery.error.message
-					: String(manifestQuery.error)
+		error: queryMessage(manifestQuery?.error)
 	});
 	const environmentQuery = $derived(browserReady ? client.system.secrets.status({}) : undefined);
 	const vault = $derived({
 		entries: environmentQuery?.current ?? [],
-		error:
-			environmentQuery?.error === undefined
-				? undefined
-				: environmentQuery.error instanceof Error
-					? environmentQuery.error.message
-					: String(environmentQuery.error)
+		error: queryMessage(environmentQuery?.error)
 	});
-	/** The last thing the host said, and whether a command it was told to run is still running. */
 	let host = $state({ status: 'Loading workspace state…', busy: false });
-	/** The release request selected in Review; absent means the newest request. */
 	let selectedRequestId = $state<string | undefined>();
-	/**
-	 * Whether the navigator is open as a sheet.
-	 *
-	 * The sidebar slot is `md:block`, so below that breakpoint the manifest tree and the review
-	 * navigator have nowhere to be. Without this the whole left-hand column simply vanishes on a
-	 * phone and no branch of the workspace can be reached at all.
-	 */
 	let navigatorSheetOpen = $state(false);
+	let activitySheetOpen = $state(false);
+	let latestBuildReceipt = $state<HostSnapshot['buildReceipt']>();
+	let previewNowEpochMs = $state(Date.now());
+	$effect(() => {
+		const expiresAt = snapshot?.preview?.expiresAtEpochMs;
+		if (expiresAt === undefined || expiresAt <= previewNowEpochMs) return;
+		const timeout = window.setTimeout(
+			() => (previewNowEpochMs = Date.now()),
+			Math.min(expiresAt - previewNowEpochMs + 1, 2_147_483_647)
+		);
+		return () => window.clearTimeout(timeout);
+	});
 
-	/**
-	 * Every Studio read is an ordinary authenticated Bolt command; nothing here queries tenant SQL.
-	 *
-	 * This was a fourth hand-rolled HTTP client — its own endpoint literal, its own credential read
-	 * off the document — sitting beside three others that did the same job. The session declares one
-	 * transport and one host operations seam, and this page uses exactly those.
-	 */
 	const session = workspaceSession();
 	const rootTabs = $derived([
-		{ name: 'workbench', label: 'Workbench', content: '' },
-		{ name: 'review', label: 'Review', content: '' },
-		{ name: 'runs', label: 'Runs', content: '' },
-		...(snapshot?.capabilities.canDecideReview === true
-			? [{ name: 'operations', label: 'Operations', content: '' }]
-			: [])
+		{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
+		{ name: 'review', label: t('bolt.studio.reviews'), content: '' }
 	] satisfies TabConfig[]);
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
@@ -241,46 +111,69 @@
 			Object.entries(sourceFiles).map(([path, contents]) => [path, contents.length])
 		)
 	);
-	const envoys = $derived(workspaceEnvoys(workspace.manifest, files));
-	const tools = $derived(workspaceTools(files));
-	const environments = $derived(studioEnvironments(snapshot?.entries ?? []));
-	const activeEnvironment = $derived(
-		environments.find((candidate) => candidate.id === view.environmentId) ?? environments[0]
-	);
-	const missingFacilities = $derived(unavailableFacilities(snapshot?.facilities ?? []));
+	const envoys = $derived(workspaceEnvoys(workspace.manifest));
+	const currentRelease = $derived(currentRoutedRelease(snapshot?.entries ?? []));
 	const controls = $derived(
 		releaseControls({
 			busy: host.busy || snapshot === undefined,
-			hasRelease: (activeEnvironment?.releaseId ?? '') !== ''
+			hasRelease: currentRelease !== undefined
 		})
 	);
 	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isReview = $derived(view.rootTab === 'review');
-	const isRuns = $derived(view.rootTab === 'runs');
-	const isOperations = $derived(view.rootTab === 'operations');
+	const currentReleaseId = $derived(currentRelease?.releaseId);
+	const buildReceipt = $derived(latestBuildReceipt ?? snapshot?.buildReceipt);
 	const sourceDraftCount = $derived(Object.keys(sourceDrafts).length);
-	const currentCommitAlreadyRequested = $derived(
-		(snapshot?.releaseRequests ?? []).some((request) => request.commit === snapshot?.source.commit)
+	const previewState = $derived(
+		workbenchPreviewState({
+			preview: snapshot?.preview,
+			sourceCommit: snapshot?.source.commit,
+			nowEpochMs: previewNowEpochMs
+		})
 	);
+	const openReviewForCurrentCommit = $derived(
+		(snapshot?.releaseRequests ?? []).find(
+			(request) =>
+				request.commit === snapshot?.source.commit &&
+				(request.status === 'open' || request.status === 'approving')
+		)
+	);
+	const currentCommitAlreadyRequested = $derived(openReviewForCurrentCommit !== undefined);
 	const requestReviewDisabled = $derived(
 		!controls.canRequestReview ||
 			sourceDraftCount > 0 ||
-			snapshot?.preview == null ||
-			snapshot.preview.commit !== snapshot.source.commit ||
+			previewState !== 'current' ||
 			currentCommitAlreadyRequested
 	);
 	const requestReviewReason = $derived(
-		controls.reason ??
+		(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
 			(sourceDraftCount > 0
-				? 'Preview saves every draft before Review.'
-				: snapshot?.preview == null || snapshot.preview.commit !== snapshot?.source.commit
-					? 'Build Preview for the current workbench first.'
+				? t('bolt.studio.reviewReason.saveDrafts')
+				: previewState !== 'current'
+					? t('bolt.studio.reviewReason.buildPreview')
 					: currentCommitAlreadyRequested
-						? 'This workbench commit is already in Review.'
-						: 'Send this exact Preview to Review.')
+						? t('bolt.studio.reviewReason.alreadyRequested')
+						: t('bolt.studio.reviewReason.sendExact'))
 	);
+	const hostStatusAnnouncement = $derived.by(() => {
+		const { status } = host;
+		if (status === 'Ready') return t('bolt.studio.status.ready');
+		if (status.startsWith('Loading')) return t('bolt.studio.status.loading');
+		if (status.startsWith('Failed:'))
+			return t('bolt.studio.status.failedWithMessage', {
+				message: status.slice('Failed:'.length).trim()
+			});
+		if (status.startsWith('Unavailable:'))
+			return t('bolt.studio.status.unavailableWithMessage', {
+				message: status.slice('Unavailable:'.length).trim()
+			});
+		if (status.startsWith('Migration ready')) return t('bolt.studio.status.migrationReady');
+		if (status.startsWith('Resolve '))
+			return t('bolt.studio.status.resolveConflicts', { count: snapshot?.conflicts.length ?? 1 });
+		return status;
+	});
 
-	/** Opens an authored file in the Editor; "View model" and "View source" both land here. */
+	let openedInitialSource = false;
 	const openSource = (path: string): void => {
 		if (path === '') return;
 		view.workbench = 'editor';
@@ -295,24 +188,20 @@
 	};
 
 	const openCurrentReview = (): void => {
-		const request = [...(snapshot?.releaseRequests ?? [])]
-			.reverse()
-			.find((candidate) => candidate.commit === snapshot?.source.commit);
-		selectedRequestId = request?.id;
+		selectedRequestId = openReviewForCurrentCommit?.id;
 		view.rootTab = 'review';
-		view.review = 'requests';
 	};
 
 	const actions = {
-		/**
-		 * Reads host state once when Studio mounts and after a host operation succeeds. It deliberately
-		 * does not claim `busy`, because the read itself does not block release controls.
-		 */
 		readHostState: (): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				const raw = yield* Effect.tryPromise(() => session.operations.read());
-				snapshot = yield* Schema.decodeUnknownEffect(OperationsStateSchema)(raw);
+				snapshot = yield* Schema.decodeUnknownEffect(HostSnapshotSchema)(raw);
 				host.status = 'Ready';
+				if (!openedInitialSource && initialSource !== undefined && initialSource.trim() !== '') {
+					openedInitialSource = true;
+					openSource(initialSource);
+				}
 			}).pipe(
 				Effect.catch((cause) => {
 					const message = String(cause);
@@ -351,36 +240,33 @@
 		requestReview: () =>
 			actions.operation(
 				{ action: 'release_request', operation: 'open' },
-				() => 'Sent the exact Preview to Review',
+				() => t('bolt.studio.action.sentReview'),
 				() => {
 					view.rootTab = 'review';
-					view.review = 'requests';
 					selectedRequestId = snapshot?.releaseRequests.at(-1)?.id;
 				}
 			),
 		reviewPreview: (requestId: string) =>
 			actions.operation(
 				{ action: 'preview', operation: 'review', requestId },
-				() => 'Opened the exact Preview under Review',
+				() => t('bolt.studio.action.openedReviewedPreview'),
 				() => window.location.reload()
 			),
 		approveRelease: (requestId: string) =>
-			actions.operation(
-				{ action: 'release_request', operation: 'approve', requestId },
-				() => 'Approved and released the exact reviewed Preview'
+			actions.operation({ action: 'release_request', operation: 'approve', requestId }, () =>
+				t('bolt.studio.action.approvedRelease')
 			),
 		requestReleaseChanges: (requestId: string, reason: string) =>
 			actions.operation(
 				{ action: 'release_request', operation: 'request_changes', requestId, reason },
-				() => 'Requested changes and retired that Preview'
+				() => t('bolt.studio.action.requestedChanges')
 			),
 		rejectRelease: (requestId: string, reason: string) =>
-			actions.operation(
-				{ action: 'release_request', operation: 'reject', requestId, reason },
-				() => 'Rejected the Review and retired that Preview'
+			actions.operation({ action: 'release_request', operation: 'reject', requestId, reason }, () =>
+				t('bolt.studio.action.rejectedReview')
 			),
 		rollback: () =>
-			actions.operation({ action: 'rollback' }, () => 'Rolled back to the previous release'),
+			actions.operation({ action: 'rollback' }, () => t('bolt.studio.action.rolledBack')),
 		preview: () => {
 			const committedFiles = sourceCommitFiles(sourceDrafts);
 			return Effect.gen(function* () {
@@ -396,10 +282,13 @@
 					sourceDrafts = settleSourceCommit(sourceDrafts, committedFiles);
 					yield* actions.readHostState();
 				}
-				yield* Effect.tryPromise(() =>
+				const response = yield* Effect.tryPromise(() =>
 					session.operations.run({ action: 'preview', operation: 'build' })
 				);
-				host.status = 'Preview ready';
+				if (Schema.is(PreviewBuildResponseSchema)(response)) {
+					latestBuildReceipt = response.preview.receipt;
+				}
+				host.status = t('bolt.studio.previewReady');
 				yield* actions.readHostState();
 				window.location.reload();
 			}).pipe(
@@ -428,10 +317,16 @@
 				Effect.ensuring(Effect.sync(() => (host.busy = false)))
 			);
 		},
+		openPreview: () =>
+			actions.operation(
+				{ action: 'preview', operation: 'build' },
+				() => t('bolt.studio.action.openedPreview'),
+				() => window.location.reload()
+			),
 		rebaseWorkbench: () =>
 			actions.operation(
 				{ action: 'workbench', operation: 'rebase' },
-				() => 'Rebased onto the latest Live commit',
+				() => t('bolt.studio.action.rebased'),
 				undefined,
 				(message) => {
 					const first = snapshot?.conflicts[0];
@@ -453,11 +348,6 @@
 	});
 </script>
 
-<!--
-	One navigator, rendered into the fixed sidebar slot on md and up and into a sheet below it. Both
-	mounts read the same `view` cell, so opening a branch from the sheet leaves the reader exactly
-	where the sidebar would have.
--->
 {#snippet navigator()}
 	{#if isWorkbench}
 		<ManifestTree
@@ -484,6 +374,7 @@
 		<ReviewSidebar
 			requests={snapshot?.releaseRequests ?? []}
 			{selectedRequestId}
+			{currentReleaseId}
 			onselect={(requestId) => {
 				selectedRequestId = requestId;
 				navigatorSheetOpen = false;
@@ -494,28 +385,18 @@
 
 <Cover class="relative bg-background" gap="none">
 	{#snippet top()}
-		<!-- Root navigation follows the product's page-heading rhythm: title, one line of what the
-		     page is for, then the rail. -->
 		<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">
 			<Stack as="header" gap="xs">
-				<h1 class="text-heading">Workspace Studio</h1>
+				<h1 class="text-heading">{t('bolt.studio.title')}</h1>
 				<p class="max-w-2xl text-meta">
-					Edit safely, preview the exact result, then ask for review.
+					{t('bolt.studio.description')}
 				</p>
 			</Stack>
 			<Cluster gap="sm" align="center" shrink={false}>
 				<Tabs
 					value={view.rootTab}
 					onValueChange={(next) => {
-						if (
-							next === 'workbench' ||
-							next === 'review' ||
-							next === 'runs' ||
-							next === 'operations'
-						) {
-							view.rootTab = next;
-							if (next === 'runs') view.automation = undefined;
-						}
+						if (next === 'workbench' || next === 'review') view.rootTab = next;
 					}}
 					showContent={false}
 					animate={false}
@@ -525,192 +406,135 @@
 					listClass="mx-0 w-full"
 					config={rootTabs}
 				/>
-				{#if isWorkbench || isReview}
-					<Button
-						variant="ghost"
-						size="sm"
-						class="shrink-0 gap-2 md:hidden"
-						aria-label="Open the Workspace Studio navigator"
-						onclick={() => (navigatorSheetOpen = true)}
-					>
-						<Icon icon="lucide:panel-bottom" class="size-4" />
-						Browse
-					</Button>
-				{/if}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="shrink-0 gap-2 md:hidden"
+					aria-label={t('bolt.studio.openNavigator')}
+					onclick={() => (navigatorSheetOpen = true)}
+				>
+					<Icon icon="lucide:panel-bottom" class="size-4" />
+					{t('bolt.studio.browse')}
+				</Button>
 			</Cluster>
 		</Stack>
 
-		{#if isWorkbench || isReview}
-			<!-- The root rail and every nested tab surface share one page gutter. Keeping the gutter on
-			     this parent prevents Workbench and Review from drifting independently. -->
-			<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
-				{#if isWorkbench}
-					<WorkbenchToolbar
-						hostStatus={host.status}
-						busy={host.busy}
-						view={view.workbench}
-						previewReady={sourceDraftCount === 0 &&
-							snapshot?.preview?.commit === snapshot?.source.commit}
-						updateRequired={snapshot?.needsRebase === true}
-						updateDisabled={host.busy || snapshot === undefined}
-						updateReason={controls.reason ?? 'Rebase onto the latest Live commit.'}
-						previewDisabled={!controls.canPreview || snapshot?.needsRebase === true}
-						previewReason={controls.reason ??
-							(snapshot?.needsRebase === true
-								? 'Rebase onto Live before Preview.'
-								: 'Preview is ready to build.')}
-						reviewRequested={currentCommitAlreadyRequested}
-						reviewDisabled={requestReviewDisabled}
-						reviewReason={requestReviewReason}
-						onview={(next) => (view.workbench = next)}
-						onpreview={() => void Effect.runPromise(actions.preview())}
-						onreview={() => void Effect.runPromise(actions.requestReview())}
-						onopenreview={openCurrentReview}
-						onrebase={() => void Effect.runPromise(actions.rebaseWorkbench())}
-					/>
-				{:else}
-					<!-- Row 2b: Review chrome -->
-					<Cluster
-						gap="sm"
-						align="center"
-						shrink={false}
-						class="border-b border-border/60 bg-card px-2 py-1.5"
-						data-testid="studio-review-tabs"
-					>
-						<Tabs
-							value={view.review}
-							onValueChange={(next) => {
-								if (next === 'requests' || next === 'history' || next === 'schema') {
-									view.review = next;
-								}
-							}}
-							showContent={false}
-							animate={false}
-							variant="underline"
-							layout="horizontal"
-							class="min-w-0 max-w-full !shrink"
-							listClass="mx-0 w-fit max-w-full"
-							config={[
-								{ name: 'requests', label: 'Changes', content: '' },
-								{ name: 'schema', label: 'Schema', content: '' },
-								{ name: 'history', label: 'History', content: '' }
-							] satisfies TabConfig[]}
-						/>
-					</Cluster>
-				{/if}
-
-				{#if isWorkbench && missingFacilities.length > 0}
-					<Inline
-						gap="xs"
-						shrink={false}
-						class="h-6 border-b border-border/60 px-2 text-muted-foreground"
-						role="status"
-						data-testid="studio-missing-facilities"
-					>
-						<Icon icon="lucide:plug" class="size-3 shrink-0" />
-						<span class="truncate text-xs leading-none">
-							Not configured: {missingFacilities.join(', ')}
-						</span>
-					</Inline>
-				{/if}
-				{#if isWorkbench && workspace.error !== undefined}
-					<Inline
-						gap="xs"
-						shrink={false}
-						class="h-6 border-b border-destructive/30 bg-destructive/10 px-2 text-destructive"
-						role="status"
-						data-testid="studio-manifest-error"
-					>
-						<Icon icon="lucide:triangle-alert" class="size-3 shrink-0" />
-						<span class="truncate text-xs leading-none">
-							Workspace manifest unavailable: {workspace.error}
-						</span>
-					</Inline>
-				{/if}
-			</Stack>
-		{/if}
+		<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
+			<span class="sr-only" aria-live="polite" aria-atomic="true">{hostStatusAnnouncement}</span>
+			{#if isWorkbench}
+				<WorkbenchToolbar
+					hostStatus={host.status}
+					busy={host.busy}
+					view={view.workbench}
+					previewReady={sourceDraftCount === 0 && previewState === 'current'}
+					draftCount={sourceDraftCount}
+					currentCommit={snapshot?.source.commit}
+					previewExpiresAt={previewState === 'current'
+						? snapshot?.preview?.expiresAtEpochMs
+						: undefined}
+					previewExpired={previewState === 'expired'}
+					buildFailed={buildReceipt?.outcome === 'failed'}
+					updateRequired={snapshot?.needsRebase === true}
+					updateDisabled={host.busy || snapshot === undefined}
+					updateReason={(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
+						t('bolt.studio.updateReason.rebaseLatest')}
+					previewDisabled={!controls.canPreview || snapshot?.needsRebase === true}
+					previewReason={(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
+						(snapshot?.needsRebase === true
+							? t('bolt.studio.previewReason.rebaseFirst')
+							: t('bolt.studio.previewReason.ready'))}
+					reviewRequested={currentCommitAlreadyRequested}
+					reviewDisabled={requestReviewDisabled}
+					reviewReason={requestReviewReason}
+					onview={(next) => (view.workbench = next)}
+					onpreview={() => void Effect.runPromise(actions.preview())}
+					onopenpreview={() => void Effect.runPromise(actions.openPreview())}
+					onreview={() => void Effect.runPromise(actions.requestReview())}
+					onopenreview={openCurrentReview}
+					onrebase={() => void Effect.runPromise(actions.rebaseWorkbench())}
+					onactivity={() => (activitySheetOpen = true)}
+				/>
+			{/if}
+			{#if isWorkbench && workspace.error !== undefined}
+				<Inline
+					gap="xs"
+					shrink={false}
+					class="h-6 border-b border-destructive/30 bg-destructive/10 px-2 text-destructive"
+					role="status"
+					data-testid="studio-manifest-error"
+				>
+					<Icon icon="lucide:triangle-alert" class="size-3 shrink-0" />
+					<span class="truncate text-xs leading-none">
+						{t('bolt.studio.manifestUnavailableWithError', { error: workspace.error })}
+					</span>
+				</Inline>
+			{/if}
+		</Stack>
 	{/snippet}
 
-	<!-- One page gutter for every root tab. -->
 	<Inline align="stretch" gap="none" fill class={INSET_X_CLASS}>
-		{#if isOperations}
-			<Bound size="full" grow clip class="bg-background font-sans">
-				<OperationsPane
-					{snapshot}
-					{controls}
-					onrollback={() => void Effect.runPromise(actions.rollback())}
-				/>
-			</Bound>
-		{:else if isRuns}
-			<Bound size="full" grow clip class="bg-background font-sans">
-				<AutomationRunsPane
-					{client}
-					automations={workspace.manifest?.automations ?? []}
-					selected={view.automation}
-					onselect={(name) => (view.automation = name)}
-				/>
-			</Bound>
-		{:else}
-			<aside
-				class="hidden w-72 shrink-0 border-r border-border/60 bg-card font-sans md:block"
-				aria-label="Workspace Studio sidebar"
-			>
-				<Stack gap="none" fill>
-					{@render navigator()}
-				</Stack>
-			</aside>
+		<aside
+			class="hidden w-72 shrink-0 border-r border-border/60 bg-card font-sans md:block"
+			aria-label={t('bolt.studio.sidebar')}
+		>
+			<Stack gap="none" fill>
+				{@render navigator()}
+			</Stack>
+		</aside>
 
-			<Bound
-				size="full"
-				grow
-				clip
-				class="relative min-w-0 bg-background font-sans"
-				data-testid="studio-viewport"
-			>
-				{#if isReview}
-					<ReviewPane
-						tab={view.review}
-						releaseRequests={snapshot?.releaseRequests ?? []}
-						{selectedRequestId}
-						sourceHistory={snapshot?.sourceHistory ?? []}
-						deploymentHistory={snapshot?.deploymentHistory ?? []}
-						busy={host.busy}
-						canDecide={snapshot?.capabilities.canDecideReview === true}
-						onpreview={(requestId) => void Effect.runPromise(actions.reviewPreview(requestId))}
-						onapprove={(requestId) => void Effect.runPromise(actions.approveRelease(requestId))}
-						onrequestchanges={(requestId, reason) =>
-							void Effect.runPromise(actions.requestReleaseChanges(requestId, reason))}
-						onreject={(requestId, reason) =>
-							void Effect.runPromise(actions.rejectRelease(requestId, reason))}
-					/>
-				{:else if view.workbench === 'manifest'}
-					<ManifestPane
-						manifest={workspace.manifest}
-						{sections}
-						{envoys}
-						{tools}
-						system={client.system}
-						{files}
-						selected={view.selected}
-						environment={vault.entries}
-						environmentError={vault.error}
-						onopenSource={openSource}
-						onconfigureEnvoys={() => onnavigate?.(ENVOYS_SETTINGS_PATH)}
-						onviewRuns={(name) => {
-							view.automation = name;
-							view.rootTab = 'runs';
-						}}
-					/>
-				{:else}
-					<SourceEditor
-						path={editor.path}
-						value={editor.value}
-						fileCount={files.length}
-						onValueChange={updateEditor}
-					/>
-				{/if}
-			</Bound>
-		{/if}
+		<Bound
+			size="full"
+			grow
+			clip
+			class="relative min-w-0 bg-background font-sans"
+			data-testid="studio-viewport"
+		>
+			{#if isReview}
+				<ReviewPane
+					releaseRequests={snapshot?.releaseRequests ?? []}
+					{selectedRequestId}
+					{currentReleaseId}
+					busy={host.busy}
+					canDecide={snapshot?.capabilities.canDecideReview === true}
+					failure={host.status.startsWith('Failed:') ||
+					host.status.startsWith('Unavailable:') ||
+					host.status.includes('trusted Colony routing headers are required')
+						? host.status
+						: undefined}
+					onpreview={(requestId) => void Effect.runPromise(actions.reviewPreview(requestId))}
+					onapprove={(requestId) => void Effect.runPromise(actions.approveRelease(requestId))}
+					onrequestchanges={(requestId, reason) =>
+						void Effect.runPromise(actions.requestReleaseChanges(requestId, reason))}
+					onreject={(requestId, reason) =>
+						void Effect.runPromise(actions.rejectRelease(requestId, reason))}
+				/>
+			{:else if view.workbench === 'manifest'}
+				<ManifestPane
+					manifest={workspace.manifest}
+					loading={!browserReady || (manifestQuery?.loading ?? false)}
+					{sections}
+					{envoys}
+					selected={view.selected}
+					environment={vault.entries}
+					environmentError={vault.error}
+					onopenSource={openSource}
+					onopenDestination={(destination: ManifestDestination) => {
+						const href = manifestDestinationHref(destination);
+						if (href !== null) onnavigate?.(href);
+					}}
+					canOpenDestination={(destination: ManifestDestination) =>
+						manifestDestinationHref(destination) !== null}
+					onretry={() => window.location.reload()}
+				/>
+			{:else}
+				<SourceEditor
+					path={editor.path}
+					value={editor.value}
+					fileCount={files.length}
+					onValueChange={updateEditor}
+				/>
+			{/if}
+		</Bound>
 	</Inline>
 </Cover>
 
@@ -718,13 +542,37 @@
 	{#if navigatorSheetOpen}
 		<Sheet.Content flush>
 			<Sheet.Header class="shrink-0 border-b border-border px-4 py-3 pr-12">
-				<Sheet.Title>Workspace navigator</Sheet.Title>
+				<Sheet.Title>{t('bolt.studio.navigator')}</Sheet.Title>
 				<Sheet.Description>
-					{isWorkbench ? 'Workspace sections and source files.' : 'Reviews for this workspace.'}
+					{t(
+						isWorkbench
+							? 'bolt.studio.navigatorWorkbenchDescription'
+							: 'bolt.studio.navigatorReviewsDescription'
+					)}
 				</Sheet.Description>
 			</Sheet.Header>
 			<Stack gap="none" grow class="min-h-0 bg-card">
 				{@render navigator()}
+			</Stack>
+		</Sheet.Content>
+	{/if}
+</Sheet.Root>
+
+<Sheet.Root bind:open={activitySheetOpen}>
+	{#if activitySheetOpen}
+		<Sheet.Content flush side="right" class="w-[min(34rem,100%)] sm:max-w-[34rem]">
+			<Sheet.Header class="shrink-0 border-b border-border px-4 py-3 pr-12 sm:px-5">
+				<Sheet.Title>{t('bolt.studio.activity')}</Sheet.Title>
+				<Sheet.Description>{t('bolt.studio.activityDescription')}</Sheet.Description>
+			</Sheet.Header>
+			<Stack gap="none" grow class="min-h-0 bg-background">
+				<ActivityPane
+					snapshot={snapshot}
+					receipt={buildReceipt}
+					hostStatus={host.status}
+					{controls}
+					onrollback={() => void Effect.runPromise(actions.rollback())}
+				/>
 			</Stack>
 		</Sheet.Content>
 	{/if}

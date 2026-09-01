@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { defineConnection } from '../../src/authoring/index.js';
-import { policySql, type PolicySqlPredicate } from '../../src/authoring/policy-sql.js';
 import {
 	app,
 	collection,
@@ -40,16 +39,24 @@ interface RefusedReadbackSchema {
  * though a refused write happened — no `after` hook, no change trigger, no history, sync or
  * delivery row — and the caller is told, not answered with a partial batch.
  *
- * A quota is the sharpest shape to test this with, because its predicate depends on something that
- * changes *between* rows of the same batch: it counts what the collection already holds, and that
- * count is re-evaluated per row inside the transaction. Once the batch has pushed the count to the
- * limit, no row of the batch can prove itself — the refusal is all-or-nothing, loudly.
+ * The refusal is a mutation authorization over the prepared row. Aggregate quotas do not belong in
+ * opaque read predicates: production limits use the policy limit surface, while row-local business
+ * decisions use this explicit authorization seam.
  */
+const NOTE_CREATE_AUTHORIZATION = 'note-quota:notes:create:authorize';
+
+const authorizeUnlessBody = (refusedBody: string) => (context: unknown): boolean => {
+	const record =
+		typeof context === 'object' && context !== null ? Reflect.get(context, 'record') : undefined;
+	return (
+		typeof record === 'object' &&
+		record !== null &&
+		Reflect.get(record, 'body') !== refusedBody
+	);
+};
+
 const workspaceWith = (
-	integrations: WorkspaceDefinition['integrations'],
-	// A quota of two, counted the way the guard actually counts: the candidate is already stored when
-	// `bolt_assert` proves it, so the row under test is inside the count and the limit is `<=`.
-	createWhere: PolicySqlPredicate = policySql('(select count(*) from notes) <= 2')
+	integrations: WorkspaceDefinition['integrations']
 ): WorkspaceDefinition =>
 	workspace({
 		name: 'refused-readback',
@@ -81,7 +88,7 @@ const workspaceWith = (
 					{
 						collection: 'notes',
 						action: 'create',
-						where: createWhere
+						authorization: { id: NOTE_CREATE_AUTHORIZATION, live: true }
 					},
 					{ collection: 'notes', action: 'read' },
 					{ collection: 'notes', action: 'update' }
@@ -147,6 +154,9 @@ const noteHooks: CollectionHooks<RefusedReadbackSchema, 'notes'> = {
 
 const authored = {
 	...emptyAuthoredRuntime,
+	policyAuthorizations: {
+		[NOTE_CREATE_AUTHORIZATION]: authorizeUnlessBody('forbidden')
+	},
 	hooks: { notes: authoredHooks(noteHooks) },
 	automations: {
 		on_note: {
@@ -222,7 +232,7 @@ describe('a batch the subject may write only part of', () => {
 		expect(String(run?.['result'])).toContain('denied');
 	}, 60_000);
 
-	it('refuses a batch the quota cannot fully admit, loudly, and stores nothing', async () => {
+	it('refuses a batch its mutation authorization cannot fully admit, loudly, and stores nothing', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 
 		const outcome = await harness.runtime.runPromise(
@@ -232,7 +242,7 @@ describe('a batch the subject may write only part of', () => {
 					return yield* collections.mutate(EffectId.make('refused-1'), writer, 'notes', [
 						{ body: 'note 0' },
 						{ body: 'note 1' },
-						{ body: 'note 2' },
+						{ body: 'forbidden' },
 						{ body: 'note 3' }
 					]);
 				})
@@ -243,7 +253,7 @@ describe('a batch the subject may write only part of', () => {
 		// batch rolls back with it.
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
-			expect(refusalMessage(outcome.failure)).toContain('is outside the create predicate');
+			expect(refusalMessage(outcome.failure)).toContain('authorization');
 
 		// Nothing was stored, and nothing acted as though it were: no hook, no change trigger run.
 		expect(await harness.database.query('select body from notes')).toEqual([]);
@@ -258,16 +268,16 @@ describe('a batch the subject may write only part of', () => {
 			Effect.result(
 				Effect.gen(function* () {
 					const collections = yield* Collections.Service;
-					// Two separate writes fill the quota; each is admitted on its own.
+					// Two separate writes satisfy the row-local decision.
 					yield* collections.mutate(EffectId.make('denied-1'), writer, 'notes', [
 						{ body: 'note 0' }
 					]);
 					yield* collections.mutate(EffectId.make('denied-2'), writer, 'notes', [
 						{ body: 'note 1' }
 					]);
-					// The third exceeds it and is refused on its own, loudly.
+					// The third is refused on its own, loudly.
 					return yield* collections.mutate(EffectId.make('denied-3'), writer, 'notes', [
-						{ body: 'note 2' }
+						{ body: 'forbidden' }
 					]);
 				})
 			)
@@ -275,7 +285,7 @@ describe('a batch the subject may write only part of', () => {
 
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
-			expect(refusalMessage(outcome.failure)).toContain('is outside the create predicate');
+			expect(refusalMessage(outcome.failure)).toContain('authorization');
 
 		const stored = await harness.database.query('select body, row_version from notes');
 		expect(bodiesOf(stored)).toEqual(['note 0', 'note 1']);
@@ -352,18 +362,17 @@ describe('an authored create the predicate refused', () => {
 		};
 		const authoredInner = {
 			...emptyAuthoredRuntime,
+			policyAuthorizations: {
+				[NOTE_CREATE_AUTHORIZATION]: authorizeUnlessBody('inner')
+			},
 			hooks: { notes: authoredHooks(innerHooks) }
 		};
 
-		// A quota of one, so the graph's two rows — the caller's and the hook's — are one too many.
-		harness = await makeBoltTestRuntime(
-			workspaceWith([], policySql('(select count(*) from notes) <= 1')),
-			{ authored: authoredInner }
-		);
+		harness = await makeBoltTestRuntime(workspaceWith([]), { authored: authoredInner });
 		const collections = await harness.runtime.runPromise(Collections.Service);
 
-		// One admitted note plus the hook-issued one is one more than the quota: the guard refuses a
-		// row the graph carried, and the refusal takes the issuing write down with it.
+		// The outer row is admitted and the hook-issued `inner` row is not: the refusal takes the
+		// issuing write down with it.
 		const outcome = await harness.runtime.runPromise(
 			collections
 				.mutate(EffectId.make('inner-1'), writer, 'notes', [{ body: 'outer' }])
@@ -371,7 +380,7 @@ describe('an authored create the predicate refused', () => {
 		);
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
-			expect(refusalMessage(outcome.failure)).toContain('is outside the create predicate');
+			expect(refusalMessage(outcome.failure)).toContain('authorization');
 		expect(await harness.database.query('select body from notes')).toEqual([]);
 	});
 });
@@ -417,7 +426,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 					return yield* collections.mutate(EffectId.make('bookkeeping-1'), writer, 'notes', [
 						{ body: 'note 0' },
 						{ body: 'note 1' },
-						{ body: 'note 2' },
+						{ body: 'forbidden' },
 						{ body: 'note 3' }
 					]);
 				})
@@ -454,12 +463,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 	 * caller never sent.
 	 */
 	it('keeps the bookkeeping of a batch the predicate allowed in full', async () => {
-		const admitted = workspaceWith(
-			described.declarations,
-			// Row-dependent — the exists() guard on the bookkeeping is real — but stable across the
-			// batch, so every row proves itself no matter when it is checked.
-			policySql("(body <> 'forbidden')")
-		);
+		const admitted = workspaceWith(described.declarations);
 		harness = await makeBoltTestRuntime(admitted, {
 			authored: { ...authored, integrations: described.authored }
 		});

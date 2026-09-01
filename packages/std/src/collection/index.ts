@@ -243,12 +243,20 @@ export interface CollectionMutationQuarantine {
 	readonly atEpochMs: number;
 }
 
+export interface CollectionMutationPendingApproval {
+	readonly requestId: string;
+	readonly collection: string;
+	readonly id: string;
+	readonly action: 'create' | 'update' | 'delete';
+}
+
 /** Server-authoritative M4 outcome, deliberately independent of Bolt's runtime implementation. */
 export type CollectionMutationSettlement = Readonly<
 	| {
 			readonly kind: 'accepted';
 			readonly idempotencyKey: string;
 			readonly settledAtEpochMs: number;
+			readonly pendingApproval?: CollectionMutationPendingApproval;
 	  }
 	| {
 			readonly kind: 'rebased';
@@ -273,8 +281,7 @@ export type CollectionMutationSettlement = Readonly<
 >;
 
 /** The authority for settlement status; Bolt's public union derives from this plus its queue phases. */
-export type CollectionMutationSettlementStatus =
-	CollectionMutationSettlement['kind'] | 'unknown';
+export type CollectionMutationSettlementStatus = CollectionMutationSettlement['kind'] | 'unknown';
 
 export interface CollectionMutationSettlementHandle {
 	readonly idempotencyKey: string;

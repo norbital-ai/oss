@@ -2,13 +2,17 @@ import { pgTable, text } from 'drizzle-orm/pg-core';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { Result } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { field } from '../../src/authoring/workspace-schema.js';
 import {
+	field,
+	type FieldDefinition,
+	type RelationDefinition,
+	type WorkspaceDefinition
+} from '../../src/authoring/workspace-schema.js';
+import {
+	compileCollectionPredicate,
 	compileOrderTerms,
-	compileWhere,
-	orderingExpressions,
-	type WhereContext
-} from '../../src/runtime/collections/read/where.js';
+	orderingExpressions
+} from '../../src/runtime/access/effective-plan.js';
 import {
 	compileCollectionCursorSeek,
 	encodeCollectionCursor
@@ -16,51 +20,112 @@ import {
 
 /** Unwraps a where compilation the test expects to succeed and renders it the way the driver would. */
 const dialect = new PgDialect();
+type WhereContext = Readonly<{
+	readonly collection: string;
+	readonly fields: Readonly<Record<string, FieldDefinition>>;
+	readonly relations: ReadonlyArray<RelationDefinition>;
+	readonly collections: ReadonlyArray<string>;
+	readonly fieldsByCollection: Readonly<Record<string, Readonly<Record<string, FieldDefinition>>>>;
+	readonly definition: WorkspaceDefinition;
+	readonly qualifier?: string;
+}>;
+
+const compilePredicate = (where: unknown, context: WhereContext) =>
+	compileCollectionPredicate({
+		definition: context.definition,
+		collection: context.collection,
+		where,
+		qualifier: context.qualifier ?? context.collection
+	});
+
 const whereSql = (where: unknown, context: WhereContext) => {
-	const result = compileWhere(where, context);
-	if (Result.isFailure(result)) throw new Error(`compileWhere failed: ${result.failure.message}`);
-	const built = dialect.sqlToQuery(result.success);
+	const result = compilePredicate(where, context);
+	if (Result.isFailure(result))
+		throw new Error(`compileCollectionPredicate failed: ${result.failure.message}`);
+	const built = dialect.sqlToQuery(result.success.sql);
 	return { sql: built.sql, parameters: built.params };
 };
 
-const context = (collection: string, extras: Partial<WhereContext> = {}): WhereContext => ({
-	collection,
-	fields: {
-		name: field.string({ required: true }),
-		company_id: field.string({ required: true }),
-		effective_range: field.json({ required: true })
-	},
-	relations: [
-		{
-			name: 'employment_employee',
-			source: 'employees',
-			target: 'employments',
-			cardinality: 'many'
-		},
-		{
-			name: 'employment_employee',
-			source: 'employments',
-			target: 'employees',
-			cardinality: 'one',
-			from: { collection: 'employments', column: 'employee_id' },
-			to: { collection: 'employees', column: 'id' }
-		}
-	],
-	collections: ['companies', 'employees', 'employments'],
-	fieldsByCollection: {
-		companies: {
-			name: field.string({ required: true }),
-			effective_range: field.json({ required: true })
-		},
-		employees: { name: field.string({ required: true }) },
-		employments: {
-			company_id: field.string({ required: true }),
-			employee_id: field.string({ required: true }),
-			effective_range: field.json({ required: true })
-		}
-	},
-	...extras
+const workspaceDefinition = (
+	rootCollection: string,
+	rootFields: Readonly<Record<string, FieldDefinition>>,
+	collections: ReadonlyArray<string>,
+	fieldsByCollection: Readonly<Record<string, Readonly<Record<string, FieldDefinition>>>>,
+	relations: ReadonlyArray<RelationDefinition>
+): WorkspaceDefinition => ({
+	name: 'collections-query-test',
+	version: '1',
+	collections: [...new Set([...collections, rootCollection])].map((name) => ({
+		name,
+		fields: name === rootCollection ? rootFields : (fieldsByCollection[name] ?? {}),
+		history: true
+	})),
+	relations,
+	apps: [],
+	policies: [],
+	prompt: 'Compile collection query test predicates.',
+	tools: [],
+	skills: [],
+	automations: [],
+	envoys: [],
+	integrations: [],
+	requiredFacilities: []
 });
+
+const context = (collection: string, extras: Partial<WhereContext> = {}): WhereContext => {
+	const base = {
+		collection,
+		fields: {
+			name: field.string({ required: true }),
+			company_id: field.string({ required: true }),
+			effective_range: field.json({ required: true })
+		},
+		relations: [
+			{
+				name: 'employment_employee',
+				source: 'employees',
+				target: 'employments',
+				cardinality: 'many',
+				from: { collection: 'employees', column: 'id' },
+				to: { collection: 'employments', column: 'employee_id' }
+			},
+			{
+				name: 'employment_employee',
+				source: 'employments',
+				target: 'employees',
+				cardinality: 'one',
+				from: { collection: 'employments', column: 'employee_id' },
+				to: { collection: 'employees', column: 'id' }
+			}
+		] satisfies ReadonlyArray<RelationDefinition>,
+		collections: ['companies', 'employees', 'employments'],
+		fieldsByCollection: {
+			companies: {
+				name: field.string({ required: true }),
+				effective_range: field.json({ required: true })
+			},
+			employees: { name: field.string({ required: true }) },
+			employments: {
+				company_id: field.string({ required: true }),
+				employee_id: field.string({ required: true }),
+				effective_range: field.json({ required: true })
+			}
+		}
+	};
+	const merged = { ...base, ...extras };
+	return {
+		...merged,
+		definition:
+			extras.definition ??
+			workspaceDefinition(
+				merged.collection,
+				merged.fields,
+				merged.collections,
+				merged.fieldsByCollection,
+				merged.relations
+			)
+	};
+};
 
 describe('Collections query owner', () => {
 	it('compiles isNull against a system column', () => {
@@ -75,7 +140,7 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."name" = $1 and "companies"."approval_id" is null)'
+			'("companies"."name" is not distinct from $1 and "companies"."approval_id" is null)'
 		);
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
@@ -86,17 +151,14 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."effective_range"->>\'start\')::timestamptz <= $1 and (("companies"."effective_range"->>\'end\') is null or ("companies"."effective_range"->>\'end\')::timestamptz >= $2)'
+			'(("companies"."effective_range"->>\'start\') is not null and ("companies"."effective_range"->>\'start\') <= $1::text and ("companies"."effective_range"->>\'end\' is null or ("companies"."effective_range"->>\'end\') >= $2::text))'
 		);
-		expect(compiled.parameters).toEqual([
-			'2026-08-15T16:00:00.000Z',
-			'2026-08-15T16:00:00.000Z'
-		]);
+		expect(compiled.parameters).toEqual(['2026-08-15T16:00:00.000Z', '2026-08-15T16:00:00.000Z']);
 	});
 
 	it('maps id to the persisted id column', () => {
 		const compiled = whereSql({ id: { eq: 'seed-company' } }, context('companies'));
-		expect(compiled.sql).toBe('"companies"."id" = $1');
+		expect(compiled.sql).toBe('"companies"."id" is not distinct from $1');
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
 
@@ -104,26 +166,30 @@ describe('Collections query owner', () => {
 		const compiled = whereSql(
 			{
 				employment_employee: {
-					approval_id: { isNull: true },
-					company_id: { eq: 'seed-company' }
+					some: {
+						approval_id: { isNull: true },
+						company_id: { eq: 'seed-company' }
+					}
 				}
 			},
 			context('employees')
 		);
 		expect(compiled.sql).toBe(
-			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" and (("employments"."approval_id" is null and "employments"."company_id" = $1)))'
+			'exists (select 1 from "employments" as "pr0" where "pr0"."employee_id" = "employees"."id" and (true) and (("pr0"."approval_id" is null and "pr0"."company_id" is not distinct from $1)))'
 		);
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
 
-	it('falls back to a collection-name heuristic when the relation is not emitted', () => {
-		const compiled = whereSql(
-			{ employment_employee: { company_id: { eq: 'seed-company' } } },
+	it('refuses a relation filter when the compiled relation is not emitted', () => {
+		const result = compilePredicate(
+			{ employment_employee: { some: { company_id: { eq: 'seed-company' } } } },
 			context('employees', { relations: [] })
 		);
-		expect(compiled.sql).toContain('exists (select 1 from "employments"');
-		expect(compiled.sql).toContain('"employments"."employee_id" = "employees"."id"');
-		expect(compiled.parameters).toEqual(['seed-company']);
+		expect(Result.isFailure(result)).toBe(true);
+		if (Result.isFailure(result)) {
+			expect(result.failure.message).toContain('no compiled relationship');
+			expect(result.failure.relationship).toBe('employees.employment_employee');
+		}
 	});
 
 	it('compiles every comparison operator authored workspaces use', () => {
@@ -132,7 +198,7 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."name" >= $1 and "companies"."name" <= $2 and "companies"."name" <> $3 and "companies"."name" > $4 and "companies"."name" < $5)'
+			'("companies"."name" >= $1 and "companies"."name" <= $2 and "companies"."name" is distinct from $3 and "companies"."name" > $4 and "companies"."name" < $5)'
 		);
 		expect(compiled.parameters).toEqual(['A', 'M', 'Bob', 'A', 'Z']);
 	});
@@ -199,7 +265,7 @@ describe('Collections query owner', () => {
 
 	it('compiles pattern operators', () => {
 		const compiled = whereSql({ name: { ilike: '%acme%' } }, context('companies'));
-		expect(compiled.sql).toBe('lower("companies"."name"::text) like lower($1)');
+		expect(compiled.sql).toBe('"companies"."name" ilike $1');
 		expect(compiled.parameters).toEqual(['%acme%']);
 	});
 
@@ -209,35 +275,34 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'("companies"."name" = $1 or "companies"."company_id" = $2)'
+			'("companies"."name" is not distinct from $1 or "companies"."company_id" is not distinct from $2)'
 		);
 		expect(compiled.parameters).toEqual(['Acme', 'c-1']);
 	});
 
 	it('negates a nested where under NOT', () => {
 		const compiled = whereSql({ NOT: { name: { eq: 'Acme' } } }, context('companies'));
-		expect(compiled.sql).toBe('not ("companies"."name" = $1)');
+		expect(compiled.sql).toBe('not ("companies"."name" is not distinct from $1)');
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
 
 	it('rejects an unknown operator instead of widening the query', () => {
-		const result = compileWhere({ name: { startsWith: 'A' } }, context('companies'));
+		const result = compilePredicate({ name: { startsWith: 'A' } }, context('companies'));
 		expect(Result.isFailure(result)).toBe(true);
 		if (Result.isFailure(result)) {
-			expect(result.failure.field).toBe('name');
+			expect(result.failure.field).toBe('where.name.startsWith');
 			expect(result.failure.collection).toBe('companies');
 			expect(result.failure.message).toContain('startsWith');
-			expect(result.failure.message).toContain('gte');
 		}
 	});
 
 	it('rejects a key that is neither a column nor a relation', () => {
-		const result = compileWhere({ not_a_column: { eq: 1 } }, context('companies'));
+		const result = compilePredicate({ not_a_column: { eq: 1 } }, context('companies'));
 		expect(Result.isFailure(result)).toBe(true);
 	});
 
 	it('rejects an operand that cannot be bound', () => {
-		const result = compileWhere({ name: { eq: () => 'x' } }, context('companies'));
+		const result = compilePredicate({ name: { eq: () => 'x' } }, context('companies'));
 		expect(Result.isFailure(result)).toBe(true);
 	});
 
@@ -246,22 +311,30 @@ describe('Collections query owner', () => {
 		// sort that is not total repeats or skips rows at every page boundary. Ordering resolves
 		// against the driver's table, which keeps runtime collation metadata out of the cursor.
 		const companies = pgTable('companies', { id: text('id'), name: text('name') });
-		const named = compileOrderTerms({ name: 'asc' }, context('companies'));
+		const queryContext = context('companies');
+		const named = compileOrderTerms(queryContext.definition, queryContext.collection, {
+			name: 'asc'
+		});
 		expect(named).toEqual([
 			{ column: 'name', direction: 'asc' },
 			{ column: 'id', direction: 'asc' }
 		]);
-		expect(compileOrderTerms({ unknown: 'asc' }, context('companies'))).toEqual([
-			{ column: 'id', direction: 'asc' }
-		]);
-		const descending = compileOrderTerms({ id: 'desc' }, context('companies'));
+		expect(
+			compileOrderTerms(queryContext.definition, queryContext.collection, { unknown: 'asc' })
+		).toEqual([{ column: 'id', direction: 'asc' }]);
+		const descending = compileOrderTerms(queryContext.definition, queryContext.collection, {
+			id: 'desc'
+		});
 		expect(descending).toEqual([{ column: 'id', direction: 'desc' }]);
 		const rendered = new PgDialect().sqlToQuery(orderingExpressions(companies, descending)[0]!);
 		expect(rendered.sql).toBe('"companies"."id" desc');
 	});
 
 	it('uses cursor v2 without embedding runtime collation metadata', () => {
-		const terms = compileOrderTerms({ name: 'asc' }, context('companies'));
+		const queryContext = context('companies');
+		const terms = compileOrderTerms(queryContext.definition, queryContext.collection, {
+			name: 'asc'
+		});
 		expect(terms).toEqual([
 			{ column: 'name', direction: 'asc' },
 			{ column: 'id', direction: 'asc' }

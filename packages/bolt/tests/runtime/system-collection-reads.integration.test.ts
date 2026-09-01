@@ -11,7 +11,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
-import { decidePolicies } from '../../src/runtime/access/policy-compiler.js';
+import { decidePolicies } from '../../src/runtime/access/access-control.js';
 import { systemSubject } from '../../src/runtime/access/system-principal.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
@@ -287,8 +287,12 @@ const RUNTIME_OWNED = [
 	'requestor',
 	'user',
 	'team',
-	'chat_session',
-	'chat_message',
+	'agent_task',
+	'agent_plan',
+	'agent_message',
+	'agent_inbox',
+	'agent_run',
+	'agent_usage',
 	'automation_run',
 	'bolt_notifications'
 ];
@@ -651,8 +655,11 @@ describe('approval requests are scoped to their parties and approvers', () => {
 				(grant) => grant.collection === name && grant.action === 'read'
 			);
 			expect(grants).toHaveLength(1);
-			expect(grants[0]?.where).toMatchObject({ kind: 'policy-sql' });
-			expect(typeof Reflect.get(grants[0]?.where ?? {}, 'statement')).toBe('string');
+			expect(grants[0]?.where).toEqual(
+				name === 'approval_request'
+					? { id: { approvalParty: true } }
+					: { approval_request_id: { approvalParty: true } }
+			);
 
 			const compiled = await harness.runtime.runPromise(
 				Effect.gen(function* () {
@@ -662,10 +669,10 @@ describe('approval requests are scoped to their parties and approvers', () => {
 			expect(compiled.allowed).toBe(true);
 			const statement = AccessControl.predicateStatement(compiled);
 			expect(statement.sql).not.toBe('true');
-			expect(statement.sql).toContain('::jsonb');
+			expect(statement.sql).toContain('jsonb_typeof');
+			expect(statement.sql).toContain('approver_teams');
 			expect(statement.parameters).toContain(contractorSubject.userId);
 			expect(statement.parameters).toContain(CONTRACTOR_TEAM);
-			expect(statement.parameters).toContain(JSON.stringify([CONTRACTOR_TEAM.toLocaleLowerCase()]));
 		}
 	});
 });

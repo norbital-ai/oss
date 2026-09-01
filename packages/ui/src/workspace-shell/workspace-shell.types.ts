@@ -1,15 +1,8 @@
 import { Schema } from 'effect';
 import { FeatureColorKeySchema } from '#lib/feature-colors';
 
-/**
- * A sidebar section heading is the `text-overline` role and nothing more, so the constant
- * is now the role class rather than a fourth private assembly of size, weight, transform
- * and tracking. It stays a named export because the workspace sidebar applies it in three
- * places that are not `Sidebar.GroupLabel`.
- */
 export const WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS = 'text-overline';
 export const WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS = 'text-xs font-normal sm:text-micro';
-/** Shared right-edge slot for expand chevrons and host-plugin badges. */
 export const WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS =
 	'pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 items-center justify-center';
 
@@ -40,6 +33,7 @@ export interface WorkspaceNavigationItem {
 	readonly description?: string | null;
 	readonly thumbnail?: string | null;
 	readonly children?: ReadonlyArray<WorkspaceNavigationItem>;
+	readonly section?: 'operations' | 'administration' | 'settings';
 }
 
 const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Schema.Struct({
@@ -56,22 +50,30 @@ const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Sch
 		Schema.Array(
 			Schema.suspend((): Schema.Codec<WorkspaceNavigationItem> => WorkspaceNavigationItemSchema)
 		)
-	)
+	),
+	section: Schema.optional(Schema.Literals(['operations', 'administration', 'settings']))
 });
 
-/** A team a workspace admin can preview the workspace under. */
+export interface WorkspaceNavigationSection {
+	readonly key: 'operations' | 'administration' | 'applications';
+	readonly label: string;
+	readonly items: ReadonlyArray<WorkspaceNavigationItem>;
+	readonly href?: string;
+}
+
+const WorkspaceNavigationSectionSchema = Schema.Struct({
+	key: Schema.Literals(['operations', 'administration', 'applications']),
+	label: Schema.String,
+	items: Schema.Array(WorkspaceNavigationItemSchema),
+	href: Schema.optional(Schema.String)
+});
+
 const WorkspaceImpersonationTeamSchema = Schema.Struct({
 	id: Schema.String,
 	name: Schema.NullOr(Schema.String)
 });
 export type WorkspaceImpersonationTeam = typeof WorkspaceImpersonationTeamSchema.Type;
 
-/**
- * Admin team impersonation state for the account menu.
- *
- * The shell renders the picker only when the host supplies the data; the host
- * decides who qualifies (admins only) and what teams exist.
- */
 const WorkspaceImpersonationSchema = Schema.Struct({
 	isAdmin: Schema.Boolean,
 	isActive: Schema.Boolean,
@@ -100,11 +102,10 @@ const WorkspaceNavigationModelSchema = Schema.Struct({
 	activeOrganization: WorkspaceOrganizationOptionSchema,
 	organizations: Schema.Array(WorkspaceOrganizationOptionSchema),
 	user: WorkspaceUserSummarySchema,
+	sections: Schema.Array(WorkspaceNavigationSectionSchema),
 	system: Schema.Array(WorkspaceNavigationItemSchema),
 	applications: Schema.Array(WorkspaceNavigationItemSchema),
-	/** Optional destination for the Applications section label, such as an app directory. */
 	applicationsHref: Schema.optional(Schema.String),
-	/** Compact account-adjacent tools, rendered above notifications in the sidebar footer. */
 	utilities: Schema.optional(Schema.Array(WorkspaceNavigationItemSchema))
 });
 export type WorkspaceNavigationModel = typeof WorkspaceNavigationModelSchema.Type;

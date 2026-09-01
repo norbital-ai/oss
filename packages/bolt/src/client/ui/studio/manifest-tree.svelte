@@ -5,9 +5,11 @@
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
+	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import {
+		MANIFEST_SECTION_MESSAGES,
 		sourceTreeChildren,
 		sourceTreeMatches,
 		type WorkbenchView,
@@ -15,20 +17,6 @@
 		type SourceTreeEntry
 	} from '#lib/client/ui/studio/studio-state.js';
 
-	/**
-	 * The workbench navigator: the workspace's own manifest under Manifest, its files under Editor.
-	 *
-	 * A branch header both selects the branch and opens it, so it is one `<button>` rather than a
-	 * collapsible trigger with a second button inside it — that markup is invalid, and it is why
-	 * selecting "Apps" used to be impossible without first opening it.
-	 *
-	 * Only Collections opens. Every other kind is read whole in its own panel, so listing its members
-	 * here too would give a reader two controls that land on the same page and one of them would be
-	 * the worse read.
-	 *
-	 * Both trees stay mounted and one is hidden. They share a fixed-width slot, and swapping a short
-	 * manifest tree for a measured file tree during navigation is what makes the main viewport jump.
-	 */
 	let {
 		sections = [],
 		files = [],
@@ -48,6 +36,7 @@
 		onselect?: (key: string) => void;
 		ontoggle?: (id: string) => void;
 	} = $props();
+	const { t } = useI18n();
 
 	let searchQuery = $state('');
 
@@ -57,6 +46,11 @@
 		selected.startsWith('source:') ? selected.slice('source:'.length) : null
 	);
 	const filtering = $derived(searchQuery.trim() !== '');
+	const sectionRegionId = (id: string): string =>
+		`manifest-tree-${id.replaceAll(/[^a-zA-Z0-9_-]/g, '-')}`;
+	const sectionLabel = (id: ManifestSection['id']): string => t(MANIFEST_SECTION_MESSAGES[id][0]);
+	const emptySectionLabel = (id: ManifestSection['id']): string =>
+		t(MANIFEST_SECTION_MESSAGES[id][2]);
 
 	const toFileTreeEntry = (entry: SourceTreeEntry): FileTreeEntry => ({
 		name: entry.name,
@@ -79,27 +73,30 @@
 	};
 </script>
 
-<Stack as="nav" gap="none" fill aria-label="Workspace navigator">
+<Stack as="nav" gap="none" fill aria-label={t('bolt.studio.navigator')}>
 	<div class="h-full min-h-0" class:hidden={view !== 'manifest'} aria-hidden={view !== 'manifest'}>
-		<Scroll name="Manifest sections" layout="stack" gap="none" grow class="min-h-0 py-1">
+		<Scroll name={t('bolt.studio.manifest')} layout="stack" gap="none" grow class="min-h-0 py-1">
 			{#each sections as section (section.id)}
-				{@const open = section.expandable && expanded.includes(section.id)}
+				{@const expandable = section.id === 'collections'}
+				{@const open = expandable && expanded.includes(section.id)}
+				{@const regionId = sectionRegionId(section.id)}
 				<Stack gap="none">
 					<button
 						type="button"
 						class={cn(
 							'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors',
-							selectedKind === section.id && (!section.expandable || selectedName === '')
+							selectedKind === section.id && (!expandable || selectedName === '')
 								? 'bg-accent text-foreground'
 								: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
 						)}
-						aria-expanded={section.expandable ? open : undefined}
+						aria-expanded={expandable ? open : undefined}
+						aria-controls={expandable ? regionId : undefined}
 						onclick={() => {
-							if (section.expandable) ontoggle?.(section.id);
+							if (expandable) ontoggle?.(section.id);
 							onselect?.(section.id);
 						}}
 					>
-						{#if section.expandable}
+						{#if expandable}
 							<Icon
 								icon="lucide:chevron-right"
 								class={cn('size-3 shrink-0 transition-transform', open && 'rotate-90')}
@@ -109,7 +106,7 @@
 						{/if}
 						<ProductIcon name={section.icon} class="size-3.5 shrink-0" />
 						<span class={cn('flex-1 truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
-							{section.label}
+							{sectionLabel(section.id)}
 						</span>
 						{#if section.entries.length > 0}
 							<span
@@ -121,9 +118,7 @@
 					</button>
 
 					{#if open}
-						<!-- The indent belongs to the row that owns the children, so it is this element's
-						     padding rather than a margin the nested list carries away with it. -->
-						<div class="pl-5">
+						<div id={regionId} class="pl-5">
 							<div class="border-l border-border/50 pl-2">
 								{#each section.entries as entry (entry.name)}
 									<button
@@ -134,7 +129,7 @@
 												? 'bg-accent text-foreground'
 												: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
 										)}
-										title={entry.detail ?? entry.name}
+										title={entry.name}
 										onclick={() => onselect?.(`${section.id}:${entry.name}`)}
 									>
 										<IconWrapper name={entry.icon ?? 'lucide:box'} class="size-3 shrink-0" />
@@ -146,7 +141,7 @@
 									<p
 										class={cn('px-2 py-1 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
 									>
-										None declared.
+										{emptySectionLabel(section.id)}
 									</p>
 								{/each}
 							</div>
@@ -169,7 +164,9 @@
 			class="border-b border-border/60 px-3 py-1.5 text-muted-foreground"
 		>
 			<Icon icon="lucide:file-code-2" class="size-3.5 shrink-0" />
-			<span class={cn('shrink-0 truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>Source</span>
+			<span class={cn('shrink-0 truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
+				>{t('bolt.studio.source')}</span
+			>
 			{#if files.length > 0}
 				<span
 					class="shrink-0 rounded-full bg-muted px-1.5 py-px text-tiny font-semibold tabular-nums"
@@ -185,13 +182,13 @@
 				<input
 					type="search"
 					bind:value={searchQuery}
-					aria-label="Filter source files"
-					placeholder="Filter"
+					aria-label={t('bolt.studio.filterSource')}
+					placeholder={t('bolt.studio.filter')}
 					class="h-6 w-full min-w-0 rounded-sm border border-border/60 bg-background py-0 pl-6 pr-2 text-tiny text-foreground placeholder:text-muted-foreground"
 				/>
 			</label>
 		</Inline>
-		<Scroll name="Workspace source" layout="stack" gap="none" grow class="min-h-0 py-1">
+		<Scroll name={t('bolt.studio.source')} layout="stack" gap="none" grow class="min-h-0 py-1">
 			<div class="min-h-0" class:hidden={filtering} aria-hidden={filtering}>
 				{#if browseEntries.length > 0}
 					<FileTree
@@ -202,7 +199,7 @@
 					/>
 				{:else}
 					<p class={cn('px-3 py-2 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
-						None.
+						{t('bolt.studio.noSourceFiles')}
 					</p>
 				{/if}
 			</div>
@@ -215,7 +212,7 @@
 					/>
 				{:else}
 					<p class={cn('px-3 py-2 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
-						No matches.
+						{t('bolt.studio.noSourceMatches')}
 					</p>
 				{/if}
 			</div>

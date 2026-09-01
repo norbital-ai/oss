@@ -16,7 +16,6 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runAuthored } from './authored.js';
-import { findConfig } from './config.js';
 import { publishEvidence } from './evidence.js';
 import { buildMetrics } from './metrics/emitter.js';
 import { Effect } from 'effect';
@@ -92,20 +91,6 @@ export type TierCoverage = Readonly<{
 	readonly syntactic: boolean;
 	readonly graph: boolean;
 	readonly typeAware: boolean;
-	/** False only when the configuration explicitly declined the tier. */
-	readonly semantic: boolean;
-}>;
-
-/** The indexing bill, recorded verbatim from the run. Absent fields mean the provider said nothing. */
-export type IndexingSpend = Readonly<{
-	readonly filesTotal: number;
-	readonly filesEmbedded: number;
-	readonly filesUnchanged: number;
-	readonly filesDeleted: number;
-	readonly apiRequests: number;
-	readonly promptTokens: number | undefined;
-	readonly costUsd: number | undefined;
-	readonly durationMs: number;
 }>;
 
 export type Receipt = Readonly<{
@@ -121,12 +106,6 @@ export type Receipt = Readonly<{
 	readonly sourceInventoryDigest: string;
 	readonly ruleSetDigest: string;
 	readonly catalogueDigest: string;
-	/** Identity of what produced the vectors; absent when the tier was declined. */
-	readonly embedderId?: string | undefined;
-	/** The committed Merkle root of the vector index; absent when the tier was declined. */
-	readonly indexDigest?: string | undefined;
-	/** The indexing bill; absent when the tier was declined. */
-	readonly indexing?: IndexingSpend | undefined;
 	readonly counts: Readonly<{
 		error: number;
 		warning: number;
@@ -144,12 +123,6 @@ export type AuditOptions = Readonly<{
 	readonly includeTests?: boolean | undefined;
 	/** Restrict the scan to these repository-relative paths. */
 	readonly paths?: ReadonlyArray<string> | undefined;
-	/**
-	 * Tier overrides for this call, above any configuration. The one that matters: declining the
-	 * semantic tier explicitly, which otherwise runs on defaults and fails loudly without a
-	 * credential.
-	 */
-	readonly semantic?: Readonly<{ disabled?: boolean | undefined }> | undefined;
 	readonly signal?: AbortSignal | undefined;
 }>;
 
@@ -168,15 +141,6 @@ export type AuditResult = Readonly<{
 	readonly packs: ReadonlyArray<string>;
 	/** How many findings came from authored rules rather than the built-in detector. */
 	readonly authoredFindings: number;
-	/** Coverage and spend of the semantic pass; `ran: false` only when explicitly declined. */
-	readonly semantic: Readonly<{
-		ran: boolean;
-		embedderId: string | undefined;
-		indexDigest: string | undefined;
-		stats: IndexingSpend | undefined;
-		clusterCount: number;
-		singletonCount: number;
-	}>;
 }>;
 
 /**
@@ -229,8 +193,7 @@ function decodeReceiptShape(value: unknown, path: string): Receipt {
 const ReceiptTierSchema = Schema.Struct({
 	syntactic: Schema.Boolean,
 	graph: Schema.Boolean,
-	typeAware: Schema.Boolean,
-	semantic: Schema.Boolean
+	typeAware: Schema.Boolean
 });
 
 const ReceiptHeadSchema = Schema.Struct({
@@ -246,7 +209,7 @@ function receiptFailureMessage(failure: unknown, path: string): string {
 	const segments = [...text.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1] ?? '');
 	const slot = segments[segments.length - 1] ?? '';
 	if (text.includes('Expected object') && segments.length === 0) return 'is not a receipt object';
-	const tierSlots = new Set(['syntactic', 'graph', 'typeAware', 'semantic']);
+	const tierSlots = new Set(['syntactic', 'graph', 'typeAware']);
 	if (segments[0] === '"tiers"' && tierSlots.has(clean(slot)))
 		return `has no boolean "${clean(slot)}" tier`;
 	if (segments[0] === '"tiers"') return 'records no tier coverage';
@@ -302,7 +265,6 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		root,
 		includeTests: options.includeTests ?? false,
 		paths: options.paths ?? [],
-		semanticDisabled: options.semantic?.disabled === true,
 		signal: options.signal
 	});
 
@@ -332,7 +294,6 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		// The graph pass is part of the neutral baseline and always runs.
 		graph: true,
 		typeAware: authored.typeAware.ran,
-		semantic: authored.semantic,
 		allFiles: authored.allFiles,
 		selectedFileCount: authored.selectedFiles.length,
 		scope: options.paths?.length ? 'path' : 'all',
@@ -347,15 +308,7 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		cataloguePath: join(root, DIAGNOSIS_DIRECTORY, 'findings.tsv'),
 		metricsPath: join(root, DIAGNOSIS_DIRECTORY, 'metrics.tsv'),
 		packs: authored.packs,
-		authoredFindings: authored.findings.length,
-		semantic: {
-			ran: authored.semantic.ran,
-			embedderId: authored.semantic.embedderId,
-			indexDigest: authored.semantic.indexDigest,
-			stats: authored.semantic.stats,
-			clusterCount: authored.semantic.clusterCount,
-			singletonCount: authored.semantic.singletonCount
-		}
+		authoredFindings: authored.findings.length
 	};
 }
 

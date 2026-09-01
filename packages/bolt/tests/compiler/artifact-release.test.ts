@@ -14,6 +14,7 @@ import {
 import {
 	buildCodeGraph,
 	buildTenantRelease,
+	readSchemaProvenance,
 	serverModulePartition,
 	writeTenantRelease
 } from '../../src/compiler/artifact-release.js';
@@ -65,6 +66,12 @@ const emittedCode = (dependency = 'export const dependency = 1;') => [
 ];
 
 describe('tenant release sidecar', () => {
+	it('refuses to synthesize schema provenance without committed migration lineage', async () => {
+		await expect(readSchemaProvenance('/missing-workspace', [])).rejects.toThrow(
+			'release requires a committed migration lineage'
+		);
+	});
+
 	it('never evaluates the built guest artifact in the compiler process', async () => {
 		const releaseWriter = await readFile(
 			new URL('../../src/compiler/artifact-release.ts', import.meta.url),

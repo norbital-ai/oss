@@ -19,8 +19,11 @@
 	import {
 		WORKSPACE_HOST_PLUGINS,
 		WORKSPACE_SETTINGS_PATH,
-		hostPluginKeyFromPath
+		hostPluginKeyFromPath,
+		studioSourceFromSearch,
+		studioSourceHref
 	} from '#lib/client/ui/shell/workspace-navigation.js';
+	import { setStudioSourceEntitlement } from '#lib/client/ui/system/automation-presentation.js';
 	import WorkspaceMembers from '../settings/workspace.svelte';
 	import { EMPTY_WORKSPACE_ACCESS } from '#lib/client/ui/settings/rows.js';
 	import { SYSTEM_COLLECTION_SURFACES } from '#lib/client/ui/system/system-collection-surfaces.js';
@@ -255,28 +258,13 @@
 		...(view.user.email === '' ? {} : { email: view.user.email })
 	});
 
-	/**
-	 * This panel is the web agent, always, and there is nothing to resolve.
-	 *
-	 * It used to pick a name out of `workspace.agentNames` and then re-pick it from a
-	 * `workspace.agents` round trip, because the compiler synthesized one agent per workspace and
-	 * named it after the package — so the panel could not know what it was talking to without asking.
-	 * The web agent has no declaration and no name of its own beyond this one; every *other* agent is
-	 * an envoy, reached on a transport rather than here.
-	 */
-	const agentModelsQuery = $derived(workspace.frameworkClient.system.ai.models({}));
-
+	/** The workspace Task panel addresses the canonical browser agent directly. */
 	provideAgentClient(
 		untrack(() => ({
 			client: workspace.frameworkClient,
 			subject,
-			agentName: WEB_AGENT_ID
-		})),
-		{
-			get agentModels() {
-				return agentModelsQuery;
-			}
-		}
+			agentId: WEB_AGENT_ID
+		}))
 	);
 
 	/**
@@ -361,6 +349,10 @@
 	const hostPluginsVisible = $derived(
 		view.user.admin && !accessScope.startsWith('team:') && !(impersonation?.isActive ?? false)
 	);
+	setStudioSourceEntitlement(() => ({
+		canEnterStudio: hostPluginsVisible,
+		openSource: (path) => actions.navigate(studioSourceHref(path))
+	}));
 
 	const resolveAppName = (href: string): string | undefined => {
 		if (!href.startsWith('/app/')) return undefined;
@@ -411,6 +403,9 @@
 
 	const path = $derived(view.path === '' ? '/' : view.path);
 	const hostPlugin = $derived(hostPluginKeyFromPath(path));
+	const studioInitialSource = $derived(
+		hostPlugin === 'workspace-studio' ? studioSourceFromSearch(view.search) : undefined
+	);
 	const landingName = $derived(resolveAppName(path));
 	/**
 	 * Which app component is mounted, and whether its module is still arriving.
@@ -537,8 +532,9 @@
 	});
 
 	const memberAccessQuery = $derived(
-		workspace.frameworkClient.system.identity.workspaceAccess({ tenantId: view.organization.id })
+		workspace.frameworkClient.system.identity.workspaceAccess({})
 	);
+	const memberAccess = $derived(memberAccessQuery.current ?? EMPTY_WORKSPACE_ACCESS);
 </script>
 
 <svelte:head><title>{workspace.title}</title></svelte:head>
@@ -587,12 +583,16 @@
 >
 	{#if path === WORKSPACE_SETTINGS_PATH || path.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
 		<WorkspaceMembers
-			access={memberAccessQuery.current ?? EMPTY_WORKSPACE_ACCESS}
+			access={memberAccess}
 			loading={memberAccessQuery.loading}
 			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
 		/>
 	{:else if hostPlugin === 'workspace-studio'}
-		<StudioShell client={workspace.frameworkClient} onnavigate={actions.navigate} />
+		<StudioShell
+			client={workspace.frameworkClient}
+			onnavigate={actions.navigate}
+			initialSource={studioInitialSource}
+		/>
 	{:else if hostPlugin === 'organization'}
 		<OrganizationSettings tenantId={view.organization.id} client={workspace.frameworkClient} />
 	{:else if hostPlugin === 'envoys'}

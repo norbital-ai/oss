@@ -1,20 +1,32 @@
-export { createSyncClient } from './client.js';
+export { createSyncClient, SyncAttachmentError } from './client.js';
 export type {
-	LiveQuerySeed,
 	MountedLiveQuery,
+	SyncAttachmentFailureKind,
 	SyncClient,
-	SyncClientOptions
+	SyncClientOptions,
+	SyncWorkspaceAttachment,
+	SyncWorkspaceAttachmentListener
 } from './client.js';
-export { createSyncHttpDriver, SyncHttpError } from './http-driver.js';
+export { createBrowserSyncBroker } from './sse-driver.js';
 export type {
-	SyncHttpDriver,
-	SyncHttpDriverOptions,
-	SyncPushRequest
-} from './http-driver.js';
+	BrowserSyncBroker,
+	BrowserSyncBrokerOptions,
+	BrowserSyncProfileElection,
+	BrowserSyncScope,
+	BrowserSyncWorkspaceBinding,
+	BrowserSyncWorkspaceBindingOptions,
+	BrowserSyncWorkspaceControls,
+	EventSourceLike
+} from './sse-driver.js';
+export { createSyncHttpDriver, SyncHttpError } from './http-driver.js';
+export type { SyncHttpDriver, SyncHttpDriverOptions, SyncPushRequest } from './http-driver.js';
 export {
-	applyPatch,
+	applyPrefixDelta,
+	applyPrefixUpdate,
+	applyPrefixUpdates,
+	extendRetainedPrefix,
 	initialClientState,
-	RETAIN_MS,
+	DETACH_GRACE_MS,
 	STALE_WRITE_MS,
 	step
 } from './machine.js';
@@ -25,11 +37,6 @@ export type {
 	DisconnectCause,
 	QueryPhase,
 	QueryState,
+	VersionedPrefixState,
 	WriteState
 } from './machine.js';
-export { openSyncSse } from './sse-driver.js';
-export type {
-	EventSourceLike,
-	SyncSseDriver,
-	SyncSseDriverOptions
-} from './sse-driver.js';

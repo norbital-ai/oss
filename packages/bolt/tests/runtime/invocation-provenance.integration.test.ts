@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	EnvironmentName,
+	FixedCommandCatalogue,
 	InvocationId,
 	Invocation,
 	PROTOCOL_VERSION,
@@ -21,7 +21,8 @@ import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
-import { dispatchInvocation } from '../../src/runtime/dispatch.js';
+import { DispatchError, dispatchInvocation } from '../../src/runtime/dispatch.js';
+import { FixedCommandBindings } from '../../src/runtime/commands.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -34,15 +35,15 @@ import {
 const policySubject = { ...adminSubject, admin: false };
 
 /**
- * Which invocation tags may reach the command switch at all.
+ * Which invocation tags may reach the command catalogue at all.
  *
  * `POST /_bolt/plugin/<anything>/<command>` builds a `Plugin` invocation out of a URL and a request
  * body with no authentication anywhere, and a `Task` carries no credential by construction. Both
- * used to hand their input to the switch untouched, so the switch was a second, unauthenticated
- * command port. The provenance gate now defaults both credential-free tags to deny.
+ * used to hand their input to the deleted switch untouched, so that switch was a second,
+ * unauthenticated command port. The provenance gate now defaults both credential-free tags to deny.
  *
- * These tests therefore hold the *whole* switch against the gate rather than a chosen sample, and
- * read the command list out of the dispatcher's own source so a case added tomorrow is covered
+ * These tests therefore hold the whole fixed catalogue against the gate rather than a chosen
+ * sample, and read names from `FixedCommandCatalogue` so a binding added tomorrow is covered
  * without anybody remembering to extend a list here.
  */
 
@@ -59,49 +60,27 @@ const scope = {
 };
 
 /**
- * Every `case` label of the command switch, read from the dispatcher itself.
+ * Every fixed command name, read from the protocol catalogue that `commands.ts` must bind exactly
+ * once.
  *
  * A written-out list is a list somebody has to remember to extend, which is exactly how five
- * `schema.*` commands each shipped without a check. Slicing from the switch header keeps an
- * unrelated `switch` elsewhere in the file out of the result.
- *
- * The anchor is located rather than assumed. `indexOf` answers `-1` when the header moves, and
- * `slice(-1)` then hands the regex one character: the list comes back empty, and two of the three
- * tests below iterate it and pass having checked nothing at all. Renaming the switch's subject from
- * `invocation.command` to `command` did exactly that, and only the length assertion noticed.
+ * `schema.*` commands each shipped without a check. The catalogue is the only name authority; the
+ * deleted switch is not consulted.
  */
-const dispatchSource = readFileSync(
-	new URL('../../src/runtime/dispatch.ts', import.meta.url),
-	'utf8'
-);
-const SWITCH_HEADER = 'switch (command) {';
-const switchStart = dispatchSource.indexOf(SWITCH_HEADER);
-if (switchStart < 0)
-	throw new Error(`dispatch.ts no longer contains \`${SWITCH_HEADER}\`; this scrape reads nothing`);
-const switchBody = dispatchSource.slice(switchStart);
-const SWITCH_COMMANDS: ReadonlyArray<string> = [
-	...switchBody.matchAll(/^\t+case '([a-zA-Z.]+)':/gmu)
-].map((match) => match[1] ?? '');
+const FIXED_COMMANDS: ReadonlyArray<string> = FixedCommandCatalogue.map(({ name }) => name);
 
-/** The two prefixes the boundary resolves before the switch, so neither appears as a `case`. */
-const PREFIX_COMMANDS: ReadonlyArray<string> = ['invoke.anything', 'schema.migrate'];
+/** Authored names the interpreter resolves by membership, not as fixed catalogue entries. */
+const DYNAMIC_COMMANDS: ReadonlyArray<string> = ['invoke.anything', 'automations.midnight'];
 
 /**
- * The commands `dispatch.ts` names as runtime-enqueued, which are the only ones a `Task` may run.
+ * The commands `FixedCommandBindings` admits on Task origin, which are the only ones a `Task` may run.
  *
  * `automations.<name>` is not here because it is not a fixed string: it is resolved against the
  * automations the workspace declares, which the automation tests below cover from both sides.
  */
-const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
-	'integrations.pull',
-	'integrations.flush',
-	'envoys.drain',
-	// `tasks.tick` is not listed because it is not task-runnable: the command that runs other
-	// commands is not itself one of them, so the tick is refused on a row.
-	'envoys.complete',
-	'collections.resume',
-	'collections.discard'
-];
+const TASK_COMMANDS: ReadonlyArray<string> = [...FixedCommandBindings.values()]
+	.filter(({ origins }) => origins.Task !== undefined)
+	.map(({ contract }) => contract.name);
 
 const scopedInvocation = {
 	protocolVersion: PROTOCOL_VERSION,
@@ -195,6 +174,16 @@ const gatedWorkspace = workspace({
 const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
 const gatedAuthored = {
 	...emptyAuthoredRuntime,
+	automations: {
+		nightly: {
+			name: 'nightly',
+			policies: ['admin'],
+			trigger: { _tag: 'Schedule' as const, cron: '0 0 * * *' },
+			input: Schema.Json,
+			output: Schema.Json,
+			handler: () => ({ completed: true })
+		}
+	},
 	policyAuthorizations: gatedFunctions.authorizations,
 	approvalFlows: gatedFunctions.approvalFlows
 };
@@ -202,32 +191,31 @@ const gatedAuthored = {
 describe('invocation provenance', () => {
 	// A regex that silently stops matching would make every loop below pass over an empty list, which
 	// is the shape a green suite takes when it is proving nothing.
-	it('reads the whole command switch out of the dispatcher', () => {
-		expect(SWITCH_COMMANDS.length).toBeGreaterThan(40);
-		expect(SWITCH_COMMANDS).toContain('identity.authenticate');
-		expect(SWITCH_COMMANDS).toContain('notifications.drain');
-		expect(SWITCH_COMMANDS).toContain('collections.resume');
-		expect(new Set(SWITCH_COMMANDS).size).toBe(SWITCH_COMMANDS.length);
+	it('binds the whole protocol catalogue exactly once', () => {
+		expect(FIXED_COMMANDS.length).toBeGreaterThan(40);
+		expect(FIXED_COMMANDS).not.toContain('identity.authenticate');
+		expect(FIXED_COMMANDS).not.toContain('agents.enqueue');
+		expect(FIXED_COMMANDS).not.toContain('agents.updateVerifier');
+		expect(FIXED_COMMANDS).toContain('notifications.drain');
+		expect(FIXED_COMMANDS).toContain('collections.resume');
+		expect(new Set(FIXED_COMMANDS).size).toBe(FIXED_COMMANDS.length);
+		expect([...FixedCommandBindings.keys()].sort()).toEqual([...FIXED_COMMANDS].sort());
 	});
 
-	it('refuses every command in the switch on a plugin that is not the data browser', async () => {
+	it('refuses every catalogue command on a plugin that is not the data browser', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace());
-		for (const name of [...SWITCH_COMMANDS, ...PREFIX_COMMANDS]) {
+		for (const name of [...FIXED_COMMANDS, ...DYNAMIC_COMMANDS]) {
 			const failure = await failureOf(harness, plugin(name));
-			expect(failure, name).toBeInstanceOf(AccessControl.AccessDenied);
-			expect((failure as AccessControl.AccessDenied).reason, name).toContain(
-				'carries no credential'
-			);
-			expect((failure as AccessControl.AccessDenied).resource, name).toBe(name);
+			expect((failure as { readonly code?: string }).code, name).toBe('unauthorized');
 		}
 	});
 
-	it('refuses every command in the switch on a task, except the ones the runtime enqueues', async () => {
+	it('refuses every catalogue command on a task, except the ones the runtime enqueues', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace());
-		for (const name of [...SWITCH_COMMANDS, ...PREFIX_COMMANDS]) {
+		for (const name of [...FIXED_COMMANDS, ...DYNAMIC_COMMANDS]) {
 			const outcome = await outcomeOf(harness, task(name));
-			if (ENQUEUED_COMMANDS.includes(name)) {
-				// Allowed past the gate, then refused by the schema its own case declares — which is the
+			if (TASK_COMMANDS.includes(name)) {
+				// Allowed past the gate, then refused by the contract its binding declares — which is the
 				// input being absent here, not the caller being unauthorized.
 				expect(outcome._tag, name).toBe('Failure');
 				expect(outcome._tag === 'Failure' ? outcome.failure : undefined, name).not.toBeInstanceOf(
@@ -238,9 +226,7 @@ describe('invocation provenance', () => {
 			expect(outcome._tag, name).toBe('Failure');
 			const failure = outcome._tag === 'Failure' ? outcome.failure : undefined;
 			expect(failure, name).toBeInstanceOf(AccessControl.AccessDenied);
-			expect((failure as AccessControl.AccessDenied).reason, name).toContain(
-				'not a command the runtime enqueues'
-			);
+			expect((failure as AccessControl.AccessDenied).reason, name).toContain('provenance');
 		}
 	});
 
@@ -252,18 +238,18 @@ describe('invocation provenance', () => {
 	it('admits a declared automation on a task and still refuses the host commands sharing its prefix', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 
-		const declared = await outcomeOf(harness, task('automations.nightly', {}));
-		expect(declared._tag).toBe('Failure');
-		// Past the gate. The switch has no case for it because nothing dispatches a `Task` back into
-		// Bolt yet, so the honest answer today is `unknown_command` and not a refusal.
-		expect(declared._tag === 'Failure' ? declared.failure : undefined).not.toBeInstanceOf(
-			AccessControl.AccessDenied
+		const declared = await outcomeOf(
+			harness,
+			task('automations.nightly', {
+				args: {},
+				bolt_run_as: adminSubject,
+				bolt_task_id: 'task-nightly'
+			})
 		);
-		expect(
-			declared._tag === 'Failure'
-				? (declared.failure as { readonly code?: string }).code
-				: undefined
-		).toBe('unknown_command');
+		expect(declared._tag).toBe('Success');
+		expect(declared._tag === 'Success' ? declared.success.value : undefined).toEqual({
+			completed: true
+		});
 
 		for (const name of [
 			'automations.start',
@@ -340,9 +326,11 @@ describe('invocation provenance', () => {
 		expect(beforePlugin).toEqual([]);
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
 		expect(await harness.database.query('select approval_id from people')).toEqual([]);
-		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(
-			AccessControl.AccessDenied
-		);
+		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(DispatchError);
+		expect(posted._tag === 'Failure' ? posted.failure : undefined).toMatchObject({
+			code: 'unauthorized',
+			message: 'Missing command credential'
+		});
 
 		const resumed = await runtime.runPromise(
 			dispatchInvocation(task('collections.resume', { requestId }))

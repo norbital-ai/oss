@@ -231,6 +231,18 @@ export default defineAutomation(
 );
 ```
 
+Schedule identity is host-owned. Do not put `bolt_task_id` in authored arguments, input schemas, or
+fixture payloads: the host injects the active occurrence id immediately before dispatch and overwrites
+any persisted spoof. That is how `api.progress`, stop/retry, history, and idempotency stay attached
+to the actual run.
+
+Each tenant invocation has a 2,000 ms guest CPU ceiling. Keep one handler invocation to a bounded
+slice of records and a bounded prompt. For a large durable job, persist ordinary checkpoint state so
+the next scheduled or event-triggered invocation selects the next idempotent batch; never scan an
+unbounded backlog, spin a timer/continuation, or create a private queue. Delayed self-scheduling via
+`api.automations.run({ after })` is currently refused, so it is not a continuation mechanism. A CPU
+halt is a design signal to reduce the slice, not permission to raise a hidden limit.
+
 Interactive web chat uses the shared `src/+agents.md` prompt as the signed-in person. An envoy adds
 its own `task` and policy array from `src/envoys/+<name>.ts`. When a handler or hook needs model judgement, call
 `api.infer({ schema, prompt, model?, images? })` — an Effect `Schema.Schema` for `schema` (never
@@ -265,9 +277,10 @@ export default defineAutomation(
 Automations and hooks may make schema-validated inference over explicitly selected workspace
 images. Pass the `file()` column's value itself — that value _is_ the file
 (`{storage_key, file_name, file_size, mime_type}`), so pass `record.photo`, not something read off
-it. Bolt reads the object it names, inlines the bytes and mime type on the turn, and refuses a
-non-image, more than eight images, or more than 20 MiB in total rather than dropping any of them
-silently:
+it. The guest sends only a bounded descriptor; the trusted host reads and validates the scoped object
+immediately before the provider call. It refuses a non-image, more than eight images, or more than
+20 MiB in total rather than dropping any of them silently. Do not read bytes or build a `data:` URL
+in authored code: base64 expansion would exceed the guest facility's 1 MiB request ceiling.
 
 ```ts
 const result =
@@ -326,6 +339,10 @@ generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-
 `defineCommandHandler` for imperative work that may mutate data. Payload schemas are Effect `Schema`
 (`Schema.Struct`, `Schema.Union`, `Schema.Literals`, …) — the authoring boundary adapts them to
 `~standard` for dispatch validation, so there is no zod in authoring.
+
+A signed-in session or host HMAC may call `invoke.<name>`. Dispatch does not require a separate
+`invoke:<name>` policy grant. The handler runs as the minted principal, so every collection, file,
+and approval check inside the function is the caller's policy.
 
 ## Fixtures (no seed role)
 

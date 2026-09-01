@@ -1,10 +1,16 @@
 import { Schema } from 'effect';
-import { BundleManifest, PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
+import {
+	BundleManifest,
+	COMPILED_MANIFEST_VERSION,
+	PROTOCOL_VERSION
+} from '@norbital-ai/bolt-protocol';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
 import { canonicalJson } from '../canonical-json.js';
 import { manifestIntegrations } from '../authoring/integration-introspection.js';
 import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../compiler/schema-plan.js';
+import { policyIndexRequirements } from '../runtime/access/effective-plan.js';
+import { buildSchemaPlan } from '../runtime/schema/schema-plan.js';
+import { withSystemCollections } from '../runtime/schema/system-collections.js';
 
 /** Owns fingerprint behavior at the manifest boundary so validation and typed semantics stay consistent for every caller. */
 const ManifestValues = {
@@ -20,12 +26,14 @@ export const buildManifest = (
 	input: ManifestInput
 ): BundleManifest => {
 	const requiredFacilities = [...new Set(workspace.requiredFacilities)].sort();
-	const schemaPlan = buildSchemaPlan(workspace);
+	const effectiveWorkspace = withSystemCollections(workspace);
+	const schemaPlan = buildSchemaPlan(workspace, policyIndexRequirements(effectiveWorkspace));
 	const schemaFingerprint = workspace.schemaFingerprint;
 	if (schemaFingerprint === undefined)
 		throw new TypeError('Compiled workspace is missing its schema fingerprint.');
 	return BundleManifest.make({
 		protocolVersion: PROTOCOL_VERSION,
+		compiledManifestVersion: COMPILED_MANIFEST_VERSION,
 		artifactId: input.artifactId,
 		artifactVersion: workspace.version,
 		schemaFingerprint,

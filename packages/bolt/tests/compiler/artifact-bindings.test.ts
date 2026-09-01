@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { COMPILED_MANIFEST_VERSION } from '@norbital-ai/bolt-protocol';
 import { renderArtifact } from '../../src/compiler/workspace-build.js';
 
 /**
@@ -21,23 +22,57 @@ const root = '/workspace';
 const artifactWithEverything = (): string =>
 	renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		collections: [],
-		relations: [],
-		apps: [],
-		policies: [`${root}/src/policies/+admin.policy.ts`],
-		functions: [`${root}/src/remotes/+summary.ts`],
+		compiledAuthoring: {
+			collections: [
+				{
+					name: 'invoices',
+					fields: {},
+					history: true,
+					sourcePath: 'src/collections/invoices/+model.ts'
+				}
+			],
+			relationships: [],
+			customTypeReferences: [],
+			capabilities: {
+				skills: [{ name: 'payroll', description: 'Payroll workflow', digest: 'skill', files: [] }],
+				mcp: [{
+					name: 'search',
+					digest: 'mcp',
+					protocol: '2026-07-28',
+					transport: { kind: 'streamable-http', endpoint: 'https://mcp.example' }
+				}]
+			}
+		},
+		collectionHooks: [
+			{ name: 'invoices', path: `${root}/src/collections/invoices/+hooks.ts` }
+		],
+		apps: [
+			{
+				name: 'billing',
+				label: 'Billing',
+				sourcePath: 'src/apps/+billing.svelte'
+			}
+		],
+		appGroups: [
+			{
+				name: 'finance',
+				label: 'Finance',
+				sourcePath: 'src/apps/finance/+group.ts'
+			}
+		],
+		policies: [`${root}/src/access/policies/+admin.ts`],
+		functions: [`${root}/src/functions/+summary.ts`],
 		toolFiles: [`${root}/src/tools/+summarize.tool.ts`],
-		mcpFiles: [`${root}/src/capabilities/mcp/+search.ts`],
-		envoyFiles: [],
+		envoyFiles: [`${root}/src/envoys/+support.ts`],
 		automations: ['nightly'],
 		automationFiles: [`${root}/src/automations/+nightly.ts`],
 		pipelineFiles: [`${root}/src/collections/invoices/+pipelines.ts`],
-		skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
+		integrationFiles: [`${root}/src/collections/invoices/+integrations.ts`],
 		prompt: 'You are the test workspace agent.',
 		root,
 		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
-		environmentFile: undefined,
+		environmentFile: `${root}/src/+env.ts`,
 		migrations: [],
 		schemaFingerprint: 'sha256:fixture'
 	});
@@ -74,10 +109,10 @@ describe('emitted artifact bindings', () => {
 		// pipelines and automations would simply never run.
 		expect(artifact).toContain('import pipelines0 from');
 		expect(artifact).toContain('import automation0 from');
-		expect(artifact).toContain('import mcp0 from');
-		expect(artifact).toContain('const declaredMcpServers = {"search": mcp0};');
-		expect(artifact).toContain('tools: agentTools(declaredWorkspace.tools, declaredMcpServers)');
-		expect(artifact).toContain('"body": "# Payroll\\n\\nUse the approved workflow."');
+		expect(artifact).not.toContain('import mcp0 from');
+		expect(artifact).not.toContain('declaredMcpServers');
+		expect(artifact).not.toContain('agentTools');
+		expect(artifact).not.toContain('Use the approved workflow.');
 		expect(artifact).toContain('"invoices": pipelines0');
 		expect(artifact).toContain('name: "nightly"');
 		expect(artifact).toContain('pipelines: declaredPipelines');
@@ -91,10 +126,32 @@ describe('emitted artifact bindings', () => {
 		expect(artifact).toContain('policies: declaredAutomations[automation.name].policies');
 	});
 
+	it('embeds the current manifest version and every compiler-discovered authored source path', () => {
+		const artifact = artifactWithEverything();
+		for (const sourcePath of [
+			'src/collections/invoices/+model.ts',
+			'src/collections/invoices/+hooks.ts',
+			'src/collections/invoices/+pipelines.ts',
+			'src/collections/invoices/+integrations.ts',
+			'src/apps/+billing.svelte',
+			'src/apps/finance/+group.ts',
+			'src/access/policies/+admin.ts',
+			'src/envoys/+support.ts',
+			'src/automations/+nightly.ts',
+			'src/functions/+summary.ts',
+			'src/+env.ts'
+		]) {
+			expect(artifact).toContain(JSON.stringify(sourcePath));
+		}
+		expect(artifact).toContain(
+			`\"compiledManifestVersion\": ${COMPILED_MANIFEST_VERSION}`
+		);
+	});
+
 	it('boots one automation descriptor with its declared policies intact', () => {
 		const artifact = artifactWithEverything();
 		const start = artifact.indexOf('const automations = declaredWorkspace.automations.map(');
-		const end = artifact.indexOf('\n// The index of what this release ships', start);
+		const end = artifact.indexOf('\nconst browserAssets =', start);
 		if (start < 0 || end < 0) {
 			throw new Error('the artifact no longer builds its runtime workspace in one emitted block');
 		}
@@ -107,8 +164,7 @@ describe('emitted artifact bindings', () => {
 			'policies',
 			'declaredCustomTypes',
 			'describedIntegrations',
-			'agentTools',
-			'declaredMcpServers',
+			'declaredEnvironment',
 			`${artifact.slice(start, end)}\nreturn workspace;`
 		)(
 			{
@@ -128,7 +184,6 @@ describe('emitted artifact bindings', () => {
 			[],
 			{},
 			{ declarations: [] },
-			(tools: unknown) => tools,
 			{}
 		) as { readonly automations: ReadonlyArray<{ readonly policies: ReadonlyArray<string> }> };
 

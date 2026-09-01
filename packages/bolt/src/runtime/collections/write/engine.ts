@@ -1,6 +1,6 @@
 /** Chunked imports and concrete declarative graph preparation. */
 import { Effect, Schema } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId, type ChangeBatch } from '@norbital-ai/bolt-protocol';
 import type { FieldDefinition, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import type { AuthoredRefusal, RefusalSite } from '#lib/authoring/refusal.js';
 import type * as AccessControl from '#lib/runtime/access/access-control.js';
@@ -37,6 +37,7 @@ export type GraphPreparedOperation = Readonly<{
 export type AppliedDeclarativeGraph = Readonly<{
 	readonly operations: ReadonlyArray<GraphPreparedOperation>;
 	readonly records: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+	readonly batch: ChangeBatch;
 }>;
 
 export type GraphIncludedRelationship = Readonly<{
@@ -60,6 +61,22 @@ type GraphRelatedRows = Readonly<{
 type GraphStoredRow = Readonly<{
 	readonly row: Readonly<Record<string, unknown>>;
 	readonly snapshot: string;
+}>;
+
+type GraphNodeIdentity = Readonly<{
+	readonly id: string;
+	readonly action: 'create' | 'update';
+	readonly clearLock: boolean;
+	readonly ownerTransition?: 'preserve' | 'claim';
+}>;
+type PlannedGraphNodeIdentity = GraphNodeIdentity &
+	Readonly<{ readonly ownerTransition: 'preserve' | 'claim' }>;
+type GraphDecodedInput = Readonly<{
+	readonly submitted: Readonly<{
+		readonly own: Readonly<Record<string, Schema.Json>>;
+		readonly included: ReadonlyArray<GraphIncludedRelationship>;
+	}>;
+	readonly decoded: Readonly<Record<string, Schema.Json>>;
 }>;
 
 export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<{
@@ -234,19 +251,9 @@ type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 		payload: Readonly<Record<string, unknown>>,
 		depth: number,
 		ownership?: Readonly<{ readonly column: string; readonly parentId: string }>,
-		identity?: Readonly<{
-			readonly id: string;
-			readonly action: 'create' | 'update';
-			readonly clearLock: boolean;
-		}>,
+		identity?: GraphNodeIdentity,
 		requiresBrowserBaseVersion?: boolean,
-		preDecoded?: Readonly<{
-			readonly submitted: {
-				readonly own: Readonly<Record<string, Schema.Json>>;
-				readonly included: ReadonlyArray<GraphIncludedRelationship>;
-			};
-			readonly decoded: Readonly<Record<string, Schema.Json>>;
-		}>,
+		preDecoded?: GraphDecodedInput,
 		wavePrepared?: unknown
 	) => Effect.Effect<string, E, R>;
 }>;
@@ -507,13 +514,16 @@ export const makeGraphPreparers = <Error, Requirements>(
 			}
 
 			// Relationship ownership comes from the graph position, never from a writable payload.
-			// Existing children are proved to belong to this parent above. Their owner key is stripped
-			// rather than assigned, so it can neither reparent the row nor turn `{ id }` into a false
-			// update with version/history/event side effects.
+			// Existing children are proved to belong to this parent below. Their owner key is stripped
+			// rather than trusted. A trusted authored graph may additionally claim an unowned stored row;
+			// that one explicit transition writes null -> parent id through the ordinary update pipeline.
 			if (ownership !== undefined) {
 				const owned = { ...own };
 				delete owned[ownership.column];
-				own = action === 'create' ? { ...owned, [ownership.column]: ownership.parentId } : owned;
+				own =
+					action === 'create' || identity?.ownerTransition === 'claim'
+						? { ...owned, [ownership.column]: ownership.parentId }
+						: owned;
 			}
 			own = ports.encodeMutationValues(own, definition.fields);
 			const referenceProblem = ports.referenceValueProblem(own, definition.fields);
@@ -570,18 +580,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 			 * so their `prepare` hook runs once per (collection × wave) below instead of once
 			 * per node.
 			 */
-			type PlannedChild = Readonly<{
-				readonly relation: WritableManyRelation;
-				readonly child: Readonly<Record<string, unknown>>;
-				readonly identity:
-					| Readonly<{
-							readonly id: string;
-							readonly action: 'create' | 'update';
-							readonly clearLock: boolean;
-					  }>
-					| undefined;
-				readonly requiresBrowserBaseVersion: boolean;
-			}>;
+				type PlannedChild = Readonly<{
+					readonly relation: WritableManyRelation;
+					readonly child: Readonly<Record<string, unknown>>;
+					readonly identity: PlannedGraphNodeIdentity | undefined;
+					readonly requiresBrowserBaseVersion: boolean;
+				}>;
 			const childWaves: Array<PlannedChild> = [];
 			const relationOmissions: Array<{
 				readonly relation: WritableManyRelation;
@@ -606,13 +610,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 				const desiredIds = new Set<string>();
 				for (const child of relation.rows) {
 					const childId = child['id'];
-					let childIdentity:
-						| Readonly<{
-								readonly id: string;
-								readonly action: 'create' | 'update';
-								readonly clearLock: boolean;
-						  }>
-						| undefined;
+					let childIdentity: PlannedGraphNodeIdentity | undefined;
 					if (childId !== undefined && (typeof childId !== 'string' || childId.length === 0))
 						return yield* ports.graphRefusal(
 							relation.edge.childCollection,
@@ -627,7 +625,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 								`The desired ${relation.edge.name} relationship contains ${childId} more than once.`
 							);
 						if (byId.has(childId)) {
-							childIdentity = { id: childId, action: 'update', clearLock: false };
+							childIdentity = {
+								id: childId,
+								action: 'update',
+								clearLock: false,
+								ownerTransition: 'preserve'
+							};
 						} else if (relationshipRequiresBrowserBaseVersion) {
 							const declaredExisting = ports.browserMutation?.baseVersions.some(
 								(entry) =>
@@ -640,13 +643,42 @@ export const makeGraphPreparers = <Error, Requirements>(
 									'update',
 									`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
 								);
-							childIdentity = { id: childId, action: 'create', clearLock: false };
+							childIdentity = {
+								id: childId,
+								action: 'create',
+								clearLock: false,
+								ownerTransition: 'preserve'
+							};
 						} else {
-							return yield* ports.graphRefusal(
+							// Only a relation introduced by trusted authored code reaches this branch. Resolve the
+							// explicit identity as an existing row: absence is never reinterpreted as a create, and
+							// a non-null owner is never overwritten. This is the sole ownership-claim transition.
+							const stored = yield* ports.storedGraphRow(
+								EffectId.make(
+									`${ports.effectId}:claim-owner:${relation.edge.childCollection}:${childId}`
+								),
 								relation.edge.childCollection,
-								'update',
-								`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
+								childId
 							);
+							if (stored === undefined)
+								return yield* ports.graphRefusal(
+									relation.edge.childCollection,
+									'update',
+									`${childId} does not identify an existing ${relation.edge.childCollection} row, so it cannot be claimed by ${collection} ${id}.`
+								);
+							const storedOwner = stored.row[relation.edge.childColumn];
+							if (storedOwner !== null && storedOwner !== id)
+								return yield* ports.graphRefusal(
+									relation.edge.childCollection,
+									'update',
+									`${childId} is already owned by another ${collection} row, so this relationship mutation cannot move or overwrite it.`
+								);
+							childIdentity = {
+								id: childId,
+								action: 'update',
+								clearLock: false,
+								ownerTransition: storedOwner === null ? 'claim' : 'preserve'
+							};
 						}
 						desiredIds.add(childId);
 					}
@@ -675,14 +707,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 			 * The wave's `prepare`, once per (collection × wave). Collections with no prepared
 			 * hook take the ordinary per-node decode; only a declared `prepare` earns a batch.
 			 */
-			type PreparedChildBatch = Readonly<{
-				readonly child: PlannedChild;
-				readonly submitted: {
-					readonly own: Readonly<Record<string, Schema.Json>>;
-					readonly included: ReadonlyArray<GraphIncludedRelationship>;
-				};
-				readonly decoded: Readonly<Record<string, Schema.Json>>;
-			}>;
+			type PreparedChildBatch = GraphDecodedInput & Readonly<{ readonly child: PlannedChild }>;
 			const childBatches = new Map<string, ReadonlyArray<PreparedChildBatch>>();
 			const childWavePrepared = new Map<string, unknown>();
 			{

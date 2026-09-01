@@ -19,18 +19,22 @@ not host topology.
 packages/bolt/docs/
 ├── README.md                          ← you are here
 ├── pillars/
-│   ├── 04-sync-engine/                P4  changelog, SyncHost, connect / advance
+│   ├── 04-sync-engine/                P4  prefix engine, SyncHost, connect / extend / advance
 │   └── 05-client/                     P5  Machine reducer, drivers, shell
+├── collections/                       reads, graph mutation lifecycle, history
 ├── access/                            identities, policies, approvals
+├── runtime/                           command catalogue, dispatch admission
 └── agents/                            turns, tools, envoys
 ```
 
-| Folder                                                       | Pins                                                          |
-| ------------------------------------------------------------ | ------------------------------------------------------------- |
-| [pillars/04-sync-engine](./pillars/04-sync-engine/README.md) | Changelog, ledger, SyncHost registry, connect / advance, invariants |
-| [pillars/05-client](./pillars/05-client/README.md)           | Machine reducer, project(), SSE / HTTP drivers, syncStatus    |
-| [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md) |
-| [agents](./agents/README.md)                                 | Tool loop, envoys vs automations                              |
+| Folder                                                       | Pins                                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------------- |
+| [pillars/04-sync-engine](./pillars/04-sync-engine/README.md) | Prefix engine, SyncHost registry, connect / extend / advance, invariants |
+| [pillars/05-client](./pillars/05-client/README.md)           | Machine reducer, project(), SSE / HTTP drivers, syncStatus          |
+| [collections](./collections/README.md)                       | Reads, graph writes, hooks, history, embeddings                     |
+| [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md)       |
+| [runtime](./runtime/README.md)                               | Dispatch admission, `invoke.*`, Data Browser 403 vs other-plugin 401 |
+| [agents](./agents/README.md)                                 | Durable Tasks, Effect AI, envoys vs automations                     |
 
 | Colony               | Folder                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -126,7 +130,7 @@ It is the tenant id and the string typed at `/login`. It is not the directory na
 ## Guest runtime
 
 `src/runtime/app.ts` builds Effect layers from the artifact. `src/runtime/dispatch.ts` routes
-commands (`collections.mutate`, `sync.connect`, `sync.advance`, `agents.enqueue`, …).
+commands (`collections.mutate`, `sync.connect`, `sync.advance`, `tasks.submit`, …).
 
 The guest has no Node builtins. Every I/O port is a facility the host binds per invocation
 (`packages/bolt-protocol/src/facilities.ts`). On Colony that binding happens inside a fresh

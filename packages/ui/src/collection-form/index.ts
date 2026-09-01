@@ -1,5 +1,9 @@
 export { default as CollectionForm } from './collection-form.svelte';
 export { getCollectionFormFieldContext } from './collection-form-field.svelte';
+export {
+	submitCollectionMutation,
+	type CollectionMutationSubmission
+} from './collection-mutation-outcome.js';
 export type {
 	CollectionRecordFlagMetadata,
 	CollectionRecordFlagTone,

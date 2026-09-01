@@ -121,22 +121,6 @@ type PublishEvidenceOptions = Readonly<{
 	graph?: boolean | undefined;
 	/** Whether the type-aware tier had anything to build a program from. */
 	typeAware?: boolean | undefined;
-	/** Coverage and spend of the semantic pass, recorded verbatim when it ran. */
-	semantic?: Readonly<{
-		ran: boolean;
-		embedderId: string | undefined;
-		indexDigest: string | undefined;
-		stats: Readonly<{
-			filesTotal: number;
-			filesEmbedded: number;
-			filesUnchanged: number;
-			filesDeleted: number;
-			apiRequests: number;
-			promptTokens: number | undefined;
-			costUsd: number | undefined;
-			durationMs: number;
-		}> | undefined;
-	} | undefined>;
 	scope?: 'all' | 'path' | undefined;
 	includeTests?: boolean | undefined;
 	existing?: Receipt | undefined;
@@ -149,7 +133,6 @@ export function publishEvidence(options: PublishEvidenceOptions): Receipt {
 	atomicWrite(cataloguePath, catalogue);
 
 	const existing = options.existing;
-	const semantic = options.semantic;
 	const receipt: Receipt = existing
 		? {
 				...existing,
@@ -165,23 +148,17 @@ export function publishEvidence(options: PublishEvidenceOptions): Receipt {
 				scope: options.scope ?? 'all',
 				includeTests: options.includeTests ?? false,
 				// Every tier records what it did honestly: `graph` is part of the neutral baseline,
-				// `typeAware` false means the selection held no file a program can contain, and
-				// `semantic` false means the configuration explicitly declined the tier — never
-				// that a provider failed, because a failed provider is exit-2 evidence.
+				// and `typeAware` false means the selection held no file a program can contain.
 				tiers: {
 					syntactic: true,
 					graph: options.graph ?? true,
-					typeAware: options.typeAware ?? false,
-					semantic: semantic?.ran ?? false
+					typeAware: options.typeAware ?? false
 				},
 				files: options.selectedFileCount ?? options.allFiles?.length ?? 0,
 				findings: 'findings.tsv',
 				sourceInventoryDigest: sourceInventoryDigest(options.root, options.allFiles ?? []),
 				ruleSetDigest: options.authoredRuleSetDigest,
 				catalogueDigest: digest(catalogue),
-				embedderId: semantic?.embedderId,
-				indexDigest: semantic?.indexDigest,
-				indexing: semantic?.stats,
 				counts: findingCounts(options.findings),
 				complete: true
 			};

@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
 	EnvironmentName,
 	ReleaseId,
+	syncJsonByteLength,
 	TenantId,
 	type CollectionMutateRequest,
-	type SyncAnswer,
+	type StoredRecord,
 	type SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
@@ -19,7 +20,6 @@ import type {
 	WorkspaceClientRuntime
 } from '../../src/client/contracts.js';
 import type { SyncClient } from '../../src/client/sync/index.js';
-import { setWorkspaceSession } from '#lib/client/session.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -31,8 +31,8 @@ const scope = {
  * A SyncClient double that answers reads the way the Machine does.
  *
  * Collection reads are Machine-backed now: the proxy mounts one live question and the Machine
- * publishes its answer, so a fake has to hold query state and notify subscribers rather than
- * transport a command. `publish` paints one query's answer with the phase the caller names, which
+ * publishes its prefix, so a fake has to hold query state and notify subscribers rather than
+ * transport a command. `publish` paints one query's prefix with the phase the caller names, which
  * is what lets a test drive both the fresh and the revalidating paints.
  */
 const fakeSyncClient = () => {
@@ -42,6 +42,8 @@ const fakeSyncClient = () => {
 	const enqueued: Array<CollectionMutateRequest> = [];
 	const client = {
 		start: () => undefined,
+		attach: () => () => undefined,
+		shutdown: () => undefined,
 		current: () => state,
 		subscribe: (listener: (state: ClientState) => void) => {
 			listeners.add(listener);
@@ -51,18 +53,25 @@ const fakeSyncClient = () => {
 		mount: (input: Schema.Json) => {
 			const key = stableKey(input);
 			mounted.push({ key, input });
-			return { key, release: () => undefined };
+			return { key, extend: () => undefined, detach: () => undefined };
 		},
 		enqueue: (request: CollectionMutateRequest) => enqueued.push(request),
-		publish: (key: string, answer: SyncAnswer, phase: 'fresh' | 'pending' = 'fresh') => {
+		publish: (
+			key: string,
+			rows: ReadonlyArray<StoredRecord>,
+			phase: 'fresh' | 'pending' = 'fresh'
+		) => {
 			const input = mounted.find((entry) => entry.key === key)?.input as SyncQueryInput | undefined;
 			if (input === undefined) throw new Error(`Unknown mounted query ${key}`);
 			state = {
 				...state,
 				queries: new Map([...state.queries]).set(key, {
 					input,
-					answer,
+					prefix: { version: 1, rows, retainedBytes: syncJsonByteLength(rows) },
+					requestedPrefix: input.kind === 'findFirst' ? 1 : (input.limit ?? 100),
 					phase,
+					validating: phase === 'pending',
+					extending: false,
 					subscribers: 1
 				})
 			};
@@ -78,9 +87,15 @@ const fakeSyncClient = () => {
  */
 const inertSync: SyncClient = {
 	start: () => undefined,
+	attach: () => () => undefined,
+	shutdown: () => undefined,
 	current: () => initialClientState(),
 	subscribe: () => () => undefined,
-	mount: (input) => ({ key: stableKey(input), release: () => undefined }),
+	mount: (input) => ({
+		key: stableKey(input),
+		extend: () => undefined,
+		detach: () => undefined
+	}),
 	enqueue: () => undefined
 };
 
@@ -101,35 +116,6 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceCli
 	mutation: { partitionKey: 'test-partition', schemaFingerprint: 'sha256:test' },
 	syncStatus: initialClientState(),
 	settlements: inertSettlements
-});
-
-beforeEach(() => {
-	setWorkspaceSession({
-		tenantId: 'typed-client-test',
-		environment: 'test',
-		releaseId: 'release',
-		principal: 'operator-1',
-		accessScope: 'operator',
-		credential: 'test-credential',
-		transport: { command: async () => null },
-		syncStreamUrl: '/sync',
-		files: {
-			store: async () => '',
-			remove: async () => undefined,
-			urlFor: (key) => key
-		},
-		chatDocuments: {
-			store: async (_conversation, key, file) => ({
-				storage_key: key,
-				file_name: file.name,
-				file_size: file.size,
-				mime_type: file.type || 'application/octet-stream'
-			}),
-			remove: async () => undefined,
-			urlFor: (_conversation, key) => key
-		},
-		operations: { read: async () => null, run: async () => null }
-	});
 });
 
 describe('typed browser client', () => {
@@ -294,7 +280,7 @@ describe('typed browser client', () => {
 		expect(Reflect.get(proxy.db, 'user')).toBeUndefined();
 		expect(proxy.collections['user']).toBeUndefined();
 		expect(() => proxy.records.findMany('user')).toThrow(/private to the Bolt runtime/);
-		expect(() => proxy.history.findMany('session', 'session-1')).toThrow(
+		expect(() => proxy.history.findMany('agent_task', 'task-1')).toThrow(
 			/private to the Bolt runtime/
 		);
 		expect(Reflect.get(proxy.db, 'employees')).toBeDefined();
@@ -307,9 +293,23 @@ describe('typed browser client', () => {
 		expect(Reflect.get(approval, 'pending')).toBeUndefined();
 	});
 
-	it('answers a grouped aggregate from the machine without hydrating a bounded page', async () => {
+	it('answers a grouped aggregate as a one-shot command without mounting a live prefix', async () => {
 		const sync = fakeSyncClient();
-		const bolt = createBoltClient(scope, { command: async () => null });
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const grouped = {
+			active: [
+				{ id: 'e1', status: 'active' },
+				{ id: 'e2', status: 'active' }
+			],
+			pending: [],
+			closed: [{ id: 'e3', status: 'closed' }]
+		};
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve(grouped);
+			}
+		});
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findGrouped: (input: object) => PromiseLike<unknown>;
@@ -319,29 +319,18 @@ describe('typed browser client', () => {
 			where: { archived: { eq: false } },
 			group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
 		});
-		expect(sync.mounted).toHaveLength(1);
-		expect(sync.mounted[0]?.input).toEqual({
-			kind: 'findGrouped',
-			collection: 'employees',
-			where: { archived: { eq: false } },
-			group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
-		});
-		sync.client.publish(sync.mounted[0]?.key ?? '', {
-			active: [
-				{ id: 'e1', status: 'active' },
-				{ id: 'e2', status: 'active' }
-			],
-			pending: [],
-			closed: [{ id: 'e3', status: 'closed' }]
-		});
-		await expect(query).resolves.toEqual({
-			active: [
-				{ id: 'e1', status: 'active' },
-				{ id: 'e2', status: 'active' }
-			],
-			pending: [],
-			closed: [{ id: 'e3', status: 'closed' }]
-		});
+		expect(sync.mounted).toHaveLength(0);
+		await expect(query).resolves.toEqual(grouped);
+		expect(commands).toEqual([
+			{
+				command: 'collections.findGrouped',
+				input: {
+					collection: 'employees',
+					where: { archived: { eq: false } },
+					group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
+				}
+			}
+		]);
 	});
 
 	it('loads an approval request by id instead of mistaking timeline events for request rows', async () => {

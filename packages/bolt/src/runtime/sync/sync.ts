@@ -1,11 +1,13 @@
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import {
 	EffectId,
-	MAX_SYNC_HELD_IDS,
 	type SyncAdvanceRequest,
 	type SyncAdvanceResponse,
+	type SyncAdvanceSubscription,
+	type SyncConnectEvaluation,
 	type SyncConnectRequest,
-	type SyncConnectEvaluation
+	type SyncExtendPrefixEvaluation,
+	type SyncExtendPrefixRequest
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
@@ -14,10 +16,12 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { changelogSince } from './changelog.js';
-import { advanceSubscription } from './delta-engine.js';
-import { contentDigest, heldCoordinatesOf, heldIdsOf } from './digest.js';
-import { describeSyncQuery, resolveSyncQuery } from './resolver.js';
+import {
+	SyncPrefixResolutionError,
+	advanceActivePrefix,
+	extendActivePrefix,
+	resolveInitialPrefix
+} from './delta-engine.js';
 
 class SyncInputError extends Schema.TaggedError<SyncInputError>()('Bolt.Sync.InputError', {
 	message: Schema.NonEmptyString
@@ -37,9 +41,13 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		request: SyncAdvanceRequest
 	) => Effect.Effect<SyncAdvanceResponse, unknown>;
+	readonly extendPrefix: (
+		effectId: EffectId,
+		state: SyncAdvanceSubscription,
+		request: SyncExtendPrefixRequest
+	) => Effect.Effect<SyncExtendPrefixEvaluation, unknown>;
 }>;
 
-/** Per-invocation evaluator. No subscription or cursor state survives this service call. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Sync');
 
 export const layer = Layer.effect(
@@ -71,7 +79,6 @@ export const layer = Layer.effect(
 			impersonatedTeam: string | null,
 			request: SyncConnectRequest
 		) {
-			// Ledger first: any answer returned below is necessarily resolved after these terminal writes.
 			const outcomes = yield* (yield* Collections.Service).lookupBrowserMutations(
 				EffectId.make(`${effectId}:ledger`),
 				actor,
@@ -79,88 +86,71 @@ export const layer = Layer.effect(
 				impersonatedTeam,
 				request.pending
 			);
-			const moved = yield* changelogSince(EffectId.make(`${effectId}:changelog`), request.head);
-			const changedCollections = new Set(moved.collections);
 			const results = yield* Effect.forEach(request.queries, (query, index) =>
 				Effect.gen(function* () {
-					const described = yield* describeSyncQuery(subject, query.input);
-					const canSkip =
-						!moved.truncated &&
-						query.digest !== undefined &&
-						(query.digestOnly === true ||
-							(query.heldIds !== undefined && query.heldCoordinates !== undefined)) &&
-						!described.dependencies.some((collection) => changedCollections.has(collection));
-					if (canSkip) {
-						return {
-							key: query.key,
-							input: query.input,
-							...(impersonatedTeam === null ? {} : { impersonatedTeam }),
-							policyHash: described.policyHash,
-							dependencies: described.dependencies,
-							policyDependencies: described.policyDependencies,
-							routing: described.routing,
-							heldIds: query.digestOnly === true ? [] : (query.heldIds ?? []),
-							heldCoordinates: query.digestOnly === true ? [] : (query.heldCoordinates ?? []),
-							digestOnly: query.digestOnly === true,
-							digest: query.digest as string,
-							changed: false as const
-						};
-					}
-					const answer = yield* resolveSyncQuery(
-						EffectId.make(`${effectId}:resolve:${index}`),
+					const resolved = yield* resolveInitialPrefix(
+						EffectId.make(`${effectId}:query:${index}`),
 						subject,
-						query.input
+						query.input,
+						query.requestedPrefix
 					);
-					const resolvedIds = heldIdsOf(answer);
-					const heldCoordinates = heldCoordinatesOf(answer, query.input);
-					const digestOnly = resolvedIds.length > MAX_SYNC_HELD_IDS;
-					const digest = yield* Effect.promise(() => contentDigest(answer));
-					const registration = {
-						key: query.key,
+					return {
+						key: query.queryKey,
 						input: query.input,
+						planKey: resolved.plan.effectivePlan.fingerprint,
+						version: 0,
+						prefixKeys: resolved.keys,
+						loadedPrefix: resolved.rows.length,
+						prefixBytes: resolved.retainedBytes,
 						...(impersonatedTeam === null ? {} : { impersonatedTeam }),
-						policyHash: described.policyHash,
-						dependencies: described.dependencies,
-						policyDependencies: described.policyDependencies,
-						routing: described.routing,
-						heldIds: digestOnly ? [] : resolvedIds,
-						heldCoordinates: digestOnly ? [] : heldCoordinates,
-						digestOnly,
-						digest
+						authorityFingerprint: resolved.plan.effectivePlan.authority.fingerprint,
+						dependencies: resolved.plan.effectivePlan.dependencies,
+						routing: resolved.plan.effectivePlan.routing,
+						rows: resolved.rows
 					};
-					return query.digest === digest
-						? { ...registration, changed: false as const }
-						: { ...registration, changed: true as const, answer };
 				})
 			);
-			return { head: moved.head, results, outcomes };
+			return { results, outcomes } satisfies SyncConnectEvaluation;
 		});
+
+		const lookupOutcomes = Effect.fn('Sync.lookupAdvanceOutcomes')(function* (
+			effectId: EffectId,
+			request: SyncAdvanceRequest
+		) {
+			if (request.pending.length === 0) return [];
+			if (request.writer === undefined)
+				return yield* new SyncInputError({
+					message: 'A sync advance carrying pending writes requires the writer credential.'
+				});
+			const writer = yield* authenticate(
+				EffectId.make(`${effectId}:writer`),
+				request.writer.credential,
+				request.writer.impersonatedTeam
+			);
+			return yield* (yield* Collections.Service).lookupBrowserMutations(
+				EffectId.make(`${effectId}:ledger`),
+				writer.actor,
+				writer.subject,
+				writer.impersonatedTeam,
+				request.pending
+			);
+		});
+
+		const resetReason = (failure: unknown) =>
+			failure instanceof SyncPrefixResolutionError
+				? failure.reason
+				: failure instanceof Identity.AuthenticationError ||
+					  failure instanceof AccessControl.AccessDenied
+					? ('authority-changed' as const)
+					: undefined;
 
 		const advance = Effect.fn('Sync.advance')(function* (
 			effectId: EffectId,
 			request: SyncAdvanceRequest
 		) {
-			let outcomes: SyncAdvanceResponse['outcomes'] = [];
-			if (request.pending.length > 0) {
-				if (request.writer === undefined)
-					return yield* new SyncInputError({
-						message: 'A sync advance carrying pending writes requires the writer credential.'
-					});
-				const writer = yield* authenticate(
-					EffectId.make(`${effectId}:writer`),
-					request.writer.credential,
-					request.writer.impersonatedTeam
-				);
-				outcomes = yield* (yield* Collections.Service).lookupBrowserMutations(
-					EffectId.make(`${effectId}:ledger`),
-					writer.actor,
-					writer.subject,
-					writer.impersonatedTeam,
-					request.pending
-				);
-			}
+			const outcomes = yield* lookupOutcomes(effectId, request);
 			const updates: SyncAdvanceResponse['updates'][number][] = [];
-			const refused: SyncAdvanceResponse['refused'][number][] = [];
+			const resets: SyncAdvanceResponse['resets'][number][] = [];
 			for (const [index, state] of request.subscriptions.entries()) {
 				const admitted = yield* Effect.result(
 					authenticate(
@@ -170,40 +160,47 @@ export const layer = Layer.effect(
 					)
 				);
 				if (Result.isFailure(admitted)) {
-					if (admitted.failure instanceof Identity.AuthenticationError) {
-						refused.push({ subId: state.subId });
-						continue;
-					}
-					if (admitted.failure instanceof AccessControl.AccessDenied) {
-						refused.push({ subId: state.subId });
+					const reason = resetReason(admitted.failure);
+					if (reason !== undefined) {
+						resets.push({ subId: state.subId, reason });
 						continue;
 					}
 					return yield* admitted.failure;
 				}
 				const evaluated = yield* Effect.result(
-					advanceSubscription(
+					advanceActivePrefix(
 						EffectId.make(`${effectId}:subscription:${index}`),
-						{ state, subject: admitted.success.subject },
-						request.changes
+						admitted.success.subject,
+						state,
+						{ changes: request.changes }
 					)
 				);
 				if (Result.isFailure(evaluated)) {
-					if (evaluated.failure instanceof AccessControl.AccessDenied) {
-						refused.push({ subId: state.subId });
+					const reason = resetReason(evaluated.failure);
+					if (reason !== undefined) {
+						resets.push({ subId: state.subId, reason });
 						continue;
 					}
 					return yield* evaluated.failure;
 				}
 				if (evaluated.success !== undefined) updates.push(evaluated.success);
 			}
-			const head = (yield* changelogSince(EffectId.make(`${effectId}:head`), undefined)).head;
-			return { head, updates, refused, outcomes };
+			return { updates, resets, outcomes } satisfies SyncAdvanceResponse;
 		});
 
-		// The connect/advance evaluators evaluate through resolver, delta-engine, changelog and
-		// ledger helpers that require the runtime services per call; the service's own contract
-		// carries no requirement, so the context they need is resolved once here and bound at the
-		// boundary.
+		const extendPrefix = Effect.fn('Sync.extendPrefix')(function* (
+			effectId: EffectId,
+			state: SyncAdvanceSubscription,
+			request: SyncExtendPrefixRequest
+		) {
+			const admitted = yield* authenticate(
+				EffectId.make(`${effectId}:authenticate`),
+				state.credential,
+				state.impersonatedTeam
+			);
+			return yield* extendActivePrefix(effectId, admitted.subject, state, request);
+		});
+
 		const environment = Layer.mergeAll(
 			Layer.succeed(Database.Service, yield* Database.Service),
 			Layer.succeed(Collections.Service, yield* Collections.Service),
@@ -215,7 +212,9 @@ export const layer = Layer.effect(
 				connect(effectId, actor, subject, impersonatedTeam, request).pipe(
 					Effect.provide(environment)
 				),
-			advance: (effectId, request) => advance(effectId, request).pipe(Effect.provide(environment))
+			advance: (effectId, request) => advance(effectId, request).pipe(Effect.provide(environment)),
+			extendPrefix: (effectId, state, request) =>
+				extendPrefix(effectId, state, request).pipe(Effect.provide(environment))
 		});
 	})
 );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalDiagnostics, approvalRefusal } from '../../src/compiler/approval-checks.js';
+import { approvalDiagnostics, approvalRefusal } from '../../src/authoring/approval-validation.js';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
 
 const policy = (

@@ -26,7 +26,8 @@ import {
 	definePull,
 	field,
 	policy,
-	workspace
+	workspace,
+	type CompiledAuthoring
 } from '../../src/authoring/workspace-schema.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
@@ -132,6 +133,13 @@ const definition = workspace({
 
 const manifest = buildManifest(definition, { artifactId: 'scheduled-pull' });
 
+const compiledAuthoring = {
+	collections: [],
+	relationships: [],
+	customTypeReferences: [],
+	capabilities: { skills: [], mcp: [] }
+} satisfies CompiledAuthoring;
+
 /* -------------------------------------------------------------------------------------------------
  * Part one: the manifest.
  * ---------------------------------------------------------------------------------------------- */
@@ -207,8 +215,8 @@ describe('a host can read an integration out of the manifest', () => {
 	it('is composed into the manifest the emitted artifact actually builds', () => {
 		const artifact = renderArtifact({
 			metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-			collections: [],
-			relations: [],
+			compiledAuthoring,
+			collectionHooks: [],
 			apps: [],
 			policies: [],
 			functions: [],
@@ -217,7 +225,6 @@ describe('a host can read an integration out of the manifest', () => {
 			automations: [],
 			automationFiles: [],
 			pipelineFiles: [],
-			skills: [],
 			prompt: 'You are the test workspace agent.',
 			root: '/workspace',
 			assetIndex: { browser: [], server: [] },

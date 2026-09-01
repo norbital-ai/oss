@@ -8,11 +8,8 @@ import { collectionQuery } from '../../src/runtime/dispatch.js';
  * were lost, and then `with` — a table asked for its relations and rendered raw uuids instead.
  */
 describe('collection query boundary', () => {
-	const subject = { userId: 'u1', tenantId: 't1', teamPath: ['admin'], policies: [] };
-
 	it('carries every query field across', () => {
 		const query = collectionQuery({
-			subject,
 			collection: 'component_entries',
 			where: { repayment_agreement_id: { isNull: true } },
 			orderBy: { event_date: 'desc' },
@@ -35,21 +32,21 @@ describe('collection query boundary', () => {
 	it('does not forward a projection the read path cannot honour', () => {
 		// `columns` is accepted on the wire and left here on purpose: selecting fewer columns would strip
 		// the ordering columns the cursor is cut from. Half-wiring it would break paging, not narrow it.
-		expect(collectionQuery({ subject, collection: 'people', columns: { name: true } })).toEqual({
+		expect(collectionQuery({ collection: 'people', columns: { name: true } })).toEqual({
 			collection: 'people',
 			limit: 100
 		});
 	});
 
 	it('omits what was not asked for rather than sending an undefined through', () => {
-		expect(collectionQuery({ subject, collection: 'people' })).toEqual({
+		expect(collectionQuery({ collection: 'people' })).toEqual({
 			collection: 'people',
 			limit: 100
 		});
 	});
 
 	it('clamps the page to the boundary ceiling in both directions', () => {
-		expect(collectionQuery({ subject, collection: 'people', limit: 100_000 }).limit).toBe(500);
-		expect(collectionQuery({ subject, collection: 'people', limit: 0 }).limit).toBe(1);
+		expect(collectionQuery({ collection: 'people', limit: 100_000 }).limit).toBe(500);
+		expect(collectionQuery({ collection: 'people', limit: 0 }).limit).toBe(1);
 	});
 });

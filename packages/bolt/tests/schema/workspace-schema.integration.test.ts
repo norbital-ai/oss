@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import { SYSTEM_MODELS } from '../../src/authoring/system-models.js';
 import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
 import {

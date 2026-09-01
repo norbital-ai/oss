@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { SYSTEM_MODEL_TABLES } from '../../src/authoring/system-models.js';
 import { envoy, integration, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan } from '../../src/runtime/schema/schema-plan.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as Database from '../../src/runtime/facilities/database.js';
 import {
@@ -13,11 +13,7 @@ import {
 import { composer, executeBuilt, jsonTextEquals } from '../../src/runtime/persistence.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
-const {
-	bolt_audit: audit,
-	bolt_notifications: notifications,
-	bolt_sync_outbox: syncOutbox
-} = SYSTEM_MODEL_TABLES;
+const { bolt_audit: audit, bolt_notifications: notifications } = SYSTEM_MODEL_TABLES;
 
 const supportEnvoy = () =>
 	envoy({
@@ -136,7 +132,7 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 			Schema.decodeUnknownSync(Notification)({ id: '', recipient: '', payload: {}, read: false })
 		).toThrow());
 
-	it('publishes an enqueued notification through the replica outbox', async () => {
+	it('persists an enqueued notification and its idempotent audit', async () => {
 		const harness = await makeBoltTestRuntime(envoyedWorkspace());
 		try {
 			const notification = {
@@ -177,16 +173,6 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 					)
 				).rows
 			).toEqual([notification]);
-			expect(
-				(
-					await read(
-						composer
-							.select({ collection_name: syncOutbox.collection_name })
-							.from(syncOutbox)
-							.where(eq(syncOutbox.collection_name, 'bolt_notifications'))
-					)
-				).rows
-			).toEqual([{ collection_name: 'bolt_notifications' }]);
 			expect(
 				(
 					await read(

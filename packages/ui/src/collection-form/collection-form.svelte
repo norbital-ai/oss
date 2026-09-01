@@ -41,11 +41,15 @@
 		CollectionFormValidationIssue
 	} from '#lib/collection-form/collection-form.types';
 	import { Effect } from 'effect';
+	import { toast } from 'svelte-sonner';
 	import {
 		getCollectionClientForSurface,
 		setCollectionClientContext
 	} from '#lib/collection-runtime';
-	import { submitCollectionMutation } from './collection-mutation-outcome';
+	import {
+		submitCollectionMutation,
+		type CollectionMutationSubmission
+	} from './collection-mutation-outcome';
 
 	function validateFieldValue(
 		field: CollectionField,
@@ -270,7 +274,7 @@
 		}
 	} satisfies FormSchema;
 	// svelte-ignore state_referenced_locally -- a mounted form owns one record baseline; record changes remount its representation.
-	const form: FormState<typeof runtimeSchema, void> = new FormState({
+	const form: FormState<typeof runtimeSchema, CollectionMutationSubmission | void> = new FormState({
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
@@ -280,7 +284,7 @@
 		translate: t,
 		remoteFn:
 			() =>
-			(data): Effect.Effect<void, unknown> => {
+			(data): Effect.Effect<CollectionMutationSubmission | void, unknown> => {
 				const values = Object.fromEntries(Object.entries(data));
 				if (onSubmit) return onSubmit(values);
 				const writableValues = pickWritableFormValues(definition.fields, values);
@@ -288,7 +292,12 @@
 					operations.mutate(recordId ? { id: recordId, ...writableValues } : writableValues)
 				);
 			},
-		onSuccess: () => onAfterSubmit?.()
+		onSuccess: (submission) => {
+			if (submission?.kind === 'pendingApproval') {
+				toast.success(t('form.submittedForApproval'));
+			}
+			return onAfterSubmit?.();
+		}
 	});
 	const submissionPending = $derived(onSubmit ? form.isSubmitting : operations.pending > 0);
 	const dirtyFieldCount = $derived(

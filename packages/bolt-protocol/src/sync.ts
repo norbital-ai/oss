@@ -1,145 +1,266 @@
 import { Schema } from 'effect';
+import { CommandHeaders, commandContract } from './host.js';
 import {
-	CollectionGroupedQueryRequestFields,
 	CollectionMutationIdempotencyKey,
 	CollectionQueryRequestFields,
 	StoredRecord
 } from './collections.js';
+import { InvocationScope } from './invocation.js';
 
 const NonNegativeInteger = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
+const PositiveInteger = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
 
-/** Header joining a control/write request to the SSE connection allocated by its host. */
 export const SYNC_CONNECTION_HEADER = 'x-bolt-sync-connection';
-/** Above this base, the host keeps only a digest and every wake receives a full answer. */
-export const MAX_SYNC_HELD_IDS = 20_000;
+export const DEFAULT_SYNC_LOADED_KEYS = 100;
+export const MAX_SYNC_LOADED_KEYS = 1_000;
+export const MAX_SYNC_INITIAL_ANSWER_BYTES = 2 * 1024 * 1024;
+export const MAX_SYNC_OUTBOUND_FRAME_BYTES = 2 * 1024 * 1024;
+export const MAX_SYNC_RETAINED_PREFIX_BYTES = 8 * 1024 * 1024;
 
-/** First SSE control event; subsequent events are exclusively `apply`. */
-export const SyncReadyFrame = Schema.Struct({
-	connectionId: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltSyncReadyFrame' });
-export interface SyncReadyFrame extends Schema.Schema.Type<typeof SyncReadyFrame> {}
+const SyncPrefixLengthValue = NonNegativeInteger.check(
+	Schema.isLessThanOrEqualTo(MAX_SYNC_LOADED_KEYS)
+);
+const SyncPositivePrefixLengthValue = PositiveInteger.check(
+	Schema.isLessThanOrEqualTo(MAX_SYNC_LOADED_KEYS)
+);
+const SyncPrefixIndexValue = NonNegativeInteger.check(Schema.isLessThan(MAX_SYNC_LOADED_KEYS));
+const SyncRetainedPrefixBytesValue = NonNegativeInteger.check(
+	Schema.isLessThanOrEqualTo(MAX_SYNC_RETAINED_PREFIX_BYTES)
+);
 
-/** A reconnect position in the collection-granular changelog. */
-export const SyncCursor = Schema.Struct({ sequence: NonNegativeInteger }).annotate({
-	identifier: 'BoltSyncCursor'
-});
-export interface SyncCursor extends Schema.Schema.Type<typeof SyncCursor> {}
+export const syncJsonByteLength = (value: unknown): number =>
+	new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
-/** The complete semantic input of one live collection query. */
+export const syncApplyFrameByteLength = (frame: unknown): number =>
+	new TextEncoder().encode(`event: apply\ndata: ${JSON.stringify(frame)}\n\n`).byteLength;
+
+export const syncScopedApplyFrameByteLength = syncApplyFrameByteLength;
+
+const { after: _after, ...LiveCollectionQueryRequestFields } = CollectionQueryRequestFields;
+
 export const SyncQueryInput = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('findMany'), ...CollectionQueryRequestFields }),
-	Schema.Struct({ kind: Schema.Literal('findFirst'), ...CollectionQueryRequestFields }),
-	Schema.Struct({ kind: Schema.Literal('findGrouped'), ...CollectionGroupedQueryRequestFields }),
-	Schema.Struct({ kind: Schema.Literal('count'), ...CollectionQueryRequestFields })
+	Schema.Struct({ kind: Schema.Literal('findMany'), ...LiveCollectionQueryRequestFields }),
+	Schema.Struct({ kind: Schema.Literal('findFirst'), ...LiveCollectionQueryRequestFields })
 ]).annotate({ identifier: 'BoltSyncQueryInput' });
 export type SyncQueryInput = typeof SyncQueryInput.Type;
 
-/** Opaque equality partition filed by the host to avoid waking unrelated query holders. */
 export const SyncRoutingConstraint = Schema.Struct({
 	field: Schema.NonEmptyString,
 	values: Schema.Array(Schema.Json)
 }).annotate({ identifier: 'BoltSyncRoutingConstraint' });
 export interface SyncRoutingConstraint extends Schema.Schema.Type<typeof SyncRoutingConstraint> {}
 
-/** One committed value for an equality partition. The host compares it but never interprets it. */
-export const SyncRoutingValue = Schema.Struct({
-	field: Schema.NonEmptyString,
-	value: Schema.Json
-}).annotate({ identifier: 'BoltSyncRoutingValue' });
-export interface SyncRoutingValue extends Schema.Schema.Type<typeof SyncRoutingValue> {}
+export const LinkAndRouteValues = Schema.Record(Schema.String, Schema.Json).annotate({
+	identifier: 'BoltLinkAndRouteValues'
+});
+export interface LinkAndRouteValues extends Schema.Schema.Type<typeof LinkAndRouteValues> {}
 
-/** One committed coordinate returned by the invocation that performed the write. */
-export const SyncChange = Schema.Struct({
+const SyncChangeIdentity = {
 	collection: Schema.NonEmptyString,
-	recordId: Schema.NonEmptyString,
-	/** Trusted post-commit equality values used only to narrow host-side invalidation. */
-	routing: Schema.optionalKey(Schema.Array(SyncRoutingValue)),
-	mutationId: Schema.optionalKey(CollectionMutationIdempotencyKey)
-}).annotate({ identifier: 'BoltSyncChange' });
-export interface SyncChange extends Schema.Schema.Type<typeof SyncChange> {}
-
-/** Minimal host-held row state needed to derive the next content digest without re-running a query. */
-export const SyncHeldCoordinate = Schema.Struct({
 	id: Schema.NonEmptyString,
-	rowVersion: Schema.NullOr(Schema.Union([Schema.Number, Schema.String])),
-	/** Values of the authoritative order terms, including the primary-key tiebreaker. */
+	mutationId: Schema.optionalKey(CollectionMutationIdempotencyKey)
+};
+
+export const SyncChange = Schema.Union([
+	Schema.Struct({
+		...SyncChangeIdentity,
+		operation: Schema.Literal('insert'),
+		after: LinkAndRouteValues
+	}),
+	Schema.Struct({
+		...SyncChangeIdentity,
+		operation: Schema.Literal('update'),
+		before: LinkAndRouteValues,
+		after: LinkAndRouteValues
+	}),
+	Schema.Struct({
+		...SyncChangeIdentity,
+		operation: Schema.Literal('delete'),
+		before: LinkAndRouteValues
+	})
+]).annotate({ identifier: 'BoltSyncChange' });
+export type SyncChange = typeof SyncChange.Type;
+
+export const ChangeBatch = Schema.Struct({
+	changes: Schema.Array(SyncChange)
+}).annotate({ identifier: 'BoltChangeBatch' });
+export interface ChangeBatch extends Schema.Schema.Type<typeof ChangeBatch> {}
+
+const syncChangeKey = (change: Pick<SyncChange, 'collection' | 'id'>): string =>
+	`${change.collection.length}:${change.collection}:${change.id}`;
+
+const syncChangeAfter = (change: SyncChange): LinkAndRouteValues | undefined =>
+	change.operation === 'delete' ? undefined : change.after;
+
+const syncChangeBefore = (change: SyncChange): LinkAndRouteValues | undefined =>
+	change.operation === 'insert' ? undefined : change.before;
+
+const withLatestMutationId = (
+	change: SyncChange,
+	current: SyncChange,
+	next: SyncChange
+): SyncChange => {
+	const mutationId = next.mutationId ?? current.mutationId;
+	return mutationId === undefined ? change : { ...change, mutationId };
+};
+
+export const compactSyncChanges = (
+	changes: ReadonlyArray<SyncChange>
+): ReadonlyArray<SyncChange> => {
+	const order: Array<string> = [];
+	const ordered = new Set<string>();
+	const compacted = new Map<string, SyncChange>();
+	for (const next of changes) {
+		const key = syncChangeKey(next);
+		if (!ordered.has(key)) {
+			ordered.add(key);
+			order.push(key);
+		}
+		const current = compacted.get(key);
+		if (current === undefined) {
+			compacted.set(key, next);
+			continue;
+		}
+		if (current.operation === 'insert') {
+			if (next.operation === 'delete') {
+				compacted.delete(key);
+				continue;
+			}
+			const after = syncChangeAfter(next);
+			if (after === undefined) continue;
+			compacted.set(
+				key,
+				withLatestMutationId(
+					{
+						collection: current.collection,
+						id: current.id,
+						operation: 'insert',
+						after
+					},
+					current,
+					next
+				)
+			);
+			continue;
+		}
+		const before = syncChangeBefore(current);
+		if (before === undefined) continue;
+		if (next.operation === 'delete') {
+			compacted.set(
+				key,
+				withLatestMutationId(
+					{
+						collection: current.collection,
+						id: current.id,
+						operation: 'delete',
+						before
+					},
+					current,
+					next
+				)
+			);
+			continue;
+		}
+		const after = syncChangeAfter(next);
+		if (after === undefined) continue;
+		compacted.set(
+			key,
+			withLatestMutationId(
+				{
+					collection: current.collection,
+					id: current.id,
+					operation: 'update',
+					before,
+					after
+				},
+				current,
+				next
+			)
+		);
+	}
+	return order.flatMap((key) => {
+		const change = compacted.get(key);
+		return change === undefined ? [] : [change];
+	});
+};
+
+export const SyncQueryKey = Schema.NonEmptyString.annotate({ identifier: 'BoltSyncQueryKey' });
+export type SyncQueryKey = typeof SyncQueryKey.Type;
+
+export const SyncQueryVersion = NonNegativeInteger.annotate({
+	identifier: 'BoltSyncQueryVersion'
+});
+export type SyncQueryVersion = typeof SyncQueryVersion.Type;
+
+export const SyncPrefixKey = Schema.Struct({
+	id: Schema.NonEmptyString,
 	order: Schema.Array(Schema.Json)
-}).annotate({ identifier: 'BoltSyncHeldCoordinate' });
-export interface SyncHeldCoordinate extends Schema.Schema.Type<typeof SyncHeldCoordinate> {}
+}).annotate({ identifier: 'BoltSyncPrefixKey' });
+export interface SyncPrefixKey extends Schema.Schema.Type<typeof SyncPrefixKey> {}
 
-/** One cursored page: the authoritative rows and the keyset continuation for the next one. */
-export const SyncPageAnswer = Schema.Struct({
+export const SyncPrefixPut = Schema.Struct({
+	id: Schema.NonEmptyString,
+	index: SyncPrefixIndexValue,
+	row: StoredRecord
+}).annotate({ identifier: 'BoltSyncPrefixPut' });
+export interface SyncPrefixPut extends Schema.Schema.Type<typeof SyncPrefixPut> {}
+
+export const SyncPrefixDelta = Schema.Struct({
+	removeIds: Schema.Array(Schema.NonEmptyString),
+	put: Schema.Array(SyncPrefixPut)
+}).annotate({ identifier: 'BoltSyncPrefixDelta' });
+export interface SyncPrefixDelta extends Schema.Schema.Type<typeof SyncPrefixDelta> {}
+
+export const SyncPrefixUpdate = Schema.Struct({
+	queryKey: SyncQueryKey,
+	fromVersion: SyncQueryVersion,
+	toVersion: SyncQueryVersion,
+	delta: SyncPrefixDelta
+}).annotate({ identifier: 'BoltSyncPrefixUpdate' });
+export interface SyncPrefixUpdate extends Schema.Schema.Type<typeof SyncPrefixUpdate> {}
+
+export const SyncResetReason = Schema.Literals([
+	'stale-version',
+	'prefix-limit',
+	'prefix-bytes',
+	'inconsistent-prefix',
+	'plan-changed',
+	'policy-changed',
+	'release-changed',
+	'authority-changed'
+]).annotate({ identifier: 'BoltSyncResetReason' });
+export type SyncResetReason = typeof SyncResetReason.Type;
+
+export const SyncPrefixReset = Schema.Struct({
+	queryKey: SyncQueryKey,
+	reason: SyncResetReason
+}).annotate({ identifier: 'BoltSyncPrefixReset' });
+export interface SyncPrefixReset extends Schema.Schema.Type<typeof SyncPrefixReset> {}
+
+export const SyncExtendPrefixRequest = Schema.Struct({
+	queryKey: SyncQueryKey,
+	version: SyncQueryVersion,
+	loadedPrefix: SyncPrefixLengthValue,
+	requestedPrefix: SyncPositivePrefixLengthValue
+}).annotate({ identifier: 'BoltSyncExtendPrefixRequest' });
+export type SyncExtendPrefixRequest = typeof SyncExtendPrefixRequest.Type;
+
+export const SyncExtendPrefixResponse = Schema.Struct({
+	queryKey: SyncQueryKey,
+	version: SyncQueryVersion,
+	fromPrefix: SyncPrefixLengthValue,
+	toPrefix: SyncPositivePrefixLengthValue,
 	rows: Schema.Array(StoredRecord),
-	/** The keyset continuation for the next page, or null when this page is the last. */
-	nextCursor: Schema.NullOr(Schema.NonEmptyString)
-}).annotate({ identifier: 'BoltSyncPageAnswer' });
-export interface SyncPageAnswer extends Schema.Schema.Type<typeof SyncPageAnswer> {}
+	retainedBytes: SyncRetainedPrefixBytesValue
+}).annotate({ identifier: 'BoltSyncExtendPrefixResponse' });
+export type SyncExtendPrefixResponse = typeof SyncExtendPrefixResponse.Type;
 
-/**
- * A query answer. Lists preserve authoritative order; grouped and scalar answers stay exact.
- *
- * The cursored-page arm is answered only for a read whose input carries `after` — a one-shot read
- * the delta engine never patches (RFC §2.3). It must stay ahead of `StoredRecord`, whose open
- * record would otherwise absorb it and lose the cursor slot on the wire.
- */
-export const SyncAnswer = Schema.Union([
-	Schema.Array(StoredRecord),
-	SyncPageAnswer,
-	StoredRecord,
-	Schema.Record(Schema.String, Schema.Array(StoredRecord)),
-	Schema.Number,
-	Schema.Null
-]).annotate({ identifier: 'BoltSyncAnswer' });
-export type SyncAnswer = typeof SyncAnswer.Type;
+export const SyncExtendPrefixEvaluation = Schema.Struct({
+	...SyncExtendPrefixResponse.fields,
+	prefixKeys: Schema.Array(SyncPrefixKey)
+}).annotate({ identifier: 'BoltSyncExtendPrefixEvaluation' });
+export type SyncExtendPrefixEvaluation = typeof SyncExtendPrefixEvaluation.Type;
 
-/** The only patches the browser reducer accepts. */
-export const SyncPatch = Schema.Union([
-	Schema.Struct({
-		op: Schema.Literal('insert'),
-		index: NonNegativeInteger,
-		row: StoredRecord
-	}),
-	Schema.Struct({
-		op: Schema.Literal('replace'),
-		recordId: Schema.NonEmptyString,
-		/** New seat when the row moved, or when an entrant replaces a window boundary row. */
-		index: Schema.optionalKey(NonNegativeInteger),
-		/**
-		 * The row that loses its seat when this patch is a boundary seat change (§2.3). `index`
-		 * names the entrant's actual rank; it need not be the displaced row's former seat.
-		 */
-		displaces: Schema.optionalKey(Schema.NonEmptyString),
-		row: StoredRecord
-	}),
-	Schema.Struct({ op: Schema.Literal('remove'), recordId: Schema.NonEmptyString }),
-	Schema.Struct({ op: Schema.Literal('scalar'), value: Schema.Number }),
-	Schema.Struct({ op: Schema.Literal('answer'), answer: SyncAnswer })
-]).annotate({ identifier: 'BoltSyncPatch' });
-export type SyncPatch = typeof SyncPatch.Type;
-
-/** The public handshake, used for initial connect and one-entry revalidation alike. */
-export const SyncConnectRequest = Schema.Struct({
-	head: Schema.optionalKey(SyncCursor),
-	queries: Schema.Array(
-		Schema.Struct({
-			key: Schema.NonEmptyString,
-			input: SyncQueryInput,
-			digest: Schema.optionalKey(Schema.NonEmptyString),
-			/** Reconnect base retained by the client answer; lets changelog skipping avoid a resolve. */
-			heldIds: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
-			/** Reconnect base for point/rank advances; omitted by older clients forces one fresh resolve. */
-			heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
-			/** Echo of a guest-issued ceiling; forces full answers and needs no positional base. */
-			digestOnly: Schema.optionalKey(Schema.Boolean)
-		})
-	),
-	/** Keys whose retained attachment this control request releases. */
-	released: Schema.Array(Schema.NonEmptyString),
-	pending: Schema.Array(CollectionMutationIdempotencyKey)
-}).annotate({ identifier: 'BoltSyncConnectRequest' });
-export interface SyncConnectRequest extends Schema.Schema.Type<typeof SyncConnectRequest> {}
-
-/** Every durable terminal write state the stream may settle. */
 export const SyncWriteStatus = Schema.Union([
 	Schema.Struct({
 		resolution: Schema.Literal('accepted'),
@@ -178,91 +299,94 @@ export const SyncOutcome = Schema.Struct({
 }).annotate({ identifier: 'BoltSyncOutcome' });
 export interface SyncOutcome extends Schema.Schema.Type<typeof SyncOutcome> {}
 
-/** Registration facts computed in the guest and filed, without interpretation, by a host. */
+export const SyncApplyFrame = Schema.Struct({
+	updates: Schema.Array(SyncPrefixUpdate),
+	resets: Schema.Array(SyncPrefixReset),
+	outcomes: Schema.Array(SyncOutcome)
+}).annotate({ identifier: 'BoltSyncApplyFrame' });
+export interface SyncApplyFrame extends Schema.Schema.Type<typeof SyncApplyFrame> {}
+
+export const SyncScope = InvocationScope;
+export interface SyncScope extends Schema.Schema.Type<typeof SyncScope> {}
+
+export const SyncScopedApplyFrame = Schema.Struct({
+	scope: SyncScope,
+	frame: SyncApplyFrame
+}).annotate({ identifier: 'BoltSyncScopedApplyFrame' });
+export interface SyncScopedApplyFrame extends Schema.Schema.Type<typeof SyncScopedApplyFrame> {}
+
 export const SyncSubEntry = Schema.Struct({
-	key: Schema.NonEmptyString,
+	key: SyncQueryKey,
 	input: SyncQueryInput,
-	/** Header-derived preview coordinate; absent means the credential's ordinary authority. */
+	planKey: Schema.NonEmptyString,
+	version: SyncQueryVersion,
+	prefixKeys: Schema.Array(SyncPrefixKey),
+	loadedPrefix: SyncPrefixLengthValue,
+	prefixBytes: SyncRetainedPrefixBytesValue,
 	impersonatedTeam: Schema.optionalKey(Schema.NonEmptyString),
-	policyHash: Schema.NonEmptyString,
+	authorityFingerprint: Schema.NonEmptyString,
 	dependencies: Schema.Array(Schema.NonEmptyString),
-	/** Subset whose commits require re-authenticating every attached credential. */
-	policyDependencies: Schema.Array(Schema.NonEmptyString),
-	/** Necessary root-query equality constraints; absent means collection-wide routing. */
-	routing: Schema.optionalKey(Schema.Array(SyncRoutingConstraint)),
-	heldIds: Schema.Array(Schema.NonEmptyString),
-	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
-	digestOnly: Schema.Boolean,
-	digest: Schema.NonEmptyString
+	routing: Schema.Array(SyncRoutingConstraint)
 }).annotate({ identifier: 'BoltSyncSubEntry' });
 export interface SyncSubEntry extends Schema.Schema.Type<typeof SyncSubEntry> {}
 
-export const SyncConnectResult = Schema.Union([
-	Schema.Struct({
-		key: Schema.NonEmptyString,
-		digest: Schema.NonEmptyString,
-		digestOnly: Schema.Boolean,
-		changed: Schema.Literal(false)
-	}),
-	Schema.Struct({
-		key: Schema.NonEmptyString,
-		digest: Schema.NonEmptyString,
-		digestOnly: Schema.Boolean,
-		changed: Schema.Literal(true),
-		answer: SyncAnswer
-	})
-]).annotate({ identifier: 'BoltSyncConnectResult' });
-export type SyncConnectResult = typeof SyncConnectResult.Type;
+export const SyncConnectResult = Schema.Struct({
+	queryKey: SyncQueryKey,
+	version: SyncQueryVersion,
+	rows: Schema.Array(StoredRecord),
+	retainedBytes: SyncRetainedPrefixBytesValue
+}).annotate({ identifier: 'BoltSyncConnectResult' });
+export interface SyncConnectResult extends Schema.Schema.Type<typeof SyncConnectResult> {}
 
-/** Guest-to-host registration evaluation; the host projects this to `SyncConnectResult`. */
-export const SyncConnectEvaluationResult = Schema.Union([
-	Schema.Struct({ ...SyncSubEntry.fields, changed: Schema.Literal(false) }),
-	Schema.Struct({ ...SyncSubEntry.fields, changed: Schema.Literal(true), answer: SyncAnswer })
-]).annotate({ identifier: 'BoltSyncConnectEvaluationResult' });
+export const SyncConnectEvaluationResult = Schema.Struct({
+	...SyncSubEntry.fields,
+	rows: Schema.Array(StoredRecord)
+}).annotate({ identifier: 'BoltSyncConnectEvaluationResult' });
 export type SyncConnectEvaluationResult = typeof SyncConnectEvaluationResult.Type;
 
+export const SyncConnectRequest = Schema.Struct({
+	queries: Schema.Array(
+		Schema.Struct({
+			queryKey: SyncQueryKey,
+			input: SyncQueryInput,
+			requestedPrefix: SyncPositivePrefixLengthValue
+		})
+	),
+	detached: Schema.Array(SyncQueryKey),
+	pending: Schema.Array(CollectionMutationIdempotencyKey)
+}).annotate({ identifier: 'BoltSyncConnectRequest' });
+export interface SyncConnectRequest extends Schema.Schema.Type<typeof SyncConnectRequest> {}
+
 export const SyncConnectResponse = Schema.Struct({
-	head: SyncCursor,
-	results: Schema.Array(SyncConnectResult),
+	queries: Schema.Array(SyncConnectResult),
 	outcomes: Schema.Array(SyncOutcome)
 }).annotate({ identifier: 'BoltSyncConnectResponse' });
 export interface SyncConnectResponse extends Schema.Schema.Type<typeof SyncConnectResponse> {}
 
 export const SyncConnectEvaluation = Schema.Struct({
-	head: SyncCursor,
 	results: Schema.Array(SyncConnectEvaluationResult),
 	outcomes: Schema.Array(SyncOutcome)
 }).annotate({ identifier: 'BoltSyncConnectEvaluation' });
 export interface SyncConnectEvaluation extends Schema.Schema.Type<typeof SyncConnectEvaluation> {}
 
-/**
- * Host-held state sent back to the stateless guest for one advance.
- *
- * `credential` is deliberately opaque. The host stores it but never derives a subject or policy;
- * the guest authenticates it afresh, which makes revocation and policy drift visible on a wake.
- */
 export const SyncAdvanceSubscription = Schema.Struct({
 	subId: Schema.NonEmptyString,
-	key: Schema.NonEmptyString,
 	input: SyncQueryInput,
+	planKey: Schema.NonEmptyString,
+	version: SyncQueryVersion,
+	prefixKeys: Schema.Array(SyncPrefixKey),
+	prefixBytes: SyncRetainedPrefixBytesValue,
+	viewerPrefixes: Schema.Array(SyncPrefixLengthValue),
 	credential: Schema.NonEmptyString,
 	impersonatedTeam: Schema.optionalKey(Schema.NonEmptyString),
-	heldIds: Schema.Array(Schema.NonEmptyString),
-	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
-	digestOnly: Schema.Boolean,
-	digest: Schema.NonEmptyString,
-	policyHash: Schema.NonEmptyString
+	authorityFingerprint: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltSyncAdvanceSubscription' });
-export interface SyncAdvanceSubscription extends Schema.Schema.Type<
-	typeof SyncAdvanceSubscription
-> {}
+export type SyncAdvanceSubscription = typeof SyncAdvanceSubscription.Type;
 
 export const SyncAdvanceRequest = Schema.Struct({
 	changes: Schema.Array(SyncChange),
 	subscriptions: Schema.Array(SyncAdvanceSubscription),
-	/** Writer-owned ledger ids, including terminal outcomes that committed no collection change. */
 	pending: Schema.Array(CollectionMutationIdempotencyKey),
-	/** Opaque authority used only to scope `pending` ledger lookup. */
 	writer: Schema.optionalKey(
 		Schema.Struct({
 			credential: Schema.NonEmptyString,
@@ -272,46 +396,51 @@ export const SyncAdvanceRequest = Schema.Struct({
 }).annotate({ identifier: 'BoltSyncAdvanceRequest' });
 export interface SyncAdvanceRequest extends Schema.Schema.Type<typeof SyncAdvanceRequest> {}
 
-/** One full-answer fallback or one exact positional delta for a subscription. */
+export const SyncViewerPrefixDelta = Schema.Struct({
+	loadedPrefix: SyncPrefixLengthValue,
+	delta: SyncPrefixDelta
+}).annotate({ identifier: 'BoltSyncViewerPrefixDelta' });
+export type SyncViewerPrefixDelta = typeof SyncViewerPrefixDelta.Type;
+
 export const SyncAdvanceUpdate = Schema.Struct({
 	subId: Schema.NonEmptyString,
-	from: Schema.NonEmptyString,
-	to: Schema.NonEmptyString,
-	patch: SyncPatch,
-	heldIds: Schema.Array(Schema.NonEmptyString),
-	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
-	digestOnly: Schema.Boolean,
-	policyHash: Schema.NonEmptyString,
-	dependencies: Schema.Array(Schema.NonEmptyString),
-	policyDependencies: Schema.Array(Schema.NonEmptyString)
+	fromVersion: SyncQueryVersion,
+	toVersion: SyncQueryVersion,
+	prefixKeys: Schema.Array(SyncPrefixKey),
+	prefixBytes: SyncRetainedPrefixBytesValue,
+	deltas: Schema.Array(SyncViewerPrefixDelta),
+	authorityFingerprint: Schema.NonEmptyString,
+	dependencies: Schema.Array(Schema.NonEmptyString)
 }).annotate({ identifier: 'BoltSyncAdvanceUpdate' });
 export interface SyncAdvanceUpdate extends Schema.Schema.Type<typeof SyncAdvanceUpdate> {}
 
-export const SyncAdvanceRefusal = Schema.Struct({
-	subId: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltSyncAdvanceRefusal' });
-export interface SyncAdvanceRefusal extends Schema.Schema.Type<typeof SyncAdvanceRefusal> {}
+export const SyncAdvanceReset = Schema.Struct({
+	subId: Schema.NonEmptyString,
+	reason: SyncResetReason
+}).annotate({ identifier: 'BoltSyncAdvanceReset' });
+export interface SyncAdvanceReset extends Schema.Schema.Type<typeof SyncAdvanceReset> {}
 
 export const SyncAdvanceResponse = Schema.Struct({
-	head: SyncCursor,
 	updates: Schema.Array(SyncAdvanceUpdate),
-	refused: Schema.Array(SyncAdvanceRefusal),
+	resets: Schema.Array(SyncAdvanceReset),
 	outcomes: Schema.Array(SyncOutcome)
 }).annotate({ identifier: 'BoltSyncAdvanceResponse' });
 export interface SyncAdvanceResponse extends Schema.Schema.Type<typeof SyncAdvanceResponse> {}
 
-export const SyncApplyPatch = Schema.Struct({
-	key: Schema.NonEmptyString,
-	from: Schema.NonEmptyString,
-	to: Schema.NonEmptyString,
-	patch: SyncPatch
-}).annotate({ identifier: 'BoltSyncApplyPatch' });
-export interface SyncApplyPatch extends Schema.Schema.Type<typeof SyncApplyPatch> {}
-
-/** The sole SSE payload. A commit's query changes and write settlements are one reducer event. */
-export const SyncApplyFrame = Schema.Struct({
-	head: SyncCursor,
-	patches: Schema.Array(SyncApplyPatch),
-	outcomes: Schema.Array(SyncOutcome)
-}).annotate({ identifier: 'BoltSyncApplyFrame' });
-export interface SyncApplyFrame extends Schema.Schema.Type<typeof SyncApplyFrame> {}
+export const SyncCommandContracts = [
+	commandContract({
+		name: 'sync.connect',
+		input: SyncConnectRequest,
+		responses: [{ status: 200, value: SyncConnectEvaluation, headers: CommandHeaders }]
+	}),
+	commandContract({
+		name: 'sync.extendPrefix',
+		input: Schema.Struct({ request: SyncExtendPrefixRequest, state: SyncAdvanceSubscription }),
+		responses: [{ status: 200, value: SyncExtendPrefixEvaluation, headers: CommandHeaders }]
+	}),
+	commandContract({
+		name: 'sync.advance',
+		input: SyncAdvanceRequest,
+		responses: [{ status: 200, value: SyncAdvanceResponse, headers: CommandHeaders }]
+	})
+] as const;

@@ -11,8 +11,8 @@ import {
 import { eq } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import { planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
-export { fingerprintSchemaSteps } from '#lib/compiler/schema-plan.js';
+import { planTableNames, type SchemaPlan } from './schema-plan.js';
+export { fingerprintSchemaSteps } from './schema-plan.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
@@ -270,9 +270,17 @@ export const layer = (schemaPlan: SchemaPlan) =>
 					 *
 					 * Split by id rather than by inspecting the SQL: `exclusionStep` is what mints these and it
 					 * is the same module that decides they belong to a collection.
+					 *
+					 * `:live-index:` steps share the constraint for the same reason: `effectiveIndexSteps`
+					 * indexes relationship endpoints and effective-plan probes on *workspace* collections —
+					 * the one other plan step kind whose target table only the lineage creates. On a virgin
+					 * database the first of them raised `relation … does not exist`, the plan transaction
+					 * rolled back whole, and the tenant was left an empty database that looked provisioned.
 					 */
 					const [postLineageSteps, planSteps] = Array.partition(schemaPlan.steps, (step) =>
-						step.id.includes(':exclusion:') || step.id.startsWith('sync-trigger:')
+						step.id.includes(':exclusion:') ||
+						step.id.includes(':live-index:') ||
+						step.id.startsWith('sync-trigger:')
 							? Result.fail(step)
 							: Result.succeed(step)
 					);

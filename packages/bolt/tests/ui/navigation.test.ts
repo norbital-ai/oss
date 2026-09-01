@@ -4,8 +4,28 @@ import {
 	APPROVALS_PATH,
 	buildApplicationNavigation,
 	buildSystemNavigation,
+	studioSourceFromSearch,
+	studioSourceHref,
 	WORKSPACE_SETTINGS_PATH
 } from '../../src/client/ui/shell/workspace-navigation.js';
+
+const shellLabels: Readonly<Record<string, string>> = {
+	'bolt.shell.people': 'People',
+	'bolt.shell.settings': 'Settings',
+	'bolt.shell.approvals': 'Approvals',
+	'bolt.shell.automations': 'Automations',
+	'bolt.shell.operations': 'Operations',
+	'bolt.shell.administration': 'Administration',
+	'bolt.shell.applications': 'Applications',
+	'bolt.shell.workspaceStudio': 'Workspace Studio',
+	'bolt.shell.organization': 'Organization',
+	'bolt.shell.agents': 'Agents',
+	'bolt.shell.secrets': 'Environment secrets'
+};
+const shellI18n = {
+	has: (key: string) => key in shellLabels,
+	t: (key: string) => shellLabels[key] ?? `Missing translation: ${key}`
+};
 
 describe('workspace navigation', () => {
 	it('marks the current app active and places host plugins by their declared placement', () => {
@@ -26,6 +46,7 @@ describe('workspace navigation', () => {
 		const system = buildSystemNavigation({
 			isAdmin: true,
 			currentPath: WORKSPACE_SETTINGS_PATH,
+			i18n: shellI18n,
 			plugins: [
 				{
 					key: 'workspace-studio',
@@ -106,26 +127,28 @@ describe('workspace navigation', () => {
 		expect(applications[0]?.icon).toBe('lucide:user-round');
 	});
 
-	it('never exposes untranslated keys from built-in shell navigation', () => {
+	it('uses the catalog for every built-in shell label without an English fallback', () => {
 		const seen: string[] = [];
 		const system = buildSystemNavigation({
 			isAdmin: true,
 			currentPath: '/',
 			i18n: {
-				has: (key) => key === 'bolt.shell.settings' || key === 'bolt.shell.people',
+				has: () => true,
 				t: (key) => {
 					seen.push(key);
 					if (key === 'bolt.shell.settings') return '设置';
 					if (key === 'bolt.shell.people') return '人员';
-					return key;
+					if (key === 'bolt.shell.approvals') return '审批';
+					return `译文：${key}`;
 				}
 			}
 		});
 
 		expect(system.find((item) => item.key === 'settings')?.label).toBe('设置');
 		expect(system[0]?.children?.[0]?.label).toBe('人员');
-		expect(system.find((item) => item.key === 'approvals')?.label).toBe('Approvals');
-		expect(seen).not.toContain('bolt.shell.approvals');
+		expect(system.find((item) => item.key === 'approvals')?.label).toBe('审批');
+		expect(seen).toContain('bolt.shell.approvals');
+		expect(system.flatMap((item) => [item, ...(item.children ?? [])]).every((item) => !item.label.startsWith('bolt.'))).toBe(true);
 	});
 
 	it('resolves nested app titles from the leaf catalog key', () => {
@@ -149,5 +172,14 @@ describe('workspace navigation', () => {
 				currentPath: '/'
 			})
 		).toEqual([]);
+	});
+
+	it('carries a compiler-projected Source path into Studio without inventing one', () => {
+		const href = studioSourceHref('src/automations/+daily.ts');
+		expect(href).toBe('/__host/workspace-studio?source=src%2Fautomations%2F%2Bdaily.ts');
+		expect(studioSourceFromSearch(`?${href.split('?')[1]}`)).toBe('src/automations/+daily.ts');
+		expect(studioSourceFromSearch(href.split('?')[1] ?? '')).toBe('src/automations/+daily.ts');
+		expect(studioSourceFromSearch('?automation=daily')).toBeUndefined();
+		expect(studioSourceFromSearch('?source=%20')).toBeUndefined();
 	});
 });

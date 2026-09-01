@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { auditImports } from '../../src/quality/audit.js';
 
@@ -33,7 +34,7 @@ describe('Bolt architecture boundaries', () => {
 	});
 
 	it('keeps browser workspace entrypoints independent of the server runtime graph', async () => {
-		const entrypoints = ['workspace-api.ts', 'system-client.ts'];
+		const entrypoints = ['workspace-api.ts'];
 		const violations = (
 			await Promise.all(
 				entrypoints.map(async (entrypoint) => {
@@ -73,6 +74,69 @@ describe('Bolt architecture boundaries', () => {
 		expect(violations).toEqual([]);
 	});
 
+	it('forbids runtime modules from resolving imports into compiler', async () => {
+		const source = new URL('../../src', import.meta.url).pathname;
+		const runtime = join(source, 'runtime');
+		const files = (await sourceFiles(runtime)).filter((file) => file.endsWith('.ts'));
+		const options: ts.CompilerOptions = {
+			allowJs: true,
+			baseUrl: source,
+			module: ts.ModuleKind.ESNext,
+			moduleResolution: ts.ModuleResolutionKind.Bundler,
+			paths: { '#lib/*': ['*'] }
+		};
+		const violations: Array<string> = [];
+		for (const file of files) {
+			const sourceText = await readFile(file, 'utf8');
+			const syntax = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+			const inspect = (node: ts.Node): void => {
+				const literal =
+					(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+					node.moduleSpecifier !== undefined &&
+					ts.isStringLiteral(node.moduleSpecifier)
+						? node.moduleSpecifier
+						: ts.isCallExpression(node) &&
+							  node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+							  node.arguments[0] !== undefined &&
+							  ts.isStringLiteral(node.arguments[0])
+							? node.arguments[0]
+							: undefined;
+				if (literal !== undefined) {
+					const resolved = ts.resolveModuleName(literal.text, file, options, ts.sys).resolvedModule;
+					if (resolved?.resolvedFileName.includes('/src/compiler/'))
+						violations.push(`${file.slice(runtime.length + 1)} -> ${literal.text}`);
+				}
+				ts.forEachChild(node, inspect);
+			};
+			inspect(syntax);
+		}
+		expect(violations).toEqual([]);
+	});
+
+	it('keeps the Toolchain cutover smaller after parser deletion and schema relocation', async () => {
+		const source = new URL('../../src', import.meta.url).pathname;
+		const tracked = [
+			...(await sourceFiles(join(source, 'compiler'))).filter((path) => path.endsWith('.ts')),
+			...(await sourceFiles(join(source, 'runtime/schema'))).filter((path) => path.endsWith('.ts')),
+			...[
+				'model-introspection.ts',
+				'models-schema.ts',
+				'workspace-schema.ts',
+				'internals.ts',
+				'approval-validation.ts'
+			].map((path) => join(source, 'authoring', path))
+		];
+		const total = (await Promise.all(tracked.map(lineCount))).reduce(
+			(lines, count) => lines + count,
+			0
+		);
+		expect(tracked.length).toBeLessThanOrEqual(19);
+		// 8,688 is the measured post-cutover basket after drizzle 1.0 array SQL
+		// introspection (`text[]`). Comments are not deleted to meet a line gate.
+		expect(total).toBeLessThanOrEqual(8_688);
+		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
+	});
+
 	it('enforces the amended collection lifecycle source budget', async () => {
 		const source = new URL('../../src', import.meta.url).pathname;
 		const collections = join(source, 'runtime/collections');
@@ -89,7 +153,6 @@ describe('Bolt architecture boundaries', () => {
 		const accessSuccessors = [
 			'runtime/access/access-control.ts',
 			'runtime/access/invocation.ts',
-			'runtime/access/policy-compiler.ts',
 			'runtime/access/policy-surface.ts',
 			'runtime/access/predicate.ts'
 		];
@@ -98,7 +161,7 @@ describe('Bolt architecture boundaries', () => {
 			collectionLines +
 			(await sum([
 				'runtime/dispatch.ts',
-				'compiler/schema-plan.ts',
+				'runtime/schema/schema-plan.ts',
 				'authoring/contracts-schema.ts',
 				'authoring/internals.ts',
 				'runtime/approvals/approvals.ts',

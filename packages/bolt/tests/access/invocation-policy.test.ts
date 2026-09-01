@@ -59,7 +59,7 @@ describe('invocation policy contracts', () => {
 			parameters: ['user-1'],
 			fields: ['name', 'status']
 		});
-		expect(hash.sql).toContain('"owner_id" = $1');
+		expect(hash.sql).toContain('"owner_id" is not distinct from $1');
 		expect(hash.sql).toContain('or false');
 	});
 
@@ -92,7 +92,7 @@ describe('invocation policy contracts', () => {
 			parameterOffset: 3
 		});
 
-		expect(statement.sql).toContain('"candidate"."owner_id" = $4');
+		expect(statement.sql).toContain('"candidate"."owner_id" is not distinct from $4');
 		expect(statement.sql).toContain('"candidate"."status" in ($5, $6)');
 		expect(statement.sql).not.toContain(' as "predicate"');
 		expect(statement.parameters).toEqual(['user-1', 'open', 'closed']);

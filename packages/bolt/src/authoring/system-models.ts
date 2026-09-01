@@ -1,15 +1,7 @@
 import { sql } from 'drizzle-orm';
-import {
-	bigint,
-	bigserial,
-	boolean,
-	doublePrecision,
-	integer,
-	jsonb,
-	uuid
-} from 'drizzle-orm/pg-core';
+import { bigserial, boolean, integer, jsonb, uuid } from 'drizzle-orm/pg-core';
 import { compileModelTables } from './model-introspection.js';
-import { defineModel, file, instant, text, type ModelIndex } from './models-schema.js';
+import { defineModel, instant, text, type ModelIndex } from './models-schema.js';
 import type { TransportIdentity } from '../runtime/envoys/transport-identity.js';
 
 const systemIndex = (column: string): ModelIndex => ({ columns: [column] });
@@ -194,7 +186,6 @@ const authSessionModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [systemIndex('token'), systemIndex('userId')]
 	}
 );
@@ -214,7 +205,6 @@ const authAccountModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [systemIndex('userId')]
 	}
 );
@@ -225,7 +215,7 @@ const authVerificationModel = defineModel(
 		value: text().notNull(),
 		expiresAt: instant().notNull()
 	},
-	{ history: false, sync: false, indexes: [systemIndex('identifier')] }
+	{ history: false, indexes: [systemIndex('identifier')] }
 );
 
 /** Where bolt keeps the secret that signs its sessions, generated on first use. */
@@ -234,7 +224,7 @@ const authConfigModel = defineModel(
 		key: text().notNull(),
 		value: text().notNull()
 	},
-	{ history: false, sync: false, indexes: [systemIndex('key')] }
+	{ history: false, indexes: [systemIndex('key')] }
 );
 
 /**
@@ -285,7 +275,6 @@ const scheduleModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [{ name: 'bolt_schedule_due', columns: ['next_run_at'] }]
 	}
 );
@@ -313,7 +302,6 @@ const taskModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_task_pending_due',
@@ -329,118 +317,176 @@ const taskModel = defineModel(
 	}
 );
 
-/** One immutable semantic field item from a canonical TanStack ModelMessage. */
-const agentMessagePartModel = defineModel(
+/** One durable Task. Lifecycle and its sole active-run fence live together on this row. */
+const agentTaskModel = defineModel(
 	{
-		message_id: text().notNull(),
-		field: text().notNull(),
-		ordinal: integer().notNull(),
-		payload: jsonb().notNull()
+		workbench_id: text().notNull(),
+		subject_id: text().notNull(),
+		agent_id: text().notNull(),
+		audience: text().notNull(),
+		parent_id: uuid(),
+		status: text().notNull(),
+		active_plan_id: uuid(),
+		active_run_id: uuid(),
+		epoch: integer().notNull()
 	},
 	{
 		history: false,
 		indexes: [
-			systemIndex('message_id'),
 			{
-				name: 'chat_message_part_field_ordinal',
-				columns: ['message_id', 'field', 'ordinal'],
-				unique: true
-			}
-		]
-	}
-);
-
-/** The sole durable scheduler state for one conversation. */
-const agentLaneModel = defineModel(
-	{
-		conversation_id: text().notNull().unique(),
-		state: text().notNull().default('active'),
-		active_run_id: text(),
-		active_generation: integer().notNull().default(0),
-		requested_generation: integer().notNull().default(0),
-		resume_from_run_id: text()
-	},
-	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('active_run_id')] }
-);
-
-/** One execution record and the pinned TanStack RunStore/driver fence row. */
-const agentRunModel = defineModel(
-	{
-		run_id: text().notNull().unique(),
-		conversation_id: text().notNull(),
-		generation: integer().notNull(),
-		status: text().notNull().default('running'),
-		started_at: bigint({ mode: 'number' }).notNull(),
-		finished_at: bigint({ mode: 'number' }),
-		error: jsonb(),
-		usage: jsonb(),
-		usage_unreported: boolean().notNull().default(false),
-		sandbox_key: text(),
-		cancel_requested: boolean().notNull().default(false),
-		driver_epoch: integer().notNull().default(0),
-		cause: text().notNull(),
-		disposition: text(),
-		input_boundary: bigint({ mode: 'number' }).notNull(),
-		subject_snapshot: jsonb().notNull(),
-		authority_fingerprint: text().notNull(),
-		agent_release_id: text().notNull(),
-		resolved_model: jsonb().notNull(),
-		depth: integer().notNull().default(0)
-	},
-	{
-		history: false,
-		indexes: [
-			systemIndex('conversation_id'),
-			systemIndex('status'),
-			{
-				name: 'agent_run_conversation_generation',
-				columns: ['conversation_id', 'generation'],
-				unique: true
+				name: 'agent_task_subject_route',
+				columns: ['workbench_id', 'subject_id', 'status', 'created_at']
 			},
 			{
-				name: 'agent_run_one_running',
-				columns: ['conversation_id'],
-				unique: true,
-				where: "status = 'running'"
+				name: 'agent_task_workbench_route',
+				columns: ['workbench_id', 'audience', 'status', 'created_at']
+			},
+			systemIndex('parent_id'),
+			systemIndex('active_plan_id'),
+			{
+				name: 'agent_task_active_run',
+				columns: ['active_run_id'],
+				unique: true
 			}
 		]
 	}
 );
 
-/** Durable input awaiting claim, or the immutable receipt of the run that claimed it. */
+/** One immutable revision of the Task objective and verification contract. */
+const agentPlanModel = defineModel(
+	{
+		task_id: uuid().notNull(),
+		revision: integer().notNull(),
+		checkpoint_sequence: integer().notNull(),
+		body: text().notNull(),
+		status: text().notNull()
+	},
+	{
+		history: false,
+		indexes: [
+			{
+				name: 'agent_plan_task_revision',
+				columns: ['task_id', 'revision'],
+				unique: true
+			},
+			{ name: 'agent_plan_task_status', columns: ['task_id', 'status', 'revision'] }
+		]
+	}
+);
+
+/**
+ * One complete encoded Effect Prompt message. Parts are never normalized into another table.
+ *
+ * `supersedes_id` is the message's only mutation route and it never mutates anything: a revised user
+ * message is a *new* row naming the revision it replaces, exactly as a new Plan revision supersedes
+ * the previous one. The superseded row stays byte-for-byte durable and readable; only the projection
+ * that feeds the model skips it. The route is unique so one revision can never fork a message into
+ * two live heads.
+ */
+const agentMessageModel = defineModel(
+	{
+		task_id: uuid().notNull(),
+		sequence: integer().notNull(),
+		run_id: uuid(),
+		author: jsonb().notNull(),
+		message: jsonb().notNull(),
+		semantic_hash: text().notNull(),
+		annotation: jsonb(),
+		supersedes_id: uuid()
+	},
+	{
+		history: false,
+		indexes: [
+			{
+				name: 'agent_message_task_sequence',
+				columns: ['task_id', 'sequence'],
+				unique: true
+			},
+			{ name: 'agent_message_run_sequence', columns: ['run_id', 'sequence'] },
+			{ name: 'agent_message_supersedes', columns: ['supersedes_id'], unique: true },
+			{
+				name: 'agent_message_semantic_identity',
+				columns: ['task_id', 'semantic_hash'],
+				unique: true
+			},
+			{ name: 'agent_message_content_route', columns: ['message'], method: 'gin' },
+			{ name: 'agent_message_annotation_route', columns: ['annotation'], method: 'gin' }
+		]
+	}
+);
+
+/** The Task's only durable queue and the immutable receipt of its claim. */
 const agentInboxModel = defineModel(
 	{
-		tenant_id: text().notNull(),
-		conversation_id: text().notNull(),
-		message_id: text().notNull(),
-		receipt_sequence: bigint({ mode: 'number' }).notNull(),
-		source_kind: text().notNull(),
-		source_message_id: text().notNull(),
-		requested_mode: text().notNull().default('queue'),
-		state: text().notNull().default('pending'),
-		subject_snapshot: jsonb().notNull(),
-		authority_fingerprint: text().notNull(),
-		agent_release_id: text().notNull(),
-		resolved_model: jsonb().notNull(),
-		depth: integer().notNull().default(0),
-		claimed_by_run_id: text(),
-		claimed_at: instant(),
-		rejected_reason: text()
+		task_id: uuid().notNull(),
+		sequence: integer().notNull(),
+		message_id: uuid().notNull(),
+		mode: text().notNull(),
+		priority: text().notNull(),
+		state: text().notNull(),
+		claimed_run_id: uuid()
 	},
 	{
 		history: false,
 		indexes: [
 			{
-				name: 'agent_inbox_admission',
-				columns: ['tenant_id', 'conversation_id', 'source_kind', 'source_message_id'],
+				name: 'agent_inbox_task_sequence',
+				columns: ['task_id', 'sequence'],
 				unique: true
 			},
 			{
-				name: 'agent_inbox_pending_fifo',
-				columns: ['conversation_id', 'state', 'receipt_sequence']
+				name: 'agent_inbox_claim_route',
+				columns: ['task_id', 'state', 'priority', 'sequence']
 			},
-			systemIndex('message_id'),
-			systemIndex('claimed_by_run_id')
+			{ name: 'agent_inbox_message', columns: ['message_id'], unique: true },
+			systemIndex('claimed_run_id')
+		]
+	}
+);
+
+/** One fenced execution attempt with one immutable authority snapshot. */
+const agentRunModel = defineModel(
+	{
+		task_id: uuid().notNull(),
+		directive_id: uuid().notNull(),
+		epoch: integer().notNull(),
+		mode: text().notNull(),
+		phase: text().notNull(),
+		input_through_sequence: integer().notNull(),
+		model_id: text().notNull(),
+		capability_snapshot: jsonb().notNull(),
+		status: text().notNull()
+	},
+	{
+		history: false,
+		indexes: [
+			{ name: 'agent_run_task_epoch', columns: ['task_id', 'epoch'], unique: true },
+			{ name: 'agent_run_task_status', columns: ['task_id', 'status', 'created_at'] },
+			systemIndex('directive_id')
+		]
+	}
+);
+
+/** One immutable exact observation and settlement record per provider attempt. */
+const agentUsageModel = defineModel(
+	{
+		call_id: text().notNull().unique(),
+		run_id: uuid().notNull(),
+		provider: text().notNull(),
+		model: text().notNull(),
+		operation: text().notNull(),
+		usage: jsonb(),
+		charge: jsonb(),
+		charge_source: text(),
+		pricing_version: text(),
+		settlement_id: text().notNull().unique(),
+		settlement_state: text().notNull()
+	},
+	{
+		history: false,
+		indexes: [
+			{ name: 'agent_usage_run_route', columns: ['run_id', 'created_at'] },
+			systemIndex('settlement_state')
 		]
 	}
 );
@@ -475,7 +521,7 @@ const approvalStateModel = defineModel(
 		tenant_id: text().notNull(),
 		state: jsonb().notNull()
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
 const auditModel = defineModel(
@@ -487,7 +533,7 @@ const auditModel = defineModel(
 		request_id: text(),
 		payload: jsonb().notNull()
 	},
-	{ history: false, sync: false, indexes: [systemIndex('sequence'), systemIndex('request_id')] }
+	{ history: false, indexes: [systemIndex('sequence'), systemIndex('request_id')] }
 );
 
 const envoyReceiptModel = defineModel(
@@ -502,7 +548,6 @@ const envoyReceiptModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{ name: 'bolt_envoy_receipts_window', columns: ['envoy_name', 'direction', 'created_at'] }
 		]
@@ -531,7 +576,6 @@ const envoyInboundModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_envoy_inbound_pending',
@@ -548,7 +592,7 @@ const integrationModel = defineModel(
 		cursor: jsonb(),
 		lease_until: instant()
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
 const integrationInboxModel = defineModel(
@@ -563,7 +607,6 @@ const integrationInboxModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_integration_inbox_receipt',
@@ -593,7 +636,6 @@ const integrationOutboxModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_integration_outbox_due',
@@ -602,74 +644,6 @@ const integrationOutboxModel = defineModel(
 			{
 				name: 'bolt_integration_outbox_record',
 				columns: ['collection_name', 'record_id', 'sequence']
-			}
-		]
-	}
-);
-
-const conversationModel = defineModel(
-	{
-		conversation_id: text().notNull().unique(),
-		parent_id: text(),
-		agent_name: text().notNull(),
-		user_id: text().notNull(),
-		sandbox_key: text().notNull(),
-		title: text(),
-		/**
-		 * The media added to this conversation: file refs whose bytes live in the object store.
-		 * This attribute is the whole record — no side table — so an upload is one append and a
-		 * reader asks the session itself what its sources are.
-		 */
-		files: file({ multiple: true }),
-		verifier: jsonb(),
-		visibility: text().notNull().default('personal'),
-		envoy_key: text(),
-		drain_lease_until: instant(),
-		/** Provider message edited in place for envoy progress and queued-message previews. */
-		transport_message_key: text(),
-		/** Last base progress line, kept so an incoming queue preview can extend rather than replace it. */
-		transport_progress: text(),
-		usage_cost_usd: doublePrecision().notNull().default(0),
-		usage_cost_micro_units: bigint({ mode: 'number' }).notNull().default(0),
-		usage_cost_currency: text(),
-		usage_total_tokens: bigint({ mode: 'number' }).notNull().default(0),
-		usage_turns_counted: integer().notNull().default(0),
-		usage_turns_unreported: integer().notNull().default(0)
-	},
-	{
-		history: false,
-		indexes: [systemIndex('envoy_key'), systemIndex('parent_id')]
-	}
-);
-
-const agentMessageModel = defineModel(
-	{
-		sequence: bigserial({ mode: 'number' }).unique(),
-		message_id: text().notNull().unique(),
-		conversation_id: text().notNull(),
-		role: text().notNull(),
-		name: text(),
-		run_id: text(),
-		iteration_index: integer(),
-		content_kind: text().notNull().default('null'),
-		content_text: text({ search: true }),
-		search_text: text({ search: true }),
-		tool_call_id: text(),
-		error: text(),
-		model_metadata: jsonb(),
-		app_metadata: jsonb(),
-		/** Deterministic canonical payload identity used to reject mutation on idempotent append. */
-		semantic_hash: text().notNull()
-	},
-	{
-		history: false,
-		indexes: [
-			systemIndex('conversation_id'),
-			systemIndex('run_id'),
-			{
-				name: 'chat_message_generated_identity',
-				columns: ['run_id', 'iteration_index', 'role', 'message_id'],
-				unique: true
 			}
 		]
 	}
@@ -688,7 +662,6 @@ const collectionHistoryModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_collection_history_record',
@@ -709,7 +682,6 @@ const externalSubjectModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_external_subject_identity',
@@ -731,7 +703,7 @@ const invitationModel = defineModel(
 		/** Nullable only for invitations created before expiring links existed. */
 		expires_at: instant()
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
 /**
@@ -758,7 +730,7 @@ const channelLinkModel = defineModel(
 		claimed_by: text(),
 		expires_at: instant().notNull()
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
 const notificationModel = defineModel(
@@ -776,28 +748,10 @@ const schemaStateModel = defineModel(
 		fingerprint: text().notNull(),
 		applied_at: instant().notNull().defaultNow()
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
-const schemaMigrationModel = defineModel(
-	{ tag: text().notNull().unique() },
-	{ history: false, sync: false }
-);
-
-const syncOutboxModel = defineModel(
-	{
-		xid: bigint({ mode: 'number' })
-			.notNull()
-			.default(sql`pg_current_xact_id()::text::bigint`),
-		sequence: bigserial({ mode: 'number' }).unique(),
-		collection_name: text().notNull()
-	},
-	{
-		history: false,
-		sync: false,
-		indexes: [{ name: 'bolt_sync_outbox_cursor', columns: ['xid', 'sequence'], unique: true }]
-	}
-);
+const schemaMigrationModel = defineModel({ tag: text().notNull().unique() }, { history: false });
 
 const secretModel = defineModel(
 	{
@@ -808,7 +762,6 @@ const secretModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [{ name: 'bolt_secrets_tenant_name', columns: ['tenant_id', 'name'], unique: true }]
 	}
 );
@@ -822,7 +775,6 @@ const personalSecretModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_personal_secrets_owner_name',
@@ -838,7 +790,7 @@ const workspaceIdentitySettingsModel = defineModel(
 		tenant_id: text().notNull().unique(),
 		settings: jsonb().notNull().default({})
 	},
-	{ history: false, sync: false }
+	{ history: false }
 );
 
 /**
@@ -867,7 +819,6 @@ const browserMutationModel = defineModel(
 	},
 	{
 		history: false,
-		sync: false,
 		indexes: [
 			{
 				name: 'bolt_browser_mutation_scope_key',
@@ -895,12 +846,12 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	verification: authVerificationModel,
 	auth_config: authConfigModel,
 	team: teamModel,
-	chat_session: conversationModel,
-	chat_message: agentMessageModel,
-	chat_message_part: agentMessagePartModel,
-	agent_run: agentRunModel,
-	agent_lane: agentLaneModel,
+	agent_task: agentTaskModel,
+	agent_plan: agentPlanModel,
+	agent_message: agentMessageModel,
 	agent_inbox: agentInboxModel,
+	agent_run: agentRunModel,
+	agent_usage: agentUsageModel,
 	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });
@@ -919,7 +870,6 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_channel_links: channelLinkModel,
 	bolt_schema_state: schemaStateModel,
 	__drizzle_migrations: schemaMigrationModel,
-	bolt_sync_outbox: syncOutboxModel,
 	bolt_secrets: secretModel,
 	bolt_personal_secrets: personalSecretModel,
 	bolt_workspace_identity_settings: workspaceIdentitySettingsModel,

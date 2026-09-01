@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- services consumes database's binding/invocation port
 // (CallContext, invokeBinding) over the #lib alias, so the pair is linked, not parallel.
 import { Context, Effect, Layer, Ref } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { compactSyncChanges, EffectId } from '@norbital-ai/bolt-protocol';
 import type {
 	AIRequest,
 	AIResponse,
@@ -30,40 +30,78 @@ import {
 	invokeBinding
 } from '#lib/runtime/facilities/database.js';
 
+export type AICatalogRequest = Extract<AIRequest, { readonly _tag: 'Catalog' }>;
+export type AIGenerateRequest = Extract<AIRequest, { readonly _tag: 'Generate' }>;
+export type AIEmbedRequest = Extract<AIRequest, { readonly _tag: 'Embed' }>;
+export type AICatalogResponse = Extract<AIResponse, { readonly _tag: 'Catalog' }>;
+export type AIGeneratedResponse = Extract<AIResponse, { readonly _tag: 'Generated' }>;
+export type AIEmbeddedResponse = Extract<AIResponse, { readonly _tag: 'Embedded' }>;
+
 /** AI capability bound by the host for one invocation context. */
 export type AIInterface = Readonly<{
-	readonly execute: (
+	readonly catalog: (
 		effectId: EffectId,
-		request: AIRequest
-	) => Effect.Effect<AIResponse, BoundFacilityError>;
+		request: AICatalogRequest
+	) => Effect.Effect<AICatalogResponse, BoundFacilityError>;
+	readonly generate: (
+		effectId: EffectId,
+		request: AIGenerateRequest
+	) => Effect.Effect<AIGeneratedResponse, BoundFacilityError>;
+	readonly embed: (
+		effectId: EffectId,
+		request: AIEmbedRequest
+	) => Effect.Effect<AIEmbeddedResponse, BoundFacilityError>;
 }>;
 /** Identifies the facilities service in Effect's context so dependency wiring remains explicit and type checked. */
 const AIService = Context.Service<AIInterface>('@norbital-ai/bolt/AI');
-/**
- * Gives every model call a distinct, replay-stable effect id.
- *
- * The host uses the id as both provider idempotency key and usage-meter identity. Reusing one would
- * answer a later call with the first completion and bill neither correctly. A per-layer counter
- * suffixes repeated caller ids deterministically, so replaying the same calls in the same order
- * preserves idempotency without global state.
- */
 const AILayers = {
 	make: (binding: FacilityBinding<AIRequest, AIResponse> | undefined, context: CallContext) =>
-		Layer.effect(
+		Layer.succeed(
 			AIService,
-			Effect.map(Ref.make<ReadonlyMap<string, number>>(new Map()), (issued) => {
-				const distinct = distinctIdIn(issued);
+			(() => {
+				const invoke = (id: EffectId, request: AIRequest) =>
+					invokeBinding('ai', binding, context, id, request);
+				const unexpected = (expected: AIResponse['_tag'], actual: AIResponse['_tag']) =>
+					new BoundFacilityError({
+						operation: 'ai',
+						code: 'invalid_ai_response',
+						message: `AI facility returned ${actual}; ${expected} was required`,
+						retryable: false,
+						outcome: 'known'
+					});
 				return AIService.of({
-					execute: Effect.fn('AI.execute')((id, request) =>
-						distinct(id).pipe(
-							Effect.flatMap((unique) => invokeBinding('ai', binding, context, unique, request))
+					catalog: Effect.fn('AI.catalog')((id, request) =>
+						invoke(id, request).pipe(
+							Effect.flatMap((response) =>
+								response._tag === 'Catalog'
+									? Effect.succeed(response)
+									: Effect.fail(unexpected('Catalog', response._tag))
+							)
+						)
+					),
+					generate: Effect.fn('AI.generate')((id, request) =>
+						invoke(id, request).pipe(
+							Effect.flatMap((response) =>
+								response._tag === 'Generated'
+									? Effect.succeed(response)
+									: Effect.fail(unexpected('Generated', response._tag))
+							)
+						)
+					),
+					embed: Effect.fn('AI.embed')((id, request) =>
+						invoke(id, request).pipe(
+							Effect.flatMap((response) =>
+								response._tag === 'Embedded'
+									? Effect.succeed(response)
+									: Effect.fail(unexpected('Embedded', response._tag))
+							)
 						)
 					)
 				});
-			})
+			})()
 		)
 };
-export const AI = { Service: AIService, layer: AILayers.make } as const;
+export const AI = Object.freeze({ Service: AIService, layer: AILayers.make });
 
 /** Outbound and inbound communication capability bound by the host. */
 type CommunicationInterface = Readonly<{
@@ -91,10 +129,10 @@ const CommunicationLayers = {
 			})
 		)
 };
-export const Communication = {
+export const Communication = Object.freeze({
 	Service: CommunicationService,
 	layer: CommunicationLayers.make
-} as const;
+});
 
 /** Provider connector capability bound by the host. */
 export type ConnectorInterface = Readonly<{
@@ -120,7 +158,7 @@ const ConnectorLayers = {
 			})
 		)
 };
-export const Connector = { Service: ConnectorService, layer: ConnectorLayers.make } as const;
+export const Connector = Object.freeze({ Service: ConnectorService, layer: ConnectorLayers.make });
 
 /** Tenant file capability bound by the host. */
 export type FilesInterface = Readonly<{
@@ -143,7 +181,7 @@ const FilesLayers = {
 			})
 		)
 };
-export const Files = { Service: FilesService, layer: FilesLayers.make } as const;
+export const Files = Object.freeze({ Service: FilesService, layer: FilesLayers.make });
 
 /** Colony-owned operator tool capability bound by the host. */
 export type HostToolsInterface = Readonly<{
@@ -169,7 +207,7 @@ const HostToolsLayers = {
 			})
 		)
 };
-export const HostTools = { Service: HostToolsService, layer: HostToolsLayers.make } as const;
+export const HostTools = Object.freeze({ Service: HostToolsService, layer: HostToolsLayers.make });
 
 /** Identity lifecycle observations the host may project. Optional: emit no-ops when unbound. */
 type IdentityHooksInterface = Readonly<{
@@ -199,10 +237,10 @@ const IdentityHooksLayers = {
 			})
 		)
 };
-export const IdentityHooks = {
+export const IdentityHooks = Object.freeze({
 	Service: IdentityHooksService,
 	layer: IdentityHooksLayers.make
-} as const;
+});
 
 /** Browser SSE/WebSocket transport capability bound by the host. */
 type TransportInterface = Readonly<{
@@ -225,10 +263,11 @@ const TransportService = Context.Service<TransportInterface>('@norbital-ai/bolt/
 const distinctIdIn = (issued: Ref.Ref<ReadonlyMap<string, number>>) => (id: EffectId) =>
 	Ref.modify(issued, (current) => {
 		const used = current.get(id) ?? 0;
-		return [
+		const next: readonly [EffectId, ReadonlyMap<string, number>] = [
 			used === 0 ? id : EffectId.make(`${id}#${used}`),
 			new Map(current).set(id, used + 1)
-		] as const;
+		];
+		return next;
 	});
 
 const TransportLayers = {
@@ -252,11 +291,14 @@ const TransportLayers = {
 			})
 		)
 };
-export const Transport = { Service: TransportService, layer: TransportLayers.make } as const;
+export const Transport = Object.freeze({ Service: TransportService, layer: TransportLayers.make });
 
 /** Host commit hook used by long-running internal writers to fan durable changes immediately. */
 type SyncCommitInterface = Readonly<{
-	readonly publish: (effectId: EffectId, request: SyncCommitRequest) => Effect.Effect<void>;
+	readonly publish: (
+		effectId: EffectId,
+		request: SyncCommitRequest
+	) => Effect.Effect<void, BoundFacilityError>;
 	readonly drainChanges: Effect.Effect<ReadonlyArray<SyncChange>>;
 }>;
 const SyncCommitService = Context.Service<SyncCommitInterface>('@norbital-ai/bolt/SyncCommit');
@@ -267,43 +309,27 @@ const SyncCommitLayers = {
 	) =>
 		Layer.effect(
 			SyncCommitService,
-			Effect.map(Ref.make<ReadonlyArray<SyncChange>>([]), (pending) =>
-				SyncCommitService.of({
-					publish: (id, request) =>
-						(request.changes.length === 0
-							? Effect.succeed(true)
-							: binding === undefined
-								? Effect.succeed(false)
-								: invokeBinding('syncCommit', binding, context, id, request).pipe(
-										Effect.map(({ accepted }) => accepted),
-										Effect.catch(() => Effect.succeed(false))
-									)
-						).pipe(
-							Effect.flatMap((accepted) =>
-								accepted
-									? Effect.void
-									: Ref.update(pending, (current) => {
-											const seen = new Set(
-												current.map(({ collection, recordId }) => `${collection}\0${recordId}`)
-											);
-											return [
-												...current,
-												...request.changes.filter(({ collection, recordId }) => {
-													const key = `${collection}\0${recordId}`;
-													if (seen.has(key)) return false;
-													seen.add(key);
-													return true;
-												})
-											];
-										})
-							)
-						),
+			Effect.map(Ref.make<ReadonlyArray<SyncChange>>([]), (pending) => {
+				const defer = (request: SyncCommitRequest) =>
+					Ref.update(pending, (current) => compactSyncChanges([...current, ...request.changes]));
+				return SyncCommitService.of({
+					publish: (id, request) => {
+						const changes = compactSyncChanges(request.changes);
+						if (changes.length === 0) return Effect.void;
+						const batch = { changes };
+						return binding === undefined
+							? defer(batch)
+							: invokeBinding('syncCommit', binding, context, id, batch).pipe(Effect.asVoid);
+					},
 					drainChanges: Ref.getAndSet(pending, [])
-				})
-			)
+				});
+			})
 		)
 };
-export const SyncCommit = { Service: SyncCommitService, layer: SyncCommitLayers.make } as const;
+export const SyncCommit = Object.freeze({
+	Service: SyncCommitService,
+	layer: SyncCommitLayers.make
+});
 
 /** Durable task capability bound by the host. */
 type TasksInterface = Readonly<{
@@ -326,4 +352,4 @@ const TasksLayers = {
 			})
 		)
 };
-export const Tasks = { Service: TasksService, layer: TasksLayers.make } as const;
+export const Tasks = Object.freeze({ Service: TasksService, layer: TasksLayers.make });

@@ -1,43 +1,27 @@
-import type { ChatDocumentRef } from '@norbital-ai/bolt-protocol';
-
-/** One caller-owned admission identity retained only while its HTTP outcome is unknown. */
-export type UnsettledAgentAdmission = Readonly<{
-	conversationId: string;
-	turnId: string;
+/** One client-minted idempotency key retained only while its command outcome is unknown. */
+export type UnsettledTaskAdmission = Readonly<{
+	taskId: string;
+	agentId: string;
 	message: string;
+	mode: 'agent' | 'plan' | 'compact';
+	priority: 'normal' | 'steer';
 	draft: string;
-	createdConversation: boolean;
-	documentKeys: readonly string[];
 }>;
 
-/** Reuses the same durable turn only when the user is retrying the exact same admission. */
+/** Reuses a Task ID only for an exact retry of the same canonical submission identity. */
 export const retryableAdmission = (
-	admission: UnsettledAgentAdmission | null,
+	admission: UnsettledTaskAdmission | null,
 	input: Readonly<{
-		conversationId: string;
+		agentId: string;
 		message: string;
-		documents: readonly ChatDocumentRef[];
+		mode: 'agent' | 'plan' | 'compact';
+		priority: 'normal' | 'steer';
 	}>
-): UnsettledAgentAdmission | null => {
-	if (
-		admission === null ||
-		admission.conversationId !== input.conversationId ||
-		admission.message !== input.message
-	) {
-		return null;
-	}
-	const keys = input.documents.map(({ storage_key }) => storage_key);
-	return keys.length === admission.documentKeys.length &&
-		keys.every((key, index) => key === admission.documentKeys[index])
+): UnsettledTaskAdmission | null =>
+	admission !== null &&
+	admission.agentId === input.agentId &&
+	admission.message === input.message &&
+	admission.mode === input.mode &&
+	admission.priority === input.priority
 		? admission
 		: null;
-};
-
-/** Removes only attachments from the admission that became durable; newer draft uploads survive. */
-export const withoutAdmittedDocuments = (
-	documents: readonly ChatDocumentRef[],
-	admission: UnsettledAgentAdmission
-): ChatDocumentRef[] => {
-	const admitted = new Set(admission.documentKeys);
-	return documents.filter(({ storage_key }) => !admitted.has(storage_key));
-};
