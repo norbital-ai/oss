@@ -1,5 +1,19 @@
 import { Option, Schema } from 'effect';
 
+/** Number or numeric string, the decode `Number(input)` was standing in for. */
+export const NumberFromUnknown = Schema.Union([Schema.Number, Schema.NumberFromString]);
+
+/**
+ * Decode a wire/form value as a number. Invalid input is `NaN`, the same as `Number('x')`, so
+ * existing callers that already branch on `Number.isFinite` keep their control flow.
+ *
+ * Declared in this file rather than a sibling: `tests/core.test.ts` imports this module as
+ * TypeScript source, and Node's type stripping does not rewrite a `./number.js` specifier to the
+ * `.ts` that exists. Every other source-imported module in this package is a single file.
+ */
+export const decodeNumber = (value: unknown): number =>
+	Option.getOrElse(Schema.decodeUnknownOption(NumberFromUnknown)(value), () => Number.NaN);
+
 /**
  * One mutation in a JSON Patch document, as `deepDiff` and the form engine's delta carry it.
  *
