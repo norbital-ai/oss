@@ -68,12 +68,15 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/RateLimits'
  * The identity half goes through `bucketKey` from `@norbital-ai/std/rate-limit`, which hashes it.
  * That is the same derivation Colony's bootstrap limiter uses, so an address is never a key in
  * either store — and there is one answer, not two, to what a bucket is called.
+ *
+ * `bucketKey` hashes through WebCrypto, so it carries an `Error` channel for a `crypto.subtle`
+ * that refuses. It is declared here rather than swallowed; `admit` decides what to do with it.
  */
 const keyFor = (
 	command: string,
 	rule: RateLimitRule,
 	subject: RateLimitSubject
-): Effect.Effect<string> =>
+): Effect.Effect<string, Error> =>
 	bucketKey(
 		[subject.tenantId, command, rule.key],
 		rule.key === 'subject'
@@ -130,7 +133,12 @@ export const make = (spec: RateLimitSpec | undefined): Interface => {
 				// that cannot be read: failing closed on malformed configuration takes the workspace down in
 				// order to enforce a rule nobody can state.
 				if (windowMillis === undefined) continue;
-				const key = yield* keyFor(command, rule, subject);
+				// A digest that will not compute is the host's WebCrypto failing, not a caller to be turned
+				// away: answering `RateLimited` would tell somebody they had spent admissions they never
+				// spent, and admitting would drop the ceiling on the way through. Both are worse than a
+				// defect that stops the invocation and says so — the same direction the store failure below
+				// takes, for the same reason.
+				const key = yield* keyFor(command, rule, subject).pipe(Effect.orDie);
 				yield* limiter
 					.consume({
 						key,

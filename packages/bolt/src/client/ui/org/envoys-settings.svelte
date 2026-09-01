@@ -293,7 +293,18 @@
 
 	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
 		Effect.tryPromise({ try: () => ownPairingOpen(envoy.name, envoy.transport), catch: toError }).pipe(
-			Effect.andThen(observePairing(envoy))
+			Effect.andThen(observePairing(envoy)),
+			Effect.catch((cause) => {
+				// `runPairingRequest` reports its own refusals and cannot fail, so a rejection here is the
+				// owned open itself breaking — a defect in the fiber holding it. The dialog is waiting on
+				// that Promise, and this is the only fiber that will ever hear about it: the `$effect`
+				// below forks this and a failure left in the channel would be discarded there, leaving the
+				// card on a spinner for a socket nobody is still opening. Shown on the card, like every
+				// other pairing failure this page reports.
+				connectionErrors[envoy.name] =
+					cause.message === '' ? 'The pairing request could not be started.' : cause.message;
+				return Effect.void;
+			})
 		);
 
 	function openPairing(envoy: DeclaredEnvoy): void {

@@ -28,6 +28,26 @@ const workspaceBinding = (name: string): string => bind('bolt_secrets', name);
 const { bolt_secrets: boltSecrets } = SYSTEM_MODEL_TABLES;
 
 /**
+ * Carries the one failure `SecretCipher.encrypt` reports as a bare `Error` into this vault's own
+ * declared channel.
+ *
+ * `encrypt` refuses a missing or unusable key as `SecretKeyUnavailable`, which `write` already
+ * declares and a caller already knows what to do about. What is left in its `| Error` half is the
+ * host's WebCrypto failing *mid-seal* — a different thing to tell somebody, and one nobody fixes by
+ * setting a key that is already set. It is an infrastructure failure of exactly the kind
+ * `FacilityError` exists to carry, so it is mapped rather than widened away: the reason travels
+ * verbatim in `message`, and `write` keeps the union it promises.
+ */
+const sealFailed = (operation: string, cause: Error): Database.FacilityError =>
+	new Database.FacilityError({
+		operation,
+		code: 'secret_seal_failed',
+		message: `${operation} failed while sealing the value: ${cause.message === '' ? String(cause) : cause.message}`,
+		retryable: false,
+		outcome: 'unknown'
+	});
+
+/**
  * The Secrets vault: the values behind a workspace's `+env.ts` declaration.
  *
  * Three rules shape this service, and each is enforced here rather than left to callers:
@@ -204,11 +224,16 @@ const layer = Layer.effect(
 			}
 			// Sealed before the statement is built, so a missing key refuses *ahead of* the write. There is
 			// no ordering here in which a plaintext credential reaches the table.
-			const sealed = yield* cipher.encrypt(
-				`storing the secret ${name}`,
-				workspaceBinding(name),
-				value
-			);
+			const operation = `storing the secret ${name}`;
+			const sealed = yield* cipher
+				.encrypt(operation, workspaceBinding(name), value)
+				.pipe(
+					Effect.mapError((cause) =>
+						cause instanceof SecretCipher.SecretKeyUnavailable
+							? cause
+							: sealFailed(operation, cause)
+					)
+				);
 			yield* executeBuilt(
 				effectId,
 				database,

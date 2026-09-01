@@ -293,8 +293,11 @@ export type BatchMutationError = MutationError | MutationPhaseFailure;
  * `MutationVersionConflict`), re-verifies the ledger, and can still be refused by authored code or
  * the policy — the same union `mutate` reports, which is the honest statement of what a caller
  * must decide about.
+ *
+ * An alias rather than a bare `export type { … as … }`: the re-export form publishes the name
+ * without binding it here, and `resume`/`discard` below name it locally.
  */
-export type { BatchMutationError as ResumeError };
+export type ResumeError = BatchMutationError;
 
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 export type QueryError =

@@ -30,7 +30,7 @@ export type EventSourceLike = {
 export type { SyncHttpDriver as BrowserSyncWorkspaceControls };
 export type BrowserSyncWorkspaceBindingOptions = Readonly<{
 	readonly scope: BrowserSyncScope;
-	readonly controls: BrowserSyncWorkspaceControls;
+	readonly controls: SyncHttpDriver;
 }>;
 export type BrowserSyncWorkspaceBinding = Readonly<{
 	readonly attachment: SyncWorkspaceAttachment;

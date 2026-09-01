@@ -3,8 +3,11 @@ import type {
 	CollectionRegistry,
 	ErasedCollectionRegistry
 } from '@norbital-ai/std/collection';
+import type { Component as CollectionRepresentationComponent } from 'svelte';
 import { getContext, hasContext, setContext } from 'svelte';
-export type { Component as CollectionRepresentationComponent } from 'svelte';
+// Imported above rather than only re-exported: a bare `export type { … } from` does not bind the
+// name locally, so `CollectionSurface` below could not name the type it declares.
+export type { CollectionRepresentationComponent };
 export {
 	getRelationshipDirectoryContext,
 	setRelationshipDirectoryContext

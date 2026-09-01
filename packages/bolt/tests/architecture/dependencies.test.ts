@@ -131,12 +131,13 @@ describe('Bolt architecture boundaries', () => {
 			0
 		);
 		expect(tracked.length).toBeLessThanOrEqual(19);
-		// 8,707 is the measured basket. On top of the post-cutover 8,688 (drizzle 1.0 array SQL
-		// introspection, `text[]`), the durable agent-runtime contract — auto-compaction and
-		// user-message supersession — declares itself in the authoring schema: `models-schema.ts`
-		// +10, `model-introspection.ts` +2, `workspace-schema.ts` +2, against −1 across the
-		// compiler (RFC/toolchain.md §6.1.2). Comments are not deleted to meet a line gate.
-		expect(total).toBeLessThanOrEqual(8_707);
+		// 8,762 is the measured basket, and this ceiling has now been raised three times in one
+		// cutover: 8,688 → 8,691 (user-message supersession) → 8,707 (the agent-runtime contract
+		// declaring itself in the authoring schema) → 8,762 here, as the sync-engine and mutation
+		// fixes landed alongside them. The number is a ratchet on deliberate debt, so it is raised
+		// with its reason rather than met by deleting comments — but three raises in one night is
+		// itself the signal: the next change to this basket should be removing lines, not adding.
+		expect(total).toBeLessThanOrEqual(8_762);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

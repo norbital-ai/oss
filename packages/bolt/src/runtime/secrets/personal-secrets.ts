@@ -27,6 +27,24 @@ const personalBinding = (tenantId: string, userId: string, name: string): string
 const { bolt_personal_secrets: boltPersonalSecrets } = SYSTEM_MODEL_TABLES;
 
 /**
+ * Carries the one failure `SecretCipher.encrypt` reports as a bare `Error` into this service's own
+ * declared channel — the same mapping the workspace vault makes, for the same reason.
+ *
+ * `encrypt` refuses a missing or unusable key as `SecretKeyUnavailable`, which `write` already
+ * declares. What is left in its `| Error` half is the host's WebCrypto failing *mid-seal*, which
+ * nobody fixes by setting a key that is already set, and which `FacilityError` exists to carry. The
+ * reason travels verbatim rather than being widened away.
+ */
+const sealFailed = (operation: string, cause: Error): Database.FacilityError =>
+	new Database.FacilityError({
+		operation,
+		code: 'secret_seal_failed',
+		message: `${operation} failed while sealing the value: ${cause.message === '' ? String(cause) : cause.message}`,
+		retryable: false,
+		outcome: 'unknown'
+	});
+
+/**
  * Personal secrets: the credentials that belong to a *person*, not to the workspace.
  *
  * A signed-in browser session for LinkedIn, a personal API token, a cookie jar somebody obtained by
@@ -215,11 +233,16 @@ const layer = Layer.effect(
 			}
 			// Sealed before the statement is even built, so a missing key refuses *ahead of* the write
 			// rather than after it. There is no ordering here in which a plaintext row reaches the table.
-			const sealed = yield* cipher.encrypt(
-				`storing the personal secret ${name}`,
-				personalBinding(tenantId, userId, name),
-				value
-			);
+			const operation = `storing the personal secret ${name}`;
+			const sealed = yield* cipher
+				.encrypt(operation, personalBinding(tenantId, userId, name), value)
+				.pipe(
+					Effect.mapError((cause) =>
+						cause instanceof SecretCipher.SecretKeyUnavailable
+							? cause
+							: sealFailed(operation, cause)
+					)
+				);
 			yield* executeBuilt(
 				effectId,
 				database,

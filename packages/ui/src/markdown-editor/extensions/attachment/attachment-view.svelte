@@ -124,7 +124,7 @@
 		getUploadClient()?.cancel(uploadId);
 	}
 
-	function fetchFileAsBlob(url: string): Effect.Effect<Blob> {
+	function fetchFileAsBlob(url: string): Effect.Effect<Blob, Error> {
 		return Effect.gen(function* () {
 			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
 			if (!response.ok) {
@@ -140,14 +140,14 @@
 		});
 	}
 
-	function fetchText(url: string): Effect.Effect<string> {
+	function fetchText(url: string): Effect.Effect<string, Error> {
 		return Effect.gen(function* () {
 			const blob = yield* fetchFileAsBlob(url);
 			return yield* Effect.tryPromise({ try: () => blob.text(), catch: toError });
 		});
 	}
 
-	function loadPdfPreview(url: string): Effect.Effect<PreviewContent> {
+	function loadPdfPreview(url: string): Effect.Effect<PreviewContent, Error> {
 		return Effect.gen(function* () {
 			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
 			if (!response.ok) {
@@ -164,7 +164,7 @@
 		});
 	}
 
-	function loadCsvPreview(url: string): Effect.Effect<PreviewContent> {
+	function loadCsvPreview(url: string): Effect.Effect<PreviewContent, Error> {
 		return Effect.gen(function* () {
 			const text = yield* fetchText(url);
 			const result = Papa.parse<Record<string, unknown>>(text, {
@@ -187,7 +187,7 @@
 		});
 	}
 
-	function loadMarkdownPreview(url: string): Effect.Effect<PreviewContent> {
+	function loadMarkdownPreview(url: string): Effect.Effect<PreviewContent, Error> {
 		return fetchText(url).pipe(
 			Effect.map((text) => ({
 				type: 'markdown',
@@ -196,11 +196,12 @@
 		);
 	}
 
-	function loadTextPreview(url: string): Effect.Effect<PreviewContent> {
+	function loadTextPreview(url: string): Effect.Effect<PreviewContent, Error> {
 		return fetchText(url).pipe(Effect.map((text) => ({ type: 'text', content: text })));
 	}
 
-	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent>> = {
+	// `Error` is real: every loader fetches, and `togglePreview` already has an `onFailure` branch.
+	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent, Error>> = {
 		image: () => Effect.succeed({ type: 'image' }),
 		pdf: loadPdfPreview,
 		csv: loadCsvPreview,
