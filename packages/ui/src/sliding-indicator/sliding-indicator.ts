@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { toError } from '@norbital-ai/std';
 import { tick } from 'svelte';
 
 /** Shared duration for sliding selection indicators (tabs, file tree, sidebar rail). */
@@ -140,7 +141,7 @@ export function createSlidingIndicatorScheduler(
 			const shouldAnimate = animateNext;
 			animateNext = false;
 			Effect.runFork(
-				Effect.promise(tick).pipe(
+				Effect.tryPromise({ try: tick, catch: toError }).pipe(
 					Effect.map(() => runMeasure(shouldAnimate)),
 					Effect.ignoreCause({
 						log: true,

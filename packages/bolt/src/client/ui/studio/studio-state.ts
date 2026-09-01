@@ -346,23 +346,23 @@ export const manifestInspectionState = (
 ): 'current' | 'rebuild_required' =>
 	manifest?.compiledManifestVersion === COMPILED_MANIFEST_VERSION ? 'current' : 'rebuild_required';
 
-export const EnvironmentStatusSchema = SecretsStatus;
+const EnvironmentStatusSchema = SecretsStatus;
 export type EnvironmentVariable = (typeof EnvironmentStatusSchema.Type)[number];
 
-export const EnvoyStatusSchema = EnvoyStatusContract;
+const EnvoyStatusSchema = EnvoyStatusContract;
 export type EnvoyStatus = typeof EnvoyStatusSchema.Type;
 
-export const decodeManifest = (value: unknown): WorkspaceManifest | undefined => {
+const decodeManifest = (value: unknown): WorkspaceManifest | undefined => {
 	const decoded = Schema.decodeUnknownResult(ManifestSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : undefined;
 };
 
-export const decodeEnvironmentStatus = (value: unknown): ReadonlyArray<EnvironmentVariable> => {
+const decodeEnvironmentStatus = (value: unknown): ReadonlyArray<EnvironmentVariable> => {
 	const decoded = Schema.decodeUnknownResult(EnvironmentStatusSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : [];
 };
 
-export const decodeEnvoyStatus = (value: unknown): EnvoyStatus | undefined => {
+const decodeEnvoyStatus = (value: unknown): EnvoyStatus | undefined => {
 	const decoded = Schema.decodeUnknownResult(EnvoyStatusSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : undefined;
 };

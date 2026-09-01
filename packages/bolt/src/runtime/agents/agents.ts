@@ -1,4 +1,4 @@
-import { Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
+import { Clock, Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
 import { Prompt, Tool, Toolkit } from 'effect/unstable/ai';
 import { EffectId, ReleaseId } from '@norbital-ai/bolt-protocol';
 import {
@@ -72,7 +72,7 @@ export {
 	ToolNotAllowed
 } from './capability-catalog.js';
 
-export class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()(
+class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()(
 	'Bolt.TaskRuntime.Error',
 	{ operation: Schema.NonEmptyString, message: Schema.NonEmptyString }
 ) {
@@ -131,7 +131,7 @@ export const AgentTaskRow = Schema.Struct({
 	active_run_id: Schema.optionalKey(Schema.NullOr(RunId)),
 	epoch: Schema.Natural
 });
-export type AgentTask = typeof AgentTaskRow.Type;
+type AgentTask = typeof AgentTaskRow.Type;
 
 export const AgentPlanRow = Schema.Struct({
 	id: PlanId,
@@ -141,7 +141,7 @@ export const AgentPlanRow = Schema.Struct({
 	body: Schema.NonEmptyString,
 	status: Schema.Literals(['active', 'verified', 'stalled', 'superseded'])
 });
-export type AgentPlan = typeof AgentPlanRow.Type;
+type AgentPlan = typeof AgentPlanRow.Type;
 
 export const AgentMessageRow = Schema.Struct({
 	id: MessageId,
@@ -171,7 +171,7 @@ export const AgentRunRow = Schema.Struct({
 	capability_snapshot: CapabilitySnapshot,
 	status: RunStatus
 });
-export type AgentRun = typeof AgentRunRow.Type;
+type AgentRun = typeof AgentRunRow.Type;
 
 export const AgentUsageRow = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -206,7 +206,7 @@ const canonicalJson = (value: unknown): string => {
 	return JSON.stringify(value) ?? 'null';
 };
 
-export const semanticHash = (value: unknown): string => {
+const semanticHash = (value: unknown): string => {
 	const state = [0x81_1c_9d_c5, 0x9e_37_79_b9, 0x85_eb_ca_6b, 0xc2_b2_ae_35];
 	const primes = [0x01_00_01_93, 0x5b_d1_e9_95, 0x27_d4_eb_2d, 0x16_56_67_b1];
 	for (const byte of new TextEncoder().encode(canonicalJson(value))) {
@@ -236,7 +236,7 @@ const runIdFor = (scope: string): RunId => RunId.make(deterministicId(`run:${sco
 const providerCallIdFor = (scope: string): ProviderCallId =>
 	ProviderCallId.make(`call:${semanticHash(scope)}`);
 
-export const MAX_IMAGE_COUNT = 8;
+const MAX_IMAGE_COUNT = 8;
 const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
 const keySegment = (value: string): string => {
 	let binary = '';
@@ -554,7 +554,7 @@ type ResolvedAgent = Readonly<{
 	audience: TaskAudience;
 	delegation: 'enabled' | 'disabled';
 }>;
-export type TaskExecutionResult = Readonly<{
+type TaskExecutionResult = Readonly<{
 	taskId: TaskId;
 	status: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'attention';
 	output?: Prompt.MessageEncoded;
@@ -963,7 +963,7 @@ export const layer = Layer.effect(
 			const inboxSequence = inboxRows[0]?.sequence ?? 0;
 			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
 				_tag: 'Wake',
-				notLaterThanEpochMs: Date.now()
+				notLaterThanEpochMs: yield* Clock.currentTimeMillis
 			});
 			const message = {
 				id: messageId,
@@ -1341,6 +1341,13 @@ export const layer = Layer.effect(
 				'agent_run',
 				[{ id: run.id, status: input.runStatus, phase: input.phase }]
 			);
+			if (input.plans !== undefined) {
+				for (const plan of input.plans) {
+					const id = plan['id'];
+					if (typeof id !== 'string' || id === '')
+						return yield* Effect.fail(new TypeError('A Task Plan mutation requires an id.'));
+				}
+			}
 			const completePlans =
 				input.plans === undefined
 					? undefined
@@ -1349,12 +1356,7 @@ export const layer = Layer.effect(
 							subject,
 							task.id,
 							'agent_plan',
-							input.plans.map((plan) => {
-								const id = plan['id'];
-								if (typeof id !== 'string' || id === '')
-									throw new TypeError('A Task Plan mutation requires an id.');
-								return { ...plan, id };
-							})
+							input.plans.map((plan) => ({ ...plan, id: String(plan['id']) }))
 						);
 			const completeDirectives =
 				input.directiveState === undefined
@@ -1435,7 +1437,7 @@ export const layer = Layer.effect(
 			});
 			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
 				_tag: 'Wake',
-				notLaterThanEpochMs: Date.now()
+				notLaterThanEpochMs: yield* Clock.currentTimeMillis
 			});
 		});
 

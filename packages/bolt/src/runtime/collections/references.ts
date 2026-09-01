@@ -19,6 +19,7 @@ const decodeVectorValue = (field: string, value: unknown): unknown => {
 					try {
 						return JSON.parse(value) as unknown;
 					} catch {
+						/* best effort */
 						return undefined;
 					}
 				})()

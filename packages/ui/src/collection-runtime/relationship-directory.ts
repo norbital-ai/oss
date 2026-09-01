@@ -10,7 +10,7 @@ export function setRelationshipDirectoryContext(directory: CollectionRecordOpera
 	setContext(RELATIONSHIP_DIRECTORY_CONTEXT, directory);
 }
 
-/** Internal renderer lookup; deliberately absent from the package's public index. */
+/** Internal renderer lookup; consumed through `#lib/collection-runtime`, not the public package. */
 export function getRelationshipDirectoryContext(): CollectionRecordOperations | undefined {
 	return hasContext(RELATIONSHIP_DIRECTORY_CONTEXT)
 		? getContext<CollectionRecordOperations>(RELATIONSHIP_DIRECTORY_CONTEXT)

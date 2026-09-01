@@ -28,7 +28,7 @@ export type CollectionFormName<TCollections extends CollectionRegistry> = Extrac
 	string
 >;
 
-export type CollectionFormValidationValues = Readonly<Record<string, unknown>>;
+export type CollectionFormValidationValues = { readonly [field: string]: unknown };
 
 const collectionFormValidationIssueSchema = Schema.Struct({
 	message: Schema.String,

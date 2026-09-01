@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { Effect } from 'effect';
+	import { Effect, Option, Schema } from 'effect';
 	import { untrack, type Component } from 'svelte';
 	import { ModeWatcher } from 'mode-watcher';
+	import { toError } from '@norbital-ai/std';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { CollectionQuery, CollectionRecord } from '@norbital-ai/std/collection';
 	import {
@@ -121,44 +122,41 @@
 		surfaces: collectionSurfaces,
 		claimView: () => () => undefined
 	});
+	const LooseRecord = Schema.Record(Schema.String, Schema.Unknown);
+	const DirectoryQueryFields = Schema.Struct({
+		where: Schema.optionalKey(LooseRecord),
+		orderBy: Schema.optionalKey(LooseRecord),
+		search: Schema.optionalKey(Schema.String),
+		limit: Schema.optionalKey(Schema.Number)
+	});
+
 	const safeUserDirectoryQuery = (query: unknown): CollectionQuery<CollectionRecord> => {
-		const input =
-			query !== null && typeof query === 'object' && !Array.isArray(query)
-				? (query as Readonly<Record<string, unknown>>)
-				: {};
-		const rawWhere =
-			input['where'] !== null &&
-			typeof input['where'] === 'object' &&
-			!Array.isArray(input['where'])
-				? (input['where'] as Readonly<Record<string, unknown>>)
-				: {};
-		const where = Object.fromEntries(
-			Object.entries(rawWhere).filter(([field]) => field === 'id' || field === 'name')
-		) as Record<string, unknown>;
-		const search = typeof input['search'] === 'string' ? input['search'].trim() : '';
+		const decoded = Schema.decodeUnknownOption(DirectoryQueryFields)(query);
+		const input = Option.isSome(decoded) ? decoded.value : {};
+		const where: { [field: string]: unknown } = {};
+		for (const [field, value] of Object.entries(input.where ?? {})) {
+			if (field === 'id' || field === 'name') where[field] = value;
+		}
+		const search = input.search?.trim() ?? '';
 		if (search.length > 0)
 			where.name = {
 				ilike: `%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
 			};
-		const rawOrderBy =
-			input['orderBy'] !== null &&
-			typeof input['orderBy'] === 'object' &&
-			!Array.isArray(input['orderBy'])
-				? (input['orderBy'] as Readonly<Record<string, unknown>>)
-				: {};
-		const orderBy = Object.fromEntries(
-			Object.entries(rawOrderBy).filter(
-				([field, direction]) =>
-					(field === 'id' || field === 'name') && (direction === 'asc' || direction === 'desc')
-			)
-		) as NonNullable<CollectionQuery<CollectionRecord>['orderBy']>;
-		const requestedLimit =
-			typeof input['limit'] === 'number' && Number.isInteger(input['limit']) ? input['limit'] : 100;
+		const orderBy: NonNullable<CollectionQuery<CollectionRecord>['orderBy']> = {};
+		for (const [field, direction] of Object.entries(input.orderBy ?? {})) {
+			if ((field === 'id' || field === 'name') && (direction === 'asc' || direction === 'desc')) {
+				orderBy[field] = direction;
+			}
+		}
+		const requestedLimit = input.limit;
 		return {
 			columns: { id: true, name: true },
-			where: where as NonNullable<CollectionQuery<CollectionRecord>['where']>,
+			where,
 			orderBy,
-			limit: Math.max(1, Math.min(100, requestedLimit))
+			limit:
+				typeof requestedLimit === 'number' && Number.isInteger(requestedLimit)
+					? Math.max(1, Math.min(100, requestedLimit))
+					: 100
 		};
 	};
 	setRelationshipDirectoryContext({
@@ -213,7 +211,7 @@
 							Object.assign(customTypeRendererStates, {
 								[kind]: {
 									status: 'failed',
-									error: cause instanceof Error ? cause : new Error(String(cause))
+									error: toError(cause)
 								}
 							})
 						)

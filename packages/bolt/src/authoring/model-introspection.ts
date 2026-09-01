@@ -541,7 +541,9 @@ const relationFactories = (cardinality: 'one' | 'many'): object =>
 			get: (_target, target) => {
 				if (typeof target !== 'string') return undefined;
 				return (input?: Readonly<Record<string, unknown>>) => {
-					const hasEndpoints = input !== undefined && ('from' in input || 'to' in input);
+					const hasEndpoints =
+						input !== undefined &&
+						(Object.hasOwn(input, 'from') || Object.hasOwn(input, 'to'));
 					const from = endpointOf(input?.['from']);
 					const to = endpointOf(input?.['to']);
 					if (hasEndpoints && (from === undefined || to === undefined))
@@ -582,7 +584,7 @@ const orderedRelationshipEndpoints = (
 };
 
 /** Executes one authored relationship declaration and resolves inverse ownership exactly once. */
-export const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefinition> => {
+const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefinition> => {
 	if (declaration === undefined) return Object.freeze([]);
 	if (typeof declaration !== 'function')
 		throw new TypeError('The relationship module must default-export a relationship function.');

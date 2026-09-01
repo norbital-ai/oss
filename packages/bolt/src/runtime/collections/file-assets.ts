@@ -47,7 +47,7 @@ export const readFileAsset = Effect.fn('Collections.readAsset')(function* (
 /** Portable base64 for tenant isolates, which have neither Node's Buffer nor reliable `btoa`. */
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-export const encodeBase64 = (bytes: Uint8Array): string => {
+const encodeBase64 = (bytes: Uint8Array): string => {
 	let out = '';
 	for (let index = 0; index < bytes.length; index += 3) {
 		const first = bytes[index] ?? 0;

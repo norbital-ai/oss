@@ -9,6 +9,7 @@
 	import * as Popover from '#lib/popover';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import type { Snippet } from 'svelte';
 	import { Effect } from 'effect';
 	import { tick } from 'svelte';
@@ -170,8 +171,8 @@
 				const change = onOpenChange(newOpen);
 				if (change) yield* change;
 				if (newOpen && scrollToSelection) {
-					yield* Effect.promise(() => tick());
-					yield* Effect.promise(() => tick());
+					yield* Effect.tryPromise({ try: () => tick(), catch: toError });
+					yield* Effect.tryPromise({ try: () => tick(), catch: toError });
 					scrollToCurrentSelection();
 				}
 			})

@@ -3,23 +3,39 @@ import type { Prompt } from 'effect/unstable/ai';
 import {
 	TaskControlRequest,
 	type TaskControlResult,
+	TaskEditMessageRequest,
+	type TaskEditMessageResult,
 	TaskSubmitRequest,
 	type TaskSubmitResult
 } from '@norbital-ai/bolt-protocol';
+import { getErrorMessage } from '@norbital-ai/std';
 import { getContext, setContext } from 'svelte';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 
-export type TaskSubmissionInput = Readonly<{
+type TaskSubmissionInput = Readonly<{
 	readonly taskId?: string;
 	readonly message: Prompt.MessageEncoded;
 	readonly mode: TaskSubmitRequest['mode'];
 	readonly priority?: TaskSubmitRequest['priority'];
 }>;
 
-export type TaskSubmission = Readonly<{
+type TaskSubmission = Readonly<{
 	readonly taskId: TaskSubmitRequest['taskId'];
 	readonly directiveId: TaskSubmitResult['directiveId'];
+}>;
+
+type TaskRevisionInput = Readonly<{
+	readonly taskId: string;
+	readonly messageId: string;
+	readonly message: Prompt.MessageEncoded;
+}>;
+
+type TaskRevision = Readonly<{
+	readonly taskId: TaskEditMessageRequest['taskId'];
+	readonly directiveId: TaskEditMessageResult['directiveId'];
+	readonly messageId: TaskEditMessageResult['messageId'];
+	readonly supersedesId: TaskEditMessageResult['supersedesId'];
 }>;
 
 class AgentClientFailure extends Schema.TaggedError<AgentClientFailure>()(
@@ -33,7 +49,7 @@ const agentRequest = <A>(operation: string, request: Effect.Effect<A, unknown>) 
 			(cause) =>
 				new AgentClientFailure({
 					operation,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: getErrorMessage(cause),
 					cause
 				})
 		)
@@ -58,6 +74,7 @@ type AgentClient = Readonly<{
 	surface: AgentSurface;
 	writeSurface: (next: AgentSurface) => void;
 	submit: (input: TaskSubmissionInput) => Effect.Effect<TaskSubmission, AgentClientFailure>;
+	editMessage: (input: TaskRevisionInput) => Effect.Effect<TaskRevision, AgentClientFailure>;
 	control: (
 		taskId: string,
 		action: TaskControlRequest['action']
@@ -96,6 +113,33 @@ function submitTask(
 	);
 }
 
+function editTask(
+	active: AgentRuntimeConfig,
+	input: TaskRevisionInput
+): Effect.Effect<TaskRevision, AgentClientFailure> {
+	return agentRequest(
+		'tasks.editMessage',
+		Schema.decodeUnknownEffect(TaskEditMessageRequest)({
+			taskId: input.taskId,
+			messageId: input.messageId,
+			message: input.message
+		}).pipe(
+			Effect.flatMap((request) =>
+				active.client.system.tasks
+					.editMessage(request)
+					.pipe(
+						Effect.map((result) => ({
+							taskId: request.taskId,
+							directiveId: result.directiveId,
+							messageId: result.messageId,
+							supersedesId: result.supersedesId
+						}))
+					)
+			)
+		)
+	);
+}
+
 function controlTask(
 	active: AgentRuntimeConfig,
 	taskId: string,
@@ -127,6 +171,7 @@ export function createAgentClient(runtime: AgentRuntimeConfig): AgentClient {
 			surface.failed = next.failed;
 		},
 		submit: (input) => submitTask(runtime, input),
+		editMessage: (input) => editTask(runtime, input),
 		control: (taskId, action) => controlTask(runtime, taskId, action)
 	};
 }

@@ -13,6 +13,7 @@ import {
 	PROTOCOL_VERSION,
 	type TenantRelease
 } from '@norbital-ai/bolt-protocol';
+import { toError } from '@norbital-ai/std';
 import {
 	collection,
 	type CollectionCatalogEntry,
@@ -360,7 +361,7 @@ class WorkspaceCompiler {
 	static readonly filesUnder = (root: string) =>
 		Effect.tryPromise({
 			try: () => readdir(root, { withFileTypes: true, recursive: true }),
-			catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+			catch: (cause) => toError(cause)
 		}).pipe(
 			Effect.catch((cause) =>
 				Reflect.get(cause, 'code') === 'ENOENT'
@@ -1219,7 +1220,7 @@ export const compileTenantCapabilities = (
 		const sharedRoot = join(root, '.norbital', 'shared');
 		const packages = yield* Effect.tryPromise({
 			try: () => readdir(sharedRoot, { withFileTypes: true }),
-			catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+			catch: (cause) => toError(cause)
 		}).pipe(
 			Effect.catch((cause) =>
 				Reflect.get(cause, 'code') === 'ENOENT'
@@ -1601,7 +1602,10 @@ const WorkspaceSynchronization = {
 				importWorkspaceModels,
 				importWorkspaceRelationships,
 				validateWorkspaceMigrationLineage
-			} = yield* Effect.promise(() => import('./schema-migrations.js'));
+			} = yield* Effect.tryPromise({
+				try: () => import('./schema-migrations.js'),
+				catch: toError
+			});
 			const authoredModels = yield* importWorkspaceModels(models);
 			const authoredRelationships = yield* importWorkspaceRelationships(
 				join(root, 'src', 'collections', '+relationship.ts')
@@ -1657,8 +1661,14 @@ const WorkspaceSynchronization = {
 			const appMeta = Object.fromEntries(appMetaEntries);
 			yield* Effect.all(
 				[
-					Effect.promise(() => rm(generated, { recursive: true, force: true })),
-					Effect.promise(() => rm(types, { recursive: true, force: true }))
+					Effect.tryPromise({
+						try: () => rm(generated, { recursive: true, force: true }),
+						catch: toError
+					}),
+					Effect.tryPromise({
+						try: () => rm(types, { recursive: true, force: true }),
+						catch: toError
+					})
 				],
 				{ concurrency: 'unbounded' }
 			);
@@ -1907,8 +1917,8 @@ const WorkspaceSynchronization = {
 					rm(join(artifactDirectory, 'code'), { recursive: true, force: true })
 				])
 			);
-			yield* Effect.promise(() =>
-				build({
+			yield* Effect.tryPromise({
+				try: () => build({
 					root,
 					configFile: false,
 					plugins: [
@@ -1975,8 +1985,9 @@ const WorkspaceSynchronization = {
 							}
 						}
 					}
-				})
-			);
+				}),
+				catch: toError
+			});
 			if (serverCodeChunks.length === 0)
 				return yield* Effect.fail(new Error('Server build emitted no executable code graph'));
 			const lockfile = yield* Effect.tryPromise(() => readLockfileProvenance(root));

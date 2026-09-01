@@ -22,6 +22,10 @@ export const forbiddenBoltDependencies = [
 
 const forbiddenProviderDependencies = ['openai', 'pg', '@aws-sdk', '@slack', 'stripe'] as const;
 
+const AstNode = Schema.Record(Schema.String, Schema.Unknown);
+const isAstNode = Schema.is(AstNode);
+const decodeAstNode = Schema.decodeUnknownResult(AstNode);
+
 /**
  * Host surfaces Bolt must not open for itself.
  *
@@ -138,7 +142,7 @@ export type SystemColumnFinding = Readonly<{
 const AuthoringAudit = {
 	isSystemColumnRead: (node: Readonly<Record<string, unknown>>): string | undefined => {
 		if (node['type'] !== 'MemberExpression') return undefined;
-		const property = node['property'] as Readonly<Record<string, unknown>> | undefined;
+		const property = isAstNode(node['property']) ? node['property'] : undefined;
 		if (property === undefined) return undefined;
 		// `record['id']` and `Reflect.get(record, 'id')` reach the same column by a
 		// spelling a property-name check alone does not see.
@@ -179,7 +183,7 @@ const AuthoringAudit = {
 					return ['expressions'];
 				// Arbitrary calls derive a new value; only explicit scalar coercions preserve identity.
 				case 'CallExpression': {
-					const callee = node['callee'] as Readonly<Record<string, unknown>> | undefined;
+					const callee = isAstNode(node['callee']) ? node['callee'] : undefined;
 					return callee?.['type'] === 'Identifier' &&
 						(callee['name'] === 'String' || callee['name'] === 'Number')
 						? ['arguments']
@@ -191,21 +195,18 @@ const AuthoringAudit = {
 		})();
 		return keys.flatMap((key) => {
 			const value = node[key];
-			return value == null
-				? []
-				: Array.isArray(value)
-					? value
-					: [value as Readonly<Record<string, unknown>>];
+			if (value == null) return [];
+			if (Array.isArray(value)) return value.filter(isAstNode);
+			return isAstNode(value) ? [value] : [];
 		});
 	},
 	/** Every expression tag a single attribute carries, whether quoted with text or standing alone. */
 	attributeExpressions: (value: unknown): ReadonlyArray<Readonly<Record<string, unknown>>> => {
 		const parts = Array.isArray(value) ? value : [value];
 		return parts.flatMap((part) => {
-			const node = part as Readonly<Record<string, unknown>> | null;
-			return node !== null && typeof node === 'object' && node['type'] === 'ExpressionTag'
-				? [node['expression'] as Readonly<Record<string, unknown>>]
-				: [];
+			if (!isAstNode(part) || part['type'] !== 'ExpressionTag') return [];
+			const expression = part['expression'];
+			return isAstNode(expression) ? [expression] : [];
 		});
 	}
 };
@@ -247,8 +248,8 @@ const systemColumnReadsInComponent = (
 	report: (column: string, component: string, prop: string, start: number) => void
 ): void => {
 	const component = typeof node['name'] === 'string' ? node['name'] : 'component';
-	for (const attribute of (node['attributes'] as
-		ReadonlyArray<Readonly<Record<string, unknown>>> | undefined) ?? []) {
+	const attributes = node['attributes'];
+	for (const attribute of Array.isArray(attributes) ? attributes.filter(isAstNode) : []) {
 		if (attribute['type'] !== 'Attribute') continue;
 		reportAttributeColumnReads(attribute, component, report);
 	}
@@ -267,7 +268,6 @@ export const auditAuthoredSystemColumns = (
 	files: Readonly<Record<string, string>>
 ): ReadonlyArray<SystemColumnFinding> => {
 	const findings: Array<SystemColumnFinding> = [];
-	const decodeNode = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Unknown));
 	for (const [file, source] of Object.entries(files)) {
 		if (!file.endsWith('.svelte')) continue;
 		/** Descends the whole fragment, because a component can be nested in any block or snippet. */
@@ -276,7 +276,7 @@ export const auditAuthoredSystemColumns = (
 				for (const child of node) visit(child);
 				return;
 			}
-			const decoded = decodeNode(node);
+			const decoded = decodeAstNode(node);
 			if (Result.isFailure(decoded)) return;
 			if (
 				decoded.success['type'] === 'Component' ||

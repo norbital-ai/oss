@@ -1,4 +1,5 @@
 import { Config, Context, Effect, Layer, Option, Redacted, Schema } from 'effect';
+import { toError } from '../error/index.js';
 
 /**
  * The one place a stored secret is turned into ciphertext, and the only place it is turned back.
@@ -129,7 +130,7 @@ export type Interface = Readonly<{
 		operation: string,
 		binding: string,
 		value: string
-	) => Effect.Effect<string, SecretKeyUnavailable>;
+	) => Effect.Effect<string, SecretKeyUnavailable | Error>;
 	/** Opens an envelope written under the same key *and* the same row identity, or says why it could not. */
 	readonly decrypt: (
 		name: string,
@@ -253,10 +254,11 @@ const utf8 = (text: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode
 const sourced = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from(bytes);
 
 /** The AES-GCM key handle. WebCrypto, never `node:crypto`, for the reason `toBase64Url` gives. */
-const importKey = (key: Uint8Array, usage: 'encrypt' | 'decrypt'): Effect.Effect<CryptoKey> =>
-	Effect.promise(() =>
-		crypto.subtle.importKey('raw', sourced(key), { name: 'AES-GCM' }, false, [usage])
-	);
+const importKey = (key: Uint8Array, usage: 'encrypt' | 'decrypt'): Effect.Effect<CryptoKey, Error> =>
+	Effect.tryPromise({
+		try: () => crypto.subtle.importKey('raw', sourced(key), { name: 'AES-GCM' }, false, [usage]),
+		catch: toError
+	});
 
 const BASE64_KEY = /^[A-Za-z0-9+/_-]{43}=?$/;
 
@@ -288,18 +290,20 @@ const resolveKey = (configured: Option.Option<Redacted.Redacted<string>>): KeyMa
  * split back into the envelope's third and fourth parts is done here, against `TAG_BYTES`, rather
  * than read off an API that hands them over separately.
  */
-const seal = (key: Uint8Array, binding: string, value: string): Effect.Effect<string> =>
+const seal = (key: Uint8Array, binding: string, value: string): Effect.Effect<string, Error> =>
 	Effect.gen(function* () {
 		const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
 		const cipher = yield* importKey(key, 'encrypt');
 		const sealed = new Uint8Array(
-			yield* Effect.promise(() =>
-				crypto.subtle.encrypt(
-					{ name: 'AES-GCM', iv: nonce, additionalData: utf8(binding), tagLength: TAG_BYTES * 8 },
-					cipher,
-					utf8(value)
-				)
-			)
+			yield* Effect.tryPromise({
+				try: () =>
+					crypto.subtle.encrypt(
+						{ name: 'AES-GCM', iv: nonce, additionalData: utf8(binding), tagLength: TAG_BYTES * 8 },
+						cipher,
+						utf8(value)
+					),
+				catch: toError
+			})
 		);
 		const ciphertext = sealed.subarray(0, sealed.length - TAG_BYTES);
 		const tag = sealed.subarray(sealed.length - TAG_BYTES);
@@ -350,23 +354,25 @@ const open = (key: Uint8Array, binding: string, stored: string): Effect.Effect<O
 	// Rejects when the tag does not verify. That is the branch that makes a tampered value fail
 	// rather than decrypt to garbage a caller would go on to use. Both WebCrypto calls are
 	// Promise-API edge work, and a rejection of either is a tampered or mis-keyed value — the
-	// defected promise failure is mapped into the same `Rejected` the parsing checks return.
+	// promise failure is mapped into the same `Rejected` the parsing checks return.
 	return importKey(key, 'decrypt').pipe(
 		Effect.flatMap((cipher) =>
-			Effect.promise(() =>
-				crypto.subtle.decrypt(
-					{
-						name: 'AES-GCM',
-						iv: sourced(nonceBytes),
-						additionalData: utf8(binding),
-						tagLength: TAG_BYTES * 8
-					},
-					cipher,
-					joined
-				)
-			)
+			Effect.tryPromise({
+				try: () =>
+					crypto.subtle.decrypt(
+						{
+							name: 'AES-GCM',
+							iv: sourced(nonceBytes),
+							additionalData: utf8(binding),
+							tagLength: TAG_BYTES * 8
+						},
+						cipher,
+						joined
+					),
+				catch: toError
+			})
 		),
-		Effect.catchDefect(() => Effect.succeed(null)),
+		Effect.catch(() => Effect.succeed(null)),
 		Effect.map((outcome) =>
 			outcome === null
 				? {

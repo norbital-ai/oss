@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -287,39 +287,46 @@
 			{:else}
 				<Stack gap="none" class="divide-y divide-border/50 border-y border-border/50">
 					{#each entries as entry (entry.key ?? entry.name)}
-						<Inline as="article" align="start" gap="sm" class="flex-wrap py-3 sm:flex-nowrap">
-							<IconWrapper
-								name={entry.icon ??
-									(kind === 'collections' ? 'lucide:box' : `product:${branch.icon}`)}
-								class="mt-0.5 size-4 shrink-0 text-muted-foreground"
-							/>
-							<Stack gap="xs" grow class="min-w-0">
-								<Cluster gap="xs">
-									<h3
-										class={cn(
-											'text-xs font-medium text-foreground',
-											kind !== 'apps' && 'font-mono'
-										)}
-									>
-										{entry.label ?? entry.name}
-									</h3>
-									{@render systemMarker(entry.origin)}
-									{#if entry.versioned}<span class="text-micro text-muted-foreground"
-											>{t('bolt.studio.versioned')}</span
-										>{/if}
-								</Cluster>
-								{#if entry.description !== undefined}
-									{@render description(entry.description, `${kind}-${entry.name}`)}
-								{/if}
-								{#if entry.detail !== undefined}<p class="text-micro text-muted-foreground">
-										{entry.detail}
-									</p>{/if}
-							</Stack>
-							<Cluster gap="sm" shrink={false} class="w-full justify-end sm:w-auto">
+						<Stack as="article" gap="sm" class="py-3 md:flex-row md:items-start md:justify-between">
+							<Inline align="start" gap="sm" grow>
+								<IconWrapper
+									name={entry.icon ??
+										(kind === 'collections' ? 'lucide:box' : `product:${branch.icon}`)}
+									class="mt-0.5 size-4 shrink-0 text-muted-foreground"
+								/>
+								<Stack gap="xs" grow class="min-w-0">
+									<Inline gap="xs" class="min-w-0">
+										<h3
+											class={cn(
+												'min-w-0 truncate text-xs font-medium text-foreground',
+												kind !== 'apps' && 'font-mono'
+											)}
+										>
+											{entry.label ?? entry.name}
+										</h3>
+										{@render systemMarker(entry.origin)}
+										{#if entry.versioned}<span
+												class="shrink-0 text-micro text-muted-foreground"
+												>{t('bolt.studio.versioned')}</span
+											>{/if}
+									</Inline>
+									{#if entry.description !== undefined}
+										{@render description(entry.description, `${kind}-${entry.name}`)}
+									{/if}
+									{#if entry.detail !== undefined}
+										<Cluster gap="xs" class="text-micro text-muted-foreground">
+											{#each entry.detail.split(' · ') as part, index (`${index}-${part}`)}
+												<span class="shrink-0">{part}</span>
+											{/each}
+										</Cluster>
+									{/if}
+								</Stack>
+							</Inline>
+							<Cluster gap="sm" shrink={false} class="justify-end md:justify-end">
 								{@render destinationAction(entry.destination, entry.name)}
 								{@render sourceAction(entry.sourcePath, entry.name)}
 							</Cluster>
-						</Inline>
+						</Stack>
 					{/each}
 				</Stack>
 			{/if}
@@ -384,7 +391,7 @@
 							</Inline>
 
 							{#if open}
-								<Stack id={regionId} gap="md" class="ml-6 border-t border-border/50 pt-3">
+								<Stack id={regionId} gap="md" class="border-t border-border/50 pt-3">
 									{#each grantGroups(policy) as group (group.collectionName)}
 										<Stack gap="xs">
 											<h4 class="font-mono text-micro font-semibold text-foreground">
@@ -392,7 +399,7 @@
 											</h4>
 											<ul class="divide-y divide-border/40">
 												{#each group.grants as grant, index (`${grant.action}-${index}`)}
-													<li class="grid gap-2 py-2 text-micro sm:grid-cols-[5rem_1fr]">
+													<Grid as="li" gap="sm" tracks="5rem 1fr" class="py-2 text-micro">
 														<span class="font-semibold uppercase text-foreground"
 															>{grant.action}</span
 														>
@@ -416,15 +423,17 @@
 																<span>{t('bolt.studio.authorizationRequired')}</span>
 															{/if}
 															{#if grant.where !== undefined}
+																<Scroll name="Grant predicate" class="max-h-48">
 																<pre
-																	class="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-micro text-foreground">{JSON.stringify(
+																	class="whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-micro text-foreground">{JSON.stringify(
 																		grant.where,
 																		null,
 																		2
 																	)}</pre>
+																</Scroll>
 															{/if}
 														</Stack>
-													</li>
+													</Grid>
 												{/each}
 											</ul>
 										</Stack>

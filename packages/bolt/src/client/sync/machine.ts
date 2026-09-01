@@ -13,15 +13,14 @@ import {
 	DEFAULT_SYNC_LOADED_KEYS,
 	MAX_SYNC_LOADED_KEYS,
 	MAX_SYNC_RETAINED_PREFIX_BYTES,
-	syncJsonByteLength
+	syncRetainedPrefixBytes
 } from '@norbital-ai/bolt-protocol';
+import { Option, Schema } from 'effect';
 import type { SyncClientApplyFrame } from './sse-driver.js';
 import { applyPrefixDelta } from '../live-query/project.js';
 
 export { applyPrefixDelta } from '../live-query/project.js';
 
-type QueryKey = string;
-type WriteId = CollectionMutationIdempotencyKey;
 
 export type DisconnectCause = Readonly<{
 	readonly kind: 'transport' | 'terminal';
@@ -63,8 +62,8 @@ export type WriteState = Readonly<
 
 export type ClientState = Readonly<{
 	readonly link: 'live' | 'reconnecting' | 'closed';
-	readonly queries: ReadonlyMap<QueryKey, QueryState>;
-	readonly writes: ReadonlyMap<WriteId, WriteState>;
+	readonly queries: ReadonlyMap<string, QueryState>;
+	readonly writes: ReadonlyMap<CollectionMutationIdempotencyKey, WriteState>;
 	readonly reconnectAttempt: number;
 	readonly reconnectAt: number;
 }>;
@@ -76,17 +75,17 @@ export type ClientEvent = Readonly<
 			readonly kind: 'registered';
 			readonly response: SyncConnectResponse;
 			readonly at: number;
-			readonly requestedKeys: ReadonlyArray<QueryKey>;
+			readonly requestedKeys: ReadonlyArray<string>;
 	  }
 	| { readonly kind: 'extensionAccepted'; readonly response: SyncExtendPrefixResponse }
 	| {
 			readonly kind: 'extensionRejected';
-			readonly queryKey: QueryKey;
+			readonly queryKey: string;
 			readonly message: string;
 	  }
-	| { readonly kind: 'mounted'; readonly key: QueryKey; readonly input: SyncQueryInput }
-	| { readonly kind: 'detached'; readonly key: QueryKey; readonly at: number }
-	| { readonly kind: 'extendRequested'; readonly key: QueryKey; readonly requestedPrefix: number }
+	| { readonly kind: 'mounted'; readonly key: string; readonly input: SyncQueryInput }
+	| { readonly kind: 'detached'; readonly key: string; readonly at: number }
+	| { readonly kind: 'extendRequested'; readonly key: string; readonly requestedPrefix: number }
 	| {
 			readonly kind: 'writeEnqueued';
 			readonly request: CollectionMutateRequest;
@@ -98,7 +97,7 @@ export type ClientEvent = Readonly<
 export type ClientEffect = Readonly<
 	| { readonly kind: 'register'; readonly request: SyncConnectRequest }
 	| { readonly kind: 'extend'; readonly request: SyncExtendPrefixRequest }
-	| { readonly kind: 'push'; readonly writeId: WriteId }
+	| { readonly kind: 'push'; readonly writeId: CollectionMutationIdempotencyKey }
 	| { readonly kind: 'restart'; readonly message: string }
 >;
 
@@ -113,13 +112,11 @@ export const initialClientState = (now = 0): ClientState => ({
 const retryDelay = (attempt: number): number =>
 	Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(16, Math.max(0, attempt)));
 
-const isRecord = (value: unknown): value is StoredRecord =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
+const StoredRecordId = Schema.Struct({ id: Schema.NonEmptyString });
 
-const recordIdOf = (row: unknown): string | undefined => {
-	if (!isRecord(row)) return undefined;
-	const id = row['id'];
-	return typeof id === 'string' && id.length > 0 ? id : undefined;
+const recordIdOf = (row: StoredRecord): string | undefined => {
+	const decoded = Schema.decodeUnknownOption(StoredRecordId)(row);
+	return Option.isSome(decoded) ? decoded.value.id : undefined;
 };
 
 const requireUniqueRecordIds = (rows: ReadonlyArray<StoredRecord>, label: string): string[] => {
@@ -141,7 +138,7 @@ const checkedPrefix = (
 	if (!Number.isInteger(version) || version < 0) throw new Error(`${label} has an invalid version`);
 	if (rows.length > MAX_SYNC_LOADED_KEYS) throw new Error(`${label} exceeds the loaded-key ceiling`);
 	requireUniqueRecordIds(rows, label);
-	const measuredBytes = syncJsonByteLength(rows);
+	const measuredBytes = syncRetainedPrefixBytes(rows);
 	if (retainedBytes !== measuredBytes || retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES) {
 		throw new Error(`${label} has inconsistent retained-prefix bytes`);
 	}
@@ -156,7 +153,12 @@ export const applyPrefixUpdate = (
 		throw new Error('Sync prefix update does not continue the retained version');
 	}
 	const rows = applyPrefixDelta(state.rows, update.delta);
-	return checkedPrefix(update.toVersion, rows, syncJsonByteLength(rows), 'Updated sync prefix');
+	return checkedPrefix(
+		update.toVersion,
+		rows,
+		syncRetainedPrefixBytes(rows),
+		'Updated sync prefix'
+	);
 };
 
 export const applyPrefixUpdates = (
@@ -211,18 +213,18 @@ const withoutPrefix = (query: QueryState): Omit<QueryState, 'prefix' | 'error'> 
 const requestedPrefixOf = (input: SyncQueryInput): number => {
 	if (input.kind === 'findFirst') return 1;
 	const requested = input.limit ?? DEFAULT_SYNC_LOADED_KEYS;
-	if (!Number.isInteger(requested) || requested <= 0 || requested > MAX_SYNC_LOADED_KEYS) {
+	if (!Number.isInteger(requested) || requested <= 0) {
 		throw new Error(`A live prefix must contain between 1 and ${MAX_SYNC_LOADED_KEYS} rows`);
 	}
-	return requested;
+	return Math.min(requested, MAX_SYNC_LOADED_KEYS);
 };
 
-const pendingWrites = (state: ClientState): ReadonlyArray<WriteId> => [...state.writes.keys()];
+const pendingWrites = (state: ClientState): ReadonlyArray<CollectionMutationIdempotencyKey> => [...state.writes.keys()];
 
 const registrationEffect = (
 	state: ClientState,
-	keys: ReadonlyArray<QueryKey> | undefined,
-	detached: ReadonlyArray<QueryKey> = []
+	keys: ReadonlyArray<string> | undefined,
+	detached: ReadonlyArray<string> = []
 ): Extract<ClientEffect, { readonly kind: 'register' }> => {
 	const selected = keys === undefined ? [...state.queries.keys()] : [...new Set(keys)];
 	const queries = selected.flatMap((queryKey): SyncConnectRequest['queries'] => {
@@ -243,7 +245,7 @@ const registrationEffect = (
 };
 
 const extensionEffect = (
-	key: QueryKey,
+	key: string,
 	query: QueryState
 ): Extract<ClientEffect, { readonly kind: 'extend' }> => {
 	const prefix = query.prefix;
@@ -260,9 +262,9 @@ const extensionEffect = (
 };
 
 const settleWrites = (
-	writes: ReadonlyMap<WriteId, WriteState>,
+	writes: ReadonlyMap<CollectionMutationIdempotencyKey, WriteState>,
 	outcomes: SyncClientApplyFrame['outcomes'] | SyncConnectResponse['outcomes']
-): ReadonlyMap<WriteId, WriteState> => {
+): ReadonlyMap<CollectionMutationIdempotencyKey, WriteState> => {
 	if (outcomes.length === 0) return writes;
 	const next = new Map(writes);
 	for (const outcome of outcomes) next.delete(outcome.id);
@@ -274,7 +276,7 @@ const protocolRestart = (
 	message: string,
 	at: number
 ): [ClientState, ClientEffect[]] => {
-	const queries = new Map<QueryKey, QueryState>();
+	const queries = new Map<string, QueryState>();
 	for (const [key, query] of state.queries) {
 		queries.set(key, {
 			...withoutPrefix(query),
@@ -302,9 +304,9 @@ const onFrame = (
 	at: number
 ): [ClientState, ClientEffect[]] => {
 	if (state.link !== 'live') return [state, []];
-	const updateKeys = new Set<QueryKey>();
-	const resetKeys = new Set<QueryKey>();
-	const prefixes = new Map<QueryKey, VersionedPrefixState>();
+	const updateKeys = new Set<string>();
+	const resetKeys = new Set<string>();
+	const prefixes = new Map<string, VersionedPrefixState>();
 
 	try {
 		for (const update of payload.updates) {
@@ -358,6 +360,7 @@ const onFrame = (
 			resetKeys.size === 0 ? [] : [registrationEffect(next, [...resetKeys])]
 		];
 	} catch (cause) {
+		/* best effort */
 		return protocolRestart(
 			state,
 			cause instanceof Error ? cause.message : 'Sync frame is incompatible with retained state',
@@ -370,14 +373,14 @@ const onRegistered = (
 	state: ClientState,
 	response: SyncConnectResponse,
 	at: number,
-	requestedKeys: ReadonlyArray<QueryKey>
+	requestedKeys: ReadonlyArray<string>
 ): [ClientState, ClientEffect[]] => {
 	const expected = new Set(requestedKeys);
 	if (expected.size !== requestedKeys.length) {
 		return protocolRestart(state, 'Sync registration requested one query more than once', at);
 	}
-	const seen = new Set<QueryKey>();
-	const prefixes = new Map<QueryKey, VersionedPrefixState>();
+	const seen = new Set<string>();
+	const prefixes = new Map<string, VersionedPrefixState>();
 	try {
 		for (const result of response.queries) {
 			if (!expected.has(result.queryKey) || seen.has(result.queryKey)) {
@@ -405,6 +408,7 @@ const onRegistered = (
 			}
 		}
 	} catch (cause) {
+		/* best effort */
 		return protocolRestart(
 			state,
 			cause instanceof Error ? cause.message : 'Sync registration is incompatible',
@@ -432,7 +436,7 @@ const onRegistered = (
 			effects.push({ kind: 'push', writeId: id });
 		}
 	}
-	const missing: QueryKey[] = [];
+	const missing: string[] = [];
 	for (const [key, query] of queries) {
 		if (query.subscribers === 0 || query.phase !== 'pending' || query.validating) continue;
 		queries.set(key, { ...query, validating: true });
@@ -452,7 +456,7 @@ const onRegistered = (
 
 const resetAndRegister = (
 	state: ClientState,
-	key: QueryKey,
+	key: string,
 	message?: string
 ): [ClientState, ClientEffect[]] => {
 	const query = state.queries.get(key);
@@ -478,7 +482,7 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			return onFrame(state, event.payload, event.at);
 		case 'disconnected': {
 			const terminal = event.cause.kind === 'terminal';
-			const queries = new Map<QueryKey, QueryState>();
+			const queries = new Map<string, QueryState>();
 			for (const [key, query] of state.queries) {
 				queries.set(key, {
 					...withoutError(query),
@@ -527,6 +531,7 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 					continueExtension ? [extensionEffect(event.response.queryKey, extended)] : []
 				];
 			} catch (cause) {
+				/* best effort */
 				return resetAndRegister(
 					state,
 					event.response.queryKey,
@@ -624,7 +629,7 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			const queries = new Map(state.queries);
 			const writes = new Map(state.writes);
 			const effects: ClientEffect[] = [];
-			const detached: QueryKey[] = [];
+			const detached: string[] = [];
 
 			for (const [key, query] of queries) {
 				if (

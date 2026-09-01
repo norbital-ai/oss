@@ -83,7 +83,7 @@ export type AuthoredIntegrationModule = Readonly<{
 	readonly send: Readonly<Record<string, AuthoredIntegrationSend>>;
 }>;
 
-export type DescribedIntegrations = Readonly<{
+type DescribedIntegrations = Readonly<{
 	readonly declarations: ReadonlyArray<IntegrationDeclaration>;
 	readonly authored: Readonly<Record<string, AuthoredIntegrationModule>>;
 }>;
@@ -97,7 +97,7 @@ export type DescribedIntegrations = Readonly<{
  * the input to this function and a bad one should produce a sentence rather than a `TypeError` from
  * three frames deeper.
  */
-export type IntegrationBindingInput = Readonly<{
+type IntegrationBindingInput = Readonly<{
 	readonly pull?: unknown;
 	readonly webhook?: unknown;
 	readonly input?: Schema.Codec<unknown, unknown>;
@@ -112,7 +112,7 @@ type IntegrationSendBindingInput = Readonly<{
 	readonly on?: unknown;
 	readonly body?: unknown;
 }>;
-export type IntegrationsModuleInput = Readonly<
+type IntegrationsModuleInput = Readonly<
 	Record<
 		string,
 		Readonly<{

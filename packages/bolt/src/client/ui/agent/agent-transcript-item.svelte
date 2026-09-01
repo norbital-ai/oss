@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Result } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import type { CompactOrigin } from './context-view.js';
 	import type { PanelMessage } from './transcript.js';
@@ -37,11 +38,10 @@
 
 	function diagnostic(value: unknown): string {
 		if (typeof value === 'string') return value;
-		try {
-			return JSON.stringify(value, null, 2) ?? String(value);
-		} catch {
-			return String(value);
-		}
+		return Result.getOrElse(
+			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
+			() => String(value)
+		);
 	}
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {

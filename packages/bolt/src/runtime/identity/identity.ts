@@ -107,13 +107,13 @@ const AssignedMemberRow = Schema.Struct({ id: Schema.NonEmptyString, email: Null
 const WorkspaceSettingsRow = Schema.Struct({ settings: Schema.Json });
 
 /** Workspace invitations last long enough to be acted on, while still bounding forwarded links. */
-export const INVITATION_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
+const INVITATION_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
 
-export type InvitationClaimState =
+type InvitationClaimState =
 	| Readonly<{ readonly state: 'ready' }>
 	| Readonly<{ readonly state: 'expired' | 'accepted' | 'revoked' | 'invalid' }>;
 
-export type InvitationAcceptance =
+type InvitationAcceptance =
 	| Readonly<{ readonly state: 'accepted' }>
 	| Readonly<{
 			readonly state: 'expired' | 'already_accepted' | 'revoked' | 'wrong_account' | 'invalid';
@@ -198,7 +198,7 @@ export class AuthenticationError extends Schema.TaggedError<AuthenticationError>
  * deploying one — a row that granted a policy would be a privilege escalation performed with an
  * `update` statement, in a place no diff, no review and no type check can see.
  */
-export type TeamRecord = Readonly<{
+type TeamRecord = Readonly<{
 	readonly id: string;
 	readonly name: string;
 	readonly parentId?: string;
@@ -234,12 +234,12 @@ type TeamChanges = Readonly<{
  * which is the 400 those answers deserve; a new error class would mean a new arm in `app.ts`'s
  * error match for a class of answer the runtime already knows how to report.
  */
-export type TeamOutcome =
+type TeamOutcome =
 	| Readonly<{ readonly _tag: 'Team'; readonly team: TeamRecord }>
 	| Readonly<{ readonly _tag: 'Refused'; readonly reason: string }>;
 
 /** The same, for moving a person: `team` is absent when they were taken out of every team. */
-export type TeamAssignment =
+type TeamAssignment =
 	| Readonly<{ readonly _tag: 'Assigned'; readonly memberId: string; readonly team?: TeamRecord }>
 	| Readonly<{ readonly _tag: 'Refused'; readonly reason: string }>;
 
@@ -610,26 +610,24 @@ export const layerWith = (
 								return { rows, affectedRows: result.affectedRows };
 							}),
 						deliver: (message) =>
-							Effect.gen(function* () {
-								/**
-								 * Better Auth writes the verification row before it invokes this callback. OTP delivery
-								 * is interactive work: submit it immediately and answer only after the provider accepts
-								 * it. The effect id is the provider idempotency key, so an uncertain transport outcome
-								 * can be retried without sending the same code twice. Once accepted, Resend owns delivery.
-								 */
-								yield* communication.execute(EffectId.make(`${effectId}:code-delivery`), {
-									_tag: 'Send',
-									channel: 'email',
-									recipient: message.email,
-									payload: {
-										kind: 'sign_in_code',
-										code: message.code,
-										purpose: message.purpose,
-										expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
-										subject: 'Your sign-in code',
-										body: `Your sign-in code is ${message.code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
-									}
-								});
+							/**
+							 * Better Auth writes the verification row before it invokes this callback. OTP delivery
+							 * is interactive work: submit it immediately and answer only after the provider accepts
+							 * it. The effect id is the provider idempotency key, so an uncertain transport outcome
+							 * can be retried without sending the same code twice. Once accepted, Resend owns delivery.
+							 */
+							communication.execute(EffectId.make(`${effectId}:code-delivery`), {
+								_tag: 'Send',
+								channel: 'email',
+								recipient: message.email,
+								payload: {
+									kind: 'sign_in_code',
+									code: message.code,
+									purpose: message.purpose,
+									expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
+									subject: 'Your sign-in code',
+									body: `Your sign-in code is ${message.code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
+								}
 							})
 					},
 					random,

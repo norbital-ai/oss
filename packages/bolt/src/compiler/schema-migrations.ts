@@ -5,6 +5,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getErrorMessage, toError } from '@norbital-ai/std';
 import { Effect, Result, Schema } from 'effect';
 import { getColumns, sql } from 'drizzle-orm';
 import { AUTH_MODELS, SYSTEM_MODEL_TABLES } from '../authoring/system-models.js';
@@ -58,9 +59,10 @@ import { workspaceSchemaFingerprint } from './schema-fingerprint.js';
 export type WorkspaceSnapshot = Awaited<ReturnType<typeof DrizzleKitPostgres.generateDrizzleJson>>;
 
 const DRIZZLE_KIT_POSTGRES = 'drizzle-kit/api-postgres';
-const loadDrizzleKitPostgres: Effect.Effect<typeof DrizzleKitPostgres> = Effect.promise(
-	() => import(/* @vite-ignore */ DRIZZLE_KIT_POSTGRES)
-);
+const loadDrizzleKitPostgres: Effect.Effect<typeof DrizzleKitPostgres, Error> = Effect.tryPromise({
+	try: () => import(/* @vite-ignore */ DRIZZLE_KIT_POSTGRES),
+	catch: toError
+});
 
 /**
  * The stable envelope of a drizzle-kit PostgreSQL snapshot.
@@ -581,7 +583,7 @@ const ddlEntityKey = (entity: WorkspaceSnapshot['ddl'][number]): string => {
  */
 export const planWorkspaceMigration = (
 	input: WorkspaceMigrationPlanInput
-): Effect.Effect<WorkspaceMigration | undefined> =>
+): Effect.Effect<WorkspaceMigration | undefined, Error> =>
 	Effect.gen(function* () {
 		const { generateDrizzleJson, generateMigration } = yield* loadDrizzleKitPostgres;
 		const tables = workspaceMigrationTables(input.authoring);
@@ -592,8 +594,16 @@ export const planWorkspaceMigration = (
 		// in the current models either, so it was stripped from both sides of the diff and no `DROP TABLE`
 		// was ever generated for it. The table stayed in the database forever, which is the bug the
 		// differ exists to fix.
-		const previous = input.previous ?? (yield* Effect.promise(() => generateDrizzleJson({})));
-		const snapshot = yield* Effect.promise(() => generateDrizzleJson(tables, previous.id));
+		const previous =
+			input.previous ??
+			(yield* Effect.tryPromise({
+				try: () => generateDrizzleJson({}),
+				catch: toError
+			}));
+		const snapshot = yield* Effect.tryPromise({
+			try: () => generateDrizzleJson(tables, previous.id),
+			catch: toError
+		});
 		const surviving = new Set(snapshot.ddl.map(ddlEntityKey));
 		const intermediate: WorkspaceSnapshot = {
 			...previous,
@@ -606,8 +616,14 @@ export const planWorkspaceMigration = (
 		// dropped, while a constraint left over from a dropped table is absent from `snapshot` and so
 		// leaves in the same pass that drops the table it guarded — with drizzle-kit's own ordering
 		// between them. Nothing created in the second pass can reference something the first removed.
-		const removals = yield* Effect.promise(() => generateMigration(previous, intermediate));
-		const additions = yield* Effect.promise(() => generateMigration(intermediate, snapshot));
+		const removals = yield* Effect.tryPromise({
+			try: () => generateMigration(previous, intermediate),
+			catch: toError
+		});
+		const additions = yield* Effect.tryPromise({
+			try: () => generateMigration(intermediate, snapshot),
+			catch: toError
+		});
 		const statements = restoreGeneratedColumnNotNull(
 			orderGeneratedColumnDependencies([...removals, ...additions]),
 			snapshot
@@ -626,7 +642,7 @@ export const planWorkspaceMigration = (
 export const compileHostModelSchema = (
 	name: string,
 	model: ModelDeclaration
-): Effect.Effect<ReadonlyArray<string>> =>
+): Effect.Effect<ReadonlyArray<string>, Error> =>
 	planWorkspaceMigration({
 		authoring: compileWorkspaceAuthoring({
 			models: { [name]: model },
@@ -670,7 +686,7 @@ const importModel = (modelFile: string) =>
 				`Could not import ${modelFile} to read its columns.\n\n` +
 					'A collection model is imported directly, so it must be strippable TypeScript — no `enum`, ' +
 					'no `namespace`, and no constructor parameter properties.\n\n' +
-					`Node said:\n${caught instanceof Error ? caught.message : String(caught)}`,
+					`Node said:\n${getErrorMessage(caught)}`,
 				{ cause: caught }
 			)
 	}).pipe(
@@ -692,13 +708,11 @@ const importModel = (modelFile: string) =>
 
 /** Imports the model declarations named by filesystem-first discovery, keyed by collection name. */
 export const importWorkspaceModels = (modelFiles: ReadonlyArray<string>) =>
-	Effect.gen(function* () {
-		const models: Record<string, ModelDeclaration> = {};
-		for (const modelFile of modelFiles) {
-			models[basename(dirname(modelFile))] = yield* importModel(modelFile);
-		}
-		return models;
-	});
+	Effect.forEach(modelFiles, (modelFile) =>
+		importModel(modelFile).pipe(
+			Effect.map((model) => [basename(dirname(modelFile)), model] as const)
+		)
+	).pipe(Effect.map((entries) => Object.fromEntries(entries)));
 
 /** Imports the optional relationship function through the same content-revision boundary as models. */
 export const importWorkspaceRelationships = (relationshipFile: string) =>
@@ -726,7 +740,7 @@ export const importWorkspaceRelationships = (relationshipFile: string) =>
 		},
 		catch: (caught) =>
 			new Error(
-				`Could not import ${relationshipFile} to compile its relationships.\n\nNode said:\n${caught instanceof Error ? caught.message : String(caught)}`,
+				`Could not import ${relationshipFile} to compile its relationships.\n\nNode said:\n${getErrorMessage(caught)}`,
 				{ cause: caught }
 			)
 	});

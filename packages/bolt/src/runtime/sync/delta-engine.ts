@@ -8,6 +8,7 @@ import {
 	SyncResetReason,
 	compactSyncChanges,
 	syncJsonByteLength,
+	syncRetainedPrefixBytes,
 	type ChangeBatch,
 	type LinkAndRouteValues,
 	type StoredRecord,
@@ -45,17 +46,16 @@ export class SyncPrefixResolutionError extends Schema.TaggedError<SyncPrefixReso
 	readonly retryable = false;
 }
 
-export type SyncLivePlan = Readonly<{
+type SyncLivePlan = Readonly<{
 	readonly subject: Subject;
 	readonly effectivePlan: EffectiveQueryPlan;
 }>;
-export type ResolvedPrefix = Readonly<{
+type ResolvedPrefix = Readonly<{
 	readonly plan: SyncLivePlan;
 	readonly keys: ReadonlyArray<SyncPrefixKey>;
 	readonly rows: ReadonlyArray<StoredRecord>;
 	readonly retainedBytes: number;
 }>;
-export type ActiveSyncPrefix = SyncAdvanceSubscription;
 
 type SyncDescribeRequirements = Workspace.Interface | AccessControl.Interface;
 type SyncEngineRequirements = SyncDescribeRequirements | Collections.Interface;
@@ -183,8 +183,7 @@ const prefixKeyOf = (row: StoredRecord, plan: EffectiveQueryPlan): SyncPrefixKey
 	return { id, order: order as SyncPrefixKey['order'] };
 };
 
-const retainedPrefixBytes = (rows: ReadonlyArray<StoredRecord>): number =>
-	rows.reduce((total, row) => total + syncJsonByteLength(row), 0);
+const retainedPrefixBytes = syncRetainedPrefixBytes;
 
 const uniqueRows = (rows: ReadonlyArray<StoredRecord>): ReadonlyArray<StoredRecord> => {
 	const byId = new Map<string, StoredRecord>();
@@ -539,7 +538,7 @@ const compareKeys = (left: SyncPrefixKey, right: SyncPrefixKey, plan: SyncLivePl
 	return 0;
 };
 
-const validateState = (state: ActiveSyncPrefix): void => {
+const validateState = (state: SyncAdvanceSubscription): void => {
 	if (!Number.isSafeInteger(state.version) || state.version < 0)
 		throw reset('stale-version', 'The retained prefix version is not a non-negative integer.');
 	if (
@@ -567,7 +566,7 @@ const validateState = (state: ActiveSyncPrefix): void => {
 
 const requirePlan = Effect.fn('Sync.requirePlan')(function* (
 	subject: Subject,
-	state: ActiveSyncPrefix,
+	state: SyncAdvanceSubscription,
 	message: string
 ) {
 	const plan = yield* describeSyncQuery(subject, state.input);
@@ -583,7 +582,7 @@ const requirePlan = Effect.fn('Sync.requirePlan')(function* (
 	return plan;
 });
 
-export const derivePrefixDelta = (
+const derivePrefixDelta = (
 	oldPrefix: ReadonlyArray<SyncPrefixKey>,
 	newPrefix: ReadonlyArray<SyncPrefixKey>,
 	affectedIds: ReadonlySet<string>,
@@ -617,13 +616,13 @@ const rowsByKeyOrder = (
 export const advanceActivePrefix: (
 	effectId: EffectId,
 	subject: Subject,
-	state: ActiveSyncPrefix,
+	state: SyncAdvanceSubscription,
 	batch: ChangeBatch
 ) => Effect.Effect<SyncAdvanceUpdate | undefined, SyncEngineError, SyncEngineRequirements> =
 	Effect.fn('Sync.advanceActivePrefix')(function* (
 	effectId: EffectId,
 	subject: Subject,
-	state: ActiveSyncPrefix,
+	state: SyncAdvanceSubscription,
 	batch: ChangeBatch
 ) {
 	validateState(state);
@@ -727,14 +726,14 @@ export const advanceActivePrefix: (
 export const extendActivePrefix: (
 	effectId: EffectId,
 	subject: Subject,
-	state: ActiveSyncPrefix,
+	state: SyncAdvanceSubscription,
 	request: SyncExtendPrefixRequest
 ) => Effect.Effect<SyncExtendPrefixEvaluation, SyncEngineError, SyncEngineRequirements> = Effect.fn(
 	'Sync.extendActivePrefix'
 )(function* (
 	effectId: EffectId,
 	subject: Subject,
-	state: ActiveSyncPrefix,
+	state: SyncAdvanceSubscription,
 	request: SyncExtendPrefixRequest
 ) {
 	validateState(state);
@@ -784,11 +783,6 @@ export const extendActivePrefix: (
 		return yield* Effect.fail(
 			reset('inconsistent-prefix', 'The extension is not a strict continuation of the retained prefix.')
 		);
-	const retainedBytes = state.prefixBytes + retainedPrefixBytes(extensionRows);
-	if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
-		return yield* Effect.fail(
-			reset('prefix-bytes', 'The extended prefix exceeds its cumulative encoded byte ceiling.')
-		);
 	const toPrefix = Math.min(request.requestedPrefix, nextKeys.length);
 	if (toPrefix === 0)
 		return yield* Effect.fail(
@@ -805,17 +799,23 @@ export const extendActivePrefix: (
 			requestedKeys.filter(({ id }) => !newBodies.has(id)).map(({ id }) => id)
 		))
 	]);
+	const rows = requestedKeys.map(({ id }) => {
+		const row = bodies.get(id);
+		if (row === undefined)
+			throw reset('inconsistent-prefix', `Prefix extension has no body for ${id}.`);
+		return row;
+	});
+	const retainedBytes = state.prefixBytes + retainedPrefixBytes(rows);
+	if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
+		return yield* Effect.fail(
+			reset('prefix-bytes', 'The extended prefix exceeds its cumulative encoded byte ceiling.')
+		);
 	return {
 		queryKey: request.queryKey,
 		version: state.version,
 		fromPrefix: request.loadedPrefix,
 		toPrefix,
-		rows: requestedKeys.map(({ id }) => {
-			const row = bodies.get(id);
-			if (row === undefined)
-				throw reset('inconsistent-prefix', `Prefix extension has no body for ${id}.`);
-			return row;
-		}),
+		rows,
 		retainedBytes,
 		prefixKeys: nextKeys
 	} satisfies SyncExtendPrefixEvaluation;

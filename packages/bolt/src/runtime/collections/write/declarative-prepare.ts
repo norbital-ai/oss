@@ -166,8 +166,26 @@ export const reviewedRelationshipOf = (snapshot: RelationshipSnapshot) => ({
 	snapshot: snapshot.json
 });
 
+/**
+ * A client-minted record id, as RFC 9562 defines one — versions 1 through 8, not 1 through 5.
+ *
+ * The narrower `[1-5]` predated UUIDv7 and silently made every v7 record **un-updatable**: a create
+ * passes because the browser mints v4 (`crypto.randomUUID`), but an update carries the row's own
+ * id, and seeded data is v7 (`019f6f10-…-7000-…`). Every one of BCA's 34 job assignments therefore
+ * refused an edit with "must carry a valid client-minted UUID" while the command itself answered
+ * 200 — a rejection that reads like a success everywhere except the form.
+ */
 const MUTATION_RECORD_ID =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Whether a value is a record id a browser is allowed to have minted.
+ *
+ * Exported because it is a contract, not a detail: it decides which existing rows a browser may
+ * update at all, and the version range is the whole of it.
+ */
+export const isClientMintedRecordId = (value: unknown): value is string =>
+	typeof value === 'string' && MUTATION_RECORD_ID.test(value);
 
 /**
  * Validates the caller-authored graph once, before PREPARE reads or authored hooks run.
@@ -215,7 +233,7 @@ const validateSubmittedGraph = <Error, ReadError, Requirements>(
 				);
 			if (
 				clientGraph &&
-				((typeof submittedId === 'string' && !MUTATION_RECORD_ID.test(submittedId)) ||
+				((typeof submittedId === 'string' && !isClientMintedRecordId(submittedId)) ||
 					(node.depth === 0 && typeof submittedId !== 'string'))
 			)
 				return yield* ports.graphRefusal(
@@ -522,22 +540,23 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		const stagedWrites: Array<GraphRootSeed & { readonly action: 'create' | 'update' }> = [];
 		const stageHookWrites: HookWriteOps = {
 			mutate: (collection, values) =>
-				Effect.gen(function* () {
-					yield* ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls);
-					const submittedId = values['id'];
-					const id =
-						typeof submittedId === 'string'
-							? submittedId
-							: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
-					const action = typeof submittedId === 'string' ? 'update' : 'create';
-					stagedWrites.push({
-						collection,
-						payload: { ...values, id },
-						id,
-						action,
-						readExisting: typeof submittedId === 'string'
-					});
-				})
+				ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
+					Effect.map(() => {
+						const submittedId = values['id'];
+						const id =
+							typeof submittedId === 'string'
+								? submittedId
+								: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
+						const action = typeof submittedId === 'string' ? 'update' : 'create';
+						stagedWrites.push({
+							collection,
+							payload: { ...values, id },
+							id,
+							action,
+							readExisting: typeof submittedId === 'string'
+						});
+					})
+				)
 		};
 		const graphPreparers = makeGraphPreparers<Error | ReadError | AuthoredRefusal, Requirements>({
 			...ports,

@@ -46,8 +46,8 @@ const humanize = (value: string): string =>
 const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
-export const ENVOYS_SETTINGS_PATH = hostPluginSurfaceHref('envoys');
-export const ENVIRONMENT_SETTINGS_PATH = hostPluginSurfaceHref('environment_secrets');
+const ENVOYS_SETTINGS_PATH = hostPluginSurfaceHref('envoys');
+const ENVIRONMENT_SETTINGS_PATH = hostPluginSurfaceHref('environment_secrets');
 
 const applicationHref = (name: string): string => `/app/${name}`;
 

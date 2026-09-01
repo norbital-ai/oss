@@ -12,7 +12,7 @@ import { WorkspaceAccess as WorkspaceAccessContract } from '@norbital-ai/bolt-pr
  * The People surface's one payload: who is a member, which invitations are open, the distinct
  * teams those members carry, and the access events the runtime has recorded.
  */
-export const WorkspaceAccessSchema = WorkspaceAccessContract;
+const WorkspaceAccessSchema = WorkspaceAccessContract;
 export type WorkspaceAccess = typeof WorkspaceAccessSchema.Type;
 export type MemberRow = WorkspaceAccess['members'][number];
 export type InvitationRow = WorkspaceAccess['invitations'][number];
@@ -27,7 +27,7 @@ export const EMPTY_WORKSPACE_ACCESS: WorkspaceAccess = {
 	events: []
 };
 
-export const decodeWorkspaceAccess = (value: unknown): WorkspaceAccess | undefined => {
+const decodeWorkspaceAccess = (value: unknown): WorkspaceAccess | undefined => {
 	const decoded = Schema.decodeUnknownResult(WorkspaceAccessSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : undefined;
 };

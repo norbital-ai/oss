@@ -9,7 +9,7 @@ import {
 
 export type PolicyRuntimeFunction = (context: unknown, api: unknown) => unknown;
 
-export type PolicyRuntimeFunctions = Readonly<{
+type PolicyRuntimeFunctions = Readonly<{
 	readonly authorizations: Readonly<Record<string, PolicyRuntimeFunction>>;
 	readonly approvalFlows: Readonly<Record<string, PolicyRuntimeFunction>>;
 }>;
@@ -256,7 +256,7 @@ export const approvalConfigurationId = (
 	action: string
 ): string => `${policy}:${collection}:${action}`;
 
-export const policyAuthorizationId = (policy: string, collection: string, action: string): string =>
+const policyAuthorizationId = (policy: string, collection: string, action: string): string =>
 	`${policy}:${collection}:${action}:authorize`;
 
 /** Approval stage identities are runtime-derived; authors never name stages. */

@@ -1,4 +1,5 @@
 import { Effect, Result } from 'effect';
+import { toError } from '@norbital-ai/std';
 import type { WebhookSignatureSpec } from '#lib/authoring/contracts-schema.js';
 import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-schema.js';
 
@@ -129,25 +130,29 @@ const hmacProof = Effect.fn('Integrations.hmacProof')(function* (
 	const hash = algorithm === 'sha512' ? 'SHA-512' : 'SHA-256';
 	const encoder = new TextEncoder();
 	const payloadBytes = encoder.encode(payload);
-	const key = yield* Effect.promise(() =>
-		globalThis.crypto.subtle.importKey(
-			'raw',
-			encoder.encode(secret),
-			{ name: 'HMAC', hash },
-			false,
-			['sign', 'verify']
-		)
-	);
-	const digest = yield* Effect.promise(() =>
-		globalThis.crypto.subtle.sign('HMAC', key, payloadBytes)
-	);
+	const key = yield* Effect.tryPromise({
+		try: () =>
+			globalThis.crypto.subtle.importKey(
+				'raw',
+				encoder.encode(secret),
+				{ name: 'HMAC', hash },
+				false,
+				['sign', 'verify']
+			),
+		catch: toError
+	});
+	const digest = yield* Effect.tryPromise({
+		try: () => globalThis.crypto.subtle.sign('HMAC', key, payloadBytes),
+		catch: toError
+	});
 	// Copy onto a concrete ArrayBuffer. A caller's Uint8Array may legally be backed by a
 	// SharedArrayBuffer, while WebCrypto accepts only BufferSource over ArrayBuffer.
 	const signatureBytes = new Uint8Array(provided.length);
 	signatureBytes.set(provided);
-	const matches = yield* Effect.promise(() =>
-		globalThis.crypto.subtle.verify('HMAC', key, signatureBytes, payloadBytes)
-	);
+	const matches = yield* Effect.tryPromise({
+		try: () => globalThis.crypto.subtle.verify('HMAC', key, signatureBytes, payloadBytes),
+		catch: toError
+	});
 	return { expected: new Uint8Array(digest), matches };
 });
 

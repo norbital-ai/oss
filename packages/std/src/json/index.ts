@@ -32,9 +32,7 @@ function pathJoin(base: string, key: string): string {
 }
 
 /** Keyed records, as JSON Patch addresses them by name — arrays are addressed by index instead. */
-function isKeyedObject(value: unknown): value is object {
-	return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
+const isKeyedObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 /** One index of two arrays: dropped past the new end, appended past the old end, or diffed. */
 function indexDiff(

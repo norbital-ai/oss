@@ -16,6 +16,8 @@ import {
 	SyncRegistry,
 	SyncSubEntry,
 	syncApplyFrameByteLength,
+	syncJsonByteLength,
+	syncRetainedPrefixBytes,
 	type SyncApplyFrame as SyncApplyFrameType,
 	type SyncRegistryConnection,
 	type SyncSubEntry as SyncSubEntryType
@@ -93,6 +95,17 @@ describe('clean-cut live query v2 protocol', () => {
 		expect(Schema.decodeUnknownResult(SyncSubEntry)(withoutPlan)._tag).toBe('Failure');
 		const { prefixKeys: _prefixKeys, ...withoutPrefix } = prefixEntry('steps', 2);
 		expect(Schema.decodeUnknownResult(SyncSubEntry)(withoutPrefix)._tag).toBe('Failure');
+	});
+
+	it('measures retained prefix bytes as the sum of row encodings, not the array encoding', () => {
+		const rows = [{ id: 'a' }, { id: 'b' }];
+		expect(syncRetainedPrefixBytes([])).toBe(0);
+		expect(syncJsonByteLength([])).toBe(2);
+		expect(syncRetainedPrefixBytes(rows)).toBe(
+			syncJsonByteLength(rows[0]) + syncJsonByteLength(rows[1])
+		);
+		expect(syncRetainedPrefixBytes(rows)).not.toBe(syncJsonByteLength(rows));
+		expect(Object.hasOwn(Protocol, 'syncRetainedPrefixBytes')).toBe(true);
 	});
 
 	it('admits only findMany and findFirst as live query inputs', () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Effect, Schema } from 'effect';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
 	import ActivityPane from './activity-pane.svelte';
 	import ManifestPane from './manifest-pane.svelte';
@@ -49,7 +50,7 @@
 	} = $props();
 	const { t } = useI18n();
 	const queryMessage = (error: unknown): string | undefined =>
-		error === undefined ? undefined : error instanceof Error ? error.message : String(error);
+		error === undefined ? undefined : getErrorMessage(error);
 
 	const PreviewBuildResponseSchema = Schema.Struct({
 		preview: Schema.Struct({ receipt: WorkbenchBuildReceiptSchema })
@@ -173,7 +174,7 @@
 		return status;
 	});
 
-	let openedInitialSource = false;
+	let openedInitialSource = $state(false);
 	const openSource = (path: string): void => {
 		if (path === '') return;
 		view.workbench = 'editor';
@@ -225,7 +226,7 @@
 				afterSuccess?.();
 			}).pipe(
 				Effect.catch((cause) => {
-					const message = cause instanceof Error ? cause.message : String(cause);
+					const message = getErrorMessage(cause);
 					return actions.readHostState().pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
@@ -293,7 +294,7 @@
 				window.location.reload();
 			}).pipe(
 				Effect.catch((cause) => {
-					const message = cause instanceof Error ? cause.message : String(cause);
+					const message = getErrorMessage(cause);
 					return actions.readHostState().pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
@@ -385,10 +386,10 @@
 
 <Cover class="relative bg-background" gap="none">
 	{#snippet top()}
-		<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">
+		<Stack gap="md" shrink={false} class="bg-background px-4 pt-3 sm:gap-6 sm:px-6 sm:pt-6">
 			<Stack as="header" gap="xs">
 				<h1 class="text-heading">{t('bolt.studio.title')}</h1>
-				<p class="max-w-2xl text-meta">
+				<p class="hidden max-w-2xl text-meta sm:block">
 					{t('bolt.studio.description')}
 				</p>
 			</Stack>

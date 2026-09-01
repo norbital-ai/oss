@@ -149,7 +149,7 @@ export interface CollectionDefinition<
 	readonly relationships?: readonly CollectionRelationship[];
 }
 
-export type CollectionWhere<_TRow extends object> = Readonly<Record<string, unknown>>;
+export type CollectionWhere<_TRow extends object> = { readonly [field: string]: unknown };
 
 export interface CollectionBaseQuery<TRow extends object> {
 	readonly with?: Record<string, unknown>;

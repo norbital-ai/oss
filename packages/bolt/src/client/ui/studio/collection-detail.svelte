@@ -63,7 +63,7 @@
 		<Stack gap="sm">
 			<Stack as="section" gap="xs">
 				<h3 class="text-xs font-semibold text-foreground">{t('bolt.studio.columns')}</h3>
-				<div class="max-w-full overflow-x-auto">
+				<Scroll name="Collection record" axis="x" class="max-w-full">
 					<Stack
 						as="div"
 						gap="none"
@@ -99,7 +99,7 @@
 							<p class="px-1 py-2 text-meta">{t('bolt.studio.noFields')}</p>
 						{/if}
 					</Stack>
-				</div>
+				</Scroll>
 			</Stack>
 			<Stack as="section" gap="xs">
 				<h3 class="text-xs font-semibold text-foreground">{t('bolt.studio.relations')}</h3>

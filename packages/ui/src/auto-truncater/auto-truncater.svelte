@@ -46,6 +46,7 @@
 
 <script lang="ts" generics="T extends { key?: string }">
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import { useResizeObserver, watch } from 'runed';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
@@ -145,7 +146,7 @@
 		layoutQueued = true;
 		void Effect.runPromise(
 			Effect.gen(function* () {
-				yield* Effect.promise(() => tick());
+				yield* Effect.tryPromise({ try: () => tick(), catch: toError });
 				measureAttempts = 0;
 				yield* updateLayout();
 			}).pipe(

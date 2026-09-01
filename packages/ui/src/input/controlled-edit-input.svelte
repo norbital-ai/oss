@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '#lib/button';
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { tick, type ComponentProps } from 'svelte';
 	import Input from './input.svelte';
@@ -44,7 +45,7 @@
 		isEditing = !isEditing;
 		if (!isEditing) return;
 		Effect.runFork(
-			Effect.promise(() => tick()).pipe(
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(
 				Effect.map(() => ref?.focus()),
 				Effect.ignoreCause({
 					log: true,

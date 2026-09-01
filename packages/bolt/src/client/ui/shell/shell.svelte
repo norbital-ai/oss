@@ -775,7 +775,7 @@
 		contained
 		portalTarget="[data-slot='sidebar-inset']"
 		side="right"
-		class="flex h-full w-[min(30rem,100%)] flex-col sm:max-w-[30rem]"
+		class="flex h-full w-[min(30rem,100%)] flex-col max-md:min-h-[min(85dvh,48rem)] sm:max-w-[30rem]"
 		persistenceKey="bolt-workspace-agent"
 		preventBackgroundClick="narrow"
 		onOpenAutoFocus={(event) => {

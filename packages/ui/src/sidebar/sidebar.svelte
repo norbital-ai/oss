@@ -47,7 +47,8 @@
 	const closeOnNavigation: Attachment<HTMLElement> = (element) => {
 		const handleClick = (event: MouseEvent) => {
 			if (!closeOnNavigate || !(event.target instanceof Element)) return;
-			if (event.target.closest('a[href]')) sidebar.setOpenMobile(false);
+			if (event.target.closest('a[href], [data-dismiss-mobile-sheet]'))
+				sidebar.setOpenMobile(false);
 		};
 		element.addEventListener('click', handleClick);
 		return () => element.removeEventListener('click', handleClick);

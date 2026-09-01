@@ -6,7 +6,8 @@ export function parseTaskSlashCommand(source: string):
 			readonly mode: 'plan' | 'compact';
 			readonly message: string;
 			readonly complete: boolean;
-	  } {
+	  }
+ {
 	const match = /^\s*\/(plan|compact)(?:\s+([\s\S]*))?$/i.exec(source);
 	if (!match) return { kind: 'message', message: source };
 	const command = match[1]?.toLowerCase();

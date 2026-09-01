@@ -2,7 +2,7 @@ import type { AgentPlanRow, AgentRunRow, PanelMessage } from './transcript.js';
 
 export type CompactOrigin = 'automatic' | 'manual' | 'unresolved';
 
-export type AgentContextView = Readonly<{
+type AgentContextView = Readonly<{
 	checkpoint: PanelMessage | null;
 	checkpointOrigin: CompactOrigin | null;
 	focusMessages: readonly PanelMessage[];

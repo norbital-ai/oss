@@ -1,5 +1,5 @@
 import type { StoredRecord, SyncPrefixUpdate, SyncQueryInput } from '@norbital-ai/bolt-protocol';
-import { syncJsonByteLength } from '@norbital-ai/bolt-protocol';
+import { syncJsonByteLength, syncRetainedPrefixBytes } from '@norbital-ai/bolt-protocol';
 import { describe, expect, it } from 'vitest';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
 import {
@@ -24,7 +24,7 @@ const queryInput = (collection: string): SyncQueryInput => ({
 const retained = (
 	version: number,
 	rows: ReadonlyArray<StoredRecord>
-): VersionedPrefixState => ({ version, rows, retainedBytes: syncJsonByteLength(rows) });
+): VersionedPrefixState => ({ version, rows, retainedBytes: syncRetainedPrefixBytes(rows) });
 
 const heldQuery = (
 	input: SyncQueryInput,
@@ -70,7 +70,7 @@ describe('sync engine registration ownership', () => {
 						queryKey: first,
 						version: 0,
 						rows: firstRows,
-						retainedBytes: syncJsonByteLength(firstRows)
+						retainedBytes: syncRetainedPrefixBytes(firstRows)
 					}
 				],
 				outcomes: []
@@ -123,6 +123,50 @@ describe('sync engine registration ownership', () => {
 		expect(rejected.queries.get(key)).toMatchObject({ phase: 'pending', validating: false });
 		expect(effects).toEqual([
 			{ kind: 'restart', message: 'Sync registration omitted a query owned by this request' }
+		]);
+	});
+
+	it('rejects a registration whose retainedBytes is the JSON array encoding', () => {
+		const input = queryInput('steps');
+		const key = stableKey(input);
+		const rows = [{ id: 's1', position: 1 }];
+		expect(syncJsonByteLength(rows)).not.toBe(syncRetainedPrefixBytes(rows));
+		const state: ClientState = {
+			...initialClientState(0),
+			link: 'live',
+			queries: new Map([
+				[
+					key,
+					{
+						input,
+						requestedPrefix: 100,
+						phase: 'pending',
+						validating: true,
+						extending: false,
+						subscribers: 1
+					} satisfies QueryState
+				]
+			])
+		};
+		const [rejected, effects] = step(state, {
+			kind: 'registered',
+			at: 2,
+			requestedKeys: [key],
+			response: {
+				queries: [
+					{
+						queryKey: key,
+						version: 0,
+						rows,
+						retainedBytes: syncJsonByteLength(rows)
+					}
+				],
+				outcomes: []
+			}
+		});
+		expect(rejected.link).toBe('reconnecting');
+		expect(effects).toEqual([
+			{ kind: 'restart', message: 'Registered sync prefix has inconsistent retained-prefix bytes' }
 		]);
 	});
 });
@@ -200,7 +244,7 @@ describe('keyed retained-prefix reducer', () => {
 			fromPrefix: 1,
 			toPrefix: 2,
 			rows: [{ id: 'r2' }],
-			retainedBytes: syncJsonByteLength(rows)
+			retainedBytes: syncRetainedPrefixBytes(rows)
 		});
 		expect(extended).toMatchObject({ version: 7, rows });
 		expect(() =>
@@ -210,7 +254,7 @@ describe('keyed retained-prefix reducer', () => {
 				fromPrefix: 1,
 				toPrefix: 2,
 				rows: [{ id: 'r2' }],
-				retainedBytes: syncJsonByteLength(rows)
+				retainedBytes: syncRetainedPrefixBytes(rows)
 			})
 		).toThrow(/stale/u);
 	});

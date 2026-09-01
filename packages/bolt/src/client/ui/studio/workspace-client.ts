@@ -4,7 +4,7 @@ import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/inter
 import type { SystemClientApi } from '#lib/client/workspace-api.js';
 import type { ErasedAutomationClientApi } from '#lib/client/automation-client.svelte.js';
 
-type ErasedRecord = Readonly<Record<string, unknown>>;
+type ErasedRecord = { readonly [field: string]: unknown };
 type ErasedCollections = Readonly<
 	Record<string, { readonly row: ErasedRecord; readonly mutation: ErasedRecord }>
 >;

@@ -188,7 +188,7 @@ const authoritativeVersions = (state: ClientState): ReadonlyMap<string, number> 
 };
 
 /** Builds the exact existing-row vector the protocol requires for a browser mutation graph. */
-export const collectionMutationBaseVersions = (
+const collectionMutationBaseVersions = (
 	state: ClientState,
 	graph: CollectionMutationGraph,
 	catalog: CollectionCatalog

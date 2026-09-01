@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { toError } from '../error/index.js';
 
 /**
  * What a bucket is named, with the identifying half hashed.
@@ -35,7 +36,7 @@ import { Effect } from 'effect';
 export const bucketKey = (
 	scope: ReadonlyArray<string>,
 	identity: string | undefined
-): Effect.Effect<string> => {
+): Effect.Effect<string, Error> => {
 	const named = identity?.trim().toLowerCase() ?? '';
 	// An empty identity is a *shared* bucket, and deliberately the strict direction: anonymous
 	// traffic that names nothing is counted together, so omitting the field a limit is keyed on
@@ -58,8 +59,11 @@ export const bucketKey = (
  * Async because `crypto.subtle` is. That is the whole cost, and it is paid nowhere: the call site
  * in `bucketKey` is inside an Effect.
  */
-const sha256Hex = (value: string): Effect.Effect<string> =>
-	Effect.promise(() => crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))).pipe(
+const sha256Hex = (value: string): Effect.Effect<string, Error> =>
+	Effect.tryPromise({
+		try: () => crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)),
+		catch: toError
+	}).pipe(
 		Effect.map((digest) =>
 			[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 		)

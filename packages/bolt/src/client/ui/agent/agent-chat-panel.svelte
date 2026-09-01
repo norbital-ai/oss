@@ -215,15 +215,23 @@
 		activeTask.status === 'waiting'
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
+	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
+		switch (parsed.kind) {
+			case 'message':
+				return parsed.message.trim().length > 0;
+			case 'submission':
+				return parsed.complete;
+			default: {
+				const _exhaustive: never = parsed;
+				return _exhaustive;
+			}
+		}
+	}
 	const canSend = $derived(
 		!pending &&
-		!controlPending &&
-		taskAcceptsSubmission &&
-		(parsedDraft.kind === 'message'
-			? parsedDraft.message.trim().length > 0
-			: parsedDraft.kind === 'submission'
-				? parsedDraft.complete
-				: false)
+			!controlPending &&
+			taskAcceptsSubmission &&
+			draftSendable(parsedDraft)
 	);
 
 	function planState(): string {
@@ -307,10 +315,6 @@
 		queueMicrotask(() => composer?.focus());
 	}
 
-	function composerPriority(): 'normal' | 'steer' {
-		return revisedMessage !== null && taskWorking ? 'steer' : 'normal';
-	}
-
 	function beginNewTask(): void {
 		selectedTaskId = undefined;
 		composingNew = true;
@@ -334,13 +338,46 @@
 		return { role: 'user', content: message };
 	}
 
+	function editRevision() {
+		return Effect.suspend(() => {
+			const parsed = parseTaskSlashCommand(draft);
+			const message = parsed.message.trim();
+			if (message.length === 0 || revisedMessage === null || activeTaskId === undefined) {
+				return Effect.void;
+			}
+			pending = true;
+			sendFailure = null;
+			return agentClient
+				.editMessage({
+					taskId: activeTaskId,
+					messageId: revisedMessage.id,
+					message: canonicalUserMessage(message)
+				})
+				.pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							draft = '';
+							revisedMessage = null;
+						})
+					),
+					Effect.tapError((error) =>
+						Effect.sync(() => {
+							sendFailure = error.message;
+						})
+					),
+					Effect.ensuring(Effect.sync(() => (pending = false))),
+					Effect.asVoid
+				);
+		});
+	}
+
 	function submit(priority: 'normal' | 'steer' = 'normal') {
 		return Effect.suspend(() => {
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
 			if (message.length === 0) return Effect.void;
 			const mode = parsed.kind === 'submission' ? parsed.mode : planMode ? 'plan' : 'agent';
-			const retry = retryableAdmission(unsettledAdmission, {
+			const retry = retryableAdmission(visibleAdmission, {
 				agentId: runtime.agentId,
 				message,
 				mode,
@@ -401,6 +438,15 @@
 		);
 	}
 
+	function attemptSend(priority: 'normal' | 'steer' = 'normal'): void {
+		if (!canSend) return;
+		if (revisedMessage !== null) {
+			Effect.runFork(editRevision());
+			return;
+		}
+		Effect.runFork(submit(priority));
+	}
+
 	function onComposerKeydown(event: KeyboardEvent): void {
 		if (isAgentModeShortcut(event)) {
 			event.preventDefault();
@@ -416,9 +462,7 @@
 			!event.isComposing
 		) {
 			event.preventDefault();
-			if (canSend) {
-				Effect.runFork(submit(revisedMessage !== null && taskWorking ? 'steer' : 'normal'));
-			}
+			attemptSend('normal');
 		}
 	}
 
@@ -446,14 +490,14 @@
 		});
 	});
 
-	$effect(() => {
-		if (
-			unsettledAdmission !== null &&
+	const visibleAdmission = $derived(
+		unsettledAdmission !== null &&
+			// `?.` for the checker only: `unsettledAdmission` is `$state`, so its narrowing does not
+			// survive into the callback, and the guard above already proved it non-null.
 			allTasks.some((task) => task.id === unsettledAdmission?.taskId)
-		) {
-			unsettledAdmission = null;
-		}
-	});
+			? null
+			: unsettledAdmission
+	);
 </script>
 
 {#snippet childConversation(task: AgentTask)}
@@ -488,7 +532,7 @@
 			</Inline>
 		</summary>
 
-		<Stack gap="sm" class="mt-2 border-l border-border/60 pl-3">
+		<Stack gap="sm" class="border-l border-border/60 pl-3">
 			{#if childPlan !== undefined}
 				<div class="rounded-lg border border-border/60 bg-background/70 px-3 py-2">
 					<p class="m-0 text-tiny font-semibold">Plan r{childPlan.revision}</p>
@@ -514,7 +558,7 @@
 				<summary class="cursor-pointer text-tiny font-medium text-muted-foreground">
 					Full child transcript · {childMessages.length} messages
 				</summary>
-				<ol class="mt-2 list-none p-0" aria-label={`Child Task ${task.agent_id} full transcript`}>
+				<ol class="list-none p-0" aria-label={`Child Task ${task.agent_id} full transcript`}>
 					{#each childMessages as message (message.key)}
 						<AgentTranscriptItem
 							{message}
@@ -572,8 +616,10 @@
 					<p class="max-w-sm">Start a Task. Agent and Plan submissions share one durable transcript.</p>
 				</div>
 			{:else}
-				<div
-					class="flex items-center gap-1 rounded-lg bg-muted/50 p-1"
+				<Inline
+					align="center"
+					gap="xs"
+					class="rounded-lg bg-muted/50 p-1"
 					role="tablist"
 					aria-label="Conversation view"
 				>
@@ -610,7 +656,7 @@
 							<span class="ml-1 text-micro">({contextView.outsideMessageIds.size} outside view)</span>
 						{/if}
 					</button>
-				</div>
+				</Inline>
 
 				{#if transcriptTab === 'focus'}
 					<Stack
@@ -638,7 +684,7 @@
 										<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span>
 									</Inline>
 								</summary>
-								<Stack gap="sm" class="mt-2 border-t border-border/60 pt-2">
+								<Stack gap="sm" class="border-t border-border/60 pt-2">
 									<Inline gap="md" class="text-tiny text-muted-foreground">
 										<span>{elapsedSince(activePlan.created_at)}</span>
 										{#if costLabel !== ''}<span>{costLabel}</span>{/if}
@@ -666,7 +712,7 @@
 										</p>
 									</div>
 								</Inline>
-								<p class="mt-2 mb-0 whitespace-pre-wrap text-xs leading-5">
+								<p class="mb-0 whitespace-pre-wrap text-xs leading-5">
 									{plainMessageText(contextView.checkpoint)}
 								</p>
 							</section>
@@ -685,9 +731,11 @@
 										<span class="text-xs font-medium">Step {todoPosition(todo)} / {todo.items.length}</span>
 									</Inline>
 								</summary>
-								<ol class="mt-2 max-h-64 space-y-1 overflow-y-auto pl-0" aria-label="Task progress">
+								<Scroll name="Task progress" class="max-h-64">
+								<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
 									{#each todo.items as item (item.id)}
-										<li class="flex min-w-0 items-start gap-2 text-xs">
+										<li class="min-w-0 text-xs">
+											<Inline align="start" gap="sm">
 											{#if item.status === 'done'}
 												<Icon icon="lucide:circle-check" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 											{:else if item.status === 'doing'}
@@ -696,9 +744,11 @@
 												<Icon icon="lucide:circle" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 											{/if}
 											<span class={item.status === 'done' ? 'min-w-0 text-muted-foreground line-through' : 'min-w-0'}>{item.text}</span>
+											</Inline>
 										</li>
 									{/each}
-								</ol>
+								</Stack>
+								</Scroll>
 							</details>
 						{/if}
 
@@ -755,17 +805,17 @@
 		</Stack>
 	</Scroll>
 
-	<div class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+	<Stack gap="sm" class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
 		{#if revisedMessage !== null}
 			<Inline
 				align="center"
 				gap="sm"
-				class="mx-1 mb-2 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2"
+				class="rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2"
 			>
 				<Icon icon="lucide:message-square-pen" class="size-3.5 shrink-0 text-primary" />
 				<p class="m-0 min-w-0 flex-1 text-tiny text-muted-foreground">
 					Revising message {revisedMessage.sequence + 1}. The original remains in the durable transcript;
-					this sends a new {taskWorking ? 'steer instruction at the next safe boundary' : 'instruction'}.
+					this appends a revision that supersedes it.
 				</p>
 				<button
 					type="button"
@@ -777,19 +827,19 @@
 			</Inline>
 		{/if}
 		{#if activeTask?.status === 'done'}
-			<p class="mx-1 mb-2 text-xs text-muted-foreground">
+			<p class="text-xs text-muted-foreground">
 				This Task is complete and immutable. Start a new Task for another objective.
 			</p>
 		{:else if canResume}
-			<p class="mx-1 mb-2 text-xs text-muted-foreground">
+			<p class="text-xs text-muted-foreground">
 				Resume this Task before submitting another message.
 			</p>
 		{/if}
 		{#if sendFailure !== null}
-			<p class="mx-1 mb-2 text-xs text-destructive" role="alert">{sendFailure}</p>
+			<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
 		{/if}
 		{#if planMode || parsedDraft.kind === 'submission'}
-			<p class="mx-1 mb-2 text-tiny text-muted-foreground">
+			<p class="text-tiny text-muted-foreground">
 				{parsedDraft.kind === 'submission' && parsedDraft.mode === 'compact'
 					? 'Compact saves a focus checkpoint without deleting durable history.'
 					: 'Plan saves an objective and verification contract. Future Agent turns focus on the latest Plan; no new Task is needed.'}
@@ -799,7 +849,7 @@
 			class={AGENT_COMPOSER_SHELL_CLASS}
 			onsubmit={(event) => {
 				event.preventDefault();
-				if (canSend) Effect.runFork(submit(composerPriority()));
+				attemptSend('normal');
 			}}
 		>
 			<label class="sr-only" for="agent-task-composer">Message</label>
@@ -837,7 +887,7 @@
 						class="size-8 rounded-full"
 						disabled={!canSend}
 						aria-label="Steer Task"
-						onclick={() => Effect.runFork(submit('steer'))}
+						onclick={() => attemptSend('steer')}
 					>
 						<Icon icon="lucide:milestone" class="size-4" />
 					</Button>
@@ -870,9 +920,7 @@
 					size="icon"
 					class="size-8 rounded-full"
 					disabled={!canSend}
-					aria-label={revisedMessage !== null && taskWorking
-						? 'Send revised message as Task steer'
-						: 'Submit Task message'}
+					aria-label={revisedMessage !== null ? 'Send revised message' : 'Submit Task message'}
 				>
 					{#if pending}
 						<Spinner class="size-4" label={t(agentOrbBusyStatusKey(orbState))} />
@@ -882,5 +930,5 @@
 				</Button>
 			</Inline>
 		</form>
-	</div>
+	</Stack>
 </Stack>

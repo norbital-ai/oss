@@ -65,7 +65,7 @@ export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput'
 	const imageAssets: Array<ImageAsset> = [];
 	for (const name of collection.embedding?.fields ?? []) {
 		const value = row[name];
-		if (value === null || value === undefined) continue;
+		if (value == null) continue;
 		if (
 			collection.fields[name]?.type === 'json' &&
 			jsonRecord(value) &&

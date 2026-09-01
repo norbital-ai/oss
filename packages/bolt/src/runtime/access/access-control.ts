@@ -46,7 +46,7 @@ type PolicyDecision = Readonly<{
 }>;
 
 /** Whether this policy belongs to the subject before action/resource matching. */
-export const subjectHasPolicy = (
+const subjectHasPolicy = (
 	policy: PolicyDeclaration,
 	subject: Identity.Subject,
 	held: ReadonlySet<string>
@@ -58,7 +58,7 @@ export const subjectHasPolicy = (
 };
 
 /** Matches one policy against a fully resolved subject and policy coordinate. */
-export const matchesPolicy = (
+const matchesPolicy = (
 	policy: PolicyDeclaration,
 	subject: Identity.Subject,
 	action: string,
@@ -233,7 +233,7 @@ const grantResult = (
 };
 
 /** Unions matching authored grants into the predicate and write metadata used by execution. */
-export const compileRowPredicate = (
+const compileRowPredicate = (
 	policies: ReadonlyArray<PolicyDeclaration>,
 	subject: Identity.Subject,
 	action: string,

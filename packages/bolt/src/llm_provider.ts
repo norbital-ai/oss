@@ -102,6 +102,7 @@ const parseLiteralEndpoint = (endpoint: string, path: string): URL => {
 	try {
 		return new URL(endpoint);
 	} catch {
+		/* best effort */
 		return fail(
 			'invalid-endpoint',
 			path,

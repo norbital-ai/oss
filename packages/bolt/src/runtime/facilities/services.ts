@@ -30,12 +30,12 @@ import {
 	invokeBinding
 } from '#lib/runtime/facilities/database.js';
 
-export type AICatalogRequest = Extract<AIRequest, { readonly _tag: 'Catalog' }>;
-export type AIGenerateRequest = Extract<AIRequest, { readonly _tag: 'Generate' }>;
-export type AIEmbedRequest = Extract<AIRequest, { readonly _tag: 'Embed' }>;
-export type AICatalogResponse = Extract<AIResponse, { readonly _tag: 'Catalog' }>;
-export type AIGeneratedResponse = Extract<AIResponse, { readonly _tag: 'Generated' }>;
-export type AIEmbeddedResponse = Extract<AIResponse, { readonly _tag: 'Embedded' }>;
+type AICatalogRequest = Extract<AIRequest, { readonly _tag: 'Catalog' }>;
+type AIGenerateRequest = Extract<AIRequest, { readonly _tag: 'Generate' }>;
+type AIEmbedRequest = Extract<AIRequest, { readonly _tag: 'Embed' }>;
+type AICatalogResponse = Extract<AIResponse, { readonly _tag: 'Catalog' }>;
+type AIGeneratedResponse = Extract<AIResponse, { readonly _tag: 'Generated' }>;
+type AIEmbeddedResponse = Extract<AIResponse, { readonly _tag: 'Embedded' }>;
 
 /** AI capability bound by the host for one invocation context. */
 export type AIInterface = Readonly<{

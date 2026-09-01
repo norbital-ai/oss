@@ -7,7 +7,7 @@ import {
 	isUtcIsoInstant,
 	parseUtcInstant
 } from '../src/date/index.ts';
-import { getErrorMessage } from '../src/error/index.ts';
+import { getErrorMessage, toError } from '../src/error/index.ts';
 import { currencyFractionDigits, ISO_CURRENCY, MoneyValueSchema } from '../src/finance/currency.ts';
 import { safeParse } from '../src/json/index.ts';
 import {
@@ -31,6 +31,9 @@ describe('retained core utilities', () => {
 		assert.equal(getErrorMessage('refused'), 'refused');
 		assert.equal(getErrorMessage({ message: 409 }), '409');
 		assert.equal(getErrorMessage(false), 'false');
+		const wrapped = toError('refused');
+		assert.equal(wrapped.message, 'refused');
+		assert.equal(toError(wrapped), wrapped);
 	});
 
 	it('retains currency metadata and synchronous fraction lookup', () => {

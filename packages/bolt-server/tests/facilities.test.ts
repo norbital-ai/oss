@@ -407,6 +407,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		const tasks = makeTaskBinding(
 			makeTimekeeper({
 				tick: () => Effect.succeed(null),
+				run: Effect.runPromise,
 				onFailure: () => {}
 			}),
 			(command) => registered.push(command)
@@ -476,6 +477,7 @@ it.effect('interrupts only the exact active task dispatch and forgets settled po
 		const tasks = makeTaskBinding(
 			makeTimekeeper({
 				tick: () => Effect.succeed(null),
+				run: Effect.runPromise,
 				onFailure: () => {}
 			}),
 			() => {},
@@ -540,6 +542,7 @@ it.effect('constructs each extension provider selected by Effect Config', () =>
 		const tasks = makeTaskBinding(
 			makeTimekeeper({
 				tick: () => Effect.succeed(null),
+				run: Effect.runPromise,
 				onFailure: () => {}
 			})
 		);

@@ -1,5 +1,6 @@
 import { Environment, type ParseResult } from '@marcbachmann/cel-js';
 import { Effect } from 'effect';
+import { getErrorMessage } from '../error/index.js';
 import type {
 	ComputationDefinition,
 	InlinedTable,
@@ -147,7 +148,7 @@ export function validateDefinition(
 						? { ok: false, errors: [{ message: err.message }] }
 						: {
 								ok: false,
-								errors: [{ message: err instanceof Error ? err.message : String(err) }]
+								errors: [{ message: getErrorMessage(err) }]
 							}
 			})
 		)

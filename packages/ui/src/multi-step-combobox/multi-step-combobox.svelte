@@ -19,6 +19,7 @@
 	import { Bound, Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import { isEqual } from 'es-toolkit/predicate';
 	import { watch } from 'runed';
 	import { tick, type Snippet } from 'svelte';
@@ -381,7 +382,7 @@
 
 	function focusInputSoon() {
 		Effect.runFork(
-			Effect.promise(() => tick()).pipe(
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(
 				Effect.map(() => refs.searchInput?.focus()),
 				Effect.ignoreCause({
 					log: true,

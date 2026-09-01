@@ -15,6 +15,7 @@ import type { Context as EffectContext } from 'effect/Context';
 import { Prompt } from 'effect/unstable/ai';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AgentId, ImageAsset, TaskId, WorkbenchId } from '@norbital-ai/bolt-protocol/facilities';
+import { getErrorMessage, toError } from '@norbital-ai/std';
 import {
 	SkillDeclaration,
 	type McpToolRoute,
@@ -719,8 +720,8 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 });
 
 export const MCP_PROTOCOL_VERSION = '2026-07-28' as const;
-export const McpCallToolResult = withInputRequired(specTypeSchemas.CallToolResult);
-export type McpCallToolResult = CompleteCallToolResult | InputRequiredResult;
+const McpCallToolResult = withInputRequired(specTypeSchemas.CallToolResult);
+type McpCallToolResult = CompleteCallToolResult | InputRequiredResult;
 type McpFailureReason = McpToolError['reason'];
 type McpValidationIssue = StandardSchemaV1.Issue;
 
@@ -744,9 +745,7 @@ const toolError = (cause: unknown, route: McpToolRoute): McpToolError => {
 	const detail =
 		cause instanceof SdkHttpError
 			? `MCP server returned HTTP ${cause.status}: ${cause.message}`
-			: cause instanceof Error
-				? cause.message
-				: String(cause);
+			: getErrorMessage(cause);
 	return new McpToolError({ server: route.server, tool: route.tool, reason, detail });
 };
 
@@ -809,19 +808,12 @@ const connectorFetch = (
 };
 
 const closeMcp = (client: Client, transport: StreamableHTTPClientTransport) =>
-	Effect.promise(async () => {
-		let failure: unknown;
-		try {
+	Effect.tryPromise({
+		try: async () => {
 			await client.close();
-		} catch (cause) {
-			failure = cause;
-		}
-		try {
 			await transport.close();
-		} catch (cause) {
-			failure ??= cause;
-		}
-		if (failure !== undefined) throw failure;
+		},
+		catch: toError
 	});
 
 export const callMcpTool = Effect.fn('CapabilityCatalog.callMcpTool')(function* (

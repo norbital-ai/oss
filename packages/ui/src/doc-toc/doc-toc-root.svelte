@@ -1,6 +1,7 @@
 <!-- exported package TOC root rendered by website docs layouts -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import { onMount, tick, type Snippet } from 'svelte';
@@ -72,7 +73,7 @@
 	export function refresh(): Effect.Effect<void, unknown> {
 		return Effect.gen(function* () {
 			popoverOpen = false;
-			yield* Effect.promise(() => tick());
+			yield* Effect.tryPromise({ try: () => tick(), catch: toError });
 			if (articleElement) syncArticle(articleElement, headingSelector);
 			const sync = onSync?.();
 			if (sync) yield* sync;

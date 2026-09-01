@@ -149,6 +149,16 @@ export type AnyModelFieldBuilder = AnyPgColumnBuilder | ReferenceBuilder;
 const REFERENCE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const REFERENCE_TAG = /^[A-Z][A-Z0-9_]*$/;
 
+const emptyReferenceHandle = <TTargets extends ReferenceTargets>(
+	targets: TTargets
+): ReferenceHandle<TTargets> => {
+	const kind = Object.keys(targets)[0];
+	if (kind === undefined) {
+		throw new TypeError('reference() requires at least two targets.');
+	}
+	return Object.freeze({ kind, id: '' }) as ReferenceHandle<TTargets>;
+};
+
 const makeReferenceBuilder = <
 	const TTargets extends ReferenceTargets,
 	const TNotNull extends boolean,
@@ -164,7 +174,7 @@ const makeReferenceBuilder = <
 		targets,
 		config: Object.freeze({ notNull, isUnique, onDelete }),
 		_: Object.freeze({
-			data: undefined as never as ReferenceHandle<TTargets>,
+			data: emptyReferenceHandle(targets),
 			notNull,
 			hasDefault: false as const
 		}),
@@ -789,7 +799,7 @@ export const relationshipCascades = (value: unknown): boolean =>
  * that used to stand here. A validator no caller runs is not validation — it is a second, silently
  * divergent copy of this shape.
  */
-export interface BoltGroupDefinition {
+interface BoltGroupDefinition {
 	readonly label: string;
 	readonly description: string;
 	readonly icon: string;

@@ -3,7 +3,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
 		currentRoutedRelease,
 		formatMicroSgd,
@@ -171,7 +171,7 @@
 				{#if buildOpen}
 					<Stack id="activity-build-details" gap="sm" class="rounded-md bg-muted/35 p-3">
 						<p class="text-xs text-foreground">{receipt.summary}</p>
-						<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-micro">
+						<Grid as="dl" gap="xs" tracks="auto 1fr" class="text-micro">
 							<dt class="text-muted-foreground">{t('bolt.studio.phase')}</dt>
 							<dd>{buildPhaseLabel(receipt.phase)}</dd>
 							<dt class="text-muted-foreground">{t('bolt.studio.commit')}</dt>
@@ -182,14 +182,18 @@
 									{t('bolt.studio.duration')}
 								</dt>
 								<dd>{duration}</dd>{/if}
-						</dl>
+						</Grid>
 						{#if receipt.stdout !== undefined}
+							<Scroll name="Build stdout" class="max-h-64">
 							<pre
-								class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-foreground">{receipt.stdout}</pre>
+								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-foreground">{receipt.stdout}</pre>
+							</Scroll>
 						{/if}
 						{#if receipt.stderr !== undefined}
+							<Scroll name="Build stderr" class="max-h-64">
 							<pre
-								class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-destructive">{receipt.stderr}</pre>
+								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-destructive">{receipt.stderr}</pre>
+							</Scroll>
 						{/if}
 					</Stack>
 				{/if}
@@ -225,14 +229,14 @@
 						{#if snapshot.usageEstimate.meters.length > 0}
 							<ul class="divide-y divide-border/40 border-y border-border/40">
 								{#each snapshot.usageEstimate.meters as meter (meter.kind)}
-									<li class="grid grid-cols-[1fr_auto] gap-x-4 py-1.5 text-micro">
+									<Grid as="li" gap="sm" tracks="1fr auto" class="py-1.5 text-micro">
 										<span class="text-foreground">{meter.kind}</span>
 										<span class="tabular-nums text-muted-foreground">
 											{quantity.format(meter.monthToDateQuantity)} → {quantity.format(
 												meter.projectedQuantity
 											)}
 										</span>
-									</li>
+									</Grid>
 								{/each}
 							</ul>
 						{/if}
@@ -242,7 +246,7 @@
 				{/if}
 				<dl class="divide-y divide-border/50 border-y border-border/50">
 					{#each metrics as metric (metric.id)}
-						<div class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 py-2">
+						<Grid gap="xs" tracks="1fr auto" class="py-2">
 							<dt class="text-xs text-foreground">{t(metric.labelKey)}</dt>
 							<dd class="text-xs font-medium tabular-nums text-foreground">
 								{metric.value ?? t('bolt.studio.notMeasured')}
@@ -252,7 +256,7 @@
 									? t(metric.detailKey)
 									: t(metric.detailKey, metric.detailValues)}
 							</dd>
-						</div>
+						</Grid>
 					{/each}
 				</dl>
 			{/if}
@@ -274,7 +278,8 @@
 						{#if snapshot?.sourceHistory.length === 0 || snapshot === undefined}
 							<p class="text-meta">{t('bolt.studio.noWorkbenchCommits')}</p>
 						{:else}
-							<ul class="max-h-48 overflow-auto divide-y divide-border/40">
+							<Scroll name="Activity list" class="max-h-48">
+							<ul class="divide-y divide-border/40">
 								{#each [...snapshot.sourceHistory].reverse() as commit (commit.commit)}
 									<li class="py-2 font-mono text-micro text-foreground">
 										{t('bolt.studio.commitFileCount', {
@@ -284,6 +289,7 @@
 									</li>
 								{/each}
 							</ul>
+							</Scroll>
 						{/if}
 					</Stack>
 					<Stack gap="xs">
@@ -291,13 +297,15 @@
 						{#if snapshot?.deploymentHistory.length === 0 || snapshot === undefined}
 							<p class="text-meta">{t('bolt.studio.noDeployments')}</p>
 						{:else}
-							<ul class="max-h-48 overflow-auto divide-y divide-border/40">
+							<Scroll name="Activity list" class="max-h-48">
+							<ul class="divide-y divide-border/40">
 								{#each [...snapshot.deploymentHistory].reverse() as releaseId, index (releaseId)}
 									<li class="py-2 font-mono text-micro text-foreground">
 										{releaseId}{index === 0 ? ` · ${t('bolt.studio.currentSuffix')}` : ''}
 									</li>
 								{/each}
 							</ul>
+							</Scroll>
 						{/if}
 					</Stack>
 				</Stack>
@@ -329,14 +337,14 @@
 						{/if}
 					</Cluster>
 					{#if currentRelease !== undefined}
-						<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-micro">
+						<Grid as="dl" gap="xs" tracks="auto 1fr" class="text-micro">
 							<dt class="text-muted-foreground">{t('bolt.studio.release')}</dt>
 							<dd class="break-all font-mono">{currentRelease.releaseId}</dd>
 							<dt class="text-muted-foreground">{t('bolt.studio.artifact')}</dt>
 							<dd class="break-all font-mono">{currentRelease.artifactId}</dd>
 							<dt class="text-muted-foreground">{t('bolt.studio.commit')}</dt>
 							<dd class="break-all font-mono">{snapshot?.source.commit}</dd>
-						</dl>
+						</Grid>
 					{/if}
 					{#if missingFacilities.length > 0}
 						<p class="text-micro text-amber-700 dark:text-amber-300">
@@ -346,7 +354,8 @@
 						</p>
 					{/if}
 					{#if snapshot !== undefined && snapshot.entries.length > 0}
-						<ul class="max-h-48 overflow-auto divide-y divide-border/40 border-y border-border/40">
+							<Scroll name="Activity facilities" class="max-h-48">
+							<ul class="divide-y divide-border/40 border-y border-border/40">
 							{#each snapshot.entries as entry (`${entry.tenantId}:${entry.environmentId}`)}
 								<li class="py-2 text-micro">
 									<p class="font-medium text-foreground">{entry.environmentId}</p>
@@ -356,6 +365,7 @@
 								</li>
 							{/each}
 						</ul>
+							</Scroll>
 					{/if}
 					<Button
 						type="button"

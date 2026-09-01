@@ -4,6 +4,7 @@ import {
 	PROTOCOL_VERSION,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
+import { getErrorMessage } from '@norbital-ai/std';
 import { Clock, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
@@ -15,7 +16,12 @@ import {
 	runScheduleTick
 } from './schedules.js';
 import { makeTimekeeper } from './timekeeper.js';
-import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
+import {
+	startServer,
+	type RunningServer,
+	UuidGeneration,
+	uuidGenerationLayer
+} from './server.js';
 
 /** Reports a lifecycle phase that prevented the self-host application from becoming usable. */
 export class ApplicationStartError extends Schema.TaggedError<ApplicationStartError>()(
@@ -61,229 +67,218 @@ export const installProcessShutdown = (application: RunningApplication): (() => 
 };
 
 /** Validates configuration, activates one immutable bundle, and owns all server finalizers. */
-export const startApplication = (options: ApplicationOptions) =>
-	Effect.runPromise(
+export const startApplication = async (
+	options: ApplicationOptions
+): Promise<RunningApplication> => {
+	const { configuration, facilities } = options;
+	const taskInvocations = makeTaskInvocationControl();
+	const finalizeFacilities =
+		options.finalizeFacilities === undefined
+			? Effect.void
+			: Effect.tryPromise(options.finalizeFacilities);
+	if (
+		facilities.scope.tenantId !== configuration.scope.tenantId ||
+		facilities.scope.environment !== configuration.scope.environment ||
+		facilities.scope.releaseId !== configuration.scope.releaseId
+	) {
+		// The bindings the embedder may have opened are finalized before the mismatch is
+		// reported; a failure in finalization must not hide the validation error that
+		// caused the halt.
+		await Effect.runPromise(finalizeFacilities.pipe(Effect.catch(() => Effect.void)));
+		throw new ApplicationStartError({
+			operation: 'BoltServer.Application.validateScope',
+			message: 'Facility bindings do not match the configured invocation scope'
+		});
+	}
+
+	/**
+	 * One tick, held against the bundle this process already loaded.
+	 *
+	 * The queue is driven through `host.schedules.discover` / `host.schedules.settle` with the
+	 * occurrences invoked between them — `schedules.ts` owns that conversation, because it is the
+	 * guest's protocol rather than this file's lifecycle. What is left here is which bundle it
+	 * talks to, which scope it talks about, and the deadline this host grants an invocation.
+	 */
+	const tickOnce = () =>
 		Effect.gen(function* () {
-			const { configuration, facilities } = options;
-			const taskInvocations = makeTaskInvocationControl();
-			const finalizeFacilities =
-				options.finalizeFacilities === undefined
-					? Effect.void
-					: Effect.tryPromise(options.finalizeFacilities);
-			if (
-				facilities.scope.tenantId !== configuration.scope.tenantId ||
-				facilities.scope.environment !== configuration.scope.environment ||
-				facilities.scope.releaseId !== configuration.scope.releaseId
-			) {
-				// The bindings the embedder may have opened are finalized before the mismatch is
-				// reported; a failure in finalization must not hide the validation error that
-				// caused the halt.
-				yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
-				return yield* new ApplicationStartError({
-					operation: 'BoltServer.Application.validateScope',
-					message: 'Facility bindings do not match the configured invocation scope'
-				});
-			}
-
-			/**
-			 * One tick, held against the bundle this process already loaded.
-			 *
-			 * The queue is driven through `host.schedules.discover` / `host.schedules.settle` with the
-			 * occurrences invoked between them — `schedules.ts` owns that conversation, because it is the
-			 * guest's protocol rather than this file's lifecycle. What is left here is which bundle it
-			 * talks to, which scope it talks about, and the deadline this host grants an invocation.
-			 */
-			const tickOnce = () =>
-				Effect.gen(function* () {
-					const loader = yield* BundleLoader;
-					const bundle = yield* loader.load();
-					return yield* runScheduleTick({
-						scope: configuration.scope,
-						deadlineMillis: configuration.invocationTimeoutMillis,
-						gatewaySecret: configuration.gatewaySecret,
-						invocations: taskInvocations,
-						dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
-					});
-				}).pipe(
-					Effect.mapError((cause) =>
-						cause instanceof ApplicationStartError
-							? cause
-							: new ApplicationStartError({
-									operation: 'BoltServer.Application.tick',
-									message:
-										cause instanceof ScheduleTickError
-											? cause.message
-											: 'Bolt scheduler tick failed',
-									cause
-								})
-					)
-				);
-
-			/**
-			 * The host's timer, and the task facility that feeds it.
-			 *
-			 * The binding is built here rather than accepted from the embedder because there is nothing left
-			 * to configure: routing and timer requests are answered by this process, while lifecycle
-			 * signals point at the exact in-process dispatch and never form a second queue. Whatever `tasks` binding the caller
-			 * supplied is replaced, deliberately — a host that let one be injected would be letting somebody
-			 * else own its clock.
-			 */
-			let runTick: Effect.Effect<number | null, unknown> = Effect.fail(
-				new ApplicationStartError({
-					operation: 'BoltServer.Application.tick',
-					message: 'Bolt scheduler runtime is not ready'
-				})
-			);
-			const timekeeper = makeTimekeeper({
-				tick: () => runTick,
-				onFailure: (cause) => {
-					// The timekeeper backs off; this boundary keeps an unwatched failure visible.
-					Effect.runFork(
-						Effect.logError(
-							`timekeeper.tick: ${cause instanceof Error ? cause.message : String(cause)}`
-						)
-					);
-				}
+			const loader = yield* BundleLoader;
+			const bundle = yield* loader.load();
+			return yield* runScheduleTick({
+				scope: configuration.scope,
+				deadlineMillis: configuration.invocationTimeoutMillis,
+				gatewaySecret: configuration.gatewaySecret,
+				invocations: taskInvocations,
+				dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
 			});
-			const bound: FacilityBindings = {
-				...facilities,
-				tasks: makeTaskBinding(timekeeper, () => {}, taskInvocations)
-			};
-
-			const applicationLayer = Layer.mergeAll(
-				uuidGenerationLayer,
-				serverHealthLayer,
-				makeBundleLoaderLayer({ bundlePath: configuration.bundlePath, facilities: bound })
-			);
-			const runtime = ManagedRuntime.make(applicationLayer);
-			runTick = Effect.tryPromise(() => runtime.runPromise(tickOnce()));
-
-			const startup = Effect.gen(function* () {
-				const activated = Effect.gen(function* () {
-					const loader = yield* BundleLoader;
-					const bundle = yield* loader.load();
-					const now = yield* Clock.currentTimeMillis;
-					const uuid = yield* UuidGeneration;
-					const activation = Activation.make({
-						protocolVersion: PROTOCOL_VERSION,
-						id: uuid.next(),
-						scope: configuration.scope,
-						deadlineEpochMs: now + configuration.invocationTimeoutMillis,
-						reason: 'restart'
-					});
-					const unsafeResult = yield* Effect.tryPromise({
-						try: (signal) => bundle.activate(activation, bound, signal),
-						catch: (cause) =>
-							new ApplicationStartError({
-								operation: 'BoltServer.Application.activate',
-								message: 'Bolt bundle activation failed',
-								cause
-							})
-					}).pipe(Effect.timeout(configuration.invocationTimeoutMillis));
-					const result = yield* Schema.decodeUnknownEffect(ActivationResult)(unsafeResult).pipe(
-						Effect.mapError(
-							(cause) =>
-								new ApplicationStartError({
-									operation: 'BoltServer.Application.decodeActivation',
-									message: 'Bolt bundle returned an invalid activation result',
-									cause
-								})
-						)
-					);
-					if (result._tag === 'Failure') {
-						return yield* new ApplicationStartError({
-							operation: 'BoltServer.Application.activate',
-							message: result.error.message
-						});
-					}
-					// Activation already knows the next due instant, so no discovery tick is needed.
-					timekeeper.settle(result.nextDueAtEpochMs);
-				});
-				const server = yield* Effect.gen(function* () {
-					yield* activated;
-					return yield* Effect.tryPromise(() =>
-						startServer(configuration, bound, runtime, taskInvocations)
-					);
-				});
-				yield* Effect.gen(function* () {
-					const health = yield* ServerHealth;
-					yield* health.markReady();
-				});
-				return server;
-			});
-			const started = yield* Effect.result(
-				Effect.tryPromise({
-					try: () => runtime.runPromise(startup),
-					catch: (cause) => cause
-				})
-			);
-			if (Result.isFailure(started)) {
-				const cause = started.failure;
-				// Same order as the imperative path: the host's finalizer runs before the runtime is
-				// disposed, and the original failure is rethrown afterwards.
-				yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
-				yield* runtime.disposeEffect;
-				if (cause instanceof ApplicationStartError) return yield* cause;
-				return yield* new ApplicationStartError({
-					operation: 'BoltServer.Application.start',
-					message: 'Bolt server application failed to start',
-					cause
-				});
-			}
-			const server: RunningServer = started.success;
-
-			/**
-			 * Runs the ordered transport, drain, timekeeper, bundle, and facility finalizers once.
-			 *
-			 * A transport failure is the one failure reported to the caller of `stop`; every other
-			 * step's failures are observed but do not hide that one.
-			 */
-			const stopEffect = Effect.gen(function* () {
-				const transportFailure = yield* Effect.result(Effect.tryPromise(() => server.close()));
-				yield* Effect.tryPromise(() =>
-					runtime.runPromise(ServerHealth.use((health) => health.stopAdmission()))
-				);
-				yield* Effect.tryPromise(() =>
-					runtime.runPromise(
-						Effect.gen(function* () {
-							const health = yield* ServerHealth;
-							const loader = yield* BundleLoader;
-							return yield* health
-								.drain(configuration.drainTimeoutMillis)
-								.pipe(
-									Effect.ensuring(Effect.sync(() => timekeeper.stop())),
-									Effect.ensuring(loader.dispose()),
-									Effect.ensuring(health.markFinalized())
-								);
+		}).pipe(
+			Effect.mapError((cause) =>
+				cause instanceof ApplicationStartError
+					? cause
+					: new ApplicationStartError({
+							operation: 'BoltServer.Application.tick',
+							message:
+								cause instanceof ScheduleTickError
+									? cause.message
+									: 'Bolt scheduler tick failed',
+							cause
 						})
-					)
-				);
-				if (Result.isFailure(transportFailure)) {
-					return yield* Effect.fail(transportFailure.failure);
-				}
-			}).pipe(
-				Effect.ensuring(
-					Effect.gen(function* () {
-						yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
-						yield* runtime.disposeEffect;
-					})
+			)
+		);
+
+	/**
+	 * The host's timer, and the task facility that feeds it.
+	 *
+	 * The binding is built here rather than accepted from the embedder because there is nothing left
+	 * to configure: routing and timer requests are answered by this process, while lifecycle
+	 * signals point at the exact in-process dispatch and never form a second queue. Whatever `tasks` binding the caller
+	 * supplied is replaced, deliberately — a host that let one be injected would be letting somebody
+	 * else own its clock.
+	 */
+	let runScheduledTick = <A, E>(
+		_effect: Effect.Effect<A, E, BundleLoader>
+	): Promise<A> =>
+		Promise.reject(
+			new ApplicationStartError({
+				operation: 'BoltServer.Application.tick',
+				message: 'Bolt scheduler runtime is not ready'
+			})
+		);
+	const timekeeper = makeTimekeeper({
+		tick: tickOnce,
+		run: (effect) => runScheduledTick(effect),
+		onFailure: (cause) => {
+			// The timekeeper backs off; this boundary keeps an unwatched failure visible.
+			Effect.runFork(
+				Effect.logError(
+					`timekeeper.tick: ${getErrorMessage(cause)}`
 				)
 			);
-			let stopped = false;
-			/** Stops the application once, converging concurrent callers on the same run. */
-			const stop = () =>
-				Effect.runPromise(
-					Effect.suspend(() => {
-						if (stopped) return Effect.void;
-						stopped = true;
-						return stopEffect;
-					})
-				);
+		}
+	});
+	const bound: FacilityBindings = {
+		...facilities,
+		tasks: makeTaskBinding(timekeeper, () => {}, taskInvocations)
+	};
 
-			return {
-				address: server.address,
-				close: stop,
-				stop
-			};
-		})
+	const applicationLayer = Layer.mergeAll(
+		uuidGenerationLayer,
+		serverHealthLayer,
+		makeBundleLoaderLayer({ bundlePath: configuration.bundlePath, facilities: bound })
 	);
+	const runtime = ManagedRuntime.make(applicationLayer);
+	runScheduledTick = (effect) => runtime.runPromise(effect);
+
+	const startup = Effect.gen(function* () {
+		const activated = Effect.gen(function* () {
+			const loader = yield* BundleLoader;
+			const bundle = yield* loader.load();
+			const now = yield* Clock.currentTimeMillis;
+			const uuid = yield* UuidGeneration;
+			const activation = Activation.make({
+				protocolVersion: PROTOCOL_VERSION,
+				id: uuid.next(),
+				scope: configuration.scope,
+				deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+				reason: 'restart'
+			});
+			const unsafeResult = yield* Effect.tryPromise({
+				try: (signal) => bundle.activate(activation, bound, signal),
+				catch: (cause) =>
+					new ApplicationStartError({
+						operation: 'BoltServer.Application.activate',
+						message: 'Bolt bundle activation failed',
+						cause
+					})
+			}).pipe(Effect.timeout(configuration.invocationTimeoutMillis));
+			const result = yield* Schema.decodeUnknownEffect(ActivationResult)(unsafeResult).pipe(
+				Effect.mapError(
+					(cause) =>
+						new ApplicationStartError({
+							operation: 'BoltServer.Application.decodeActivation',
+							message: 'Bolt bundle returned an invalid activation result',
+							cause
+						})
+				)
+			);
+			if (result._tag === 'Failure') {
+				return yield* new ApplicationStartError({
+					operation: 'BoltServer.Application.activate',
+					message: result.error.message
+				});
+			}
+			// Activation already knows the next due instant, so no discovery tick is needed.
+			timekeeper.settle(result.nextDueAtEpochMs);
+		});
+		const server = yield* Effect.gen(function* () {
+			yield* activated;
+			return yield* Effect.tryPromise(() =>
+				startServer(configuration, bound, runtime, taskInvocations)
+			);
+		});
+		yield* Effect.gen(function* () {
+			const health = yield* ServerHealth;
+			yield* health.markReady();
+		});
+		return server;
+	});
+	let server: RunningServer;
+	try {
+		server = await runtime.runPromise(startup);
+	} catch (cause) {
+		// Same order as the imperative path: the host's finalizer runs before the runtime is
+		// disposed, and the original failure is rethrown afterwards.
+		await Effect.runPromise(finalizeFacilities.pipe(Effect.catch(() => Effect.void)));
+		await runtime.dispose();
+		if (cause instanceof ApplicationStartError) throw cause;
+		throw new ApplicationStartError({
+			operation: 'BoltServer.Application.start',
+			message: 'Bolt server application failed to start',
+			cause
+		});
+	}
+
+	/**
+	 * Runs the ordered transport, drain, timekeeper, bundle, and facility finalizers once.
+	 *
+	 * A transport failure is the one failure reported to the caller of `stop`; every other
+	 * step's failures are observed but do not hide that one.
+	 */
+	const stopEffect = Effect.gen(function* () {
+		const transportFailure = yield* Effect.result(Effect.tryPromise(() => server.close()));
+		yield* runtime.contextEffect.pipe(
+			Effect.flatMap((context) =>
+				Effect.gen(function* () {
+					const health = yield* ServerHealth;
+					const loader = yield* BundleLoader;
+					yield* health.stopAdmission();
+					yield* health
+						.drain(configuration.drainTimeoutMillis)
+						.pipe(
+							Effect.ensuring(Effect.sync(() => timekeeper.stop())),
+							Effect.ensuring(loader.dispose()),
+							Effect.ensuring(health.markFinalized())
+						);
+				}).pipe(Effect.provide(context))
+			)
+		);
+		if (Result.isFailure(transportFailure)) {
+			return yield* Effect.fail(transportFailure.failure);
+		}
+	}).pipe(
+		Effect.ensuring(
+			Effect.gen(function* () {
+				yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
+				yield* runtime.disposeEffect;
+			})
+		)
+	);
+	let stopping: Promise<void> | undefined;
+	/** Stops the application once, converging concurrent callers on the same run. */
+	const stop = () => (stopping ??= Effect.runPromise(stopEffect));
+
+	return {
+		address: server.address,
+		close: stop,
+		stop
+	};
+};

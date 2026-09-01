@@ -8,6 +8,7 @@
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { toError } from '@norbital-ai/std';
 	import { watch } from 'runed';
 	import { onMount, tick, type Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
@@ -287,7 +288,9 @@
 			}
 		}
 
-		void Effect.runPromise(Effect.promise(() => tick()).pipe(Effect.map(() => syncScrollState())));
+		void Effect.runPromise(
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(Effect.map(() => syncScrollState()))
+		);
 
 		const resizeObserver =
 			typeof ResizeObserver !== 'undefined'
@@ -347,7 +350,7 @@
 		// estimates bridge the reconciliation without changing the scroll offset.
 		rowVirtualizer.measure();
 		void Effect.runPromise(
-			Effect.promise(() => tick()).pipe(
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(
 				Effect.map(() => {
 					for (const rowElement of mountedRowElements) {
 						measureRowElement(rowElement);
@@ -397,7 +400,9 @@
 			const measure = () => measureRowElement(rowElement);
 			mountedRowElements.add(rowElement);
 			measure();
-			void Effect.runPromise(Effect.promise(() => tick()).pipe(Effect.map(measure)));
+			void Effect.runPromise(
+				Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(Effect.map(measure))
+			);
 
 			// Row details are mounted after the disclosure control changes state. Measuring only when the
 			// attachment is installed can therefore capture the collapsed 48px row and leave the expanded

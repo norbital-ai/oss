@@ -10,6 +10,7 @@
 	 * The row is wide enough to say its own name, so the shortcut is printed inline rather than hidden
 	 * in a tooltip. Collapsed, there is no room for either, and the tooltip carries both.
 	 */
+	import { tick } from 'svelte';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
@@ -31,13 +32,25 @@
 		expanded?: boolean;
 		onclick?: () => void;
 	} = $props();
+
+	const sidebar = Sidebar.useSidebar()();
+
+	function handleClick(): void {
+		if (sidebar.isMobile && sidebar.openMobile) {
+			sidebar.setOpenMobile(false);
+			void tick().then(() => onclick?.());
+			return;
+		}
+		onclick?.();
+	}
 </script>
 
 <Sidebar.MenuButton
 	tooltipContent={shortcut ? `${label} · ${shortcut}` : label}
 	aria-label={shortcut ? `${label} (${shortcut})` : label}
 	aria-haspopup="dialog"
-	{onclick}
+	onclick={handleClick}
+	data-dismiss-mobile-sheet
 	data-testid="workspace-agent-trigger"
 	class={cn(
 		'rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',

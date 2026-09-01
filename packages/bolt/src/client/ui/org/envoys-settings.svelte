@@ -5,6 +5,7 @@
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import { toError } from '@norbital-ai/std';
 	import { workspaceSession } from '#lib/client/session.js';
 	import type { WorkspaceManifest } from '#lib/client/ui/studio/studio-state.js';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
@@ -291,7 +292,7 @@
 		});
 
 	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
-		Effect.promise(() => ownPairingOpen(envoy.name, envoy.transport)).pipe(
+		Effect.tryPromise({ try: () => ownPairingOpen(envoy.name, envoy.transport), catch: toError }).pipe(
 			Effect.andThen(observePairing(envoy))
 		);
 

@@ -6,7 +6,7 @@
  * left to right, which is what keeps sibling branches from overlapping as the tree deepens.
  */
 
-export const TeamNodeSchema = Schema.Struct({
+const TeamNodeSchema = Schema.Struct({
 	id: Schema.String,
 	name: Schema.String,
 	parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),

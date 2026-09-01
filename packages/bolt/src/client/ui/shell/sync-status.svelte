@@ -15,8 +15,10 @@
 </script>
 
 {#if notices.length > 0}
-	<aside
-		class="pointer-events-none fixed bottom-6 right-6 z-40 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2"
+	<Stack
+		as="aside"
+		gap="sm"
+		class="pointer-events-none fixed bottom-6 right-6 z-40 w-[min(24rem,calc(100vw-2rem))]"
 		aria-label="Workspace sync status"
 		data-testid="workspace-sync-status"
 		data-sync-status={state?.link ?? 'unavailable'}
@@ -37,5 +39,5 @@
 				</Stack>
 			</Inline>
 		{/each}
-	</aside>
+	</Stack>
 {/if}

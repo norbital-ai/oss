@@ -5,7 +5,7 @@ import type {
 	StoredRecord,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
-import { syncJsonByteLength } from '@norbital-ai/bolt-protocol';
+import { syncRetainedPrefixBytes } from '@norbital-ai/bolt-protocol';
 import { describe, expect, it } from 'vitest';
 import { project } from '../../src/client/live-query/project.js';
 import { stableKey } from '../../src/client/live-query/stable-key.js';
@@ -43,7 +43,7 @@ const registeredPrefix = (queryKey: string, version: number, rows: StoredRecord[
 			queryKey,
 			version,
 			rows,
-			retainedBytes: syncJsonByteLength(rows)
+			retainedBytes: syncRetainedPrefixBytes(rows)
 		}
 	],
 	outcomes: []
@@ -130,7 +130,7 @@ describe('Sync v2 prefix Machine', () => {
 		expect(state.queries.get(key)).toMatchObject({
 			phase: 'fresh',
 			validating: false,
-			prefix: { version: 4, rows: [], retainedBytes: syncJsonByteLength([]) }
+			prefix: { version: 4, rows: [], retainedBytes: syncRetainedPrefixBytes([]) }
 		});
 	});
 
@@ -283,7 +283,7 @@ describe('Sync v2 prefix Machine', () => {
 				fromPrefix: 1,
 				toPrefix: 2,
 				rows: [{ id: 'b' }],
-				retainedBytes: syncJsonByteLength(rows)
+				retainedBytes: syncRetainedPrefixBytes(rows)
 			}
 		});
 		expect(state.queries.get(key)?.prefix).toMatchObject({ version: 5, rows });

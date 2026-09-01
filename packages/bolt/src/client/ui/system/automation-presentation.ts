@@ -2,7 +2,7 @@ import { getContext, setContext } from 'svelte';
 
 export type AutomationRunStatus = 'pending' | 'running' | 'done' | 'failed';
 
-export type AutomationStatusMessageKey =
+type AutomationStatusMessageKey =
 	| 'bolt.automations.status.running'
 	| 'bolt.automations.status.completed'
 	| 'bolt.automations.status.failed';
@@ -53,7 +53,7 @@ export const canShowAutomationSource = ({
 export const canShowStudioSource = (canEnterStudio: boolean | undefined): boolean =>
 	canEnterStudio === true;
 
-export type StudioSourceEntitlement = Readonly<{
+type StudioSourceEntitlement = Readonly<{
 	readonly canEnterStudio: boolean;
 	readonly openSource: (path: string) => void;
 }>;

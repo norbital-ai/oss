@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -89,7 +89,7 @@
 
 	<Stack gap="sm">
 		<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.runDetails')}</h3>
-		<dl class="grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+		<Grid as="dl" gap="sm" tracks="minmax(7rem,auto) minmax(0,1fr)" class="text-sm">
 			<dt class="text-muted-foreground">{t('bolt.automations.taskId')}</dt>
 			<dd class="break-all font-mono text-xs text-foreground">{text('task_id') ?? '—'}</dd>
 			<dt class="text-muted-foreground">{t('bolt.automations.started')}</dt>
@@ -98,7 +98,7 @@
 			<dd class="text-foreground">{timestamp('progress_updated_at')}</dd>
 			<dt class="text-muted-foreground">{t('bolt.automations.checkpoints')}</dt>
 			<dd class="tabular-nums text-foreground">{String(record?.['progress_sequence'] ?? 0)}</dd>
-		</dl>
+		</Grid>
 	</Stack>
 
 	{#if error}
@@ -109,8 +109,10 @@
 	{:else if printableResult}
 		<Stack gap="xs">
 			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.result')}</h3>
+			<Scroll name="Automation result" class="max-h-72">
 			<pre
-				class="max-h-72 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs text-foreground">{printableResult}</pre>
+				class="rounded-lg border bg-muted/40 p-3 text-xs text-foreground">{printableResult}</pre>
+			</Scroll>
 		</Stack>
 	{/if}
 </Stack>

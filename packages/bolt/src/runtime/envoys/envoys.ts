@@ -8,6 +8,7 @@ import {
 	ImageAsset,
 	type TaskId
 } from '@norbital-ai/bolt-protocol/facilities';
+import { getErrorMessage } from '@norbital-ai/std';
 import { and, asc, count, eq, gt, inArray } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -106,7 +107,7 @@ const EnvoyOutcome = Schema.Struct({
 });
 interface EnvoyOutcome extends Schema.Schema.Type<typeof EnvoyOutcome> {}
 
-export type EnvoyRegistrationClaim =
+type EnvoyRegistrationClaim =
 	| Readonly<{
 			readonly state: 'ready';
 			readonly envoy: string;
@@ -114,7 +115,7 @@ export type EnvoyRegistrationClaim =
 	  }>
 	| Readonly<{ readonly state: 'expired' | 'registered' | 'invalid' }>;
 
-export type EnvoyRegistrationRedemption =
+type EnvoyRegistrationRedemption =
 	| Readonly<{
 			readonly state: 'registered' | 'already_registered';
 			readonly envoy: string;
@@ -137,7 +138,7 @@ const MAX_DRAIN_MESSAGES = 32;
 const REGISTRATION_NOTICE_LIMITS = {
 	'envoys.registration': [{ window: '15 minutes', limit: 1, key: 'sender' as const }]
 };
-export const ENVOY_REGISTRATION_EXPIRES_SECONDS = 15 * 60;
+const ENVOY_REGISTRATION_EXPIRES_SECONDS = 15 * 60;
 
 const InboundRow = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -299,9 +300,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					(failure: unknown) =>
 						new EnvoyError({
 							envoy: envoyName,
-							message: `${operation} failed: ${
-								failure instanceof Error ? failure.message : String(failure)
-							}`
+							message: `${operation} failed: ${getErrorMessage(failure)}`
 						})
 				);
 

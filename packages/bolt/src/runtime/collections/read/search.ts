@@ -242,6 +242,7 @@ export const prepareSearchPlan = async (
 		const probe = await embed(normalized.success.term);
 		return compileSemanticSearch(normalized.success.term, probe, context);
 	} catch {
+		/* best effort */
 		return failure(context, 'search', 'The semantic query could not be embedded.');
 	}
 };

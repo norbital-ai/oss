@@ -65,7 +65,7 @@ const COMPARISON_OPS = [
 	'arrayOverlaps'
 ] as const;
 
-type WithSpec = Readonly<Record<string, unknown>>;
+type WithSpec = { readonly [field: string]: unknown };
 export type ColumnSelection = Readonly<Record<string, boolean>>;
 
 export const selectedColumnNames = (
@@ -151,7 +151,7 @@ export type OrderTerm = Readonly<{
 	readonly column: string;
 	readonly direction: 'asc' | 'desc';
 }>;
-export type EffectivePlanMode = 'live-prefix' | 'one-shot';
+type EffectivePlanMode = 'live-prefix' | 'one-shot';
 export type EffectiveFieldRequirement = Readonly<{
 	readonly collection: string;
 	readonly field: string;
@@ -167,7 +167,7 @@ export type EffectiveProjection = Readonly<{
 	readonly limit: number;
 	readonly children: ReadonlyArray<EffectiveProjection>;
 }>;
-export type EffectiveQueryExecution = Readonly<{
+type EffectiveQueryExecution = Readonly<{
 	readonly collection: string;
 	readonly kind: 'findMany' | 'findFirst' | 'count' | 'findGrouped';
 	readonly where?: unknown;
@@ -179,7 +179,7 @@ export type EffectiveQueryExecution = Readonly<{
 	readonly after?: string;
 	readonly search?: Readonly<{ readonly mode?: unknown }>;
 }>;
-export type EffectiveAuthorityPlan = Readonly<{
+type EffectiveAuthorityPlan = Readonly<{
 	readonly collections: ReadonlyArray<string>;
 	readonly subjectOperands: ReadonlyArray<EffectiveSubjectOperand>;
 	readonly source: ReadonlyArray<PolicyHashSource>;
@@ -205,7 +205,7 @@ export type EffectiveQueryPlan = Readonly<{
 	readonly limit: number;
 	readonly oneShotReason?: string;
 }>;
-export type EffectiveQueryNarrowing = Readonly<{
+type EffectiveQueryNarrowing = Readonly<{
 	readonly where?: unknown;
 	readonly limit?: number;
 	readonly after?: string;
@@ -247,7 +247,7 @@ type ForwardSegment = Readonly<{
 	readonly targetCollection: string;
 	readonly targetField: string;
 }>;
-export type EffectiveSubjectOperand = 'id' | 'email' | 'team' | 'tenantId' | 'admin';
+type EffectiveSubjectOperand = 'id' | 'email' | 'team' | 'tenantId' | 'admin';
 type SubjectOperandName = EffectiveSubjectOperand | 'teamIds';
 type PlanResult<A> = Result.Result<A, EffectivePlanError>;
 type PredicateState = {
@@ -1184,7 +1184,7 @@ const semanticsOf = (
 	subjectOperands: [...state.subjectOperands].toSorted()
 });
 
-export type CompiledStructuredPredicate = Readonly<{
+type CompiledStructuredPredicate = Readonly<{
 	readonly expression: RowPredicateExpression;
 	readonly sql: SQL;
 	readonly semantics: ReturnType<typeof semanticsOf>;
@@ -1579,7 +1579,7 @@ const projectionPlan = (
 	});
 };
 
-export type EffectiveQueryPlanInput = Readonly<{
+type EffectiveQueryPlanInput = Readonly<{
 	readonly definition: WorkspaceDefinition;
 	readonly rootCollection: string;
 	readonly where?: unknown;

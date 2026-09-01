@@ -7,6 +7,7 @@ import {
 	DatabaseResponse,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
+import { getErrorMessage } from '@norbital-ai/std';
 import { Config, Effect, Redacted } from 'effect';
 import { Client, type QueryResultRow } from 'pg';
 import { makeWireBinding } from '../config.js';
@@ -147,7 +148,7 @@ export const makePostgresDatabase = ({
 			// A managed database fails for driver reasons only the driver knows. Keep that diagnostic so
 			// an unreachable host and a wrong password do not collapse into the same sentence.
 			message: (cause) =>
-				`PostgreSQL operation failed: ${cause instanceof Error ? cause.message : String(cause)}`
+				`PostgreSQL operation failed: ${getErrorMessage(cause)}`
 		},
 		checkCancellationAfterInvoke: true,
 		invoke: (_metadata, input, signal) =>
@@ -213,7 +214,7 @@ export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 					code: 'database.failed',
 					retryable: databaseFailureRetryable,
 					message: (cause) =>
-						`Local database operation failed: ${cause instanceof Error ? cause.message : String(cause)}`
+						`Local database operation failed: ${getErrorMessage(cause)}`
 				},
 				checkCancellationAfterInvoke: true,
 				invoke: (_metadata, input, signal) =>

@@ -131,9 +131,12 @@ describe('Bolt architecture boundaries', () => {
 			0
 		);
 		expect(tracked.length).toBeLessThanOrEqual(19);
-		// 8,688 is the measured post-cutover basket after drizzle 1.0 array SQL
-		// introspection (`text[]`). Comments are not deleted to meet a line gate.
-		expect(total).toBeLessThanOrEqual(8_688);
+		// 8,707 is the measured basket. On top of the post-cutover 8,688 (drizzle 1.0 array SQL
+		// introspection, `text[]`), the durable agent-runtime contract — auto-compaction and
+		// user-message supersession — declares itself in the authoring schema: `models-schema.ts`
+		// +10, `model-introspection.ts` +2, `workspace-schema.ts` +2, against −1 across the
+		// compiler (RFC/toolchain.md §6.1.2). Comments are not deleted to meet a line gate.
+		expect(total).toBeLessThanOrEqual(8_707);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

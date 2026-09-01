@@ -11,6 +11,7 @@ import {
 	systemSignaturePayload
 } from '@norbital-ai/bolt-protocol';
 import type { FacilityBindings } from '@norbital-ai/bolt-protocol';
+import { toError } from '@norbital-ai/std';
 import type { PolicyDeclaration } from '#lib/authoring/workspace-schema.js';
 
 /**
@@ -261,18 +262,23 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(fun
  * boundary can actually reach — the runtime's bundle cannot touch `node:crypto`, and the sandbox
  * context deliberately hands it WebCrypto rather than Node's modules.
  */
-const hmacHex = (secret: string, payload: string): Effect.Effect<string> =>
-	Effect.promise(() =>
-		crypto.subtle.importKey(
-			'raw',
-			new TextEncoder().encode(secret),
-			{ name: 'HMAC', hash: 'SHA-256' },
-			false,
-			['sign']
-		)
-	).pipe(
+const hmacHex = (secret: string, payload: string): Effect.Effect<string, Error> =>
+	Effect.tryPromise({
+		try: () =>
+			crypto.subtle.importKey(
+				'raw',
+				new TextEncoder().encode(secret),
+				{ name: 'HMAC', hash: 'SHA-256' },
+				false,
+				['sign']
+			),
+		catch: toError
+	}).pipe(
 		Effect.flatMap((material) =>
-			Effect.promise(() => crypto.subtle.sign('HMAC', material, new TextEncoder().encode(payload)))
+			Effect.tryPromise({
+				try: () => crypto.subtle.sign('HMAC', material, new TextEncoder().encode(payload)),
+				catch: toError
+			})
 		),
 		Effect.map((digest) =>
 			[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')

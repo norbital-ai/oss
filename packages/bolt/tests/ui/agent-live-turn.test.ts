@@ -71,6 +71,54 @@ describe('Task client commands', () => {
 		]);
 		expect(command).toHaveBeenCalledTimes(2);
 	});
+
+	it('revises a user message through tasks.editMessage, not tasks.submit', async () => {
+		const taskId = '00000000-0000-4000-8000-000000000221';
+		const messageId = '00000000-0000-4000-8000-000000000222';
+		const directiveId = '00000000-0000-4000-8000-000000000223';
+		const revisionId = '00000000-0000-4000-8000-000000000224';
+		const calls: Array<{ readonly command: string; readonly input: Schema.Json }> = [];
+		const command = vi.fn((command: string, input: Schema.Json) => {
+			calls.push({ command, input });
+			return Promise.resolve({ directiveId, messageId: revisionId, supersedesId: messageId });
+		});
+		const agent = createAgentClient({
+			client: emptyAgentClient({ command }),
+			subject: {
+				userId: 'admin-1',
+				tenantId: 'tenant-1',
+				teamPath: ['admin'],
+				policies: []
+			},
+			agentId: 'payroll'
+		});
+
+		await expect(
+			Effect.runPromise(
+				agent.editMessage({
+					taskId,
+					messageId,
+					message: { role: 'user', content: 'Export payroll for March' }
+				})
+			)
+		).resolves.toEqual({
+			taskId,
+			directiveId,
+			messageId: revisionId,
+			supersedesId: messageId
+		});
+		expect(calls).toEqual([
+			{
+				command: 'tasks.editMessage',
+				input: {
+					taskId,
+					messageId,
+					message: { role: 'user', content: 'Export payroll for March' }
+				}
+			}
+		]);
+		expect(command).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe.skipIf(server === undefined || server.length === 0)('live Task admission', () => {

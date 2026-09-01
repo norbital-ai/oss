@@ -63,6 +63,7 @@ export type PlanContext = Readonly<{
 }>;
 
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const parseRelationJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const fieldsOf = (
 	definition: WorkspaceDefinition,
@@ -318,7 +319,7 @@ const asRow = (value: unknown): Readonly<Record<string, Schema.Json>> =>
 	value as Readonly<Record<string, Schema.Json>>;
 
 const relationValue = (value: unknown): unknown =>
-	typeof value === 'string' ? (JSON.parse(value) as unknown) : value;
+	typeof value === 'string' ? parseRelationJson(value) : value;
 
 const split = (
 	row: Readonly<Record<string, unknown>>,
@@ -374,7 +375,7 @@ export const readRelationalRows = (
 ): ReadonlyArray<Readonly<Record<string, Schema.Json>>> =>
 	rows.map((row) => readRow(asRow(row), level, mask));
 
-export const projectRootRow = <Row extends Readonly<Record<string, unknown>>>(
+const projectRootRow = <Row extends Readonly<Record<string, unknown>>>(
 	row: Row,
 	projection: ColumnSelection | undefined,
 	attached: ReadonlySet<string>

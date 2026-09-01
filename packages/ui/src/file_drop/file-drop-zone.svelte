@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, formatFileSize } from '#lib/utils';
@@ -176,7 +177,7 @@
 					Effect.sync(() => {
 						const upload = client.uploads.find(({ id }) => id === uploadId);
 						if (upload?.stage !== 'aborted') {
-							onUploadError?.(error instanceof Error ? error.message : String(error), item.file);
+							onUploadError?.(getErrorMessage(error), item.file);
 						}
 					})
 				)

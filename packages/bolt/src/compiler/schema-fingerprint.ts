@@ -17,13 +17,12 @@ type SnapshotLike = Readonly<{ readonly ddl: ReadonlyArray<unknown> }>;
 
 const isSnapshotColumn = (value: unknown): value is SnapshotColumn => {
 	if (value === null || typeof value !== 'object') return false;
-	const entry = value as Record<string, unknown>;
 	return (
-		entry['entityType'] === 'columns' &&
-		typeof entry['table'] === 'string' &&
-		typeof entry['name'] === 'string' &&
-		typeof entry['type'] === 'string' &&
-		typeof entry['notNull'] === 'boolean'
+		Reflect.get(value, 'entityType') === 'columns' &&
+		typeof Reflect.get(value, 'table') === 'string' &&
+		typeof Reflect.get(value, 'name') === 'string' &&
+		typeof Reflect.get(value, 'type') === 'string' &&
+		typeof Reflect.get(value, 'notNull') === 'boolean'
 	);
 };
 

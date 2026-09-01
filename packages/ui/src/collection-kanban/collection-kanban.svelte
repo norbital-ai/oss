@@ -2,6 +2,7 @@
 	lang="ts"
 	generics="TCollections extends CollectionRegistry, TName extends CollectionKanbanName<TCollections>"
 >
+	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import type {
 		CollectionDefinition,
 		CollectionField,
@@ -398,7 +399,7 @@
 		const authoredMove = onCardMove;
 		if (authoredMove) {
 			return authoredMove({ record, fromLane, toLane }).pipe(
-				Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))
+				Effect.mapError((cause) => toError(cause))
 			);
 		}
 		// Default local-first move: the generated client durably overlays `toLane`; the temporary lane
@@ -409,14 +410,14 @@
 				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
 			const mutation = yield* Effect.tryPromise({
 				try: () => operations.mutate({ id: String(id), [groupBy]: toLane }),
-				catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+				catch: (cause) => toError(cause)
 			});
 			// `await mutate()` means only that this tab accepted the in-memory overlay. A board move is
 			// complete only after the authority accepts (or successfully rebases) it; otherwise a rejected
 			// move looks successful until refresh and silently jumps back to its original lane.
 			const settlement = yield* Effect.tryPromise({
 				try: () => mutation.settlement.wait(),
-				catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+				catch: (cause) => toError(cause)
 			});
 			if (settlement.kind === 'accepted' || settlement.kind === 'rebased') return;
 			return yield* Effect.fail(
@@ -449,7 +450,7 @@
 			}).pipe(
 				Effect.catch((cause) =>
 					Effect.sync(() => {
-						moveError = cause instanceof Error ? cause.message : String(cause);
+						moveError = getErrorMessage(cause);
 					})
 				)
 			)

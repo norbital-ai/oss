@@ -239,13 +239,13 @@ const completeGraphReadParticipant = <Error, Requirements>(
 	session: GraphReadSession<Error>,
 	participant: string
 ): Effect.Effect<void, never, Requirements> =>
-	Effect.gen(function* () {
+	Effect.suspend(() => {
 		// Completion is a finalizer action, not Effect-construction state. Recording it eagerly marks
 		// every participant complete while the concurrent preparation effects are merely being built,
 		// which makes each participant's later read look like a ready wave and degenerates batching to
 		// one facility query per root.
 		session.batch.completed.add(participant);
-		yield* flushGraphReadBatch(readWave, session);
+		return flushGraphReadBatch(readWave, session);
 	});
 
 /** Invocation-facing graph-read API; the queue and facility adapters cannot drift independently. */

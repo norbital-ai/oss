@@ -3,7 +3,7 @@ import {
 	ReleaseId,
 	SYNC_CONNECTION_HEADER,
 	TenantId,
-	syncJsonByteLength
+	syncRetainedPrefixBytes
 } from '@norbital-ai/bolt-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSyncHttpDriver } from '../../src/client/sync/http-driver.js';
@@ -263,7 +263,7 @@ describe('sync drivers', () => {
 							fromPrefix: 1,
 							toPrefix: 2,
 							rows: [{ id: 'b' }],
-							retainedBytes: syncJsonByteLength([{ id: 'a' }, { id: 'b' }])
+							retainedBytes: syncRetainedPrefixBytes([{ id: 'a' }, { id: 'b' }])
 						}
 						: { queries: [], outcomes: [] };
 				return new Response(JSON.stringify(payload), {

@@ -3,7 +3,7 @@ import type {
 	QueryInput
 } from '#lib/runtime/collections/collections.contract.js';
 
-type AuthoredQueryInput = Readonly<Record<string, unknown>>;
+type AuthoredQueryInput = { readonly [field: string]: unknown };
 
 /** Preserves the wire shape accepted by authored collection reads. */
 export const queryInput = (collection: string, input: AuthoredQueryInput): QueryInput => ({

@@ -12,6 +12,7 @@
 	import { ScrollArea } from '#lib/scroll-area';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
 	import { marked } from 'marked';
 	import Papa from 'papaparse';
@@ -125,13 +126,16 @@
 
 	function fetchFileAsBlob(url: string): Effect.Effect<Blob> {
 		return Effect.gen(function* () {
-			const response = yield* Effect.promise(() => fetch(url));
+			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
 			if (!response.ok) {
 				yield* Effect.sync(() => toast.error(t('misc.failedToFetchFile')));
 			}
 			const contentType =
 				response.headers.get('Content-Type') || fileType || 'application/octet-stream';
-			const arrayBuffer = yield* Effect.promise(() => response.arrayBuffer());
+			const arrayBuffer = yield* Effect.tryPromise({
+				try: () => response.arrayBuffer(),
+				catch: toError
+			});
 			return new Blob([arrayBuffer], { type: contentType });
 		});
 	}
@@ -139,17 +143,20 @@
 	function fetchText(url: string): Effect.Effect<string> {
 		return Effect.gen(function* () {
 			const blob = yield* fetchFileAsBlob(url);
-			return yield* Effect.promise(() => blob.text());
+			return yield* Effect.tryPromise({ try: () => blob.text(), catch: toError });
 		});
 	}
 
 	function loadPdfPreview(url: string): Effect.Effect<PreviewContent> {
 		return Effect.gen(function* () {
-			const response = yield* Effect.promise(() => fetch(url));
+			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
 			if (!response.ok) {
 				yield* Effect.sync(() => toast.error(t('misc.failedToLoadPdf')));
 			}
-			const arrayBuffer = yield* Effect.promise(() => response.arrayBuffer());
+			const arrayBuffer = yield* Effect.tryPromise({
+				try: () => response.arrayBuffer(),
+				catch: toError
+			});
 			const base64 = btoa(
 				new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
 			);

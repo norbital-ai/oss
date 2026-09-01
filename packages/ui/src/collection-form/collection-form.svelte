@@ -2,6 +2,7 @@
 	lang="ts"
 	generics="TCollections extends CollectionRegistry, TName extends CollectionFormName<TCollections>"
 >
+	import { getErrorMessage } from '@norbital-ai/std';
 	import type {
 		CollectionField,
 		CollectionFieldName,
@@ -126,7 +127,7 @@
 			Effect.catch((cause) =>
 				Effect.sync(() => {
 					issues.push({
-						message: cause instanceof Error ? cause.message : String(cause),
+						message: getErrorMessage(cause),
 						path: []
 					});
 					return candidate;
@@ -173,7 +174,7 @@
 			Effect.catch((cause) =>
 				Effect.sync(() => {
 					issues.push({
-						message: cause instanceof Error ? cause.message : String(cause),
+						message: getErrorMessage(cause),
 						path: []
 					});
 				})

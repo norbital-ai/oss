@@ -184,6 +184,9 @@ importers:
       '@norbital-ai/bolt-protocol':
         specifier: workspace:*
         version: link:../bolt-protocol
+      '@norbital-ai/std':
+        specifier: workspace:*
+        version: link:../std
       effect:
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112

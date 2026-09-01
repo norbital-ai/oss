@@ -1,7 +1,11 @@
 import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { WorkspaceAuthoringManifest } from './bundle.js';
-import { CollectionMutateRequest, CollectionQueryRequest } from './collections.js';
+import {
+	CollectionGroupedQueryRequest,
+	CollectionMutateRequest,
+	CollectionQueryRequest
+} from './collections.js';
 import { CommandHeaders, commandContract } from './host.js';
 import {
 	AgentId,
@@ -447,6 +451,11 @@ export const SystemCommandContracts = [
 	commandContract({
 		name: 'collections.count',
 		input: CollectionQueryRequest,
+		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'collections.findGrouped',
+		input: CollectionGroupedQueryRequest,
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({

@@ -5,8 +5,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import { getCollectionClientContext } from '#lib/collection-runtime';
-	import { getRelationshipDirectoryContext } from '../../collection-runtime/relationship-directory.js';
+	import { getCollectionClientContext, getRelationshipDirectoryContext } from '#lib/collection-runtime';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	interface Props extends DataRendererProps {

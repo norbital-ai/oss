@@ -151,6 +151,7 @@
 	} from '#lib/sliding-indicator';
 	import { SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import { cn } from '#lib/utils';
+	import { toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
@@ -218,7 +219,7 @@
 	onMount(() => {
 		// Initial measurement after fonts load
 		void Effect.runPromise(
-			Effect.promise(() => document.fonts.ready).pipe(
+			Effect.tryPromise({ try: () => document.fonts.ready, catch: toError }).pipe(
 				Effect.map(() => scheduleIndicatorMeasure(false)),
 				Effect.ignoreCause({
 					log: true,

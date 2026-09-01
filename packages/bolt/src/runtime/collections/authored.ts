@@ -661,7 +661,7 @@ export const mergeRuntimeHandlers = (
 	return Object.freeze(merged);
 };
 
-export type RuntimeRemoteRegistry = Readonly<{
+type RuntimeRemoteRegistry = Readonly<{
 	readonly names: ReadonlySet<string>;
 	readonly invoke: (
 		name: string,
@@ -687,7 +687,8 @@ export const remoteRegistryLayer = (
 			const files = yield* Files.Service;
 			const automations = yield* Automations.Service;
 			const names = new Set(Object.keys(handlers));
-			if (names.has('')) throw new Error('An authored command name may not be empty');
+			if (names.has(''))
+				return yield* Effect.fail(new Error('An authored command name may not be empty'));
 			return RemoteRegistry.of({
 				names,
 				invoke: Effect.fn('RemoteRegistry.invoke')(function* (name, input, subject, effectId) {

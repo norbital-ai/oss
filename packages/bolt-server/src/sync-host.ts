@@ -26,7 +26,7 @@ export type SyncSink = Readonly<{
 	readonly close: (reason: SyncDisconnectReason) => void;
 }>;
 
-export interface SyncConnection extends SyncRegistryConnection {
+interface SyncConnection extends SyncRegistryConnection {
 	readonly id: string;
 	readonly scope: SyncScope;
 	readonly sink: Readonly<{
@@ -53,7 +53,7 @@ const sha256 = (value: string): string => createHash('sha256').update(value).dig
 const scopeKey = (scope: SyncScope): string =>
 	`${scope.tenantId}\u0000${scope.environment}\u0000${scope.releaseId}`;
 
-export const makeSyncRegistry = (): SyncRegistry<SyncConnection> =>
+const makeSyncRegistry = (): SyncRegistry<SyncConnection> =>
 	new SyncRegistry({ hash: sha256 });
 
 export class SyncConnectionUnavailable extends Error {

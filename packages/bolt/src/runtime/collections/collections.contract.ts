@@ -294,7 +294,7 @@ export type BatchMutationError = MutationError | MutationPhaseFailure;
  * the policy — the same union `mutate` reports, which is the honest statement of what a caller
  * must decide about.
  */
-export type ResumeError = BatchMutationError;
+export type { BatchMutationError as ResumeError };
 
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 export type QueryError =

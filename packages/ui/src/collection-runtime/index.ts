@@ -3,17 +3,18 @@ import type {
 	CollectionRegistry,
 	ErasedCollectionRegistry
 } from '@norbital-ai/std/collection';
-import { getContext, hasContext, setContext, type Component } from 'svelte';
-export { setRelationshipDirectoryContext } from './relationship-directory.js';
+import { getContext, hasContext, setContext } from 'svelte';
+export type { Component as CollectionRepresentationComponent } from 'svelte';
+export {
+	getRelationshipDirectoryContext,
+	setRelationshipDirectoryContext
+} from './relationship-directory.js';
 
 const COLLECTION_CLIENT_CONTEXT = Symbol.for('@norbital-ai/ui/collection-client');
 const COLLECTION_SURFACE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-surface');
 const COLLECTION_RECORD_SCOPE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-record-scope');
 
 export type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
-
-/** The registry erases each representation's generated row type at its shared UI boundary. */
-export type CollectionRepresentationComponent = Component;
 
 export interface CollectionSurface {
 	readonly representation?: CollectionRepresentationComponent;

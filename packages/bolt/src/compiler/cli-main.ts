@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { Cause, Effect } from 'effect';
+import { toError } from '@norbital-ai/std';
 import { syncWorkspace, type SyncResult } from './workspace-build.js';
 
 const { positionals, values: options } = parseArgs({
@@ -96,12 +97,14 @@ const run = (): Promise<void> => {
 			 * returning undefined, so a presence check written against undefined never fires and the
 			 * missing-package path produces the stack trace this branch exists to avoid.
 			 */
-			const probe = yield* Effect.promise(() =>
-				import('@norbital-ai/doctor').then(
-					(module): typeof import('@norbital-ai/doctor') | undefined => module,
-					() => undefined
-				)
-			);
+			const probe = yield* Effect.tryPromise({
+				try: () =>
+					import('@norbital-ai/doctor').then(
+						(module): typeof import('@norbital-ai/doctor') | undefined => module,
+						() => undefined
+					),
+				catch: toError
+			});
 			if (probe === undefined) {
 				process.stderr.write(
 					[
@@ -114,7 +117,10 @@ const run = (): Promise<void> => {
 				process.exitCode = 1;
 				return;
 			}
-			const result = yield* Effect.promise(() => probe.audit({ root: workspaceRoot }));
+			const result = yield* Effect.tryPromise({
+				try: () => probe.audit({ root: workspaceRoot }),
+				catch: toError
+			});
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
 			} else {
@@ -149,9 +155,10 @@ const run = (): Promise<void> => {
 		const program = Effect.gen(function* () {
 			// Imported here rather than at process startup: both migrate and sync use the diff engine, but
 			// commands that only inspect CLI metadata should not pay to load drizzle-kit.
-			const { generateWorkspaceMigration } = yield* Effect.promise(
-				() => import('./schema-migrations.js')
-			);
+			const { generateWorkspaceMigration } = yield* Effect.tryPromise({
+				try: () => import('./schema-migrations.js'),
+				catch: toError
+			});
 			const result = yield* generateWorkspaceMigration(workspaceRoot, nameValue);
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -190,7 +197,10 @@ const run = (): Promise<void> => {
 			const result = yield* syncWorkspace(workspaceRoot);
 			report(command, result);
 			if (!watch) return;
-			const { watch: watchDirectory } = yield* Effect.promise(() => import('node:fs'));
+			const { watch: watchDirectory } = yield* Effect.tryPromise({
+				try: () => import('node:fs'),
+				catch: toError
+			});
 			const watcher = watchDirectory(resolve(workspaceRoot, 'src'), { recursive: true }, () => {
 				void Effect.runPromise(
 					syncWorkspace(workspaceRoot).pipe(

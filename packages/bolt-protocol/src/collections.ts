@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 
 export const CollectionWriteValues = Schema.Record(Schema.String, Schema.Json).annotate({
 	identifier: 'BoltCollectionWriteValues'
@@ -152,7 +152,6 @@ export const MAX_COLLECTION_PREDICATE_DEPTH = 4;
 
 const FIELD_OPERATORS = new Set<string>(COLLECTION_PREDICATE_FIELD_OPERATORS);
 const RELATION_QUANTIFIERS = new Set<string>(COLLECTION_PREDICATE_RELATION_QUANTIFIERS);
-const SUBJECT_OPERANDS = new Set<string>(COLLECTION_PREDICATE_SUBJECTS);
 const JSON_PATH_TYPES = new Set(['string', 'number', 'boolean', 'instant', 'json']);
 const JSON_PATH_KEYS = new Set([
 	'path',
@@ -170,16 +169,16 @@ const JSON_PATH_KEYS = new Set([
 	'isNotNull'
 ]);
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-	value !== null && typeof value === 'object' && !Array.isArray(value);
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const TeamIdsOperand = Schema.Struct({ $subject: Schema.Literal('teamIds') });
 
-const isSubjectOperand = (value: unknown): boolean => {
-	if (!isRecord(value)) return false;
-	const keys = Object.keys(value);
-	return (
-		keys.length === 1 && keys[0] === '$subject' && SUBJECT_OPERANDS.has(value['$subject'] as string)
-	);
+const jsonObject = (value: unknown): typeof JsonObject.Type | undefined => {
+	const decoded = Schema.decodeUnknownOption(JsonObject)(value);
+	return Option.isSome(decoded) ? decoded.value : undefined;
 };
+
+const isSubjectOperand = Schema.is(CollectionSubjectOperand);
+const isTeamIdsOperand = Schema.is(TeamIdsOperand);
 
 const operandProblem = (value: unknown): string | undefined => {
 	if (isSubjectOperand(value)) return undefined;
@@ -187,12 +186,12 @@ const operandProblem = (value: unknown): string | undefined => {
 };
 
 const scalarOperandProblem = (value: unknown): string | undefined =>
-	isRecord(value) && value['$subject'] === 'teamIds'
+	isTeamIdsOperand(value)
 		? 'uses set-valued subject.teamIds with a scalar operator'
 		: operandProblem(value);
 
 const setOperandProblem = (value: unknown): string | undefined => {
-	if (isRecord(value) && value['$subject'] === 'teamIds') return undefined;
+	if (isTeamIdsOperand(value)) return undefined;
 	if (!Array.isArray(value)) return 'requires an array or subject.teamIds';
 	for (const member of value) {
 		const problem = scalarOperandProblem(member);
@@ -224,44 +223,47 @@ const pathSegmentsProblem = (path: unknown, requireNonEmpty: boolean): string | 
 };
 
 const jsonPathProblem = (value: unknown): string | undefined => {
-	if (!isRecord(value)) return 'jsonPath must be an object';
-	const unexpected = unexpectedKey(value, JSON_PATH_KEYS);
+	const object = jsonObject(value);
+	if (object === undefined) return 'jsonPath must be an object';
+	const unexpected = unexpectedKey(object, JSON_PATH_KEYS);
 	if (unexpected !== undefined) return `jsonPath has unsupported ${unexpected}`;
-	const pathProblem = pathSegmentsProblem(value['path'], true);
+	const pathProblem = pathSegmentsProblem(object['path'], true);
 	if (pathProblem !== undefined) return `jsonPath.path ${pathProblem}`;
-	if (!JSON_PATH_TYPES.has(value['type'] as string)) return 'jsonPath.type is unsupported';
-	if (value['transform'] !== undefined && value['transform'] !== 'case-fold')
+	if (!JSON_PATH_TYPES.has(object['type'] as string)) return 'jsonPath.type is unsupported';
+	if (object['transform'] !== undefined && object['transform'] !== 'case-fold')
 		return 'jsonPath.transform is unsupported';
-	const operator = exclusiveOperator(value, ['path', 'type', 'transform']);
+	const operator = exclusiveOperator(object, ['path', 'type', 'transform']);
 	if (operator === undefined) return 'jsonPath requires exactly one comparison';
 	if (operator === 'isNull' || operator === 'isNotNull')
-		return typeof value[operator] === 'boolean' ? undefined : `${operator} requires a boolean`;
+		return typeof object[operator] === 'boolean' ? undefined : `${operator} requires a boolean`;
 	return operator === 'in' || operator === 'notIn'
-		? setOperandProblem(value[operator])
-		: scalarOperandProblem(value[operator]);
+		? setOperandProblem(object[operator])
+		: scalarOperandProblem(object[operator]);
 };
 
 const jsonArraySomeProblem = (value: unknown): string | undefined => {
-	if (!isRecord(value)) return 'jsonArraySome must be an object';
-	const unexpected = unexpectedKey(value, new Set(['path', 'transform', 'eq', 'in']));
+	const object = jsonObject(value);
+	if (object === undefined) return 'jsonArraySome must be an object';
+	const unexpected = unexpectedKey(object, new Set(['path', 'transform', 'eq', 'in']));
 	if (unexpected !== undefined) return `jsonArraySome has unsupported ${unexpected}`;
-	if (value['path'] !== undefined) {
-		const pathProblem = pathSegmentsProblem(value['path'], false);
+	if (object['path'] !== undefined) {
+		const pathProblem = pathSegmentsProblem(object['path'], false);
 		if (pathProblem !== undefined) return `jsonArraySome.path ${pathProblem}`;
 	}
-	if (value['transform'] !== undefined && value['transform'] !== 'case-fold')
+	if (object['transform'] !== undefined && object['transform'] !== 'case-fold')
 		return 'jsonArraySome.transform is unsupported';
-	const operator = exclusiveOperator(value, ['path', 'transform']);
+	const operator = exclusiveOperator(object, ['path', 'transform']);
 	if (operator === undefined) return 'jsonArraySome requires exactly one of eq or in';
 	return operator === 'in'
-		? setOperandProblem(value[operator])
-		: scalarOperandProblem(value[operator]);
+		? setOperandProblem(object[operator])
+		: scalarOperandProblem(object[operator]);
 };
 
 const fieldPredicateProblem = (value: unknown): string | undefined => {
 	if (isSubjectOperand(value)) return scalarOperandProblem(value);
-	if (!isRecord(value)) return operandProblem(value);
-	const entries = Object.entries(value);
+	const object = jsonObject(value);
+	if (object === undefined) return operandProblem(value);
+	const entries = Object.entries(object);
 	if (entries.length === 0) return 'a field condition must name an operator';
 	for (const [operator, operand] of entries) {
 		if (!FIELD_OPERATORS.has(operator)) return `has unsupported operator ${operator}`;
@@ -289,8 +291,9 @@ const fieldPredicateProblem = (value: unknown): string | undefined => {
 			continue;
 		}
 		if (operator === 'kind') {
-			if (!isRecord(operand)) return 'kind must be an object';
-			const kindEntries = Object.entries(operand);
+			const kind = jsonObject(operand);
+			if (kind === undefined) return 'kind must be an object';
+			const kindEntries = Object.entries(kind);
 			if (
 				kindEntries.length !== 1 ||
 				(kindEntries[0]?.[0] !== 'eq' && kindEntries[0]?.[0] !== 'ne') ||
@@ -306,9 +309,10 @@ const fieldPredicateProblem = (value: unknown): string | undefined => {
 };
 
 const predicateProblem = (value: unknown, depth = 0): string | undefined => {
-	if (!isRecord(value)) return 'a predicate must be an object';
+	const object = jsonObject(value);
+	if (object === undefined) return 'a predicate must be an object';
 	if (depth > MAX_COLLECTION_PREDICATE_DEPTH) return 'predicate nesting exceeds the maximum depth';
-	for (const [node, condition] of Object.entries(value)) {
+	for (const [node, condition] of Object.entries(object)) {
 		if (node === 'AND' || node === 'OR') {
 			if (!Array.isArray(condition)) return `${node} must be an array`;
 			for (const branch of condition) {
@@ -322,12 +326,13 @@ const predicateProblem = (value: unknown, depth = 0): string | undefined => {
 			if (problem !== undefined) return `NOT ${problem}`;
 			continue;
 		}
-		if (isRecord(condition)) {
-			const quantifiers = Object.keys(condition).filter((key) => RELATION_QUANTIFIERS.has(key));
+		const relation = jsonObject(condition);
+		if (relation !== undefined) {
+			const quantifiers = Object.keys(relation).filter((key) => RELATION_QUANTIFIERS.has(key));
 			if (quantifiers.length > 0) {
-				if (quantifiers.length !== 1 || Object.keys(condition).length !== 1)
+				if (quantifiers.length !== 1 || Object.keys(relation).length !== 1)
 					return `${node} relation requires exactly one quantifier`;
-				const problem = predicateProblem(condition[quantifiers[0] ?? ''], depth + 1);
+				const problem = predicateProblem(relation[quantifiers[0] ?? ''], depth + 1);
 				if (problem !== undefined) return `${node}.${quantifiers[0]} ${problem}`;
 				continue;
 			}

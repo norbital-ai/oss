@@ -87,14 +87,13 @@ export const layer = Layer.effect(
 				request.pending
 			);
 			const results = yield* Effect.forEach(request.queries, (query, index) =>
-				Effect.gen(function* () {
-					const resolved = yield* resolveInitialPrefix(
-						EffectId.make(`${effectId}:query:${index}`),
-						subject,
-						query.input,
-						query.requestedPrefix
-					);
-					return {
+				resolveInitialPrefix(
+					EffectId.make(`${effectId}:query:${index}`),
+					subject,
+					query.input,
+					query.requestedPrefix
+				).pipe(
+					Effect.map((resolved) => ({
 						key: query.queryKey,
 						input: query.input,
 						planKey: resolved.plan.effectivePlan.fingerprint,
@@ -107,8 +106,8 @@ export const layer = Layer.effect(
 						dependencies: resolved.plan.effectivePlan.dependencies,
 						routing: resolved.plan.effectivePlan.routing,
 						rows: resolved.rows
-					};
-				})
+					}))
+				)
 			);
 			return { results, outcomes } satisfies SyncConnectEvaluation;
 		});

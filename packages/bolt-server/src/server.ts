@@ -1256,7 +1256,7 @@ const startServerEffect = <E>(
 			);
 			yield* Effect.forEach(
 				cancelConnections,
-				(cancel) => Effect.tryPromise(() => runtime.runPromise(cancel)).pipe(Effect.result),
+				(cancel) => cancel.pipe(Effect.result),
 				{ concurrency: 'unbounded', discard: true }
 			);
 			shutdown.abort(new Error('Bolt server is shutting down'));
@@ -1270,7 +1270,7 @@ const startServerEffect = <E>(
 			yield* Fiber.join(listener);
 		});
 		const closeOnce = yield* Effect.cached(closeEffect);
-		const close = () => Effect.runPromise(closeOnce);
+		const close = () => runtime.runPromise(closeOnce);
 
 		return {
 			address: { host: configuration.host, port: address.port },

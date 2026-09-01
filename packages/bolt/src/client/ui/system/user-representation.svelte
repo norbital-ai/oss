@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 
 	let { record }: { record: Record<string, unknown> | null; close: () => void } = $props();
 	const text = (name: string): string | undefined => {
@@ -34,20 +34,26 @@
 
 	<Stack gap="sm">
 		<h3 class="text-sm font-semibold text-foreground">Access and membership</h3>
-		<dl class="grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
-			<dt class="flex items-center gap-2 text-muted-foreground">
+		<Grid as="dl" gap="md" tracks="minmax(7rem,auto) minmax(0,1fr)" class="text-sm">
+			<dt class="text-muted-foreground">
+				<Inline align="center" gap="sm">
 				<Icon icon="lucide:shield-check" class="size-4" /> Role
+				</Inline>
 			</dt>
 			<dd class="capitalize text-foreground">{text('role') ?? text('access') ?? 'Member'}</dd>
-			<dt class="flex items-center gap-2 text-muted-foreground">
+			<dt class="text-muted-foreground">
+				<Inline align="center" gap="sm">
 				<Icon icon="lucide:circle-dot" class="size-4" /> Status
+				</Inline>
 			</dt>
 			<dd class="capitalize text-foreground">{text('status') ?? 'Active'}</dd>
-			<dt class="flex items-center gap-2 text-muted-foreground">
+			<dt class="text-muted-foreground">
+				<Inline align="center" gap="sm">
 				<Icon icon="lucide:users" class="size-4" /> Team
+				</Inline>
 			</dt>
 			<dd class="text-foreground">{team ?? 'Not assigned'}</dd>
-		</dl>
+		</Grid>
 	</Stack>
 
 	<Stack gap="xs" class="rounded-lg border bg-muted/30 p-4">

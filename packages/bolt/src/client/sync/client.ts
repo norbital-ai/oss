@@ -9,6 +9,7 @@ import type {
 	SyncOutcome,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
+import { getErrorMessage } from '@norbital-ai/std';
 import { stableKey } from '../live-query/stable-key.js';
 import type { BrowserSyncScope } from './sse-driver.js';
 import {
@@ -96,7 +97,7 @@ const attachmentError = (cause: unknown): SyncAttachmentError =>
 		? cause
 		: new SyncAttachmentError(
 				'transport',
-				cause instanceof Error ? cause.message : String(cause),
+				getErrorMessage(cause),
 				{ cause }
 			);
 

@@ -75,7 +75,7 @@ type FinderPromptInsert = {
 };
 
 /** Chip / prose the composer inserts so the model sees path, collection, and label. */
-export function formatFinderEntityForPrompt(entity: FinderEntity): FinderPromptInsert | null {
+function formatFinderEntityForPrompt(entity: FinderEntity): FinderPromptInsert | null {
 	switch (entity.kind) {
 		case 'app': {
 			const title = entity.description

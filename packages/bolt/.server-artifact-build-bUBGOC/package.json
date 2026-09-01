@@ -1,0 +1,6 @@
+{
+	"name": "@template/server-artifact-build",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module"
+}

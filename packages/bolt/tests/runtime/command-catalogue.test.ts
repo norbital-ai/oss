@@ -13,13 +13,13 @@ describe('command catalogue cutover', () => {
 	});
 
 	/**
-	 * The two commands a collection page issues per view, named rather than left to the set equality
-	 * above. `collections.count` is what `countQueryOf` calls for "1 of 335"; it was dropped from the
-	 * registry while the surface was cut over, and a caller of a contract nothing binds gets
-	 * `unknown_command` at run time with nothing failing at build time.
+	 * The collection one-shots a board issues by name, rather than left to the set equality above.
+	 * `collections.count` is what `countQueryOf` calls for "1 of 335"; `collections.findGrouped` is
+	 * what the kanban lanes call. A caller of a contract nothing binds gets `unknown_command` at run
+	 * time with nothing failing at build time.
 	 */
-	it('binds the collection query pair the browser client calls by name', () => {
-		for (const name of ['collections.export', 'collections.count']) {
+	it('binds the collection query commands the browser client calls by name', () => {
+		for (const name of ['collections.export', 'collections.count', 'collections.findGrouped']) {
 			expect(FixedCommandCatalogue.map((contract) => contract.name)).toContain(name);
 			expect(FixedCommandBindings.has(name), name).toBe(true);
 			expect(

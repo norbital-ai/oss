@@ -4,7 +4,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import { humanize } from '@norbital-ai/std';
+	import { humanize, toError } from '@norbital-ai/std';
 	import { Effect } from 'effect';
 	import { isEqual } from 'es-toolkit/predicate';
 	import { tick } from 'svelte';
@@ -185,7 +185,7 @@
 		validatedInput = '';
 		colorSearchValue = '';
 		Effect.runFork(
-			Effect.promise(() => tick()).pipe(
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(
 				Effect.map(() => inputElement?.focus()),
 				Effect.ignoreCause({
 					log: true,

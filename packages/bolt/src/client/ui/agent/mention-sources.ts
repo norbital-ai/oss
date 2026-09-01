@@ -5,6 +5,16 @@
  */
 import { Effect, Result, Schema } from 'effect';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+export {
+	consumeTrigger,
+	findMentionTrigger,
+	insertMention,
+	mentionDeletion,
+	reconcileAfterEdit,
+	rewriteTriggerQuery,
+	serializeMentions
+} from './composer-mentions.js';
+export type { ComposerMention, MentionTrigger } from './composer-mentions.js';
 
 export const COMMAND_SCOPES = ['record', 'plan', 'app', 'command'] as const;
 export type CommandScope = (typeof COMMAND_SCOPES)[number];
@@ -131,7 +141,7 @@ const appMenuItem = (app: MentionAppHit): MentionMenuItem => ({
 const scopeMenuItem = (collection: string): MentionMenuItem => ({ kind: 'scope', collection });
 
 /** Assembles the @ menu from the current prefix, collections, records, and apps. */
-export function buildMentionMenuEntries(
+function buildMentionMenuEntries(
 	parsed: ParsedCommandQuery,
 	collections: readonly string[],
 	records: readonly MentionMenuItem[],
@@ -170,7 +180,7 @@ export function buildMentionMenuEntries(
 	}
 }
 
-export type MentionSources = {
+type MentionSources = {
 	collections(): readonly string[];
 	apps(): readonly MentionAppHit[];
 	search(query: string, scope: string | null): Effect.Effect<readonly MentionRecordHit[]>;

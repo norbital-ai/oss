@@ -26,7 +26,7 @@ import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema
  * Bolt-provisioned database and a lineage-provisioned one disagreed on every foreign key.
  */
 export type ScalarType = 'string' | 'uuid' | 'number' | 'boolean' | 'instant' | 'json';
-export type FieldType = ScalarType | 'reference';
+type FieldType = ScalarType | 'reference';
 
 interface ReferenceTargetDefinition {
 	/** Stable discriminator exposed to application code. */
@@ -185,7 +185,7 @@ export const field = {
 };
 
 /** Compiler-derived lexical search facts carried to the runtime. */
-export interface CollectionSearchDefinition {
+interface CollectionSearchDefinition {
 	/** The authored `search: true` fields, sorted for stable DDL and ranking. */
 	readonly fields: ReadonlyArray<string>;
 	readonly documentColumn: 'search_document';
@@ -198,7 +198,7 @@ export interface CollectionSearchDefinition {
 }
 
 /** Model embedding declaration plus the platform columns settle maintains. */
-export interface CollectionEmbeddingDefinition extends ModelEmbedding {
+interface CollectionEmbeddingDefinition extends ModelEmbedding {
 	readonly vectorColumn: 'record_embedding';
 	readonly embeddedAtColumn: 'embedded_at';
 	readonly sourceFingerprintColumn: 'record_embedding_fingerprint';
@@ -301,13 +301,13 @@ export interface CompiledCollection
 	readonly sourcePath: string;
 }
 
-export interface CustomTypeReference {
+interface CustomTypeReference {
 	readonly collection: string;
 	readonly field: string;
 	readonly name: string;
 }
 
-export interface CompiledSkillPackage {
+interface CompiledSkillPackage {
 	readonly name: string;
 	readonly description: string;
 	readonly digest: string;
@@ -344,7 +344,7 @@ export const McpRegistrationDefinition = Schema.Struct({
 export interface McpRegistrationDefinition
 	extends Schema.Schema.Type<typeof McpRegistrationDefinition> {}
 
-export interface CompiledMcpRegistration {
+interface CompiledMcpRegistration {
 	readonly name: string;
 	readonly digest: string;
 	readonly protocol: '2026-07-28';
@@ -816,7 +816,7 @@ export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined>(
  * boundary cannot be crossed exactly once, and a platform that claimed it would be lying about the
  * one case it exists to handle.
  */
-export const defineSend = <Row>(binding: {
+interface SendBinding<Row> {
 	readonly send: SendRequestSpec;
 	readonly on:
 		| 'create'
@@ -832,7 +832,9 @@ export const defineSend = <Row>(binding: {
 		readonly record: Row;
 		readonly previous?: Row;
 	}) => unknown;
-}): typeof binding => {
+}
+
+export const defineSend = <Row>(binding: SendBinding<Row>): typeof binding => {
 	if (binding.send.path.trim() === '') {
 		throw new TypeError(
 			'A send binding requires a path: there is nowhere to deliver to without one.'
@@ -880,7 +882,7 @@ const mcpToolName = (tool: Schema.Schema.Type<typeof McpToolDefinition>): string
 	typeof tool === 'string' ? tool : tool.name;
 
 /** One compiler-discovered MCP v2 server. Its filename owns its name. */
-export const McpServerDefinition = Schema.Struct({
+const McpServerDefinition = Schema.Struct({
 	url: McpToolRoute.fields.url,
 	description: Schema.optionalKey(Schema.NonEmptyString),
 	tools: Schema.Array(McpToolDefinition).check(
@@ -891,7 +893,7 @@ export const McpServerDefinition = Schema.Struct({
 		})
 	)
 });
-export interface McpServerDefinition extends Schema.Schema.Type<typeof McpServerDefinition> {}
+interface McpServerDefinition extends Schema.Schema.Type<typeof McpServerDefinition> {}
 
 /** One compiled workspace Skill. The artifact carries the authored body rather than a file-store guess. */
 export const SkillDeclaration = Schema.Struct({
@@ -917,7 +919,7 @@ export interface ToolDeclaration {
  * the same `ToolDeclaration` a platform or workspace tool uses, with an MCP route attached. Policy
  * grants still name the server, while invocation resolves the exact offered declaration by tool name.
  */
-export const describeMcpServer = (
+const describeMcpServer = (
 	name: string,
 	definition: unknown
 ): ReadonlyArray<ToolDeclaration> => {
@@ -1089,7 +1091,7 @@ export interface AppDeclaration {
 	readonly label: string;
 }
 
-export interface WorkspaceAppDeclaration extends AppDeclaration {
+interface WorkspaceAppDeclaration extends AppDeclaration {
 	readonly icon?: string;
 	readonly description?: string;
 	readonly banner?: string;

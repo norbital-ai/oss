@@ -31,6 +31,10 @@ const SyncRetainedPrefixBytesValue = NonNegativeInteger.check(
 export const syncJsonByteLength = (value: unknown): number =>
 	new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
+/** Sum of each retained row's JSON bytes. Not `syncJsonByteLength(rows)` — the array wrapper is not retained. */
+export const syncRetainedPrefixBytes = (rows: ReadonlyArray<unknown>): number =>
+	rows.reduce<number>((total, row) => total + syncJsonByteLength(row), 0);
+
 export const syncApplyFrameByteLength = (frame: unknown): number =>
 	new TextEncoder().encode(`event: apply\ndata: ${JSON.stringify(frame)}\n\n`).byteLength;
 

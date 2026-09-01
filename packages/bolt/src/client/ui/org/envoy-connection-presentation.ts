@@ -1,4 +1,4 @@
-export type EnvoyTransportConnectionView = Readonly<{
+type EnvoyTransportConnectionView = Readonly<{
 	state: 'disconnected' | 'connecting' | 'pairing' | 'connected' | 'error';
 	stored: boolean;
 	retrying?: boolean;

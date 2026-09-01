@@ -135,6 +135,7 @@ export {
 	syncApplyFrameByteLength,
 	syncScopedApplyFrameByteLength,
 	syncJsonByteLength,
+	syncRetainedPrefixBytes,
 	SYNC_CONNECTION_HEADER,
 	DEFAULT_SYNC_LOADED_KEYS,
 	MAX_SYNC_INITIAL_ANSWER_BYTES,

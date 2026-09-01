@@ -22,6 +22,7 @@ import {
 	type SyncPrefixKey,
 	type SyncQueryInput,
 	type SyncResetReason,
+	type SyncRoutingConstraint,
 	type SyncSubEntry
 } from './sync.js';
 
@@ -148,16 +149,17 @@ const routingKey = (field: string, value: unknown): string => `${field}\0${canon
 
 const normalizedRouting = (
 	routing: SyncSubEntry['routing']
-): NonNullable<SyncSubEntry['routing']> =>
-	routing
-		.map(({ field, values }) => ({
-			field,
-			values: [...new Map(values.map((value) => [canonical(value), value])).values()].sort((a, b) =>
-				canonical(a).localeCompare(canonical(b))
-			)
-		}))
-		.filter(({ values }) => values.length > 0)
-		.sort((left, right) => left.field.localeCompare(right.field));
+): NonNullable<SyncSubEntry['routing']> => {
+	const normalized: SyncRoutingConstraint[] = [];
+	for (const { field, values } of routing) {
+		const unique = [...new Map(values.map((value) => [canonical(value), value])).values()].sort(
+			(left, right) => canonical(left).localeCompare(canonical(right))
+		);
+		if (unique.length > 0) normalized.push({ field, values: unique });
+	}
+	normalized.sort((left, right) => left.field.localeCompare(right.field));
+	return normalized;
+};
 
 const sameRouting = (
 	left: NonNullable<SyncSubEntry['routing']>,
@@ -233,7 +235,14 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 				if (
 					state.planKey !== entry.planKey ||
 					state.authorityFingerprint !== entry.authorityFingerprint ||
-					state.version !== entry.version ||
+					// A freshly evaluated registration always says version 0: `connect` reads the current
+					// authoritative answer and has no way to know what version this host is holding the
+					// shared plan at. The lane serializes `connect` against `committed`, so that read *is*
+					// the current answer and the viewer joins at the version the plan already holds.
+					// Comparing the two outright — which is what this used to do — refused every second
+					// viewer of any query that had advanced even once, and refusal here closes the whole
+					// connection. A non-zero entry is still a claim about a specific version and must match.
+					(entry.version !== 0 && state.version !== entry.version) ||
 					canonical(state.input) !== canonical(entry.input) ||
 					!sameStrings(state.dependencies, dependencies) ||
 					!sameRouting(state.routing, routing) ||
@@ -535,10 +544,21 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 	}
 }
 
-const syncClientResponse = (evaluation: SyncConnectEvaluation): SyncConnectResponse => ({
+/**
+ * The client's answer, versioned by the registry rather than by the evaluation.
+ *
+ * A fresh evaluation says 0 for every query. If that reached the browser unchanged, a second viewer
+ * of an already-advanced plan would fence its retained prefix at 0 and reject the very next update
+ * as discontinuous. `registeredVersion` reports what the plan is actually held at, which is the
+ * version the deltas that follow will continue from.
+ */
+const syncClientResponse = (
+	evaluation: SyncConnectEvaluation,
+	registeredVersion: (queryKey: string) => number | undefined
+): SyncConnectResponse => ({
 	queries: evaluation.results.map((result: SyncConnectEvaluationResult) => ({
 		queryKey: result.key,
-		version: result.version,
+		version: registeredVersion(result.key) ?? result.version,
 		rows: result.rows,
 		retainedBytes: result.prefixBytes
 	})),
@@ -684,15 +704,21 @@ export class SyncConnectionLane<
 				)
 			)
 				return this.#fail(connection, 'sync initial answer does not match its prefix');
-			const response = syncClientResponse(evaluation);
-			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES)
-				return this.#fail(connection, 'sync initial answer exceeds its encoded byte ceiling');
 			try {
 				this.registry.attach(connection, evaluation.results);
 			} catch (cause) {
 				this.detach(connection.id, this.#guestFailure);
 				throw cause;
 			}
+			// Built after attachment, because the version a query is registered at is the registry's
+			// answer and not the evaluation's. `#fail` below still detaches, which releases everything
+			// this attachment just installed.
+			const response = syncClientResponse(
+				evaluation,
+				(queryKey) => this.registry.prefixViewer(connection, queryKey)?.version
+			);
+			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES)
+				return this.#fail(connection, 'sync initial answer exceeds its encoded byte ceiling');
 			return response;
 		});
 	}

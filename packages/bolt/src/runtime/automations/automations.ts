@@ -51,7 +51,7 @@ export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 }
 
 /** Delayed work is not a cron declaration and therefore has no durable place to wait. */
-export class AutomationDeferredUnsupported extends Schema.TaggedError<AutomationDeferredUnsupported>()(
+class AutomationDeferredUnsupported extends Schema.TaggedError<AutomationDeferredUnsupported>()(
 	'Bolt.Automations.DeferredUnsupported',
 	{ name: Schema.NonEmptyString, delayMillis: Schema.Number }
 ) {}

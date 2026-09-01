@@ -10,6 +10,7 @@ import {
 	TenantId,
 	success
 } from '@norbital-ai/bolt-protocol';
+import { toError } from '@norbital-ai/std';
 import { Deferred, Effect, Fiber } from 'effect';
 import { makeSyncCommitFacility } from '../src/server.js';
 
@@ -58,7 +59,7 @@ describe('bolt-server sync commit facility', () => {
 			);
 			const running = yield* Effect.tryPromise({
 				try: (signal) => facility.call(metadata, request, signal),
-				catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+				catch: (cause) => toError(cause)
 			}).pipe(Effect.forkChild);
 
 			yield* Deferred.await(entered);

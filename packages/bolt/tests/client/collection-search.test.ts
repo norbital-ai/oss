@@ -3,7 +3,7 @@ import { Schema } from 'effect';
 import {
 	EnvironmentName,
 	ReleaseId,
-	syncJsonByteLength,
+	syncRetainedPrefixBytes,
 	TenantId,
 	type StoredRecord,
 	type SyncQueryInput
@@ -69,7 +69,7 @@ const fakeSyncClient = () => {
 				...state,
 				queries: new Map([...state.queries]).set(key, {
 					input,
-					prefix: { version: 1, rows, retainedBytes: syncJsonByteLength(rows) },
+					prefix: { version: 1, rows, retainedBytes: syncRetainedPrefixBytes(rows) },
 					requestedPrefix: input.kind === 'findFirst' ? 1 : (input.limit ?? 100),
 					phase,
 					validating: phase === 'pending',

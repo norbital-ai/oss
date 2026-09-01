@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Effect, Schema } from 'effect';
 	import { onMount } from 'svelte';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
@@ -83,7 +84,7 @@
 		}).pipe(
 			Effect.match({
 				onFailure: (cause) => {
-					actionFailure = cause instanceof Error ? cause.message : String(cause);
+					actionFailure = getErrorMessage(cause);
 				},
 				onSuccess: () => {
 					actionFailure = undefined;
@@ -97,7 +98,7 @@
 		return Effect.tryPromise(() => execution.stop(activeTaskId)).pipe(
 			Effect.match({
 				onFailure: (cause) => {
-					actionFailure = cause instanceof Error ? cause.message : String(cause);
+					actionFailure = getErrorMessage(cause);
 				},
 				onSuccess: () => {
 					actionFailure = undefined;
@@ -160,10 +161,7 @@
 						{#if activeQuery?.error !== undefined}
 							<p class="text-micro text-destructive" role="alert">
 								{t('bolt.automations.statusUnavailable', {
-									error:
-										activeQuery.error instanceof Error
-											? activeQuery.error.message
-											: String(activeQuery.error)
+									error: getErrorMessage(activeQuery.error)
 								})}
 							</p>
 						{:else if actionFailure !== undefined}

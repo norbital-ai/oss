@@ -20,7 +20,7 @@ const MessageAuthor = Schema.Struct({
 	kind: Schema.Literals(['human', 'agent', 'parent-agent', 'tool', 'system']),
 	id: Schema.optionalKey(Schema.NonEmptyString)
 });
-export type MessageAuthor = typeof MessageAuthor.Type;
+type MessageAuthor = typeof MessageAuthor.Type;
 
 const CompactAnnotation = Schema.Struct({
 	tag: Schema.Literal('compact'),
@@ -110,13 +110,13 @@ const decodeAgentUsageRow = Schema.decodeUnknownOption(AgentUsageRow);
 
 /** Decodes each durable row directly as the one canonical Effect message representation. */
 export function projectAgentMessages(rows: readonly unknown[]): PanelMessage[] {
-	return rows
-		.flatMap((row) => {
-			const decoded = decodeAgentMessageRow(row);
-			return Option.isSome(decoded) ? [decoded.value] : [];
-		})
-		.sort((left, right) => left.sequence - right.sequence)
-		.map((row) => ({
+	const decoded: Array<typeof AgentMessageRow.Type> = [];
+	for (const row of rows) {
+		const parsed = decodeAgentMessageRow(row);
+		if (Option.isSome(parsed)) decoded.push(parsed.value);
+	}
+	decoded.sort((left, right) => left.sequence - right.sequence);
+	return decoded.map((row) => ({
 			kind: 'message',
 			key: row.id,
 			id: row.id,
@@ -179,7 +179,7 @@ export function latestTodo(
 	return null;
 }
 
-export type ExactTaskCharge = Readonly<{
+type ExactTaskCharge = Readonly<{
 	currency: string;
 	coefficient: bigint;
 	scale: number;

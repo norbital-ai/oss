@@ -51,7 +51,7 @@ import { DispatchError } from '#lib/runtime/workspace.js';
 import { authoredManifestDeclarations } from '#lib/runtime/workspace-manifest.js';
 
 export type InvocationOrigin = 'Command' | 'Task' | 'Plugin';
-export type PrincipalRule = 'public' | 'session-or-system' | 'system' | 'runtime-task';
+type PrincipalRule = 'public' | 'session-or-system' | 'system' | 'runtime-task';
 
 export type ExecutionContext = Readonly<{
 	effectId: EffectId;
@@ -63,7 +63,7 @@ export type ExecutionContext = Readonly<{
 	trustedContext?: PluginTrustedContext;
 }>;
 
-export type OriginRule = Readonly<{
+type OriginRule = Readonly<{
 	principal: PrincipalRule;
 	authorization: string;
 	authorize?: (context: ExecutionContext, input: unknown) => Effect.Effect<void, unknown, unknown>;
@@ -171,6 +171,24 @@ const collectionQuery = (input: {
 		...(withRelations === undefined ? {} : { with: withRelations }),
 		...(search === undefined ? {} : { search }),
 		...(after === undefined ? {} : { after })
+	};
+};
+const groupedQuery = (input: {
+	readonly collection: string;
+	readonly where?: unknown;
+	readonly userFilter?: unknown;
+	readonly orderBy?: unknown;
+	readonly with?: unknown;
+	readonly search?: unknown;
+	readonly columns?: unknown;
+	readonly group: { readonly by: string; readonly lanes?: readonly Schema.Json[] };
+}) => {
+	const base = collectionQuery({ ...input, limit: 1 });
+	const { limit: _limit, after: _after, ...rest } = base;
+	return {
+		...rest,
+		groupBy: input.group.by,
+		lanes: input.group.lanes ?? []
 	};
 };
 export { collectionQuery };
@@ -417,30 +435,25 @@ const remainingBindings: ReadonlyArray<CommandBinding> = [
 			return json({ credential });
 		})),
 	binding('identity.workspaceAccess', { Command: session('tenant workspace access') },
-		(context) => Effect.gen(function* () {
-			return json(yield* (yield* Identity.Service).workspaceAccess(context.effectId, context.tenantId));
-		})),
+		(context) =>
+			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.workspaceAccess(context.effectId, context.tenantId), json))),
 	binding('identity.invite', { Command: { ...session('manage identity'), authorize: protect('manage', 'identity') } },
 		(context, input) => Effect.gen(function* () {
 			const invitationId = yield* (yield* Identity.Service).invite(context.effectId, context.tenantId, input.email, principal(context).userId);
 			return json({ invitationId });
 		})),
 	binding('identity.invitation.inspect', { Command: system('host invitation inspection') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Identity.Service).inspectInvitation(context.effectId, context.tenantId, input.invitationId));
-		})),
+		(context, input) =>
+			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.inspectInvitation(context.effectId, context.tenantId, input.invitationId), json))),
 	binding('identity.invitation.accept', { Command: session('invitation object acceptance') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Identity.Service).acceptInvitation(context.effectId, input.invitationId, principal(context)));
-		})),
+		(context, input) =>
+			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.acceptInvitation(context.effectId, input.invitationId, principal(context)), json))),
 	binding('approvals.decide', { Command: session('approval object decision') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Approvals.Service).decide(context.effectId, principal(context), input.state, input.decision, input.reason));
-		})),
+		(context, input) =>
+			Effect.flatMap(Approvals.Service, (approvals) => Effect.map(approvals.decide(context.effectId, principal(context), input.state, input.decision, input.reason), json))),
 	binding('approvals.withdraw', { Command: session('approval object withdrawal') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Approvals.Service).withdraw(context.effectId, principal(context), input.state));
-		})),
+		(context, input) =>
+			Effect.flatMap(Approvals.Service, (approvals) => Effect.map(approvals.withdraw(context.effectId, principal(context), input.state), json))),
 	binding('approvals.capabilities', { Command: session('approval visibility and capability') },
 		(context, input) => Effect.gen(function* () {
 			const visible = yield* (yield* Collections.Service).findFirst(context.effectId, principal(context), {
@@ -478,31 +491,36 @@ const remainingBindings: ReadonlyArray<CommandBinding> = [
 			return json({ settled: true, nextDueAtEpochMs: next ?? null });
 		})),
 	binding('sync.connect', { Command: session('viewer-scoped live query admission') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Sync.Service).connect(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input));
-		})),
+		(context, input) =>
+			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.connect(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input), json))),
 	binding('sync.extendPrefix', { Command: system('host live-prefix extension') },
-		(context, input) => Effect.gen(function* () {
-			return json(yield* (yield* Sync.Service).extendPrefix(context.effectId, input.state, input.request));
-		})),
+		(context, input) =>
+			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.extendPrefix(context.effectId, input.state, input.request), json))),
 	binding('sync.advance', { Command: system('host commit delta evaluation') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Sync.Service).advance(context.effectId, input)); })),
+		(context, input) =>
+			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.advance(context.effectId, input), json))),
 	binding('collections.embed', { Command: system('host embedding checkpoint') },
-		(context) => Effect.gen(function* () { return json(yield* (yield* Collections.Service).embedRecords(context.effectId)); })),
+		(context) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.embedRecords(context.effectId), json))),
 	binding('tasks.submit', { Command: session('TaskService.submit exact task object') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Agents.Service).submit(context.effectId, principal(context), input)); })),
+		(context, input) =>
+			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.submit(context.effectId, principal(context), input), json))),
 	binding('tasks.editMessage', { Command: session('TaskService.editMessage exact task object') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Agents.Service).editMessage(context.effectId, principal(context), input)); })),
+		(context, input) =>
+			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.editMessage(context.effectId, principal(context), input), json))),
 	binding('tasks.control', { Command: session('TaskService.control exact task object') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Agents.Service).control(context.effectId, principal(context), input)); })),
+		(context, input) =>
+			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.control(context.effectId, principal(context), input), json))),
 	binding('workspace.manifest', { Command: session('visible workspace manifest') },
 		(context) => Effect.map(workspaceManifest(context, false), json)),
 	binding('workspace.authoringManifest', { Command: session('administrator authoring manifest') },
 		(context) => Effect.map(workspaceManifest(context, true), json)),
 	binding('collections.history', { Command: session('collection row history policy') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Collections.Service).history(context.effectId, principal(context), input.collection, input.id)); })),
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.history(context.effectId, principal(context), input.collection, input.id), json))),
 	binding('collections.mutate', { Command: session('collection action, row, and field policy') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Collections.Service).mutateBrowser(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input)); })),
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.mutateBrowser(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input), json))),
 	binding('collections.resume', { Command: session('held mutation object'), Task: task('held mutation object') },
 		(context, input) => Effect.gen(function* () { yield* (yield* Collections.Service).resume(context.effectId, input.requestId); return json({ resumed: true, requestId: input.requestId }); })),
 	binding('collections.discard', { Command: session('held mutation object'), Task: task('held mutation object') },
@@ -513,9 +531,14 @@ const remainingBindings: ReadonlyArray<CommandBinding> = [
 			return json({ imported: yield* (yield* Collections.Service).import(context.effectId, subject, input.records.map((record) => ({ ...record, subject }))) });
 		})),
 	binding('collections.export', { Command: session('collection query policy') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Collections.Service).export(context.effectId, principal(context), collectionQuery(input))); })),
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.export(context.effectId, principal(context), collectionQuery(input)), json))),
 	binding('collections.count', { Command: session('collection query policy') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Collections.Service).count(context.effectId, principal(context), collectionQuery(input))); })),
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.count(context.effectId, principal(context), collectionQuery(input)), json))),
+	binding('collections.findGrouped', { Command: session('collection query policy') },
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.findGrouped(context.effectId, principal(context), groupedQuery(input)), json))),
 	binding('schema.plan', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
 		() => Effect.map(WorkspaceSchema.Service, (schema) => { const plan = schema.plan(); return json({ fingerprint: plan.fingerprint, steps: plan.steps.map(({ id, sql }) => ({ id, sql })) }); })),
 	binding('schema.fingerprint', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
@@ -534,21 +557,29 @@ const remainingBindings: ReadonlyArray<CommandBinding> = [
 	binding('automations.stop', { Command: session('declared automation task object') },
 		(context, input) => Effect.gen(function* () { yield* (yield* Automations.Service).stop(context.effectId, input.name, input.taskId); return json({ stopped: true }); })),
 	binding('envoys.receive', { Command: system('host-authenticated transport delivery') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).receive(context.effectId, input.envoy, input.delivery)); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.receive(context.effectId, input.envoy, input.delivery), json))),
 	binding('envoys.registration.inspect', { Command: system('host registration claim inspection') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).inspectRegistration(context.effectId, input.claimId)); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.inspectRegistration(context.effectId, input.claimId), json))),
 	binding('envoys.registration.redeem', { Command: session('registration claim object redemption') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).redeemRegistration(context.effectId, input.claimId, principal(context))); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.redeemRegistration(context.effectId, input.claimId, principal(context)), json))),
 	binding('envoys.drain', { Command: session('envoy conversation object'), Task: task('envoy conversation object') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).drain(context.effectId, input.envoy, input.conversationId)); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.drain(context.effectId, input.envoy, input.conversationId), json))),
 	binding('envoys.complete', { Command: session('envoy conversation object'), Task: task('envoy conversation object') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).complete(context.effectId, input.envoy, input.conversationId, input.output, input.progressKey ?? null)); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.complete(context.effectId, input.envoy, input.conversationId, input.output, input.progressKey ?? null), json))),
 	binding('envoys.status', { Command: session('envoy status visibility') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Envoys.Service).status(context.effectId, input.envoy)); })),
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.status(context.effectId, input.envoy), json))),
 	binding('integrations.pull', { Command: session('integration binding'), Task: task('integration binding') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Integrations.Service).pull(context.effectId, input.name, input.cursor, input.binding)); })),
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) => Effect.map(integrations.pull(context.effectId, input.name, input.cursor, input.binding), json))),
 	binding('integrations.flush', { Command: session('integration outbox'), Task: task('integration outbox') },
-		(context, input) => Effect.gen(function* () { return json(yield* (yield* Integrations.Service).flush(context.effectId, input.name, input.input ?? null)); })),
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) => Effect.map(integrations.flush(context.effectId, input.name, input.input ?? null), json))),
 	binding('notifications.drain', { Command: session('notification object'), Task: task('notification object') },
 		(context, input) => Effect.gen(function* () { yield* (yield* Notifications.Service).drain(context.effectId, input); return json({ delivered: true, id: input.id }); }))
 ];

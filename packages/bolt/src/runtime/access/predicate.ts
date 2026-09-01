@@ -165,7 +165,7 @@ const predicateColumn = (column: string, qualifier?: string): SQL =>
 		? quoteIdentifier(column)
 		: sql`${quoteIdentifier(qualifier)}.${quoteIdentifier(column)}`;
 
-export const comparisonSql = {
+const comparisonSql = {
 	eq: '=',
 	ne: '<>',
 	gt: '>',

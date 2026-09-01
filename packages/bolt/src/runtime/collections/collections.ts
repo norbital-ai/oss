@@ -37,6 +37,7 @@ import {
 	type SyncOutcome,
 	type SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
+import { toError } from '@norbital-ai/std';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import {
 	compileCollectionPredicate,
@@ -257,12 +258,15 @@ const BROWSER_MUTATION_LEASE_SECONDS =
 	1000;
 
 const sha256Hex = Effect.fn('Collections.sha256Hex')((value: string) =>
-	Effect.promise(async () => {
-		const digest = await globalThis.crypto.subtle.digest(
-			'SHA-256',
-			new TextEncoder().encode(value)
-		);
-		return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+	Effect.tryPromise({
+		try: async () => {
+			const digest = await globalThis.crypto.subtle.digest(
+				'SHA-256',
+				new TextEncoder().encode(value)
+			);
+			return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+		},
+		catch: toError
 	})
 );
 
@@ -1950,7 +1954,16 @@ export const layerWith = (
 							return vector;
 						})
 					);
-				const planned = yield* Effect.promise(() => prepareSearchPlan(input, context, embed));
+				const planned = yield* Effect.tryPromise({
+					try: () => prepareSearchPlan(input, context, embed),
+					catch: toError
+				}).pipe(
+					Effect.mapError((cause) =>
+						cause instanceof WhereCompileError
+							? cause
+							: refusal({ field: 'search', message: cause.message })
+					)
+				);
 				return Result.isFailure(planned)
 					? yield* Effect.fail(refusal(planned.failure))
 					: planned.success;
@@ -2990,6 +3003,7 @@ export const layerWith = (
 						const decoded: unknown = JSON.parse(operation.snapshot);
 						return isJsonObject(decoded) ? decoded : operation.previous;
 					} catch {
+						/* best effort */
 						return operation.previous;
 					}
 				};
@@ -3245,17 +3259,21 @@ export const layerWith = (
 							groupRoots: ReadonlyArray<(typeof roots)[number]>
 						) =>
 							lifecycleError(
-								Effect.gen(function* () {
-									const stored = yield* graphReads.read(
+								graphReads
+									.read(
 										EffectId.make(`${effectId}:write-wave:${depth}:${groupCollection}`),
 										groupRoots.map((root) => ({
 											collection: root.collection,
 											id: root.rootId
 										})),
 										[]
-									);
-									for (const [key, row] of stored.stored) readSession.storedRows.set(key, row);
-								})
+									)
+									.pipe(
+										Effect.map((stored) => {
+											for (const [key, row] of stored.stored)
+												readSession.storedRows.set(key, row);
+										})
+									)
 							);
 						const prepareRootGroup = (groupRoots: ReadonlyArray<(typeof roots)[number]>) =>
 							lifecycleError(
@@ -3267,13 +3285,13 @@ export const layerWith = (
 									const outcomes = yield* Effect.forEach(
 										groupRoots,
 										(root) =>
-											Effect.gen(function* () {
+											(() => {
 												const key = writeRecordKey({
 													collection: root.collection,
 													recordId: root.rootId
 												});
 												const policy = access.invocation();
-												const outcome = yield* prepareDeclarativeGraphService<
+												return prepareDeclarativeGraphService<
 													GraphPrepareError,
 													GraphWaveReadError,
 													never
@@ -3374,10 +3392,10 @@ export const layerWith = (
 																? failure
 																: mutationPhaseFailure('prepare', root.collection, [], failure)
 														);
-													})
+													}),
+													Effect.map((outcome) => ({ key, root, outcome }))
 												);
-												return { key, root, outcome };
-											}).pipe(
+											})().pipe(
 												Effect.ensuring(graphReads.complete(readSession, root.rootId)),
 												// Root preparation now runs in child fibers. Keep the facility service in
 												// each child's Effect context as well as the layer closure so any authored,
@@ -3964,7 +3982,9 @@ export const layerWith = (
 				const nowEpochMs = yield* Clock.currentTimeMillis;
 				const currentSchemaFingerprint = workspace.definition.schemaFingerprint;
 				if (currentSchemaFingerprint === undefined)
-					throw new TypeError('Compiled workspace is missing its schema fingerprint.');
+					return yield* Effect.fail(
+						new TypeError('Compiled workspace is missing its schema fingerprint.')
+					);
 				const graph = input.graph;
 				const baseVersions = input.baseVersions;
 				const rootId = String(graph.action === 'delete' ? graph.id : graph.values['id']);
@@ -3983,17 +4003,18 @@ export const layerWith = (
 					outcome
 				});
 				const settleOutcome = (outcome: BrowserMutationOutcome) =>
-					Effect.gen(function* () {
-						const records =
-							outcome._tag !== 'Committed' || outcome.action === 'delete'
-								? []
-								: yield* findMany(EffectId.make(`${mutationEffectId}:readback`), subject, {
-										collection: outcome.collection,
-										where: { id: { in: [outcome.id] } },
-										limit: 1
-									}).pipe(Effect.catch(() => Effect.succeed([])));
-						return projectBrowserMutationOutcome(input.idempotencyKey, outcome).settle(records);
-					});
+					(outcome._tag !== 'Committed' || outcome.action === 'delete'
+						? Effect.succeed([])
+						: findMany(EffectId.make(`${mutationEffectId}:readback`), subject, {
+								collection: outcome.collection,
+								where: { id: { in: [outcome.id] } },
+								limit: 1
+							}).pipe(Effect.catch(() => Effect.succeed([])))
+					).pipe(
+						Effect.map((records) =>
+							projectBrowserMutationOutcome(input.idempotencyKey, outcome).settle(records)
+						)
+					);
 				const claim = (fence: BrowserMutationFence) =>
 					Effect.gen(function* () {
 						const beginning = yield* beginBrowserMutation(
@@ -4079,8 +4100,7 @@ export const layerWith = (
 					while (current instanceof MutationPhaseFailure) current = current.underlying;
 					return current;
 				};
-				const persistFailure = (cause: unknown) =>
-					Effect.gen(function* () {
+				const persistFailure = (cause: unknown) => {
 						const error = unwrapPhase(cause);
 						const refusal = refusalOf(error);
 						const terminal: BrowserMutationOutcome =
@@ -4130,8 +4150,8 @@ export const layerWith = (
 													schemaFingerprint: currentSchemaFingerprint,
 													reason: `The mutation stopped with an unclassified failure: ${describeCause(error)}`
 												};
-						return yield* settleTerminal(fence, terminal);
-					});
+						return settleTerminal(fence, terminal);
+					};
 				const write =
 					graph.action === 'delete'
 						? mutate(mutationEffectId, subject, graph.collection, [{ id: graph.id }], false, 0, {
@@ -4256,29 +4276,28 @@ export const layerWith = (
 						action: 'create' | 'update';
 						payload: Readonly<Record<string, unknown>>;
 					}>;
-					const mutateImportChunk = (chunk: ReadonlyArray<ImportRoot>, chunkIndex: number) =>
-						Effect.gen(function* () {
-							const first = chunk[0];
-							if (first === undefined) return 0;
-							yield* mutate(
-								EffectId.make(`${effectId}:chunk:${chunkIndex}`),
-								subject,
-								first.collection,
-								chunk.map((root) => root.payload),
-								false,
-								0,
-								{
-									roots: chunk.map(({ collection, id, action }) => ({ collection, id, action }))
-								}
-							).pipe(
-								Effect.catchIf(isBrowserMutationReplay, (cause) => Effect.die(cause)),
-								Effect.catchIf(
-									(cause): cause is MutationPhaseFailure => cause instanceof MutationPhaseFailure,
-									(cause) => Effect.fail(cause.underlying as MutationError)
-								)
-							);
-							return chunk.length;
-						});
+					const mutateImportChunk = (chunk: ReadonlyArray<ImportRoot>, chunkIndex: number) => {
+						const first = chunk[0];
+						if (first === undefined) return Effect.succeed(0);
+						return mutate(
+							EffectId.make(`${effectId}:chunk:${chunkIndex}`),
+							subject,
+							first.collection,
+							chunk.map((root) => root.payload),
+							false,
+							0,
+							{
+								roots: chunk.map(({ collection, id, action }) => ({ collection, id, action }))
+							}
+						).pipe(
+							Effect.catchIf(isBrowserMutationReplay, (cause) => Effect.die(cause)),
+							Effect.catchIf(
+								(cause): cause is MutationPhaseFailure => cause instanceof MutationPhaseFailure,
+								(cause) => Effect.fail(cause.underlying as MutationError)
+							),
+							Effect.as(chunk.length)
+						);
+					};
 					const importChunks = <Row>(
 						rows: ReadonlyArray<Row>,
 						rootFor: (row: Row, index: number) => Effect.Effect<ImportRoot, MutationError>

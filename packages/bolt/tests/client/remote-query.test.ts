@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Effect, Schema } from 'effect';
-import { syncJsonByteLength, type StoredRecord } from '@norbital-ai/bolt-protocol';
+import { syncRetainedPrefixBytes, type StoredRecord } from '@norbital-ai/bolt-protocol';
 import { createMachineQuery, createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 import {
 	initialClientState,
@@ -112,7 +112,7 @@ describe('machine-backed query read semantics', () => {
 						prefix: {
 							version: 1,
 							rows: [...rows],
-							retainedBytes: syncJsonByteLength(rows)
+							retainedBytes: syncRetainedPrefixBytes(rows)
 						}
 					})
 				]
@@ -153,7 +153,7 @@ describe('machine-backed query read semantics', () => {
 			prefix: {
 				version: 1,
 				rows: stableRows,
-				retainedBytes: syncJsonByteLength(stableRows)
+				retainedBytes: syncRetainedPrefixBytes(stableRows)
 			}
 		});
 		const relevant: ClientState = {

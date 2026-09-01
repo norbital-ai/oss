@@ -1,9 +1,13 @@
 import {
+	EnvironmentName,
+	ReleaseId,
 	SyncApplyFrame as SyncApplyFrameSchema,
-	SyncScopedApplyFrame as SyncScopedApplyFrameSchema
+	SyncScopedApplyFrame as SyncScopedApplyFrameSchema,
+	TenantId
 } from '@norbital-ai/bolt-protocol';
 import type { SyncApplyFrame, SyncScope } from '@norbital-ai/bolt-protocol';
-import { Schema } from 'effect';
+import { getErrorMessage } from '@norbital-ai/std';
+import { Option, Schema } from 'effect';
 import type { WorkspaceSession } from '../session.js';
 import { SyncAttachmentError } from './client.js';
 import type {
@@ -12,7 +16,7 @@ import type {
 } from './client.js';
 import type { SyncHttpDriver } from './http-driver.js';
 
-export type SyncClientApplyFrame = SyncApplyFrame;
+export type { SyncApplyFrame as SyncClientApplyFrame };
 export type BrowserSyncScope = Readonly<SyncScope & Pick<WorkspaceSession, 'workspaceId'>>;
 export type BrowserSyncProfileElection = Readonly<Pick<WorkspaceSession, 'syncPrincipal'>>;
 export type EventSourceLike = {
@@ -23,7 +27,7 @@ export type EventSourceLike = {
 	readonly close: () => void;
 	onerror: ((event: unknown) => void) | null;
 };
-export type BrowserSyncWorkspaceControls = SyncHttpDriver;
+export type { SyncHttpDriver as BrowserSyncWorkspaceControls };
 export type BrowserSyncWorkspaceBindingOptions = Readonly<{
 	readonly scope: BrowserSyncScope;
 	readonly controls: BrowserSyncWorkspaceControls;
@@ -68,92 +72,60 @@ const wireKeyOf = (scope: SyncScope): string =>
 		nonempty('Browser sync release id', scope.releaseId)
 	]);
 
-type Envelope = Readonly<{
-	readonly protocolVersion: typeof PROTOCOL;
-	readonly profileKey: string;
-	readonly memberId: string;
-	readonly sentAtEpochMs: number;
-}>;
-type BrokerMessage =
-	| (Envelope & { readonly kind: 'member.presence'; readonly scopes: ReadonlyArray<BrowserSyncScope> })
-	| (Envelope & { readonly kind: 'member.depart' })
-	| (Envelope & { readonly kind: 'owner.heartbeat'; readonly connectionId: string })
-	| (Envelope & {
-			readonly kind: 'owner.scope-ready';
-			readonly connectionId: string;
-			readonly targetMemberId: string;
-			readonly scope: BrowserSyncScope;
-	  })
-	| (Envelope & { readonly kind: 'owner.release'; readonly connectionId: string })
-	| (Envelope & {
-			readonly kind: 'sync.frame';
-			readonly connectionId: string;
-			readonly scope: BrowserSyncScope;
-			readonly frame: SyncApplyFrame;
-	  });
+const BrowserSyncScopeSchema = Schema.Struct({
+	workspaceId: Schema.NonEmptyString,
+	tenantId: TenantId,
+	environment: EnvironmentName,
+	releaseId: ReleaseId
+});
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
-const text = (value: unknown): string | undefined =>
-	typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-const isScope = (value: unknown): value is BrowserSyncScope =>
-	isRecord(value) &&
-	text(value.workspaceId) !== undefined &&
-	text(value.tenantId) !== undefined &&
-	text(value.environment) !== undefined &&
-	text(value.releaseId) !== undefined;
+const BrokerEnvelopeFields = {
+	protocolVersion: Schema.Literal(PROTOCOL),
+	profileKey: Schema.NonEmptyString,
+	memberId: Schema.NonEmptyString,
+	sentAtEpochMs: Schema.Number.check(Schema.isFinite())
+};
+
+const BrokerMessageSchema = Schema.Union([
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('member.presence'),
+		scopes: Schema.Array(BrowserSyncScopeSchema)
+	}),
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('member.depart')
+	}),
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('owner.heartbeat'),
+		connectionId: Schema.NonEmptyString
+	}),
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('owner.release'),
+		connectionId: Schema.NonEmptyString
+	}),
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('owner.scope-ready'),
+		connectionId: Schema.NonEmptyString,
+		targetMemberId: Schema.NonEmptyString,
+		scope: BrowserSyncScopeSchema
+	}),
+	Schema.Struct({
+		...BrokerEnvelopeFields,
+		kind: Schema.Literal('sync.frame'),
+		connectionId: Schema.NonEmptyString,
+		scope: BrowserSyncScopeSchema,
+		frame: SyncApplyFrameSchema
+	})
+]);
+type BrokerMessage = typeof BrokerMessageSchema.Type;
 
 const decodeBrokerMessage = (value: unknown): BrokerMessage | undefined => {
-	if (!isRecord(value)) return undefined;
-	const { protocolVersion, profileKey, memberId, sentAtEpochMs, kind } = value;
-	const profile = text(profileKey);
-	const member = text(memberId);
-	if (
-		protocolVersion !== PROTOCOL ||
-		profile === undefined ||
-		member === undefined ||
-		typeof sentAtEpochMs !== 'number' ||
-		!Number.isFinite(sentAtEpochMs)
-	)
-		return undefined;
-	const envelope = { protocolVersion: PROTOCOL, profileKey: profile, memberId: member, sentAtEpochMs };
-	switch (kind) {
-		case 'member.presence': {
-			if (!Array.isArray(value.scopes) || !value.scopes.every(isScope)) return undefined;
-			return { ...envelope, kind, scopes: value.scopes };
-		}
-		case 'member.depart':
-			return { ...envelope, kind };
-		case 'owner.heartbeat':
-		case 'owner.release': {
-			const connectionId = text(value.connectionId);
-			return connectionId === undefined ? undefined : { ...envelope, kind, connectionId };
-		}
-		case 'owner.scope-ready': {
-			const connectionId = text(value.connectionId);
-			const targetMemberId = text(value.targetMemberId);
-			return connectionId === undefined || targetMemberId === undefined || !isScope(value.scope)
-				? undefined
-				: { ...envelope, kind, connectionId, targetMemberId, scope: value.scope };
-		}
-		case 'sync.frame': {
-			const connectionId = text(value.connectionId);
-			if (connectionId === undefined || !isScope(value.scope)) return undefined;
-			try {
-				return {
-					...envelope,
-					kind,
-					connectionId,
-					scope: value.scope,
-					frame: Schema.decodeUnknownSync(SyncApplyFrameSchema)(value.frame)
-				};
-			} catch {
-				return undefined;
-			}
-		}
-		default:
-			return undefined;
-	}
+	const decoded = Schema.decodeUnknownOption(BrokerMessageSchema)(value);
+	return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const eventData = (event: unknown): string | undefined => {
@@ -243,7 +215,7 @@ const openTransport = (options: {
 		terminate(
 			new SyncAttachmentError(
 				'transport',
-				cause instanceof Error ? cause.message : String(cause),
+				getErrorMessage(cause),
 				{ cause }
 			),
 			true
@@ -378,18 +350,22 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 	const report = (cause: unknown): void => options.onError?.(cause);
 	const eachListener = (
 		bindings: Iterable<Binding>,
-		fn: (listener: SyncWorkspaceAttachmentListener) => void
+		fn: (listener: SyncWorkspaceAttachmentListener) => void | Promise<void>
 	): void => {
 		for (const binding of bindings)
 			for (const listener of [...binding.listeners]) {
 				try {
-					fn(listener);
+					const result = fn(listener);
+					if (result instanceof Promise) result.catch(report);
 				} catch (cause) {
 					report(cause);
 				}
 			}
 	};
-	const envelope = (): Envelope => ({
+	const envelope = (): Pick<
+		BrokerMessage,
+		'protocolVersion' | 'profileKey' | 'memberId' | 'sentAtEpochMs'
+	> => ({
 		protocolVersion: PROTOCOL,
 		profileKey,
 		memberId,
@@ -476,7 +452,7 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 	const deliver = (scope: BrowserSyncScope, frame: SyncApplyFrame): void => {
 		const local = localScopes.get(wireKeyOf(scope));
 		if (local === undefined) return;
-		eachListener(local.bindings, (listener) => void Promise.resolve(listener.onFrame(frame)).catch(report));
+		eachListener(local.bindings, (listener) => listener.onFrame(frame));
 	};
 	const ownerHeartbeat = (active: Owner): void => {
 		if (active.finished || active.connectionId === undefined) return;

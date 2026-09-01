@@ -23,7 +23,7 @@ const { bolt_schedule: boltSchedule, bolt_task: boltTask } = SYSTEM_MODEL_TABLES
 
 export type { Statement } from '#lib/runtime/persistence.js';
 
-type Row = Readonly<Record<string, unknown>>;
+type Row = { readonly [field: string]: unknown };
 export type ExecuteStatements<E = never> = (
 	statements: ReadonlyArray<Statement>
 ) => Effect.Effect<ReadonlyArray<Row>, E>;

@@ -164,7 +164,8 @@
 											gap="none"
 											class="divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
 										>
-											<Stack gap="xs" class="min-w-0 overflow-auto p-3">
+											<Scroll name="Review payload" class="min-w-0 p-3">
+											<Stack gap="xs">
 												<span class="text-micro font-medium text-foreground"
 													>{t('bolt.studio.before')}</span
 												>
@@ -172,13 +173,16 @@
 													class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.before ??
 														'∅'}</pre>
 											</Stack>
-											<Stack gap="xs" class="min-w-0 overflow-auto p-3">
+											</Scroll>
+											<Scroll name="Review payload" class="min-w-0 p-3">
+											<Stack gap="xs">
 												<span class="text-micro font-medium text-foreground"
 													>{t('bolt.studio.after')}</span
 												>
 												<pre
 													class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.after}</pre>
 											</Stack>
+											</Scroll>
 										</Grid>
 									</Stack>
 								{/each}
@@ -202,17 +206,19 @@
 							{#if selected.schemaPlan.steps.length === 0}
 								<p class="text-meta">{t('bolt.studio.noSchemaSteps')}</p>
 							{:else}
+								<Scroll name="Schema plan steps" class="max-h-96">
 								<ul
-									class="max-h-96 overflow-auto divide-y divide-border/50 rounded-md border border-border/70"
+									class="divide-y divide-border/50 rounded-md border border-border/70"
 								>
 									{#each selected.schemaPlan.steps as step (step.id)}
 										<li class="px-3 py-2">
-											<p class="text-micro text-muted-foreground">{step.id}</p>
+											<p class="text-micro text-muted-foreground">{step.sql.split('\n')[0] ?? 'Schema step'}</p>
 											<pre
 												class="whitespace-pre-wrap break-all font-mono text-micro text-foreground">{step.sql}</pre>
 										</li>
 									{/each}
 								</ul>
+								</Scroll>
 							{/if}
 						</Stack>
 					{/if}

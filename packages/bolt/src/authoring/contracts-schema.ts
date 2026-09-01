@@ -136,7 +136,7 @@ type ReferencesForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder
 	]: C[K] extends ReferenceBuilder<infer Targets, boolean, boolean> ? Targets : never;
 };
 
-export interface TableShape<
+interface TableShape<
 	Select,
 	Insert = Partial<Select>,
 	References = Readonly<Record<never, never>>
