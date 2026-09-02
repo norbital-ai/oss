@@ -461,7 +461,7 @@ describe('sync engine effective-plan compilation', () => {
 		const unbounded = compileEffectiveQueryPlan({
 			definition,
 			rootCollection: 'projects',
-			limit: 1001,
+			limit: 10_001,
 			kind: 'findMany',
 			subject,
 			policyFor: unrestricted
@@ -577,6 +577,30 @@ describe('sync engine effective-plan compilation', () => {
 		);
 		expect(excluded.execution.columns).toBeUndefined();
 		expect(excluded.projection.fields).toContain('id');
+	});
+
+	it('admits a live prefix up to the protocol key ceiling, and refuses one past it', () => {
+		const admitted = succeed(
+			compileEffectiveQueryPlan({
+				definition,
+				rootCollection: 'projects',
+				limit: 10_000,
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			})
+		);
+		expect(admitted.mode).toBe('live-prefix');
+		expect(admitted.limit).toBe(10_000);
+		const refused = compileEffectiveQueryPlan({
+			definition,
+			rootCollection: 'projects',
+			limit: 10_001,
+			kind: 'findMany',
+			subject,
+			policyFor: unrestricted
+		});
+		expect(Result.isFailure(refused) && refused.failure.code).toBe('unsupported-live-shape');
 	});
 
 	it('leaves a one-shot selection exactly as authored', () => {

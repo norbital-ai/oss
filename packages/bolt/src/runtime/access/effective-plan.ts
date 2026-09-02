@@ -7,6 +7,7 @@ import {
 	type CollectionRelationshipSegment,
 	type CollectionReversePath
 } from '@norbital-ai/bolt-protocol/collections';
+import { MAX_SYNC_LOADED_KEYS } from '@norbital-ai/bolt-protocol';
 import type {
 	CompiledAuthoring,
 	FieldDefinition,
@@ -29,7 +30,6 @@ import { policyHashSource, type PolicyHashSource } from './policy-surface.js';
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isJson = Schema.is(Schema.Json);
 
-const MAX_LIVE_PREFIX = 1_000;
 const DEFAULT_LIVE_PREFIX = 100;
 export const DEFAULT_RELATION_PREFIX_LIMIT = 100;
 export const MAX_RELATION_DEPTH = MAX_COLLECTION_PREDICATE_DEPTH;
@@ -1546,12 +1546,12 @@ const projectionPlan = (
 				(typeof limit !== 'number' ||
 					!Number.isInteger(limit) ||
 					limit < 1 ||
-					limit > MAX_LIVE_PREFIX)
+					limit > MAX_SYNC_LOADED_KEYS)
 			)
 				return diagnostic(
 					'unsupported-live-shape',
 					`${childNode}.limit`,
-					`Live projection ${childNode} requires a limit from 1 to ${MAX_LIVE_PREFIX}.`,
+					`Live projection ${childNode} requires a limit from 1 to ${MAX_SYNC_LOADED_KEYS}.`,
 					relation.identity
 				);
 			const nestedWhere = isObject(childSpec) ? childSpec['where'] : undefined;
@@ -1675,12 +1675,12 @@ export const compileEffectiveQueryPlan = (
 	const requestedLimit = input.kind === 'findFirst' ? 1 : (input.limit ?? DEFAULT_LIVE_PREFIX);
 	if (
 		mode === 'live-prefix' &&
-		(!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_LIVE_PREFIX)
+		(!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_SYNC_LOADED_KEYS)
 	)
 		return diagnostic(
 			'unsupported-live-shape',
 			'query.limit',
-			`Live queries require a contiguous prefix limit from 1 to ${MAX_LIVE_PREFIX}.`
+			`Live queries require a contiguous prefix limit from 1 to ${MAX_SYNC_LOADED_KEYS}.`
 		);
 	const rootPolicy = input.policyFor(input.rootCollection);
 	const projection = projectionPlan(

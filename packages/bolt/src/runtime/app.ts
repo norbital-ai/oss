@@ -714,6 +714,15 @@ const BundleDispatch = {
 							_tag: 'Failure',
 							error: makeWireError('invalid_input', error.message, { httpStatus: 400 })
 						};
+					// A query the planner refuses is input too: an unknown field, a live window the engine
+					// does not admit, a relationship it cannot resolve. It reached the catch-all as a 500,
+					// and a 500 told the sync client to retry the same registration forever, so an authored
+					// mistake showed as a page that never loaded rather than as the sentence naming it.
+					if (error instanceof AccessControl.EffectivePlanError)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('invalid_input', error.message, { httpStatus: 400 })
+						};
 					if (error instanceof Collections.MutationVersionConflict)
 						return {
 							_tag: 'Failure',

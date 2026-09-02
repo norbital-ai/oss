@@ -6,7 +6,7 @@ import {
 	syncRetainedPrefixBytes
 } from '@norbital-ai/bolt-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSyncHttpDriver } from '../../src/client/sync/http-driver.js';
+import { createSyncHttpDriver, SyncHttpError } from '../../src/client/sync/http-driver.js';
 import {
 	createBrowserSyncBroker,
 	type BrowserSyncBroker,
@@ -247,6 +247,26 @@ const fakeWorkspaceControls = (
 });
 
 describe('sync drivers', () => {
+	it('fails a 400 registration terminally with the host sentence, and keeps a 500 retryable', async () => {
+		const driverFor = (status: number) =>
+			createSyncHttpDriver({
+				registrationUrl: '/__bolt/sync/connect',
+				extensionUrl: '/__bolt/sync/extend',
+				fetch: (async () =>
+					new Response(JSON.stringify({ status, message: `answered ${status}` }), {
+						status,
+						headers: { 'content-type': 'application/json' }
+					})) as unknown as typeof fetch,
+				push: async () => undefined
+			});
+		const empty = { queries: [], detached: [], pending: [] };
+		const refused: unknown = await driverFor(400).register('c', empty).catch((cause) => cause);
+		expect(refused).toBeInstanceOf(SyncHttpError);
+		expect(refused).toMatchObject({ status: 400, terminal: true, message: 'answered 400' });
+		const failed: unknown = await driverFor(500).register('c', empty).catch((cause) => cause);
+		expect(failed).toMatchObject({ status: 500, terminal: false, message: 'answered 500' });
+	});
+
 	it('uses the browser-owned connection id on registration and extension controls', async () => {
 		const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
 		const driver = createSyncHttpDriver({

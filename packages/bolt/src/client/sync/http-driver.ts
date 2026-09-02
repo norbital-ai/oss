@@ -44,8 +44,16 @@ export type SyncHttpDriverOptions = Readonly<{
 	readonly push: (request: SyncPushRequest, signal?: AbortSignal) => Promise<void>;
 }>;
 
+/**
+ * Statuses a retry cannot change.
+ *
+ * 400 is here because a registration the host calls malformed — an authored query the planner
+ * refuses, a body it cannot decode — will be refused identically every time. Retrying it on the
+ * transport backoff left every query on the page pending forever, with the refusal's sentence
+ * read once and thrown away; failing them with it is what lets a person read what was wrong.
+ */
 const terminalStatus = (status: number): boolean =>
-	status === 401 || status === 403 || status === 410 || status === 426;
+	status === 400 || status === 401 || status === 403 || status === 410 || status === 426;
 
 const responseMessage = async (response: Response): Promise<string> => {
 	try {
