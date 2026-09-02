@@ -1486,6 +1486,23 @@ const projectionPlan = (
 	const authored = selectedFields(definition, collection, columns);
 	const order = normalizedOrder(definition, collection, orderBy);
 	const readMask = effectiveReadMask(policy?.fields);
+	// A live prefix is keyed by its ordering values, and a key is a scalar: the cursor that continues
+	// the prefix binds each value back into SQL, and a JSON object has no total order the engine can
+	// bind. Ordering a live query by a range or any other custom type used to pass planning, load its
+	// rows, and then fail at the first row with a 502 the client retried forever — the loans page,
+	// ordered by `effective_range`, sat on "Reconnecting to live updates" with no sentence anywhere.
+	// Refusing here names the field, and a refusal is terminal for the client, so the page shows it.
+	if (enforceLive) {
+		const compound = order.find(({ field }) => fieldsOf(definition, collection)?.[field]?.type === 'json');
+		if (compound !== undefined) {
+			const declared = fieldsOf(definition, collection)?.[compound.field]?.customType ?? 'json';
+			return diagnostic(
+				'unsupported-live-shape',
+				`${node}.orderBy.${compound.field}`,
+				`Live ordering requires a scalar field: ${collection}.${compound.field} is ${declared}, which cannot key a live prefix. Order by a scalar column, such as one generated from it.`
+			);
+		}
+	}
 	const carried = enforceLive
 		? order.map(({ field }) => field).filter((field) => !authored.includes(field))
 		: [];

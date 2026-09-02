@@ -783,6 +783,10 @@
 						createOpen = false;
 					}}
 				/>
+			{:else if collectionSurface?.representationFailure}
+				<p class="text-sm text-destructive" role="alert">
+					The representation for "{String(collection)}" failed to load: {collectionSurface.representationFailure}
+				</p>
 			{:else}
 				<p class="text-sm text-destructive" role="alert">
 					Collection "{String(collection)}" requires an explicit representation to create records.

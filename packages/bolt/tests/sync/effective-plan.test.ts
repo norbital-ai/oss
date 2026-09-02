@@ -603,6 +603,35 @@ describe('sync engine effective-plan compilation', () => {
 		expect(Result.isFailure(refused) && refused.failure.code).toBe('unsupported-live-shape');
 	});
 
+	it('refuses a live ordering by a JSON or custom column at plan time, naming the field', () => {
+		const refused = compileEffectiveQueryPlan({
+			definition,
+			rootCollection: 'projects',
+			orderBy: { metadata: 'desc' },
+			kind: 'findMany',
+			subject,
+			policyFor: unrestricted
+		});
+		expect(Result.isFailure(refused)).toBe(true);
+		if (Result.isFailure(refused)) {
+			expect(refused.failure.code).toBe('unsupported-live-shape');
+			expect(refused.failure.node).toBe('query.orderBy.metadata');
+			expect(refused.failure.message).toContain('projects.metadata is json');
+		}
+		const oneShot = succeed(
+			compileEffectiveQueryPlan({
+				definition,
+				rootCollection: 'projects',
+				orderBy: { metadata: 'desc' },
+				after: 'cursor',
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			})
+		);
+		expect(oneShot.mode).toBe('one-shot');
+	});
+
 	it('leaves a one-shot selection exactly as authored', () => {
 		const plan = succeed(
 			compileEffectiveQueryPlan({

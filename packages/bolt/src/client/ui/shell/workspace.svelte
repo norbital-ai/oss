@@ -100,6 +100,11 @@
 				const load = workspace.representationLoaders[property];
 				if (load !== undefined) {
 					requestedCollectionSurfaces.add(property);
+					// A representation that fails to load is recorded with its sentence, not swallowed. This
+					// caught and discarded the failure, so a representation whose module threw — a `Column`
+					// rendered outside any `Grid`, in the claims form — surfaced as "requires an explicit
+					// representation to create records": a sentence about a file that does not exist, for a
+					// file that does and is broken. Nobody could tell the two apart.
 					void Effect.runPromise(
 						Effect.tryPromise(load).pipe(
 							Effect.tap((representation) =>
@@ -109,7 +114,16 @@
 									})
 								)
 							),
-							Effect.catch(() => Effect.void)
+							Effect.catch((failure) =>
+								Effect.sync(() => {
+									const message =
+										failure.cause instanceof Error ? failure.cause.message : String(failure.cause);
+									console.error(`[bolt] representation for ${property} failed to load: ${message}`);
+									Object.assign(loadedCollectionSurfaces, {
+										[property]: { representationFailure: message }
+									});
+								})
+							)
 						)
 					);
 				}

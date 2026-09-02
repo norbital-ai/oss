@@ -23,6 +23,8 @@ export interface CollectionSurface {
 	readonly representation?: CollectionRepresentationComponent;
 	/** Static `bolt:banner` URL declared on the collection's `+representation.svelte`, if any. */
 	readonly banner?: string | null;
+	/** Why the authored representation could not be loaded, when there was one and it failed. */
+	readonly representationFailure?: string;
 }
 
 export type CollectionSurfaceRegistry = Readonly<Record<string, CollectionSurface>>;
