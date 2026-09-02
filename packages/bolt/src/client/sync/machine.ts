@@ -21,7 +21,6 @@ import { applyPrefixDelta } from '../live-query/project.js';
 
 export { applyPrefixDelta } from '../live-query/project.js';
 
-
 export type DisconnectCause = Readonly<{
 	readonly kind: 'transport' | 'terminal';
 	readonly message: string;
@@ -32,6 +31,12 @@ export const DETACH_GRACE_MS = 30_000;
 export const STALE_WRITE_MS = 15_000;
 const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 30_000;
+/**
+ * Consecutive stream failures, with no frame ever delivered, before the connection is called
+ * terminal rather than retried. Six is roughly a minute under the backoff above — long enough
+ * that a genuine blip during startup still recovers on its own.
+ */
+const TRANSPORT_ESCALATION_ATTEMPTS = 6;
 
 export type QueryPhase = 'pending' | 'fresh' | 'failed';
 
@@ -55,8 +60,7 @@ export type QueryState = Readonly<{
 
 export type WriteState = Readonly<
 	{ readonly request: CollectionMutateRequest } & (
-		| { readonly phase: 'queued' }
-		| { readonly phase: 'sent'; readonly sentAt: number }
+		{ readonly phase: 'queued' } | { readonly phase: 'sent'; readonly sentAt: number }
 	)
 >;
 
@@ -136,7 +140,8 @@ const checkedPrefix = (
 	label: string
 ): VersionedPrefixState => {
 	if (!Number.isInteger(version) || version < 0) throw new Error(`${label} has an invalid version`);
-	if (rows.length > MAX_SYNC_LOADED_KEYS) throw new Error(`${label} exceeds the loaded-key ceiling`);
+	if (rows.length > MAX_SYNC_LOADED_KEYS)
+		throw new Error(`${label} exceeds the loaded-key ceiling`);
 	requireUniqueRecordIds(rows, label);
 	const measuredBytes = syncRetainedPrefixBytes(rows);
 	if (retainedBytes !== measuredBytes || retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES) {
@@ -219,7 +224,9 @@ const requestedPrefixOf = (input: SyncQueryInput): number => {
 	return Math.min(requested, MAX_SYNC_LOADED_KEYS);
 };
 
-const pendingWrites = (state: ClientState): ReadonlyArray<CollectionMutationIdempotencyKey> => [...state.writes.keys()];
+const pendingWrites = (state: ClientState): ReadonlyArray<CollectionMutationIdempotencyKey> => [
+	...state.writes.keys()
+];
 
 const registrationEffect = (
 	state: ClientState,
@@ -355,10 +362,7 @@ const onFrame = (
 			});
 		}
 		const next = { ...state, queries, writes: settleWrites(state.writes, payload.outcomes) };
-		return [
-			next,
-			resetKeys.size === 0 ? [] : [registrationEffect(next, [...resetKeys])]
-		];
+		return [next, resetKeys.size === 0 ? [] : [registrationEffect(next, [...resetKeys])]];
 	} catch (cause) {
 		/* best effort */
 		return protocolRestart(
@@ -394,12 +398,7 @@ const onRegistered = (
 			}
 			prefixes.set(
 				result.queryKey,
-				checkedPrefix(
-					result.version,
-					result.rows,
-					result.retainedBytes,
-					'Registered sync prefix'
-				)
+				checkedPrefix(result.version, result.rows, result.retainedBytes, 'Registered sync prefix')
 			);
 		}
 		for (const key of expected) {
@@ -481,7 +480,29 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 		case 'frame':
 			return onFrame(state, event.payload, event.at);
 		case 'disconnected': {
-			const terminal = event.cause.kind === 'terminal';
+			/**
+			 * A transport failure that never once succeeded is escalated to terminal.
+			 *
+			 * `EventSource` cannot read an HTTP status: a 401 fires `onerror` exactly as a dropped
+			 * connection does, so the SSE driver has no way to tell "your session ended" from "the
+			 * network blipped" and reports every stream failure as retryable. The stream is also
+			 * established before `register`, which is an ordinary fetch and *can* read the status — so
+			 * an auth failure on the stream never reaches the one path able to classify it, and the
+			 * client reconnects on a capped backoff forever.
+			 *
+			 * That is what a signed-out browser looks like after an environment reset, which drops the
+			 * `session` rows the credential resolves against: every view sits on `loading`, the console
+			 * repeats "Sync event stream disconnected", and the server logs nothing at all, because a
+			 * 401 is not a failure it records. Bounding it turns an unexplained flap into a state the
+			 * UI can render — the queries fail with a message rather than staying pending forever.
+			 *
+			 * Only a connection that has never delivered a frame escalates. A live connection that
+			 * drops is an ordinary reconnect and keeps its unbounded backoff, because that one really
+			 * is a network condition and really does recover.
+			 */
+			const neverEstablished = state.reconnectAttempt + 1 >= TRANSPORT_ESCALATION_ATTEMPTS;
+			const terminal =
+				event.cause.kind === 'terminal' || (neverEstablished && state.link !== 'live');
 			const queries = new Map<string, QueryState>();
 			for (const [key, query] of state.queries) {
 				queries.set(key, {
@@ -566,10 +587,7 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			};
 			queries.set(event.key, query);
 			const next = { ...state, queries };
-			return [
-				next,
-				state.link === 'live' ? [registrationEffect(next, [event.key])] : []
-			];
+			return [next, state.link === 'live' ? [registrationEffect(next, [event.key])] : []];
 		}
 		case 'detached': {
 			const existing = state.queries.get(event.key);

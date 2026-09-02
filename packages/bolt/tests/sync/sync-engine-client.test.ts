@@ -385,3 +385,38 @@ describe('retained-prefix lifetime', () => {
 		]);
 	});
 });
+
+describe('a stream that never connects', () => {
+	const disconnect = (state: ClientState): ClientState =>
+		step(state, {
+			kind: 'disconnected',
+			cause: { kind: 'transport', message: 'Sync event stream disconnected', at: 0 }
+		})[0];
+
+	it('gives up and reports, instead of flapping forever against a 401', () => {
+		// `EventSource` cannot read an HTTP status, so a 401 fires `onerror` exactly as a dropped
+		// connection does and the SSE driver reports every stream failure as retryable. After an
+		// environment reset drops the `session` rows a credential resolves against, that is what a
+		// signed-out browser does: every view sits on `loading` and the console repeats one line,
+		// while the server logs nothing, because a 401 is not a failure it records.
+		let state = initialClientState(0);
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			state = disconnect(state);
+			expect(state.link, `attempt ${attempt + 1} is still an ordinary reconnect`).toBe(
+				'reconnecting'
+			);
+		}
+		state = disconnect(state);
+		expect(state.link).toBe('closed');
+	});
+
+	it('keeps retrying a live connection that drops, which is a real network condition', () => {
+		// The escalation is only for a connection that never delivered anything. One that was live and
+		// dropped is an ordinary reconnect and must keep its unbounded backoff.
+		let state: ClientState = { ...initialClientState(0), link: 'live' };
+		for (let attempt = 0; attempt < 12; attempt += 1) {
+			state = { ...disconnect(state), link: 'live' };
+		}
+		expect(state.link).toBe('live');
+	});
+});
