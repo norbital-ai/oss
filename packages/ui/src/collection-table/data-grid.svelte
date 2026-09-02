@@ -40,6 +40,7 @@
 </script>
 
 <script lang="ts" generics="TRow extends object">
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import CollectionGrid from './internal/collection-grid.svelte';
 	import {
 		RowAPI,
@@ -84,7 +85,7 @@
 		if (right == null) return -1;
 		if (typeof left === 'number' && typeof right === 'number') return left - right;
 		if (typeof left === 'boolean' && typeof right === 'boolean')
-			return Number(left) - Number(right);
+			return decodeNumber(left ? 1 : 0) - decodeNumber(right ? 1 : 0);
 		return String(left).localeCompare(String(right), undefined, {
 			numeric: true,
 			sensitivity: 'base'

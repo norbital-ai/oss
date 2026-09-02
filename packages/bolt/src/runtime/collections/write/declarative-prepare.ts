@@ -123,7 +123,7 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 			inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
 			depth: number,
-			staged?: Pick<HookWriteOps, 'mutate'>
+			staged?: Pick<HookWriteOps<Error>, 'mutate'>
 		) => Effect.Effect<unknown, AuthoredRefusal, Requirements>;
 		readonly refuseRunawayHooks: (
 			action: string,
@@ -538,8 +538,8 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		};
 		let stagedWriteCalls = 0;
 		const stagedWrites: Array<GraphRootSeed & { readonly action: 'create' | 'update' }> = [];
-		const stageHookWrites: HookWriteOps = {
-			mutate: (collection, values) =>
+		const stageHookWrites: HookWriteOps<Error> = {
+			mutate: (collection: string, values: Readonly<Record<string, unknown>>) =>
 				ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
 					Effect.map(() => {
 						const submittedId = values['id'];
@@ -558,8 +558,23 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					})
 				)
 		};
-		const graphPreparers = makeGraphPreparers<Error | ReadError | AuthoredRefusal, Requirements>({
+		const graphPreparers = makeGraphPreparers<Error | AuthoredRefusal, Requirements>({
 			...ports,
+			buildApi: (effectId, subject, elevated, depth) =>
+				ports.buildApi(effectId, subject, elevated, depth, stageHookWrites),
+			runMutateBefore: (effectId, subject, input, existing, module, depth, prepared) =>
+				ports.runMutateBefore(
+					effectId,
+					subject,
+					input,
+					existing,
+					module,
+					depth,
+					prepared,
+					stageHookWrites
+				),
+			runMutatePrepare: (effectId, subject, collection, inputs, module, depth) =>
+				ports.runMutatePrepare(effectId, subject, collection, inputs, module, depth, stageHookWrites),
 			effectId,
 			subject,
 			rootCollection,

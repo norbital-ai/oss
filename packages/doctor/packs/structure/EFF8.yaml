@@ -1,0 +1,14 @@
+id: EFF8
+summary: Effect.gen only unwraps a service and maps json
+severity: error
+principles: [simplicity, no-bloat]
+rule:
+  any:
+    - 'Effect.gen(function* () { return json(yield* (yield* $SVC.Service).$FN($...A)); })'
+    - 'Effect.gen(function* () { return json(yield* (yield* $SVC).$FN($...A)); })'
+    - 'Effect.gen(function* () { return yield* (yield* $SVC.Service).$FN($...A); })'
+examples:
+  bad:
+    - 'export const run = (context, input) => Effect.gen(function* () { return json(yield* (yield* Sync.Service).advance(context.effectId, input)); });'
+  good:
+    - 'export const run = (context, input) => Effect.map(workspaceManifest(context, false), json);'

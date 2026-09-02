@@ -11,6 +11,7 @@
  * Collapsing 1 and 2 would let a scan that never produced evidence read as a clean pass, which is
  * the failure this tool exists to prevent.
  */
+import { getErrorMessage } from '@norbital-ai/std';
 import { assess, audit, type Severity } from './index.js';
 import { computeCheckpointDelta, deltaSummary } from './analysis/delta.js';
 import { parseArgs } from 'node:util';
@@ -142,7 +143,7 @@ async function main(): Promise<void> {
 
 await main().catch((error: unknown) => {
 	process.stderr.write(
-		`norbital-doctor: ${error instanceof Error ? error.message : String(error)}\n`
+		`norbital-doctor: ${getErrorMessage(error)}\n`
 	);
 	process.exitCode = 2;
 });

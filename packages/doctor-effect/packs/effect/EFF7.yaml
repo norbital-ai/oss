@@ -1,0 +1,21 @@
+id: EFF7
+summary: single-yield Effect.gen adds no composition
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+rule:
+  all:
+    - pattern: Effect.gen($FN)
+    - count:
+        min: 1
+        of:
+          kind: YieldExpression
+    - not:
+        count:
+          min: 2
+          of:
+            kind: YieldExpression
+examples:
+  bad:
+    - "export const f = Effect.gen(function* () { return yield* Effect.succeed(1); });"
+  good:
+    - "export const f = Effect.succeed(1);"

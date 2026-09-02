@@ -30,6 +30,7 @@
 // TYPE DEFINITIONS
 // ================================
 
+import { decodeNumber } from '@norbital-ai/std/json';
 import type { HTMLInputAttributes } from 'svelte/elements';
 import { Schema } from 'effect';
 
@@ -135,7 +136,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 
 	number: {
 		parse: (val: string) => {
-			const num = Number(val.trim());
+			const num = decodeNumber(val.trim());
 			return isNaN(num) ? undefined : num;
 		},
 		display: String,

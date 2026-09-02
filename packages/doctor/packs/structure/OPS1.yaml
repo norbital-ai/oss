@@ -1,0 +1,32 @@
+id: OPS1
+summary: operational health or admission state is hard-coded
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*health*'
+  - '**/*ready*'
+  - '**/*status*'
+  - '**/*operation*'
+  - '**/*capacit*'
+  - '**/*admission*'
+ignore:
+  - '**/*.test.ts'
+  - '**/*.test.js'
+  - '**/*.spec.ts'
+  - '**/*.spec.js'
+rule:
+  any:
+    - pattern:
+        context: "const $X = { status: 'ready', $...REST }"
+        selector: ObjectLiteralExpression
+    - pattern:
+        context: "const $X = { health: 'ready', $...REST }"
+        selector: ObjectLiteralExpression
+    - pattern:
+        context: 'const $X = { accepting: $A, outstanding: $B }'
+        selector: ObjectLiteralExpression
+examples:
+  bad:
+    - "{ status: 'ready', service: 'colony' }"
+  good:
+    - "{ status: snapshot.ready ? 'ready' : 'starting' }"

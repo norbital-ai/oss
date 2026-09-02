@@ -1,22 +1,21 @@
 // repository-health:allow SEM_PARALLEL -- pattern forms the rule authoring surface carrying rules; provider/consumer of the same algebra.
 /**
- * How a rule is authored.
+ * How a YAML rule document is compiled.
  *
- * `defineRule` is the one entry point. Give it a `rule` — ast-grep's own field name — to describe a
- * shape, or `when` + `check` to write a visitor when the claim is not a shape at all.
- *
- * `defineScope` sits beside it for co-occurring signals bound to a lexical owner: the shape a
- * hand-rolled reimplementation actually has, and the one `QRY1` could not express.
+ * Pack rules are declared as YAML. `defineRule` is the compiler: a `rule` field becomes a matcher,
+ * and a `visitor` field is bound to a named check. `defineScope` sits beside it for co-occurring
+ * signals bound to a lexical owner.
  *
  * Both compile to an ordinary `Rule`, so the runner, the ignore file, the allowance comments and
  * the catalogue treat them identically.
  *
- * Examples are mandatory, and a composite must carry a negative. A rule with no counter-example is
- * the usual way a detector becomes noise: `QRY1` had no example of the defect spelled a second way,
- * so nobody noticed it recognised only the first.
+ * Examples are mandatory on a matcher, and a composite must carry a negative. A rule with no
+ * counter-example is the usual way a detector becomes noise: `QRY1` had no example of the defect
+ * spelled a second way, so nobody noticed it recognised only the first.
  */
 import ts from 'typescript';
 import {
+	bindMatchHost,
 	bindingTexts,
 	compile,
 	match,
@@ -189,6 +188,7 @@ export function defineRule(definition: RuleDefinition): Rule {
 		...rest,
 		when: [...kinds],
 		check(node, context) {
+			bindMatchHost(context.sourceFile, { root: context.root, file: context.file });
 			const bindings: Bindings = new Map();
 			if (!compiled.run(node, context.sourceFile, bindings)) return;
 			for (const [name, constraint] of constrained) {

@@ -1,4 +1,5 @@
 import { Clock, Config, Context, Effect, Option, Redacted, Schema } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 import {
 	ConfigResponse,
 	EffectId,
@@ -139,12 +140,7 @@ export const HostConfig = Context.Service<HostConfigShape>('@bolt/HostConfig');
  */
 export const hostConfigFromProcessEnv = (): HostConfigShape => ({
 	read: (key) =>
-		Config.option(Config.redacted(key)).pipe(
-			Effect.match({
-				onFailure: (): Option.Option<Redacted.Redacted<string>> => Option.none(),
-				onSuccess: (value) => value
-			})
-		)
+		Config.option(Config.redacted(key)).pipe(Effect.orElseSucceed(() => Option.none()))
 });
 
 /**
@@ -223,7 +219,7 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(fun
 	const provided = headerValue(parameters.headers, SYSTEM_SIGNATURE_HEADER);
 	const stamped = headerValue(parameters.headers, SYSTEM_TIMESTAMP_HEADER);
 	if (provided === undefined || stamped === undefined) return false;
-	const timestamp = Number(stamped);
+	const timestamp = decodeNumber(stamped);
 	if (!Number.isSafeInteger(timestamp)) return false;
 	if (Math.abs(parameters.now - timestamp) > SIGNATURE_LIFETIME_MILLIS) return false;
 	// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:

@@ -16,6 +16,7 @@
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { Option, Schema } from 'effect';
 import { collectSourceFiles, describeRoots, isTestPath, lineCounts } from './inventory.js';
 import type { LineCounts, RootDescription } from './inventory.js';
 import { moduleMappings, packageFor, resolveImport, stronglyConnected, testReach } from './graph.js';
@@ -218,16 +219,26 @@ function numericFields(value: unknown): Record<string, number | null> {
 	);
 }
 
+const BaselineRecord = Schema.Struct({
+	schemaVersion: Schema.optionalKey(Schema.Unknown),
+	analyzerVersion: Schema.optionalKey(Schema.Unknown),
+	roots: Schema.optionalKey(Schema.Unknown),
+	scorePrecision: Schema.optionalKey(Schema.Unknown),
+	totals: Schema.optionalKey(Schema.Unknown)
+});
+
 /** Decode a baseline defensively while preserving the comparison's own validation errors. */
 function decodeBaseline(text: string): ComparisonSide {
+	// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
 	const parsed: unknown = JSON.parse(text);
-	const record = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+	const decoded = Schema.decodeUnknownOption(BaselineRecord)(parsed);
+	const record = Option.isSome(decoded) ? decoded.value : {};
 	return {
-		schemaVersion: record['schemaVersion'],
-		analyzerVersion: record['analyzerVersion'],
-		roots: record['roots'],
-		scorePrecision: numericFields(record['scorePrecision']),
-		totals: numericFields(record['totals'])
+		schemaVersion: record.schemaVersion,
+		analyzerVersion: record.analyzerVersion,
+		roots: record.roots,
+		scorePrecision: numericFields(record.scorePrecision),
+		totals: numericFields(record.totals)
 	};
 }
 

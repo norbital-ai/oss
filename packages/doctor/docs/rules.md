@@ -78,6 +78,23 @@ to more than one principle total.
 | Q1       | error | high       | Callback-named function forwards every parameter unchanged to one callback                                      | Call the callback directly.                                                         |
 | Q3       | error | high       | Private function has one same-file direct call and forwards its parameters unchanged                            | Call the forwarded owner directly.                                                  |
 | Q4       | hint  | medium     | Private function has one same-file direct call and a small mutation-free single expression                      | Review whether its name earns the indirection; inline when it does not.             |
+| IDENT1   | error | high       | `onSuccess` handler returns its argument unchanged                                                              | Drop the match; use `orElseSucceed` / `catch` / `getOrElse` so success is implicit. |
+| SWALLOW1 | error | high       | `Effect.catch` handler is empty or returns `undefined`                                                          | Log, fail, or recover with a real value; do not discard the error channel.          |
+| FETCH1   | error | high       | Bare `fetch(` call                                                                                              | Use `httpRequest` from `@norbital-ai/std/http`.                                     |
+| EFF11    | error | high       | `Effect.Effect<A, unknown>` erases the error channel                                                            | Name the failure type; `R` as `unknown` is not this rule.                           |
+| COERCE1  | error | high       | `Number()` used as an IO decoder                                                                                | Use `decodeNumber` from `@norbital-ai/std/json`.                                    |
+| Q5       | error | high       | Parameter is typed as the `undefined` or `void` singleton                                                       | Drop the phantom argument or type a real domain value.                              |
+| GUARD1   | error | high       | `typeof x === 'object' && x !== null` reconstructs a record by hand                                             | Decode with Effect Schema (`JsonObject` / the domain schema).                       |
+| REFLECT1 | error | high       | `Reflect.get(Object(...), key)` reads a coerced value instead of a decoded boundary                             | Decode once; read typed fields.                                                     |
+| STATE2   | error | high       | Module `const` Map/Set is mutated from a function                                                               | Move lifetime into a factory or inject the cache.                                   |
+| STD2     | error | high       | `instanceof Error ? .message : String(.)` reimplements `getErrorMessage`                                        | Import `getErrorMessage` from `@norbital-ai/std`.                                   |
+| STD3     | error | high       | `instanceof Error ? cause : new Error(String(cause))` reimplements `toError`                                    | Import `toError` from `@norbital-ai/std`.                                           |
+| PARSE1   | error | high       | Ternary `JSON.parse` branch skips the decode boundary                                                           | Decode with Effect Schema (`Schema.parseJson`).                                     |
+| VOID1    | error | high       | `void Promise.resolve(...)` discards a native Promise                                                           | Return or `yield*` the work so failure is owned.                                    |
+| EFF8     | error | high       | `Effect.gen` only unwraps a service and maps `json`                                                             | Use `Effect.map` / `Effect.flatMap` on the service call.                            |
+| EFF9     | error | high       | `Effect.promise` drops rejection onto the defect channel                                                        | Use `Effect.tryPromise` and name the failure.                                       |
+| EFF10    | error | high       | SvelteKit `error()` throws inside Effect                                                                        | Fail in Effect and map to `error()` at the HTTP edge.                               |
+| SANDWICH1| error | high       | Effect is `runPromise`'d and lifted back into Effect                                                            | Keep one runtime; return the inner Effect.                                          |
 | QRY1     | error | high       | A generated query is mirrored or adapted by a handwritten query state machine                                   | Render `.current`/`.loading`/`.error`; the sync engine owns freshness.              |
 | QRY2     | error | high       | A live query is manually refreshed or refetched                                                                 | Delete the refresh path; mutations and the sync engine update the query.            |
 | QRY3     | error | high       | A derived query receives a plain binding that froze a reactive parameter at initialization                      | Derive the parameter binding or construct the parameters inside the query owner.    |
@@ -345,11 +362,15 @@ PERF1 excludes inline or bound fixed collections of four or fewer items and rece
 outer callback. PERF4 requires a side-effect-free predicate so replacing the materialization with
 `find` preserves behavior. These rules do not infer cost from a method name alone.
 
-Q3/Q4 do not infer uselessness from length alone. Exported/API functions, callbacks passed as values,
-recursive functions, branching bodies, async/generator/generic boundaries, and mutable expressions
-are excluded. Q3 is the high-confidence transparent case. Q4 keeps small expressions as review-only
-inventory because a semantic name can still earn that abstraction. The health report retains both
-per pillar so indirection density can be compared without turning ambiguous style into a gate.
+Q1, Q5, GUARD1, and REFLECT1 are YAML `rule` matchers. Q3/Q4 are YAML rules that match a
+forwarder or small expression and require exactly one same-file call of that name. Q1 is the
+callback-shaped transparent forwarder, including exported aliases. Q3 is the private one-use
+forwarder and dominates Q1 at the same site. Q4 is the private one-use expression that is not a
+forwarder. Exported/API functions, callbacks passed as values, recursive functions, branching
+bodies, async/generator/generic boundaries, and mutable expressions are excluded from Q3/Q4. Q5
+is a singleton `undefined`/`void` parameter type, not a union with `undefined`. The health report
+retains Q1/Q3/Q4 per pillar so indirection density can be compared without turning ambiguous style
+into a gate.
 
 QRY1 has two mechanically bounded proofs of a handwritten query owner. The legacy-independent proof
 requires one lexical owner to combine storage, loading, and at least two cache/facade lifecycle

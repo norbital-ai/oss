@@ -31,9 +31,13 @@ const pendingApprovalDetails = {
 
 test('preserves an ordinary collection mutation failure', async () => {
 	const failure = new Error('Payroll period is closed');
+	// The failure channel is `Cause.UnknownError`, so the rejection cannot arrive as itself. What
+	// must survive is both halves of it: the original object, reachable as the cause, and the
+	// sentence it carried, which is what the form shows. This asserted `error === failure` and so
+	// asserted something the declared type cannot deliver.
 	await assert.rejects(
 		Effect.runPromise(submitCollectionMutation(() => Promise.reject(failure))),
-		(error) => error === failure
+		(error) => error.cause === failure && error.message === 'Payroll period is closed'
 	);
 });
 

@@ -1,4 +1,5 @@
 <script lang="ts" generics="TMulti extends boolean">
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import { Result } from 'effect';
 	import Icon from '@iconify/svelte';
 	import {
@@ -105,7 +106,7 @@
 	let hasSelection = $derived(selectedDateStrings.length > 0);
 	const selectedYear = $derived(
 		selectedDateStrings[0] && /^\d{4}/.test(selectedDateStrings[0])
-			? Number(selectedDateStrings[0].slice(0, 4))
+			? decodeNumber(selectedDateStrings[0].slice(0, 4))
 			: null
 	);
 

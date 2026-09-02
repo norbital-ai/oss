@@ -1,0 +1,14 @@
+id: IMP1
+summary: deep relative import bypasses a declared alias for the same target
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+rule:
+  all:
+    - kind: ImportDeclaration
+    - regex: "from ['\"]\\.\\./\\.\\./"
+    - aliasCovered: true
+examples:
+  bad:
+    - "import { v } from '../../lib/value.js';\nexport const x = v;"
+  good:
+    - "import { v } from '#lib/value.js';\nexport const x = v;"

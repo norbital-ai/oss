@@ -1,0 +1,30 @@
+id: LIVE2
+summary: server-sent events are used outside the sync engine
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability]
+ignore:
+  - 'packages/doctor/src/**'
+  - 'packages/doctor-norbital/src/**'
+  - 'packages/bolt/src/client/sync/sse-driver.ts'
+  - 'packages/bolt-server/src/server.ts'
+  - '**/routes/api/bolt/sync/stream/+server.ts'
+rule:
+  any:
+    - pattern: 'new EventSource($URL)'
+    - all:
+        - any:
+            - kind: StringLiteral
+            - kind: NoSubstitutionTemplateLiteral
+        - regex: "text/event-stream|^['\"]sse['\"]$"
+        - not:
+            inside:
+              any:
+                - pattern: '$A === $B'
+                - pattern: '$A == $B'
+                - pattern: '$A !== $B'
+                - pattern: '$A != $B'
+examples:
+  bad:
+    - "export const source = new EventSource('/events');"
+  good:
+    - "export const transport = 'websocket';"

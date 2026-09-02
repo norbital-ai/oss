@@ -28,14 +28,14 @@ const DEFAULT_RETRY_AFTER_MILLIS = 60_000;
 /** However long a host has been failing, it looks again at least this often. */
 const MAX_FAILURE_BACKOFF_MILLIS = 3_600_000;
 
-export type TimekeeperOptions<R = never> = Readonly<{
+export type TimekeeperOptions<R = never, E = never> = Readonly<{
 	/**
 	 * Runs one tick and answers the next instant anything is due, or `null` for "nothing".
 	 *
 	 * The answer comes from the tick itself rather than from a query this module makes: the guest has
 	 * just been in the database and knows, so asking again would be paying twice for one fact.
 	 */
-	readonly tick: () => Effect.Effect<number | null, unknown, R>;
+	readonly tick: () => Effect.Effect<number | null, E, R>;
 	/**
 	 * Process edge that executes one tick Effect. The timer callback is not itself an Effect
 	 * runtime, so this is where a host attaches its ManagedRuntime (or `Effect.runPromise`).
@@ -82,7 +82,9 @@ export type Timekeeper = Readonly<{
 	readonly stop: () => void;
 }>;
 
-export const makeTimekeeper = <R = never>(options: TimekeeperOptions<R>): Timekeeper => {
+export const makeTimekeeper = <R = never, E = never>(
+	options: TimekeeperOptions<R, E>
+): Timekeeper => {
 	const retryAfterMillis = options.retryAfterMillis ?? DEFAULT_RETRY_AFTER_MILLIS;
 	const nowMillis = options.nowMillis ?? Date.now;
 	/**
@@ -118,7 +120,7 @@ export const makeTimekeeper = <R = never>(options: TimekeeperOptions<R>): Timeke
 				consecutiveFailures = 0;
 				resolve(nextDueAtEpochMs, true);
 			}).pipe(
-				Effect.catch((cause: unknown) =>
+				Effect.catch((cause) =>
 					Effect.sync(() => {
 						consecutiveFailures += 1;
 						options.onFailure(cause);

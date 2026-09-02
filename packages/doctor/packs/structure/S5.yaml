@@ -1,0 +1,8 @@
+id: S5
+summary: Array.from(new Set(...))
+severity: hint
+principles: [simplicity, no-bloat]
+rule: Array.from(new Set($VALUE))
+examples:
+  bad: ["const unique = Array.from(new Set(items));"]
+  good: ["const unique = [...new Set(items)];"]

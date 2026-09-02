@@ -41,7 +41,7 @@
 		CollectionFormValidation,
 		CollectionFormValidationIssue
 	} from '#lib/collection-form/collection-form.types';
-	import { Effect } from 'effect';
+	import { Cause, Effect } from 'effect';
 	import { toast } from 'svelte-sonner';
 	import {
 		getCollectionClientForSurface,
@@ -285,7 +285,7 @@
 		translate: t,
 		remoteFn:
 			() =>
-			(data): Effect.Effect<CollectionMutationSubmission | void, unknown> => {
+			(data): Effect.Effect<CollectionMutationSubmission | void, Cause.UnknownError> => {
 				const values = Object.fromEntries(Object.entries(data));
 				if (onSubmit) return onSubmit(values);
 				const writableValues = pickWritableFormValues(definition.fields, values);

@@ -36,7 +36,7 @@
 		asideWidthClass?: string;
 		asideClass?: string;
 		popoverClass?: string;
-		onSync?: () => void | Effect.Effect<void, unknown>;
+		onSync?: () => void | Effect.Effect<void>;
 	} = $props();
 
 	const tocState = setDocTocState(new DocTocState());
@@ -70,7 +70,7 @@
 		return () => tocState.observer.unwatch();
 	});
 
-	export function refresh(): Effect.Effect<void, unknown> {
+	export function refresh(): Effect.Effect<void, Error> {
 		return Effect.gen(function* () {
 			popoverOpen = false;
 			yield* Effect.tryPromise({ try: () => tick(), catch: toError });

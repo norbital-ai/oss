@@ -1,0 +1,28 @@
+id: BOOT1
+summary: environment file is loaded after configuration is captured
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - 'scripts/**'
+  - 'bin/**'
+  - '**/bootstrap*'
+  - '**/server.*'
+rule:
+  all:
+    - pattern: process.env
+    - inside:
+        all:
+          - kind: SourceFile
+          - has:
+              pattern: 'loadEnvFile($...A)'
+            stopBy: end
+      stopBy: end
+    - not:
+        follows:
+          pattern: $F($...A)
+        stopBy: end
+examples:
+  bad:
+    - "const hydrate = () => loadEnvFile('.env'); const environment = process.env; hydrate();"
+  good:
+    - "loadEnvFile('.env'); const port = process.env.PORT;"

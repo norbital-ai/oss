@@ -1,12 +1,13 @@
 # A shape guard in a caller is a claim that "I know what this object is", made where a
 # value was received rather than where it was decoded. Values cross boundaries once;
-# the boundary decodes them (see src/decode.ts), and callers read what they were given.
-# Any ad-hoc `isRecord` read anywhere in this workspace is that smell returning.
+# the boundary decodes them, and callers read what they were given.
+# Effect's `Predicate.isRecord` is the owner; a local `isRecord` helper is the smell.
 id: NO_ISRECORD
 summary: ad-hoc record shape guard instead of a boundary decode
 severity: error
 principles: [type-safety, straightforwardness]
 rule:
   any:
-    - pattern: isRecord($...ARGS)
-    - pattern: isRecord
+    - pattern: 'const isRecord = $FN'
+    - pattern: function isRecord
+    - pattern: 'const isRecord: $TYPE = $FN'

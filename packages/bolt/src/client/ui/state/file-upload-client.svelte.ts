@@ -5,7 +5,7 @@ import type {
 	UploadOptions,
 	UploadResult
 } from '@norbital-ai/ui/file-upload';
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { workspaceSession } from '#lib/client/session.js';
 
 /**
@@ -44,7 +44,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	 * type of what it serves back from that extension — a key without one reads back as an octet
 	 * stream and the renderer shows a download instead of an image.
 	 */
-	upload(file: File, options: UploadOptions = {}): Effect.Effect<UploadResult, unknown> {
+	upload(file: File, options: UploadOptions = {}): Effect.Effect<UploadResult, Cause.UnknownError> {
 		const { id, effect } = this.beginUpload(file, {
 			stream: options.stream,
 			onProgress: (stage: UploadEntry['stage']) => options.onProgress?.(stage)
@@ -61,7 +61,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	uploadMany(
 		files: File[],
 		options: Pick<UploadOptions, 'stream'> = {}
-	): Effect.Effect<UploadResult[], unknown> {
+	): Effect.Effect<UploadResult[], Cause.UnknownError> {
 		return Effect.forEach(files, (file) => this.upload(file, options), {
 			concurrency: 'unbounded'
 		});
@@ -70,7 +70,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	beginUpload(
 		file: File,
 		options: BeginUploadOptions = {}
-	): { id: string; effect: Effect.Effect<UploadResult, unknown> } {
+	): { id: string; effect: Effect.Effect<UploadResult, Cause.UnknownError> } {
 		const id = options.uploadId ?? this.#newUploadId();
 		const controller = new AbortController();
 		this.#controllers.set(id, controller);
@@ -79,18 +79,16 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		options.onProgress?.('uploading');
 		const extension = file.name.includes('.') ? `.${file.name.split('.').at(-1)}` : '';
 		const storageKey = `${id}${extension}`;
-		const effect = Effect.tryPromise({
-			try: () =>
-				workspaceSession().files.store(
-					storageKey,
-					file,
-					({ loaded, total }) => {
-						entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
-					},
-					controller.signal
-				),
-			catch: (cause) => cause
-		}).pipe(
+		const effect = Effect.tryPromise(() =>
+			workspaceSession().files.store(
+				storageKey,
+				file,
+				({ loaded, total }) => {
+					entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
+				},
+				controller.signal
+			)
+		).pipe(
 			Effect.map((url) => {
 				const result: UploadResult = {
 					id: id,
@@ -125,7 +123,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	 * deriving a key by string-slicing a URL is how one host's routing shape gets written into a
 	 * framework, and how a delete lands on the wrong object when that shape changes.
 	 */
-	delete(fileUrl: string): Effect.Effect<void, unknown> {
+	delete(fileUrl: string): Effect.Effect<void, Cause.UnknownError> {
 		const entry = this.uploads.find((candidate) => candidate.result?.url === fileUrl);
 		const result = entry?.result;
 		if (entry === undefined || result === undefined) return Effect.void;

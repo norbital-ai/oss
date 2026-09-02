@@ -1,30 +1,12 @@
 /**
- * The rule authoring surface.
+ * The compiled rule object the runner executes.
  *
- * A rule is a plain object with a `check` function. It is authored in TypeScript, committed to the
- * repository like any other source, and picked up by the plugin and the CLI without a build step —
- * Node strips the types on import. That is the whole point: a person or an agent adds a file, opens
- * a pull request, and the next audit enforces it.
+ * Pack rules are declared as YAML (`packs/<name>/<id>.yaml`). This module is the runtime shape
+ * after that document is compiled: an id, a summary, and a `check`. Consumer extensions are the
+ * same YAML dialect under `.norbital/config/doctor/`.
  *
  * Rules run in the syntactic tier: one file at a time, no cross-file state, no type checker. That
  * restriction is what makes them cheap enough to run on every save and safe to run in parallel.
- *
- * ```ts
- * // .norbital/config/doctor/no-raw-fetch.ts
- * import { defineRule } from '@norbital-ai/doctor';
- *
- * export default defineRule({
- *   id: 'ACME1',
- *   severity: 'error',
- *   summary: 'raw fetch bypasses the http client',
- *   principles: ['straightforwardness', 'testability'],
- *   when: ['CallExpression'],
- *   check(node, context) {
- *     if (context.calleeName(node) !== 'fetch') return;
- *     context.report(node, 'callee=fetch prefer=@acme/http#request');
- *   }
- * });
- * ```
  */
 import ts from 'typescript';
 

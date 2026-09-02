@@ -42,7 +42,7 @@ export interface CollectionFormValidation {
 	/** Cross-field or domain validation that may perform asynchronous checks. */
 	readonly semantic?: (
 		values: CollectionFormValidationValues
-	) => Effect.Effect<readonly CollectionFormValidationIssue[] | void, unknown>;
+	) => Effect.Effect<readonly CollectionFormValidationIssue[] | void>;
 }
 
 export interface CollectionFormRendererProps extends FieldRendererProps {
@@ -99,7 +99,7 @@ export interface CollectionFormController {
 export interface CollectionFormDeleteAction {
 	readonly label?: string;
 	readonly disabled?: boolean;
-	readonly onDelete: () => void | Effect.Effect<void, unknown>;
+	readonly onDelete: () => void | Effect.Effect<void>;
 }
 
 export interface CollectionFormComposition<
@@ -130,7 +130,7 @@ export interface CollectionFormProps<
 	defaultValues?: Partial<CollectionRow<TCollections[TName]>>;
 	submitLabel?: string;
 	validation?: CollectionFormValidation;
-	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void, unknown>;
+	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void>;
 	deleteAction?: CollectionFormDeleteAction;
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];
@@ -138,7 +138,7 @@ export interface CollectionFormProps<
 	loading?: boolean;
 	skeletonRows?: number;
 	class?: string;
-	onAfterSubmit?: () => void | Effect.Effect<void, unknown>;
+	onAfterSubmit?: () => void | Effect.Effect<void>;
 	/** Every writable collection field must be declared exactly once; use `hidden` to conceal one. */
 	children: Snippet<[CollectionFormComposition<TCollections, TName>]>;
 }

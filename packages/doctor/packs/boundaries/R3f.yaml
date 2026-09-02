@@ -1,0 +1,8 @@
+id: R3f
+summary: explicit cast to any
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule: $VALUE as any
+examples:
+  bad: ["const loose = value as any;"]
+  good: ["const loose = value as never;"]

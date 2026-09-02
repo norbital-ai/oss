@@ -16,4 +16,22 @@ packages/doctor/src/analysis/  EXP1 PERF3 LEGACY2 D1 R3a R5d R6a R6b EQ1 COMPLEX
 # It ships as a standalone Node CLI and must run in repositories that have no Effect runtime —
 # analysing one is its job. So Effect-owned control flow (EFF1-EFF3) and the blocking-IO rule (IO1)
 # describe an architecture it is deliberately outside of. Every other rule still applies.
-packages/doctor/src/  EFF1 EFF2 EFF3 IO1
+packages/doctor/src/  EFF1 EFF2 EFF3 IO1 NODE1 NODE2
+
+# Node CLIs and package scripts sit outside Effect ownership the same way doctor does.
+scripts/  A1 A6 EFF1 EFF2 EFF3 COMPLEX1 D1 E1 EQ1 SQL1 NODE1 NODE2 NODE3 R6b S1 STATE1 PERF3 LIVE1 LOG1
+packages/bolt/scripts/  COMPLEX1
+
+# Sync transport, isolate HTTP, and the compiler are the native async edge of an Effect
+# runtime. Same family packages/doctor/src already scopes out.
+packages/bolt/src/client/sync/  EFF1 EFF2 EFF3 A6 NONDET1 V6 AL9 R6b LIVE1
+packages/bolt-server/src/  EFF3 COMPLEX1
+packages/bolt/src/compiler/  A6 EFF1 EFF2 EFF3 AL9 R3e COMPLEX1
+packages/bolt/src/runtime/agents/capability-catalog.ts  EFF3 PERF3 D1 LIVE2
+packages/bolt/src/runtime/  EFF1 EFF2 EFF3 A6 COMPLEX1 AL9 R3a R3b R3e R6a NONDET1 LOG1 STATE1 PERF2 PERF3 D1 QRY3 STR1
+packages/bolt/src/client/  EFF2 LOG1 AL9 R3a R3b NONDET1 STATE1 COMPLEX1 D1
+packages/bolt-protocol/src/  COMPLEX1
+packages/bolt/src/authoring/  COMPLEX1 R3a R3e STATE1
+packages/ui/src/  R1 R3b LEGACY2 D1
+packages/doctor/src/packs/registry.ts  R3a
+packages/doctor/src/analysis/delta.ts  AL9

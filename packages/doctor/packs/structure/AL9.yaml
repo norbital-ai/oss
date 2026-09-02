@@ -1,0 +1,19 @@
+id: AL9
+summary: large inline data parameter has no named schema-derived owner
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  all:
+    - kind: Parameter
+    - has:
+        all:
+          - kind: TypeLiteral
+          - count:
+              min: 4
+              of:
+                kind: PropertySignature
+examples:
+  bad:
+    - 'export const f = (o: { a: string; b: string; c: string; d: string }) => o;'
+  good:
+    - 'export const f = (o: Options) => o;'

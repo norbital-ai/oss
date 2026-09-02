@@ -51,15 +51,15 @@ type CodePurpose = Parameters<
 	NonNullable<Parameters<typeof emailOTP>[0]['sendVerificationOTP']>
 >[0]['type'];
 
-export type DeliverCode = (message: {
+export type DeliverCode<E = never> = (message: {
 	readonly email: string;
 	readonly code: string;
 	readonly purpose: CodePurpose;
-}) => Effect.Effect<void, unknown>;
+}) => Effect.Effect<void, E>;
 
-type AuthOptions = Readonly<{
-	readonly execute: ExecuteQuery;
-	readonly deliver: DeliverCode;
+type AuthOptions<QueryE = never, DeliverE = never> = Readonly<{
+	readonly execute: ExecuteQuery<QueryE>;
+	readonly deliver: DeliverCode<DeliverE>;
 	/** Signs sessions. Supplied by the host; never read from the environment by the bundle. */
 	readonly secret: string;
 	readonly baseURL: string;
@@ -87,8 +87,8 @@ type AuthOptions = Readonly<{
  * pins its id or code sequence can pass its own; the defaults are the platform primitives a bare
  * invocation would use anyway.
  */
-export const makeAuth = (
-	options: AuthOptions,
+export const makeAuth = <QueryE = never, DeliverE = never>(
+	options: AuthOptions<QueryE, DeliverE>,
 	/** Uniform source the six-digit production code is cut from; the platform RNG unless a host injects one. */
 	random: () => number = Math.random,
 	/** Minted when Better Auth creates one of its rows; the platform RNG unless a host injects one. */

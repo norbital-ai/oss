@@ -1,33 +1,25 @@
 /**
- * YAML as the authoring surface for pattern rules.
+ * YAML is the rule authoring surface.
  *
- * `defineRule` in `pattern.ts` speaks TypeScript, which is the right surface for rules that live in
- * this repository — the compiler checks the syntax kinds and the examples run in the suite. It is
- * the wrong surface for a consumer that wants to add a rule without owning a build of this package,
- * so this module translates a documented YAML dialect onto the same machinery: a `rule` field goes
- * to `defineRule` untouched exactly as an ast-grep config would state it, and a `detect`/`prefer`
- * pair delegates to the overlap detectors in `overlaps.ts`.
+ * A pack is a directory of YAML files. Each file is one rule. `rule` is an ast-grep matcher;
+ * `detect`/`prefer` names an overlap detector. `defineRule` compiles that document into the
+ * runner's `Rule` object — it is not a second place to declare pack rules.
  *
  * Strictness is the contract. A misspelled field, a principle outside `PRINCIPLE_ORDER`, or a glob
  * that matches nothing throws at load time with the file named — never a rule that silently reports
  * nothing, because "zero findings" must mean "clean", not "misconfigured". One file maps to one
  * rule; ids are unique across every file loaded in a call.
  */
-import { readdirSync, readFileSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { getErrorMessage } from '@norbital-ai/std';
 import { parse as parseYaml } from 'yaml';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import { jsonRecord } from './manifest.js';
 import { OVERLAP_SHAPES, overlapRules, type OverlapShape } from './overlaps.js';
-import { defineRule, type Matcher } from './pattern.js';
-import {
-	PRINCIPLE_ORDER,
-	type Confidence,
-	type Principle,
-	type Rule,
-	type Severity
-} from './rules.js';
+import { defineRule, type Examples, type Matcher } from './pattern.js';
+import { PRINCIPLE_ORDER, type Confidence, type Principle, type Rule, type Severity } from './rules.js';
 
 type LoadedPatterns = Readonly<{
 	/** Rules ready to feed runRules() alongside pack/authored rules. */
@@ -48,7 +40,8 @@ const FIELDS: ReadonlyArray<string> = [
 	'detect',
 	'prefer',
 	'module',
-	'rule'
+	'rule',
+	'examples'
 ];
 
 /** A rule file is YAML; `.yaml` is accepted beside `.yml` because globs do not distinguish them. */
@@ -74,10 +67,6 @@ function isDoctorConfigTree(local: string): boolean {
 		local === '.norbital/config' ||
 		local.startsWith('.norbital/config/')
 	);
-}
-
-function detailOf(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 function fail(file: string, problem: string): never {
@@ -152,11 +141,8 @@ function patternToRegExp(pattern: string): RegExp {
 /** One directory read through Effect: the walk owns its failure message. */
 function readDirectory(directory: string): ReadonlyArray<Dirent> {
 	const read = Effect.runSync(Effect.result(Effect.try(() => readdirSync(directory, { withFileTypes: true }))));
-	return Result.match(read, {
-		onFailure: (error) => {
-			throw new Error(`norbital-doctor: cannot walk ${directory} for rule files: ${detailOf(error)}`);
-		},
-		onSuccess: (found) => found
+	return Result.getOrElse(read, (error) => {
+		throw new Error(`norbital-doctor: cannot walk ${directory} for rule files: ${getErrorMessage(error)}`);
 	});
 }
 
@@ -207,6 +193,17 @@ function expandPatterns(
 	return selected;
 }
 
+function readExamples(file: string, value: unknown): Examples {
+	const record = jsonRecord(value) ?? fail(file, '"examples" must be a mapping with bad and good');
+	const bad = record.bad;
+	const good = record.good;
+	if (!Array.isArray(bad) || bad.length === 0 || bad.some((item) => typeof item !== 'string'))
+		fail(file, '"examples.bad" must be a non-empty array of strings');
+	if (!Array.isArray(good) || good.length === 0 || good.some((item) => typeof item !== 'string'))
+		fail(file, '"examples.good" must be a non-empty array of strings');
+	return { bad: bad as ReadonlyArray<string>, good: good as ReadonlyArray<string> };
+}
+
 /** Parse, validate and synthesise one YAML file, appending to the run-wide accumulators. */
 function loadFile(
 	file: string,
@@ -218,7 +215,7 @@ function loadFile(
 	{
 		const read = Effect.runSync(Effect.result(Effect.try(() => parseYaml(readFileSync(absolute, 'utf8')))));
 		Result.match(read, {
-			onFailure: (error) => fail(file, `invalid YAML: ${detailOf(error)}`),
+			onFailure: (error) => fail(file, `invalid YAML: ${getErrorMessage(error)}`),
 			onSuccess: (parsed) => {
 				document = parsed;
 			}
@@ -285,7 +282,9 @@ function loadFile(
 			(typeof yaml.rule !== 'object' || yaml.rule === null || Array.isArray(yaml.rule))
 		)
 			fail(file, '"rule" must be a pattern string or a matcher object');
-		rules.push(defineRule({ ...common, rule: yaml.rule as Matcher, examples: DELEGATED_EXAMPLES }));
+		const examples =
+			yaml.examples === undefined ? DELEGATED_EXAMPLES : readExamples(file, yaml.examples);
+		rules.push(defineRule({ ...common, rule: yaml.rule as Matcher, examples }));
 		return;
 	}
 
@@ -332,4 +331,37 @@ export async function loadPatternFiles(
 		loadFile(file, absolute, rules, declared);
 	}
 	return { rules, sources };
+}
+
+/**
+ * Load every YAML rule in a shipped pack directory.
+ *
+ * The directory is the pack: one file, one rule.
+ */
+export function loadPackDirectory(directory: string): ReadonlyArray<Rule> {
+	if (!existsSync(directory))
+		throw new Error(`norbital-doctor: pack directory missing: ${directory}`);
+	const names = readdirSync(directory)
+		.filter((name) => RULE_FILE.test(name))
+		.sort((left, right) => left.localeCompare(right));
+	if (names.length === 0)
+		throw new Error(`norbital-doctor: pack directory ${directory} contains no .yaml/.yml rules`);
+	const rules: Array<Rule> = [];
+	const declared = new Map<string, string>();
+	for (const name of names) loadFile(name, join(directory, name), rules, declared);
+	return rules;
+}
+
+/** A matcher document, or a rule file's `rule` field — reusable shapes that are not themselves rules. */
+export function loadMatcherFile(absolute: string): Matcher {
+	const read = Effect.runSync(Effect.result(Effect.try(() => parseYaml(readFileSync(absolute, 'utf8')))));
+	const document = Result.getOrElse(read, (error) => {
+		throw new Error(`norbital-doctor: ${absolute}: invalid YAML: ${getErrorMessage(error)}`);
+	});
+	if (typeof document === 'string') return document;
+	const record = jsonRecord(document);
+	if (record === undefined)
+		throw new Error(`norbital-doctor: ${absolute}: expected a matcher mapping or pattern string`);
+	if (record.rule !== undefined) return record.rule as Matcher;
+	return document as Matcher;
 }

@@ -1,0 +1,18 @@
+id: R5d
+summary: in-operator duck typing
+severity: hint
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  all:
+    - any:
+        - pattern: $A && $B
+        - pattern: $C || $D
+    - count:
+        min: 2
+        of:
+          pattern: $K in $V
+examples:
+  bad:
+    - "export const g = (v: object) => 'a' in v && 'b' in v;"
+  good:
+    - "export const g = (v: object) => 'a' in v;"

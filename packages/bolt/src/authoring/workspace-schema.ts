@@ -723,43 +723,45 @@ export const defineConnection = <const Connection extends HttpConnection>(
  * `resolve` alone — `map`'s second parameter is a `NoInfer` position — so a `map` that reads the
  * resolution wrongly is an error at `map` rather than a silently widened `resolve`.
  */
-type InboundResolution<Resolved> =
-	| Effect.Effect<Resolved, unknown, never>
+type InboundResolution<Resolved, E = never> =
+	| Effect.Effect<Resolved, E, never>
 	// repository-health:allow EFF2 -- Inbound integrations accept third-party async resolvers and the runtime immediately lifts this Promise branch into Effect.
 	| Promise<Resolved>
 	| Resolved;
 
-interface InboundBinding<Record_, Encoded, Row, Resolved> {
+interface InboundBinding<Record_, Encoded, Row, Resolved, E = never> {
 	readonly input: Schema.Codec<Record_, Encoded>;
 	readonly records?: PullRecordsSpec;
 	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
 	readonly resolve?: (context: {
 		readonly records: ReadonlyArray<Record_>;
 		readonly api: Api;
-	}) => InboundResolution<Resolved>;
+	}) => InboundResolution<Resolved, E>;
 	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
 }
 
-interface PullBinding<Record_, Encoded, Row, Resolved> extends InboundBinding<
+interface PullBinding<Record_, Encoded, Row, Resolved, E = never> extends InboundBinding<
 	Record_,
 	Encoded,
 	Row,
-	Resolved
+	Resolved,
+	E
 > {
 	readonly pull: PullRequestSpec;
 }
 
-interface WebhookBinding<Record_, Encoded, Row, Resolved> extends InboundBinding<
+interface WebhookBinding<Record_, Encoded, Row, Resolved, E = never> extends InboundBinding<
 	Record_,
 	Encoded,
 	Row,
-	Resolved
+	Resolved,
+	E
 > {
 	readonly webhook: WebhookRequestSpec;
 }
 
-export const definePull = <Record_, Encoded, Row, Resolved = undefined>(
-	binding: PullBinding<Record_, Encoded, Row, Resolved>
+export const definePull = <Record_, Encoded, Row, Resolved = undefined, E = never>(
+	binding: PullBinding<Record_, Encoded, Row, Resolved, E>
 ): typeof binding => binding;
 
 /**
@@ -783,8 +785,8 @@ export const definePull = <Record_, Encoded, Row, Resolved = undefined>(
  * per delivery with an `api`, and its result is `map`'s second argument, so a body carrying a site
  * *code* becomes a row carrying a `site_id`. One lookup per delivery, not one per event in it.
  */
-export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined>(
-	binding: WebhookBinding<Record_, Encoded, Row, Resolved>
+export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined, E = never>(
+	binding: WebhookBinding<Record_, Encoded, Row, Resolved, E>
 ): typeof binding => {
 	if (binding.webhook.path.trim() === '') {
 		throw new TypeError(

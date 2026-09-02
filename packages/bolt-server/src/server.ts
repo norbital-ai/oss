@@ -995,7 +995,7 @@ const startServerEffect = <E>(
 	Effect.gen(function* () {
 		const websocketServer = new WebSocketServer({ noServer: true });
 		const shutdown = new AbortController();
-		const cancelConnections = new Set<Effect.Effect<void, unknown, RuntimeServices>>();
+		const cancelConnections = new Set<Effect.Effect<void, never, RuntimeServices>>();
 		let liveFacilities: FacilityBindings;
 
 		/**

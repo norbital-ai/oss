@@ -9,6 +9,7 @@ import {
 	type TaskId
 } from '@norbital-ai/bolt-protocol/facilities';
 import { getErrorMessage } from '@norbital-ai/std';
+import { decodeNumber } from '@norbital-ai/std/json';
 import { and, asc, count, eq, gt, inArray } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -1128,7 +1129,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								)
 							)
 					);
-					const left = Number(
+					const left = decodeNumber(
 						Reflect.get((remaining.rows[0] as object | undefined) ?? {}, 'count') ?? 0
 					);
 					if (left > 0) {

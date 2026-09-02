@@ -34,6 +34,7 @@
 	import { Bound, Inline, Scroll, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import { watch } from 'runed';
 	type TableRow = Record<string, unknown> & { __matrixRowId: string };
 
@@ -133,7 +134,7 @@
 		if (right == null) return -1;
 		if (typeof left === 'number' && typeof right === 'number') return left - right;
 		if (typeof left === 'boolean' && typeof right === 'boolean') {
-			return Number(left) - Number(right);
+			return decodeNumber(left ? 1 : 0) - decodeNumber(right ? 1 : 0);
 		}
 		return String(left).localeCompare(String(right));
 	}

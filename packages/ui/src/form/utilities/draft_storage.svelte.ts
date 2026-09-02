@@ -219,13 +219,9 @@ export class DraftStorage<T = Record<string, unknown>> {
 
 				return parsed.data as T;
 			}).pipe(
-				Effect.match({
-					onFailure: (error) => {
-						Effect.runSync(Effect.logWarning('[DraftStorage] Failed to load draft:', error));
-						return null;
-					},
-					onSuccess: (draft) => draft
-				})
+				Effect.catch((error) =>
+					Effect.logWarning('[DraftStorage] Failed to load draft:', error).pipe(Effect.as(null))
+				)
 			)
 		);
 	}
@@ -245,12 +241,7 @@ export class DraftStorage<T = Record<string, unknown>> {
 					lastModified: parsed.lastModified,
 					schemaMatch: parsed.schemaHash === this.schemaHash
 				};
-			}).pipe(
-				Effect.match({
-					onFailure: () => null,
-					onSuccess: (metadata) => metadata
-				})
-			)
+			}).pipe(Effect.orElseSucceed(() => null))
 		);
 	}
 

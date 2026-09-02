@@ -14,7 +14,7 @@ export type StepFormSubmitErrors = {
 };
 
 export type StepFormSubmitContract<TData> = {
-	handleSubmit: (event: Event) => void | Effect.Effect<void, unknown>;
+	handleSubmit: (event: Event) => void | Effect.Effect<void>;
 	readonly isSubmitting: boolean;
 	readonly errors: StepFormSubmitErrors;
 	getData: () => TData;

@@ -1,0 +1,22 @@
+id: FETCH1
+summary: raw fetch bypasses the typed HTTP client
+severity: error
+principles: [modularity, type-safety, testability]
+ignore:
+  - '**/scripts/**'
+  - '**/*.config.*'
+  - '**/std/src/http/**'
+rule:
+  all:
+    - pattern: fetch($...ARGS)
+    - not:
+        any:
+          - pattern: fetch(true)
+          - pattern: fetch(false)
+examples:
+  bad:
+    - "export const load = () => fetch('/api/items');"
+    - "export const load = () => Effect.tryPromise(() => fetch(url));"
+  good:
+    - "export const load = () => httpRequest(url, { operation: 'load' });"
+    - "export const via = () => client.fetch('/api/items');"

@@ -1,0 +1,12 @@
+id: EFF9
+summary: Effect.promise drops rejection onto the defect channel
+severity: error
+principles: [type-safety, straightforwardness]
+rule:
+  any:
+    - 'Effect.promise($FN)'
+examples:
+  bad:
+    - 'export const read = () => Effect.promise(() => file.text());'
+  good:
+    - 'export const read = () => Effect.tryPromise({ try: () => file.text(), catch: toError });'

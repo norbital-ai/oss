@@ -1,0 +1,55 @@
+id: Q1
+summary: callback-named function forwards every parameter unchanged
+severity: error
+principles: [simplicity, modularity, no-bloat]
+rule:
+  any:
+    - all:
+        - pattern: ($CALLBACK) => $CALLBACK()
+        - regex: '^(?:[Cc]allback|[Cc]b|[Hh]andler|[Ll]istener|[Ff]n|[Nn]ext|[Dd]one)$'
+          on: CALLBACK
+    - all:
+        - pattern: '($CALLBACK) => { return $CALLBACK(); }'
+        - regex: '^(?:[Cc]allback|[Cc]b|[Hh]andler|[Ll]istener|[Ff]n|[Nn]ext|[Dd]one)$'
+          on: CALLBACK
+    - all:
+        - pattern: ($CALLBACK, $A) => $CALLBACK($A)
+        - regex: '^(?:[Cc]allback|[Cc]b|[Hh]andler|[Ll]istener|[Ff]n|[Nn]ext|[Dd]one)$'
+          on: CALLBACK
+    - all:
+        - pattern: ($A) => $CALLEE($A)
+        - inside:
+            pattern:
+              context: const $NAME = $INIT
+              selector: VariableDeclaration
+          field: initializer
+        - regex: '^(?:on[A-Z]|handle[A-Z])|(?:Callback|Handler)$'
+          on: NAME
+    - all:
+        - pattern: ($A, $B) => $CALLEE($A, $B)
+        - inside:
+            pattern:
+              context: const $NAME = $INIT
+              selector: VariableDeclaration
+          field: initializer
+        - regex: '^(?:on[A-Z]|handle[A-Z])|(?:Callback|Handler)$'
+          on: NAME
+    - all:
+        - pattern: 'function $NAME($CALLBACK) { return $CALLBACK(); }'
+        - regex: '^(?:[Cc]allback|[Cc]b|[Hh]andler|[Ll]istener|[Ff]n|[Nn]ext|[Dd]one)$'
+          on: CALLBACK
+    - all:
+        - pattern: 'function $NAME($A) { return $CALLEE($A); }'
+        - regex: '^(?:on[A-Z]|handle[A-Z])|(?:Callback|Handler)$'
+          on: NAME
+    - all:
+        - pattern: 'export function $NAME($A) { return $CALLEE($A); }'
+        - regex: '^(?:on[A-Z]|handle[A-Z])|(?:Callback|Handler)$'
+          on: NAME
+examples:
+  bad:
+    - export const onReady = (callback) => callback();
+    - export const handleClick = (event) => props.onClick(event);
+  good:
+    - 'export const onReady = (callback) => { log(); callback(); };'
+    - export const start = (value) => decorate(value);

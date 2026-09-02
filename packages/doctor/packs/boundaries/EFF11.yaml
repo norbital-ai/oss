@@ -1,0 +1,25 @@
+id: EFF11
+summary: Effect error channel erased to unknown
+severity: error
+principles: [type-safety, straightforwardness, testability]
+rule:
+  any:
+    - pattern:
+        context: 'type _ = Effect.Effect<$A, unknown>'
+        selector: TypeReference
+    - pattern:
+        context: 'type _ = Effect.Effect<$A, unknown, $R>'
+        selector: TypeReference
+    - pattern:
+        context: 'type _ = Effect<$A, unknown>'
+        selector: TypeReference
+    - pattern:
+        context: 'type _ = Effect<$A, unknown, $R>'
+        selector: TypeReference
+examples:
+  bad:
+    - 'export const run = (): Effect.Effect<void, unknown> => Effect.void;'
+    - 'export type H = (x: X) => Effect.Effect<Y, unknown, never>;'
+  good:
+    - 'export const run = (): Effect.Effect<void, HttpFailure> => Effect.void;'
+    - 'export const provide = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E> => e;'

@@ -159,7 +159,7 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 		throw new Error(
 			`norbital-doctor: could not load ${configPath}: ${Result.match(outcome, { onFailure: (error) => String(error), onSuccess: () => '' })}`
 		);
-	config = (Result.match(outcome, { onSuccess: (v) => v, onFailure: () => undefined }) ?? {}) as ProbeConfig;
+	config = (Result.getOrElse(outcome, () => undefined) ?? {}) as ProbeConfig;
 
 	const packNames: Array<string> = [];
 	const rules: Array<Rule> = [...(config.rules ?? [])];

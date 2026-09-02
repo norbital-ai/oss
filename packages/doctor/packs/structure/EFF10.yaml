@@ -1,0 +1,23 @@
+id: EFF10
+summary: SvelteKit error() throws from the middle of Effect.gen
+severity: error
+principles: [straightforwardness, type-safety]
+rule:
+  all:
+    - pattern: error($STATUS, $MSG)
+    - inside:
+        pattern: Effect.gen($FN)
+      stopBy: end
+    - not:
+        inside:
+          any:
+            - pattern: Effect.mapError($HANDLER)
+            - pattern: Effect.sync($FN)
+            - pattern: Effect.catch($HANDLER)
+            - pattern: Effect.catchTag($TAG, $HANDLER)
+        stopBy: end
+examples:
+  bad:
+    - 'export const GET = () => Effect.gen(function* () { return error(400, ''bad''); });'
+  good:
+    - 'export const GET = () => Effect.fail(''bad'');'

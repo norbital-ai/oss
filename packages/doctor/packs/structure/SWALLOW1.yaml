@@ -1,0 +1,14 @@
+id: SWALLOW1
+summary: Effect.catch handler discards the failure with an empty body
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  any:
+    - 'Effect.catch(() => {})'
+    - 'Effect.catch(() => undefined)'
+    - 'Effect.catch(() => { return; })'
+examples:
+  bad:
+    - 'export const f = (e) => e.pipe(Effect.catch(() => {}));'
+  good:
+    - 'export const f = (e) => e.pipe(Effect.catch((error) => Effect.log(error)));'

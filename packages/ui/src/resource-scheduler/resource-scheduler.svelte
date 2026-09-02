@@ -3,6 +3,7 @@
 	generics="TResource extends ResourceSchedulerResource, TItem extends ResourceSchedulerItem"
 >
 	import Icon from '@iconify/svelte';
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import { Number as EffectNumber } from 'effect';
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -249,7 +250,7 @@
 		if (disabled || readonly || !onCreate || !(event.target instanceof Element)) return;
 		if (event.target.closest('[data-scheduler-item]')) return;
 		const dayElement = event.target.closest('[data-day-index]');
-		const index = Number(dayElement?.getAttribute('data-day-index'));
+		const index = decodeNumber(dayElement?.getAttribute('data-day-index'));
 		if (!Number.isInteger(index)) return;
 		event.currentTarget instanceof Element &&
 			event.currentTarget.setPointerCapture(event.pointerId);

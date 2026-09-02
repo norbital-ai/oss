@@ -1,0 +1,22 @@
+id: S1
+summary: silent catch block
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  all:
+    - kind: CatchClause
+    - not:
+        has:
+          kind: ExpressionStatement
+        stopBy: end
+    - not:
+        has:
+          kind: ThrowStatement
+        stopBy: end
+    - not:
+        regex: "//|/\\*"
+examples:
+  bad:
+    - 'export const f = () => { try { go(); } catch {} };'
+  good:
+    - 'export const f = () => { try { go(); } catch { /* the probe is best effort */ } };'

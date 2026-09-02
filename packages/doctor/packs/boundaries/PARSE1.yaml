@@ -1,0 +1,14 @@
+id: PARSE1
+summary: JSON.parse in a ternary branch skips the decode boundary
+severity: error
+principles: [type-safety, straightforwardness]
+rule:
+  any:
+    - 'typeof $X === ''string'' ? JSON.parse($X) : $X'
+    - 'typeof $X === ''string'' ? JSON.parse($X) as $T : $X'
+    - 'typeof $X === ''string'' ? (JSON.parse($X) as $T) : $X'
+examples:
+  bad:
+    - 'export const relationValue = (value) => typeof value === ''string'' ? JSON.parse(value) as unknown : value;'
+  good:
+    - 'export const relationValue = (value) => Schema.decodeUnknownSync(Schema.parseJson(Schema.Unknown))(value);'

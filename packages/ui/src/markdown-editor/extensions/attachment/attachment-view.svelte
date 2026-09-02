@@ -13,6 +13,7 @@
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 	import { toError } from '@norbital-ai/std';
+	import { httpRequest } from '@norbital-ai/std/http';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
 	import { marked } from 'marked';
 	import Papa from 'papaparse';
@@ -126,7 +127,9 @@
 
 	function fetchFileAsBlob(url: string): Effect.Effect<Blob, Error> {
 		return Effect.gen(function* () {
-			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
+			const response = yield* httpRequest(url, { operation: 'attachment.fetch' }).pipe(
+				Effect.mapError(toError)
+			);
 			if (!response.ok) {
 				yield* Effect.sync(() => toast.error(t('misc.failedToFetchFile')));
 			}
@@ -149,7 +152,9 @@
 
 	function loadPdfPreview(url: string): Effect.Effect<PreviewContent, Error> {
 		return Effect.gen(function* () {
-			const response = yield* Effect.tryPromise({ try: () => fetch(url), catch: toError });
+			const response = yield* httpRequest(url, { operation: 'attachment.fetch' }).pipe(
+				Effect.mapError(toError)
+			);
 			if (!response.ok) {
 				yield* Effect.sync(() => toast.error(t('misc.failedToLoadPdf')));
 			}

@@ -1,0 +1,36 @@
+id: STATE2
+summary: module const collection is mutated from a function
+severity: error
+principles: [simplicity, modularity, testability]
+ignore:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: SourceFile
+    - has:
+        any:
+          - pattern: const $NAME = new Map()
+          - pattern: const $NAME = new Set()
+          - pattern: const $NAME = new WeakMap()
+          - pattern: const $NAME = new WeakSet()
+      stopBy: end
+    - has:
+        all:
+          - any:
+              - pattern: $NAME.set($...A)
+              - pattern: $NAME.add($...A)
+              - pattern: $NAME.delete($...A)
+              - pattern: $NAME.clear()
+          - inside:
+              any:
+                - kind: FunctionDeclaration
+                - kind: FunctionExpression
+                - kind: ArrowFunction
+                - kind: MethodDeclaration
+            stopBy: end
+      stopBy: end
+examples:
+  bad:
+    - "const cache = new Map();\nexport const get = (k) => { cache.set(k, 1); return cache.get(k); };"
+  good:
+    - "const index = new Map([[\"a\", 1]]);\nexport const get = (k) => index.get(k);"

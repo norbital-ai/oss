@@ -37,7 +37,7 @@ export interface CollectionToolbarActionProps {
 	 * a bare disabled button leaves the operator guessing which precondition they missed.
 	 */
 	unavailable?: string;
-	onRun: () => void | Effect.Effect<void, unknown>;
+	onRun: () => void | Effect.Effect<void>;
 }
 
 /**

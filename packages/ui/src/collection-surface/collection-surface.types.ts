@@ -13,14 +13,14 @@ export interface CollectionPipelineContext<TRow extends object> {
 	readonly selectedRows: readonly TRow[];
 }
 
-export interface CollectionPipeline<TRow extends object> {
+export interface CollectionPipeline<TRow extends object, E = Error> {
 	readonly id: string;
 	readonly label: string;
 	readonly description?: string;
 	readonly icon?: string;
 	readonly requiresSelection?: boolean;
 	readonly getDisabledReason?: (selectedRows: readonly TRow[]) => string | null;
-	run(context: CollectionPipelineContext<TRow>): Effect.Effect<unknown, unknown>;
+	run(context: CollectionPipelineContext<TRow>): Effect.Effect<unknown, E>;
 }
 
 const collectionIntegrationStateSchema = Schema.Literals([

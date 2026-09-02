@@ -1,5 +1,6 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
 import { Context, Duration, Effect, Layer, Option, Result, Schema } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 import { Prompt } from 'effect/unstable/ai';
 import {
 	AIRequest,
@@ -16,7 +17,11 @@ import type { AuthoredIntegrationModule } from '#lib/authoring/integration-intro
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
-import type { Interface as CollectionsInterface } from './collections.contract.js';
+import type {
+	BatchMutationError,
+	Interface as CollectionsInterface,
+	QueryError
+} from './collections.contract.js';
 import * as Collections from './collections.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import { AI, Files, type AIInterface, type FilesInterface } from '#lib/runtime/facilities/services.js';
@@ -196,21 +201,21 @@ export const runAuthoredHandler = <A>(
 	});
 
 /** Read operations shared by authored handlers and policy decisions. */
-export type AuthoringReadOps = Readonly<{
+export type AuthoringReadOps<E = never> = Readonly<{
 	/** Exact generic database members structurally visible to authored code. */
 	readonly allowedCollections: ReadonlySet<string>;
 	readonly findMany: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
+	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, E, never>;
 	readonly findFirst: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<Readonly<Record<string, unknown>> | undefined, unknown, never>;
+	) => Effect.Effect<Readonly<Record<string, unknown>> | undefined, E, never>;
 	readonly count: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<number, unknown, never>;
+	) => Effect.Effect<number, E, never>;
 	/**
 	 * Rows nearest a probe vector, closest first, each carrying the measured `distance`.
 	 *
@@ -221,16 +226,16 @@ export type AuthoringReadOps = Readonly<{
 	readonly findNearest: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
+	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, E, never>;
 }>;
 
 /** Every operation an ordinary authored handler can reach, bound to the current invocation. */
-export type AuthoringOps = AuthoringReadOps &
+export type AuthoringOps<E = never> = AuthoringReadOps<E> &
 	Readonly<{
 		readonly mutate: (
 			collection: string,
 			values: Readonly<Record<string, unknown>>
-		) => Effect.Effect<void, unknown, never>;
+		) => Effect.Effect<void, E, never>;
 		/**
 		 * Starts a declared automation in the current I/O flow, or waits until an explicit delay.
 		 *
@@ -243,13 +248,13 @@ export type AuthoringOps = AuthoringReadOps &
 			name: string,
 			input: Schema.Json,
 			options: Readonly<{ readonly after?: string | number }> | undefined
-		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
-		readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
-		readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, unknown, never>;
+		) => Effect.Effect<{ readonly taskId: string }, E, never>;
+		readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, E, never>;
+		readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, E, never>;
 	}>;
 
 /** A preflight the runtime may place in front of an authored operation. */
-type AuthoredOperationGuard = (operation: string) => Effect.Effect<void, unknown, never>;
+type AuthoredOperationGuard<E = never> = (operation: string) => Effect.Effect<void, E, never>;
 
 /**
  * Places one guard immediately before every operation reachable through the authored API.
@@ -258,10 +263,10 @@ type AuthoredOperationGuard = (operation: string) => Effect.Effect<void, unknown
  * those bindings but do not belong to a cancellable automation task. Only automation dispatch wraps
  * its bound operations with this function.
  */
-export const guardAuthoringOps = (
-	ops: AuthoringOps,
-	guard: AuthoredOperationGuard
-): AuthoringOps => ({
+export const guardAuthoringOps = <E, G>(
+	ops: AuthoringOps<E>,
+	guard: AuthoredOperationGuard<G>
+): AuthoringOps<E | G> => ({
 	allowedCollections: ops.allowedCollections,
 	findMany: (collection, input) =>
 		guard(`db.${collection}.findMany`).pipe(Effect.andThen(ops.findMany(collection, input))),
@@ -301,23 +306,23 @@ type InferenceRequest = Readonly<{
 }>;
 
 /** The Effect-native capability object supplied to authored handlers after invocation binding. */
-export type RuntimeAuthoringApi = Readonly<{
+export type RuntimeAuthoringApi<E = never> = Readonly<{
 	readonly db: object;
 	readonly automations: Readonly<{
 		readonly run: (
 			name: string,
 			input?: Schema.Json,
 			options?: Readonly<{ readonly after?: string | number }>
-		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
+		) => Effect.Effect<{ readonly taskId: string }, E, never>;
 	}>;
-	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
-	readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, unknown, never>;
+	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, E, never>;
+	readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, E, never>;
 }>;
 
 /** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
-type RuntimeAutomationApi = RuntimeAuthoringApi &
+type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 	Readonly<{
-		readonly progress: (value: AutomationProgression) => Effect.Effect<void, unknown, never>;
+		readonly progress: (value: AutomationProgression) => Effect.Effect<void, E, never>;
 	}>;
 
 /**
@@ -437,7 +442,7 @@ const isDurationInputString = (
 	if (separator <= 0) return false;
 	const amount = value.slice(0, separator);
 	const unit = value.slice(separator + 1);
-	return amount.trim() !== '' && Number.isFinite(Number(amount)) && durationUnits.has(unit);
+	return amount.trim() !== '' && Number.isFinite(decodeNumber(amount)) && durationUnits.has(unit);
 };
 
 export const afterMillisOf = (after: string | number | undefined): number | undefined => {
@@ -455,7 +460,7 @@ export const afterMillisOf = (after: string | number | undefined): number | unde
  * message and the host resolves any image descriptors before its provider call.
  */
 export const inferOp =
-	(effectId: EffectIdType, ai: AIInterface): AuthoringOps['infer'] =>
+	(effectId: EffectIdType, ai: AIInterface): AuthoringOps<Database.FacilityError>['infer'] =>
 	(input) =>
 		Effect.gen(function* () {
 			const refusal = (code: string, message: string) =>
@@ -512,8 +517,8 @@ export const inferOp =
  * Every method returns an Effect bound to the invocation's effect id and subject, so authored
  * business logic composes with `Effect.gen` — the same shape the authoring types declare.
  */
-const collectionReadApi = (
-	ops: AuthoringReadOps,
+const collectionReadApi = <E>(
+	ops: AuthoringReadOps<E>,
 	collection: string
 ): Readonly<Record<string, unknown>> => ({
 	findMany: (input: Readonly<Record<string, unknown>> = {}) => ops.findMany(collection, input),
@@ -533,7 +538,7 @@ const databaseApi = (
 				: undefined
 	});
 
-export const makeAuthoringApi = (ops: AuthoringOps): RuntimeAuthoringApi => {
+export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E> => {
 	const database = databaseApi(ops.allowedCollections, (collection) => {
 		const reads = collectionReadApi(ops, collection);
 		return collection === 'approval_request'
@@ -559,7 +564,7 @@ export const makeAuthoringApi = (ops: AuthoringOps): RuntimeAuthoringApi => {
 };
 
 /** Builds the smaller, read-only capability object supplied to policy decisions. */
-export const makePolicyDecisionApi = (ops: AuthoringReadOps, subject: Subject): unknown =>
+export const makePolicyDecisionApi = <E>(ops: AuthoringReadOps<E>, subject: Subject): unknown =>
 	Object.freeze({
 		db: databaseApi(ops.allowedCollections, (collection) =>
 			Object.freeze(collectionReadApi(ops, collection))
@@ -576,21 +581,35 @@ export const makePolicyDecisionApi = (ops: AuthoringReadOps, subject: Subject): 
 	});
 
 /** Adds the current durable run's progression capability without widening the ordinary API. */
-export const makeAutomationApi = (
-	api: RuntimeAuthoringApi,
-	progress: RuntimeAutomationApi['progress']
-): RuntimeAutomationApi => ({ ...api, progress });
+export const makeAutomationApi = <E, P>(
+	api: RuntimeAuthoringApi<E>,
+	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>
+): RuntimeAutomationApi<E | P> => ({ ...api, progress });
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
-export const makeBoundAuthoringOps = (
+export const makeBoundAuthoringOps = <RunE = never>(
 	effectId: EffectIdType,
 	subject: Subject,
 	collections: CollectionsInterface,
 	ai: AIInterface,
 	files: FilesInterface,
 	automations: Automations.Interface,
-	runAutomation?: AuthoringOps['runAutomation']
-): AuthoringOps => {
+	runAutomation?: AuthoringOps<
+		| QueryError
+		| BatchMutationError
+		| Schema.SchemaError
+		| Automations.AutomationStopped
+		| Automations.AutomationDeferredUnsupported
+		| RunE
+	>['runAutomation']
+): AuthoringOps<
+	| QueryError
+	| BatchMutationError
+	| Schema.SchemaError
+	| Automations.AutomationStopped
+	| Automations.AutomationDeferredUnsupported
+	| RunE
+> => {
 	const readAsset = (file: FileRef) => readFileAsset(effectId, files, file);
 	/**
 	 * A direct automation, integration, or remote may issue more than one write in one invocation.
@@ -641,9 +660,18 @@ export const makeBoundAuthoringOps = (
 	};
 };
 
-type RuntimeRemoteApi = Pick<RuntimeAuthoringApi, 'db' | 'infer' | 'readFileAsset'>;
+type RuntimeRemoteApi<E = never> = Pick<RuntimeAuthoringApi<E>, 'db' | 'infer' | 'readFileAsset'>;
 export type RuntimeRemoteHandler = ReturnType<
-	() => (input: unknown, api: RuntimeRemoteApi) => unknown
+	() => (
+		input: unknown,
+		api: RuntimeRemoteApi<
+			| QueryError
+			| BatchMutationError
+			| Schema.SchemaError
+			| Automations.AutomationStopped
+			| Automations.AutomationDeferredUnsupported
+		>
+	) => unknown
 >;
 
 /** Merges authored remotes and tools once; ambiguous exact membership is a bundle-construction error. */
@@ -698,7 +726,7 @@ export const remoteRegistryLayer = (
 							code: 'unknown_command',
 							message: `Unknown workspace command: ${name}`
 						});
-					const api: RuntimeRemoteApi = makeAuthoringApi(
+					const api = makeAuthoringApi(
 						makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
 					);
 					const output = yield* runAuthoredHandler(() => handler(input, api)).pipe(

@@ -1,0 +1,21 @@
+id: PERF2
+summary: Effect Schema decoder is rebuilt for every element
+severity: error
+principles: [simplicity, efficiency, no-bloat]
+rule:
+  all:
+    - pattern: Schema.$FN($...ARGS)
+    - regex: 'decodeUnknown|decode|encode|validate'
+      on: FN
+    - inside:
+        pattern: $S.map($CB)
+      stopBy: end
+    - not:
+        inside:
+          regex: "^Effect\\."
+        stopBy: end
+examples:
+  bad:
+    - 'export const f = (xs) => xs.map((x) => Schema.decodeUnknownSync(Row)(x));'
+  good:
+    - "export const d = Schema.decodeUnknownSync(Row);\nexport const f = (xs) => xs.map(d);\nexport const g = (e) => Effect.flatMap(e, (x) => Schema.decodeUnknownEffect(Row)(x));"

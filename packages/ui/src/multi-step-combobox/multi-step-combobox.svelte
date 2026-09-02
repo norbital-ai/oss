@@ -20,6 +20,7 @@
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { toError } from '@norbital-ai/std';
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import { isEqual } from 'es-toolkit/predicate';
 	import { watch } from 'runed';
 	import { tick, type Snippet } from 'svelte';
@@ -272,7 +273,7 @@
 	});
 
 	function handleCommandSelect(value: string) {
-		const index = Number(value);
+		const index = decodeNumber(value);
 		if (!Number.isInteger(index)) return;
 		const option = filteredOptions[index];
 		if (option) handleSelect(option.value);

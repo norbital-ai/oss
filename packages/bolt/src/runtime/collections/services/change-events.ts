@@ -18,7 +18,7 @@ type ChangeTrigger = Readonly<{
 	}>;
 }>;
 
-export type ChangeEventPorts = Readonly<{
+export type ChangeEventPorts<E = never> = Readonly<{
 	readonly automations: Pick<Automations.Interface, 'startMany' | 'executeMany'>;
 	readonly authored: Readonly<Record<string, ChangeTrigger>>;
 	readonly runBody: (
@@ -26,7 +26,7 @@ export type ChangeEventPorts = Readonly<{
 		taskId: string,
 		raw: Schema.Json,
 		attemptEffectId: string
-	) => Effect.Effect<Schema.Json, unknown>;
+	) => Effect.Effect<Schema.Json, E>;
 }>;
 
 /**
@@ -34,8 +34,8 @@ export type ChangeEventPorts = Readonly<{
  *
  * A row that was never written is not passed in at all — a change event announces a record.
  */
-export const emitChangeEventsMany = Effect.fn('Collections.emitChangeEventsMany')(function* (
-	ports: ChangeEventPorts,
+export const emitChangeEventsMany = Effect.fn('Collections.emitChangeEventsMany')(function* <E>(
+	ports: ChangeEventPorts<E>,
 	effectId: EffectId,
 	collection: string,
 	records: ReadonlyArray<ChangeEventRecord>,

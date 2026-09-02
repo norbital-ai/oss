@@ -1,15 +1,26 @@
 import { Option, Schema } from 'effect';
 
-/** Number or numeric string, the decode `Number(input)` was standing in for. */
-export const NumberFromUnknown = Schema.Union([Schema.Number, Schema.NumberFromString]);
+/**
+ * Number or numeric string, the decode `Number(input)` was standing in for.
+ *
+ * The blank string is refused rather than decoded. `Schema.NumberFromString` follows `Number('')`
+ * and answers `0`, which is the one coercion no caller here wants: an empty numeric field is a
+ * value nobody entered, and rendering it as `0` states an amount the record does not hold. It read
+ * as a plain zero in a payroll figure.
+ */
+export const NumberFromUnknown = Schema.Union([
+	Schema.Number,
+	Schema.String.check(Schema.isPattern(/\S/u)).pipe(Schema.decodeTo(Schema.NumberFromString))
+]);
 
 /**
  * Decode a wire/form value as a number. Invalid input is `NaN`, the same as `Number('x')`, so
  * existing callers that already branch on `Number.isFinite` keep their control flow.
  *
- * Declared in this file rather than a sibling: `tests/core.test.ts` imports this module as
+ * Declared here rather than in a sibling file: `tests/core.test.ts` imports this module as
  * TypeScript source, and Node's type stripping does not rewrite a `./number.js` specifier to the
- * `.ts` that exists. Every other source-imported module in this package is a single file.
+ * `.ts` that exists. Every other source-imported module in this package is a single file for the
+ * same reason.
  */
 export const decodeNumber = (value: unknown): number =>
 	Option.getOrElse(Schema.decodeUnknownOption(NumberFromUnknown)(value), () => Number.NaN);

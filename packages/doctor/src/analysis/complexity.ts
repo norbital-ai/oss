@@ -38,7 +38,7 @@ export type AstSummary = Readonly<{
 		name: string;
 		line: number;
 		useLine: number;
-		kind: 'transparent-forwarder' | 'single-use-expression';
+		kind: 'callback-proxy' | 'transparent-forwarder' | 'single-use-expression';
 		confidence: 'high' | 'review';
 		forwardsTo?: string;
 		tokens: number;
@@ -191,6 +191,14 @@ function transparentForwardedCall(candidate: TopLevelFunction): string | null {
 	const returned = directReturnedExpression(candidate.body);
 	const call = returned && ts.isCallExpression(returned) ? returned : null;
 	if (!call || call.arguments.length !== parameters.length) return null;
+	const callee = call.expression;
+	if (
+		!(
+			ts.isIdentifier(callee) ||
+			(ts.isPropertyAccessExpression(callee) && !ts.isCallExpression(callee.expression))
+		)
+	)
+		return null;
 	if (
 		!call.arguments.every(
 			(argument, index) => ts.isIdentifier(argument) && argument.text === parameters[index]
@@ -287,6 +295,27 @@ function safeSingleExpression(candidate: TopLevelFunction): ts.Node | null {
 	return unsafe ? null : expression;
 }
 
+const GENERIC_EXPRESSION_NAME =
+	/^(?:tmp|temp|helper|util|utils|wrap|wrapper|shim|inner|fn|go|impl|thunk|label)$/i;
+
+/**
+ * Q4 is review-only because a name can earn a one-line helper. Fire only when the name is
+ * generic, a restatement of the callee, or too short to be vocabulary.
+ */
+function nameEarnsExpression(name: string, expression: ts.Node): boolean {
+	if (GENERIC_EXPRESSION_NAME.test(name) || name.length <= 2) return false;
+	if (ts.isCallExpression(expression)) {
+		const callee = expression.expression;
+		const calleeName = ts.isIdentifier(callee)
+			? callee.text
+			: ts.isPropertyAccessExpression(callee)
+				? callee.name.text
+				: '';
+		if (calleeName !== '' && name.toLowerCase() === calleeName.toLowerCase()) return false;
+	}
+	return /[a-z][A-Z]/.test(name) || (name.includes('_') && name.length >= 6);
+}
+
 /** Find only mechanically inlineable same-file one-use functions; larger abstractions stay inventory. */
 function inlineEvidence(
 	file: ts.SourceFile,
@@ -313,6 +342,7 @@ function inlineEvidence(
 	const inlineCandidates: AstSummary['inlineCandidates'] = [];
 	for (const candidate of candidates) {
 		if (counts.get(candidate.name) !== 1 || isExportedTopLevelFunction(candidate)) continue;
+		if (candidate.node.type !== undefined && ts.isTypePredicateNode(candidate.node.type)) continue;
 		const uses = references.get(candidate.name) ?? [];
 		const externalUses = uses.filter(
 			(use) => use.getStart(file) < candidate.node.getStart(file) || use.end > candidate.node.end
@@ -327,11 +357,19 @@ function inlineEvidence(
 		const forwardedTo = transparentForwardedCall(candidate);
 		const expression = forwardedTo ? null : safeSingleExpression(candidate);
 		if (!forwardedTo && !expression) continue;
+		if (!forwardedTo && expression !== null && nameEarnsExpression(candidate.name, expression))
+			continue;
+		const callbackProxy =
+			forwardedTo !== null && /^(?:on[A-Z]|handle[A-Z]|callback|listener|handler)/.test(candidate.name);
 		inlineCandidates.push({
 			name: candidate.name,
 			line: file.getLineAndCharacterOfPosition(candidate.nameNode.getStart(file)).line + 1,
 			useLine: file.getLineAndCharacterOfPosition(externalUses[0].getStart(file)).line + 1,
-			kind: forwardedTo ? 'transparent-forwarder' : 'single-use-expression',
+			kind: callbackProxy
+				? 'callback-proxy'
+				: forwardedTo
+					? 'transparent-forwarder'
+					: 'single-use-expression',
 			confidence: forwardedTo ? 'high' : 'review',
 			...(forwardedTo ? { forwardsTo: forwardedTo } : {}),
 			tokens: tokenCount(candidate.body.getText(file))
@@ -499,4 +537,67 @@ export function analyzeAst(path: string, source: string): AstSummary {
 		duplicateEntities,
 		services: [...new Set(services)].sort()
 	};
+}
+
+const INDIRECTION = {
+	Q1: {
+		severity: 'error',
+		confidence: 'high',
+		summary: 'callback-named function forwards every parameter unchanged to one callback'
+	},
+	Q3: {
+		severity: 'error',
+		confidence: 'high',
+		summary: 'private function has one same-file direct call and forwards its parameters unchanged'
+	},
+	Q4: {
+		severity: 'hint',
+		confidence: 'medium',
+		summary: 'private function has one same-file direct call and a small mutation-free single expression'
+	}
+} as const;
+
+/**
+ * Q1/Q3/Q4 as catalogue rows, from the same inline-candidate walk the metrics already publish.
+ *
+ * Snapshot used to treat these as optional quality overlays. They are the gate: a transparent
+ * one-use forwarder is an error, a small named expression is a hint, and a parameter callback
+ * proxy is the sharper Q1 form of the same shape.
+ */
+export function indirectionFindings(
+	file: string,
+	source: string
+): ReadonlyArray<
+	Readonly<{
+		readonly rule: 'Q1' | 'Q3' | 'Q4';
+		readonly severity: 'error' | 'hint';
+		readonly confidence: 'high' | 'medium';
+		readonly summary: string;
+		readonly location: string;
+		readonly principles: ReadonlyArray<string>;
+	}>
+> {
+	const summary = analyzeAst(file, source);
+	const lines = source.split(/\r?\n/);
+	return summary.inlineCandidates.map((candidate) => {
+		const rule =
+			candidate.kind === 'callback-proxy'
+				? 'Q1'
+				: candidate.kind === 'transparent-forwarder'
+					? 'Q3'
+					: 'Q4';
+		const declared = INDIRECTION[rule];
+		const excerpt = (lines[candidate.line - 1] ?? '').trim();
+		const evidence =
+			`name=${candidate.name} kind=${candidate.kind}` +
+			(candidate.forwardsTo === undefined ? '' : ` forwardsTo=${candidate.forwardsTo}`);
+		return {
+			rule,
+			severity: declared.severity,
+			confidence: declared.confidence,
+			summary: declared.summary,
+			location: `${file}:${candidate.line}: ${excerpt} [${evidence}]`,
+			principles: ['simplicity', 'no-bloat']
+		};
+	});
 }

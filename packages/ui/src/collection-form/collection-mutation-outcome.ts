@@ -4,7 +4,7 @@ import type {
 	CollectionOperations,
 	CollectionType
 } from '@norbital-ai/std/collection';
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 
 type CollectionMutation = CollectionOperations<CollectionType<object, object>>['mutate'];
 
@@ -36,7 +36,7 @@ const pendingApprovalSubmission = (
 
 const submissionFromSettlement = (
 	settlement: CollectionMutationSettlement
-): Effect.Effect<CollectionMutationSubmission, Error> => {
+): Effect.Effect<CollectionMutationSubmission, Cause.UnknownError> => {
 	switch (settlement.kind) {
 		case 'accepted':
 			return Effect.succeed(
@@ -54,20 +54,43 @@ const submissionFromSettlement = (
 				resolution: 'rebased',
 				idempotencyKey: settlement.idempotencyKey
 			});
+		// `UnknownError` is `(cause, message?)`: the first argument lands in `Error.cause`, not in
+		// `message`. Passing the authoritative reason alone left every refusal reading as a generic
+		// error in the form while the sentence the server actually wrote — "Payroll period is closed"
+		// — was reachable only by opening `.cause`. The settlement rides as the cause so a debugger
+		// keeps the whole object, and the reason is the message, which is the part a person reads.
 		case 'rejected':
-			return Effect.fail(new Error(settlement.message));
+			return Effect.fail(new Cause.UnknownError(settlement, settlement.message));
 		case 'quarantined':
-			return Effect.fail(new Error(settlement.quarantine.message));
+			return Effect.fail(
+				new Cause.UnknownError(settlement.quarantine, settlement.quarantine.message)
+			);
+		default: {
+			const _exhaustive: never = settlement;
+			return _exhaustive;
+		}
 	}
 };
+
+/**
+ * Wrap a rejected promise while keeping what it said.
+ *
+ * The failure channel is `Cause.UnknownError`, so an ordinary rejection cannot travel as itself and
+ * has to be wrapped. Wrapped by default it also loses its sentence: `UnknownError`'s first argument
+ * is the cause, and the message falls back to a generic one. So the original rides as the cause —
+ * identity preserved for anything inspecting it — and its own text becomes the message, which is
+ * the half a person reads in the form.
+ */
+const preserving = (cause: unknown): Cause.UnknownError =>
+	new Cause.UnknownError(cause, cause instanceof Error ? cause.message : String(cause));
 
 /** Runs a collection mutation through its authoritative terminal settlement. */
 export function submitCollectionMutation(
 	mutation: () => ReturnType<CollectionMutation>
-): Effect.Effect<CollectionMutationSubmission, unknown> {
-	return Effect.tryPromise({ try: mutation, catch: (cause) => cause }).pipe(
+): Effect.Effect<CollectionMutationSubmission, Cause.UnknownError> {
+	return Effect.tryPromise({ try: () => mutation(), catch: preserving }).pipe(
 		Effect.flatMap((result) =>
-			Effect.tryPromise({ try: () => result.settlement.settled, catch: (cause) => cause })
+			Effect.tryPromise({ try: () => result.settlement.settled, catch: preserving })
 		),
 		Effect.flatMap(submissionFromSettlement)
 	);

@@ -38,6 +38,7 @@ import {
 	type SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
 import { toError } from '@norbital-ai/std';
+import { decodeNumber } from '@norbital-ai/std/json';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import {
 	compileCollectionPredicate,
@@ -537,36 +538,61 @@ export const insertionLayers = (
 		const key = `${node.collection}\u0000${node.id}`;
 		if (!positions.has(key)) positions.set(key, index);
 	});
-	const layers: Array<number> = [];
-	for (const [index, node] of nodes.entries()) {
-		let layer = 0;
-		const fields = fieldsByCollection.get(node.collection);
-		for (const [name, value] of Object.entries(node.values)) {
-			const field = fields?.[name];
-			const relationTarget = relationTargets.get(`${node.collection}\u0000${name}`);
-			const referenceHandle =
-				field?.reference !== undefined &&
-				value !== null &&
-				typeof value === 'object' &&
-				!Array.isArray(value)
-					? value
-					: undefined;
-			const kind = referenceHandle === undefined ? undefined : Reflect.get(referenceHandle, 'kind');
-			const referenceTarget =
-				typeof kind === 'string'
-					? field?.reference?.targets.find((target) => target.tag === kind)?.collection
-					: undefined;
-			const identifier =
-				referenceTarget === undefined || referenceHandle === undefined
-					? value
-					: Reflect.get(referenceHandle, 'id');
-			const targetCollection = referenceTarget ?? relationTarget;
-			if (targetCollection === undefined || typeof identifier !== 'string') continue;
-			const referenced = positions.get(`${targetCollection}\u0000${identifier}`);
-			if (referenced === undefined || referenced >= index) continue;
-			layer = Math.max(layer, (layers[referenced] ?? 0) + 1);
+	/**
+	 * Layers are relaxed to a fixpoint, not assigned in one forward pass.
+	 *
+	 * Reading `layers[referenced]` while still building it forced the pass to skip any dependency it
+	 * had not reached yet, so the layering depended on the order the graph happened to arrive in: a
+	 * row referencing a row emitted after it stayed at layer 0 and was inserted first. A payroll run
+	 * hit exactly that — an adjustment names the captured-input junction that caused it, and the
+	 * engine states adjustments alongside those junctions rather than after them, so Postgres refused
+	 * the transaction with `payslip_adjustments_input_loan_repayment_input_fk`.
+	 *
+	 * Ordinary graphs settle in two or three passes and stop on the first that changes nothing. A
+	 * reference cycle cannot settle, so the pass count is bounded by the node count; such a graph
+	 * keeps the best layering found, which is what the forward pass gave it too, and a cycle of
+	 * required references has no valid insertion order to find in any case.
+	 */
+	const layers: Array<number> = new Array<number>(nodes.length).fill(0);
+	let settled = false;
+	for (let pass = 0; pass < nodes.length && !settled; pass += 1) {
+		settled = true;
+		for (const [index, node] of nodes.entries()) {
+			let layer = 0;
+			const fields = fieldsByCollection.get(node.collection);
+			for (const [name, value] of Object.entries(node.values)) {
+				const field = fields?.[name];
+				const relationTarget = relationTargets.get(`${node.collection}\u0000${name}`);
+				const referenceHandle =
+					field?.reference !== undefined &&
+					value !== null &&
+					typeof value === 'object' &&
+					!Array.isArray(value)
+						? value
+						: undefined;
+				const kind =
+					referenceHandle === undefined ? undefined : Reflect.get(referenceHandle, 'kind');
+				const referenceTarget =
+					typeof kind === 'string'
+						? field?.reference?.targets.find((target) => target.tag === kind)?.collection
+						: undefined;
+				const identifier =
+					referenceTarget === undefined || referenceHandle === undefined
+						? value
+						: Reflect.get(referenceHandle, 'id');
+				const targetCollection = referenceTarget ?? relationTarget;
+				if (targetCollection === undefined || typeof identifier !== 'string') continue;
+				const referenced = positions.get(`${targetCollection}\u0000${identifier}`);
+				// A dependency absent from `positions` is a row this graph is not writing, so it already
+				// exists and orders nothing. A self-reference cannot raise its own layer.
+				if (referenced === undefined || referenced === index) continue;
+				layer = Math.max(layer, (layers[referenced] ?? 0) + 1);
+			}
+			if (layer > (layers[index] ?? 0)) {
+				layers[index] = layer;
+				settled = false;
+			}
 		}
-		layers.push(layer);
 	}
 	return layers;
 };
@@ -788,9 +814,7 @@ const compiledFilter = (
 };
 
 /** Projects the canonical effective-plan relation/routing manifest into the write-capture shape. */
-const effectivePlanCaptureManifest = (
-	definition: WorkspaceDefinition
-): DeclaredCaptureFields => {
+const effectivePlanCaptureManifest = (definition: WorkspaceDefinition): DeclaredCaptureFields => {
 	const manifest = new Map<string, Set<string>>();
 	for (const collection of definition.collections) manifest.set(collection.name, new Set());
 	for (const requirement of policyIndexRequirements(definition)) {
@@ -803,9 +827,7 @@ const effectivePlanCaptureManifest = (
 	);
 };
 
-export const layerWith = (
-	randomId: () => string = () => globalThis.crypto.randomUUID()
-) =>
+export const layerWith = (randomId: () => string = () => globalThis.crypto.randomUUID()) =>
 	Layer.effect(
 		Service,
 		Effect.gen(function* () {
@@ -1651,15 +1673,16 @@ export const layerWith = (
 				mutate,
 				startAutomation,
 				infer: inferOp(effectId, ai),
-				readFileAsset: (file: Parameters<AuthoringOps['readFileAsset']>[0]) =>
-					readFileAsset(effectId, files, file)
+				readFileAsset: (
+					file: Parameters<AuthoringOps<Database.FacilityError>['readFileAsset']>[0]
+				) => readFileAsset(effectId, files, file)
 			});
-			const authoringApi = (
+			const authoringApi = <StagedE = never>(
 				effectId: EffectId,
 				subject: Identity.Subject,
 				elevated = false,
 				depth = 0,
-				staged?: HookWriteOps
+				staged?: HookWriteOps<StagedE>
 			) =>
 				makeAuthoringApi(
 					buildOpsService(authoringWritePorts(effectId), effectId, subject, elevated, depth, staged)
@@ -1675,58 +1698,67 @@ export const layerWith = (
 					Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
 				)
 			});
-			const runAutomationBody = Effect.fn('Collections.runAutomationBody')(function* (
+			const runAutomationBody: (
 				name: string,
 				taskId: string,
 				raw: Schema.Json,
 				attemptEffectId: string
-			) {
-				const declaration = authored.automations[name];
-				if (declaration === undefined) {
-					return yield* new AuthoredRefusal({ message: `Automation ${name} is not declared.` });
-				}
-				const admitted = yield* Schema.decodeUnknownEffect(AutomationExecutionInput)(raw);
-				const turnEffectId = EffectId.make(attemptEffectId);
-				const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
-				const api = makeAutomationApi(
-					makeAuthoringApi(
-						guardAuthoringOps(
-							buildOpsService(
-								authoringWritePorts(turnEffectId),
-								turnEffectId,
-								admitted.bolt_run_as,
-								false,
-								0,
-								undefined,
-								admitted.bolt_depth
-							),
-							guard
-						)
-					),
-					(value) =>
-						guard('progress').pipe(
-							Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
-							Effect.flatMap((progression) =>
-								automations.progress(turnEffectId, taskId, progression)
+			) => Effect.Effect<
+				Schema.Json,
+				| QueryError
+				| BatchMutationError
+				| Schema.SchemaError
+				| Automations.AutomationStopped
+				| Automations.AutomationDeferredUnsupported
+			> = Effect.fn('Collections.runAutomationBody')(
+				function* (name, taskId, raw, attemptEffectId) {
+					const declaration = authored.automations[name];
+					if (declaration === undefined) {
+						return yield* new AuthoredRefusal({ message: `Automation ${name} is not declared.` });
+					}
+					const admitted = yield* Schema.decodeUnknownEffect(AutomationExecutionInput)(raw);
+					const turnEffectId = EffectId.make(attemptEffectId);
+					const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
+					const api = makeAutomationApi(
+						makeAuthoringApi(
+							guardAuthoringOps(
+								buildOpsService(
+									authoringWritePorts(turnEffectId),
+									turnEffectId,
+									admitted.bolt_run_as,
+									false,
+									0,
+									undefined,
+									admitted.bolt_depth
+								),
+								guard
 							)
-						)
-				);
-				const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
-					admitted.args
-				);
-				const output = yield* runAuthoredHandler(() =>
-					declaration.handler(api, { args, scope: admitted.scope ?? {} })
-				);
-				const declaredOutput = yield* Schema.decodeUnknownEffect(
-					declaration.output ?? Schema.Unknown
-				)(output);
-				return yield* Schema.decodeUnknownEffect(Schema.Json)(declaredOutput);
-			});
+						),
+						(value) =>
+							guard('progress').pipe(
+								Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
+								Effect.flatMap((progression) =>
+									automations.progress(turnEffectId, taskId, progression)
+								)
+							)
+					);
+					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
+						admitted.args
+					);
+					const output = yield* runAuthoredHandler(() =>
+						declaration.handler(api, { args, scope: admitted.scope ?? {} })
+					);
+					const declaredOutput = yield* Schema.decodeUnknownEffect(
+						declaration.output ?? Schema.Unknown
+					)(output);
+					return yield* Schema.decodeUnknownEffect(Schema.Json)(declaredOutput);
+				}
+			);
 			/**
 			 * Admits and immediately executes one automation unless the caller explicitly supplied a delay.
 			 * The durable row is lifecycle/input state; this Effect remains the sole owner of the body.
 			 */
-			const startAutomation = Effect.fn('Collections.startAutomation')(function* (
+			const startAutomation: (
 				effectId: EffectId,
 				name: string,
 				input: Schema.Json,
@@ -1736,28 +1768,37 @@ export const layerWith = (
 					readonly taskId?: string;
 					readonly parentDepth?: number;
 				}>
-			) {
-				const afterMillis = afterMillisOf(options?.after);
-				if (afterMillis === undefined) {
-					return yield* new AuthoredRefusal({
-						message: `"${String(options?.after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+			) => Effect.Effect<
+				{ readonly taskId: string },
+				| QueryError
+				| BatchMutationError
+				| Schema.SchemaError
+				| Automations.AutomationStopped
+				| Automations.AutomationDeferredUnsupported
+			> = Effect.fn('Collections.startAutomation')(
+				function* (effectId, name, input, scope, options) {
+					const afterMillis = afterMillisOf(options?.after);
+					if (afterMillis === undefined) {
+						return yield* new AuthoredRefusal({
+							message: `"${String(options?.after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+						});
+					}
+					const taskId = yield* automations.start(effectId, name, input, {
+						afterMillis,
+						scope,
+						...(options?.taskId === undefined ? {} : { taskId: options.taskId }),
+						...(options?.parentDepth === undefined ? {} : { parentDepth: options.parentDepth })
 					});
+					if (afterMillis > 0) return { taskId };
+					yield* automations.execute(
+						EffectId.make(`${effectId}:execute`),
+						name,
+						taskId,
+						(raw, attemptEffectId) => runAutomationBody(name, taskId, raw, attemptEffectId)
+					);
+					return { taskId };
 				}
-				const taskId = yield* automations.start(effectId, name, input, {
-					afterMillis,
-					scope,
-					...(options?.taskId === undefined ? {} : { taskId: options.taskId }),
-					...(options?.parentDepth === undefined ? {} : { parentDepth: options.parentDepth })
-				});
-				if (afterMillis > 0) return { taskId };
-				yield* automations.execute(
-					EffectId.make(`${effectId}:execute`),
-					name,
-					taskId,
-					(raw, attemptEffectId) => runAutomationBody(name, taskId, raw, attemptEffectId)
-				);
-				return { taskId };
-			});
+			);
 			const changeEventPorts = {
 				automations,
 				authored: authored.automations,
@@ -1822,7 +1863,7 @@ export const layerWith = (
 				inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 				module: AuthoredCollectionHookModule | undefined,
 				depth: number,
-				staged?: HookWriteOps
+				staged?: HookWriteOps<Error>
 			) {
 				const prepare = module?.mutate?.prepare;
 				if (prepare === undefined) return undefined;
@@ -1848,7 +1889,7 @@ export const layerWith = (
 				module: AuthoredCollectionHookModule | undefined,
 				depth = 0,
 				prepared: unknown = undefined,
-				staged?: HookWriteOps
+				staged?: HookWriteOps<Error>
 			) {
 				const api = authoringApi(effectId, subject, false, depth + 1, staged);
 				// Already decoded by the caller. `prepare` sees the batch's inputs and the handler sees one
@@ -2050,11 +2091,7 @@ export const layerWith = (
 						message:
 							'Ranked search pagination requires a cursor carrying the lexical rank or semantic distance.'
 					});
-				const ordering = compileOrderTerms(
-					workspace.definition,
-					input.collection,
-					input.orderBy
-				);
+				const ordering = compileOrderTerms(workspace.definition, input.collection, input.orderBy);
 				const seekResult = compileCollectionCursorSeek(
 					input.after,
 					ordering,
@@ -2181,7 +2218,7 @@ export const layerWith = (
 							input.collection,
 							decodeReferenceRow(record, definition.fields)
 						),
-						distance: typeof measured === 'number' ? measured : Number(measured ?? Number.NaN)
+						distance: typeof measured === 'number' ? measured : decodeNumber(measured ?? Number.NaN)
 					};
 				});
 			});
@@ -2886,9 +2923,15 @@ export const layerWith = (
 						: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
 					captureParameters
 				);
-				const historyPrunes = historyPruneStatements(operations).map((statement) =>
-					transactionSql(statement.sql, statement.parameters)
-				);
+				// A record created in this transaction has exactly one history entry, and the prune only
+				// acts where `total > horizon`, so pruning a create is a guaranteed no-op. It was not a
+				// free one: the prune is a fixed ~1.8 KB recursive statement emitted once per record, so
+				// a payroll run creating 4,000 rows sent 4,000 verbatim copies — 7.1 MB, 53% of a
+				// 13.5 MB facility request that then breached the 1 MiB ceiling and failed the write.
+				// Updates and deletes still prune, which is where a history log can actually outgrow it.
+				const historyPrunes = historyPruneStatements(
+					operations.filter((operation) => operation.action !== 'create')
+				).map((statement) => transactionSql(statement.sql, statement.parameters));
 				const statements: Array<{
 					readonly sql: string;
 					readonly parameters: ReadonlyArray<Schema.Json>;
@@ -3270,8 +3313,7 @@ export const layerWith = (
 									)
 									.pipe(
 										Effect.map((stored) => {
-											for (const [key, row] of stored.stored)
-												readSession.storedRows.set(key, row);
+											for (const [key, row] of stored.stored) readSession.storedRows.set(key, row);
 										})
 									)
 							);
@@ -3728,7 +3770,7 @@ export const layerWith = (
 				const row = result.rows[0];
 				const value =
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
-				return typeof value === 'number' ? value : Number(value ?? 0);
+				return typeof value === 'number' ? value : decodeNumber(value ?? 0);
 			});
 			/**
 			 * One complete authoritative grouping.
@@ -3744,8 +3786,12 @@ export const layerWith = (
 			 */
 			const findGrouped: Interface['findGrouped'] = Effect.fn('Collections.findGrouped')(
 				function* (effectId, subject, input) {
-					const { definition, policy, compiled, searched, visibility } =
-						yield* prepareRead(effectId, subject, input, ROOT_ALIAS, () =>
+					const { definition, policy, compiled, searched, visibility } = yield* prepareRead(
+						effectId,
+						subject,
+						input,
+						ROOT_ALIAS,
+						() =>
 							input.lanes.length > GROUPED_RESULT_LIMIT
 								? new WhereCompileError({
 										collection: input.collection,
@@ -3753,7 +3799,7 @@ export const layerWith = (
 										message: `Grouped query exceeds the ${GROUPED_RESULT_LIMIT}-lane request limit.`
 									})
 								: undefined
-						);
+					);
 					const table = queryTableFor(input.collection, definition.fields);
 					if (
 						columnsOf(table)[input.groupBy] === undefined ||
@@ -3773,11 +3819,7 @@ export const layerWith = (
 						where:
 							and(compiled, searched.predicate, AccessControl.predicateExpression(visibility)) ??
 							always(),
-						ordering: compileOrderTerms(
-							workspace.definition,
-							input.collection,
-							input.orderBy
-						),
+						ordering: compileOrderTerms(workspace.definition, input.collection, input.orderBy),
 						searchOrdering:
 							searched.mode === 'lexical'
 								? desc(searched.rank)
@@ -4101,57 +4143,57 @@ export const layerWith = (
 					return current;
 				};
 				const persistFailure = (cause: unknown) => {
-						const error = unwrapPhase(cause);
-						const refusal = refusalOf(error);
-						const terminal: BrowserMutationOutcome =
-							refusal !== undefined
+					const error = unwrapPhase(cause);
+					const refusal = refusalOf(error);
+					const terminal: BrowserMutationOutcome =
+						refusal !== undefined
+							? {
+									_tag: 'Rejected',
+									code: 'refused',
+									message: refusal.message,
+									schemaFingerprint: currentSchemaFingerprint,
+									...(refusal.collection === undefined ? {} : { collection: refusal.collection }),
+									...(refusal.action === undefined ? {} : { action: refusal.action })
+								}
+							: error instanceof AccessControl.AccessDenied
 								? {
 										_tag: 'Rejected',
-										code: 'refused',
-										message: refusal.message,
+										code: 'forbidden',
+										message: error.reason,
 										schemaFingerprint: currentSchemaFingerprint,
-										...(refusal.collection === undefined ? {} : { collection: refusal.collection }),
-										...(refusal.action === undefined ? {} : { action: refusal.action })
+										collection: error.resource,
+										...(error.action === 'create' ||
+										error.action === 'update' ||
+										error.action === 'delete'
+											? { action: error.action }
+											: {})
 									}
-								: error instanceof AccessControl.AccessDenied
+								: error instanceof MutationVersionConflict
 									? {
-											_tag: 'Rejected',
-											code: 'forbidden',
-											message: error.reason,
-											schemaFingerprint: currentSchemaFingerprint,
-											collection: error.resource,
-											...(error.action === 'create' ||
-											error.action === 'update' ||
-											error.action === 'delete'
-												? { action: error.action }
-												: {})
+											_tag: 'VersionConflict',
+											collection: error.collection,
+											id: error.id,
+											baseVersion: error.baseVersion,
+											currentVersion: error.currentVersion,
+											schemaFingerprint: currentSchemaFingerprint
 										}
-									: error instanceof MutationVersionConflict
+									: error instanceof PendingApproval
 										? {
-												_tag: 'VersionConflict',
+												_tag: 'PendingApproval',
+												requestId: error.requestId,
 												collection: error.collection,
 												id: error.id,
-												baseVersion: error.baseVersion,
-												currentVersion: error.currentVersion,
+												action: error.action,
 												schemaFingerprint: currentSchemaFingerprint
 											}
-										: error instanceof PendingApproval
-											? {
-													_tag: 'PendingApproval',
-													requestId: error.requestId,
-													collection: error.collection,
-													id: error.id,
-													action: error.action,
-													schemaFingerprint: currentSchemaFingerprint
-												}
-											: {
-													_tag: 'Quarantined',
-													idempotencyKey: input.idempotencyKey,
-													schemaFingerprint: currentSchemaFingerprint,
-													reason: `The mutation stopped with an unclassified failure: ${describeCause(error)}`
-												};
-						return settleTerminal(fence, terminal);
-					};
+										: {
+												_tag: 'Quarantined',
+												idempotencyKey: input.idempotencyKey,
+												schemaFingerprint: currentSchemaFingerprint,
+												reason: `The mutation stopped with an unclassified failure: ${describeCause(error)}`
+											};
+					return settleTerminal(fence, terminal);
+				};
 				const write =
 					graph.action === 'delete'
 						? mutate(mutationEffectId, subject, graph.collection, [{ id: graph.id }], false, 0, {

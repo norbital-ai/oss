@@ -1,0 +1,35 @@
+id: POLICY1
+summary: policy or admission service ignores the identity it is meant to isolate
+severity: error
+principles: [simplicity, straightforwardness, testability]
+rule:
+  all:
+    - any:
+        - '($ID, $REST) => { void $ID; $BODY }'
+        - '($ID, $REST) => { void $ID; return $REST(); }'
+        - '($ID: $T, $REST: $U) => { void $ID; $BODY }'
+        - '($ID: $T, $REST: $U) => { void $ID; return $REST(); }'
+        - all:
+            - '($ID: $T) => $LIT'
+            - regex: '^(?:\d+|true|false|null|undefined|[''"].*[''"])$'
+              on: LIT
+        - all:
+            - '($ID) => $LIT'
+            - regex: '^(?:\d+|true|false|null|undefined|[''"].*[''"])$'
+              on: LIT
+        - '($ID: $T) => void $ID'
+        - '($ID) => void $ID'
+        - '($ID: $T) => console.log($...A)'
+        - '($ID) => console.log($...A)'
+        - '($ID: $T) => { const $K = $ID; return console.log($...A); }'
+        - '($ID: $T) => $ID'
+        - '($ID) => $ID'
+        - '($ID: $T, $E: $U) => $E ? $ID : $X'
+        - '($ID: $T) => $ID.length'
+    - regex: 'tenant|workspace|account|organization|subject|principal|user'
+      on: ID
+examples:
+  bad:
+    - 'export const admit = (tenantId: string, work: () => void) => { void tenantId; return work(); };'
+  good:
+    - 'export const admit = (tenantId: string, work: () => void) => schedule(tenantId, work);'

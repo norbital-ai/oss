@@ -1,0 +1,22 @@
+id: E1
+summary: environment-dependent behavior
+severity: error
+principles: [straightforwardness, testability]
+ignore:
+  - '**/*config.*'
+  - '**/vitest.config.*'
+  - '**/*.config.ts'
+  - '**/*.config.js'
+rule:
+  all:
+    - pattern: process.env.$KEY
+    - inside:
+        any:
+          - pattern: $A === $B
+          - pattern: $A !== $B
+      stopBy: end
+examples:
+  bad:
+    - "export const prod = process.env.NODE_ENV === 'production' ? 1 : 2;"
+  good:
+    - 'export const prod = config.isProduction ? 1 : 2;'

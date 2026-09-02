@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { currencyFractionDigits, ISO_CURRENCY, type MoneyValue } from '@norbital-ai/std/finance';
+	import { decodeNumber } from '@norbital-ai/std/json';
 	import Icon from '@iconify/svelte';
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -59,7 +60,7 @@
 						const current = drafts[index];
 						return focusedIndex === index &&
 							current?.currency === entry.currency &&
-							Number(current.amount) === entry.value
+							decodeNumber(current.amount) === entry.value
 							? current
 							: { amount: String(entry.value), currency: entry.currency };
 					})
@@ -73,7 +74,7 @@
 	/** The drafts that have become a real amount: a finite number and a currency. */
 	function completedFrom(entries: readonly MoneyDraft[]): MoneyValue[] {
 		return entries.flatMap((draft) => {
-			const amount = Number(draft.amount);
+			const amount = decodeNumber(draft.amount);
 			return draft.amount.trim() && Number.isFinite(amount) && draft.currency
 				? [{ value: amount, currency: draft.currency }]
 				: [];
@@ -103,7 +104,7 @@
 
 	function displayedAmount(draft: MoneyDraft, index: number): string {
 		if (focusedIndex === index || !draft.amount.trim()) return draft.amount;
-		const amount = Number(draft.amount);
+		const amount = decodeNumber(draft.amount);
 		if (!Number.isFinite(amount)) return draft.amount;
 		return amount.toLocaleString(undefined, {
 			minimumFractionDigits: currencyFractionDigits(draft.currency),

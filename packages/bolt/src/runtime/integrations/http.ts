@@ -1,4 +1,5 @@
 import { Number as ENumber, Schema } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 
 /**
  * The one connector operation an integration performs, and its two message shapes.
@@ -66,7 +67,7 @@ export const retryDelayMs = (
 	nowEpochMs: number
 ): number => {
 	if (retryAfter !== undefined) {
-		const seconds = Number(retryAfter);
+		const seconds = decodeNumber(retryAfter);
 		if (Number.isFinite(seconds) && seconds >= 0)
 			return Math.min(seconds * 1000, options.maxDelayMs);
 		const at = Date.parse(retryAfter);

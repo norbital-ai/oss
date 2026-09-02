@@ -1,0 +1,13 @@
+id: EFF1
+summary: native try/catch bypasses Effect error control
+severity: error
+principles: [straightforwardness, testability, type-safety]
+rule:
+  all:
+    - kind: TryStatement
+    - importsFrom: effect
+examples:
+  bad:
+    - "import { Effect } from 'effect';\nexport const f = () => { try { go(); } catch (e) { report(e); } };"
+  good:
+    - "import { Effect } from 'effect';\nexport const f = () => Effect.try(go);"

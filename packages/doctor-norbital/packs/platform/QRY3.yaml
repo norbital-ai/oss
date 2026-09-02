@@ -1,0 +1,23 @@
+id: QRY3
+summary: query parameters froze reactive input outside $derived
+severity: error
+principles: [simplicity, straightforwardness, testability, type-safety, no-bloat]
+ignore:
+  - '**/scripts/**'
+rule:
+  all:
+    - any:
+        - pattern: '$DB.findMany($A)'
+        - pattern: '$DB.findFirst($A)'
+        - pattern: '$DB.count($A)'
+    - inside:
+        kind: VariableDeclaration
+    - not:
+        inside:
+          regex: '^\$derived'
+        stopBy: end
+examples:
+  bad:
+    - 'export const rows = client.db.things.findMany({});'
+  good:
+    - 'export const rows = $derived(client.db.things.findMany({}));'

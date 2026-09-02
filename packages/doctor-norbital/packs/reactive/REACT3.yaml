@@ -1,0 +1,36 @@
+id: REACT3
+summary: hand-rolled memo of completed work duplicates the client cache
+severity: error
+principles: [simplicity, modularity, no-bloat]
+rule:
+  all:
+    - any:
+        - pattern:
+            context: 'const $NAME = $INIT'
+            selector: VariableDeclaration
+        - pattern:
+            context: 'let $NAME = $INIT'
+            selector: VariableDeclaration
+    - has:
+        all:
+          - kind: NewExpression
+          - regex: '^new (?:Set|Map)\b'
+    - regex: '^(?:[Rr]efreshed|[Ss]een|[Hh]andled|[Pp]rocessed|[Ss]ynced|[Dd]one|[Ff]etched)'
+      on: NAME
+    - not:
+        inside:
+          any:
+            - kind: FunctionDeclaration
+            - kind: FunctionExpression
+            - kind: ArrowFunction
+            - kind: MethodDeclaration
+            - kind: Constructor
+            - kind: GetAccessor
+            - kind: SetAccessor
+        stopBy: end
+examples:
+  bad:
+    - 'const refreshedHistory = new Set();'
+    - 'const refreshedHistory = new Set<string>();'
+  good:
+    - 'export const rows = $derived(client.db.things.findMany({}));'

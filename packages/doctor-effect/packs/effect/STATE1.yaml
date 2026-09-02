@@ -1,0 +1,27 @@
+id: STATE1
+summary: module-scoped mutable state hides shared lifetime
+severity: error
+principles: [simplicity, modularity, testability]
+ignore:
+  - '**/*.svelte'
+rule:
+  all:
+    - any:
+        - pattern: 'let $NAME = $INIT'
+        - pattern: 'let $NAME: $T = $INIT'
+        - pattern: 'export let $NAME = $INIT'
+        - pattern: 'export let $NAME: $T = $INIT'
+        - pattern: 'let $NAME'
+        - pattern: 'export let $NAME'
+        - pattern: 'var $NAME = $INIT'
+        - pattern: 'export var $NAME = $INIT'
+    - inside:
+        kind: SourceFile
+    - not:
+        regex: '^\$(?:state|derived|props|bindable)\b'
+        on: INIT
+examples:
+  bad:
+    - 'export let shared: number[] = [];'
+  good:
+    - 'export const shared: ReadonlyArray<number> = [];'

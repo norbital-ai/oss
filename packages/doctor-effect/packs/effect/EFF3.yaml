@@ -1,0 +1,15 @@
+id: EFF3
+summary: async/await appears in an Effect-owned module
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  all:
+    - any:
+        - kind: AwaitExpression
+        - kind: AsyncKeyword
+    - importsFrom: effect
+examples:
+  bad:
+    - "import { Effect } from 'effect';\nexport async function f() { return 1; }"
+  good:
+    - "import { Effect } from 'effect';\nexport const f = Effect.succeed(1);"

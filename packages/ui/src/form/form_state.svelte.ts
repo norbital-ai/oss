@@ -61,13 +61,16 @@ type StandardSchemaValidationResult =
  * Plain submit handler (sync or async). Framework-specific remote callables that
  * share this shape remain compatible at runtime.
  */
-export type FormSubmitFn<Schema extends FormSchema, TReturn> = (
-	data: InferSchema<Schema>
-) => Effect.Effect<TReturn, unknown>;
+export type FormSubmitFn<
+	Schema extends FormSchema,
+	TReturn,
+	E = Cause.UnknownError
+> = (data: InferSchema<Schema>) => Effect.Effect<TReturn, E>;
 
-type RemoteFnGetter<Schema extends FormSchema, TReturn> = () => FormSubmitFn<
+type RemoteFnGetter<Schema extends FormSchema, TReturn, E = Cause.UnknownError> = () => FormSubmitFn<
 	Schema,
-	TReturn
+	TReturn,
+	E
 > | null;
 
 export type AutoSubmitConfig = {
@@ -84,7 +87,7 @@ export type SubmitSuccessBehavior = 'none' | 'commit' | 'reset';
 /** Helper type: value or getter function */
 type MaybeGetter<T> = T | (() => T);
 
-export type FormStateConfig<Schema extends FormSchema, TReturn> = {
+export type FormStateConfig<Schema extends FormSchema, TReturn, E = Cause.UnknownError> = {
 	/** Schema for validation */
 	schema: MaybeGetter<Schema>;
 
@@ -101,10 +104,10 @@ export type FormStateConfig<Schema extends FormSchema, TReturn> = {
 	/**
 	 * Remote function to call on submit.
 	 */
-	remoteFn?: RemoteFnGetter<Schema, TReturn>;
+	remoteFn?: RemoteFnGetter<Schema, TReturn, E>;
 
 	/** Called after successful submission */
-	onSuccess?: (result: TReturn | null) => Effect.Effect<void, unknown> | void;
+	onSuccess?: (result: TReturn | null) => Effect.Effect<void> | void;
 
 	/**
 	 * Post-submit behavior after a successful submission.
@@ -231,13 +234,13 @@ type SubmissionState<TReturn> =
 	| { status: 'success'; result: TReturn }
 	| { status: 'error'; message: string };
 
-export class FormState<Schema extends FormSchema, TReturn = unknown> {
+export class FormState<Schema extends FormSchema, TReturn = unknown, E = Cause.UnknownError> {
 	// ============================================================================
 	// CONFIG (stored as MaybeGetter, resolved reactively in $derived)
 	// ============================================================================
 
 	private _disabledConfig: MaybeGetter<boolean> = false;
-	private _remoteFnConfig: RemoteFnGetter<Schema, TReturn> = () => null;
+	private _remoteFnConfig: RemoteFnGetter<Schema, TReturn, E> = () => null;
 	private _autoSubmitConfig: MaybeGetter<AutoSubmitConfig | undefined> = undefined;
 	private _draftKeyConfig: MaybeGetter<string[] | undefined> = undefined;
 	private _schemaConfig!: MaybeGetter<Schema>;
@@ -330,7 +333,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	private readonly _transformConfig?: MaybeGetter<
 		(data: InferSchema<Schema>) => InferSchema<Schema>
 	>;
-	private readonly onSuccess?: (result: TReturn | null) => Effect.Effect<void, unknown> | void;
+	private readonly onSuccess?: (result: TReturn | null) => Effect.Effect<void> | void;
 	private readonly description: MaybeGetter<string>;
 	private draftStorage: DraftStorageType<InferSchema<Schema>> | null = null;
 	private debouncedSaveDraft: (() => void) | null = null;
@@ -361,13 +364,11 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		});
 		return Effect.runSync(
 			snapshotEffect.pipe(
-				Effect.match({
-					onFailure: (error) => {
-						Effect.runSync(Effect.logError('[FormState] Error calculating delta:', error));
-						return [] as JsonPatchOperation[];
-					},
-					onSuccess: (operations) => operations
-				})
+				Effect.catch((error) =>
+					Effect.logError('[FormState] Error calculating delta:', error).pipe(
+						Effect.as([] as JsonPatchOperation[])
+					)
+				)
 			)
 		);
 	});
@@ -394,7 +395,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	// CONSTRUCTOR
 	// ============================================================================
 
-	constructor(config: FormStateConfig<Schema, TReturn>) {
+	constructor(config: FormStateConfig<Schema, TReturn, E>) {
 		this._schemaConfig = config.schema;
 		this.onSuccess = config.onSuccess;
 		this._submitSuccessBehaviorConfig = config.submitSuccessBehavior ?? 'none';
@@ -842,7 +843,9 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	 *
 	 * @param options - { silent?: boolean } - If true, don't show success toast
 	 */
-	submit = (options?: { silent?: boolean }): Effect.Effect<TReturn | null, unknown> => {
+	submit = (
+		options?: { silent?: boolean }
+	): Effect.Effect<TReturn | null, E | Cause.UnknownError> => {
 		if (this.disabled || this.isSubmitting) {
 			return Effect.succeed(null);
 		}

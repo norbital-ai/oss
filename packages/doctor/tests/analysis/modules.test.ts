@@ -38,7 +38,12 @@ import {
 	emptyLocality
 } from '../../build/analysis/structure.js';
 import { SCANNER_VERSION, staticFindings } from '../../build/analysis/authenticate.js';
-import { analyzeAst, complexityOf, isPassThrough } from '../../build/analysis/complexity.js';
+import {
+	analyzeAst,
+	complexityOf,
+	indirectionFindings,
+	isPassThrough
+} from '../../build/analysis/complexity.js';
 import {
 	pathwayHash,
 	shingleSimilarity,
@@ -434,7 +439,7 @@ test('authenticate: catalogue rows attach to records and unmapped locations stay
 		quality.byPrinciple.map(({ name, count }) => [name, count]),
 		[['simplicity', 0], ['straightforwardness', 1], ['modularity', 0], ['testability', 0], ['efficiency', 0], ['type-safety', 0], ['colocation', 1], ['no-bloat', 1]]
 	);
-	assert.equal(SCANNER_VERSION, 32);
+	assert.equal(SCANNER_VERSION, 34);
 });
 
 // --- complexity -----------------------------------------------------------------------------
@@ -495,9 +500,7 @@ test('complexity: pass-through recognizes only direct forwarding shapes', () => 
 });
 
 test('complexity: AST summary extracts imports, services, and inline evidence', () => {
-	const summary = analyzeAst(
-		'/probe/store.ts',
-		`
+	const source = `
 import { effect } from 'effect';
 import type { Clock } from 'effect';
 import { effect as rename } from 'effect';
@@ -511,12 +514,14 @@ export const forward = (value) => pipe(value);
 export const start = (value) => forward(value);
 const internalShim = (input: string) => bridgeCall(input);
 export const kickoff = (input: string) => internalShim(input);
+const onReady = (value) => notify(value);
+export const startReady = (value) => onReady(value);
 const dynamic = () => import('./late.js');
 const legacy = require('./old.cjs');
 const asset = new URL('./asset.txt', import.meta.url);
 export * from './reexports.js';
-`
-	);
+`;
+	const summary = analyzeAst('/probe/store.ts', source);
 	assert.deepEqual(
 		summary.imports.map(({ specifier, typeOnly }) => [specifier, typeOnly]),
 		[
@@ -531,9 +536,42 @@ export * from './reexports.js';
 	assert.deepEqual(summary.services.sort(), ['generic', 'layer', 'port', 'Session'].sort());
 	assert.equal(summary.namedPassThroughFunctions >= 1, true);
 	assert.equal(summary.localNamedCalls >= 1, true);
-	const forwarder = summary.inlineCandidates.at(-1);
-	assert.equal(forwarder?.kind, 'transparent-forwarder');
-	assert.equal(forwarder?.confidence, 'high');
+	const kinds = summary.inlineCandidates.map((candidate) => candidate.kind).sort();
+	assert.ok(kinds.includes('transparent-forwarder'));
+	assert.ok(kinds.includes('callback-proxy'));
+	const proxy = summary.inlineCandidates.find((candidate) => candidate.kind === 'callback-proxy');
+	assert.equal(proxy?.name, 'onReady');
+	assert.equal(proxy?.forwardsTo, 'notify');
+	const rows = indirectionFindings('probe.ts', source);
+	assert.ok(rows.some((row) => row.rule === 'Q1' && row.location.includes('name=onReady')));
+	assert.ok(rows.some((row) => row.rule === 'Q3' && row.location.includes('name=internalShim')));
+});
+
+test('complexity: Q3 skips type predicates and constructed callees; Q4 skips earned names', () => {
+	const source = `
+const isRuleList = (value: unknown): value is ReadonlyArray<string> => Array.isArray(value);
+export const check = (value: unknown) => isRuleList(value);
+const decodeRow = (input: unknown): Row => Schema.decodeUnknownSync(Row)(input);
+export const read = (input: unknown) => decodeRow(input);
+const escapeLikePattern = (value: string) => value.replace(/[%_\\\\]/g, '\\\\$&');
+export const like = (value: string) => escapeLikePattern(value);
+const label = (name: string) => name.trim();
+export const show = (name: string) => label(name);
+`;
+	const rows = indirectionFindings('probe.ts', source);
+	assert.equal(
+		rows.some((row) => row.location.includes('name=isRuleList')),
+		false
+	);
+	assert.equal(
+		rows.some((row) => row.location.includes('name=decodeRow')),
+		false
+	);
+	assert.equal(
+		rows.some((row) => row.location.includes('name=escapeLikePattern')),
+		false
+	);
+	assert.ok(rows.some((row) => row.rule === 'Q4' && row.location.includes('name=label')));
 });
 
 // --- entities -------------------------------------------------------------------------------

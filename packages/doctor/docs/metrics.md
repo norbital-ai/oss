@@ -3,7 +3,7 @@
 The analyzer emits report schema 9 and analyzer version 10. It sorts roots, files, graph edges,
 concepts, services, and findings and emits no timestamp. A repeated scan of the same canonical roots
 and bytes is byte-stable apart from an explicitly chosen output path. Scanner receipts are schema 6
-with scanner version 32.
+with scanner version 34.
 
 ## Per-root metrics table
 
@@ -146,7 +146,7 @@ starts from configured tests and follows resolved value imports. It is not cover
 ## Scanner provenance and principles
 
 Static findings require exactly one canonical `.norbital/diagnosis/receipt.json` per root
-using receipt version 6 and static scanner version 32. Health verifies full production scope,
+using receipt version 6 and static scanner version 34. Health verifies full production scope,
 excluded tests, completion,
 canonical root/location, exact receipt/count fields, TSV digest and severity/principle aggregates,
 and SHA-256 forms.

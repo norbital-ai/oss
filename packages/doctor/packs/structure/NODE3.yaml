@@ -1,0 +1,27 @@
+id: NODE3
+summary: command entrypoint reimplements node:util parseArgs
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+files:
+  - 'scripts/**'
+  - 'bin/**'
+  - '**/*cli*'
+rule:
+  all:
+    - kind: SourceFile
+    - has:
+        pattern: process.argv
+      stopBy: end
+    - has:
+        any:
+          - pattern: $A.includes($B)
+          - pattern: $A.indexOf($B)
+          - pattern: $A.find($B)
+          - pattern: $A.startsWith($B)
+          - kind: SwitchStatement
+      stopBy: end
+examples:
+  bad:
+    - "import { parseArgs } from 'node:util'; const parsed = parseArgs({ options: { root: { type: 'string' } } }); const verbose = process.argv.includes('-v');"
+  good:
+    - "import { parseArgs } from 'node:util'; const { values } = parseArgs({ options: { root: { type: 'string' }, json: { type: 'boolean' } } });"

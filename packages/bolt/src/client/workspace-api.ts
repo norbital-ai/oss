@@ -17,6 +17,8 @@ import {
 	type SyncQueryInput as SyncQueryInputType
 } from '@norbital-ai/bolt-protocol';
 import type { CollectionFilter, CollectionFilterOptions } from '@norbital-ai/std/collection';
+import { toError } from '@norbital-ai/std/error';
+import { decodeNumber } from '@norbital-ai/std/json';
 import type {
 	MemoryMutationResult,
 	RemoteQuery,
@@ -146,10 +148,10 @@ const decodedCommandEffect = <Output extends Schema.Top>(
 	command: string,
 	input: Schema.Json,
 	output: Output
-): Effect.Effect<Schema.Schema.Type<Output>, unknown> =>
+): Effect.Effect<Schema.Schema.Type<Output>, Error> =>
 	Effect.tryPromise({
 		try: () => runtime.bolt.command(command, input, output),
-		catch: (cause) => cause
+		catch: toError
 	});
 
 const pendingGraphs = (
@@ -162,7 +164,7 @@ const rowVersionOf = (row: StoredRecord): number | undefined => {
 	if (typeof value === 'number')
 		return Number.isSafeInteger(value) && value >= 1 ? value : undefined;
 	if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return undefined;
-	const parsed = Number(value);
+	const parsed = decodeNumber(value);
 	return Number.isSafeInteger(parsed) ? parsed : undefined;
 };
 
@@ -401,11 +403,14 @@ const commandQueryOf = <Input extends Schema.Top, Output extends Schema.Top>(
 	createRemoteQuery(
 		() =>
 			Effect.gen(function* () {
-				const checked = yield* decodeUnknownSchema(inputSchema, input);
+				const checked = yield* decodeUnknownSchema(inputSchema, input) as Effect.Effect<
+					Schema.Schema.Type<Input>,
+					Schema.SchemaError
+				>;
 				const payload = Schema.decodeUnknownSync(Schema.Json)(checked);
 				return yield* Effect.tryPromise({
 					try: () => runtime.bolt.command(command, payload, outputSchema, signal),
-					catch: (cause) => cause
+					catch: toError
 				});
 			}),
 		outputSchema
@@ -424,7 +429,7 @@ type ContractFor<Name extends FixedCommandName> = Extract<
 type ClientContract = Extract<FixedCommandContract, { readonly clientPath: ReadonlyArray<string> }>;
 type ClientLeaf<Contract extends ClientContract> = Contract['clientMode'] extends 'query'
 	? (input: InputOf<Contract>, signal?: AbortSignal) => RemoteQuery<OutputOf<Contract>>
-	: (input: InputOf<Contract>, signal?: AbortSignal) => Effect.Effect<OutputOf<Contract>, unknown>;
+	: (input: InputOf<Contract>, signal?: AbortSignal) => Effect.Effect<OutputOf<Contract>, Error>;
 type Nest<Path extends ReadonlyArray<string>, Value> = Path extends readonly [
 	infer Head extends string,
 	...infer Tail extends ReadonlyArray<string>
@@ -455,19 +460,26 @@ const fixedContract = <Name extends FixedCommandName>(name: Name): ContractFor<N
 };
 
 const commandPayload = <S extends Schema.Top>(schema: S, input: unknown): Schema.Json =>
-	Schema.decodeUnknownSync(Schema.Json)(Effect.runSync(decodeUnknownSchema(schema, input)));
+	Schema.decodeUnknownSync(Schema.Json)(
+		Effect.runSync(
+			decodeUnknownSchema(schema, input) as Effect.Effect<
+				Schema.Schema.Type<S>,
+				Schema.SchemaError
+			>
+		)
+	);
 
 const commandEffectOf = <Name extends FixedCommandName>(
 	runtime: WorkspaceClientRuntime,
 	name: Name,
 	input: InputOf<ContractFor<Name>>,
 	signal?: AbortSignal
-): Effect.Effect<OutputOf<ContractFor<Name>>, unknown> => {
+): Effect.Effect<OutputOf<ContractFor<Name>>, Error> => {
 	const contract = fixedContract(name);
 	const output = clientResponse(contract);
 	return Effect.tryPromise({
 		try: () => runtime.bolt.command(name, commandPayload(contract.input, input), output, signal),
-		catch: (cause) => cause
+		catch: toError
 	});
 };
 
@@ -511,7 +523,7 @@ const createSystemClient = (runtime: WorkspaceClientRuntime): SystemClientApi =>
 									output,
 									signal
 								),
-							catch: (cause) => cause
+							catch: toError
 						});
 	}
 	return root as SystemClientApi;

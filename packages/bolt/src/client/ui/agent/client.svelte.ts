@@ -43,7 +43,7 @@ class AgentClientFailure extends Schema.TaggedError<AgentClientFailure>()(
 	{ operation: Schema.NonEmptyString, message: Schema.String, cause: Schema.Defect() }
 ) {}
 
-const agentRequest = <A>(operation: string, request: Effect.Effect<A, unknown>) =>
+const agentRequest = <A, E>(operation: string, request: Effect.Effect<A, E>) =>
 	request.pipe(
 		Effect.mapError(
 			(cause) =>

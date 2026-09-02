@@ -1,0 +1,18 @@
+id: NODE4
+summary: glob entrypoint uses substring matching instead of node:fs glob
+severity: error
+principles: [simplicity, straightforwardness, testability]
+rule:
+  all:
+    - kind: SourceFile
+    - regex: sandbox_glob
+    - has:
+        any:
+          - pattern: $A.indexOf($B)
+          - pattern: $A.includes($B)
+      stopBy: end
+examples:
+  bad:
+    - "import { glob } from 'node:fs/promises'; export const run = (entry, input) => input.tool === 'sandbox_glob' ? entry.name.indexOf(input.pattern) >= 0 : glob(input.pattern);"
+  good:
+    - "import { glob } from 'node:fs/promises'; export const run = (pattern) => glob(pattern);"

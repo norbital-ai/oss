@@ -43,12 +43,12 @@
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void | undefined;
 		onPrefetch?: (href: string) => void | undefined;
-		onOrganizationChange?: (organizationId: string) => void | Effect.Effect<void, unknown>;
-		onSignOut?: () => void | Effect.Effect<void, unknown>;
+		onOrganizationChange?: (organizationId: string) => void | Effect.Effect<void>;
+		onSignOut?: () => void | Effect.Effect<void>;
 		notifications?: Snippet<[{ expanded: boolean }]>;
 		impersonation?: WorkspaceImpersonation | null;
-		onImpersonate?: (teamId: string) => void | Effect.Effect<void, unknown>;
-		onStopImpersonating?: () => void | Effect.Effect<void, unknown>;
+		onImpersonate?: (teamId: string) => void | Effect.Effect<void>;
+		onStopImpersonating?: () => void | Effect.Effect<void>;
 		onSearch?: () => void;
 		searchLabel?: string;
 		searchShortcut?: string;
@@ -60,7 +60,7 @@
 	const displayExpanded = $derived(sidebar.isMobile || sidebar.open);
 	let signOutPending = $state(false);
 	const runPending = (
-		action: () => void | Effect.Effect<void, unknown>,
+		action: () => void | Effect.Effect<void>,
 		setPending: (pending: boolean) => void
 	): void => {
 		setPending(true);

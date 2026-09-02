@@ -19,7 +19,12 @@ import {
 	testWorkspace
 } from '../support/bolt-test-layer.js';
 
-const guardedOperations = (calls: Array<string>, guards: Array<string>): AuthoringOps => {
+// The guard fails with `AutomationStopped`, so `guardAuthoringOps` widens the error channel; the
+// declared type has to say so or the helper claims operations that can never stop.
+const guardedOperations = (
+	calls: Array<string>,
+	guards: Array<string>
+): AuthoringOps<Automations.AutomationStopped> => {
 	const record = <A>(operation: string, result: A) =>
 		Effect.sync(() => {
 			calls.push(operation);

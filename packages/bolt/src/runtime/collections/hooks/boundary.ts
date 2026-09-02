@@ -94,7 +94,7 @@ export class HookEffectIds {
  */
 const HOOK_NESTING_LIMIT = 8;
 
-export type HookWriteOps = Pick<AuthoringOps, 'mutate'>;
+export type HookWriteOps<E = never> = Pick<AuthoringOps<E>, 'mutate'>;
 
 /**
  * Refuses a hook chain that has stopped going anywhere.
@@ -126,26 +126,31 @@ export const refuseRunawayHooks = (
 			)
 		: Effect.void;
 
-type AuthoringReadPorts = Readonly<{
+type AuthoringReadPorts<E = never> = Readonly<{
 	readonly allowedCollections: ReadonlySet<string>;
 	readonly findMany: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		input: QueryInput
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown>;
+	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, E>;
 	readonly count: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		input: QueryInput
-	) => Effect.Effect<number, unknown>;
+	) => Effect.Effect<number, E>;
 	readonly findNearest: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		input: NearestQueryInput
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown>;
+	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, E>;
 }>;
 
-type AuthoringWritePorts = AuthoringReadPorts &
+type AuthoringWritePorts<
+	ReadE = never,
+	MutateE = never,
+	AutoE = never,
+	InferE = never
+> = AuthoringReadPorts<ReadE> &
 	Readonly<{
 		readonly mutate: (
 			effectId: EffectIdType,
@@ -154,7 +159,7 @@ type AuthoringWritePorts = AuthoringReadPorts &
 			values: ReadonlyArray<Readonly<Record<string, unknown>>>,
 			elevated: boolean,
 			depth: number
-		) => Effect.Effect<unknown, unknown>;
+		) => Effect.Effect<unknown, MutateE>;
 		readonly startAutomation: (
 			effectId: EffectIdType,
 			name: string,
@@ -165,9 +170,9 @@ type AuthoringWritePorts = AuthoringReadPorts &
 				readonly taskId?: string;
 				readonly parentDepth?: number;
 			}>
-		) => Effect.Effect<{ readonly taskId: string }, unknown>;
-		readonly infer: AuthoringOps['infer'];
-		readonly readFileAsset: AuthoringOps['readFileAsset'];
+		) => Effect.Effect<{ readonly taskId: string }, AutoE>;
+		readonly infer: AuthoringOps<InferE>['infer'];
+		readonly readFileAsset: AuthoringOps<InferE>['readFileAsset'];
 	}>;
 
 /**
@@ -177,11 +182,11 @@ type AuthoringWritePorts = AuthoringReadPorts &
  * Their bound operation is elevated because the record already passed authorization; authority
  * changes, while vocabulary does not.
  */
-export const buildReadOps = (
-	ports: AuthoringReadPorts,
+export const buildReadOps = <E>(
+	ports: AuthoringReadPorts<E>,
 	effectId: EffectIdType,
 	subject: Identity.Subject
-): AuthoringReadOps => ({
+): AuthoringReadOps<E> => ({
 	allowedCollections: ports.allowedCollections,
 	findMany: (collection, input) =>
 		ports.findMany(effectId, subject, queryInput(collection, input)),
@@ -194,8 +199,8 @@ export const buildReadOps = (
 		ports.findNearest(effectId, subject, nearestQueryInput(collection, input))
 });
 
-export const buildOps = (
-	ports: AuthoringWritePorts,
+export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
+	ports: AuthoringWritePorts<ReadE, MutateE, AutoE, InferE>,
 	effectId: EffectIdType,
 	subject: Identity.Subject,
 	elevated = false,
@@ -209,9 +214,9 @@ export const buildOps = (
 	 * many writes it could fit into thirty seconds and every one of them is a fact.
 	 */
 	depth = 0,
-	staged?: HookWriteOps,
+	staged?: HookWriteOps<StagedE>,
 	automationDepth?: number
-): AuthoringOps => {
+): AuthoringOps<ReadE | MutateE | AutoE | InferE | StagedE> => {
 	/**
 	 * One fresh child effect id per hook-issued write.
 	 *

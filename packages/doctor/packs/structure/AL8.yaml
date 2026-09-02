@@ -1,0 +1,14 @@
+id: AL8
+summary: inline message shape redeclares the canonical message type
+severity: error
+principles: [simplicity, type-safety, no-bloat]
+rule:
+  all:
+    - kind: TypeLiteral
+    - regex: "\\brole\\b"
+    - regex: "\\b(?:content|parts)\\b"
+examples:
+  bad:
+    - 'export const f = (m: { role: string; content: string }) => m;'
+  good:
+    - 'export const f = (m: Message) => m;'

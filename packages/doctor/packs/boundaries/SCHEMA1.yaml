@@ -1,0 +1,13 @@
+id: SCHEMA1
+summary: Zod bypasses the required Effect Schema boundary
+severity: error
+principles: [simplicity, straightforwardness, type-safety, no-bloat]
+rule:
+  all:
+    - kind: ImportDeclaration
+    - any:
+        - regex: "from ['\"]zod(?:/|['\"])"
+        - regex: "^import ['\"]zod"
+examples:
+  bad: ["import { z } from 'zod';\nexport const S = z.string();"]
+  good: ["import { Schema } from 'effect';\nexport const S = Schema.String;"]

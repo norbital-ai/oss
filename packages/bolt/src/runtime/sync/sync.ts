@@ -16,6 +16,7 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
+import { EffectivePlanError } from '#lib/runtime/access/effective-plan.js';
 import {
 	SyncPrefixResolutionError,
 	advanceActivePrefix,
@@ -36,16 +37,39 @@ export type Interface = Readonly<{
 		subject: Subject,
 		impersonatedTeam: string | null,
 		request: SyncConnectRequest
-	) => Effect.Effect<SyncConnectEvaluation, unknown>;
+	) => Effect.Effect<
+		SyncConnectEvaluation,
+		| Collections.QueryError
+		| Database.FacilityError
+		| SyncPrefixResolutionError
+		| EffectivePlanError
+	>;
 	readonly advance: (
 		effectId: EffectId,
 		request: SyncAdvanceRequest
-	) => Effect.Effect<SyncAdvanceResponse, unknown>;
+	) => Effect.Effect<
+		SyncAdvanceResponse,
+		| SyncInputError
+		| Identity.AuthenticationError
+		| AccessControl.AccessDenied
+		| Collections.QueryError
+		| Database.FacilityError
+		| SyncPrefixResolutionError
+		| EffectivePlanError
+	>;
 	readonly extendPrefix: (
 		effectId: EffectId,
 		state: SyncAdvanceSubscription,
 		request: SyncExtendPrefixRequest
-	) => Effect.Effect<SyncExtendPrefixEvaluation, unknown>;
+	) => Effect.Effect<
+		SyncExtendPrefixEvaluation,
+		| Identity.AuthenticationError
+		| AccessControl.AccessDenied
+		| Collections.QueryError
+		| Database.FacilityError
+		| SyncPrefixResolutionError
+		| EffectivePlanError
+	>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Sync');

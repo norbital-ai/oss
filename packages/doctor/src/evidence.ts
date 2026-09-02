@@ -8,6 +8,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
+import { SCANNER_VERSION } from './analysis/authenticate.js';
 import type { Finding, Receipt, Severity } from './index.js';
 
 const SEVERITY_RANK: Readonly<Record<Severity, number>> = { error: 0, hint: 1 };
@@ -143,7 +144,7 @@ export function publishEvidence(options: PublishEvidenceOptions): Receipt {
 		: {
 				schemaVersion: 6,
 				kind: 'repository-health-static-receipt',
-				scannerVersion: 32,
+				scannerVersion: SCANNER_VERSION,
 				root: realpathSync(options.root),
 				scope: options.scope ?? 'all',
 				includeTests: options.includeTests ?? false,

@@ -1,0 +1,13 @@
+id: P9
+summary: export-star barrel
+severity: hint
+principles: [simplicity, colocation, no-bloat]
+rule:
+  all:
+    - kind: ExportDeclaration
+    - regex: '^export \* from '
+examples:
+  bad:
+    - "export * from './other.js';"
+  good:
+    - "export { thing } from './other.js';"

@@ -1,0 +1,10 @@
+id: CEREMONY5
+summary: one collection is filtered twice where a single partition would do
+severity: error
+principles: [simplicity, efficiency, no-bloat]
+rule: '$SOURCE.filter($PREDICATE).concat($SOURCE.filter($OTHER))'
+examples:
+  bad:
+    - 'const all = fields.filter(isSystem).concat(fields.filter(isNotSystem));'
+  good:
+    - 'const [system, rest] = Array.partition(fields, isSystem);'

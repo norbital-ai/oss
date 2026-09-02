@@ -1,0 +1,31 @@
+id: GUARD1
+summary: hand-rolled object duck guard reconstructs a record
+severity: error
+principles: [simplicity, type-safety, no-bloat]
+rule:
+  any:
+    - 'typeof $X === ''object'' && $X !== null ? $X : undefined'
+    - 'typeof $X === ''object'' && $X != null ? $X : undefined'
+    - '$X !== null && typeof $X === ''object'' ? $X : undefined'
+    - '$X != null && typeof $X === ''object'' ? $X : undefined'
+    - 'typeof $X === ''object'' && $X !== null && !Array.isArray($X) ? $X : undefined'
+    - '$X !== null && typeof $X === ''object'' && !Array.isArray($X) ? $X : undefined'
+    - 'typeof $X === ''object'' && $X !== null ? ($X as $T) : $U'
+    - 'typeof $X === ''object'' && $X !== null && !Array.isArray($X) ? ($X as $T) : $U'
+    - '$X !== null && typeof $X === ''object'' && !Array.isArray($X) ? ($X as $T) : $U'
+    - 'typeof $X === ''object'' && $X !== null ? $X : {}'
+    - 'typeof $X === ''object'' && $X !== null && !Array.isArray($X) ? $X : {}'
+    - '($X: unknown): $X is object => typeof $X === ''object'' && $X !== null'
+    - '($X: unknown): $X is object => $X !== null && typeof $X === ''object'' && !Array.isArray($X)'
+    - '($X: unknown): $X is Record<string, unknown> => typeof $X === ''object'' && $X !== null && !Array.isArray($X)'
+    - '($X: unknown): $X is Readonly<Record<string, unknown>> => typeof $X === ''object'' && $X !== null && !Array.isArray($X)'
+    - 'function $NAME($X: unknown): $X is object { return typeof $X === ''object'' && $X !== null && !Array.isArray($X); }'
+    - 'function $NAME($X: unknown): $X is object { return $X !== null && typeof $X === ''object'' && !Array.isArray($X); }'
+    - 'function $NAME($X: unknown): $X is Record<string, unknown> { return typeof $X === ''object'' && $X !== null && !Array.isArray($X); }'
+    - 'function $NAME($X: unknown): $X is Record<string, unknown> { return $X !== null && typeof $X === ''object'' && !Array.isArray($X); }'
+    - 'function $NAME($X: unknown): $X is Readonly<Record<string, unknown>> { return typeof $X === ''object'' && $X !== null && !Array.isArray($X); }'
+examples:
+  bad:
+    - 'export const record = (v) => typeof v === ''object'' && v !== null ? v : undefined;'
+  good:
+    - 'export const record = (v) => Schema.decodeUnknownOption(JsonObject)(v);'

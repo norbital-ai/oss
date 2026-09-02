@@ -7,10 +7,10 @@ import ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCrossFile } from './cross-file.js';
+import { ignoredRule } from './analysis/ignore.js';
 import { runRules, sourceFiles, svelteScript } from './runner.js';
 import { runTypeAware } from './type-aware.js';
 import { applyAllowances } from './allowances.js';
-import { ignoredRule } from '../engine/scripts/ignore.mjs';
 
 type WorkerRequest = Readonly<{
 	root: string;
@@ -25,7 +25,7 @@ const selectedFiles = sourceFiles(request.root, {
 	includeTests: request.includeTests,
 	paths: request.paths.length === 0 ? undefined : request.paths
 });
-const findings = runRules({ root: request.root, rules: config.rules, files: selectedFiles });
+const findings = [...runRules({ root: request.root, rules: config.rules, files: selectedFiles })];
 
 /*
  * Whole-repository rules run beside the per-file ones.
@@ -39,7 +39,7 @@ const parse = (files: ReadonlyArray<string>) =>
 		const absolute = join(request.root, file);
 		const read = Effect.runSync(Effect.result(Effect.try(() => readFileSync(absolute, 'utf8'))));
 		if (Result.isFailure(read)) return [];
-		const source = Result.match(read, { onSuccess: (v) => v, onFailure: () => '' });
+		const source = Result.getOrElse(read, () => '');
 		// One extraction, shared with the runner. Two copies of this drifted apart: the runner kept
 		// line offsets and this one did not, so cross-file findings pointed at the wrong lines.
 		const text = file.endsWith('.svelte') ? (svelteScript(source) ?? '') : source;

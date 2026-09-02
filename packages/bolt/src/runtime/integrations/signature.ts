@@ -1,5 +1,6 @@
 import { Effect, Result } from 'effect';
 import { toError } from '@norbital-ai/std';
+import { decodeNumber } from '@norbital-ai/std/json';
 import type { WebhookSignatureSpec } from '#lib/authoring/contracts-schema.js';
 import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-schema.js';
 
@@ -165,7 +166,7 @@ const timestampMs = (value: string): number | undefined => {
 	const trimmed = value.trim();
 	if (trimmed === '') return undefined;
 	if (/^\d+$/u.test(trimmed)) {
-		const seconds = Number(trimmed);
+		const seconds = decodeNumber(trimmed);
 		return Number.isSafeInteger(seconds) ? seconds * 1000 : undefined;
 	}
 	const parsed = Date.parse(trimmed);

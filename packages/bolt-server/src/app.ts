@@ -4,7 +4,7 @@ import {
 	PROTOCOL_VERSION,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
-import { getErrorMessage } from '@norbital-ai/std';
+import { getErrorMessage, toError } from '@norbital-ai/std';
 import { Clock, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
@@ -221,21 +221,27 @@ export const startApplication = async (
 		});
 		return server;
 	});
-	let server: RunningServer;
-	try {
-		server = await runtime.runPromise(startup);
-	} catch (cause) {
-		// Same order as the imperative path: the host's finalizer runs before the runtime is
-		// disposed, and the original failure is rethrown afterwards.
-		await Effect.runPromise(finalizeFacilities.pipe(Effect.catch(() => Effect.void)));
-		await runtime.dispose();
-		if (cause instanceof ApplicationStartError) throw cause;
-		throw new ApplicationStartError({
-			operation: 'BoltServer.Application.start',
-			message: 'Bolt server application failed to start',
-			cause
-		});
-	}
+	const server = await runtime.runPromise(
+		startup.pipe(
+			Effect.catch((cause) =>
+				finalizeFacilities.pipe(
+					Effect.catch(() => Effect.void),
+					Effect.andThen(Effect.tryPromise({ try: () => runtime.dispose(), catch: toError })),
+					Effect.andThen(
+						Effect.fail(
+							cause instanceof ApplicationStartError
+								? cause
+								: new ApplicationStartError({
+										operation: 'BoltServer.Application.start',
+										message: 'Bolt server application failed to start',
+										cause
+									})
+						)
+					)
+				)
+			)
+		)
+	);
 
 	/**
 	 * Runs the ordered transport, drain, timekeeper, bundle, and facility finalizers once.

@@ -1,0 +1,13 @@
+id: REFLECT1
+summary: Reflect.get reads a coerced object instead of a decoded boundary
+severity: error
+principles: [straightforwardness, type-safety, testability]
+rule:
+  all:
+    - 'Reflect.get(Object($VALUE), $KEY)'
+    - not:
+        regex: '^(?:cause|error|err|failure)$'
+        on: VALUE
+examples:
+  bad: ["export const name = Reflect.get(Object(manifest), 'name');"]
+  good: ["export const name = Reflect.get(decoded, 'name');"]

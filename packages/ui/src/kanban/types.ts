@@ -51,7 +51,7 @@ export interface KanbanProps {
 	value: TKanbanColumnData[];
 	onCardMove?: (move: KanbanCardMove) => void;
 	cardSnippet: TCardSnippet;
-	onLoadMore: (columnId: string, lastVirtualIndex: number) => Effect.Effect<void, unknown>;
+	onLoadMore: (columnId: string, lastVirtualIndex: number) => Effect.Effect<void>;
 	itemHeight: number;
 	minColumnWidth?: number;
 	groupName?: string;
@@ -66,7 +66,7 @@ export interface KanbanColumnProps {
 	column: TKanbanColumnData;
 	cardSnippet: TCardSnippet;
 	onCardMove?: (move: KanbanCardMove) => void;
-	onLoadMore: (columnId: string, lastVirtualIndex: number) => Effect.Effect<void, unknown>;
+	onLoadMore: (columnId: string, lastVirtualIndex: number) => Effect.Effect<void>;
 	itemHeight: number;
 	minColumnWidth: number;
 	groupName: string;

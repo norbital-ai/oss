@@ -162,9 +162,9 @@
 		 */
 		impersonation?: WorkspaceImpersonation | null;
 		/** Preview the workspace under one team's policy. The host owns storing and applying it. */
-		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void>) | undefined;
 		/** Return to the real subject. */
-		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
+		onStopImpersonating?: (() => void | Effect.Effect<void>) | undefined;
 		headerTitle?: string | undefined;
 		headerDescription?: string | null | undefined;
 		headerIcon?: string | undefined;

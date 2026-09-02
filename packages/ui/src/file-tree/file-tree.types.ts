@@ -1,3 +1,5 @@
+import type { Effect } from 'effect';
+
 export type FileTreeEntry = {
 	name: string;
 	type: 'directory' | 'file';
@@ -20,9 +22,14 @@ export type FileTreeEntryBadge = {
 	class?: string;
 };
 
-export type FileTreeProps = {
+/**
+ * `E` defaults to `Error`, not `never`: a Svelte component cannot infer a type parameter from its
+ * props, so the default is the only value this ever takes — and `file-tree-node` handles a load
+ * failure (`error instanceof Error`). With `never` that handler was unreachable by its own types.
+ */
+export type FileTreeProps<E = Error> = {
 	entries: FileTreeEntry[];
-	onToggle?: (path: string) => Effect.Effect<FileTreeEntry[], unknown>;
+	onToggle?: (path: string) => Effect.Effect<FileTreeEntry[], E>;
 	onSelect?: (path: string, entry: FileTreeEntry) => void;
 	canDelete?: (path: string, entry: FileTreeEntry) => boolean;
 	onDelete?: (path: string, entry: FileTreeEntry) => void;
@@ -36,4 +43,3 @@ export type FileTreeProps = {
 	variant?: 'default' | 'dark';
 	class?: string;
 };
-import type { Effect } from 'effect';

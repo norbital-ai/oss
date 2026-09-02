@@ -11,12 +11,12 @@ export type CustomTypeRendererState =
 	| Readonly<{ status: 'ready'; renderer: CustomTypeRenderer }>
 	| Readonly<{ status: 'failed'; error: Error }>;
 
-export interface DataRendererRuntime {
-	autocompleteGeolocation(query: string): Effect.Effect<TGeolocationPickerValue[], unknown>;
+export interface DataRendererRuntime<E = Error> {
+	autocompleteGeolocation(query: string): Effect.Effect<TGeolocationPickerValue[], E>;
 	createFileUploadClient(): IFileUploadClient;
 	/** Resolves a persisted storage key through the host that mounted the workspace. */
 	fileUrl(key: string): string;
-	renderStaticMap(input: StaticMapRequest): Effect.Effect<StaticMapImage, unknown>;
+	renderStaticMap(input: StaticMapRequest): Effect.Effect<StaticMapImage, E>;
 	/** Resolve a tenant datatype without conflating loading, failure, and absence. */
 	customTypeRenderer(kind: string): CustomTypeRendererState | undefined;
 }

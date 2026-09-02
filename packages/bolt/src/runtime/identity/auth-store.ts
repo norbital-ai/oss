@@ -37,12 +37,12 @@ type AdapterStatement = Readonly<{
 }>;
 
 /** The one generated-statement capability this adapter needs from its host. */
-export type ExecuteQuery = (statement: AdapterStatement) => Effect.Effect<
+export type ExecuteQuery<E = never> = (statement: AdapterStatement) => Effect.Effect<
 	{
 		readonly rows: ReadonlyArray<Record<string, unknown>>;
 		readonly affectedRows: number;
 	},
-	unknown
+	E
 >;
 
 /**
@@ -60,7 +60,7 @@ const authSchema = Object.freeze(
 	EffectRecord.mapEntries(AUTH_MODELS, (name) => [name, SYSTEM_MODEL_TABLES[name]])
 );
 
-export const makeAuthStore = (execute: ExecuteQuery) => {
+export const makeAuthStore = <E = never>(execute: ExecuteQuery<E>) => {
 	const database = drizzle((sql, parameters, method) =>
 		Effect.runPromise(
 			execute({ sql, parameters }).pipe(

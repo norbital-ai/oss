@@ -1,4 +1,4 @@
-import { Effect, Fiber, Schema } from 'effect';
+import { Cause, Effect, Fiber, Schema } from 'effect';
 import type { RemoteQuery } from '@norbital-ai/std/collection';
 import { createSubscriber } from 'svelte/reactivity';
 import type { ClientState, QueryState } from '#lib/client/sync/machine.js';
@@ -14,15 +14,15 @@ type RemoteQueryAttempt = Readonly<{
 	readonly isCurrent: () => boolean;
 }>;
 
-class ReactiveRemoteQuery<Value> implements RemoteQuery<Value> {
+class ReactiveRemoteQuery<Value, E = never> implements RemoteQuery<Value> {
 	current = $state.raw<Value | undefined>(undefined);
 	error = $state.raw<Error | undefined>(undefined);
 	loading = $state(false);
-	readonly #pending: Fiber.Fiber<Value, unknown>;
-	readonly #fetch: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>;
+	readonly #pending: Fiber.Fiber<Value, Error>;
+	readonly #fetch: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, E>;
 	#requestGeneration = 0;
 
-	constructor(fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>) {
+	constructor(fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, E>) {
 		this.#fetch = fetchValue;
 		this.#pending = Effect.runFork(
 			this.#execute().pipe(
@@ -36,7 +36,7 @@ class ReactiveRemoteQuery<Value> implements RemoteQuery<Value> {
 		);
 	}
 
-	readonly #execute = (): Effect.Effect<void, unknown> => {
+	readonly #execute = (): Effect.Effect<void> => {
 		const self = this;
 		const generation = (this.#requestGeneration += 1);
 		const attempt: RemoteQueryAttempt = {
@@ -49,10 +49,10 @@ class ReactiveRemoteQuery<Value> implements RemoteQuery<Value> {
 				self.error = undefined;
 			});
 			yield* self.#fetch(attempt).pipe(
-				Effect.match({
+				Effect.matchCause({
 					onFailure: (cause) => {
 						if (!attempt.isCurrent()) return;
-						self.error = asError(cause);
+						self.error = asError(Cause.squash(cause));
 					},
 					onSuccess: (value) => {
 						if (!attempt.isCurrent()) return;
@@ -70,8 +70,8 @@ class ReactiveRemoteQuery<Value> implements RemoteQuery<Value> {
 		Effect.runPromise(Fiber.join(this.#pending)).then(onfulfilled, onrejected);
 }
 
-export const createRemoteQuery = <Output extends Schema.Top>(
-	fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Schema.Schema.Type<Output>, unknown>,
+export const createRemoteQuery = <Output extends Schema.Top, E = never>(
+	fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Schema.Schema.Type<Output>, E>,
 	_schema: Output
 ): RemoteQuery<Schema.Schema.Type<Output>> => new ReactiveRemoteQuery(fetchValue);
 

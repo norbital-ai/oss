@@ -723,8 +723,6 @@ export const MCP_PROTOCOL_VERSION = '2026-07-28' as const;
 const McpCallToolResult = withInputRequired(specTypeSchemas.CallToolResult);
 type McpCallToolResult = CompleteCallToolResult | InputRequiredResult;
 type McpFailureReason = McpToolError['reason'];
-type McpValidationIssue = StandardSchemaV1.Issue;
-
 class McpAdapterFailure extends Error {
 	readonly reason: McpFailureReason;
 	constructor(reason: McpFailureReason, message: string) {
@@ -847,7 +845,7 @@ export const callMcpTool = Effect.fn('CapabilityCatalog.callMcpTool')(function* 
 					});
 					if (parameters.issues !== undefined) {
 						const detail = parameters.issues
-							.map((issue: McpValidationIssue) => issue.message)
+							.map((issue: StandardSchemaV1.Issue) => issue.message)
 							.join('; ');
 						throw new McpAdapterFailure(
 							'invalid-input',

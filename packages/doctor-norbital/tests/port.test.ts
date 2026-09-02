@@ -58,6 +58,11 @@ const CASES: ReadonlyArray<Case> = [
 	},
 	{
 		rule: 'SQL1',
+		bad: "export const wipe = 'truncate things';",
+		good: "export const disk = 'truncate -s 8G image';"
+	},
+	{
+		rule: 'SQL1',
 		bad: "export function request() { const statement = { sql: 'insert into things (id) values ($1)' }; return { _tag: 'Query', ...statement }; }",
 		good: "export function request() { const statement = { sql: 'insert into things (id) values ($1)', parameters: [id] }; return { _tag: 'Transaction', statements: [statement] }; }"
 	},
@@ -85,7 +90,8 @@ const CASES: ReadonlyArray<Case> = [
 		bad: 'export const pollStatus = () => status();',
 		good:
 			'export const rows = client.db.things.findMany({});\n' +
-			'export const clock = setInterval(() => { currentTime = new Date(); }, 60_000);'
+			'export const clock = setInterval(() => { currentTime = new Date(); }, 60_000);\n' +
+			'export const watchdogPollMillis = 250;'
 	},
 	{
 		rule: 'LIVE1',
@@ -131,7 +137,12 @@ const CASES: ReadonlyArray<Case> = [
 	{
 		rule: 'TRANS2',
 		bad: 'export const n = row.name ?? row.legacy_name;',
-		good: 'export const n = row.name;'
+		good: 'export const n = row.name ?? row.preview;'
+	},
+	{
+		rule: 'TRANS2',
+		bad: 'export const n = row.name || row.previous;',
+		good: 'export const changed = previous === undefined || previous.mode !== file.mode;'
 	},
 	{
 		rule: 'ROOT1',

@@ -42,8 +42,8 @@ const RECORD_EMBEDDING_BATCH_ROWS = 100;
 const RECORD_EMBEDDING_REQUEST_CONCURRENCY = 4;
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
-const jsonRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
+const jsonRecord = Schema.is(JsonObject);
 const encodeJsonText = (value: unknown): string => {
 	const encoded = JSON.stringify(value);
 	if (encoded === undefined) throw new TypeError('Embedding state is not JSON encodable');

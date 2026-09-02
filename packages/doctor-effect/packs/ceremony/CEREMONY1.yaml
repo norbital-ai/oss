@@ -1,0 +1,18 @@
+id: CEREMONY1
+summary: an Effect runtime is started to evaluate a total synchronous expression
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+rule:
+  any:
+    - 'Effect.runSync(Effect.sync(() => $BODY))'
+    - 'Effect.runSync(Effect.succeed($BODY))'
+    - 'Effect.runSync(Effect.try(() => $BODY))'
+    - 'Effect.runSync(Effect.try({ try: () => $BODY, catch: $CATCH }))'
+examples:
+  bad:
+    - 'const text = Effect.runSync(Effect.sync(() => JSON.stringify(value, null, 2)));'
+    - 'const n = Effect.runSync(Effect.succeed(count + 1));'
+  good:
+    - 'const text = JSON.stringify(value, null, 2);'
+    - 'const result = Effect.runSync(program);'
+    - 'const decoded = Effect.runSync(Schema.decodeUnknownEffect(Row)(input));'

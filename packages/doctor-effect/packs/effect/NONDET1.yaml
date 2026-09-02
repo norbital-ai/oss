@@ -1,0 +1,29 @@
+id: NONDET1
+summary: ordinary Effect-owned module reads ambient time or randomness
+severity: error
+principles: [straightforwardness, testability]
+ignore:
+  - '**/*.svelte'
+rule:
+  all:
+    - any:
+        - pattern: Date.now()
+        - pattern: Math.random()
+        - pattern: performance.now()
+        - pattern: crypto.randomUUID()
+    - importsFrom: effect
+    - not:
+        inside:
+          any:
+            - pattern: Effect.gen($FN)
+            - pattern: Effect.sync($FN)
+            - pattern: Effect.promise($FN)
+            - pattern: Effect.fn($FN)
+            - pattern: Effect.try($FN)
+            - pattern: Effect.tryPromise($FN)
+        stopBy: end
+examples:
+  bad:
+    - "import { Effect } from 'effect';\nexport const id = Math.random();"
+  good:
+    - "import { Effect } from 'effect';\nexport const id = Effect.succeed(0);"

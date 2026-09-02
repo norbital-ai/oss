@@ -35,8 +35,8 @@
 		onNavigate?: ((href: string) => void) | undefined;
 		onPrefetch?: ((href: string) => void) | undefined;
 		onOrganizationChange?:
-			((organizationId: string) => void | Effect.Effect<void, unknown>) | undefined;
-		onSignOut?: (() => void | Effect.Effect<void, unknown>) | undefined;
+			((organizationId: string) => void | Effect.Effect<void>) | undefined;
+		onSignOut?: (() => void | Effect.Effect<void>) | undefined;
 		/**
 		 * The account area's notification surface, rendered above the user menu.
 		 *
@@ -51,9 +51,9 @@
 		 */
 		impersonation?: WorkspaceImpersonation | null;
 		/** Switch the impersonation scope to a single team. */
-		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void>) | undefined;
 		/** Return to the requestor's own team scope. */
-		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
+		onStopImpersonating?: (() => void | Effect.Effect<void>) | undefined;
 		/** Host supplies the search gesture; shell only renders the affordance. */
 		onSearch?: (() => void) | undefined;
 		searchLabel?: string | undefined;

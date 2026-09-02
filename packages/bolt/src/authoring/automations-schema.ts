@@ -103,7 +103,8 @@ export interface AutomationDefinition<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	T extends AutomationTrigger<S> = AutomationTrigger<S>,
 	I extends Schema.Top | undefined = undefined,
-	O extends Schema.Top | undefined = undefined
+	O extends Schema.Top | undefined = undefined,
+	E = never
 > {
 	readonly trigger: T;
 	readonly spec: Readonly<{
@@ -119,7 +120,7 @@ export interface AutomationDefinition<
 		readonly handler: (
 			api: AutomationApi<S>,
 			context: AutomationContext<T, S, I>
-		) => Effect.Effect<AutomationOutput<O>, unknown, never> | AutomationOutput<O>;
+		) => Effect.Effect<AutomationOutput<O>, E, never> | AutomationOutput<O>;
 	}> &
 		AutomationInputDeclaration<I> &
 		AutomationOutputDeclaration<O>;
@@ -135,11 +136,12 @@ interface DefineAutomation {
 		S extends AnySchema = DefaultWorkspaceSchema,
 		const T extends AutomationTrigger<S> = AutomationTrigger<S>,
 		const I extends Schema.Top | undefined = undefined,
-		const O extends Schema.Top | undefined = undefined
+		const O extends Schema.Top | undefined = undefined,
+		E = never
 	>(
 		trigger: ExactAutomationTrigger<T>,
-		spec: AutomationDefinition<S, T, I, O>['spec']
-	): AutomationDefinition<S, T, I, O>;
+		spec: AutomationDefinition<S, T, I, O, E>['spec']
+	): AutomationDefinition<S, T, I, O, E>;
 }
 
 /** Owns declaration retention and automation validation behind their public call contracts. */

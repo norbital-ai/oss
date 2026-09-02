@@ -1,0 +1,11 @@
+id: R3b
+summary: unapproved double cast
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  any:
+    - '$VALUE as unknown as $TARGET'
+    - '$VALUE as never as $TARGET'
+examples:
+  bad: ["const n = text as unknown as number;"]
+  good: ["const n = Number(text);"]

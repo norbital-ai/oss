@@ -1,0 +1,24 @@
+id: V14
+summary: plain let/var in a rune module should be $state
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - any:
+        - pattern: 'let $NAME = $INIT'
+        - pattern: 'let $NAME: $T = $INIT'
+        - pattern: 'let $NAME'
+        - pattern: 'var $NAME = $INIT'
+        - pattern: 'var $NAME'
+    - inside:
+        kind: SourceFile
+    - not:
+        regex: '^\$(?:state|derived|props|bindable)'
+        on: INIT
+examples:
+  bad:
+    - 'let count = 0;'
+  good:
+    - 'let count = $state(0);'

@@ -116,8 +116,13 @@ const invalidOutput = (name: string, reason: string) =>
 		message: `${name} returned an undeclared ${reason}`
 	});
 
-const decodeInput = (binding: CommandBinding, value: unknown) =>
-	decodeUnknownSchema(binding.contract.input, value).pipe(Effect.mapError(invalidInput));
+const decodeInput = <E>(binding: CommandBinding<E>, value: unknown) =>
+	(
+		decodeUnknownSchema(binding.contract.input, value) as Effect.Effect<
+			Schema.Schema.Type<(typeof binding)['contract']['input']>,
+			Schema.SchemaError
+		>
+	).pipe(Effect.mapError(invalidInput));
 
 /**
  * Handlers and origin rules run under the invocation layer. Their `R` is that layer; the binding
@@ -126,19 +131,25 @@ const decodeInput = (binding: CommandBinding, value: unknown) =>
 const providedEffect = <A, E>(effect: Effect.Effect<A, E, unknown>): Effect.Effect<A, E> =>
 	effect as Effect.Effect<A, E>;
 
-const validateOutput = Effect.fn('Bolt.validateCommandOutput')(function* (
-	binding: CommandBinding,
+const validateOutput = Effect.fn('Bolt.validateCommandOutput')(function* <E>(
+	binding: CommandBinding<E>,
 	response: DispatchResponse
 ) {
 	const declared = binding.contract.responses.find((candidate) => candidate.status === response.status);
 	if (declared === undefined)
 		return yield* invalidOutput(binding.contract.name, `status ${response.status}`);
-	const headers = yield* decodeUnknownSchema(declared.headers, response.headers).pipe(
-		Effect.mapError(() => invalidOutput(binding.contract.name, 'header shape'))
-	);
-	const value = yield* decodeUnknownSchema(declared.value, response.value).pipe(
-		Effect.mapError(() => invalidOutput(binding.contract.name, 'response value'))
-	);
+	const headers = yield* (
+		decodeUnknownSchema(declared.headers, response.headers) as Effect.Effect<
+			Schema.Schema.Type<(typeof declared)['headers']>,
+			Schema.SchemaError
+		>
+	).pipe(Effect.mapError(() => invalidOutput(binding.contract.name, 'header shape')));
+	const value = yield* (
+		decodeUnknownSchema(declared.value, response.value) as Effect.Effect<
+			Schema.Schema.Type<(typeof declared)['value']>,
+			Schema.SchemaError
+		>
+	).pipe(Effect.mapError(() => invalidOutput(binding.contract.name, 'response value')));
 	return { ...response, headers, value } as DispatchResponse;
 });
 
@@ -167,9 +178,9 @@ const resolveSession = Effect.fn('Bolt.resolveSession')(function* (
 	return actor;
 });
 
-const authenticateCommand = Effect.fn('Bolt.authenticateCommand')(function* (
+const authenticateCommand = Effect.fn('Bolt.authenticateCommand')(function* <E>(
 	invocation: Extract<Invocation, { _tag: 'Command' }>,
-	binding: CommandBinding | undefined,
+	binding: CommandBinding<E> | undefined,
 	effectId: EffectId
 ) {
 	if (binding?.origins.Command?.principal === 'public') {
@@ -272,8 +283,8 @@ const authenticatePlugin = Effect.fn('Bolt.authenticatePlugin')(function* (
 	};
 });
 
-const invoke = Effect.fn('Bolt.invokeCommandBinding')(function* (
-	binding: CommandBinding,
+const invoke = Effect.fn('Bolt.invokeCommandBinding')(function* <E>(
+	binding: CommandBinding<E>,
 	context: ExecutionContext,
 	rawInput: unknown
 ) {

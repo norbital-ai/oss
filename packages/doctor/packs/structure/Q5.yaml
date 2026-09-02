@@ -1,0 +1,22 @@
+id: Q5
+summary: parameter is typed as undefined or void
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  all:
+    - any:
+        - pattern:
+            context: 'function f($NAME: undefined) {}'
+            selector: Parameter
+        - pattern:
+            context: 'function f($NAME: void) {}'
+            selector: Parameter
+    - not:
+        regex: '^this\b'
+examples:
+  bad:
+    - 'export const f = (owner: undefined) => owner;'
+    - 'export const g = (owner: void) => owner;'
+  good:
+    - 'export const f = (owner?: string) => owner;'
+    - 'export const g = (owner: string | undefined) => owner;'

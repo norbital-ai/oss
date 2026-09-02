@@ -1,0 +1,34 @@
+id: Q3
+summary: private one-use function forwards its parameters unchanged
+severity: error
+principles: [simplicity, colocation, no-bloat]
+dominates: [Q1]
+rule:
+  all:
+    - any:
+        - pattern:
+            context: 'const $NAME = ($A) => $CALLEE($A)'
+            selector: VariableDeclaration
+        - pattern:
+            context: 'const $NAME = ($A: $T) => $CALLEE($A)'
+            selector: VariableDeclaration
+        - pattern:
+            context: 'const $NAME = ($A, $B) => $CALLEE($A, $B)'
+            selector: VariableDeclaration
+        - pattern:
+            context: 'const $NAME = ($A: $T, $B: $U) => $CALLEE($A, $B)'
+            selector: VariableDeclaration
+        - pattern: 'function $NAME($A) { return $CALLEE($A); }'
+        - pattern: 'function $NAME($A: $T) { return $CALLEE($A); }'
+    - not:
+        inside:
+          regex: '^export '
+        stopBy: end
+    - calls:
+        of: NAME
+        exactly: 1
+examples:
+  bad:
+    - "const shim = (input) => bridge(input);\nexport const kickoff = (input) => shim(input);"
+  good:
+    - 'export const kickoff = (input) => bridge(input);'

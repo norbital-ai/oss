@@ -48,7 +48,7 @@
 		avoidCollisions: boolean;
 		collisionPadding: number;
 		renderSelectionContent: Snippet;
-		onOpenChange: (open: boolean) => Effect.Effect<void, unknown> | void;
+		onOpenChange: (open: boolean) => Effect.Effect<void> | void;
 		onClear: (e: Event) => void;
 		readonlyContent?: Snippet;
 		showCreateForm: boolean;

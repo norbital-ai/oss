@@ -237,3 +237,16 @@ test('duplicate ids across two files throw naming the earlier declaration', asyn
 		/norbital-doctor: patterns\/b\.yml: rule id "DUPED" is already declared by patterns\/a\.yml/
 	);
 });
+
+test('importsFrom is a file fact, not a node shape', () => {
+	const owned: Matcher = { all: [{ kind: 'TryStatement' }, { importsFrom: 'effect' }] };
+	assert.equal(
+		matchSource(owned, "import { Effect } from 'effect';\nexport const f = () => { try { go(); } catch { } };"),
+		true
+	);
+	assert.equal(
+		matchSource(owned, "import { Effect } from 'effect/Schema';\nexport const f = () => { try { go(); } catch { } };"),
+		true
+	);
+	assert.equal(matchSource(owned, 'export const f = () => { try { go(); } catch { } };'), false);
+});

@@ -1,4 +1,4 @@
-import { Clock, Effect, Number as ENumber, Result, Schema } from 'effect';
+import { Clock, Effect, Number as ENumber, Option, Result, Schema } from 'effect';
 import {
 	CollectionSearch,
 	DataBrowserCommandContract,
@@ -66,13 +66,16 @@ export type ExecutionContext = Readonly<{
 type OriginRule = Readonly<{
 	principal: PrincipalRule;
 	authorization: string;
-	authorize?: (context: ExecutionContext, input: unknown) => Effect.Effect<void, unknown, unknown>;
+	authorize?: (
+		context: ExecutionContext,
+		input: unknown
+	) => Effect.Effect<void, AccessControl.AccessDenied, unknown>;
 }>;
 
-export type CommandBinding = Readonly<{
+export type CommandBinding<E = never> = Readonly<{
 	contract: CommandContract;
 	origins: Partial<Record<InvocationOrigin, OriginRule>>;
-	handle: (context: ExecutionContext, input: unknown) => Effect.Effect<DispatchResponse, unknown, unknown>;
+	handle: (context: ExecutionContext, input: unknown) => Effect.Effect<DispatchResponse, E, unknown>;
 }>;
 
 type ContractFor<Name extends FixedCommandName> = Extract<
@@ -87,14 +90,14 @@ const fixedContract = <Name extends FixedCommandName>(name: Name): ContractFor<N
 	return found as ContractFor<Name>;
 };
 
-const binding = <Name extends FixedCommandName>(
+const binding = <Name extends FixedCommandName, E>(
 	name: Name,
-	origins: CommandBinding['origins'],
+	origins: CommandBinding<E>['origins'],
 	handle: (
 		context: ExecutionContext,
 		input: InputOf<ContractFor<Name>>
-	) => Effect.Effect<DispatchResponse, unknown, unknown>
-): CommandBinding => ({
+	) => Effect.Effect<DispatchResponse, E, unknown>
+): CommandBinding<E> => ({
 	contract: fixedContract(name),
 	origins,
 	handle: (context, input) => handle(context, input as InputOf<ContractFor<Name>>)
@@ -328,6 +331,12 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	return yield* Schema.decodeUnknownEffect(Schema.Json)(declared);
 });
 
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
+// Named apart from the `jsonObject` builder above: that one drops `undefined` fields from a literal,
+// this one decodes an unknown payload. Sharing the name made the later declaration win for every
+// caller after it, including one that passes an object literal.
+const decodeJsonObject = Schema.decodeUnknownOption(JsonObject);
+
 const executeDirectAutomation = Effect.fn('Bolt.command.executeDirectAutomation')(function* (
 	context: ExecutionContext,
 	name: string,
@@ -340,7 +349,7 @@ const executeDirectAutomation = Effect.fn('Bolt.command.executeDirectAutomation'
 		(raw, attemptEffectId) =>
 			Effect.gen(function* () {
 				const decoded = yield* Schema.decodeUnknownEffect(WorkspaceAutomationContract.input)({
-					...(typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}),
+					...Option.getOrElse(decodeJsonObject(raw), () => ({})),
 					bolt_task_id: taskId
 				});
 				return yield* executeAutomationBody(
@@ -352,7 +361,7 @@ const executeDirectAutomation = Effect.fn('Bolt.command.executeDirectAutomation'
 	);
 });
 
-const fixedBindings: ReadonlyArray<CommandBinding> = [
+const fixedBindings = [
 	binding('secrets.status', { Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
 		(context) => Effect.gen(function* () {
 			const entries = yield* (yield* Secrets.Service).status(context.effectId);
@@ -423,7 +432,7 @@ const fixedBindings: ReadonlyArray<CommandBinding> = [
 		})),
 ];
 
-const remainingBindings: ReadonlyArray<CommandBinding> = [
+const remainingBindings = [
 	binding('identity.verifyCode', { Command: publicCommand },
 		(context, input) => Effect.gen(function* () {
 			const credential = yield* (yield* Identity.Service).verifyCode(context.effectId, input.email, input.code, context.tenantId);
@@ -585,7 +594,7 @@ const remainingBindings: ReadonlyArray<CommandBinding> = [
 ];
 
 const allBindings = [...fixedBindings, ...remainingBindings];
-const fixedByName = new Map<string, CommandBinding>();
+const fixedByName = new Map<string, (typeof allBindings)[number]>();
 for (const entry of allBindings) {
 	if (fixedByName.has(entry.contract.name)) throw new Error(`Duplicate command binding: ${entry.contract.name}`);
 	fixedByName.set(entry.contract.name, entry);
@@ -594,9 +603,9 @@ for (const contract of FixedCommandCatalogue) {
 	if (!fixedByName.has(contract.name)) throw new Error(`Fixed command has no binding: ${contract.name}`);
 }
 
-export const FixedCommandBindings: ReadonlyMap<string, CommandBinding> = fixedByName;
+export const FixedCommandBindings: ReadonlyMap<string, (typeof allBindings)[number]> = fixedByName;
 
-export const resolveFixedCommand = (name: string): CommandBinding | undefined => fixedByName.get(name);
+export const resolveFixedCommand = (name: string) => fixedByName.get(name);
 
 /** Boot invariant shared by exact automation membership and fixed-name collision checks. */
 export const assertCommandNamespace = Effect.fn('Bolt.assertCommandNamespace')(function* () {
@@ -649,7 +658,7 @@ export const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')
 					const input = yield* Schema.decodeUnknownEffect(WorkspaceInvokeContract.input)(raw);
 					return json(yield* remotes.invoke(member, input.input, principal(context), context.effectId));
 				})
-		} satisfies CommandBinding;
+		};
 	}
 	if (name.startsWith('automations.')) {
 		const member = name.slice('automations.'.length);
@@ -670,20 +679,17 @@ export const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')
 					const input = yield* Schema.decodeUnknownEffect(WorkspaceAutomationContract.input)(raw);
 					return json(yield* executeAutomationBody(context, member, input));
 				})
-		} satisfies CommandBinding;
+		};
 	}
 	return undefined;
 });
 
-export const resolveCompositeCommand = (
-	plugin: string,
-	command: string
-): CommandBinding | undefined => {
+export const resolveCompositeCommand = (plugin: string, command: string) => {
 	if (plugin !== 'data-browser' || command !== 'query') return undefined;
 	return {
 		contract: DataBrowserCommandContract,
 		origins: { Plugin: session('tenant collection read policy') },
-		handle: (context, raw) =>
+		handle: (context: ExecutionContext, raw: unknown) =>
 			Effect.gen(function* () {
 				const input = yield* Schema.decodeUnknownEffect(DataBrowserCommandContract.input)(raw);
 				const limit = input.input?.limit;

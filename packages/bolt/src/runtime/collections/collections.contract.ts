@@ -26,6 +26,10 @@ import type { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import type { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import type { NestingLimitExceeded } from '#lib/runtime/budget.js';
 import type { WhereCompileError } from '#lib/runtime/access/effective-plan.js';
+import type {
+	AutomationDeferredUnsupported,
+	AutomationStopped
+} from '#lib/runtime/automations/automations.js';
 
 export const CollectionAction = Schema.Literals(['create', 'update', 'delete']);
 export type CollectionAction = typeof CollectionAction.Type;
@@ -294,10 +298,9 @@ export type BatchMutationError = MutationError | MutationPhaseFailure;
  * the policy — the same union `mutate` reports, which is the honest statement of what a caller
  * must decide about.
  *
- * An alias rather than a bare `export type { … as … }`: the re-export form publishes the name
- * without binding it here, and `resume`/`discard` below name it locally.
+ * Public rename only. Local signatures use `BatchMutationError` so this file does not re-alias it.
  */
-export type ResumeError = BatchMutationError;
+export type { BatchMutationError as ResumeError };
 
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 export type QueryError =
@@ -437,7 +440,14 @@ export type Interface = Readonly<{
 			readonly taskId?: string;
 			readonly parentDepth?: number;
 		}>
-	) => Effect.Effect<{ readonly taskId: string }, unknown>;
+	) => Effect.Effect<
+		{ readonly taskId: string },
+		| QueryError
+		| BatchMutationError
+		| Schema.SchemaError
+		| AutomationStopped
+		| AutomationDeferredUnsupported
+	>;
 	readonly findMany: (
 		effectId: EffectId,
 		subject: Subject,
@@ -512,7 +522,7 @@ export type Interface = Readonly<{
 		subject: Subject,
 		impersonatedTeam: string | null,
 		input: CollectionMutateRequest
-	) => Effect.Effect<CollectionMutationSettlement, unknown>;
+	) => Effect.Effect<CollectionMutationSettlement, BatchMutationError | Error>;
 	readonly lookupBrowserMutations: (
 		effectId: EffectId,
 		actor: Subject,
@@ -520,8 +530,8 @@ export type Interface = Readonly<{
 		impersonatedTeam: string | null,
 		ids: ReadonlyArray<CollectionMutationIdempotencyKey>
 	) => Effect.Effect<ReadonlyArray<SyncOutcome>, Database.FacilityError>;
-	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
-	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
+	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, BatchMutationError>;
+	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, BatchMutationError>;
 	readonly import: (
 		effectId: EffectId,
 		subject: Subject,

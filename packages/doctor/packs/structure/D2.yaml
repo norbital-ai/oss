@@ -1,0 +1,10 @@
+id: D2
+summary: conditional has identical branches
+severity: error
+principles: [simplicity, no-bloat]
+rule: '$COND ? $X : $X'
+examples:
+  bad:
+    - 'export const v = flag ? 42 : 42;'
+  good:
+    - 'export const v = flag ? 42 : 0;'

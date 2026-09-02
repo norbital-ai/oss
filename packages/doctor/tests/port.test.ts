@@ -54,7 +54,7 @@ const CASES: ReadonlyArray<Case> = [
 	{
 		rule: 'R5d',
 		bad: "export const g = (v: object) => 'a' in v && 'b' in v;",
-		good: "export const g = (v: object) => 'a' in v;"
+		good: "export const g = (v: object, x: unknown) => 'a' in v || x === undefined;"
 	},
 	{
 		rule: 'CLONE',
@@ -213,6 +213,106 @@ const CASES: ReadonlyArray<Case> = [
 		rule: 'AL3',
 		bad: 'export type Bag = Record<string, unknown>;',
 		good: 'export type Bag = { readonly id: string };'
+	},
+	{
+		rule: 'Q1',
+		bad: 'export const onReady = (callback) => callback();',
+		good: 'export const onReady = (callback) => { log(); callback(); };'
+	},
+	{
+		rule: 'Q3',
+		bad: 'const shim = (input) => bridge(input);\nexport const kickoff = (input) => shim(input);',
+		good: 'export const kickoff = (input) => bridge(input);'
+	},
+	{
+		rule: 'Q4',
+		bad: 'const label = (name) => name.trim();\nexport const show = (name) => label(name);',
+		good: 'export const show = (name) => name.trim();'
+	},
+	{
+		rule: 'Q5',
+		bad: 'export const f = (owner: undefined) => owner;',
+		good: 'export const f = (owner?: string) => owner;'
+	},
+	{
+		rule: 'GUARD1',
+		bad: "export const record = (v) => typeof v === 'object' && v !== null ? v : undefined;",
+		good: 'export const record = (v) => Schema.decodeUnknownOption(JsonObject)(v);'
+	},
+	{
+		rule: 'REFLECT1',
+		bad: "export const name = Reflect.get(Object(manifest), 'name');",
+		good: "export const name = decoded.name;"
+	},
+	{
+		rule: 'STATE2',
+		bad: 'const cache = new Map();\nexport const get = (k) => { cache.set(k, 1); return cache.get(k); };',
+		good: 'const index = new Map([["a", 1]]);\nexport const get = (k) => index.get(k);'
+	},
+	{
+		rule: 'STD2',
+		bad: 'export const message = (cause) => cause instanceof Error ? cause.message : String(cause);',
+		good: 'export const message = (cause) => getErrorMessage(cause);'
+	},
+	{
+		rule: 'STD3',
+		bad: 'export const normalize = (cause) => cause instanceof Error ? cause : new Error(String(cause));',
+		good: 'export const normalize = (cause) => toError(cause);'
+	},
+	{
+		rule: 'PARSE1',
+		bad: "export const relationValue = (value) => typeof value === 'string' ? JSON.parse(value) as unknown : value;",
+		good: 'export const relationValue = (value) => Schema.decodeUnknownSync(Schema.parseJson(Schema.Unknown))(value);'
+	},
+	{
+		rule: 'VOID1',
+		bad: 'export const f = (p) => { void Promise.resolve(p).catch(report); };',
+		good: 'export const f = (p) => { return Promise.resolve(p).catch(report); };'
+	},
+	{
+		rule: 'EFF8',
+		bad: 'export const run = (context, input) => Effect.gen(function* () { return json(yield* (yield* Sync.Service).advance(context.effectId, input)); });',
+		good: 'export const run = (context, input) => Effect.map(workspaceManifest(context, false), json);'
+	},
+	{
+		rule: 'EFF9',
+		bad: 'export const read = () => Effect.promise(() => file.text());',
+		good: 'export const read = () => Effect.tryPromise({ try: () => file.text(), catch: toError });'
+	},
+	{
+		rule: 'EFF10',
+		bad: "export const GET = () => Effect.gen(function* () { return error(400, 'bad'); });",
+		good: "export const GET = () => Effect.fail('bad');"
+	},
+	{
+		rule: 'SANDWICH1',
+		bad: 'export const tick = () => Effect.tryPromise(() => runtime.runPromise(once()));',
+		good: 'export const tick = () => once();'
+	},
+	{
+		rule: 'IDENT1',
+		bad: 'export const f = (r) => r.pipe(Effect.match({ onFailure: () => null, onSuccess: (value) => value }));',
+		good: 'export const f = (r) => r.pipe(Effect.orElseSucceed(() => null));'
+	},
+	{
+		rule: 'SWALLOW1',
+		bad: 'export const f = (e) => e.pipe(Effect.catch(() => {}));',
+		good: 'export const f = (e) => e.pipe(Effect.catch((error) => Effect.log(error)));'
+	},
+	{
+		rule: 'FETCH1',
+		bad: "export const load = () => fetch('/api/items');",
+		good: "export const load = () => httpRequest(url, { operation: 'load' });"
+	},
+	{
+		rule: 'EFF11',
+		bad: 'export const run = (): Effect.Effect<void, unknown> => Effect.void;',
+		good: 'export const provide = <A, E>(e: Effect.Effect<A, E, unknown>): Effect.Effect<A, E> => e;'
+	},
+	{
+		rule: 'COERCE1',
+		bad: 'export const qty = (input) => Number(input.quantity);',
+		good: 'export const qty = (input) => decodeNumber(input.quantity);'
 	}
 
 	// --- platform ---------------------------------------------------------------------------
@@ -285,6 +385,14 @@ test('simplification rules keep their declared service and bootstrap boundaries'
 	assert.equal(
 		reports('MOD1', "<script>import * as Tree from './Tree.svelte';</script>", 'src/Tree.svelte'),
 		true
+	);
+	assert.equal(
+		reports(
+			'MOD1',
+			"import type { TaskSelectorModel } from './conversation-selector.js';",
+			'src/conversation-selector.svelte'
+		),
+		false
 	);
 
 	for (const source of [
@@ -438,7 +546,104 @@ test('simplification rules keep their declared service and bootstrap boundaries'
 		),
 		false
 	);
+
+	assert.equal(
+		reports(
+			'Q3',
+			'const purge = (owner, options) => real(owner, options);\nexport const fence = (options) => purge(undefined, options);',
+			'src/reset.ts'
+		),
+		true
+	);
+	assert.equal(
+		reports(
+			'Q3',
+			'export const purge = (owner, options) => real(owner, options);\nexport const fence = (options) => purge(undefined, options);',
+			'src/reset.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'Q3',
+			'const purge = (owner, options) => real(owner, options);\nexport const a = (o) => purge(undefined, o);\nexport const b = (o) => purge(undefined, o);',
+			'src/reset.ts'
+		),
+		false
+	);
+	assert.equal(reports('Q5', 'export const f = (owner: string | undefined) => owner;', 'src/reset.ts'), false);
+	assert.equal(reports('Q5', 'export const f = (owner: void) => owner;', 'src/reset.ts'), true);
+	assert.equal(
+		reports('Q5', 'export interface Handler { click(this: void): void }', 'src/view.ts'),
+		false
+	);
+	assert.equal(
+		reports('Q1', 'export const handleClick = (event) => props.onClick(event);', 'src/view.ts'),
+		true
+	);
+	assert.equal(
+		reports('Q1', 'export const start = (value) => decorate(value);', 'src/view.ts'),
+		false
+	);
+	assert.equal(
+		reports(
+			'STATE2',
+			'const index = new Map();\nfor (const [k, v] of pairs) index.set(k, v);\nexport const get = (k) => index.get(k);',
+			'src/cache.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports('GUARD1', "export const ok = Schema.is(JsonObject)(value);", 'src/guard.ts'),
+		false
+	);
+	assert.equal(
+		reports(
+			'GUARD1',
+			"export const record = (v: unknown): Readonly<Record<string, unknown>> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Readonly<Record<string, unknown>>) : undefined;",
+			'src/guard.ts'
+		),
+		true
+	);
+	assert.equal(
+		reports(
+			'GUARD1',
+			"export const bag = (v) => typeof v === 'object' && v !== null ? v : {};",
+			'src/guard.ts'
+		),
+		true
+	);
+	assert.equal(
+		reports('REFLECT1', "export const name = Reflect.get(decoded, 'name');", 'src/io.ts'),
+		false
+	);
+	assert.equal(
+		reports('REFLECT1', "export const code = Reflect.get(Object(cause), 'code');", 'src/io.ts'),
+		false
+	);
+	assert.equal(
+		reports(
+			'GUARD1',
+			"export const missing = (cause) => typeof cause === 'object' && cause !== null && Reflect.get(cause, 'code') === 'ENOENT';",
+			'src/guard.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports('R3a', 'export const bag = value as Readonly<Record<string, unknown>>;', 'src/io.ts'),
+		true
+	);
+	assert.equal(
+		reports('R3b', 'export const handle = data as never as ReferenceHandle;', 'src/io.ts'),
+		true
+	);
+	assert.equal(
+		reports('STD2', 'export const message = (cause) => getErrorMessage(cause);', 'src/io.ts'),
+		false
+	);
 });
+const componentOnly = new Set<string>();
+
 test('every rule in every pack has a case in this table', () => {
 	const covered = new Set(CASES.map((testCase) => testCase.rule));
 	const uncovered = ALL.map((rule) => rule.id).filter(

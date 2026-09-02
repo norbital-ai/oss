@@ -1,0 +1,21 @@
+id: UI18
+summary: client UI sends a raw transport command instead of using the generated API
+severity: error
+principles: [simplicity, straightforwardness, modularity, type-safety]
+files:
+  - '**/ui/**'
+  - '**/*.svelte'
+rule:
+  all:
+    - any:
+        - pattern: '$T.command($A)'
+        - pattern: '$T.execute($A)'
+        - pattern: '$T.send($A)'
+        - pattern: '$T.invoke($A)'
+    - regex: '(?:transport|connection|socket)$'
+      on: T
+examples:
+  bad:
+    - 'export const f = () => transport.command({});'
+  good:
+    - 'export const f = () => client.db.things.create({});'

@@ -37,11 +37,18 @@ const TRANSACTION_CONTROL =
 	/^\s*(?:(?:BEGIN|COMMIT|ROLLBACK)(?:\s+(?:WORK|TRANSACTION))?|START\s+TRANSACTION|SAVEPOINT\s+[A-Za-z_][\w$]*|RELEASE\s+SAVEPOINT\s+[A-Za-z_][\w$]*|ROLLBACK\s+TO(?:\s+SAVEPOINT)?\s+[A-Za-z_][\w$]*)\s*;?\s*$/i;
 
 const RAW_SQL =
-	/\b(?:SELECT\b[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*\bSET\b|DELETE\s+FROM\b|MERGE\s+INTO\b|TRUNCATE\b|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|ALTER\s+(?:TABLE|POLICY|VIEW)\b|DROP\s+(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b)/i;
+	/\b(?:SELECT\b[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*\bSET\b|DELETE\s+FROM\b|MERGE\s+INTO\b|TRUNCATE\s+(?:TABLE\s+)?(?:"[\w$]+"|'[\w$]+'|[\w$]+)|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|ALTER\s+(?:TABLE|POLICY|VIEW)\b|DROP\s+(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b)/i;
 
 /** Tagged SQL that the model/compiler serializes into generated DDL, never executes as CRUD. */
 const DDL_EXPRESSION_OWNER =
 	/(?:^|\/)(?:compiler|migrations?|schema|drizzle)(?:\/|$)|(?:^|\/)(?:\+model|model-introspection|system-models|system-row-model)\.[cm]?[jt]s$/i;
+
+/**
+ * Bolt's query compiler — the typed collection/query builder *is* these modules. They emit SQL
+ * the way `sse-driver.ts` owns EventSource. Flagging them is the rule describing its own owner.
+ */
+const QUERY_COMPILER_OWNER =
+	/(?:^|\/)runtime\/(?:access|collections|identity)(?:\/|$)|(?:^|\/)hosting\/tenant-database\.[cm]?[jt]s$/i;
 
 function transactionStatementOwner(
 	node: import('typescript').Node,
@@ -205,6 +212,7 @@ const rawSql = defineRule({
 		)
 			return;
 		if (taggedSql && DDL_EXPRESSION_OWNER.test(context.file)) return;
+		if (QUERY_COMPILER_OWNER.test(context.file)) return;
 		if (!taggedSql && !RAW_SQL.test(text)) return;
 		context.report(node, 'form=raw-sql');
 	}
@@ -286,14 +294,19 @@ const queryRefreshSurface = defineRule({
 });
 
 const POLLING_IDENTIFIER =
-	/(?:^poll(?:ing|ed|s)?(?:[A-Z]|$)|(?:^|_)POLL(?:ING|ED|S)?(?:_|$)|Poll(?:ing|ed|s)?(?:[A-Z]|$))/;
+	/(?:^poll(?:ing|ed|s)?(?:[A-Z]|$)|(?:^|_)POLL(?:ING|ED|S)?(?:_|$)|(?:^|_)Poll(?:ing|ed|s)?(?:[A-Z]|$))/;
 
 const pollingMechanism = defineRule({
 	id: 'LIVE1',
 	severity: 'error',
 	summary: 'handwritten polling bypasses the live sync engine',
 	principles: ['simplicity', 'straightforwardness', 'efficiency', 'testability', 'no-bloat'],
-	ignore: ['packages/doctor/src/**', 'src/packs/platform.ts', 'src/packs/reactive.ts'],
+	ignore: [
+		'packages/doctor/src/**',
+		'packages/doctor-norbital/src/**',
+		'src/packs/platform.ts',
+		'src/packs/reactive.ts'
+	],
 	when: [
 		'VariableDeclaration',
 		'FunctionDeclaration',
@@ -350,7 +363,13 @@ const nonSyncSse = defineRule({
 	severity: 'error',
 	summary: 'server-sent events are used outside the sync engine',
 	principles: ['simplicity', 'straightforwardness', 'modularity', 'testability'],
-	ignore: ['packages/doctor/src/**', 'src/packs/platform.ts'],
+	ignore: [
+		'packages/doctor/src/**',
+		'packages/doctor-norbital/src/**',
+		'packages/bolt-server/src/server.ts',
+		'**/api/bolt/sync/stream/+server.ts',
+		'src/packs/platform.ts'
+	],
 	when: ['NewExpression', 'StringLiteral', 'NoSubstitutionTemplateLiteral'],
 	check(node, context) {
 		if (syncSseOwner(context)) return;
@@ -361,6 +380,17 @@ const nonSyncSse = defineRule({
 		}
 		if (!ts.isStringLiteral(node) && !ts.isNoSubstitutionTemplateLiteral(node)) return;
 		if (node.text !== 'sse' && !/\btext\/event-stream\b/i.test(node.text)) return;
+		const compared = context.ancestors(node).some((parent) => {
+			if (!ts.isBinaryExpression(parent)) return false;
+			const operator = parent.operatorToken.kind;
+			return (
+				operator === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+				operator === ts.SyntaxKind.EqualsEqualsToken ||
+				operator === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+				operator === ts.SyntaxKind.ExclamationEqualsToken
+			);
+		});
+		if (compared) return;
 		context.report(
 			node,
 			`transport=${node.text === 'sse' ? 'sse' : 'text/event-stream'} owner=non-sync`
@@ -489,8 +519,23 @@ const legacyFieldFallback = defineRule({
 			expression.operatorToken.kind !== ts.SyntaxKind.BarBarToken
 		)
 			return;
-		const fallback = context.text(expression.right);
-		if (!/(?:^|[._])(?:legacy|old|deprecated|v1|prev)[._A-Za-z]*$/i.test(fallback)) return;
+		const right = expression.right;
+		const fallback = ts.isPropertyAccessExpression(right)
+			? right.name.text
+			: ts.isIdentifier(right)
+				? right.text
+				: ts.isElementAccessExpression(right) &&
+					  right.argumentExpression !== undefined &&
+					  ts.isStringLiteral(right.argumentExpression)
+					? right.argumentExpression.text
+					: null;
+		if (fallback === null) return;
+		if (
+			!/^(?:[Ll]egacy|[Oo]ld|[Dd]eprecated|v1|[Pp]revious|[Pp]rev)(?:[._][A-Za-z].*|[A-Z].*)?$/.test(
+				fallback
+			)
+		)
+			return;
 		context.report(
 			node,
 			`canonical=${context.text(expression.left).slice(0, 30)} fallback=${fallback.slice(0, 30)}`

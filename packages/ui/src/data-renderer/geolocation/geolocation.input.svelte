@@ -30,7 +30,7 @@
 		readonly?: boolean;
 		searchPlaceholder?: string;
 		sameWidth?: boolean;
-		autocomplete: (query: string) => Effect.Effect<TGeolocationPickerValue[], unknown>;
+		autocomplete: (query: string) => Effect.Effect<TGeolocationPickerValue[], Error>;
 	};
 
 	type GeolocationPickerProps =

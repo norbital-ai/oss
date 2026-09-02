@@ -1,0 +1,26 @@
+id: A1
+summary: discarded timer requires cleanup review
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  all:
+    - any:
+        - setTimeout($...ARGS)
+        - setInterval($...ARGS)
+    - not:
+        inside:
+          any:
+            - kind: VariableDeclaration
+            - kind: PropertyAssignment
+            - kind: ReturnStatement
+            - kind: BinaryExpression
+        stopBy:
+          any:
+            - kind: ExpressionStatement
+            - kind: Block
+            - kind: SourceFile
+examples:
+  bad:
+    - 'export const f = () => { setInterval(tick, 10); };'
+  good:
+    - 'export const f = () => { const t = setInterval(tick, 10); return () => clearInterval(t); };'

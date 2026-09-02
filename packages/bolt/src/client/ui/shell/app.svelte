@@ -103,8 +103,8 @@
 		 * nor defaults it. `null` is "no picker", which is what every host that supplies nothing gets.
 		 */
 		impersonation?: WorkspaceImpersonation | null;
-		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
-		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void>) | undefined;
+		onStopImpersonating?: (() => void | Effect.Effect<void>) | undefined;
 		tenantMessages?: TenantMessageCatalogs | undefined;
 		/** App-contributed header controls, rendered inside the banner rather than above the tabs. */
 		headerActions?: Snippet | undefined;

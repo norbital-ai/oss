@@ -31,7 +31,10 @@ const ClientFactories = {
 					try: () => transport.command(command, input, signal, headers),
 					catch: (cause) => cause
 				});
-				return yield* decodeUnknownSchema(output, raw);
+				return yield* decodeUnknownSchema(output, raw) as Effect.Effect<
+					Schema.Schema.Type<S>,
+					Schema.SchemaError
+				>;
 			});
 			return signal === undefined
 				? Effect.runPromise(effect)

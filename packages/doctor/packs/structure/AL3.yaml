@@ -1,0 +1,13 @@
+id: AL3
+summary: loose-record type alias
+severity: hint
+principles: [simplicity, type-safety, no-bloat]
+rule:
+  all:
+    - kind: TypeAliasDeclaration
+    - regex: '=\s*(?:Readonly<\s*)?Record<\s*string\s*,\s*unknown\s*>\s*>?\s*;?\s*$'
+examples:
+  bad:
+    - 'export type Bag = Record<string, unknown>;'
+  good:
+    - 'export type Bag = { readonly id: string };'

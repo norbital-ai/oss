@@ -95,14 +95,11 @@ export function moduleMappings(owner: PackageOwner): Array<AliasMapping> {
 			const configuredBase: unknown = parsed.options.baseUrl ?? parsed.options.pathsBasePath;
 			const base = typeof configuredBase === 'string' ? configuredBase : dirname(config);
 			const rawPaths: unknown = parsed.options.paths;
-			const pathMap: Readonly<Record<string, ReadonlyArray<unknown>>> =
-				typeof rawPaths === 'object' && rawPaths !== null
-					? (rawPaths as Readonly<Record<string, ReadonlyArray<unknown>>>)
-					: {};
+			const pathMap = jsonRecord(rawPaths) ?? {};
 			for (const [pattern, targets] of Object.entries(pathMap)) {
 				aliases.push({
 					pattern,
-					targets: [...targets]
+					targets: [...(Array.isArray(targets) ? targets : [])]
 						.filter((target): target is string => typeof target === 'string')
 						.map((target) => resolve(base, target)),
 					order: order++

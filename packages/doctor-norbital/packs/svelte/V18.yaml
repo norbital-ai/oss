@@ -1,0 +1,16 @@
+id: V18
+summary: $derived aliases one identifier without deriving a value
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - pattern: '$derived($X)'
+    - regex: '^[A-Za-z_$][\w$]*$'
+      on: X
+examples:
+  bad:
+    - 'const rows = $derived(items);'
+  good:
+    - 'const rows = $derived(items.filter(visible));'

@@ -84,11 +84,11 @@ type AutomationClientApi<Registry extends Readonly<Record<string, AutomationModu
 	}>;
 };
 
-type StartRun = (
+type StartRun<E = never> = (
 	input: Schema.Json
-) => Effect.Effect<Readonly<{ readonly taskId: string }>, unknown>;
+) => Effect.Effect<Readonly<{ readonly taskId: string }>, E>;
 type ReadRun = (taskId: string) => RemoteQuery<AutomationTaskSnapshot | null>;
-type LifecycleRun = (taskId: string) => Effect.Effect<void, unknown>;
+type LifecycleRun<E = never> = (taskId: string) => Effect.Effect<void, E>;
 
 /**
  * One automation run backed by an authenticated server-only collection query.
@@ -97,15 +97,15 @@ type LifecycleRun = (taskId: string) => Effect.Effect<void, unknown>;
  * active runs through the same row- and field-masked query until they settle; this public view
  * remains an ordinary reactive `RemoteQuery` and never exposes queue internals.
  */
-class ManagedAutomationRun implements AutomationRun {
+class ManagedAutomationRun<E = never> implements AutomationRun {
 	readonly id: string;
 	readonly #query: RemoteQuery<AutomationTaskSnapshot | null>;
-	readonly #stop: LifecycleRun;
+	readonly #stop: LifecycleRun<E>;
 
 	constructor(
 		id: string,
 		query: RemoteQuery<AutomationTaskSnapshot | null>,
-		stop: LifecycleRun
+		stop: LifecycleRun<E>
 	) {
 		this.id = id;
 		this.#query = query;
@@ -129,15 +129,15 @@ class ManagedAutomationRun implements AutomationRun {
 }
 
 /** Stable Svelte state shared by every reader of one generated automation property. */
-export class AutomationExecutionState {
+export class AutomationExecutionState<E = never> {
 	#starting = $state(0);
 	latest = $state.raw<AutomationRun | undefined>(undefined);
-	readonly #start: StartRun;
+	readonly #start: StartRun<E>;
 	readonly #read: ReadRun;
-	readonly #stop: LifecycleRun;
-	#runs = $state.raw<ReadonlyArray<ManagedAutomationRun>>([]);
+	readonly #stop: LifecycleRun<E>;
+	#runs = $state.raw<ReadonlyArray<ManagedAutomationRun<E>>>([]);
 
-	constructor(start: StartRun, read: ReadRun, stop: LifecycleRun) {
+	constructor(start: StartRun<E>, read: ReadRun, stop: LifecycleRun<E>) {
 		this.#start = start;
 		this.#read = read;
 		this.#stop = stop;
@@ -167,7 +167,7 @@ export class AutomationExecutionState {
 		);
 	}
 
-	readonly #track = (taskId: string): ManagedAutomationRun => {
+	readonly #track = (taskId: string): ManagedAutomationRun<E> => {
 		const existing = this.#runs.find(({ id }) => id === taskId);
 		if (existing !== undefined) return existing;
 		const run = new ManagedAutomationRun(taskId, this.#read(taskId), this.#stop);

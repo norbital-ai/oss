@@ -4,7 +4,7 @@
  * Client-agnostic upload contract. A concrete host adapter supplies the implementation.
  */
 
-import { Effect, Schema } from 'effect';
+import { Cause, Effect, Schema } from 'effect';
 import { FileValueSchema } from '../file-value/file-value.types.js';
 
 const UploadStageSchema = Schema.Literals([
@@ -68,22 +68,22 @@ export interface UploadEntry {
 	error?: string;
 }
 
-export interface IFileUploadClient {
+export interface IFileUploadClient<E = Cause.UnknownError> {
 	readonly uploads: UploadEntry[];
 
-	upload(file: File, options?: UploadOptions): Effect.Effect<UploadResult, unknown>;
+	upload(file: File, options?: UploadOptions): Effect.Effect<UploadResult, E>;
 
 	uploadMany(
 		files: File[],
 		options?: Pick<UploadOptions, 'stream'>
-	): Effect.Effect<UploadResult[], unknown>;
+	): Effect.Effect<UploadResult[], E>;
 
 	beginUpload(
 		file: File,
 		options?: BeginUploadOptions
-	): { id: string; effect: Effect.Effect<UploadResult, unknown> };
+	): { id: string; effect: Effect.Effect<UploadResult, E> };
 
-	delete(fileUrl: string): Effect.Effect<void, unknown>;
+	delete(fileUrl: string): Effect.Effect<void, E>;
 
 	cancel(entryId: string): void;
 

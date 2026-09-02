@@ -1,4 +1,5 @@
 import { Effect, Schema } from 'effect';
+import { httpRequest } from '@norbital-ai/std/http';
 import type { BoltTransport } from '#lib/client/contracts.js';
 
 export type HttpBoltTransportOptions = Readonly<{
@@ -80,18 +81,32 @@ export function createHttpBoltTransport(options: HttpBoltTransportOptions): Bolt
 		command: (command, input, signal, headers) =>
 			Effect.runPromise(
 				Effect.gen(function* () {
-					const response = yield* Effect.tryPromise(() =>
-						fetch(`${endpoint}/${encodeURIComponent(command)}`, {
-							method: 'POST',
-							credentials: 'same-origin',
-							headers: {
-								'content-type': 'application/json',
-								authorization: `Bearer ${options.credential}`,
-								...(headers ?? {})
-							},
-							body: JSON.stringify(input),
-							signal: signal ?? null
-						})
+					const response = yield* httpRequest(
+						`${endpoint}/${encodeURIComponent(command)}`,
+						{
+							operation: `bolt.command.${command}`,
+							init: {
+								method: 'POST',
+								credentials: 'same-origin',
+								headers: {
+									'content-type': 'application/json',
+									authorization: `Bearer ${options.credential}`,
+									...(headers ?? {})
+								},
+								body: JSON.stringify(input),
+								signal: signal ?? null
+							}
+						}
+					).pipe(
+						Effect.mapError(
+							(failure) =>
+								new BoltHttpResponseError(
+									failure.message,
+									failure.status ?? 0,
+									undefined,
+									null
+								)
+						)
 					);
 					const text = yield* Effect.tryPromise(() => response.text());
 					const payload =

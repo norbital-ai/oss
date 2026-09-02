@@ -71,12 +71,18 @@ test('the live transport rule reserves SSE for the canonical client sync driver'
 		'package.json': '{"name":"live-transport","type":"module"}',
 		'packages/bolt/src/client/sync/sse-driver.ts':
 			"export const source = new EventSource('/events');\nexport const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
+		'packages/bolt-server/src/server.ts':
+			"export const contentType = 'text/event-stream';\n",
+		'apps/colony/src/routes/api/bolt/sync/stream/+server.ts':
+			"export const contentType = 'text/event-stream';\n",
 		'packages/bolt/src/client/other.ts':
 			"export const source = new EventSource('/events');\n",
 		'src/api/bolt/sync/stream/+server.ts':
 			"export const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
 		'src/browser-events.ts':
-			"export const source = new EventSource('/events');\nexport const contentType = 'text/event-stream';\n"
+			"export const source = new EventSource('/events');\nexport const contentType = 'text/event-stream';\n",
+		'src/detect-stream.ts':
+			"export const isSse = (contentType: string) => contentType === 'text/event-stream';\n"
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -91,13 +97,45 @@ test('the live transport rule reserves SSE for the canonical client sync driver'
 		)
 	);
 	assert.ok(
-		findings.some((finding) => finding.location.startsWith('src/api/bolt/sync/stream/+server.ts:'))
+		!findings.some((finding) =>
+			finding.location.startsWith('src/api/bolt/sync/stream/+server.ts:')
+		)
 	);
 	assert.ok(
 		!findings.some((finding) =>
 			finding.location.startsWith('packages/bolt/src/client/sync/sse-driver.ts:')
 		)
 	);
+	assert.ok(
+		!findings.some((finding) => finding.location.startsWith('packages/bolt-server/src/server.ts:'))
+	);
+	assert.ok(
+		!findings.some((finding) =>
+			finding.location.startsWith('apps/colony/src/routes/api/bolt/sync/stream/+server.ts:')
+		)
+	);
+	assert.ok(!findings.some((finding) => finding.location.startsWith('src/detect-stream.ts:')));
+});
+
+test('SQL1 does not report Bolt query-compiler owners', async (context) => {
+	const sql = "export const q = sql`SELECT id FROM things WHERE tenant_id = ${id}`;";
+	const root = repository('sql-compiler', {
+		'package.json': '{"name":"sql-compiler","type":"module"}',
+		'packages/bolt/src/runtime/collections/read/search.ts': sql,
+		'packages/bolt/src/runtime/access/predicate.ts': sql,
+		'packages/bolt/src/runtime/identity/identity.ts': sql,
+		'src/app.ts': sql
+	});
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+
+	const sqlRules = platformRules.filter((rule) => rule.id === 'SQL1');
+	const findings = runRules({ root, rules: sqlRules });
+	assert.ok(findings.some((finding) => finding.location.startsWith('src/app.ts:')));
+	assert.ok(
+		!findings.some((finding) => finding.location.includes('/runtime/collections/'))
+	);
+	assert.ok(!findings.some((finding) => finding.location.includes('/runtime/access/')));
+	assert.ok(!findings.some((finding) => finding.location.includes('/runtime/identity/')));
 });
 
 test('the capability manifest reports the case QRY1 missed, and survives renaming', async (context) => {

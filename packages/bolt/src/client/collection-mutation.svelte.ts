@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 export class CollectionMutationState {
 	pending = $state(0);
 
-	run = <Value>(effect: Effect.Effect<Value, unknown>) => {
+	run = <Value, E = never>(effect: Effect.Effect<Value, E>) => {
 		this.pending += 1;
 		return Effect.runPromise(
 			effect.pipe(

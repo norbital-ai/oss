@@ -1,0 +1,19 @@
+id: EFF2
+summary: native Promise control bypasses Effect concurrency
+severity: error
+principles: [straightforwardness, testability, efficiency]
+dominates: [EFF3]
+rule:
+  all:
+    - any:
+        - pattern: Promise.all($X)
+        - pattern: Promise.allSettled($X)
+        - pattern: Promise.race($X)
+        - pattern: Promise.any($X)
+        - pattern: new Promise($FN)
+    - importsFrom: effect
+examples:
+  bad:
+    - "import { Effect } from 'effect';\nexport const f = () => Promise.all([a, b]);"
+  good:
+    - "import { Effect } from 'effect';\nexport const f = () => Effect.all([a, b]);"

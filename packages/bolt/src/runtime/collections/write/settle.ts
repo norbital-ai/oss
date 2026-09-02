@@ -8,7 +8,7 @@ import {
 } from '#lib/runtime/collections/collections.contract.js';
 import type { AppliedDeclarativeGraph } from './engine.js';
 
-type SettleDeclarativeGraphPorts = Readonly<{
+type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
 	readonly buildApi: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -28,17 +28,20 @@ type SettleDeclarativeGraphPorts = Readonly<{
 			readonly row: Readonly<Record<string, unknown>>;
 		}>,
 		event: 'created' | 'updated' | 'deleted'
-	) => Effect.Effect<void, unknown, never>;
+	) => Effect.Effect<void, EmitE, never>;
 	readonly embedRecords: (
 		effectId: EffectId,
 		limit: number,
 		targets: ReadonlyMap<string, ReadonlyArray<string>>
-	) => Effect.Effect<unknown, unknown, never>;
+	) => Effect.Effect<unknown, EmbedE, never>;
 }>;
 
 /** After-hook, change-event, and embedding settle for one committed graph. */
-export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGraph')(function* (
-	ports: SettleDeclarativeGraphPorts,
+export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGraph')(function* <
+	EmitE,
+	EmbedE
+>(
+	ports: SettleDeclarativeGraphPorts<EmitE, EmbedE>,
 	effectId: EffectId,
 	subject: Identity.Subject,
 	applied: AppliedDeclarativeGraph,

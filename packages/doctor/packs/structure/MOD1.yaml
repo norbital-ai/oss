@@ -1,0 +1,25 @@
+id: MOD1
+summary: module imports or re-exports itself
+severity: error
+principles: [simplicity, modularity, colocation, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: ImportDeclaration
+        - kind: ExportDeclaration
+        - kind: ImportEqualsDeclaration
+        - kind: CallExpression
+    - selfModule: true
+    - not:
+        regex: '^import type\b'
+    - not:
+        all:
+          - kind: ImportDeclaration
+          - regex: "from ['\"][^'\"]+\\.svelte['\"]"
+          - not:
+              regex: 'import \*|import \{|import type'
+examples:
+  bad:
+    - "export const Workbench = import('./workbench.js');"
+  good:
+    - "export * as Workbench from './workbench-contract.js';"

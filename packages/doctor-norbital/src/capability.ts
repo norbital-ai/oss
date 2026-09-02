@@ -37,7 +37,7 @@ const DEFAULT_SCOPES: ReadonlyArray<NodeKind> = [
 	'SourceFile'
 ];
 
-export type Capability = Readonly<{
+type Capability = Readonly<{
 	/** Short name; becomes the rule id as `CAP_<NAME>`. */
 	readonly name: string;
 	readonly summary: string;

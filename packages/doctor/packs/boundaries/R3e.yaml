@@ -1,0 +1,17 @@
+id: R3e
+summary: single cast to unknown
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  all:
+    - pattern: $VALUE as unknown
+    - not:
+        inside:
+          kind: AsExpression
+        stopBy:
+          kind: AsExpression
+examples:
+  bad: ["const opaque = value as unknown;"]
+  good:
+    - "const opaque: unknown = value;"
+    - "const n = text as unknown as number;"

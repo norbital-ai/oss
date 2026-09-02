@@ -1,0 +1,13 @@
+id: STD2
+summary: error message is extracted inline instead of getErrorMessage
+severity: error
+principles: [simplicity, colocation, no-bloat]
+rule:
+  any:
+    - '$X instanceof Error ? $X.message : String($X)'
+    - '$X instanceof Error ? $X.message : `${$X}`'
+examples:
+  bad:
+    - 'export const message = (cause) => cause instanceof Error ? cause.message : String(cause);'
+  good:
+    - 'export const message = (cause) => getErrorMessage(cause);'

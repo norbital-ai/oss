@@ -1,0 +1,19 @@
+id: NODE1
+summary: source reimplements Node built-in environment parsing
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+rule:
+  all:
+    - kind: SourceFile
+    - regex: 'parseEnv|parseEnvironment|(?:function|const|let)\s+environment\s*=\s*(?:async\s+)?(?:function|\()|environment\s*\(\s*text\b'
+    - has:
+        regex: '\.split\('
+      stopBy: end
+    - has:
+        regex: '='
+      stopBy: end
+examples:
+  bad:
+    - 'export class Config { parseEnvironment(text: string) { const out = {}; for (const line of text.split(/\r?\n/)) { const match = line.match(/^([^=]+)=(.*)$/); out[match[1]] = match[2]; } return out; } }'
+  good:
+    - "export { parseEnv } from 'node:util';"

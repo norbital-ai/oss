@@ -20,6 +20,7 @@ export function isConfiguredTest(path: string, owner: Readonly<{ root: string }>
 	try {
 		scriptsValue = JSON.parse(readFileSync(manifest, 'utf8'));
 	} catch {
+		/* best effort */
 		return false;
 	}
 	// The manifest is a parsed boundary value: scripts is read tolerantly, and any non-object
@@ -51,6 +52,7 @@ export function isConfiguredTest(path: string, owner: Readonly<{ root: string }>
 			try {
 				if (matchesGlob(local, pattern) || local === pattern) return true;
 			} catch {
+				/* best effort */
 				if (local === pattern) return true;
 			}
 	}

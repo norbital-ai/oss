@@ -1,41 +1,33 @@
 # The rule algebra
 
-Rules are written as **shapes**, not as visitors over syntax tokens. The algebra is a port of
-ast-grep's `SerializableRule` (`crates/config/src/rule/mod.rs`), so a rule written for ast-grep
-translates construct for construct, and its documented semantics are the semantics here.
+Every pack rule is a YAML file. That is the authoring surface — the same dialect a repository
+adds under `.norbital/config/doctor/`. The algebra is a port of ast-grep's `SerializableRule`
+(`crates/config/src/rule/mod.rs`), so a rule written for ast-grep translates construct for
+construct.
 
-One entry point, `defineRule`, in two forms. The field holding the shape is called `rule`, which is
-what ast-grep calls it, so a rule written against ast-grep's reference translates without renaming.
-
-```ts
-// The shape form. This is how a rule should be written.
-defineRule({
-	id: 'R3e',
-	severity: 'error',
-	summary: 'single cast to unknown',
-	principles: ['simplicity', 'type-safety'],
-	rule: {
-		all: [
-			{ pattern: '$VALUE as unknown' },
-			{ not: { inside: { kind: 'AsExpression' }, stopBy: { kind: 'AsExpression' } } }
-		]
-	},
-	examples: { bad: ['const o = v as unknown;'], good: ['const n = t as unknown as number;'] }
-});
-
-// The visitor form. The escape hatch, for claims that are not shapes — counting occurrences, or
-// reading something about the file rather than the node.
-defineRule({
-	id: 'EFF7',
-	severity: 'error',
-	summary: 'single-yield Effect.gen adds no composition',
-	principles: ['simplicity'],
-	when: ['CallExpression'],
-	check(node, context) {
-		/* … */
-	}
-});
+```yaml
+# packs/boundaries/R3e.yaml
+id: R3e
+summary: single cast to unknown
+severity: error
+principles: [simplicity, type-safety]
+rule:
+  all:
+    - pattern: $VALUE as unknown
+    - not:
+        inside:
+          kind: AsExpression
+        stopBy:
+          kind: AsExpression
+examples:
+  bad: ['const o = v as unknown;']
+  good: ['const n = t as unknown as number;']
 ```
+
+`rule` is the matcher. `detect`/`prefer` names an overlap detector. Every pack rule is one of
+those two fields. TypeScript does not declare a second copy of the pack.
+
+`defineRule` compiles that document for the runner. It is not how a pack rule is written.
 
 There used to be three functions here — `definePattern`, `defineMatcher` and a separate
 `defineRule` — which meant three places to look up how matching works and three subtly different
@@ -58,11 +50,20 @@ its `not: [c]` is `rule: { all: [<shape>, { not: c }] }`, both of which say what
 | `{ all }` / `{ any }` / `{ not }`                | composition                                                     |
 | `{ matches: 'name' }`                            | a rule named in `utils`                                         |
 | `{ atLeast, of }`                                | **extension** — N _distinct_ members match in the subtree       |
+| `{ count: { min, of } }`                         | **extension** — `of` matches at least `min` unwrapped times      |
+| `{ calls: { of, exactly } }`                     | **extension** — a bound name is used as a callee N times        |
+| `{ selfModule: true }`                           | **extension** — the specifier resolves to this file             |
+| `{ aliasCovered: true }`                         | **extension** — a declared path alias already covers this import |
+| `{ importsFrom: 'effect' }`                      | **extension** — the file imports that package or a subpath      |
 
 Alongside the matcher, `defineMatcher` accepts `utils` (named rules `matches` resolves) and
 `constraints` (a rule per metavariable, narrowing what it may bind).
 
 ## Two semantics worth stating
+
+**Operators are part of the shape.** TypeScript does not expose binary/unary operators or `?.` as
+`forEachChild` nodes. The matcher still compares them, so `$A && $B` does not match `a || b` and
+`$K in $V` does not match `===`.
 
 **`stopBy` defaults to `neighbor`.** `inside` sees the immediate parent; `has` sees direct children.
 `'end'` walks the whole chain, and `{ rule: … }` walks until a node matches — **inclusive**, so the
@@ -90,8 +91,9 @@ agent renaming every identifier in the file.
 
 ## Authoring notes
 
-Examples are mandatory and are executed: a rule that cannot demonstrate a positive and a negative is
-not a rule. `tests/port.test.ts` asserts both halves for every rule in every pack.
+A pack rule lives in `packs/<name>/<id>.yaml`. Examples on a `rule` document are executed: a
+shape that cannot demonstrate a positive and a negative is not a rule. `tests/port.test.ts`
+asserts both halves for every rule in every pack.
 
 A constraint naming a metavariable the matcher never binds is rejected when the rule is authored,
 not when it happens to match — a misspelled key would otherwise report nothing for ever, which reads

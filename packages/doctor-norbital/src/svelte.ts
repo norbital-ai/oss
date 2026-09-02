@@ -13,10 +13,9 @@ import { defineRule } from '@norbital-ai/doctor';
 import { definePack, type Pack, type Rule } from '@norbital-ai/doctor';
 import { svelteMarkup } from '@norbital-ai/doctor';
 import { SYSTEM_COLLECTION_FIELD_NAMES } from '@norbital-ai/std/collection';
+import { loadLocalRules } from './load.js';
 
 const COMPONENT = ['**/*.svelte'];
-/** Runes live in components and in `.svelte.ts` modules alike. */
-const COMPONENT_OR_RUNE = ['**/*.svelte', '**/*.svelte.ts'];
 const SYSTEM_COLLECTION_FIELD_PATTERN = SYSTEM_COLLECTION_FIELD_NAMES.map((name) =>
 	name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 ).join('|');
@@ -70,52 +69,6 @@ const effectAsLastResort = defineRule({
 	}
 });
 
-const asyncEffect = defineRule({
-	id: 'V7',
-	severity: 'error',
-	summary: 'async $effect',
-	principles: ['straightforwardness', 'testability'],
-	when: ['CallExpression'],
-	files: COMPONENT,
-	check(node, context) {
-		if (context.calleeName(node) !== '$effect') return;
-		const ts = context.ts;
-		const call = node as import('typescript').CallExpression;
-		const [body] = call.arguments;
-		if (body === undefined || !ts.isFunctionLike(body)) return;
-		const modifiers = ts.canHaveModifiers(body) ? (ts.getModifiers(body) ?? []) : [];
-		// An async effect returns a promise, so its return value cannot be the cleanup Svelte expects.
-		if (modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword))
-			context.report(node, 'body=async cleanup=unreachable');
-	}
-});
-
-const plainLetInRuneModule = defineRule({
-	id: 'V14',
-	severity: 'error',
-	summary: 'plain let/var in a rune module should be $state',
-	principles: ['straightforwardness', 'testability'],
-	when: ['VariableStatement'],
-	files: COMPONENT,
-	check(node, context) {
-		const ts = context.ts;
-		const statement = node as import('typescript').VariableStatement;
-		if (!ts.isSourceFile(statement.parent)) return;
-		const list = statement.declarationList;
-		if ((list.flags & ts.NodeFlags.Const) !== 0) return;
-		const declaration = list.declarations[0];
-		if (declaration === undefined || !ts.isIdentifier(declaration.name)) return;
-		const initializer = declaration.initializer;
-		// Already a rune, or explicitly not reactive: leave it alone.
-		if (
-			initializer !== undefined &&
-			/^\$(?:state|derived|props|bindable)/.test(context.text(initializer))
-		)
-			return;
-		context.report(node, `name=${declaration.name.text} prefer=$state`);
-	}
-});
-
 const computedBindingShouldDerive = defineRule({
 	id: 'V15',
 	severity: 'error',
@@ -138,55 +91,6 @@ const computedBindingShouldDerive = defineRule({
 		if (!ts.isPropertyAccessExpression(initializer) && !ts.isBinaryExpression(initializer)) return;
 		if (!/\.(?:current|value)\b|\$state\b|\$props\b/.test(text)) return;
 		context.report(node, `name=${declaration.name.text} prefer=$derived`);
-	}
-});
-
-/**
- * `$effect(() => reveal())` — an effect whose whole body is a call to a named function.
- *
- * The reactivity is fine: Svelte tracks reads made synchronously inside a called function, verified
- * against 5.56 rather than assumed. What is lost is *legibility*. An effect's dependencies are
- * whatever it happened to read on its last run, so at the call site there is nothing at all to read
- * — you must open the function, and then follow every early return, to learn what re-runs it.
- *
- * That matters because the tracked set is conditional. A function that guards on `mode` before
- * reading `target` subscribes to `mode` alone while the guard fails, and the subscription changes
- * shape as the branch does. An effect deserves to show that at the point it is declared.
- */
-const opaqueEffectDelegate = defineRule({
-	id: 'V20',
-	severity: 'error',
-	summary: '$effect delegates to a named function, so its dependencies are invisible',
-	principles: ['straightforwardness', 'testability'],
-	files: COMPONENT_OR_RUNE,
-	// The specific shape is listed first on purpose: `any` returns the first branch that matches and
-	// keeps only that branch's bindings, so `$effect($FN)` placed first would bind `$FN` to the
-	// arrow function and the constraint would reject every case.
-	rule: { any: ['$effect(() => $FN())', '$effect($FN)'] },
-	constraints: { FN: { kind: 'Identifier' } },
-	examples: {
-		bad: ['$effect(() => revealKeyboardIndicator());', '$effect(revealKeyboardIndicator);'],
-		good: [
-			'$effect(() => { virtualizer.scrollToIndex(indexOf(state.target)); });',
-			'$effect(() => track(commandState.inputMode));'
-		]
-	}
-});
-
-const derivedAlias = defineRule({
-	id: 'V18',
-	severity: 'error',
-	summary: '$derived aliases one identifier without deriving a value',
-	principles: ['simplicity', 'straightforwardness', 'no-bloat'],
-	when: ['CallExpression'],
-	files: COMPONENT,
-	check(node, context) {
-		if (context.calleeName(node) !== '$derived') return;
-		const ts = context.ts;
-		const call = node as import('typescript').CallExpression;
-		const [argument] = call.arguments;
-		if (argument === undefined) return;
-		if (ts.isIdentifier(argument)) context.report(node, `alias=${argument.text}`);
 	}
 });
 
@@ -305,12 +209,9 @@ function layoutRule(rule: LayoutRule): Rule {
 }
 
 export const svelteRules: ReadonlyArray<Rule> = [
+	...loadLocalRules('svelte'),
 	effectAsLastResort,
-	opaqueEffectDelegate,
-	asyncEffect,
-	plainLetInRuneModule,
 	computedBindingShouldDerive,
-	derivedAlias,
 	...LAYOUT.map(layoutRule)
 ];
 

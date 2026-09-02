@@ -36,6 +36,7 @@ import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { RemoteRegistry } from '#lib/runtime/collections/authored.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import {
 	AI,
@@ -51,6 +52,7 @@ import * as InvocationBudget from '#lib/runtime/budget.js';
 import {
 	AgentModelUnavailable,
 	McpToolError,
+	SkillError,
 	ToolNotAllowed,
 	callMcpTool,
 	executeHostTool,
@@ -565,22 +567,82 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Identity.Subject,
 		request: TaskSubmitRequest
-	) => Effect.Effect<TaskSubmitResult, unknown>;
+	) => Effect.Effect<
+		TaskSubmitResult,
+		| TaskRuntimeError
+		| AccessControl.AccessDenied
+		| AgentModelUnavailable
+		| ToolNotAllowed
+		| McpToolError
+		| SkillError
+		| Collections.QueryError
+		| Collections.BatchMutationError
+		| Schema.SchemaError
+		| DispatchError
+		| Workspace.WorkspaceLookupError
+		| InvocationBudget.NestingLimitExceeded
+		| AuthoredRefusal
+	>;
 	readonly editMessage: (
 		effectId: EffectId,
 		subject: Identity.Subject,
 		request: TaskEditMessageRequest
-	) => Effect.Effect<TaskEditMessageResult, unknown>;
+	) => Effect.Effect<
+		TaskEditMessageResult,
+		| TaskRuntimeError
+		| AccessControl.AccessDenied
+		| AgentModelUnavailable
+		| ToolNotAllowed
+		| McpToolError
+		| SkillError
+		| Collections.QueryError
+		| Collections.BatchMutationError
+		| Schema.SchemaError
+		| DispatchError
+		| Workspace.WorkspaceLookupError
+		| InvocationBudget.NestingLimitExceeded
+		| AuthoredRefusal
+	>;
 	readonly control: (
 		effectId: EffectId,
 		subject: Identity.Subject,
 		request: TaskControlRequest
-	) => Effect.Effect<TaskControlResult, unknown>;
+	) => Effect.Effect<
+		TaskControlResult,
+		| TaskRuntimeError
+		| AccessControl.AccessDenied
+		| AgentModelUnavailable
+		| ToolNotAllowed
+		| McpToolError
+		| SkillError
+		| Collections.QueryError
+		| Collections.BatchMutationError
+		| Schema.SchemaError
+		| DispatchError
+		| Workspace.WorkspaceLookupError
+		| InvocationBudget.NestingLimitExceeded
+		| AuthoredRefusal
+	>;
 	readonly execute: (
 		effectId: EffectId,
 		subject: Identity.Subject,
 		taskId: TaskId
-	) => Effect.Effect<TaskExecutionResult, unknown>;
+	) => Effect.Effect<
+		TaskExecutionResult,
+		| TaskRuntimeError
+		| AccessControl.AccessDenied
+		| AgentModelUnavailable
+		| ToolNotAllowed
+		| McpToolError
+		| SkillError
+		| Collections.QueryError
+		| Collections.BatchMutationError
+		| Schema.SchemaError
+		| DispatchError
+		| Workspace.WorkspaceLookupError
+		| InvocationBudget.NestingLimitExceeded
+		| AuthoredRefusal
+	>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Agents');
@@ -2244,7 +2306,7 @@ export const layer = Layer.effect(
 			submit,
 			editMessage,
 			control,
-			execute
-		});
+			execute: (effectId, subject, taskId) => execute(effectId, subject, taskId)
+		} as Interface);
 	})
 );

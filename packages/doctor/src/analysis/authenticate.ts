@@ -15,12 +15,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { jsonRecord } from '../manifest.js';
 import { scannerInputInventory } from './inventory.js';
 import type { ScannerInventory } from './inventory.js';
 import type { RootDescription } from './inventory.js';
 
 export const RECEIPT_SCHEMA_VERSION = 6;
-export const SCANNER_VERSION = 32;
+export const SCANNER_VERSION = 34;
 
 /** Scanner-owned principle buckets, in canonical order. */
 export const PRINCIPLES = [
@@ -266,16 +267,9 @@ export function scannerCatalogues(
 			}
 		}
 		const receiptCounts = record.counts;
-		const countsRecord =
-			typeof receiptCounts === 'object' && receiptCounts !== null
-				? (receiptCounts as Record<string, unknown>)
-				: undefined;
+		const countsRecord = jsonRecord(receiptCounts);
 		const principlesRecord =
-			countsRecord !== undefined &&
-			typeof countsRecord['principles'] === 'object' &&
-			countsRecord['principles'] !== null
-				? (countsRecord['principles'] as Record<string, unknown>)
-				: {};
+			countsRecord === undefined ? {} : (jsonRecord(countsRecord['principles']) ?? {});
 		if (
 			countsRecord === undefined ||
 			JSON.stringify(Object.keys(countsRecord).sort()) !==

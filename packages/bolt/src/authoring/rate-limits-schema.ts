@@ -39,6 +39,7 @@
  */
 
 import { Schema } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 
 /**
  * How a bucket is keyed, which decides who shares a limit with whom.
@@ -148,7 +149,7 @@ const UNIT_MILLIS: Readonly<Record<string, number>> = {
 export const rateLimitWindowMillis = (window: string): number | undefined => {
 	const parsed = WINDOW.exec(window);
 	if (parsed === null) return undefined;
-	const amount = Number(parsed[1]);
+	const amount = decodeNumber(parsed[1]);
 	const unit = UNIT_MILLIS[parsed[2] ?? ''];
 	return unit === undefined || !Number.isFinite(amount) || amount <= 0 ? undefined : amount * unit;
 };

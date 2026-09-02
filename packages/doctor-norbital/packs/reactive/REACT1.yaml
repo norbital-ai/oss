@@ -1,0 +1,21 @@
+id: REACT1
+summary: a timer drives query refresh; the client already owns the subscription
+severity: error
+principles: [simplicity, straightforwardness, efficiency, testability]
+rule:
+  all:
+    - any:
+        - pattern: '$Q.refresh()'
+        - pattern: '$Q.reload()'
+        - pattern: '$Q.invalidate()'
+        - pattern: '$Q.refetch()'
+    - inside:
+        any:
+          - pattern: 'setInterval($CB, $...REST)'
+          - pattern: 'setTimeout($CB, $...REST)'
+      stopBy: end
+examples:
+  bad:
+    - 'export const f = () => { setInterval(() => q.refresh(), 1000); };'
+  good:
+    - 'export const rows = $derived(client.db.things.findMany({}));'

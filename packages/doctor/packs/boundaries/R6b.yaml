@@ -1,0 +1,24 @@
+id: R6b
+summary: JSON.parse without visible validation
+severity: error
+principles: [straightforwardness, type-safety, testability]
+rule:
+  all:
+    - pattern: JSON.parse($TEXT)
+    - not:
+        inside:
+          kind: AsExpression
+        stopBy: end
+    - not:
+        inside:
+          regex: ":\\s*unknown\\s*="
+        stopBy: end
+    - not:
+        inside:
+          regex: "(?:decode|safeParse|validate|schema)\\."
+        stopBy: end
+examples:
+  bad:
+    - 'export const r = JSON.parse(b);'
+  good:
+    - "export const r = schema.parse(JSON.parse(b));\nexport function read(b) { const v: unknown = JSON.parse(b); return v; }"

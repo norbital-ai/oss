@@ -47,6 +47,10 @@
 			"types": "./build/finance/index.d.ts",
 			"default": "./build/finance/index.js"
 		},
+		"./http": {
+			"types": "./build/http/index.d.ts",
+			"default": "./build/http/index.js"
+		},
 		"./json": {
 			"types": "./build/json/index.d.ts",
 			"default": "./build/json/index.js"

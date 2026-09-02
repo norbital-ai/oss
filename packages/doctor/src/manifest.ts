@@ -31,10 +31,7 @@ export function readJsonObject(text: string): Readonly<Record<string, unknown>> 
 
 function decodeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
 	const decoded = Schema.decodeUnknownResult(jsonObject)(value);
-	return Result.match(decoded, {
-		onFailure: () => undefined,
-		onSuccess: (record) => record
-	});
+	return Result.getOrElse(decoded, () => undefined);
 }
 
 /**

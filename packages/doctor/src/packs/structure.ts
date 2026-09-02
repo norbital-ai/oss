@@ -4,96 +4,16 @@
  * Ported from `A1`, `A5`, `A6`, `D2`, `P9`, `Q1`, `COMPLEX1`, `S1`, `S3`, `S5`, `PERF1`–`PERF4`,
  * `E1`–`E3`, `IMP1`, and the alias family `AL1`–`AL3`.
  *
- * `Q3`/`Q4` are not here. They ask whether a private declaration has exactly one caller, which is a
- * whole-file question the legacy detector answered in a finalize pass; they belong with the
- * cross-file rules.
+ * Matcher-expressible laws live in `packs/structure/*.yaml` and join here. `Q3`/`Q4` stay
+ * visitors so they share the inline-candidate walk (type predicates, constructed callees, and
+ * names that earn a one-line helper are not findings). `Q1` stays the YAML callback-proxy shape.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { indirectionFindings } from '../analysis/complexity.js';
+import { aliasCovering, resolvesToDeclaringModule } from '../module-path.js';
+import { nameOf } from '../nameof.js';
 import { defineRule } from '../pattern.js';
 import { definePack, type Pack, type Rule } from '../rules.js';
-import { readJsonObject, recordField, stringField } from '../manifest.js';
-import { nameOf } from '../nameof.js';
-
-/**
- * Path aliases a repository declares, as `prefix -> repository-relative target directory`.
- *
- * Read from tsconfig `compilerOptions.paths` and from a manifest's `imports` map, walking up from
- * the importing file so a package inside a monorepo sees its own aliases and the root's. Cached per
- * directory: this runs once per import statement otherwise.
- */
-const aliasCache = new Map<string, ReadonlyArray<Readonly<{ prefix: string; target: string }>>>();
-
-function stripJsonComments(text: string): string {
-	return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:"'])\/\/[^\n]*/g, '$1');
-}
-
-/** Records one alias, resolved against its base. */
-type RecordAlias = (prefix: string, target: string, base: string) => void;
-
-/**
- * `compilerOptions.paths` from a tsconfig or jsconfig, narrowed field by field.
- *
- * A config this reader cannot parse means "no aliases known", never a finding — so every branch
- * here falls through to declaring nothing rather than asserting a shape onto the file.
- */
-function tsconfigAliases(root: string, directory: string, name: string, record: RecordAlias): void {
-	const file = join(root, directory === '.' ? name : `${directory}/${name}`);
-	if (!existsSync(file)) return;
-	const parsed = readJsonObject(stripJsonComments(readFileSync(file, 'utf8')));
-	if (parsed === undefined) return;
-	const compilerOptions = recordField(parsed, 'compilerOptions');
-	const base = join(directory, stringField(compilerOptions, 'baseUrl') ?? '.');
-	for (const [prefix, targets] of Object.entries(recordField(compilerOptions, 'paths')))
-		for (const target of Array.isArray(targets) ? targets : [])
-			if (typeof target === 'string') record(prefix, target, base);
-}
-
-/** A package's own `imports` map, which declares the `#alias/...` prefixes. */
-function manifestAliases(root: string, directory: string, record: RecordAlias): void {
-	const file = join(root, directory === '.' ? 'package.json' : `${directory}/package.json`);
-	if (!existsSync(file)) return;
-	const parsed = readJsonObject(readFileSync(file, 'utf8'));
-	if (parsed === undefined) return;
-	for (const [prefix, target] of Object.entries(recordField(parsed, 'imports')))
-		if (typeof target === 'string') record(prefix, target, directory);
-}
-
-function aliasesFor(
-	root: string,
-	directory: string
-): ReadonlyArray<Readonly<{ prefix: string; target: string }>> {
-	const key = `${root}\u0000${directory}`;
-	const cached = aliasCache.get(key);
-	if (cached !== undefined) return cached;
-	const found: Array<Readonly<{ prefix: string; target: string }>> = [];
-	const record: RecordAlias = (prefix, target, base) => {
-		const absolute = resolve(root, base, target.replace(/^\.\//, '').replace(/\*.*$/, ''));
-		found.push({
-			prefix: prefix.replace(/\*.*$/, ''),
-			target: relative(root, absolute).split('\\').join('/')
-		});
-	};
-	for (const name of ['tsconfig.json', 'jsconfig.json'])
-		tsconfigAliases(root, directory, name, record);
-	manifestAliases(root, directory, record);
-	aliasCache.set(key, found);
-	return found;
-}
-
-/** The alias prefix that already covers a deep relative import, if a repository declares one. */
-function aliasCovering(root: string, file: string, specifier: string): string | undefined {
-	const target = join(dirname(file), specifier)
-		.split('\\')
-		.join('/')
-		.replace(/\.[cm]?[jt]sx?$/, '');
-	for (let directory = dirname(file); ; directory = dirname(directory)) {
-		for (const alias of aliasesFor(root, directory))
-			// The alias points at a directory that contains the thing being imported the long way.
-			if (alias.target !== '' && target.startsWith(`${alias.target}/`)) return alias.prefix;
-		if (directory === '.' || directory === '' || directory === '/') return undefined;
-	}
-}
+import { loadYamlPack } from './load.js';
 
 const discardedTimer = defineRule({
 	id: 'A1',
@@ -200,16 +120,6 @@ const exportStar = defineRule({
 			context.report(node, 'form=export-star');
 	}
 });
-
-const withoutModuleExtension = (path: string): string =>
-	path.replace(/\.(?:[cm]?[jt]sx?|svelte)$/, '');
-
-function resolvesToDeclaringModule(file: string, root: string, specifier: string): boolean {
-	if (!specifier.startsWith('.')) return false;
-	const current = withoutModuleExtension(resolve(root, file));
-	const target = withoutModuleExtension(resolve(root, dirname(file), specifier));
-	return current === target || current === join(target, 'index');
-}
 
 const selfModuleEdge = defineRule({
 	id: 'MOD1',
@@ -1149,7 +1059,70 @@ const asyncIife = defineRule({
 	}
 });
 
-export const structureRules: ReadonlyArray<Rule> = [
+const INDIRECTION_CACHE = new WeakMap<
+	import('typescript').SourceFile,
+	ReturnType<typeof indirectionFindings>
+>();
+
+function cachedIndirection(
+	file: string,
+	sourceFile: import('typescript').SourceFile
+): ReturnType<typeof indirectionFindings> {
+	const cached = INDIRECTION_CACHE.get(sourceFile);
+	if (cached !== undefined) return cached;
+	const rows = indirectionFindings(file, sourceFile.getFullText());
+	INDIRECTION_CACHE.set(sourceFile, rows);
+	return rows;
+}
+
+function reportInlineCandidate(
+	rule: 'Q3' | 'Q4',
+	node: import('typescript').Node,
+	context: import('../rules.js').RuleContext
+): void {
+	const ts = context.ts;
+	const named =
+		(ts.isFunctionDeclaration(node) || ts.isVariableDeclaration(node)) && node.name !== undefined
+			? node.name
+			: node;
+	const line =
+		context.sourceFile.getLineAndCharacterOfPosition(named.getStart(context.sourceFile)).line + 1;
+	for (const row of cachedIndirection(context.file, context.sourceFile)) {
+		if (row.rule !== rule) continue;
+		if (!row.location.startsWith(`${context.file}:${line}:`)) continue;
+		const evidenceStart = row.location.lastIndexOf('[');
+		context.report(
+			node,
+			evidenceStart >= 0 ? row.location.slice(evidenceStart + 1, -1) : row.summary
+		);
+		return;
+	}
+}
+
+const privateForwarder = defineRule({
+	id: 'Q3',
+	severity: 'error',
+	summary: 'private function has one same-file direct call and forwards its parameters unchanged',
+	principles: ['simplicity', 'no-bloat'],
+	when: ['FunctionDeclaration', 'VariableDeclaration'],
+	check(node, context) {
+		reportInlineCandidate('Q3', node, context);
+	}
+});
+
+const reviewExpression = defineRule({
+	id: 'Q4',
+	severity: 'hint',
+	confidence: 'medium',
+	summary: 'private function has one same-file direct call and a small mutation-free single expression',
+	principles: ['simplicity', 'no-bloat'],
+	when: ['FunctionDeclaration', 'VariableDeclaration'],
+	check(node, context) {
+		reportInlineCandidate('Q4', node, context);
+	}
+});
+
+const visitorRules: ReadonlyArray<Rule> = [
 	inlineDataParameter,
 	inlineMessageShape,
 	decoderInTraversal,
@@ -1177,8 +1150,17 @@ export const structureRules: ReadonlyArray<Rule> = [
 	deepRelativeImport,
 	bareAlias,
 	primitiveAlias,
-	looseRecordAlias
+	looseRecordAlias,
+	privateForwarder,
+	reviewExpression
 ];
+
+const visitorIds = new Set(visitorRules.map((rule) => rule.id));
+const yamlStructure = loadYamlPack('structure', 'norbital/structure').rules.filter(
+	(rule) => !visitorIds.has(rule.id)
+);
+
+export const structureRules: ReadonlyArray<Rule> = [...visitorRules, ...yamlStructure];
 
 export const structurePack: Pack = definePack({
 	name: 'norbital/structure',

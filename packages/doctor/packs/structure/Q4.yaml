@@ -1,0 +1,26 @@
+id: Q4
+summary: private one-use expression may be clearer inline
+severity: hint
+principles: [colocation, no-bloat]
+confidence: medium
+rule:
+  all:
+    - any:
+        - pattern:
+            context: 'const $NAME = ($A) => $A.$M()'
+            selector: VariableDeclaration
+        - pattern:
+            context: 'const $NAME = ($A) => $A.$M($...R)'
+            selector: VariableDeclaration
+    - not:
+        inside:
+          regex: '^export '
+        stopBy: end
+    - calls:
+        of: NAME
+        exactly: 1
+examples:
+  bad:
+    - "const label = (name) => name.trim();\nexport const show = (name) => label(name);"
+  good:
+    - 'export const show = (name) => name.trim();'

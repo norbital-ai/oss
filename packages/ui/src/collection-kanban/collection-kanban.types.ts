@@ -112,6 +112,6 @@ export interface CollectionKanbanProps<
 	 */
 	onCardMove?: (
 		move: CollectionKanbanMove<CollectionRow<TCollections[TName]>>
-	) => Effect.Effect<void, unknown>;
+	) => Effect.Effect<void>;
 	class?: string;
 }

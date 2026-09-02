@@ -1,0 +1,22 @@
+id: AL2
+summary: primitive type alias
+severity: hint
+principles: [simplicity, no-bloat]
+rule:
+  all:
+    - kind: TypeAliasDeclaration
+    - any:
+        - has:
+            kind: NumberKeyword
+          field: type
+        - has:
+            kind: StringKeyword
+          field: type
+        - has:
+            kind: BooleanKeyword
+          field: type
+examples:
+  bad:
+    - 'export type Count = number;'
+  good:
+    - 'export type Count = { readonly value: number };'

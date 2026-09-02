@@ -44,6 +44,7 @@ export { runRules, sourceFiles, svelteMarkup, svelteScript } from './runner.js';
 export { stringlyPack, stringlyTyped } from './packs/stringly.js';
 export type { StringlyOptions } from './packs/stringly.js';
 export { defineRule, defineScope, verifyExamples, matchSource } from './pattern.js';
+export { loadMatcherFile, loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
 export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
 export { nameOf } from './nameof.js';
 export { boundariesPack, boundaryRules } from './packs/boundaries.js';

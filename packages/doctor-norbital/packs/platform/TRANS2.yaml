@@ -1,0 +1,25 @@
+id: TRANS2
+summary: canonical data falls back to an explicit legacy field
+severity: error
+principles: [simplicity, straightforwardness, type-safety, no-bloat]
+rule:
+  any:
+    - all:
+        - pattern: '$A ?? $B'
+        - regex: '(?:^|[._])(?:legacy|old|deprecated|v1|previous|prev)(?=$|[._])'
+          on: B
+        - not:
+            regex: '(?:===|!==|==|!=|<=|>=|<|>)'
+            on: B
+    - all:
+        - pattern: '$A || $B'
+        - regex: '(?:^|[._])(?:legacy|old|deprecated|v1|previous|prev)(?=$|[._])'
+          on: B
+        - not:
+            regex: '(?:===|!==|==|!=|<=|>=|<|>)'
+            on: B
+examples:
+  bad:
+    - 'export const n = row.name ?? row.legacy_name;'
+  good:
+    - 'export const n = row.name ?? row.preview;'

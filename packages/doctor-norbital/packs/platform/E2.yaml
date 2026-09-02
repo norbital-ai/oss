@@ -1,0 +1,35 @@
+id: E2
+summary: feature flag declared in source
+severity: hint
+principles: [straightforwardness, no-bloat]
+rule:
+  any:
+    - all:
+        - pattern: 'const $NAME = true'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+    - all:
+        - pattern: 'const $NAME = false'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+    - all:
+        - pattern: 'export const $NAME = true'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+    - all:
+        - pattern: 'export const $NAME = false'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+    - all:
+        - pattern: 'let $NAME = true'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+    - all:
+        - pattern: 'let $NAME = false'
+        - regex: '^(?:ENABLE_|FEATURE_|FLAG_|USE_)'
+          on: NAME
+examples:
+  bad:
+    - 'export const ENABLE_BETA = true;'
+  good:
+    - 'export const enableBeta = config.beta;'

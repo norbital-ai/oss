@@ -5,7 +5,15 @@ import type { LinkAndRouteValues } from '@norbital-ai/bolt-protocol';
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 
 export const WRITE_DEPTH_LIMIT = 8;
-export const MAX_ORDINARY_MUTATION_CHANGED_ROWS = 1_000;
+/**
+ * 10,000, raised from 1,000. RFC/sync-engine.md carries the amendment and the receipt.
+ *
+ * The ceiling is here to stop an unbounded graph, not to make a bounded one illegal. One payroll
+ * period for one company is a single declarative write of ~4,000 rows at 89 employees, and the
+ * alternative the old value forced — splitting it into separately committed batches — would leave a
+ * half-settled run visible, which is the exact state `payroll_runs/+hooks.ts` was written to prevent.
+ */
+export const MAX_ORDINARY_MUTATION_CHANGED_ROWS = 10_000;
 
 export type WriteAction = 'create' | 'update' | 'delete';
 

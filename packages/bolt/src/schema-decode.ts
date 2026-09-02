@@ -9,5 +9,9 @@ import type { Effect } from 'effect';
 export const decodeUnknownSchema = <S extends Schema.Top>(
 	schema: S,
 	input: unknown
-): Effect.Effect<Schema.Schema.Type<S>, unknown> =>
-	Schema.decodeUnknownEffect(schema)(input) as Effect.Effect<Schema.Schema.Type<S>, unknown>;
+): Effect.Effect<Schema.Schema.Type<S>, Schema.SchemaError, S['DecodingServices']> =>
+	Schema.decodeUnknownEffect(schema)(input) as Effect.Effect<
+		Schema.Schema.Type<S>,
+		Schema.SchemaError,
+		S['DecodingServices']
+	>;

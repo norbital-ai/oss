@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- integration-introspection imports the workspace-schema
 // declarations it splits, so the pair is linked, not parallel.
 import type { ManifestIntegration, ManifestIntegrationBinding } from '@norbital-ai/bolt-protocol';
-import type { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 import type {
 	PullCursorSpec,
 	PullPagesSpec,
@@ -124,10 +124,9 @@ type IntegrationsModuleInput = Readonly<
 	>
 >;
 
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
+	Option.getOrElse(Schema.decodeUnknownOption(JsonObject)(value), () => undefined);
 
 const text = (value: unknown): string | undefined =>
 	typeof value === 'string' ? value : undefined;

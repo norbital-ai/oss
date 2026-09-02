@@ -1,0 +1,14 @@
+id: SANDWICH1
+summary: Effect is run to a Promise and lifted back into Effect
+severity: error
+principles: [simplicity, straightforwardness]
+rule:
+  any:
+    - 'Effect.tryPromise(() => $RT.runPromise($E))'
+    - 'Effect.tryPromise({ try: () => $RT.runPromise($E), catch: $C })'
+    - 'await Effect.runPromiseWith($CTX)($E)'
+examples:
+  bad:
+    - 'export const tick = () => Effect.tryPromise(() => runtime.runPromise(once()));'
+  good:
+    - 'export const tick = () => once();'

@@ -1,0 +1,27 @@
+id: A6
+summary: await inside a synchronous loop
+severity: error
+principles: [efficiency, straightforwardness]
+dominates: [EFF3]
+rule:
+  all:
+    - kind: AwaitExpression
+    - inside:
+        any:
+          - kind: ForStatement
+          - kind: ForOfStatement
+          - kind: ForInStatement
+          - kind: WhileStatement
+          - kind: DoStatement
+      stopBy:
+        any:
+          - kind: FunctionDeclaration
+          - kind: FunctionExpression
+          - kind: ArrowFunction
+          - kind: MethodDeclaration
+          - kind: ConstructorDeclaration
+examples:
+  bad:
+    - 'export async function f(xs: number[]) { for (const x of xs) { await go(x); } }'
+  good:
+    - 'export async function f(xs: number[]) { await Promise.all(xs.map(go)); }'

@@ -23,7 +23,26 @@
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import ts from 'typescript';
+import {
+	aliasCovering,
+	moduleSpecifierOf,
+	resolvesToDeclaringModule,
+	sourceImportsFrom
+} from './module-path.js';
 import type { NodeKind } from './rules.js';
+
+/** Repository root and relative path for host facts (`selfModule`, `aliasCovered`). */
+type MatchHost = Readonly<{ root: string; file: string }>;
+
+const hosts = new WeakMap<ts.SourceFile, MatchHost>();
+
+/** Bind the file the runner is visiting so host-fact matchers can resolve specifiers. */
+export function bindMatchHost(
+	source: ts.SourceFile,
+	host: Readonly<{ root: string; file: string }>
+): void {
+	hosts.set(source, host);
+}
 
 export type MatchResult = Readonly<{ matched: boolean; bindings: ReadonlyMap<string, string> }>;
 
@@ -113,7 +132,17 @@ export type Matcher =
 	 * occurrences is what makes it mean "several different mechanisms" instead of "one mechanism
 	 * several times". `CAP_*` and `defineScope` are built on it.
 	 */
-	| Readonly<{ atLeast: number; of: ReadonlyArray<Matcher> }>;
+	| Readonly<{ atLeast: number; of: ReadonlyArray<Matcher> }>
+	/** This node's module specifier resolves to the file that contains it. */
+	| Readonly<{ selfModule: true }>
+	/** This node's relative specifier is already covered by a declared path alias. */
+	| Readonly<{ aliasCovered: true }>
+	/** The file that contains this node imports `importsFrom` or a subpath of it. */
+	| Readonly<{ importsFrom: string }>
+	/** The matcher `of` matches at least `min` times in this node's subtree. */
+	| Readonly<{ count: Readonly<{ min: number; of: Matcher }> }>
+	/** The bound metavariable is used as a callee exactly `exactly` times in the file. */
+	| Readonly<{ calls: Readonly<{ of: string; exactly: number }> }>;
 
 /** Named rules a matcher tree can reference through `matches`. ast-grep's `utils`. */
 export type Utils = Readonly<Record<string, Matcher>>;
@@ -147,10 +176,9 @@ export function withUtils<T>(utils: Utils, compileTree: () => T): T {
 	const outcome = Effect.runSync(Effect.result(Effect.try(() => compileTree())));
 	utilities.clear();
 	for (const [name, value] of previous) utilities.set(name, value);
-	if (Result.isFailure(outcome))
-		throw Result.match(outcome, { onFailure: (error) => error, onSuccess: () => undefined });
-	const tree = Result.match(outcome, { onSuccess: (value) => value, onFailure: () => undefined });
-	return tree as T;
+	return Result.getOrElse(outcome, (error) => {
+		throw error;
+	});
 }
 
 /** The first descendant of a given kind, which is how `selector` narrows a `context` pattern. */
@@ -212,6 +240,33 @@ export function parsePattern(pattern: string): ts.Node {
 	return ts.isExpressionStatement(first) ? first.expression : first;
 }
 
+/**
+ * Tokens TypeScript does not expose as a child: operators, optional chaining, and `let`/`const`.
+ *
+ * `forEachChild` walks operands and declaration names only, so a pattern that names `in`, `&&`,
+ * or `let` would otherwise match every node of that syntax kind.
+ */
+const VARIABLE_LIST_FLAGS =
+	ts.NodeFlags.Const | ts.NodeFlags.Let | ts.NodeFlags.Using | ts.NodeFlags.AwaitUsing;
+
+function sameUnvisitedPunctuation(pattern: ts.Node, target: ts.Node): boolean {
+	if (ts.isBinaryExpression(pattern) && ts.isBinaryExpression(target))
+		return pattern.operatorToken.kind === target.operatorToken.kind;
+	if (ts.isPrefixUnaryExpression(pattern) && ts.isPrefixUnaryExpression(target))
+		return pattern.operator === target.operator;
+	if (ts.isPostfixUnaryExpression(pattern) && ts.isPostfixUnaryExpression(target))
+		return pattern.operator === target.operator;
+	if (ts.isPropertyAccessExpression(pattern) && ts.isPropertyAccessExpression(target))
+		return (pattern.questionDotToken !== undefined) === (target.questionDotToken !== undefined);
+	if (ts.isElementAccessExpression(pattern) && ts.isElementAccessExpression(target))
+		return (pattern.questionDotToken !== undefined) === (target.questionDotToken !== undefined);
+	if (ts.isCallExpression(pattern) && ts.isCallExpression(target))
+		return (pattern.questionDotToken !== undefined) === (target.questionDotToken !== undefined);
+	if (ts.isVariableDeclarationList(pattern) && ts.isVariableDeclarationList(target))
+		return (pattern.flags & VARIABLE_LIST_FLAGS) === (target.flags & VARIABLE_LIST_FLAGS);
+	return true;
+}
+
 /** Parentheses and non-null assertions never change what a pattern means. */
 function unwrap(node: ts.Node): ts.Node {
 	let current = node;
@@ -232,7 +287,7 @@ function textOf(node: ts.Node, source: ts.SourceFile): string {
 	const text = Effect.runSync(
 		Effect.result(Effect.try(() => node.getText(source).replace(/\s+/g, ' ').trim()))
 	);
-	return Result.match(text, { onSuccess: (t) => t, onFailure: () => '' });
+	return Result.getOrElse(text, () => '');
 }
 
 function variadicName(node: ts.Node): string | undefined {
@@ -278,6 +333,9 @@ function matchShape(
 
 	// `template` ignores node kinds and compares text only; everything else requires the same kind.
 	if (strictness !== 'template' && patternNode.kind !== targetNode.kind) return false;
+	// Operators and `?.` are tokens, not `forEachChild` nodes. Without this, `$A && $B` matches
+	// every binary expression and `$K in $V` counts `||`/`===` as `in`.
+	if (strictness !== 'template' && !sameUnvisitedPunctuation(patternNode, targetNode)) return false;
 	// `signature` matches shape without text, so two calls with different names still correspond.
 	const comparesText = strictness !== 'signature';
 	if (ts.isIdentifier(patternNode) && ts.isIdentifier(targetNode))
@@ -355,23 +413,12 @@ function descendants(node: ts.Node): ReadonlyArray<ts.Node> {
 	return found;
 }
 
-/** Direct children, which is what `stopBy: 'neighbor'` means for `has`. */
-function directChildren(node: ts.Node): ReadonlyArray<ts.Node> {
-	return children(node);
-}
-
-/**
- * True when `node` is the value of the named property of `parent`.
- *
- * ast-grep uses tree-sitter field names. TypeScript's AST has no field ids, but it has named
- * properties that carry the same meaning — `initializer`, `expression`, `body` — so the property
- * name is the honest analogue.
- */
 /**
  * A node's named property.
  *
  * Reading one by name needs no assertion: `Reflect.get` answers `unknown`, which is exactly how
- * much is known about a property addressed by a string.
+ * much is known about a property addressed by a string. ast-grep uses tree-sitter field names;
+ * TypeScript's analogue is the property name (`initializer`, `expression`, `body`).
  */
 function namedProperty(parent: object, field: string): unknown {
 	return Reflect.get(parent, field);
@@ -563,7 +610,7 @@ export function compile(matcher: Matcher): Compiled {
 			run: (node, source, bindings) => {
 				const scope =
 					stop === 'neighbor'
-						? directChildren(node)
+						? children(node)
 						: withinStop(descendants(node), stop, source, bindings);
 				return scope.some(
 					(child) =>
@@ -647,6 +694,88 @@ export function compile(matcher: Matcher): Compiled {
 		};
 	}
 
+	if ('selfModule' in matcher) {
+		return {
+			kinds: undefined,
+			run: (node, source) => {
+				const specifier = moduleSpecifierOf(node);
+				if (specifier === undefined) return false;
+				const host = hosts.get(source);
+				const file = host?.file ?? source.fileName;
+				const root = host?.root ?? '.';
+				return resolvesToDeclaringModule(file, root, specifier);
+			}
+		};
+	}
+
+	if ('aliasCovered' in matcher) {
+		return {
+			kinds: undefined,
+			run: (node, source) => {
+				const specifier = moduleSpecifierOf(node);
+				const host = hosts.get(source);
+				if (specifier === undefined || host === undefined) return false;
+				return aliasCovering(host.root, host.file, specifier) !== undefined;
+			}
+		};
+	}
+
+	if ('importsFrom' in matcher) {
+		const specifier = matcher.importsFrom;
+		if (typeof specifier !== 'string' || specifier.length === 0)
+			throw new Error('norbital-doctor: importsFrom requires a package specifier');
+		return {
+			kinds: undefined,
+			run: (_node, source) => sourceImportsFrom(source, specifier)
+		};
+	}
+
+	if ('count' in matcher) {
+		const inner = compile(matcher.count.of);
+		const minimum = matcher.count.min;
+		return {
+			kinds: undefined,
+			run: (node, source, bindings) => {
+				const subtree = [node, ...descendants(node)];
+				let found = 0;
+				for (const candidate of subtree) {
+					// Parentheses unwrap to the same `in`/`&&` node; counting the wrapper would
+					// turn one operator into two and make `count.min: 2` fire on a single `in`.
+					if (unwrap(candidate) !== candidate) continue;
+					if (inner.run(candidate, source, new Map(bindings))) found += 1;
+				}
+				return found >= minimum;
+			}
+		};
+	}
+
+	if ('calls' in matcher) {
+		const raw = matcher.calls.of;
+		const name = raw.startsWith('$') ? raw : `$${raw}`;
+		const exactly = matcher.calls.exactly;
+		return {
+			kinds: undefined,
+			run: (_node, source, bindings) => {
+				const bound = bindings.get(name);
+				if (bound === undefined || !ts.isIdentifier(bound)) return false;
+				const text = bound.text;
+				let found = 0;
+				const visit = (current: ts.Node): void => {
+					if (
+						ts.isIdentifier(current) &&
+						current.text === text &&
+						ts.isCallExpression(current.parent) &&
+						current.parent.expression === current
+					)
+						found += 1;
+					ts.forEachChild(current, visit);
+				};
+				visit(source);
+				return found === exactly;
+			}
+		};
+	}
+
 	const parts = matcher.of.map(compile);
 	const threshold = matcher.atLeast;
 	return {
@@ -690,6 +819,7 @@ export function metavariablesOf(matcher: Matcher): ReadonlySet<string> {
 			if (Array.isArray(branch)) branch.forEach(walk);
 		}
 		if ('of' in current) current.of.forEach(walk);
+		if ('count' in current) walk(current.count.of);
 		const nth = Reflect.get(current, 'nthChild');
 		if (typeof nth === 'object' && nth !== null) {
 			const ofRule = Reflect.get(nth, 'ofRule');

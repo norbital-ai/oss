@@ -168,3 +168,23 @@ are positive fixtures.
 The STD1 owner boundary is package-and-module exact: the seven curated helpers are negative fixtures
 only in their published source modules inside the package named `@norbital-ai/std`; same-named
 consumer implementations and misplaced implementations inside that package remain positive fixtures.
+
+Scanner v40 adds FETCH1 (bare `fetch`), EFF11 (`Effect.Effect<A, unknown>`), and
+COERCE1 (`Number()` as an IO decoder). Scanner v39 moves Effect ownership and ceremony
+rules, plus matcher-ready Norbital rules, onto YAML and adds the `importsFrom` host fact
+so ownership is a file fact rather than a TypeScript catalogue. IDENT1 flags an
+`onSuccess` handler that returns its argument unchanged. SWALLOW1 flags an empty
+`Effect.catch`. Scanner v38 adds EFF9 (`Effect.promise`), EFF10 (`error()`))
+inside Effect), and SANDWICH1 (`tryPromise` around `runPromise`) from a 257-file sample.
+Scanner v37 counts only unwrapped
+nodes (`('k' in v)` is one `in`, not two). Scanner v36
+makes binary/unary/`?.` patterns operator-faithful (`$K in $V` no longer matches `||`/`===`).
+Scanner v35 promoted sampled IO and indirection shapes to pack rules. STD2/STD3 own
+`getErrorMessage` / `toError` instead of inline `instanceof Error` adapters. PARSE1 covers ternary
+`JSON.parse` branches that R6a missed. VOID1 flags discarded `Promise.resolve`. EFF8 catches the
+nested-yield `Effect.gen` that EFF7's yield-count misses. R3a/R3b widen to `Readonly<Record<…>>`
+and `as never as`. GUARD1 is the reconstructive ternary / type-predicate only — Node
+`code === 'ENOENT'` narrowing is not a record boundary. P9 is `export * from` only (named
+re-exports are not barrels). AL3 is an alias that *is* `Record<string, unknown>`, not a type that
+mentions Record. R5d requires two `in` operands on one `&&`/`||`. `$derived(obj.prop)` is valid
+Svelte 5 and is not a rule.

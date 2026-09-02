@@ -101,6 +101,18 @@ are portable.
 | `Q1`       | error |     0 | **portable**   | single file, no checker                              | pass-through or get-or-throw wrapper function                                      |
 | `Q3`       | error |     0 | **portable**   | single file, no checker                              | private one-use function is mechanically inlineable                                |
 | `Q4`       | hint  |     0 | **portable**   | single file, no checker                              | private one-use expression may be clearer inline                                   |
+| `Q5`       | error |     0 | **portable**   | single file, no checker                              | parameter typed as the undefined or void singleton                                 |
+| `GUARD1`   | error |     0 | **portable**   | single file, no checker                              | hand-rolled typeof-object duck guard                                               |
+| `REFLECT1` | error |     0 | **portable**   | single file, no checker                              | Reflect.get on Object() coercion                                                   |
+| `STATE2`   | error |     0 | **portable**   | single file, no checker                              | module const Map/Set mutated from a function                                       |
+| `STD2`     | error |     0 | **portable**   | single file, no checker                              | inline Error.message extraction                                                    |
+| `STD3`     | error |     0 | **portable**   | single file, no checker                              | inline unknown-to-Error catch adapter                                              |
+| `PARSE1`   | error |     0 | **portable**   | single file, no checker                              | ternary JSON.parse without decode                                                  |
+| `VOID1`    | error |     0 | **portable**   | single file, no checker                              | discarded native Promise                                                           |
+| `EFF8`     | error |     0 | **portable**   | single file, no checker                              | Effect.gen that only unwraps a service into json                                   |
+| `EFF9`     | error |     0 | **portable**   | single file, no checker                              | Effect.promise drops rejection onto the defect channel                             |
+| `EFF10`    | error |     0 | **portable**   | single file, no checker                              | SvelteKit error() throws inside Effect                                             |
+| `SANDWICH1`| error |     0 | **portable**   | single file, no checker                              | Effect run to a Promise then lifted back into Effect                               |
 | `QRY1`     | error |     0 | **portable**   | single file, no checker                              | manual query state/cache ownership bypasses the reactive client                    |
 | `QRY2`     | error |     0 | **portable**   | single file, no checker                              | generated client query is driven imperatively                                      |
 | `QRY3`     | error |     0 | **portable**   | single file, no checker                              | query parameters froze reactive input outside $derived                             |

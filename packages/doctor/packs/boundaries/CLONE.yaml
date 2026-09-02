@@ -1,0 +1,8 @@
+id: CLONE
+summary: JSON stringify/parse clone
+severity: error
+principles: [simplicity, efficiency, no-bloat]
+rule: JSON.parse(JSON.stringify($VALUE))
+examples:
+  bad: ["const copy = JSON.parse(JSON.stringify(row));"]
+  good: ["const copy = structuredClone(row);"]

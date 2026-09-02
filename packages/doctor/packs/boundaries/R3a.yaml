@@ -1,0 +1,13 @@
+id: R3a
+summary: cast to Record<string, unknown>
+severity: error
+principles: [simplicity, straightforwardness, type-safety]
+rule:
+  any:
+    - '$VALUE as Record<string, unknown>'
+    - '$VALUE as Readonly<Record<string, unknown>>'
+    - '$VALUE as Record<string, Schema.Json>'
+    - '$VALUE as Readonly<Record<string, Schema.Json>>'
+examples:
+  bad: ["const bag = value as Record<string, unknown>;"]
+  good: ["const bag = decode(value);"]

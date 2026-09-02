@@ -5,7 +5,8 @@ interface HandlerDefinition<
 	S extends Schema.Codec<unknown, unknown>,
 	Output,
 	Workspace extends AnySchema = DefaultWorkspaceSchema,
-	Kind extends 'query' | 'command' = 'query'
+	Kind extends 'query' | 'command' = 'query',
+	E = never
 > {
 	readonly kind: Kind;
 	readonly description: string;
@@ -13,20 +14,21 @@ interface HandlerDefinition<
 	readonly handler: (
 		payload: Schema.Schema.Type<S>,
 		api: Api<Workspace>
-	) => Effect.Effect<Output, unknown, never> | Output;
+	) => Effect.Effect<Output, E, never> | Output;
 }
 
 type AuthoredHandler<
 	S extends Schema.Codec<unknown, unknown>,
 	Workspace extends AnySchema,
-	Output
+	Output,
+	E = never
 > = {
 	readonly description: string;
 	readonly schema: S;
 	readonly handler: (
 		payload: Schema.Schema.Type<S>,
 		api: Api<Workspace>
-	) => Effect.Effect<Output, unknown, never> | Output;
+	) => Effect.Effect<Output, E, never> | Output;
 };
 
 /** Public read-remote contract that retains the augmented workspace schema in generated types. */
@@ -34,10 +36,11 @@ interface DefineQueryHandler {
 	<
 		const S extends Schema.Codec<unknown, unknown>,
 		Workspace extends AnySchema = DefaultWorkspaceSchema,
-		Output = unknown
+		Output = unknown,
+		E = never
 	>(
-		definition: AuthoredHandler<S, Workspace, Output>
-	): HandlerDefinition<S, Output, Workspace>;
+		definition: AuthoredHandler<S, Workspace, Output, E>
+	): HandlerDefinition<S, Output, Workspace, 'query', E>;
 }
 
 /**
@@ -48,10 +51,11 @@ interface DefineCommandHandler {
 	<
 		const S extends Schema.Codec<unknown, unknown>,
 		Workspace extends AnySchema = DefaultWorkspaceSchema,
-		Output = unknown
+		Output = unknown,
+		E = never
 	>(
-		definition: AuthoredHandler<S, Workspace, Output>
-	): HandlerDefinition<S, Output, Workspace, 'command'>;
+		definition: AuthoredHandler<S, Workspace, Output, E>
+	): HandlerDefinition<S, Output, Workspace, 'command', E>;
 }
 
 /**

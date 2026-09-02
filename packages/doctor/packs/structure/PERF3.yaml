@@ -1,0 +1,21 @@
+id: PERF3
+summary: three or more eager collection traversals are chained
+severity: error
+principles: [simplicity, efficiency, no-bloat]
+rule:
+  all:
+    - pattern: $S.$A($X).$B($Y).$C($Z)
+    - regex: '^(?:map|filter|flatMap|forEach|reduce|sort|reverse|slice|concat)$'
+      on: A
+    - regex: '^(?:map|filter|flatMap|forEach|reduce|sort|reverse|slice|concat)$'
+      on: B
+    - regex: '^(?:map|filter|flatMap|forEach|reduce|sort|reverse|slice|concat)$'
+      on: C
+    - not:
+        inside:
+          kind: PropertyAccessExpression
+examples:
+  bad:
+    - 'export const f = (xs) => xs.map(a).filter(b).map(c);'
+  good:
+    - 'export const f = (xs) => xs.flatMap(ab);'

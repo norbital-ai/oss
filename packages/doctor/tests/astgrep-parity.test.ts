@@ -84,6 +84,22 @@ test('pattern matches a shape and binds metavariables', () => {
 	assert.equal(hits({ pattern: '$A + $B' }, 'const x = one - two;'), 0);
 });
 
+test('let and const are distinct declaration-list tokens', () => {
+	assert.equal(
+		hits({ pattern: 'export let $NAME: $T = $INIT' }, 'export let shared: number[] = [];'),
+		1
+	);
+	assert.equal(
+		hits(
+			{ pattern: 'export let $NAME: $T = $INIT' },
+			'export const shared: ReadonlyArray<number> = [];'
+		),
+		0
+	);
+	assert.equal(hits({ pattern: 'const $NAME = $INIT' }, 'const refreshed = new Set();'), 1);
+	assert.equal(hits({ pattern: 'const $NAME = $INIT' }, 'let refreshed = new Set();'), 0);
+});
+
 test('a repeated metavariable must bind consistently', () => {
 	assert.equal(hits('$X === $X', 'const a = same === same;'), 1);
 	assert.equal(hits('$X === $X', 'const a = left === right;'), 0);
