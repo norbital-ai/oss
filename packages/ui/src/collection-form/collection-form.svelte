@@ -297,10 +297,12 @@
 				return submitCollectionMutation(() =>
 					operations.mutate(recordId ? { id: recordId, ...writableValues } : writableValues)
 				).pipe(
-					Effect.tap((submission) => {
-						lastSubmissionKind =
-							submission.kind === 'pendingApproval' ? 'pendingApproval' : 'committed';
-					})
+					Effect.tap((submission) =>
+						Effect.sync(() => {
+							lastSubmissionKind =
+								submission.kind === 'pendingApproval' ? 'pendingApproval' : 'committed';
+						})
+					)
 				);
 			},
 		onSuccess: (submission) => {
