@@ -763,13 +763,14 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
-				{ command: 'notifications.drain' }
+				{ command: 'notifications.drain' },
+				{ command: 'tasks.execute' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(8);
 	});
 });

@@ -138,6 +138,7 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			.map((file) => file.slice(RUNTIME.length + 1))
 			.toSorted();
 		expect(writers).toEqual([
+			'agents/agents.ts',
 			'approvals/approvals.ts',
 			'collections/collections.ts',
 			'envoys/envoys.ts',

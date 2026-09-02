@@ -54,6 +54,7 @@ import {
 	type AIInterface
 } from '#lib/runtime/facilities/services.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
@@ -722,14 +723,15 @@ export const layer = Layer.effect(
 		const collections = yield* Collections.Service;
 		const ai = yield* AI.Service;
 		const tasks = yield* Tasks.Service;
+		const queue = yield* TaskQueue.Service;
 		const database = yield* Database.Service;
 		const hostTools = yield* HostTools.Service;
 		const connector = yield* Connector.Service;
 		const remotes = yield* RemoteRegistry;
 
 		/**
-		 * Durable execute: write the `bolt_task` row first, then Wake. A wake with no row is an
-		 * empty host pass; a row with no wake waits for unrelated traffic.
+		 * Durable execute: arm the host timer first, then write the `bolt_task` row.
+		 * A crash in between costs a false alarm, never a dropped turn.
 		 */
 		const enqueueExecute = Effect.fn('Agents.enqueueExecute')(function* (
 			effectId: EffectId,
@@ -739,6 +741,7 @@ export const layer = Layer.effect(
 		) {
 			const now = yield* Clock.currentTimeMillis;
 			const rowEffectId = `tasks.execute:${taskId}:${slot}`;
+			yield* queue.wake(EffectId.make(`${effectId}:wake`), now);
 			yield* executeBuilt(
 				effectId,
 				database,
@@ -764,10 +767,6 @@ export const layer = Layer.effect(
 						})
 				)
 			);
-			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
-				_tag: 'Wake',
-				notLaterThanEpochMs: now
-			});
 		});
 
 		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentId: AgentId) {
