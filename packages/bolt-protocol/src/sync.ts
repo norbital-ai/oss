@@ -12,7 +12,13 @@ const PositiveInteger = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan
 
 export const SYNC_CONNECTION_HEADER = 'x-bolt-sync-connection';
 export const DEFAULT_SYNC_LOADED_KEYS = 100;
-export const MAX_SYNC_LOADED_KEYS = 1_000;
+/**
+ * 10,000, raised from 1,000. Pagination across the platform maxes at 10,000, and a live query is
+ * pagination that keeps itself current — a lower ceiling here made "the list you can page through"
+ * and "the list you can watch" two different lists, which is not a distinction anybody asked for.
+ * RFC/sync-engine.md carries the amendment.
+ */
+export const MAX_SYNC_LOADED_KEYS = 10_000;
 export const MAX_SYNC_INITIAL_ANSWER_BYTES = 2 * 1024 * 1024;
 export const MAX_SYNC_OUTBOUND_FRAME_BYTES = 2 * 1024 * 1024;
 export const MAX_SYNC_RETAINED_PREFIX_BYTES = 8 * 1024 * 1024;
