@@ -541,6 +541,64 @@ describe('sync engine effective-plan compilation', () => {
 		});
 	});
 
+	it('carries the ordering fields a live selection omits instead of refusing it', () => {
+		const plan = succeed(
+			compileEffectiveQueryPlan({
+				definition,
+				rootCollection: 'projects',
+				orderBy: { name: 'asc' },
+				columns: { team: true },
+				with: { account: { columns: { name: true } }, projectTags: true },
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			})
+		);
+		expect(plan.mode).toBe('live-prefix');
+		expect(plan.projection.fields).toEqual(['team', 'name', 'id']);
+		expect(plan.execution.columns).toEqual({ team: true, name: true, id: true });
+		expect(plan.execution.with).toEqual({
+			account: { columns: { name: true, id: true } },
+			projectTags: true
+		});
+		expect(plan.projection.children.map(({ fields }) => fields)).toEqual([
+			['name', 'id'],
+			expect.arrayContaining(['id', 'project_id', 'tag_id'])
+		]);
+		const excluded = succeed(
+			compileEffectiveQueryPlan({
+				definition,
+				rootCollection: 'projects',
+				columns: { id: false },
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			})
+		);
+		expect(excluded.execution.columns).toBeUndefined();
+		expect(excluded.projection.fields).toContain('id');
+	});
+
+	it('leaves a one-shot selection exactly as authored', () => {
+		const plan = succeed(
+			compileEffectiveQueryPlan({
+				definition,
+				rootCollection: 'projects',
+				orderBy: { name: 'asc' },
+				columns: { team: true },
+				with: { account: { columns: { name: true } } },
+				after: 'cursor',
+				kind: 'findMany',
+				subject,
+				policyFor: unrestricted
+			})
+		);
+		expect(plan.mode).toBe('one-shot');
+		expect(plan.projection.fields).toEqual(['team']);
+		expect(plan.execution.columns).toEqual({ team: true });
+		expect(plan.execution.with).toEqual({ account: { columns: { name: true } } });
+	});
+
 	it('keeps the protocol predicate closed while admitting typed subject operands', () => {
 		expect(Schema.is(CollectionPredicate)({ owner_id: { eq: { $subject: 'id' } } })).toBe(true);
 		expect(Schema.is(CollectionPredicate)({ owner_id: { rawSql: 'true' } })).toBe(false);

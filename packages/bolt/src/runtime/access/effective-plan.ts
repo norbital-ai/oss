@@ -124,8 +124,7 @@ export class EffectivePlanError extends Schema.TaggedError<EffectivePlanError>()
 			'unbound-subject',
 			'unsupported-live-shape',
 			'missing-index',
-			'field-mask',
-			'projection'
+			'field-mask'
 		]),
 		node: Schema.NonEmptyString,
 		relationship: Schema.optionalKey(Schema.NonEmptyString),
@@ -1367,7 +1366,33 @@ type ProjectionResult = Readonly<{
 	readonly projection: EffectiveProjection;
 	readonly semantics: PredicateSemantics;
 	readonly fields: ReadonlyArray<EffectiveFieldRequirement>;
+	/** The authored `columns` and `with`, widened to carry the fields a live prefix is keyed by. */
+	readonly execution: Readonly<{ readonly columns?: unknown; readonly with?: unknown }>;
 }>;
+
+/**
+ * The caller's column selection, widened to carry `carried`.
+ *
+ * A live prefix is keyed by its ordering fields and the implicit `id` tie-breaker: the engine reads
+ * them off every admitted row to place it, and the browser replica addresses rows by them. A caller
+ * narrowing `columns` to what its view renders knows nothing of that, and the engine used to answer
+ * the omission with a refusal — "Live projection must include ordering field leave_types.id" — for a
+ * `with: { leave_request_type: { columns: { code: true, name: true } } }` that is exactly how a
+ * template author writes a lookup. The sentence never reached anyone: the sync host reported the
+ * status alone, the client treated the 500 as a transport blip and retried it forever, and a whole
+ * page sat on its spinner. Carrying the keys is what the caller meant; refusing taught nothing.
+ *
+ * An inclusion list gains the carried fields; an exclusion list stops excluding them, and an
+ * exclusion list left empty by that is no selection at all.
+ */
+const carryingSelection = (columns: unknown, carried: ReadonlyArray<string>): unknown => {
+	if (carried.length === 0 || !isObject(columns)) return columns;
+	const entries = Object.entries(columns);
+	if (entries.some(([, enabled]) => enabled === true))
+		return { ...columns, ...Object.fromEntries(carried.map((field) => [field, true])) };
+	const kept = entries.filter(([field]) => !carried.includes(field));
+	return kept.length === 0 ? undefined : Object.fromEntries(kept);
+};
 
 const IMPLICIT_READ_MASK_FIELDS = ['id', 'row_version'] as const;
 const effectiveReadMask = (
@@ -1458,16 +1483,13 @@ const projectionPlan = (
 				);
 		}
 	}
-	const selected = selectedFields(definition, collection, columns);
+	const authored = selectedFields(definition, collection, columns);
 	const order = normalizedOrder(definition, collection, orderBy);
 	const readMask = effectiveReadMask(policy?.fields);
-	const omittedOrderField = order.find(({ field }) => !selected.includes(field));
-	if (enforceLive && omittedOrderField !== undefined)
-		return diagnostic(
-			'projection',
-			`${node}.columns.${omittedOrderField.field}`,
-			`Live projection must include ordering field ${collection}.${omittedOrderField.field}.`
-		);
+	const carried = enforceLive
+		? order.map(({ field }) => field).filter((field) => !authored.includes(field))
+		: [];
+	const selected = [...authored, ...carried];
 	const ownFields =
 		readMask === undefined ? selected : selected.filter((field) => readMask.includes(field));
 	const fieldRequirements: Array<EffectiveFieldRequirement> = [
@@ -1479,6 +1501,7 @@ const projectionPlan = (
 		rebaseSemantics(policy?.semantics, collection, chain)
 	];
 	const children: Array<EffectiveProjection> = [];
+	const carriedWith: Record<string, unknown> = {};
 	if (withClause !== undefined) {
 		if (!isObject(withClause))
 			return diagnostic('invalid-node', node, `Projection node ${node} must be an object.`);
@@ -1559,6 +1582,17 @@ const projectionPlan = (
 			);
 			if (Result.isFailure(nested)) return failed(nested);
 			children.push({ ...nested.success.projection, relationship: relation.identity });
+			carriedWith[name] = isObject(childSpec)
+				? {
+						...childSpec,
+						...(nested.success.execution.columns === undefined
+							? {}
+							: { columns: nested.success.execution.columns }),
+						...(nested.success.execution.with === undefined
+							? {}
+							: { with: nested.success.execution.with })
+					}
+				: authored;
 			semantics.push(
 				nested.success.semantics,
 				joinSemantics(
@@ -1572,10 +1606,15 @@ const projectionPlan = (
 			fieldRequirements.push(...nested.success.fields);
 		}
 	}
+	const executedColumns = carryingSelection(columns, carried);
 	return Result.succeed({
 		projection: { collection, fields: ownFields, order, limit: levelLimit, children },
 		semantics: mergePredicateSemantics(semantics),
-		fields: fieldRequirements
+		fields: fieldRequirements,
+		execution: {
+			...(executedColumns === undefined ? {} : { columns: executedColumns }),
+			...(isObject(withClause) ? { with: carriedWith } : {})
+		}
 	});
 };
 
@@ -1732,8 +1771,7 @@ export const compileEffectiveQueryPlan = (
 		...(input.where === undefined ? {} : { where: input.where }),
 		...(input.userFilter === undefined ? {} : { userFilter: input.userFilter }),
 		...(input.orderBy === undefined ? {} : { orderBy: input.orderBy }),
-		...(input.with === undefined ? {} : { with: input.with }),
-		...(input.columns === undefined ? {} : { columns: input.columns }),
+		...projection.success.execution,
 		limit: requestedLimit,
 		...(input.after === undefined ? {} : { after: input.after }),
 		...(input.search === undefined ? {} : { search: input.search })
