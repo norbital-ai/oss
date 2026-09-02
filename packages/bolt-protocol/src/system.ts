@@ -66,6 +66,23 @@ export interface TaskControlRequest extends Schema.Schema.Type<typeof TaskContro
 export const TaskControlResult = Schema.Struct({ taskId: TaskId, status: TaskStatus });
 export interface TaskControlResult extends Schema.Schema.Type<typeof TaskControlResult> {}
 
+/**
+ * Host Task-origin execution. The browser never calls this; admit writes a `bolt_task` row
+ * that the schedule tick dispatches. `bolt_run_as` is the minted subject — do not add a
+ * top-level `subject` key; Task dispatch refuses minted identity fields.
+ */
+export const TaskExecuteRequest = Schema.Struct({
+	taskId: TaskId,
+	bolt_run_as: Schema.Json
+});
+export interface TaskExecuteRequest extends Schema.Schema.Type<typeof TaskExecuteRequest> {}
+
+export const TaskExecuteResult = Schema.Struct({
+	taskId: TaskId,
+	status: Schema.Literals(['idle', 'running', 'waiting', 'done', 'failed', 'attention'])
+});
+export interface TaskExecuteResult extends Schema.Schema.Type<typeof TaskExecuteResult> {}
+
 /** The approval state exchanged by the browser approval commands and their runtime handler. */
 export const ApprovalState = Schema.TaggedUnion({
 	Pending: {
@@ -404,6 +421,12 @@ export const SystemCommandContracts = [
 		responses: [ok(TaskControlResult)],
 		clientPath: ['tasks', 'control'],
 		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'tasks.execute',
+		input: TaskExecuteRequest,
+		responses: [ok(TaskExecuteResult)],
+		budgetKey: 'agents.turn'
 	}),
 	commandContract({
 		name: 'workspace.manifest',

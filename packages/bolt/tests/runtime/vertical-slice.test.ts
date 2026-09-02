@@ -604,7 +604,7 @@ describe('runnable Bolt vertical slice', () => {
 		const oversized: FacilityBindings = {
 			...facilities,
 			database: {
-				call: (metadata, request) => {
+				call: (metadata, request, signal) => {
 					if (
 						request._tag === 'Query' &&
 						request.sql.includes('from "employees"') &&
@@ -619,7 +619,7 @@ describe('runnable Bolt vertical slice', () => {
 							}
 						});
 					}
-					return database.call(metadata, request);
+					return database.call(metadata, request, signal);
 				}
 			}
 		};

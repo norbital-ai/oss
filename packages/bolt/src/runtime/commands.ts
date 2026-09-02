@@ -546,6 +546,20 @@ const remainingBindings = [
 	binding('tasks.control', { Command: session('TaskService.control exact task object') },
 		(context, input) =>
 			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.control(context.effectId, principal(context), input), json))),
+	binding('tasks.execute', { Task: task('Agent Task execution') },
+		(context, input) => Effect.gen(function* () {
+			const runAs = yield* Schema.decodeUnknownEffect(Subject)(input.bolt_run_as).pipe(
+				Effect.mapError(() =>
+					new AccessControl.AccessDenied({
+						action: 'invoke',
+						resource: 'tasks.execute',
+						reason: 'The runtime task carries no valid declared subject'
+					})
+				)
+			);
+			const result = yield* (yield* Agents.Service).execute(context.effectId, runAs, input.taskId);
+			return json({ taskId: result.taskId, status: result.status });
+		})),
 	binding('workspace.manifest', { Command: session('visible workspace manifest') },
 		(context) => Effect.map(workspaceManifest(context, false), json)),
 	binding('workspace.authoringManifest', { Command: session('administrator authoring manifest') },

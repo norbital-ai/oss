@@ -221,6 +221,8 @@ export {
 	TaskControlResult,
 	TaskEditMessageRequest,
 	TaskEditMessageResult,
+	TaskExecuteRequest,
+	TaskExecuteResult,
 	TaskSubmitRequest,
 	TaskSubmitResult,
 	WorkspaceAccess,

@@ -54,7 +54,12 @@
 	const { t } = useI18n();
 
 	const toolbarStatus = $derived(
-		presentWorkbenchStatus({ hostStatus, busy, previewReady: false, liveStatus })
+		presentWorkbenchStatus({
+			hostStatus,
+			busy,
+			previewReady: false,
+			...(liveStatus === undefined ? {} : { liveStatus })
+		})
 	);
 	const supportingState = $derived.by(() => {
 		if (draftCount > 0) return t('bolt.studio.unsavedFiles', { count: draftCount });

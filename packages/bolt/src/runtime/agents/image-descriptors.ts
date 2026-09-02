@@ -77,10 +77,28 @@ export function stripImageFileParts(message: Prompt.MessageEncoded): Prompt.Mess
 	if (typeof message.content === 'string') return message;
 	const content = message.content.filter((part) => part.type !== 'file');
 	if (content.length === message.content.length) return message;
-	const onlyText = content.length === 1 ? content[0] : undefined;
-	if (onlyText?.type === 'text') return { ...message, content: onlyText.text };
-	if (content.length === 0) return { ...message, content: '' };
-	return { ...message, content };
+	switch (message.role) {
+		case 'system':
+		case 'user':
+		case 'assistant': {
+			const onlyText = content.length === 1 ? content[0] : undefined;
+			if (onlyText?.type === 'text') return { ...message, content: onlyText.text };
+			if (content.length === 0) return { ...message, content: '' };
+			return { ...message, content } as Prompt.MessageEncoded;
+		}
+		case 'tool':
+			return {
+				...message,
+				content: content.filter(
+					(part): part is Prompt.ToolMessagePartEncoded =>
+						part.type === 'tool-result' || part.type === 'tool-approval-response'
+				)
+			};
+		default: {
+			const _exhaustive: never = message;
+			return _exhaustive;
+		}
+	}
 }
 
 /**

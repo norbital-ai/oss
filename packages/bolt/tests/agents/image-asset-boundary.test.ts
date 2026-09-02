@@ -39,4 +39,22 @@ describe('Task image asset boundary', () => {
 		expect(JSON.stringify(stripped)).not.toContain('"type":"file"');
 		expect(JSON.stringify(stripped)).toContain('Inspect this site');
 	});
+
+	it('keeps tool-role content as a tool-part array after stripping files', () => {
+		const stripped = stripImageFileParts({
+			role: 'tool',
+			content: [
+				{
+					type: 'tool-result',
+					id: 'call_1',
+					name: 'search',
+					isFailure: false,
+					result: { ok: true },
+					providerExecuted: false
+				}
+			]
+		});
+		expect(stripped.role).toBe('tool');
+		expect(Array.isArray(stripped.content)).toBe(true);
+	});
 });

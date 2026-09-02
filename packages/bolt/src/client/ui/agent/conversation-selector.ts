@@ -15,12 +15,20 @@ const AgentTask = Schema.Struct({
 	id: TaskId,
 	agent_id: AgentId,
 	audience: TaskAudience,
-	parent_id: Schema.NullOr(TaskId),
+	parent_id: Schema.optionalKey(Schema.NullOr(TaskId)),
 	status: TaskStatus,
-	active_plan_id: Schema.NullOr(PlanId),
-	active_run_id: Schema.NullOr(RunId)
+	active_plan_id: Schema.optionalKey(Schema.NullOr(PlanId)),
+	active_run_id: Schema.optionalKey(Schema.NullOr(RunId))
 });
-export type AgentTask = typeof AgentTask.Type;
+export type AgentTask = Readonly<{
+	id: typeof TaskId.Type;
+	agent_id: typeof AgentId.Type;
+	audience: typeof TaskAudience.Type;
+	parent_id: typeof TaskId.Type | null;
+	status: typeof TaskStatus.Type;
+	active_plan_id: typeof PlanId.Type | null;
+	active_run_id: typeof RunId.Type | null;
+}>;
 
 const decodeAgentTask = Schema.decodeUnknownOption(AgentTask);
 
@@ -28,7 +36,19 @@ const decodeAgentTask = Schema.decodeUnknownOption(AgentTask);
 export function projectAgentTasks(rows: readonly unknown[]): AgentTask[] {
 	return rows.flatMap((row) => {
 		const decoded = decodeAgentTask(row);
-		return Option.isSome(decoded) ? [decoded.value] : [];
+		if (Option.isNone(decoded)) return [];
+		const task = decoded.value;
+		return [
+			{
+				id: task.id,
+				agent_id: task.agent_id,
+				audience: task.audience,
+				parent_id: task.parent_id ?? null,
+				status: task.status,
+				active_plan_id: task.active_plan_id ?? null,
+				active_run_id: task.active_run_id ?? null
+			}
+		];
 	});
 }
 

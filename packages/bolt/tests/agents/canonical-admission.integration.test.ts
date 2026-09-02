@@ -50,6 +50,14 @@ describe('canonical Task admission vertical slice', () => {
 		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 0 }]);
 		expect(
 			await harness.database.query(
+				`select command, status, input->>'taskId' as task_id
+				 from bolt_task
+				 where effect_id = $1`,
+				[`tasks.execute:${taskId}:${admitted.directiveId}`]
+			)
+		).toEqual([{ command: 'tasks.execute', status: 'pending', task_id: taskId }]);
+		expect(
+			await harness.database.query(
 				`select task.status, message.message->>'role' as role,
 					inbox.state, inbox.claimed_run_id
 				 from agent_task task

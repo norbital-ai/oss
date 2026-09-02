@@ -43,7 +43,9 @@ import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { RemoteRegistry } from '#lib/runtime/collections/authored.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
+import * as Database from '#lib/runtime/facilities/database.js';
 import {
 	AI,
 	Connector,
@@ -51,6 +53,7 @@ import {
 	Tasks,
 	type AIInterface
 } from '#lib/runtime/facilities/services.js';
+import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
@@ -79,6 +82,9 @@ export {
 	SkillError,
 	ToolNotAllowed
 } from './capability-catalog.js';
+
+const { bolt_task: boltTaskTable } = SYSTEM_MODEL_TABLES;
+const encodeSubject = Schema.encodeSync(Identity.Subject);
 
 class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()(
 	'Bolt.TaskRuntime.Error',
@@ -716,9 +722,53 @@ export const layer = Layer.effect(
 		const collections = yield* Collections.Service;
 		const ai = yield* AI.Service;
 		const tasks = yield* Tasks.Service;
+		const database = yield* Database.Service;
 		const hostTools = yield* HostTools.Service;
 		const connector = yield* Connector.Service;
 		const remotes = yield* RemoteRegistry;
+
+		/**
+		 * Durable execute: write the `bolt_task` row first, then Wake. A wake with no row is an
+		 * empty host pass; a row with no wake waits for unrelated traffic.
+		 */
+		const enqueueExecute = Effect.fn('Agents.enqueueExecute')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			taskId: TaskId,
+			slot: string
+		) {
+			const now = yield* Clock.currentTimeMillis;
+			const rowEffectId = `tasks.execute:${taskId}:${slot}`;
+			yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.insert(boltTaskTable)
+					.values({
+						command: 'tasks.execute',
+						input: JSON.stringify({
+							taskId,
+							bolt_run_as: encodeSubject(subject)
+						}),
+						effect_id: rowEffectId,
+						run_at: new Date(now).toISOString(),
+						status: 'pending'
+					})
+					.onConflictDoNothing({ target: boltTaskTable.effect_id })
+			).pipe(
+				Effect.mapError(
+					(error) =>
+						new TaskRuntimeError({
+							operation: 'enqueue',
+							message: error instanceof Error ? error.message : String(error)
+						})
+				)
+			);
+			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
+				_tag: 'Wake',
+				notLaterThanEpochMs: now
+			});
+		});
 
 		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentId: AgentId) {
 			if (agentId === WEB_AGENT_NAME) {
@@ -1003,6 +1053,7 @@ export const layer = Layer.effect(
 					const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: DirectiveId }))(
 						directive
 					);
+					yield* enqueueExecute(effectId, subject, input.taskId, decoded.id);
 					return { directiveId: decoded.id };
 				}
 			}
@@ -1020,10 +1071,6 @@ export const layer = Layer.effect(
 				inbox
 			);
 			const inboxSequence = inboxRows[0]?.sequence ?? 0;
-			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
-				_tag: 'Wake',
-				notLaterThanEpochMs: yield* Clock.currentTimeMillis
-			});
 			const message = {
 				id: messageId,
 				task_id: input.taskId,
@@ -1087,6 +1134,7 @@ export const layer = Layer.effect(
 					directives: completeDirectives
 				});
 			}
+			yield* enqueueExecute(effectId, subject, input.taskId, directiveId);
 			return { directiveId } satisfies TaskSubmitResult;
 		});
 
@@ -1494,10 +1542,7 @@ export const layer = Layer.effect(
 				epoch,
 				runs: completeRuns
 			});
-			yield* tasks.execute(EffectId.make(`${effectId}:wake`), {
-				_tag: 'Wake',
-				notLaterThanEpochMs: yield* Clock.currentTimeMillis
-			});
+			yield* enqueueExecute(effectId, subject, parent.id, `wake:${epoch}`);
 		});
 
 		const previousTodo = (

@@ -509,7 +509,6 @@
 					onSuccess: (result) => {
 						selectedTaskId = result.taskId;
 						composingNew = false;
-						unsettledAdmission = null;
 						draft = '';
 						revisedMessage = null;
 						clearPendingImages();
@@ -927,9 +926,11 @@
 								/>
 							{/each}
 						</ol>
-						{#each directChildren(activeTask.id) as child (child.id)}
-							{@render childConversation(child)}
-						{/each}
+						{#if activeTask}
+							{#each directChildren(activeTask.id) as child (child.id)}
+								{@render childConversation(child)}
+							{/each}
+						{/if}
 					</Stack>
 				{/if}
 			{/if}
