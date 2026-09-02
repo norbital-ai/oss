@@ -1028,7 +1028,7 @@ function observationsFor(id: string, docs: ReadonlyMap<string, Documented>): Rea
 				id,
 				source,
 				expect: 'fire',
-				file: document.file,
+				...(document.file === undefined ? {} : { file: document.file }),
 				fixture: document.fixture
 			});
 		for (const source of document.good)
@@ -1036,7 +1036,7 @@ function observationsFor(id: string, docs: ReadonlyMap<string, Documented>): Rea
 				id,
 				source,
 				expect: 'quiet',
-				file: document.file,
+				...(document.file === undefined ? {} : { file: document.file }),
 				fixture: document.fixture
 			});
 	}
