@@ -22,7 +22,7 @@ const LOCAL_DATABASE_TEST_TIMEOUT_MILLIS = 90_000;
 const OBSCURA_RSS_CEILING_BYTES = 64 * 1024 * 1024;
 
 const configuration = ServerConfiguration.make({
-	host: '127.0.0.1',
+	host: '0.0.0.0',
 	port: 0,
 	bundlePath: fixturePath,
 	scope: {
@@ -79,7 +79,7 @@ it.effect(
 								),
 								(application) =>
 									Effect.gen(function* () {
-										const base = `http://${application.address.host}:${application.address.port}`;
+										const base = `http://127.0.0.1:${application.address.port}`;
 										const ready = yield* Effect.tryPromise(() => fetch(`${base}/readyz`));
 										assert.strictEqual(ready.status, 200);
 

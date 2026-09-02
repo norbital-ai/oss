@@ -397,7 +397,7 @@ describe('bolt-server Sync v2 host', () => {
 		})
 	);
 
-	it('closes before admitting an oversized initial prefix', async () => {
+	it('refuses an oversized initial prefix without closing the stream', async () => {
 		const baseline = makeBridge({});
 		const host = makeSyncHost({
 			...baseline,
@@ -445,7 +445,9 @@ describe('bolt-server Sync v2 host', () => {
 			})
 		).rejects.toThrow(/encoded byte ceiling/u);
 		assert.deepStrictEqual(probe.frames, []);
-		assert.deepStrictEqual(probe.closed, ['guest-failed']);
+		// The prefix is released, not admitted. Detaching here closed the physical
+		// EventSource and 410'd every other live query that still owned it.
+		assert.deepStrictEqual(probe.closed, []);
 	});
 
 	it('closes a consumer before an oversized apply frame reaches its sink', async () => {
