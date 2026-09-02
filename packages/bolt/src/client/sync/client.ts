@@ -12,6 +12,7 @@ import type {
 import { getErrorMessage } from '@norbital-ai/std';
 import { stableKey } from '../live-query/stable-key.js';
 import type { BrowserSyncScope } from './sse-driver.js';
+import { SyncHttpError } from './http-driver.js';
 import {
 	DETACH_GRACE_MS,
 	STALE_WRITE_MS,
@@ -92,14 +93,29 @@ const sameScope = (left: BrowserSyncScope, right: BrowserSyncScope): boolean =>
 	left.environment === right.environment &&
 	left.releaseId === right.releaseId;
 
-const attachmentError = (cause: unknown): SyncAttachmentError =>
-	cause instanceof SyncAttachmentError
-		? cause
-		: new SyncAttachmentError(
-				'transport',
-				getErrorMessage(cause),
-				{ cause }
-			);
+const httpStatusOf = (cause: unknown): number | undefined => {
+	if (cause instanceof SyncHttpError) return cause.status;
+	if (cause instanceof SyncAttachmentError) return httpStatusOf(cause.cause);
+	return undefined;
+};
+
+const attachmentError = (cause: unknown): SyncAttachmentError => {
+	if (cause instanceof SyncAttachmentError) return cause;
+	if (cause instanceof SyncHttpError) {
+		const kind: SyncAttachmentFailureKind =
+			cause.status === 409
+				? 'prefix-reset'
+				: cause.terminal && cause.status !== 410
+					? 'terminal'
+					: 'transport';
+		return new SyncAttachmentError(kind, cause.message, { cause });
+	}
+	return new SyncAttachmentError('transport', getErrorMessage(cause), { cause });
+};
+
+/** Session/protocol refusals that the current EventSource cannot recover from. */
+const sessionTerminalStatus = (status: number | undefined): boolean =>
+	status === 401 || status === 403 || status === 426;
 
 const ownedFrame = (frame: SyncApplyFrame, state: ClientState): SyncApplyFrame => ({
 	updates: frame.updates.filter(({ queryKey }) => state.queries.has(queryKey)),
@@ -226,7 +242,25 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 				if (isActive(attachment))
 					dispatch({ kind: 'registered', response, at: Date.now(), requestedKeys });
 			},
-			(failure) => disconnectAttachment(attachment, failure)
+			(failure) => {
+				if (sessionTerminalStatus(httpStatusOf(failure))) {
+					disconnectAttachment(attachment, failure);
+					return;
+				}
+				// A 400 on a live link is an authored refusal for those keys — retrying it
+				// forever is learning 59. A 500/503/transport failure is not: the EventSource
+				// is still the live one, and the next register may succeed.
+				if (state.link === 'live' && httpStatusOf(failure) === 400) {
+					dispatch({
+						kind: 'registrationRejected',
+						keys: requestedKeys,
+						message: failure.message,
+						terminal: true
+					});
+					return;
+				}
+				disconnectAttachment(attachment, failure);
+			}
 		);
 	};
 

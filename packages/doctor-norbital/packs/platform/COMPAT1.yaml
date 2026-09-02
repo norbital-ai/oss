@@ -1,0 +1,19 @@
+id: COMPAT1
+summary: explicit legacy or compatibility forwarding surface
+severity: error
+principles: [simplicity, straightforwardness, modularity, colocation, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: VariableStatement
+        - kind: FunctionDeclaration
+    - has:
+        all:
+          - kind: trivia:LineComment
+          - regex: '\b(?:compatibility|compat|backwards[- ]compatible|legacy)\s+(?:forwarder|shim|alias|export)'
+      stopBy: end
+examples:
+  bad:
+    - "// legacy forwarder for the old name\nexport const oldName = newName;"
+  good:
+    - 'export const name = newName;'

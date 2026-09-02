@@ -8,6 +8,16 @@ export type UnsettledTaskAdmission = Readonly<{
 	draft: string;
 }>;
 
+/**
+ * Paints the operator's text immediately. Once the Task row is a live findMany fact, the
+ * unsettled admission is dropped so the durable message is the only copy on screen.
+ */
+export const visibleUnsettledAdmission = (
+	admission: UnsettledTaskAdmission | null,
+	knownTaskIds: ReadonlySet<string>
+): UnsettledTaskAdmission | null =>
+	admission !== null && knownTaskIds.has(admission.taskId) ? null : admission;
+
 /** Reuses a Task ID only for an exact retry of the same canonical submission identity. */
 export const retryableAdmission = (
 	admission: UnsettledTaskAdmission | null,

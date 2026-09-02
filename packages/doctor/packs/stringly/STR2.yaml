@@ -1,0 +1,17 @@
+id: STR2
+summary: tests an open-domain identifier against a literal allowlist
+severity: error
+principles: [straightforwardness, type-safety, testability]
+rule:
+  all:
+    - kind: CallExpression
+    - fact:
+        name: openDomainIdentifier
+        shape: membership
+        properties: '^(?:name|slug|handle|title|label|displayName|email|username|teamName|collectionName|workspaceName)$'
+        entities: '^(?:team|teams|collection|collections|workspace|tenant|policy|policies|app|apps|role|group|member|organization|org|project)$'
+examples:
+  bad:
+    - 'export const listed = ["Engineering", "Ops"].includes(team.name);'
+  good:
+    - 'export const listed = names.includes(team.name);'

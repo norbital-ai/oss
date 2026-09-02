@@ -8,7 +8,7 @@
 		reviewFreshnessMessageKey,
 		reviewOwnerMessageKey,
 		reviewRelativeTime,
-		type ReleaseRequest
+		type MergeRequest
 	} from '#lib/client/ui/studio/studio-state.js';
 
 	let {
@@ -17,7 +17,7 @@
 		currentReleaseId,
 		onselect
 	}: {
-		requests?: ReadonlyArray<ReleaseRequest>;
+		requests?: ReadonlyArray<MergeRequest>;
 		selectedRequestId?: string | undefined;
 		currentReleaseId?: string | undefined;
 		onselect?: ((requestId: string) => void) | undefined;
@@ -45,9 +45,9 @@
 
 <Stack gap="none" fill class="bg-card" data-testid="studio-review-sidebar">
 	<Stack gap="xs" shrink={false} class="border-b border-border/60 px-2 py-1.5">
-		{@render sidebarHeading('lucide:git-pull-request', t('bolt.studio.reviews'))}
+		{@render sidebarHeading('lucide:git-pull-request', t('bolt.studio.changes'))}
 	</Stack>
-	<Scroll name={t('bolt.studio.reviews')} layout="stack" gap="xs" grow class="min-h-0 p-2">
+	<Scroll name={t('bolt.studio.changes')} layout="stack" gap="xs" grow class="min-h-0 p-2">
 		{#if ordered.length === 0}
 			<p class="px-1 py-2 text-micro text-muted-foreground">{t('bolt.studio.noReviews')}</p>
 		{:else}
@@ -55,7 +55,7 @@
 				<button
 					type="button"
 					data-testid="studio-release-request-option"
-					data-status={request.status}
+					data-status={request.state}
 					class={cn(
 						'w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70',
 						request.id === selected?.id && 'bg-primary/5'
@@ -63,11 +63,11 @@
 					onclick={() => onselect?.(request.id)}
 				>
 					<span class="block truncate text-xs font-medium text-foreground">
-						{request.authorId}
+						{request.openedBy}
 					</span>
 					<span class="block truncate font-mono text-micro text-muted-foreground">
 						{t('bolt.studio.baseCommit', {
-							commit: request.commit.slice(0, 12),
+							commit: request.head.slice(0, 12),
 							base: request.baseCommit.slice(0, 12)
 						})}
 					</span>

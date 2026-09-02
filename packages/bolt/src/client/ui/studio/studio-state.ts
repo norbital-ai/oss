@@ -98,19 +98,29 @@ export const HostSnapshotSchema = Schema.Struct({
 		})
 	),
 	conflicts: Schema.Array(Schema.NonEmptyString),
-	releaseRequests: Schema.Array(
+	mergeRequests: Schema.Array(
 		Schema.Struct({
 			id: Schema.NonEmptyString,
 			tenantId: Schema.NonEmptyString,
 			environmentId: Schema.NonEmptyString,
 			workspaceKey: Schema.NonEmptyString,
-			authorId: Schema.NonEmptyString,
-			commit: Schema.NonEmptyString,
-			baseCommit: Schema.NonEmptyString,
-			previewEnvironmentId: Schema.NonEmptyString,
-			baseReleaseId: Schema.NullOr(Schema.NonEmptyString),
-			releaseId: Schema.NonEmptyString,
+			openedBy: Schema.NonEmptyString,
+			trackedBy: Schema.Array(Schema.NonEmptyString),
+			title: Schema.String,
+			commits: Schema.Array(
+				Schema.Struct({
+					commit: Schema.NonEmptyString,
+					by: Schema.NonEmptyString,
+					at: Schema.String,
+					message: Schema.String
+				})
+			),
+			head: Schema.NonEmptyString,
 			artifactId: Schema.NonEmptyString,
+			releaseId: Schema.NonEmptyString,
+			previewEnvironmentId: Schema.NonEmptyString,
+			baseCommit: Schema.NonEmptyString,
+			baseReleaseId: Schema.NullOr(Schema.NonEmptyString),
 			checksum: Schema.NonEmptyString,
 			schemaPlan: Schema.Struct({
 				fingerprint: Schema.NonEmptyString,
@@ -118,17 +128,68 @@ export const HostSnapshotSchema = Schema.Struct({
 					Schema.Struct({ id: Schema.NonEmptyString, sql: Schema.NonEmptyString })
 				)
 			}),
-			status: Schema.Literals(['open', 'approving', 'approved', 'changes_requested', 'rejected']),
-			reason: Schema.NullOr(Schema.String),
+			state: Schema.Literals(['draft', 'ready', 'merged', 'closed']),
+			decision: Schema.NullOr(
+				Schema.Struct({
+					kind: Schema.Literals(['approved', 'changes_requested', 'rejected']),
+					commit: Schema.NonEmptyString,
+					by: Schema.NonEmptyString,
+					at: Schema.String,
+					reason: Schema.NullOr(Schema.String)
+				})
+			),
 			createdAt: Schema.String,
 			updatedAt: Schema.String,
-			buildReceipt: Schema.Struct({
-				effectId: Schema.String,
-				commit: Schema.String,
-				outcome: Schema.Literals(['succeeded', 'failed', 'migration_required']),
-				summary: Schema.String
+			buildReceipt: WorkbenchBuildReceiptSchema,
+			deployLog: Schema.Array(
+				Schema.Struct({
+					at: Schema.String,
+					level: Schema.NonEmptyString,
+					line: Schema.String
+				})
+			),
+			changedFiles: Schema.Array(SourceFileChangeSchema),
+			diagnosis: Schema.Struct({
+				sourceDigest: Schema.NonEmptyString,
+				ranAt: Schema.String,
+				origin: Schema.Literals(['diagnose', 'preview']),
+				errors: Schema.Number,
+				warnings: Schema.Number,
+				hints: Schema.Number,
+				findings: Schema.Array(
+					Schema.Struct({
+						severity: Schema.Literals(['error', 'warning', 'hint']),
+						rule: Schema.String,
+						summary: Schema.String,
+						location: Schema.String,
+						principles: Schema.Array(Schema.String)
+					})
+				)
 			}),
-			changedFiles: Schema.Array(SourceFileChangeSchema)
+			manifest: Schema.Struct({
+				artifactId: Schema.NonEmptyString,
+				checksum: Schema.NonEmptyString
+			})
+		})
+	),
+	tracking: Schema.Union([Schema.Literal('live'), Schema.NonEmptyString]),
+	diagnosis: Schema.NullOr(
+		Schema.Struct({
+			sourceDigest: Schema.NonEmptyString,
+			ranAt: Schema.String,
+			origin: Schema.Literals(['diagnose', 'preview']),
+			errors: Schema.Number,
+			warnings: Schema.Number,
+			hints: Schema.Number,
+			findings: Schema.Array(
+				Schema.Struct({
+					severity: Schema.Literals(['error', 'warning', 'hint']),
+					rule: Schema.String,
+					summary: Schema.String,
+					location: Schema.String,
+					principles: Schema.Array(Schema.String)
+				})
+			)
 		})
 	),
 	needsRebase: Schema.Boolean,
@@ -144,18 +205,361 @@ export const HostSnapshotSchema = Schema.Struct({
 		})
 	),
 	deploymentHistory: Schema.Array(Schema.NonEmptyString),
-	facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean })),
-	buildReceipt: Schema.optionalKey(WorkbenchBuildReceiptSchema)
+	releases: Schema.Array(
+		Schema.Struct({
+			releaseId: Schema.NonEmptyString,
+			buildLog: Schema.optionalKey(WorkbenchBuildReceiptSchema),
+			deployLog: Schema.Array(
+				Schema.Struct({
+					at: Schema.String,
+					level: Schema.NonEmptyString,
+					line: Schema.String
+				})
+			)
+		})
+	),
+	facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean }))
 });
 export type HostSnapshot = typeof HostSnapshotSchema.Type;
 export type MatrixEntry = HostSnapshot['entries'][number];
 type UsageObservation = HostSnapshot['usage'][number];
 type SourceSnapshot = HostSnapshot['source'];
-export type ReleaseRequest = HostSnapshot['releaseRequests'][number];
-type ReleaseRequestStatus = ReleaseRequest['status'];
+export type MergeRequest = HostSnapshot['mergeRequests'][number];
+export type ReleaseRequest = MergeRequest;
+export type ReleaseEvidence = HostSnapshot['releases'][number];
 
-export type StudioRootTab = 'workbench' | 'review';
-export type WorkbenchView = 'manifest' | 'editor';
+export const evidenceLogs = (
+	snapshot: HostSnapshot | undefined
+): Readonly<{
+	readonly build: WorkbenchBuildReceipt | undefined;
+	readonly deploy: ReleaseEvidence['deployLog'];
+}> => {
+	if (snapshot === undefined) return { build: undefined, deploy: [] };
+	const tracked =
+		snapshot.tracking === 'live'
+			? undefined
+			: snapshot.mergeRequests.find((request) => request.id === snapshot.tracking);
+	const open =
+		tracked ??
+		[...snapshot.mergeRequests]
+			.reverse()
+			.find((request) => request.state === 'draft' || request.state === 'ready');
+	if (open !== undefined) return { build: open.buildReceipt, deploy: open.deployLog };
+	const routed = currentRoutedRelease(snapshot.entries);
+	const release =
+		snapshot.releases.find((entry) => entry.releaseId === routed?.releaseId) ??
+		snapshot.releases.at(-1);
+	return { build: release?.buildLog, deploy: release?.deployLog ?? [] };
+};
+type MergeRequestState = MergeRequest['state'];
+
+export const STUDIO_ROOT_TABS = ['workbench', 'changes', 'live'] as const;
+export type StudioRootTab = (typeof STUDIO_ROOT_TABS)[number];
+
+export const CHANGES_VIEWS = ['manifest', 'files', 'data', 'conversation', 'logs'] as const;
+export type ChangesView = (typeof CHANGES_VIEWS)[number];
+
+export type StudioOwnedSurface = 'manifest' | 'logs' | 'lifecycle' | 'diagnosis';
+
+export const isStudioRootTab = (value: string): value is StudioRootTab => {
+	switch (value) {
+		case 'workbench':
+		case 'changes':
+		case 'live':
+			return true;
+		default:
+			return false;
+	}
+};
+
+export const isChangesView = (value: string): value is ChangesView => {
+	switch (value) {
+		case 'manifest':
+		case 'files':
+		case 'data':
+		case 'conversation':
+		case 'logs':
+			return true;
+		default:
+			return false;
+	}
+};
+
+export const studioTabOwns = (tab: StudioRootTab, surface: StudioOwnedSurface): boolean => {
+	switch (tab) {
+		case 'workbench':
+			return surface === 'diagnosis';
+		case 'changes':
+			return surface === 'manifest' || surface === 'logs' || surface === 'lifecycle';
+		case 'live':
+			return surface === 'manifest' || surface === 'logs';
+		default: {
+			const unhandled: never = tab;
+			throw new Error(`Unhandled studio tab: ${String(unhandled)}`);
+		}
+	}
+};
+
+export const studioTabOwnership = (
+	tab: StudioRootTab
+): Readonly<{
+	readonly manifest: boolean;
+	readonly logs: boolean;
+	readonly lifecycle: boolean;
+	readonly diagnosis: boolean;
+}> => ({
+	manifest: studioTabOwns(tab, 'manifest'),
+	logs: studioTabOwns(tab, 'logs'),
+	lifecycle: studioTabOwns(tab, 'lifecycle'),
+	diagnosis: studioTabOwns(tab, 'diagnosis')
+});
+
+export type WorkbenchDiffBaselineKey =
+	| 'bolt.studio.diff.againstMrHead'
+	| 'bolt.studio.diff.againstLive';
+
+export const workbenchDiffBaselineKey = (
+	tracking: HostSnapshot['tracking'] | undefined
+): WorkbenchDiffBaselineKey =>
+	tracking === undefined || tracking === 'live'
+		? 'bolt.studio.diff.againstLive'
+		: 'bolt.studio.diff.againstMrHead';
+
+export const CHANGES_DIFF_BASELINE_KEY = 'bolt.studio.diff.againstBase' as const;
+
+export const trackedMergeRequest = (
+	snapshot: HostSnapshot | undefined
+): MergeRequest | undefined => {
+	if (snapshot === undefined || snapshot.tracking === 'live') return undefined;
+	return snapshot.mergeRequests.find((request) => request.id === snapshot.tracking);
+};
+
+export const newCommitsBehindHead = (input: {
+	readonly sourceCommit: string | undefined;
+	readonly tracking: HostSnapshot['tracking'] | undefined;
+	readonly mergeRequests: ReadonlyArray<MergeRequest>;
+}): number => {
+	if (input.tracking === undefined || input.tracking === 'live') return 0;
+	const request = input.mergeRequests.find((row) => row.id === input.tracking);
+	if (request === undefined) return 0;
+	if (input.sourceCommit === undefined || input.sourceCommit === request.head) return 0;
+	const index = request.commits.findIndex((row) => row.commit === input.sourceCommit);
+	if (index === -1) return request.commits.length;
+	return Math.max(0, request.commits.length - index - 1);
+};
+
+export const LIFECYCLE_RAIL = ['draft', 'ready', 'merged'] as const;
+export type LifecycleRailStage = (typeof LIFECYCLE_RAIL)[number];
+
+export const lifecycleRailMessageKey = (
+	stage: LifecycleRailStage
+):
+	| 'bolt.studio.lifecycle.draft'
+	| 'bolt.studio.lifecycle.ready'
+	| 'bolt.studio.lifecycle.merged' => {
+	switch (stage) {
+		case 'draft':
+			return 'bolt.studio.lifecycle.draft';
+		case 'ready':
+			return 'bolt.studio.lifecycle.ready';
+		case 'merged':
+			return 'bolt.studio.lifecycle.merged';
+		default: {
+			const unhandled: never = stage;
+			throw new Error(`Unhandled lifecycle stage: ${String(unhandled)}`);
+		}
+	}
+};
+
+export const lifecycleRailCurrent = (
+	state: MergeRequestState
+): LifecycleRailStage | 'closed' => {
+	switch (state) {
+		case 'draft':
+			return 'draft';
+		case 'ready':
+			return 'ready';
+		case 'merged':
+			return 'merged';
+		case 'closed':
+			return 'closed';
+		default: {
+			const unhandled: never = state;
+			throw new Error(`Unhandled merge request state: ${String(unhandled)}`);
+		}
+	}
+};
+
+export const lifecycleRailReached = (
+	state: MergeRequestState,
+	stage: LifecycleRailStage
+): boolean => {
+	if (state === 'closed') return false;
+	if (stage === 'draft') return true;
+	if (stage === 'ready') return state === 'ready' || state === 'merged';
+	return state === 'merged';
+};
+
+export const boundTriple = (
+	request: MergeRequest
+): Readonly<{
+	readonly commit: string;
+	readonly bundle: string;
+	readonly fork: string;
+}> => ({
+	commit: request.head,
+	bundle: request.artifactId,
+	fork: request.previewEnvironmentId
+});
+
+export const canWorkOnMergeRequest = (
+	request: MergeRequest,
+	tracking: HostSnapshot['tracking'] | undefined
+): boolean =>
+	(request.state === 'draft' || request.state === 'ready') && request.id !== tracking;
+
+export const mergeRequestEvidence = (
+	request: MergeRequest | undefined
+): ReturnType<typeof evidenceLogs> => {
+	if (request === undefined) return { build: undefined, deploy: [] };
+	return { build: request.buildReceipt, deploy: request.deployLog };
+};
+
+export type LiveReleaseRow = Readonly<{
+	readonly releaseId: string;
+	readonly artifactId: string | undefined;
+	readonly current: boolean;
+	readonly build: WorkbenchBuildReceipt | undefined;
+	readonly deploy: ReleaseEvidence['deployLog'];
+}>;
+
+export const liveReleaseTimeline = (
+	snapshot: HostSnapshot | undefined
+): ReadonlyArray<LiveReleaseRow> => {
+	if (snapshot === undefined) return [];
+	const current = currentRoutedRelease(snapshot.entries);
+	const evidence = new Map(snapshot.releases.map((row) => [row.releaseId, row]));
+	const artifactByRelease = new Map(
+		snapshot.entries
+			.filter((row) => row.releaseId !== '')
+			.map((row) => [row.releaseId, row.artifactId])
+	);
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	const push = (id: string): void => {
+		if (id === '' || seen.has(id)) return;
+		seen.add(id);
+		ids.push(id);
+	};
+	if (current !== undefined) push(current.releaseId);
+	for (const id of [...snapshot.deploymentHistory].reverse()) push(id);
+	for (const row of [...snapshot.releases].reverse()) push(row.releaseId);
+	return ids.map((releaseId) => {
+		const row = evidence.get(releaseId);
+		return {
+			releaseId,
+			artifactId: artifactByRelease.get(releaseId),
+			current: current?.releaseId === releaseId,
+			build: row?.buildLog,
+			deploy: row?.deployLog ?? []
+		};
+	});
+};
+
+export type SourceFileMark = 'M' | 'A' | 'D';
+
+export const sourceFileMark = (
+	path: string,
+	drafts: Readonly<Record<string, string>>,
+	sourceFiles: Readonly<Record<string, string>>
+): SourceFileMark | undefined => {
+	if (!Object.hasOwn(drafts, path)) return undefined;
+	const existed = Object.hasOwn(sourceFiles, path);
+	if (!existed) return 'A';
+	if ((drafts[path] ?? '') === '') return 'D';
+	return 'M';
+};
+
+export const sourceTreeHasDirtyDescendant = (
+	directoryPath: string,
+	drafts: Readonly<Record<string, string>>,
+	sourceFiles: Readonly<Record<string, string>>
+): boolean => {
+	const prefix = directoryPath === '' ? '' : `${directoryPath}/`;
+	return Object.keys(drafts).some(
+		(path) =>
+			(prefix === '' || path.startsWith(prefix)) &&
+			sourceFileMark(path, drafts, sourceFiles) !== undefined
+	);
+};
+
+export const sourceTreeEntryBadge = (
+	entry: Readonly<{ readonly type: 'directory' | 'file'; readonly path: string }>,
+	drafts: Readonly<Record<string, string>>,
+	sourceFiles: Readonly<Record<string, string>>
+): Readonly<{ readonly label: string; readonly class?: string }> | null => {
+	if (entry.type === 'directory') {
+		return sourceTreeHasDirtyDescendant(entry.path, drafts, sourceFiles)
+			? { label: '·' }
+			: null;
+	}
+	const mark = sourceFileMark(entry.path, drafts, sourceFiles);
+	if (mark === undefined) return null;
+	switch (mark) {
+		case 'M':
+			return { label: 'M', class: 'text-amber-700 dark:text-amber-300' };
+		case 'A':
+			return { label: 'A', class: 'text-emerald-700 dark:text-emerald-300' };
+		case 'D':
+			return { label: 'D', class: 'text-destructive' };
+		default: {
+			const unhandled: never = mark;
+			throw new Error(`Unhandled source file mark: ${String(unhandled)}`);
+		}
+	}
+};
+
+export type DiagnosisFinding = NonNullable<HostSnapshot['diagnosis']>['findings'][number];
+
+export type WorkbenchDiagnosisState = 'missing' | 'stale' | 'errors' | 'clean';
+
+export const workbenchDiagnosisState = (input: {
+	readonly diagnosis: HostSnapshot['diagnosis'];
+	readonly draftCount: number;
+}): WorkbenchDiagnosisState => {
+	if (input.diagnosis == null) return 'missing';
+	if (input.draftCount > 0) return 'stale';
+	if (input.diagnosis.errors > 0) return 'errors';
+	return 'clean';
+};
+
+export const diagnosisFindingPath = (location: string): string =>
+	location.split(':')[0] ?? location;
+
+export const diagnosisFindingsByFile = (
+	findings: ReadonlyArray<DiagnosisFinding>
+): ReadonlyArray<{
+	readonly file: string;
+	readonly findings: ReadonlyArray<DiagnosisFinding>;
+}> => {
+	const groups = new Map<string, DiagnosisFinding[]>();
+	for (const finding of findings) {
+		const file = diagnosisFindingPath(finding.location);
+		groups.set(file, [...(groups.get(file) ?? []), finding]);
+	}
+	return [...groups.entries()]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([file, rows]) => ({ file, findings: rows }));
+};
+
+export const schemaPlanSentence = (sql: string): string => {
+	const first = sql.split('\n').find((line) => line.trim() !== '')?.trim() ?? sql;
+	return first.endsWith(';') ? first.slice(0, -1) : first;
+};
+
+export const policyActionVerbs = (
+	grants: ReadonlyArray<{ readonly action: string }>
+): string => [...new Set(grants.map((grant) => grant.action))].join(' · ');
 
 type ReviewFreshness = 'current' | 'live_advanced' | 'terminal';
 type ReviewNextOwner = 'author' | 'reviewer' | 'complete';
@@ -173,51 +577,53 @@ export const workbenchPreviewState = (input: {
 };
 
 export const reviewFreshness = (
-	request: ReleaseRequest,
+	request: MergeRequest,
 	currentReleaseId: string | undefined
 ): ReviewFreshness =>
-	request.status === 'approved' ||
-	request.status === 'changes_requested' ||
-	request.status === 'rejected'
+	request.state === 'merged' || request.state === 'closed'
 		? 'terminal'
 		: request.baseReleaseId === (currentReleaseId ?? null)
 			? 'current'
 			: 'live_advanced';
 
 export const reviewNextOwner = (
-	status: ReleaseRequestStatus,
-	freshness: ReviewFreshness = 'current'
+	state: MergeRequestState,
+	freshness: ReviewFreshness = 'current',
+	decision: MergeRequest['decision'] = null
 ): ReviewNextOwner => {
-	if (freshness === 'live_advanced' && (status === 'open' || status === 'approving'))
-		return 'author';
-	if (status === 'changes_requested') return 'author';
-	if (status === 'open' || status === 'approving') return 'reviewer';
-	return 'complete';
+	if (state === 'merged' || state === 'closed') return 'complete';
+	if (freshness === 'live_advanced') return 'author';
+	if (decision?.kind === 'changes_requested') return 'author';
+	if (state === 'ready') return 'reviewer';
+	return 'author';
 };
 
-export const reviewStatusMessageKey = (status: ReleaseRequestStatus) => {
-	if (status === 'open') return 'bolt.studio.reviewStatus.open';
-	if (status === 'approving') return 'bolt.studio.reviewStatus.approving';
-	if (status === 'approved') return 'bolt.studio.reviewStatus.approved';
-	if (status === 'changes_requested') return 'bolt.studio.reviewStatus.changesRequested';
+export const reviewStatusMessageKey = (state: MergeRequestState) => {
+	if (state === 'draft') return 'bolt.studio.reviewStatus.open';
+	if (state === 'ready') return 'bolt.studio.reviewStatus.approving';
+	if (state === 'merged') return 'bolt.studio.reviewStatus.approved';
 	return 'bolt.studio.reviewStatus.rejected';
 };
 
 export const reviewFreshnessMessageKey = (
-	request: ReleaseRequest,
+	request: MergeRequest,
 	currentReleaseId: string | undefined
 ) => {
 	const freshness = reviewFreshness(request, currentReleaseId);
 	if (freshness === 'current') return 'bolt.studio.current';
 	if (freshness === 'live_advanced') return 'bolt.studio.liveAdvanced';
-	return reviewStatusMessageKey(request.status);
+	return reviewStatusMessageKey(request.state);
 };
 
 export const reviewOwnerMessageKey = (
-	request: ReleaseRequest,
+	request: MergeRequest,
 	currentReleaseId: string | undefined
 ) => {
-	const owner = reviewNextOwner(request.status, reviewFreshness(request, currentReleaseId));
+	const owner = reviewNextOwner(
+		request.state,
+		reviewFreshness(request, currentReleaseId),
+		request.decision
+	);
 	if (owner === 'author') return 'bolt.studio.author';
 	if (owner === 'reviewer') return 'bolt.studio.reviewer';
 	return 'bolt.studio.complete';

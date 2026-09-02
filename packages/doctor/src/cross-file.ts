@@ -1,38 +1,31 @@
-/**
- * Whole-repository rules: reachability, unused exports, and duplicate bodies.
- *
- * These are the rules the triage found living in `static-scan.mjs` rather than in the graph
- * analyzer, which the handover brief expected to hold them. `FILE1` alone accounts for 288 of the
- * legacy detector's findings, so deleting that file without this pass would have been the largest
- * single loss of enforcement in the port.
- *
- * A per-file rule cannot answer any of these. "Nothing imports this" and "these two bodies are the
- * same" are properties of the set, so this runs once over every parsed file rather than once per
- * file, and emits into the same catalogue as everything else.
- */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-import { nameOf } from './nameof.js';
-import type { Finding, Severity } from './index.js';
+import { registerFact, type FactContext } from './facts.js';
+import {
+	LANGUAGE_HEALTH_PROFILE,
+	compileHealthProfile,
+	matchesAny,
+	type HealthProfile
+} from './health-profile.js';
+import type { Finding } from './index.js';
 import { jsonRecord, readJsonObject, recordField } from './manifest.js';
-import type { Principle } from './rules.js';
+import { loadPackDirectory } from './patterns-yaml.js';
+import type { Rule } from './rules.js';
+import { runRules } from './runner.js';
 
-/** One parsed file, as the pass needs it. */
 type Parsed = Readonly<{ file: string; source: string; sourceFile: ts.SourceFile }>;
 
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.svelte'];
 
-/** Resolve a relative specifier to a repository-relative file, trying the usual extensions. */
 function resolveRelative(
 	from: string,
 	specifier: string,
 	known: ReadonlySet<string>
 ): string | undefined {
 	if (!specifier.startsWith('.')) return undefined;
-	// `./x.worker.ts?worker&url` is an edge to `./x.worker.ts`. Vite's query suffixes are build
-	// instructions, not part of the path, and leaving them on made every worker look unimported.
 	const bare = specifier.split('?')[0] ?? specifier;
 	const base = join(dirname(from), bare).split('\\').join('/');
 	const stripped = base.replace(/\.(?:js|mjs|cjs|jsx)$/, '');
@@ -44,10 +37,8 @@ function resolveRelative(
 	return candidates.find((candidate) => known.has(candidate));
 }
 
-/** Output directories a manifest points at, whose source sits beside them. */
 const OUTPUT = /^(?:build|dist|lib|out)\//;
 
-/** Rewrite a package-relative target onto the source that produces it. */
 function sourceCandidates(target: string): ReadonlyArray<string> {
 	const bare = target.replace(/^\.\//, '');
 	const fromSource = bare.replace(OUTPUT, 'src/');
@@ -62,7 +53,6 @@ function sourceCandidates(target: string): ReadonlyArray<string> {
 	];
 }
 
-/** A manifest's fields, without asserting a shape onto whatever the file happened to contain. */
 function readManifest(absolute: string): Readonly<Record<string, unknown>> {
 	if (!existsSync(absolute)) return {};
 	return readJsonObject(readFileSync(absolute, 'utf8')) ?? {};
@@ -70,16 +60,9 @@ function readManifest(absolute: string): Readonly<Record<string, unknown>> {
 
 const packageRoots = new Map<string, string>();
 
-/**
- * The nearest directory at or above a file that declares a package.
- *
- * `D1` prescribes "extract one owner and call it from both", and two files in different packages
- * cannot do that. In this realm each template directory is an independently published artifact —
- * `scripts/validate-template-projections.mjs` fails any projection reaching outside its own tree —
- * so a body shared between `crm` and `construction` has no owner it could move to.
- */
 function packageRootOf(root: string, file: string): string {
-	const cached = packageRoots.get(file);
+	const key = `${root}\0${file}`;
+	const cached = packageRoots.get(key);
 	if (cached !== undefined) return cached;
 	let directory = dirname(file);
 	for (;;) {
@@ -91,11 +74,10 @@ function packageRootOf(root: string, file: string): string {
 		}
 		directory = parent;
 	}
-	packageRoots.set(file, directory);
+	packageRoots.set(key, directory);
 	return directory;
 }
 
-/** Manifest paths from a file's directory up to the repository root, nearest first. */
 function manifestsAbove(from: string): ReadonlyArray<string> {
 	const found: Array<string> = [];
 	let directory = dirname(from);
@@ -107,7 +89,6 @@ function manifestsAbove(from: string): ReadonlyArray<string> {
 	}
 }
 
-/** Substitute a specifier into one `imports` entry, honouring a single `*` wildcard. */
 function substitute(key: string, target: string, specifier: string): string | undefined {
 	const star = key.indexOf('*');
 	if (star === -1) return key === specifier ? target : undefined;
@@ -117,20 +98,12 @@ function substitute(key: string, target: string, specifier: string): string | un
 	return target.replace('*', specifier.slice(head.length, specifier.length - tail.length));
 }
 
-/** The first candidate for a package-relative target that the scan actually holds. */
 function firstKnown(base: string, target: string, known: ReadonlySet<string>): string | undefined {
 	for (const candidate of sourceCandidates(target))
 		if (known.has(`${base}${candidate}`)) return `${base}${candidate}`;
 	return undefined;
 }
 
-/**
- * Resolve a `#`-prefixed subpath import through the nearest manifest's `imports` map.
- *
- * Without this the graph sees only relative specifiers. `bolt` imports itself almost exclusively as
- * `#lib/...`, so every one of its modules looked unreachable and `FILE1` reported the whole package
- * as dead code — a rule stating something false about 91 files while looking like it worked.
- */
 function resolveSubpath(
 	root: string,
 	from: string,
@@ -154,7 +127,6 @@ function resolveSubpath(
 	return undefined;
 }
 
-/** Every module specifier a file imports or re-exports. */
 function specifiersOf(parsed: Parsed): ReadonlyArray<string> {
 	const found: Array<string> = [];
 	const visit = (node: ts.Node): void => {
@@ -172,7 +144,6 @@ function specifiersOf(parsed: Parsed): ReadonlyArray<string> {
 			const [first] = node.arguments;
 			if (first !== undefined && ts.isStringLiteral(first)) found.push(first.text);
 		}
-		// `new Worker(new URL('./w.js', import.meta.url))` is a real edge.
 		if (
 			ts.isNewExpression(node) &&
 			ts.isIdentifier(node.expression) &&
@@ -187,7 +158,6 @@ function specifiersOf(parsed: Parsed): ReadonlyArray<string> {
 	return found;
 }
 
-/** The names an `export const a = 1, b = 2` statement declares. */
 function variableExports(
 	statement: ts.VariableStatement
 ): ReadonlyArray<Readonly<{ name: string; node: ts.Node }>> {
@@ -198,7 +168,6 @@ function variableExports(
 	return found;
 }
 
-/** Named and default exports a file declares. */
 function exportsOf(parsed: Parsed): ReadonlyArray<Readonly<{ name: string; node: ts.Node }>> {
 	const found: Array<{ name: string; node: ts.Node }> = [];
 	for (const statement of parsed.sourceFile.statements) {
@@ -225,7 +194,6 @@ function exportsOf(parsed: Parsed): ReadonlyArray<Readonly<{ name: string; node:
 	return found;
 }
 
-/** Every identifier a file mentions, which is the cheap over-approximation of "uses". */
 function identifiersOf(parsed: Parsed): ReadonlySet<string> {
 	const names = new Set<string>();
 	const visit = (node: ts.Node): void => {
@@ -236,7 +204,6 @@ function identifiersOf(parsed: Parsed): ReadonlySet<string> {
 	return names;
 }
 
-/** Every entry a manifest field points at, following build output back to the source beside it. */
 function declaredEntries(
 	manifest: string,
 	value: unknown,
@@ -246,7 +213,6 @@ function declaredEntries(
 	if (typeof value === 'string' && value.startsWith('.')) {
 		const resolved = resolveRelative(manifest, value, files);
 		if (resolved !== undefined) roots.add(resolved);
-		// A manifest points at build output; the source beside it is the real entry.
 		const source = value.replace(/^\.\/build\//, './src/').replace(/\.js$/, '.ts');
 		const fromSource = resolveRelative(manifest, source, files);
 		if (fromSource !== undefined) roots.add(fromSource);
@@ -256,13 +222,6 @@ function declaredEntries(
 	for (const entry of nested) declaredEntries(manifest, entry, files, roots);
 }
 
-/**
- * Files a package script invokes.
- *
- * A file a script names is an entrypoint whatever tool invokes it: `esbuild server.ts`,
- * `tsx worker.ts`, `node scripts/seed.js`. Reading the scripts covers every build tool without
- * naming any of them.
- */
 function scriptEntries(
 	manifest: string,
 	scripts: Readonly<Record<string, unknown>>,
@@ -280,27 +239,12 @@ function scriptEntries(
 	}
 }
 
-/** Whether a runtime rather than an import reaches this file. */
-function isFrameworkEntry(file: string): boolean {
-	return (
-		// A leading `+` marks a file the framework loads by convention rather than by import —
-		// SvelteKit's `+page`/`+layout` and bolt's `+definition`/`+teams`/`+env`/`+pipelines`
-		// alike. Naming only SvelteKit's four left 215 template files looking unreachable.
-		/(?:^|\/)(?:index|main|app|hooks(?:\.server|\.client)?|\+[^/]*)\.[cm]?[jt]sx?$/.test(file) ||
-		/(?:^|\/)[^/]*\.host\.[cm]?[jt]s$/.test(file) ||
-		// SvelteKit's convention modules sit at the `src/` root and are loaded by the framework.
-		/(?:^|\/)src\/(?:env|params|hooks|service-worker|app)\.[cm]?[jt]s$/.test(file) ||
-		/(?:^|\/)[^/]*\.config\.[cm]?[jt]s$/.test(file) ||
-		/(?:^|\/)(?:scripts?|bin|cli|tools)\//.test(file) ||
-		file.endsWith('.svelte')
-	);
-}
-
-/** Entrypoints a package declares, which is where reachability starts. */
-function entrypoints(root: string, files: ReadonlySet<string>): ReadonlySet<string> {
+function entrypoints(
+	root: string,
+	files: ReadonlySet<string>,
+	entries: ReadonlyArray<RegExp>
+): ReadonlySet<string> {
 	const roots = new Set<string>();
-	// Every ancestor, not just the immediate parent: no scanned file sits directly in
-	// `packages/doctor/`, so its manifest was never opened and its own CLI entry looked unreachable.
 	const manifests = [...files].flatMap((file) => manifestsAbove(file)).concat('package.json');
 	for (const manifest of new Set(manifests)) {
 		const parsed = readManifest(join(root, manifest));
@@ -308,59 +252,28 @@ function entrypoints(root: string, files: ReadonlySet<string>): ReadonlySet<stri
 			declaredEntries(manifest, parsed[field], files, roots);
 		scriptEntries(manifest, recordField(parsed, 'scripts'), files, roots);
 	}
-	// Framework and tool entries are reached by a runtime rather than by an import.
-	for (const file of files) if (isFrameworkEntry(file)) roots.add(file);
+	for (const file of files) if (matchesAny(file, entries)) roots.add(file);
 	return roots;
 }
 
-type CrossFileOptions = Readonly<{
+export type CrossFileOptions = Readonly<{
 	readonly root: string;
-	/** The files this pass reports against. */
 	readonly files: ReadonlyArray<Parsed>;
-	/**
-	 * Files that consume the reported set without belonging to it — the repository's tests.
-	 *
-	 * They are graph nodes, execution roots and name mentions, and never carry a finding. Without
-	 * them a production export used by five test files reads as dead: 57 of bolt's 88 `EXP1`
-	 * findings were exactly that, and "delete it" was the wrong answer to every one.
-	 */
 	readonly consumers?: ReadonlyArray<Parsed> | undefined;
+	readonly profile?: HealthProfile | undefined;
 }>;
 
-function finding(
-	severity: Severity,
-	rule: string,
-	summary: string,
-	principles: ReadonlyArray<Principle>,
-	file: string,
-	line: number,
-	text: string,
-	evidence: string
-): Finding {
-	return {
-		severity,
-		confidence: 'high',
-		rule,
-		summary,
-		location: `${file}:${line}: ${text.trim()}${evidence === '' ? '' : ` [${evidence}]`}`,
-		principles: [...principles]
-	};
+function siteKey(file: string, node: ts.Node, sourceFile: ts.SourceFile): string {
+	return `${file}:${node.getStart(sourceFile)}`;
 }
 
-function lineOf(parsed: Parsed, node: ts.Node): Readonly<{ line: number; text: string }> {
-	const position = parsed.sourceFile.getLineAndCharacterOfPosition(
-		node.getStart(parsed.sourceFile)
-	);
-	return { line: position.line + 1, text: parsed.source.split('\n')[position.line] ?? '' };
-}
+export type CrossFileIndex = Readonly<{
+	readonly unreferencedModules: ReadonlySet<string>;
+	readonly unreferencedExports: ReadonlySet<string>;
+	readonly duplicateBodies: ReadonlySet<string>;
+}>;
 
-/**
- * Normalised body text for duplicate detection.
- *
- * Identifiers are erased so a copy-paste with renamed variables still matches, but literals are
- * kept: two functions differing only in a threshold are two different behaviours, not a duplicate.
- */
-function bodyHash(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
+function bodyHash(node: ts.Node): string | undefined {
 	const body =
 		ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node)
 			? node.body
@@ -377,22 +290,16 @@ function bodyHash(node: ts.Node, sourceFile: ts.SourceFile): string | undefined 
 		ts.forEachChild(current, visit);
 	};
 	visit(body);
-	// Short bodies are shared by accident; a getter and a one-line delegate are not duplicates.
 	if (tokens.length < 40) return undefined;
 	return createHash('sha256').update(tokens.join(',')).digest('hex');
 }
 
-/** Run every whole-repository rule and return findings in catalogue order. */
-export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> {
-	const findings: Array<Finding> = [];
-	// The graph spans everything that can reach a reported file; the report loops below stay on
-	// `options.files`. Two corpora, one graph.
+/** Reachability, dead exports, and duplicate bodies over one repository. */
+export function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
 	const consumers = options.consumers ?? [];
 	const corpus = [...options.files, ...consumers];
 	const known = new Set(corpus.map((parsed) => parsed.file));
-	const byFile = new Map(corpus.map((parsed) => [parsed.file, parsed]));
 
-	// --- the import graph -------------------------------------------------------------------
 	const edges = new Map<string, Set<string>>();
 	for (const parsed of corpus) {
 		const targets = new Set<string>();
@@ -405,11 +312,9 @@ export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> 
 		edges.set(parsed.file, targets);
 	}
 
-	// --- FILE1: unreachable from any entrypoint ----------------------------------------------
-	// A test file is an execution surface: its runner loads it directly, so it is a root like any
-	// script. Otherwise nothing it imports would ever become reachable.
+	const profile = compileHealthProfile(options.profile ?? LANGUAGE_HEALTH_PROFILE);
 	const roots = new Set([
-		...entrypoints(options.root, known),
+		...entrypoints(options.root, known, profile.frameworkEntries),
 		...consumers.map((parsed) => parsed.file)
 	]);
 	const reachable = new Set<string>();
@@ -420,25 +325,12 @@ export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> 
 		reachable.add(current);
 		for (const target of edges.get(current) ?? []) queue.push(target);
 	}
+
+	const unreferencedModules = new Set<string>();
 	for (const parsed of options.files) {
-		if (reachable.has(parsed.file)) continue;
-		const [first] = parsed.sourceFile.statements;
-		const at = first === undefined ? { line: 1, text: '' } : lineOf(parsed, first);
-		findings.push(
-			finding(
-				'error',
-				'FILE1',
-				'production file is unreachable from a real entrypoint',
-				['simplicity', 'modularity', 'colocation', 'no-bloat'],
-				parsed.file,
-				at.line,
-				at.text,
-				'no package/framework/compiler entrypoint reaches file'
-			)
-		);
+		if (!reachable.has(parsed.file)) unreferencedModules.add(parsed.file);
 	}
 
-	// --- EXP1: an export nothing mentions ----------------------------------------------------
 	const mentionedElsewhere = new Map<string, Set<string>>();
 	for (const parsed of corpus) {
 		const names = identifiersOf(parsed);
@@ -448,86 +340,96 @@ export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> 
 			mentionedElsewhere.set(name, holders);
 		}
 	}
+	const unreferencedExports = new Set<string>();
 	for (const parsed of options.files) {
-		// Only a file something else reaches can have a *dead* export; an unreachable file is FILE1.
 		if (!reachable.has(parsed.file)) continue;
-		// A declared entrypoint IS the package's public API. Its consumers are outside this
-		// repository by construction, so "no static consumer" is not evidence of anything here.
 		if (roots.has(parsed.file)) continue;
 		for (const exported of exportsOf(parsed)) {
 			if (exported.name === 'default') continue;
 			const holders = mentionedElsewhere.get(exported.name) ?? new Set<string>();
 			const mentions = [...holders].filter((holder) => holder !== parsed.file);
 			if (mentions.length > 0) continue;
-			const at = lineOf(parsed, exported.node);
-			findings.push(
-				finding(
-					'error',
-					'EXP1',
-					'exported declaration has no static consumer',
-					['simplicity', 'modularity', 'colocation', 'no-bloat'],
-					parsed.file,
-					at.line,
-					at.text,
-					`export=${exported.name}`
-				)
-			);
+			unreferencedExports.add(siteKey(parsed.file, exported.node, parsed.sourceFile));
 		}
 	}
 
-	// --- D1: the same non-trivial body in two places ------------------------------------------
-	const bodies = new Map<
-		string,
-		Array<Readonly<{ parsed: Parsed; node: ts.Node; name: string }>>
-	>();
+	const bodies = new Map<string, Array<Readonly<{ parsed: Parsed; node: ts.Node }>>>();
 	for (const parsed of options.files) {
 		const visit = (node: ts.Node): void => {
-			const hash = bodyHash(node, parsed.sourceFile);
+			const hash = bodyHash(node);
 			if (hash !== undefined) {
-				const name = nameOf(node)?.text ?? '(anonymous)';
 				const list = bodies.get(hash) ?? [];
-				list.push({ parsed, node, name });
+				list.push({ parsed, node });
 				bodies.set(hash, list);
 			}
 			ts.forEachChild(node, visit);
 		};
 		visit(parsed.sourceFile);
 	}
+	const duplicateBodies = new Set<string>();
 	for (const [, group] of bodies) {
 		if (group.length < 2) continue;
-		// Report every copy but the first, so one duplicate pair is one finding.
+		const original = group[0]!;
 		for (const duplicate of group.slice(1)) {
-			const at = lineOf(duplicate.parsed, duplicate.node);
-			const original = group[0]!;
-			// Only a duplicate that could share an owner is debt; see `packageRootOf`.
 			if (
 				packageRootOf(options.root, duplicate.parsed.file) !==
 				packageRootOf(options.root, original.parsed.file)
 			)
 				continue;
-			findings.push(
-				finding(
-					'error',
-					'D1',
-					'duplicate non-trivial function, method, or class body',
-					['simplicity', 'modularity', 'colocation', 'no-bloat'],
-					duplicate.parsed.file,
-					at.line,
-					at.text,
-					`name=${duplicate.name} original=${original.parsed.file}:${lineOf(original.parsed, original.node).line}`
-				)
-			);
+			duplicateBodies.add(siteKey(duplicate.parsed.file, duplicate.node, duplicate.parsed.sourceFile));
 		}
 	}
 
-	void byFile;
-	void relative;
-	void resolve;
-	const order: Readonly<Record<Severity, number>> = { error: 0, hint: 1 };
-	return findings.sort(
-		(left, right) =>
-			order[left.severity] - order[right.severity] ||
-			left.rule.localeCompare(right.rule) ||
-			left.location.localeCompare(right.location)
-	);
+	return { unreferencedModules, unreferencedExports, duplicateBodies };
+}
+
+const boundIndexes = new Map<string, CrossFileIndex>();
+
+export function bindCrossFileIndex(root: string, index: CrossFileIndex): void {
+	boundIndexes.set(root, index);
+}
+
+function indexFor(context: FactContext): CrossFileIndex {
+	const index = boundIndexes.get(context.root);
+	if (index === undefined)
+		throw new Error(`norbital-doctor: repository fact "${context.file}" has no bound cross-file index`);
+	return index;
+}
+
+registerFact({
+	name: 'unreferencedModule',
+	parameters: [],
+	run: (context) => indexFor(context).unreferencedModules.has(context.file)
+});
+
+registerFact({
+	name: 'unreferencedExport',
+	parameters: [],
+	run: (context) =>
+		indexFor(context).unreferencedExports.has(siteKey(context.file, context.node, context.source))
+});
+
+registerFact({
+	name: 'duplicateBody',
+	parameters: [],
+	run: (context) =>
+		indexFor(context).duplicateBodies.has(siteKey(context.file, context.node, context.source))
+});
+
+const GRAPH_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs', 'graph');
+
+let graphRules: ReadonlyArray<Rule> | undefined;
+
+function loadGraphRules(): ReadonlyArray<Rule> {
+	graphRules ??= loadPackDirectory(GRAPH_PACK);
+	return graphRules;
+}
+
+export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> {
+	bindCrossFileIndex(options.root, analyseCrossFile(options));
+	return runRules({
+		root: options.root,
+		rules: loadGraphRules(),
+		files: options.files.map((parsed) => parsed.file)
+	});
 }

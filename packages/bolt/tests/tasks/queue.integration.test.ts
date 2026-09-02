@@ -31,9 +31,7 @@ const taskSchemaSteps = () =>
 		})
 	).steps.filter(
 		(step) =>
-			step.id.startsWith('collection:bolt_task') ||
-			step.id.startsWith('collection:bolt_schedule') ||
-			step.id.startsWith('collection:bolt_sync_outbox')
+			step.id.startsWith('collection:bolt_task') || step.id.startsWith('collection:bolt_schedule')
 	);
 
 const HOUR_MILLIS = 3_600_000;

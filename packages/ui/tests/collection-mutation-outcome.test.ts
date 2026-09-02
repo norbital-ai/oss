@@ -56,6 +56,65 @@ test('waits for an accepted authoritative settlement', async () => {
 	);
 });
 
+test('A1: a write is not painted committed until settlement, then matches that settlement', async () => {
+	let resolveSettlement;
+	const settled = new Promise((resolve) => {
+		resolveSettlement = resolve;
+	});
+	let painted;
+	const run = Effect.runPromise(
+		submitCollectionMutation(() =>
+			Promise.resolve({
+				durability: 'memory',
+				pending: true,
+				row: { id: 'optimistic-1', name: 'Optimistic' },
+				idempotencyKey: 'mutation-a1',
+				settlement: {
+					idempotencyKey: 'mutation-a1',
+					settled,
+					status: async () => 'queued',
+					wait: async () => {
+						throw new Error('submitCollectionMutation must use the eagerly registered settlement');
+					}
+				}
+			})
+		)
+	).then((submission) => {
+		painted = submission;
+		return submission;
+	});
+
+	await Promise.resolve();
+	assert.equal(painted, undefined, 'optimistic memory row must not be treated as committed');
+
+	resolveSettlement({
+		kind: 'accepted',
+		idempotencyKey: 'mutation-a1',
+		settledAtEpochMs: 10
+	});
+	assert.deepEqual(await run, {
+		kind: 'committed',
+		resolution: 'accepted',
+		idempotencyKey: 'mutation-a1'
+	});
+});
+
+test('A3: pending approval is submitted-for-approval, not a live commit', async () => {
+	assert.deepEqual(
+		await Effect.runPromise(
+			submitCollectionMutation(
+				mutation({
+					kind: 'accepted',
+					idempotencyKey: 'mutation-a3',
+					settledAtEpochMs: 11,
+					pendingApproval: pendingApprovalDetails
+				})
+			)
+		),
+		{ kind: 'pendingApproval', idempotencyKey: 'mutation-a3', ...pendingApprovalDetails }
+	);
+});
+
 test('preserves pending approval metadata from an accepted settlement', async () => {
 	assert.deepEqual(
 		await Effect.runPromise(

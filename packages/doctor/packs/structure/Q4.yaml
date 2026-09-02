@@ -1,26 +1,24 @@
 id: Q4
-summary: private one-use expression may be clearer inline
+summary: private function has one same-file direct call and a small mutation-free single expression
 severity: hint
-principles: [colocation, no-bloat]
 confidence: medium
+principles: [simplicity, no-bloat]
 rule:
   all:
     - any:
-        - pattern:
-            context: 'const $NAME = ($A) => $A.$M()'
-            selector: VariableDeclaration
-        - pattern:
-            context: 'const $NAME = ($A) => $A.$M($...R)'
-            selector: VariableDeclaration
-    - not:
-        inside:
-          regex: '^export '
-        stopBy: end
-    - calls:
-        of: NAME
+        - kind: FunctionDeclaration
+        - kind: VariableDeclaration
+    - fact:
+        name: callSites
         exactly: 1
+        candidate: single-use-expression
 examples:
   bad:
-    - "const label = (name) => name.trim();\nexport const show = (name) => label(name);"
+    - |
+      const label = (name) => name.trim();
+      export const show = (name) => label(name);
   good:
     - 'export const show = (name) => name.trim();'
+    - |
+      const formatDisplayName = (name) => name.trim();
+      export const show = (name) => formatDisplayName(name);

@@ -1,13 +1,47 @@
 # A shape guard in a caller is a claim that "I know what this object is", made where a
 # value was received rather than where it was decoded. Values cross boundaries once;
 # the boundary decodes them, and callers read what they were given.
-# Effect's `Predicate.isRecord` is the owner; a local `isRecord` helper is the smell.
+# Effect's `Predicate.isRecord` is the owner; a local guard is the smell.
+#
+# This used to match the literal name `isRecord`, which meant `isPlainRecord`, `isObject` and every
+# other spelling walked past it — and, because a pattern compared modifier children positionally,
+# it could not see an exported one either. Both are fixed, so the rule now describes the shape it
+# is actually about: a user-defined type predicate declared locally.
 id: NO_ISRECORD
-summary: ad-hoc record shape guard instead of a boundary decode
+summary: ad-hoc type predicate instead of a boundary decode
 severity: error
 principles: [type-safety, straightforwardness]
+files: ['packages/doctor/src/**']
+#
+# The parameter must be `unknown`. That is the whole distinction, and stating it as
+# "any type predicate" was wrong in a way worth recording: it reported thirteen sites and twelve of
+# them were correct code. `.filter((row): row is string => row !== undefined)` narrows a list that
+# is already typed, and `isInstanceField(member: ts.ClassElement): member is ts.PropertyDeclaration`
+# discriminates a compiler union. Neither reconstructs a shape — they read a type the compiler
+# already knows. Only a predicate over `unknown` is deciding what a value is without decoding it.
 rule:
-  any:
-    - pattern: 'const isRecord = $FN'
-    - pattern: function isRecord
-    - pattern: 'const isRecord: $TYPE = $FN'
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: FunctionExpression
+        - kind: ArrowFunction
+        - kind: MethodDeclaration
+    - has:
+        kind: TypePredicate
+    - has:
+        matches: unknownParameter
+utils:
+  unknownParameter:
+    all:
+      - kind: Parameter
+      - has:
+          kind: UnknownKeyword
+examples:
+  bad:
+    - 'function isRecord(v: unknown): v is Record<string, unknown> { return typeof v === "object"; }'
+    - 'export function isPlainRecord(v: unknown): v is object { return v !== null; }'
+    - 'const isThing = (v: unknown): v is Thing => typeof v === "object";'
+  good:
+    - 'const record = (v: unknown) => Schema.decodeUnknownOption(JsonObject)(v);'
+    - 'const rows = all.filter((row): row is string => row !== undefined);'
+    - 'function isField(member: ts.ClassElement): member is ts.PropertyDeclaration { return true; }'

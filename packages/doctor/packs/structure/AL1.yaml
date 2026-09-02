@@ -1,13 +1,18 @@
 id: AL1
 summary: bare type alias
 severity: hint
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule:
   all:
     - kind: TypeAliasDeclaration
     - regex: "=\\s*[A-Z][A-Za-z0-9]*\\s*;?\\s*$"
 examples:
   bad:
-    - "type Other = { a: string };\nexport type Bare = Other;"
+    - "type Other = { a: string };
+
+      export type Bare = Other;"
   good:
     - 'export type Bare = { a: string };'
+    - export type X = Y<Z>;
+    - "export type X = { a: string };"
+    - export type X = 'a' | 'b';

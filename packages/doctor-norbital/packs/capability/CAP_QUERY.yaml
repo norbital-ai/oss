@@ -1,0 +1,70 @@
+id: CAP_QUERY
+summary: a scope rebuilds query ownership the generated client already provides
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: ArrowFunction
+        - kind: FunctionExpression
+        - kind: MethodDeclaration
+        - kind: SourceFile
+    - atLeast: 2
+      of:
+        - all:
+            - kind: CallExpression
+            - regex: '^set(Interval|Timeout)\b'
+            - has:
+                regex: '\.(refresh|refetch|reload|invalidate)\s*\('
+              stopBy: end
+        - all:
+            - kind: VariableDeclaration
+            - regex: '\b(loading|pending|fetching|isLoading)\b'
+            - has: '$state($...ARGS)'
+              stopBy: end
+        - all:
+            - kind: NewExpression
+            - regex: '^new (Set|Map)\b'
+        - all:
+            - kind: CallExpression
+            - regex: '^\$effect'
+            - has:
+                regex: '\.current\b'
+              stopBy: end
+        - all:
+            - kind: TryStatement
+            - has:
+                regex: '\.(current|findMany|findFirst)\b'
+              stopBy: end
+    - not:
+        has:
+          any:
+            - '$CLIENT.db.$COLLECTION.$METHOD($...ARGS)'
+            - '$CLIENT.$NAMESPACE.$METHOD($...ARGS)'
+            - 'createQuery($...ARGS)'
+        stopBy: end
+examples:
+  bad:
+    - |
+      const refreshed = new Set();
+      const timer = setInterval(() => { for (const q of active) void q.refresh(); }, 1000);
+      void refreshed; void timer;
+    - |
+      function panel() {
+        let loading = $state(false);
+        const seen = new Map();
+        void loading; void seen;
+      }
+  good:
+    - |
+      function panel() {
+        const rows = client.db.employees.findMany({});
+        const timer = setInterval(() => void rows.refresh(), 1000);
+        void timer;
+      }
+    - |
+      function panel() {
+        const timer = setInterval(() => tick(), 1000);
+        void timer;
+      }

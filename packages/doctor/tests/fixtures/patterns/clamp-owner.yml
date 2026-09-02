@@ -1,7 +1,20 @@
-# An overlap binding: same detector behaviour as overlapRules, described in YAML.
+# An overlap shape: nested min/max, with an importer of the preferred owner exempt.
 id: CLAMPKIT
 summary: local clamp reimplements es-toolkit#clamp
 severity: error
 principles: [simplicity, efficiency]
-detect: clamp
-prefer: es-toolkit#clamp
+rule:
+  all:
+    - any:
+        - pattern: 'Math.min(Math.max($A, $B), $C)'
+        - pattern: 'Math.min($A, Math.max($B, $C))'
+        - pattern: 'Math.max(Math.min($A, $B), $C)'
+        - pattern: 'Math.max($A, Math.min($B, $C))'
+    - not:
+        importsFrom: es-toolkit
+examples:
+  bad:
+    - 'export const bounded = Math.min(Math.max(value, low), high);'
+  good:
+    - "import { clamp } from 'es-toolkit';\nexport const bounded = clamp(value, low, high);"
+    - "import { clamp } from 'es-toolkit';\nexport const bounded = Math.min(Math.max(value, low), high);\nvoid clamp;"

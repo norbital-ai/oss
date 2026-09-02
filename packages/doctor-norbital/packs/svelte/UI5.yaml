@@ -1,0 +1,16 @@
+id: UI5
+summary: raw overflow scroll region bypasses the Scroll primitive
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:overflow(?:-[xy])?-(?:auto|scroll))$'
+examples:
+  bad:
+    - '<div class="overflow-auto"><p>x</p></div>'
+  good:
+    - '<Scroll><p>x</p></Scroll>'
+    - '<!-- This used to be a Stack whose middle child was a div.overflow-x-auto. -->\n<Scroll><p>rows</p></Scroll>'

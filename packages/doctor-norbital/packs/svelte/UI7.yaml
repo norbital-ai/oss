@@ -1,0 +1,15 @@
+id: UI7
+summary: sibling margin bypasses the parent gap contract
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:space-[xy]-\d|m[tblr]-(?:[2-9]|1\d))$'
+examples:
+  bad:
+    - '<div class="space-y-4"><p>a</p></div>'
+  good:
+    - '<Stack gap="md"><p>a</p></Stack>'

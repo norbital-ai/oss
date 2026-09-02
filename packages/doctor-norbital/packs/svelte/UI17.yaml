@@ -1,0 +1,40 @@
+id: UI17
+summary: template exposes uuid/system id to operators
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  any:
+    - all:
+        - kind: svelte:Interpolation
+        - regex: '^\{\s*[A-Za-z_$][\w$.]*\.(?:id|uuid|_id)\s*\}$'
+        - not:
+            inside:
+              kind: svelte:Attribute
+            stopBy: end
+        - not:
+            inside:
+              kind: svelte:Block
+            stopBy: end
+    - all:
+        - kind: svelte:Element
+        - has:
+            field: tagName
+            regex: '^(?:Column|Field)$'
+        - has:
+            all:
+              - kind: svelte:Attribute
+              - regex: '\bname\s*=\s*(?:["''](?:id|created_at|updated_at|sys_period|row_version|approval_id)["'']|\{\s*["''](?:id|created_at|updated_at|sys_period|row_version|approval_id)["'']\s*\})'
+          stopBy: end
+examples:
+  bad:
+    - '<p>{record.id}</p>'
+    - '<CollectionTable>{#snippet columns({ Column })}<Column name="id" />{/snippet}</CollectionTable>'
+    - '<CollectionForm>{#snippet children({ Field })}<Field name="id" hidden />{/snippet}</CollectionForm>'
+    - "<CollectionTable>{#snippet columns({ Column })}<Column name={'id'} />{/snippet}</CollectionTable>"
+  good:
+    - '<p>{record.name}</p>'
+    - '<CollectionTable query={{ where: { job_id: { eq: record.id } } }} />'
+    - '{#each rows as row (row.id)}<p>{row.name}</p>{/each}'
+    - '<OrganizationSettings tenantId={view.organization.id} />'

@@ -15,6 +15,19 @@ import {
 	reviewRelativeTime,
 	workbenchPreviewState,
 	workspaceEnvoys,
+	boundTriple,
+	canWorkOnMergeRequest,
+	CHANGES_DIFF_BASELINE_KEY,
+	evidenceLogs,
+	liveReleaseTimeline,
+	newCommitsBehindHead,
+	sourceFileMark,
+	sourceTreeEntryBadge,
+	studioTabOwns,
+	studioTabOwnership,
+	workbenchDiagnosisState,
+	workbenchDiffBaselineKey,
+	type HostSnapshot,
 	type ReleaseRequest
 } from '../../src/client/ui/studio/studio-state.js';
 import {
@@ -30,8 +43,18 @@ const request = (overrides: Partial<ReleaseRequest> = {}): ReleaseRequest => ({
 	tenantId: 'tenant-1',
 	environmentId: 'live',
 	workspaceKey: 'workspace-1',
-	authorId: 'author-1',
-	commit: 'candidate-commit',
+	openedBy: 'author-1',
+	trackedBy: ['author-1'],
+	title: 'src/app.ts',
+	commits: [
+		{
+			commit: 'candidate-commit',
+			by: 'author-1',
+			at: '2026-09-01T00:00:00.000Z',
+			message: 'Publish'
+		}
+	],
+	head: 'candidate-commit',
 	baseCommit: 'base-commit',
 	previewEnvironmentId: 'preview-1',
 	baseReleaseId: 'release-1',
@@ -39,17 +62,33 @@ const request = (overrides: Partial<ReleaseRequest> = {}): ReleaseRequest => ({
 	artifactId: 'artifact-2',
 	checksum: 'checksum-2',
 	schemaPlan: { fingerprint: 'schema-1', steps: [] },
-	status: 'open',
-	reason: null,
+	state: 'ready',
+	decision: null,
 	createdAt: '2026-09-01T00:00:00.000Z',
 	updatedAt: '2026-09-01T00:30:00.000Z',
 	buildReceipt: {
 		effectId: 'effect-1',
 		commit: 'candidate-commit',
+		startedAt: '2026-09-01T00:00:00.000Z',
+		completedAt: '2026-09-01T00:00:30.000Z',
 		outcome: 'succeeded',
-		summary: 'Preview ready'
+		cache: 'miss',
+		phase: 'complete',
+		summary: 'Preview ready',
+		stdout: 'built'
 	},
+	deployLog: [],
 	changedFiles: [],
+	diagnosis: {
+		sourceDigest: 'a'.repeat(64),
+		ranAt: '2026-09-01T00:00:00.000Z',
+		origin: 'diagnose',
+		errors: 0,
+		warnings: 0,
+		hints: 0,
+		findings: []
+	},
+	manifest: { artifactId: 'artifact-2', checksum: 'checksum-2' },
 	...overrides
 });
 
@@ -57,15 +96,15 @@ describe('Workspace Studio collaboration presentation', () => {
 	it('derives freshness from routed releases without inspecting another author workbench', () => {
 		expect(reviewFreshness(request(), 'release-1')).toBe('current');
 		expect(reviewFreshness(request(), 'release-2')).toBe('live_advanced');
-		expect(reviewFreshness(request({ status: 'changes_requested' }), 'release-2')).toBe('terminal');
+		expect(reviewFreshness(request({ state: 'closed' }), 'release-2')).toBe('terminal');
 	});
 
-	it('names the next human owner from the existing release state', () => {
-		expect(reviewNextOwner('open')).toBe('reviewer');
-		expect(reviewNextOwner('approving')).toBe('reviewer');
-		expect(reviewNextOwner('changes_requested')).toBe('author');
-		expect(reviewNextOwner('approved')).toBe('complete');
-		expect(reviewNextOwner('open', 'live_advanced')).toBe('author');
+	it('names the next human owner from the existing merge-request state', () => {
+		expect(reviewNextOwner('ready')).toBe('reviewer');
+		expect(reviewNextOwner('draft')).toBe('author');
+		expect(reviewNextOwner('ready', 'current', { kind: 'changes_requested', commit: 'x', by: 'r', at: 't', reason: 'n' })).toBe('author');
+		expect(reviewNextOwner('merged')).toBe('complete');
+		expect(reviewNextOwner('ready', 'live_advanced')).toBe('author');
 	});
 
 	it('presents review age and Preview validity without inventing shared draft state', () => {
@@ -291,6 +330,167 @@ describe('Workspace Studio manifest handoff', () => {
 });
 
 describe('workspace navigation sections', () => {
+	it('gives workbench diagnosis only; Changes and Live own the bundle furniture', () => {
+		expect(studioTabOwnership('workbench')).toEqual({
+			manifest: false,
+			logs: false,
+			lifecycle: false,
+			diagnosis: true
+		});
+		expect(studioTabOwns('workbench', 'manifest')).toBe(false);
+		expect(studioTabOwns('workbench', 'logs')).toBe(false);
+		expect(studioTabOwns('workbench', 'lifecycle')).toBe(false);
+		expect(studioTabOwns('changes', 'manifest')).toBe(true);
+		expect(studioTabOwns('changes', 'logs')).toBe(true);
+		expect(studioTabOwns('changes', 'lifecycle')).toBe(true);
+		expect(studioTabOwns('changes', 'diagnosis')).toBe(false);
+		expect(studioTabOwns('live', 'manifest')).toBe(true);
+		expect(studioTabOwns('live', 'logs')).toBe(true);
+		expect(studioTabOwns('live', 'lifecycle')).toBe(false);
+		expect(studioTabOwns('live', 'diagnosis')).toBe(false);
+	});
+
+	it('names the workbench diff baseline from tracking, and the Changes Files lens from baseCommit', () => {
+		expect(workbenchDiffBaselineKey('live')).toBe('bolt.studio.diff.againstLive');
+		expect(workbenchDiffBaselineKey(undefined)).toBe('bolt.studio.diff.againstLive');
+		expect(workbenchDiffBaselineKey('review-1')).toBe('bolt.studio.diff.againstMrHead');
+		expect(CHANGES_DIFF_BASELINE_KEY).toBe('bolt.studio.diff.againstBase');
+	});
+
+	it('counts commits on the tracked MR that the worktree does not yet have', () => {
+		const commits = [
+			{ commit: 'c1', by: 'a', at: '2026-09-01T00:00:00.000Z', message: 'one' },
+			{ commit: 'c2', by: 'b', at: '2026-09-01T01:00:00.000Z', message: 'two' },
+			{ commit: 'c3', by: 'b', at: '2026-09-01T02:00:00.000Z', message: 'three' }
+		];
+		const mergeRequests = [request({ commits, head: 'c3' })];
+		expect(
+			newCommitsBehindHead({
+				sourceCommit: 'c1',
+				tracking: 'review-1',
+				mergeRequests
+			})
+		).toBe(2);
+		expect(
+			newCommitsBehindHead({
+				sourceCommit: 'c3',
+				tracking: 'review-1',
+				mergeRequests
+			})
+		).toBe(0);
+		expect(
+			newCommitsBehindHead({
+				sourceCommit: 'c1',
+				tracking: 'live',
+				mergeRequests
+			})
+		).toBe(0);
+	});
+
+	it('marks local workbench files and dots dirty ancestors without inventing a lifecycle', () => {
+		const drafts = { 'src/app.ts': 'changed', 'src/new.ts': 'added', 'gone.ts': '' };
+		const sourceFiles = { 'src/app.ts': 'old', 'gone.ts': 'was' };
+		expect(sourceFileMark('src/app.ts', drafts, sourceFiles)).toBe('M');
+		expect(sourceFileMark('src/new.ts', drafts, sourceFiles)).toBe('A');
+		expect(sourceFileMark('gone.ts', drafts, sourceFiles)).toBe('D');
+		expect(sourceFileMark('src/app.ts', {}, sourceFiles)).toBeUndefined();
+		expect(sourceTreeEntryBadge({ type: 'directory', path: 'src' }, drafts, sourceFiles)).toEqual({
+			label: '·'
+		});
+		expect(sourceTreeEntryBadge({ type: 'file', path: 'src/app.ts' }, drafts, sourceFiles)).toMatchObject({
+			label: 'M'
+		});
+	});
+
+	it('keeps diagnosis on the workbench and the bound triple on the MR', () => {
+		expect(workbenchDiagnosisState({ diagnosis: null, draftCount: 0 })).toBe('missing');
+		expect(
+			workbenchDiagnosisState({
+				diagnosis: request().diagnosis,
+				draftCount: 1
+			})
+		).toBe('stale');
+		expect(
+			workbenchDiagnosisState({
+				diagnosis: { ...request().diagnosis, errors: 2 },
+				draftCount: 0
+			})
+		).toBe('errors');
+		expect(workbenchDiagnosisState({ diagnosis: request().diagnosis, draftCount: 0 })).toBe('clean');
+		expect(boundTriple(request())).toEqual({
+			commit: 'candidate-commit',
+			bundle: 'artifact-2',
+			fork: 'preview-1'
+		});
+		expect(canWorkOnMergeRequest(request(), 'live')).toBe(true);
+		expect(canWorkOnMergeRequest(request(), 'review-1')).toBe(false);
+	});
+
+	it('lists Live releases from routed history, not the workbench', () => {
+		const build = request().buildReceipt;
+		const deploy = [{ at: '2026-09-02T00:00:00.000Z', level: 'log', line: 'guest-ok' }];
+		expect(
+			liveReleaseTimeline({
+				entries: [
+					{
+						tenantId: 't',
+						environmentId: 'live',
+						releaseId: 'release-live',
+						artifactId: 'artifact-live',
+						ownerEpoch: '1'
+					}
+				],
+				deploymentHistory: ['release-old', 'release-live'],
+				releases: [
+					{ releaseId: 'release-old', deployLog: [] },
+					{ releaseId: 'release-live', buildLog: build, deployLog: deploy }
+				],
+				mergeRequests: [],
+				tracking: 'live'
+			} as unknown as HostSnapshot)
+		).toEqual([
+			{
+				releaseId: 'release-live',
+				artifactId: 'artifact-live',
+				current: true,
+				build,
+				deploy
+			},
+			{
+				releaseId: 'release-old',
+				artifactId: undefined,
+				current: false,
+				build: undefined,
+				deploy: []
+			}
+		]);
+	});
+
+	it('reads build and deploy logs from the tracked MR or a release, never a workbench buffer', () => {
+		expect(evidenceLogs(undefined)).toEqual({ build: undefined, deploy: [] });
+		const build = request().buildReceipt;
+		const deploy = [{ at: '2026-09-02T00:00:00.000Z', level: 'log', line: 'guest-ok' }];
+		const snapshot = {
+			tracking: 'review-1',
+			mergeRequests: [request({ deployLog: deploy })],
+			releases: [],
+			entries: []
+		} as unknown as HostSnapshot;
+		expect(evidenceLogs(snapshot)).toEqual({ build, deploy });
+		expect(evidenceLogs({ ...snapshot, tracking: 'live' } as unknown as HostSnapshot)).toEqual({
+			build,
+			deploy
+		});
+		expect(
+			evidenceLogs({
+				tracking: 'live',
+				mergeRequests: [request({ state: 'merged', deployLog: [] })],
+				releases: [{ releaseId: 'release-live', buildLog: build, deployLog: deploy }],
+				entries: [{ tenantId: 't', environmentId: 'live', releaseId: 'release-live', artifactId: 'a', ownerEpoch: '1' }]
+			} as unknown as HostSnapshot)
+		).toEqual({ build, deploy });
+	});
+
 	it('keeps the shell runtime structurally capable of mounting the one Automations surface', () => {
 		expectTypeOf<AgentRuntimeConfig['client']>().toMatchTypeOf<AutomationRunsClient>();
 	});

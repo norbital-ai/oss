@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
 	EnvironmentName,
+	FixedCommandCatalogue,
 	ReleaseId,
 	syncRetainedPrefixBytes,
 	TenantId,
@@ -205,6 +206,12 @@ describe('collection search handoff', () => {
 				input: { collection: 'employees', limit: 1, after: 'page-1-token' }
 			}
 		]);
+		const posted = commands[0]?.command;
+		expect(posted).toBeDefined();
+		expect(
+			FixedCommandCatalogue.some((contract) => contract.name === posted),
+			posted
+		).toBe(true);
 	});
 
 	it('resolves an authoritative empty findFirst instead of waiting forever', async () => {

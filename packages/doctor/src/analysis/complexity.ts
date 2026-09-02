@@ -1,15 +1,4 @@
 // repository-health:allow SEM_PARALLEL -- different analysis modules sharing the analyzer vocabulary; related by family, not duplication.
-/**
- * Per-function structure: cyclomatic complexity, nesting, pass-through shape, and inline
- * candidates, plus the AST walk that feeds every downstream metric, ported from `analyze.mjs`.
- *
- * Complexity counts branch points in one body and stops at nested function boundaries — nested
- * functions are measured independently rather than inflating their owner. An inline candidate must
- * be private, named once, and called exactly once from the same file, and be either an
- * unchanged-parameter forwarder or a small single expression; exported functions, callbacks used
- * as values, recursion, branching, async/generator/generic boundaries, and mutation are all
- * excluded mechanically, because candidates are review evidence rather than rewrites.
- */
 import ts from 'typescript';
 import {
 	classPathway,
@@ -24,11 +13,15 @@ import {
 import type { PathwayEntityCore } from './entities.js';
 import type { FunctionMetric } from './structure.js';
 import { analyzableSource } from './inventory.js';
+import {
+	LANGUAGE_HEALTH_PROFILE,
+	compileHealthProfile,
+	matchesAny,
+	type HealthProfile
+} from '../health-profile.js';
 
-/** One import edge with whether it carries values or only types. */
 export type ImportEdge = Readonly<{ specifier: string; typeOnly: boolean }>;
 
-/** The per-file AST summary every consumer reads. */
 export type AstSummary = Readonly<{
 	imports: ReadonlyArray<ImportEdge>;
 	functions: Array<FunctionMetric>;
@@ -48,7 +41,6 @@ export type AstSummary = Readonly<{
 	services: Array<string>;
 }>;
 
-/** Count branch points and maximum control nesting in one function body. */
 export function complexityOf(body: ts.Node): { cyclomatic: number; nesting: number } {
 	let cyclomatic = 1;
 	let maximumNesting = 0;
@@ -85,7 +77,6 @@ export function complexityOf(body: ts.Node): { cyclomatic: number; nesting: numb
 	return { cyclomatic, nesting: maximumNesting };
 }
 
-/** Class-level complexity from member bodies only; an empty class stays at the floor. */
 function directClassComplexity(
 	node: ts.ClassDeclaration | ts.ClassExpression
 ): { cyclomatic: number; nesting: number } {
@@ -99,7 +90,6 @@ function directClassComplexity(
 	};
 }
 
-/** Identify a wrapper whose entire behavior is forwarding one call. */
 export function isPassThrough(body: ts.Node): boolean {
 	if (!ts.isBlock(body))
 		return (
@@ -129,7 +119,6 @@ function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
 	return modifiers?.some((modifier) => modifier.kind === kind) === true;
 }
 
-/** A top-level named function: its value node, name, name node, and body. */
 type TopLevelFunction = {
 	node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
 	name: string;
@@ -298,10 +287,6 @@ function safeSingleExpression(candidate: TopLevelFunction): ts.Node | null {
 const GENERIC_EXPRESSION_NAME =
 	/^(?:tmp|temp|helper|util|utils|wrap|wrapper|shim|inner|fn|go|impl|thunk|label)$/i;
 
-/**
- * Q4 is review-only because a name can earn a one-line helper. Fire only when the name is
- * generic, a restatement of the callee, or too short to be vocabulary.
- */
 function nameEarnsExpression(name: string, expression: ts.Node): boolean {
 	if (GENERIC_EXPRESSION_NAME.test(name) || name.length <= 2) return false;
 	if (ts.isCallExpression(expression)) {
@@ -316,7 +301,6 @@ function nameEarnsExpression(name: string, expression: ts.Node): boolean {
 	return /[a-z][A-Z]/.test(name) || (name.includes('_') && name.length >= 6);
 }
 
-/** Find only mechanically inlineable same-file one-use functions; larger abstractions stay inventory. */
 function inlineEvidence(
 	file: ts.SourceFile,
 	candidates: ReadonlyArray<TopLevelFunction>
@@ -378,8 +362,11 @@ function inlineEvidence(
 	return { inlineCandidates, localCalls };
 }
 
-/** Extract imports, functions, and Effect-style service ownership from the compiler AST. */
-export function analyzeAst(path: string, source: string): AstSummary {
+export function analyzeAst(
+	path: string,
+	source: string,
+	profile: HealthProfile = LANGUAGE_HEALTH_PROFILE
+): AstSummary {
 	const scriptKind = path.endsWith('.tsx')
 		? ts.ScriptKind.TSX
 		: path.endsWith('.jsx')
@@ -398,6 +385,7 @@ export function analyzeAst(path: string, source: string): AstSummary {
 	const functions: Array<FunctionMetric> = [];
 	const duplicateEntities: Array<PathwayEntityCore> = [];
 	const services: Array<string> = [];
+	const heritage = compileHealthProfile(profile).serviceHeritage;
 	const topLevelFunctions: Array<TopLevelFunction> = [];
 	const visit = (node: ts.Node): void => {
 		const topLevel = topLevelFunctionCandidate(node);
@@ -503,18 +491,14 @@ export function analyzeAst(path: string, source: string): AstSummary {
 		if (
 			ts.isClassDeclaration(node) &&
 			node.name &&
-			node.heritageClauses?.some((clause) =>
-				clause.getText(file).match(/(?:Effect|Context|ServiceMap)\.Service/)
-			)
+			node.heritageClauses?.some((clause) => matchesAny(clause.getText(file), heritage))
 		)
 			services.push(node.name.text);
 		if (
 			ts.isVariableDeclaration(node) &&
 			ts.isIdentifier(node.name) &&
 			node.initializer &&
-			/(?:Context|ServiceMap)\.(?:(?:Generic)?Tag|Service)\s*(?:<[^;]+?>)?\s*\(/.test(
-				node.initializer.getText(file)
-			)
+			matchesAny(node.initializer.getText(file), heritage)
 		)
 			services.push(node.name.text);
 		ts.forEachChild(node, visit);
@@ -557,13 +541,6 @@ const INDIRECTION = {
 	}
 } as const;
 
-/**
- * Q1/Q3/Q4 as catalogue rows, from the same inline-candidate walk the metrics already publish.
- *
- * Snapshot used to treat these as optional quality overlays. They are the gate: a transparent
- * one-use forwarder is an error, a small named expression is a hint, and a parameter callback
- * proxy is the sharper Q1 form of the same shape.
- */
 export function indirectionFindings(
 	file: string,
 	source: string

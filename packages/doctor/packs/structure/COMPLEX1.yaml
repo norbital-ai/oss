@@ -9,21 +9,9 @@ rule:
         - kind: MethodDeclaration
         - kind: ArrowFunction
         - kind: FunctionExpression
-    - has:
-        all:
-          - kind: IfStatement
-          - has:
-              all:
-                - kind: IfStatement
-                - has:
-                    all:
-                      - kind: IfStatement
-                      - has:
-                          kind: IfStatement
-                        stopBy: end
-                  stopBy: end
-            stopBy: end
-      stopBy: end
+    - fact:
+        name: nestingDepth
+        atLeast: 4
 examples:
   bad:
     - 'export function f(a, b, c, d) { if (a) { if (b) { if (c) { if (d) { return 1; } } } } return 0; }'

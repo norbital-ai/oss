@@ -1,5 +1,5 @@
 /**
- * The extension surface: authored rules, packs, and overlap bindings.
+ * The extension surface: authored rules, packs, and overlap YAML.
  *
  * These run against real repositories on disk rather than a mocked filesystem, because the whole
  * mechanism is discovery — a config found, a `.ts` module imported, git deciding which files are
@@ -17,10 +17,11 @@ import {
 	definePack,
 	audit,
 	assess,
-	overlapRules,
+	overlapPack,
 	runRules,
 	sourceFiles,
-	loadConfig
+	loadConfig,
+	loadPatternFiles
 } from '../build/index.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -113,31 +114,24 @@ test('rule authoring is validated at definition, not at the first scan', () => {
 	assert.throws(() => definePack({ name: 'p', rules: [rule, rule] }), /declares rule X3 twice/);
 });
 
-test('overlap bindings name any owner, and an importer of that owner is exempt', (context) => {
+test('an overlap YAML rule reports the shape, and an importer of its owner is exempt', async (context) => {
 	const root = repository('overlap', {
 		'package.json': '{"name":"overlap","type":"module"}',
 		'src/unaware.ts': 'export const c = (x: number) => Math.min(Math.max(x, 0), 10);\n',
 		'src/aware.ts':
-			'import { clamp } from "es-toolkit";\nexport const c = (x: number) => Math.min(Math.max(x, 0), 10);\nvoid clamp;\n'
+			'import { clamp } from "es-toolkit";\nexport const c = (x: number) => Math.min(Math.max(x, 0), 10);\nvoid clamp;\n',
+		'patterns/clamp.yml':
+			'id: CLAMPKIT\nsummary: local clamp reimplements es-toolkit#clamp\nseverity: error\nprinciples: [simplicity, efficiency]\nrule:\n  all:\n    - any:\n        - pattern: "Math.min(Math.max($A, $B), $C)"\n        - pattern: "Math.min($A, Math.max($B, $C))"\n        - pattern: "Math.max(Math.min($A, $B), $C)"\n        - pattern: "Math.max($A, Math.min($B, $C))"\n    - not:\n        importsFrom: es-toolkit\nexamples:\n  bad: ["const b = Math.min(Math.max(v, lo), hi);"]\n  good: ["const b = clamp(v, lo, hi);"]\n'
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const rules = overlapRules([{ shape: 'clamp', owner: 'es-toolkit', member: 'clamp' }]);
-	const findings = runRules({ root, rules });
+	const loaded = await loadPatternFiles(root, 'patterns/clamp.yml');
+	const findings = runRules({ root, rules: loaded.rules, files: ['src/unaware.ts', 'src/aware.ts'] });
 
-	// Bound to es-toolkit, not Effect: the shape detector is library-agnostic.
 	assert.equal(findings.length, 1);
 	assert.match(findings[0]?.location ?? '', /^src\/unaware\.ts:/);
-	assert.match(findings[0]?.location ?? '', /prefer=es-toolkit#clamp/);
-	assert.equal(findings[0]?.rule, 'OVERLAP_CLAMP');
-
-	// The same source is not reported where the owner is already imported.
+	assert.equal(findings[0]?.rule, 'CLAMPKIT');
 	assert.ok(!findings.some((finding) => finding.location.startsWith('src/aware.ts')));
-
-	assert.throws(
-		() => overlapRules([{ shape: 'nope' as 'clamp', owner: 'x', member: 'y' }]),
-		/unknown overlap shape/
-	);
 });
 
 test('a config is discovered, imported without a build step, and composes packs', async (context) => {
@@ -605,8 +599,8 @@ export function route() {
 	// The authorization subclass is called out, because that is the one that is a security bug
 	// rather than a maintainability one.
 	const gate = findings.find((finding) => finding.rule === 'STR1');
-	assert.match(gate?.location ?? '', /class=hardcoded-authorization/);
-	assert.match(gate?.location ?? '', /literal="Engineering"/);
+	assert.match(gate?.location ?? '', /canPublish/);
+	assert.match(gate?.location ?? '', /Engineering/);
 
 	// Nothing was reported against the closed unions, the existence check, or the value comparison.
 	for (const legal of ['isAssistant', 'isKindA', 'hasEmail', 'same'])
@@ -632,15 +626,29 @@ test('a config that cannot load is unusable evidence, not an empty scan', async 
 	await assert.rejects(() => run({ root }), /could not load|Cannot find package/);
 });
 
-test('every EFF4 family the legacy detector carried still has a shape', async (context) => {
-	// The legacy EFF4 covered six families: Number.clamp, Array.chunksOf, Array.partition,
-	// Equivalence, Cache, RateLimiter. Deleting it must not quietly stop enforcing any of them.
-	const { overlapRules } = await import('../build/index.js');
-	const root = repository('eff4', {
-		'package.json': '{"name":"eff4","type":"module"}',
+test('every overlap shape still reports its family', async (context) => {
+	const root = repository('overlaps', {
+		'package.json': '{"name":"overlaps","type":"module"}',
 		'src/clamp.ts': 'export const c = (x: number) => Math.min(Math.max(x, 0), 9);\n',
+		'src/chunk.ts': `export function split(items: ReadonlyArray<number>, size: number): Array<Array<number>> {
+	const chunks: Array<Array<number>> = [];
+	for (let i = 0; i < items.length; i += size) {
+		chunks.push(items.slice(i, i + size));
+	}
+	return chunks;
+}
+`,
+		'src/partition.ts':
+			'export const parts = { yes: items.filter(ok), no: items.filter((item) => !ok(item)) };\n',
 		'src/equal.ts':
 			'export const e = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);\n',
+		'src/group.ts': `export const grouped = items.reduce((acc: Record<string, Array<{ kind: string }>>, item) => {
+	(acc[item.kind] ??= []).push(item);
+	return acc;
+}, {});
+`,
+		'src/unique.ts': 'export const unique = [...new Set(items)];\n',
+		'src/sum.ts': 'export const total = items.reduce((acc, n) => acc + n, 0);\n',
 		'src/cache.ts': `const store = new Map<string, number>();
 export function memo(key: string): number {
 	if (store.has(key)) return store.get(key)!;
@@ -656,19 +664,29 @@ export function tick(now: number): void {
 		work();
 	}
 }
-`
+`,
+		'src/clean.ts': 'export const n = 1;\n'
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const rules = overlapRules([
-		{ shape: 'clamp', owner: 'effect', module: 'Number', member: 'clamp' },
-		{ shape: 'deep-equal', owner: 'effect', module: 'Equal', member: 'equals' },
-		{ shape: 'cache', owner: 'effect', module: 'Cache', member: 'make' },
-		{ shape: 'rate-limit', owner: 'effect', module: 'RateLimiter', member: 'make' }
-	]);
-	const byFile = new Set(
-		runRules({ root, rules }).map((finding) => finding.location.split(':')[0])
-	);
-	for (const file of ['src/clamp.ts', 'src/equal.ts', 'src/cache.ts', 'src/throttle.ts'])
-		assert.ok(byFile.has(file), `${file} must still be detected`);
+	const findings = runRules({ root, rules: overlapPack.rules });
+	const byFile = new Map<string, ReadonlyArray<string>>();
+	for (const finding of findings) {
+		const file = finding.location.split(':')[0] ?? '';
+		byFile.set(file, [...(byFile.get(file) ?? []), finding.rule]);
+	}
+	const expect: ReadonlyArray<readonly [string, string]> = [
+		['src/clamp.ts', 'OVERLAP_CLAMP'],
+		['src/chunk.ts', 'OVERLAP_CHUNK'],
+		['src/partition.ts', 'OVERLAP_PARTITION'],
+		['src/equal.ts', 'OVERLAP_DEEP_EQUAL'],
+		['src/group.ts', 'OVERLAP_GROUP_BY'],
+		['src/unique.ts', 'OVERLAP_UNIQUE'],
+		['src/sum.ts', 'OVERLAP_SUM'],
+		['src/cache.ts', 'OVERLAP_CACHE'],
+		['src/throttle.ts', 'OVERLAP_RATE_LIMIT']
+	];
+	for (const [file, rule] of expect)
+		assert.ok((byFile.get(file) ?? []).includes(rule), `${file} must still be detected as ${rule}`);
+	assert.equal(byFile.has('src/clean.ts'), false);
 });

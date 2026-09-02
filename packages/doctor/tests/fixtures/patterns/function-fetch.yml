@@ -10,3 +10,8 @@ rule:
     - has:
         pattern: fetch($URL)
       stopBy: end
+examples:
+  bad:
+    - 'export function load(url) { return fetch(url); }'
+  good:
+    - 'export function load(url) { return client.get(url); }'

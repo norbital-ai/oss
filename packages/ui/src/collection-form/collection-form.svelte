@@ -206,6 +206,11 @@
 	setCollectionClientContext(() => workspaceClient);
 	const definition = $derived(workspaceClient.collections[String(collection)]);
 	const { t } = useI18n();
+	/**
+	 * Pending approval is not a live commit. The form stays open with its draft so the operator can
+	 * still see what they submitted; `commit` would pretend the live collection already held it.
+	 */
+	let lastSubmissionKind = $state<'committed' | 'pendingApproval' | undefined>(undefined);
 
 	// svelte-ignore state_referenced_locally
 	const initialValues: Record<string, unknown> = pickCollectionFormValues(
@@ -280,7 +285,7 @@
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
 		disabled: () => loading || disabled || updateRestriction != null,
-		submitSuccessBehavior: 'commit',
+		submitSuccessBehavior: () => (lastSubmissionKind === 'pendingApproval' ? 'none' : 'commit'),
 		successMessage: null,
 		translate: t,
 		remoteFn:
@@ -291,11 +296,17 @@
 				const writableValues = pickWritableFormValues(definition.fields, values);
 				return submitCollectionMutation(() =>
 					operations.mutate(recordId ? { id: recordId, ...writableValues } : writableValues)
+				).pipe(
+					Effect.tap((submission) => {
+						lastSubmissionKind =
+							submission.kind === 'pendingApproval' ? 'pendingApproval' : 'committed';
+					})
 				);
 			},
 		onSuccess: (submission) => {
 			if (submission?.kind === 'pendingApproval') {
 				toast.success(t('form.submittedForApproval'));
+				return;
 			}
 			return onAfterSubmit?.();
 		}

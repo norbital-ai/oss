@@ -96,6 +96,12 @@ export type WorkspaceSession = Readonly<{
 	 * contract can serve sync.
 	 */
 	readonly syncStreamUrl: string;
+	/**
+	 * Where Studio opens the authoring EventSource. Same reason as `syncStreamUrl`: EventSource
+	 * cannot ride the command transport. Snapshot `read()` is the mount document; this stream is
+	 * the only progress channel for diagnose / preview / publish / merge / deploy.
+	 */
+	readonly authoringStreamUrl: string;
 	readonly files: WorkspaceFilesHost;
 	readonly operations: WorkspaceOperationsHost;
 }>;

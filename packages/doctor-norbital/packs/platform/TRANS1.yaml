@@ -1,0 +1,21 @@
+id: TRANS1
+summary: executable code carries an explicit removal or migration marker
+severity: error
+principles: [simplicity, straightforwardness, testability, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: VariableStatement
+        - kind: FunctionDeclaration
+        - kind: ExpressionStatement
+        - kind: ReturnStatement
+    - has:
+        all:
+          - kind: trivia:LineComment
+          - regex: '\b(?:TODO|FIXME|HACK)\b[^\n]*\b(?:remove|delete|drop|migrat|temporar|once .* (?:lands|ships))'
+      stopBy: end
+examples:
+  bad:
+    - "// TODO: remove once the migration lands\nexport const bridge = 1;"
+  good:
+    - "// Kept because the importer needs it.\nexport const bridge = 1;"

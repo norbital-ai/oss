@@ -393,6 +393,13 @@ export const CollectionQueryRequest = Schema.Struct(CollectionQueryRequestFields
 });
 export interface CollectionQueryRequest extends Schema.Schema.Type<typeof CollectionQueryRequest> {}
 
+/** One answered-only keyset page. Live prefixes use sync; a deep `after` stays this one-shot. */
+export const CollectionAnchoredPage = Schema.Struct({
+	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+	nextCursor: Schema.NullOr(Schema.String)
+}).annotate({ identifier: 'BoltCollectionAnchoredPage' });
+export interface CollectionAnchoredPage extends Schema.Schema.Type<typeof CollectionAnchoredPage> {}
+
 const {
 	limit: _limit,
 	after: _after,

@@ -139,6 +139,8 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	// Same `CollectionQueryRequest` input and the same read policy as `collections.export`, so it
 	// belongs on the same boundary. It reached the catalogue after this list was written.
 	'collections.count',
+	'collections.findMany',
+	'collections.findFirst',
 	'collections.findGrouped'
 ];
 

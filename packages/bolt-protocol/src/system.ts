@@ -2,6 +2,7 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { WorkspaceAuthoringManifest } from './bundle.js';
 import {
+	CollectionAnchoredPage,
 	CollectionGroupedQueryRequest,
 	CollectionMutateRequest,
 	CollectionQueryRequest
@@ -452,6 +453,16 @@ export const SystemCommandContracts = [
 		name: 'collections.count',
 		input: CollectionQueryRequest,
 		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'collections.findMany',
+		input: CollectionQueryRequest,
+		responses: [ok(CollectionAnchoredPage)]
+	}),
+	commandContract({
+		name: 'collections.findFirst',
+		input: CollectionQueryRequest,
+		responses: [ok(Schema.NullOr(Schema.Record(Schema.String, Schema.Json)))]
 	}),
 	commandContract({
 		name: 'collections.findGrouped',

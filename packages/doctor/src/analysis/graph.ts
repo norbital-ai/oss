@@ -2,8 +2,8 @@
  * Module-graph construction: package ownership, specifier resolution, cycles, and test reach.
  *
  * Resolution follows the repository's own declarations rather than a convention table: relative
- * specifiers, nearest ancestor `tsconfig`/`jsconfig` paths, manifest `imports` aliases, workspace
- * package names with their full conditional `exports`, SvelteKit's fixed `$lib`, and Vite query or
+ * specifiers, nearest ancestor `tsconfig`/`jsconfig` paths, manifest `imports` aliases, sibling
+ * package names with their full conditional `exports`, the fixed `$lib/` alias onto `src/lib`, and Vite query or
  * hash suffixes stripped before extension probing. Build output named by an export projects back
  * onto the source that produces it, because the graph holds source files, not artifacts.
  *
@@ -55,8 +55,8 @@ export function moduleMappings(owner: PackageOwner): Array<AliasMapping> {
 		for (const [pattern, target] of Object.entries(imports)) {
 			// A manifest points an alias at build output; the source that produces it is what the
 			// graph holds. `exportedStems` already does this for `exports`, and omitting it here left
-			// `#lib/*` -> `./build/*` resolving into a directory the scan never reads, so bolt's
-			// internal imports produced no edges at all.
+			// `#lib/*` -> `./build/*` resolving into a directory the scan never reads, so a
+			// package's own hashed imports produced no edges at all.
 			const targets = stringTargets(target)
 				.map((item) =>
 					item
@@ -162,7 +162,7 @@ export function exportedStems(owner: PackageOwner, subpath: string): Array<strin
 	return [];
 }
 
-/** Locate package ownership once per directory and retain names for workspace import resolution. */
+/** Locate package ownership once per directory and retain names for sibling-package import resolution. */
 export function packageFor(
 	path: string,
 	scanRoot: string,
@@ -253,7 +253,7 @@ export function resolveImport(
 		}
 	}
 	// `#lib/` is not a convention — it is whatever the manifest's `imports` map says, which
-	// `moduleMappings` now reads. `$lib/` really is SvelteKit's fixed convention, so it stays.
+	// `moduleMappings` now reads. `$lib/` is a fixed alias onto `src/lib`, so it stays.
 	if (stems.length === 0 && specifier.startsWith('#')) internal = true;
 	if (stems.length === 0 && specifier.startsWith('$lib/')) {
 		internal = true;
@@ -270,10 +270,10 @@ export function resolveImport(
 			const candidates = localOwners.length > 0 ? localOwners : owners;
 			if (candidates.length !== 1)
 				throw new Error(
-					`ambiguous workspace package name ${matched}: ${candidates.map((item) => item.id).join(', ')}`
+					`ambiguous package name ${matched}: ${candidates.map((item) => item.id).join(', ')}`
 				);
 			const target = candidates[0];
-			if (!target) throw new Error(`ambiguous workspace package name ${matched}`);
+			if (!target) throw new Error(`ambiguous package name ${matched}`);
 			const subpath = specifier === matched ? '' : specifier.slice(matched.length + 1);
 			stems = exportedStems(target, subpath);
 			if (stems.length === 0) stems = [join(target.root, 'src', subpath || 'index')];

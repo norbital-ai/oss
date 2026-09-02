@@ -1,7 +1,7 @@
 id: NODE1
 summary: source reimplements Node built-in environment parsing
 severity: error
-principles: [simplicity, straightforwardness, no-bloat]
+principles: [ simplicity, straightforwardness, no-bloat ]
 rule:
   all:
     - kind: SourceFile
@@ -13,7 +13,11 @@ rule:
         regex: '='
       stopBy: end
 examples:
+  file: scripts/config.ts
   bad:
     - 'export class Config { parseEnvironment(text: string) { const out = {}; for (const line of text.split(/\r?\n/)) { const match = line.match(/^([^=]+)=(.*)$/); out[match[1]] = match[2]; } return out; } }'
+    - export function parseEnv(text) { return Object.fromEntries(text.split('\n').map((l) => l.split('='))); }
   good:
     - "export { parseEnv } from 'node:util';"
+    - export function parseList(text) { return text.split(','); }
+    - export function readEnv() { return process.env; }

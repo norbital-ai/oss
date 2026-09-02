@@ -1,11 +1,16 @@
 id: S3
 summary: verbose null and undefined check
 severity: hint
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule:
   any:
     - $VALUE !== null && $VALUE !== undefined
     - $VALUE === null || $VALUE === undefined
 examples:
-  bad: ["if (row !== null && row !== undefined) use(row);"]
-  good: ["if (row != null) use(row);"]
+  bad:
+    - "if (row !== null && row !== undefined) use(row);"
+  good:
+    - "if (row != null) use(row);"
+    - export const ok = row != null;
+    - export const ok = row !== null;
+    - export const ok = row !== undefined && row.ready;

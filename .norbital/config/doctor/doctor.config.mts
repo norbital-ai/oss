@@ -12,5 +12,18 @@ import { reactivePack } from '@norbital-ai/doctor-norbital';
  * no opinionated rules of its own.
  */
 export default defineConfig({
-	packs: ['norbital', reactivePack, stringlyPack, effectCeremonyPack]
+	packs: ['norbital', reactivePack, stringlyPack, effectCeremonyPack],
+	profile: {
+		frameworkEntries: [
+			'(?:^|/)(?:hooks(?:\\.server|\\.client)?|\\+[^/]*)\\.[cm]?[jt]sx?$',
+			'(?:^|/)[^/]*\\.host\\.[cm]?[jt]s$',
+			'(?:^|/)src/(?:env|params|hooks|service-worker)\\.[cm]?[jt]s$',
+			'\\.svelte$'
+		],
+		serviceHeritage: [
+			'(?:Effect|Context|ServiceMap)\\.Service',
+			'(?:Context|ServiceMap)\\.(?:(?:Generic)?Tag|Service)\\s*(?:<[^;]+?>)?\\s*\\('
+		],
+		genericLabels: ['effect', 'gen', 'succeed']
+	}
 });

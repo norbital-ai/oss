@@ -1,0 +1,15 @@
+id: UI23
+summary: inline style carries layout that belongs on a primitive
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:StyleProperty
+    - regex: '(?:display\s*:\s*(?:flex|grid)|position\s*:\s*(?:absolute|fixed|sticky))'
+examples:
+  bad:
+    - '<div style="display:flex; position:absolute"></div>'
+  good:
+    - '<Cover><p>x</p></Cover>'

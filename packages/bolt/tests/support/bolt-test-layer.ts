@@ -28,6 +28,7 @@ import {
 	TransportRequest,
 	TransportResponse
 } from '@norbital-ai/bolt-protocol';
+import { cascade } from '../../src/authoring/models-schema.js';
 import {
 	collection,
 	field,
@@ -36,6 +37,7 @@ import {
 	type CollectionDefinition,
 	type FieldDefinition,
 	type PolicyDeclaration,
+	type RelationDefinition,
 	type WorkspaceDefinition,
 	type WorkspaceMigrationEntry
 } from '../../src/authoring/workspace-schema.js';
@@ -120,27 +122,76 @@ const declaredIndexMetadata = (
 		.toSorted()
 		.map((name) => ({ name: collectionIndexName(collection.name, name), columns: [name] }));
 
+/**
+ * The compiler's `+relationship.ts` shape, rebuilt from a fixture's `relations` array.
+ *
+ * Real tenants reach `planWorkspaceMigration` through `compileWorkspaceAuthoring({ relationships })`.
+ * The harness used to omit that argument, so every fixture provisioned zero foreign keys while
+ * hr-payroll's lineage creates 46. This is the same compiler path; it is not a stub.
+ */
+const relationshipModuleFor = (relations: ReadonlyArray<RelationDefinition>) => {
+	if (relations.length === 0) return undefined;
+	return (helpers: {
+		readonly one: Readonly<Record<string, (input?: Readonly<Record<string, unknown>>) => object>>;
+		readonly many: Readonly<Record<string, (input?: Readonly<Record<string, unknown>>) => object>>;
+		readonly [collection: string]: unknown;
+	}) => {
+		const endpoint = (collection: string, column: string): unknown => {
+			const table = helpers[collection];
+			if (table === null || typeof table !== 'object')
+				throw new TypeError(`Relationship names unknown collection ${collection}.`);
+			return Reflect.get(table, column);
+		};
+		const bySource: Record<string, Record<string, unknown>> = {};
+		for (const relation of relations) {
+			const factories = relation.cardinality === 'one' ? helpers.one : helpers.many;
+			const target = factories[relation.target];
+			if (target === undefined)
+				throw new TypeError(
+					`Relationship ${relation.name} targets unknown collection ${relation.target}.`
+				);
+			const declared =
+				relation.from === undefined || relation.to === undefined
+					? target()
+					: target({
+							from: endpoint(relation.from.collection, relation.from.column),
+							to: endpoint(relation.to.collection, relation.to.column)
+						});
+			const held = bySource[relation.source] ?? {};
+			held[relation.name] = relation.cascade === true ? cascade(declared) : declared;
+			bySource[relation.source] = held;
+		}
+		return bySource;
+	};
+};
+
+const compiledAuthoringFor = (definition: WorkspaceDefinition) => {
+	const relationships = relationshipModuleFor(definition.relations);
+	return compileWorkspaceAuthoring({
+		models: Object.fromEntries(
+			definition.collections.map((collection) => [
+				collection.name,
+				{
+					__kind: 'model' as const,
+					columns: drizzleColumns(collection),
+					metadata: { indexes: declaredIndexMetadata(collection) }
+				}
+			])
+		),
+		sourcePaths: Object.fromEntries(
+			definition.collections.map(({ name }) => [name, `fixture:${name}`])
+		),
+		...(relationships === undefined ? {} : { relationships })
+	});
+};
+
 export const provisioningStatements = async (
 	definition: WorkspaceDefinition
 ): Promise<ReadonlyArray<{ readonly id: string; readonly sql: string }>> => {
 	const plan = buildSchemaPlan(definition).steps;
 	const migration = await Effect.runPromise(
 		planWorkspaceMigration({
-			authoring: compileWorkspaceAuthoring({
-				models: Object.fromEntries(
-					definition.collections.map((collection) => [
-						collection.name,
-						{
-							__kind: 'model' as const,
-							columns: drizzleColumns(collection),
-							metadata: { indexes: declaredIndexMetadata(collection) }
-						}
-					])
-				),
-				sourcePaths: Object.fromEntries(
-					definition.collections.map(({ name }) => [name, `fixture:${name}`])
-				)
-			}),
+			authoring: compiledAuthoringFor(definition),
 			previous: undefined
 		})
 	);
@@ -197,8 +248,8 @@ import * as Workspace from '../../src/runtime/workspace.js';
 /**
  * A whole Bolt runtime over real SQL, without a host.
  *
- * Data semantics are the part of Bolt that pure functions cannot prove: visibility predicates,
- * approval interception, the sync outbox and its cursor all only exist once statements actually run.
+ * Data semantics are the part of Bolt that pure functions cannot prove: visibility predicates
+ * and approval interception only exist once statements actually run.
  * PGlite gives that a Postgres to run against in-process, so these stay deterministic unit tests
  * rather than something that needs a container.
  */
@@ -487,21 +538,7 @@ export const makeBoltTestRuntime = async (
 	for (const step of await provisioningStatements(definition)) await run(step.id, step.sql);
 	const migration = await Effect.runPromise(
 		planWorkspaceMigration({
-			authoring: compileWorkspaceAuthoring({
-				models: Object.fromEntries(
-					definition.collections.map((collection) => [
-						collection.name,
-						{
-							__kind: 'model' as const,
-							columns: drizzleColumns(collection),
-							metadata: { indexes: declaredIndexMetadata(collection) }
-						}
-					])
-				),
-				sourcePaths: Object.fromEntries(
-					definition.collections.map(({ name }) => [name, `fixture:${name}`])
-				)
-			}),
+			authoring: compiledAuthoringFor(definition),
 			previous: undefined
 		})
 	);

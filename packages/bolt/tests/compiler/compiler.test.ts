@@ -78,7 +78,7 @@ describe('Bolt compiler owners', () => {
 		expect(first).toEqual(second);
 		// `people` is authored, so the drizzle lineage renders its table and the plan renders nothing.
 		expect(first.steps.map(({ id }) => id)).not.toContain('collection:people');
-		// The sync engine streams the canonical collection history and has no retired sync outbox.
+		// Live sync has no durable outbox table; prefix wakes come from in-process SyncChange facts.
 		expect(first.steps.map(({ id }) => id)).not.toContain('collection:bolt_sync_outbox');
 		expect(first.steps.map(({ id }) => id)).toContain('collection:bolt_collection_history');
 		expect(first.steps.find(({ id }) => id === 'collection:approval_request')?.sql).toContain(

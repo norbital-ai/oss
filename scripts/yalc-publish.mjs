@@ -205,9 +205,10 @@ if (!existsSync(path.join(repositoryRoot, 'node_modules/.bin/yalc'))) {
  *
  * turbo hashes each package's inputs and replays the cache for anything unchanged, so the common
  * case — one package edited — compiles one package instead of five, and a second linker invoked
- * straight after the first compiles nothing at all. Four workers preserve dependency ordering but
- * overlap independent TypeScript/Svelte builds; a forced cold benchmark on the reset host was
- * 22.1s versus 27.3s serially.
+ * straight after the first compiles nothing at all. Serial `--concurrency=1` is the honest build:
+ * bolt emits declarations that `@norbital-ai/ui` consumers need, and overlapping those at
+ * `--concurrency=4` races the whole reset. A forced cold serial run was 27.3s versus 22.1s
+ * overlapped — the race costs more than five seconds.
  */
 const buildable = packages.filter(
 	({ directory }) =>
@@ -219,7 +220,7 @@ if (buildable.length > 0) {
 		'turbo',
 		'run',
 		'build',
-		'--concurrency=4',
+		'--concurrency=1',
 		...buildable.map(({ name }) => `--filter=${name}`)
 	];
 	if (buildTargetOnly) buildArguments.push('--only');

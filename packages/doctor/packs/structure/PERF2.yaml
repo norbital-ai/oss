@@ -4,18 +4,18 @@ severity: error
 principles: [simplicity, efficiency, no-bloat]
 rule:
   all:
-    - pattern: Schema.$FN($...ARGS)
-    - regex: 'decodeUnknown|decode|encode|validate'
-      on: FN
-    - inside:
-        pattern: $S.map($CB)
-      stopBy: end
-    - not:
-        inside:
-          regex: "^Effect\\."
-        stopBy: end
+    - kind: CallExpression
+    - regex: '^Schema\.(?:decodeUnknown|decode|encode|validate)'
+    - regex: 'decodeUnknown(?:Effect|Sync|Either)?\(|^Schema\.(?:decode|encode|validate)\('
+    - fact:
+        name: enclosingCallChain
+        regex: '^(?:map|filter|flatMap|forEach|reduce|some|every|find)$'
+        unlessReceiver: '^(?:Effect|Option|Either|Exit|Fiber|STM)$'
 examples:
   bad:
     - 'export const f = (xs) => xs.map((x) => Schema.decodeUnknownSync(Row)(x));'
   good:
-    - "export const d = Schema.decodeUnknownSync(Row);\nexport const f = (xs) => xs.map(d);\nexport const g = (e) => Effect.flatMap(e, (x) => Schema.decodeUnknownEffect(Row)(x));"
+    - |
+      export const d = Schema.decodeUnknownSync(Row);
+      export const f = (xs) => xs.map(d);
+      export const g = (e) => Effect.flatMap(e, (x) => Schema.decodeUnknownEffect(Row)(x));

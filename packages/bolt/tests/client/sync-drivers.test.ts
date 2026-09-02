@@ -365,6 +365,71 @@ describe('a browser Sync broker', () => {
 		expect(stream?.closed()).toBe(1);
 	}, 60_000);
 
+	it('elects one physical stream for two tabs of the same workspace without 410', async () => {
+		installBrowserProfile(fakeBrowserProfile());
+		const streams = fakeEventSources();
+		const options = {
+			election: { syncPrincipal: 'signed-in-user' },
+			streamUrl: 'https://sync.test/stream',
+			source: streams.source
+		};
+		const tabA = track(createBrowserSyncBroker(options));
+		const tabB = track(createBrowserSyncBroker(options));
+		const scope = browserScope('workspace-a', 'tenant-a');
+		const registrationsA: Array<string> = [];
+		const registrationsB: Array<string> = [];
+		const bindingA = tabA.attachWorkspace({
+			scope,
+			controls: fakeWorkspaceControls(registrationsA)
+		});
+		const bindingB = tabB.attachWorkspace({
+			scope,
+			controls: fakeWorkspaceControls(registrationsB)
+		});
+
+		await settleBroker();
+		expect(streams.opened).toHaveLength(1);
+		streams.opened[0]?.emit('open', {});
+		await settleBroker();
+
+		await bindingA.attachment.register({ queries: [], detached: [], pending: [] });
+		await bindingB.attachment.register({ queries: [], detached: [], pending: [] });
+		const connectionId = registrationsA[0];
+		expect(connectionId).toEqual(expect.any(String));
+		expect(registrationsB).toEqual([connectionId]);
+		expect(streams.opened).toHaveLength(1);
+		expect(streams.opened[0]?.closed()).toBe(0);
+	}, 60_000);
+
+	it('keeps the elected stream open when a live query expands onto a new key', async () => {
+		installBrowserProfile(fakeBrowserProfile());
+		const streams = fakeEventSources();
+		const broker = track(
+			createBrowserSyncBroker({
+				election: { syncPrincipal: 'signed-in-user' },
+				streamUrl: 'https://sync.test/stream',
+				source: streams.source
+			})
+		);
+		const registrations: Array<string> = [];
+		const binding = broker.attachWorkspace({
+			scope: browserScope('workspace-a', 'tenant-a'),
+			controls: fakeWorkspaceControls(registrations)
+		});
+		await settleBroker();
+		streams.opened[0]?.emit('open', {});
+		await settleBroker();
+		await binding.attachment.register({ queries: [], detached: [], pending: [] });
+		await binding.attachment.register({
+			queries: [],
+			detached: ['calendar-unscoped'],
+			pending: []
+		});
+		expect(streams.opened).toHaveLength(1);
+		expect(streams.opened[0]?.closed()).toBe(0);
+		expect(new Set(registrations).size).toBe(1);
+	}, 60_000);
+
 	it('elects one physical stream for two tabs while attaching both workspace scopes', async () => {
 		installBrowserProfile(fakeBrowserProfile());
 		const streams = fakeEventSources();

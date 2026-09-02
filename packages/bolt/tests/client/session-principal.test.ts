@@ -16,6 +16,7 @@ const declare = (principal: string, credential: string): WorkspaceSession => ({
 	credential,
 	transport: { command: async () => null },
 	syncStreamUrl: '/sync',
+	authoringStreamUrl: '/authoring/stream',
 	files: {
 		store: async () => '',
 		remove: async () => undefined,

@@ -1,11 +1,16 @@
 id: PERF4
 summary: filter materializes every match only to select the first
 severity: error
-principles: [simplicity, efficiency, no-bloat]
+principles: [ simplicity, efficiency, no-bloat ]
 rule:
   any:
     - $SOURCE.filter($PREDICATE)[0]
     - $SOURCE.filter($PREDICATE).at(0)
 examples:
-  bad: ["const first = rows.filter(isReady)[0];"]
-  good: ["const first = rows.find(isReady);"]
+  bad:
+    - "const first = rows.filter(isReady)[0];"
+  good:
+    - "const first = rows.find(isReady);"
+    - export const first = rows.find(isReady);
+    - export const second = rows.filter(isReady)[1];
+    - export const n = rows.filter(isReady).length;

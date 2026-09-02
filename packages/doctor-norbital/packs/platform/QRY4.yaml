@@ -1,0 +1,27 @@
+id: QRY4
+summary: public query contract exposes manual refresh
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: PropertySignature
+        - kind: MethodSignature
+        - kind: PropertyDeclaration
+        - kind: MethodDeclaration
+    - regex: '\b(?:refresh|refetch)\b'
+    - inside:
+        all:
+          - any:
+              - kind: InterfaceDeclaration
+              - kind: TypeAliasDeclaration
+              - kind: ClassDeclaration
+          - regex: '\b\w*[Qq]uery\w*\b'
+      stopBy: end
+examples:
+  bad:
+    - 'export interface RemoteQuery<T> { readonly current: T; readonly refresh: () => Promise<void>; }'
+  good:
+    - |
+      export interface RemoteQuery<T> { readonly current: T; }
+      export interface DocumentToc { readonly refresh: () => void; }

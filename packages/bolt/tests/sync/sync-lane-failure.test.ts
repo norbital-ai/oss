@@ -378,7 +378,7 @@ describe('sync lane fail-closed delivery (S7)', () => {
 		expect(reader.closes).toEqual(['guest-failed']);
 	});
 
-	it('closes the connection when the guest fails to evaluate its opening request', async () => {
+	it('leaves the stream open when the guest refuses a registration', async () => {
 		const harness = makeLane();
 		const viewer = makeViewer('opener', 'credential:opener');
 		harness.viewers.set('opener', viewer);
@@ -402,17 +402,72 @@ describe('sync lane fail-closed delivery (S7)', () => {
 				unavailable: () => new Error('opener is unavailable')
 			})
 		).rejects.toThrow('guest connect exploded');
-		expect(viewer.closes).toEqual(['guest-failed']);
+		expect(viewer.closes).toEqual([]);
+		expect(viewer.connection.closed).toBe(false);
+		expect(harness.lane.get('opener')).toBe(viewer.connection);
+
+		harness.connect = () =>
+			Promise.resolve({ results: [evaluationResult('people', 'people', PEOPLE)], outcomes: [] });
+		await harness.lane.connect({
+			request: {
+				queries: [
+					{
+						queryKey: 'people',
+						input: { kind: 'findMany', collection: 'people', orderBy: { rank: 'asc' }, limit: 10 },
+						requestedPrefix: 10
+					}
+				],
+				detached: [],
+				pending: []
+			},
+			resolve: () => viewer.connection,
+			unavailable: () => new Error('opener is unavailable')
+		});
+		expect(viewer.connection.subscriptions.get('people')).toEqual(expect.any(String));
+		expect(viewer.closes).toEqual([]);
 	});
 
-	it('closes the connection when the opening answer does not cover the queries that were asked', async () => {
+	it('leaves an already-settled stream open when a later registration is refused', async () => {
+		const harness = makeLane();
+		const reader = await open(harness, 'reader', 'people', 'people', PEOPLE);
+		harness.connect = () => Promise.reject(new Error('Live projection must include ordering field id'));
+
+		await expect(
+			harness.lane.connect({
+				request: {
+					queries: [
+						{
+							queryKey: 'leave',
+							input: {
+								kind: 'findMany',
+								collection: 'leave_types',
+								orderBy: { code: 'asc' },
+								limit: 10
+							},
+							requestedPrefix: 10
+						}
+					],
+					detached: [],
+					pending: []
+				},
+				resolve: () => reader.connection,
+				unavailable: () => new Error('reader is unavailable')
+			})
+		).rejects.toThrow('Live projection must include ordering field id');
+		expect(reader.closes).toEqual([]);
+		expect(reader.connection.closed).toBe(false);
+		expect(reader.connection.subscriptions.get('people')).toEqual(expect.any(String));
+	});
+
+	it('refuses an opening answer that does not cover the queries without closing the stream', async () => {
 		const harness = makeLane();
 		const viewer = makeViewer('opener', 'credential:opener');
 		harness.viewers.set('opener', viewer);
 		harness.lane.open(viewer.connection, 'client');
 		// The guest answered about a different query than the one requested. Answering the wrong
 		// question is not a smaller failure than answering none: the browser would install a prefix it
-		// never asked for and wait forever for the one it did.
+		// never asked for and wait forever for the one it did. That refusal used to detach the
+		// physical stream, which is the month-hop / calendar-expansion 410.
 		harness.connect = () =>
 			Promise.resolve({ results: [evaluationResult('orders', 'orders', [])], outcomes: [] });
 
@@ -433,7 +488,57 @@ describe('sync lane fail-closed delivery (S7)', () => {
 				unavailable: () => new Error('opener is unavailable')
 			})
 		).rejects.toThrow('sync initial answer does not match its prefix');
-		expect(viewer.closes).toEqual(['guest-failed']);
+		expect(viewer.closes).toEqual([]);
+		expect(viewer.connection.closed).toBe(false);
+		expect(harness.lane.get('opener')).toBe(viewer.connection);
+	});
+
+	it('leaves an already-settled stream open when a later attach is incompatible', async () => {
+		const harness = makeLane();
+		const reader = await open(harness, 'reader', 'people', 'people', PEOPLE);
+		// Same plan key as `people`, different input: the first attachment keeps the plan alive
+		// through `release` of the new key, so attach still has something to refuse.
+		harness.connect = () =>
+			Promise.resolve({
+				results: [
+					{
+						...evaluationResult('people-reshaped', 'people', PEOPLE),
+						input: {
+							kind: 'findMany',
+							collection: 'people',
+							orderBy: { name: 'asc' },
+							limit: 10
+						}
+					}
+				],
+				outcomes: []
+			});
+
+		await expect(
+			harness.lane.connect({
+				request: {
+					queries: [
+						{
+							queryKey: 'people-reshaped',
+							input: {
+								kind: 'findMany',
+								collection: 'people',
+								orderBy: { name: 'asc' },
+								limit: 10
+							},
+							requestedPrefix: 10
+						}
+					],
+					detached: [],
+					pending: []
+				},
+				resolve: () => reader.connection,
+				unavailable: () => new Error('reader is unavailable')
+			})
+		).rejects.toThrow('incompatible versioned sync registration');
+		expect(reader.closes).toEqual([]);
+		expect(reader.connection.closed).toBe(false);
+		expect(reader.connection.subscriptions.get('people')).toEqual(expect.any(String));
 	});
 });
 

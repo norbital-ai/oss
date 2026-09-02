@@ -6,6 +6,7 @@
 	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
 		currentRoutedRelease,
+		evidenceLogs,
 		formatMicroSgd,
 		reviewStatusMessageKey,
 		studioMetrics,
@@ -13,40 +14,45 @@
 		type ReleaseControls,
 		type WorkbenchBuildReceipt
 	} from '#lib/client/ui/studio/studio-state.js';
+	import type { AuthoringLiveState } from '#lib/client/ui/studio/authoring-live.js';
 
 	let {
 		snapshot,
-		receipt,
 		hostStatus,
 		controls,
+		liveLogs = [],
+		memory = null,
 		onrollback
 	}: {
 		snapshot?: HostSnapshot | undefined;
-		receipt?: WorkbenchBuildReceipt | undefined;
 		hostStatus: string;
 		controls?: ReleaseControls | undefined;
+		liveLogs?: AuthoringLiveState['logs'];
+		memory?: AuthoringLiveState['memory'];
 		onrollback?: (() => void) | undefined;
 	} = $props();
 	const { t } = useI18n();
 
 	let buildOpen = $state(false);
+	let deployOpen = $state(false);
 	let historyOpen = $state(false);
 	let runtimeOpen = $state(false);
 	const currentRelease = $derived(currentRoutedRelease(snapshot?.entries ?? []));
+	const logs = $derived(evidenceLogs(snapshot));
 	const metrics = $derived(
 		studioMetrics({ usage: snapshot?.usage ?? [], source: snapshot?.source })
 	);
 	const openReview = $derived(
-		[...(snapshot?.releaseRequests ?? [])]
+		[...(snapshot?.mergeRequests ?? [])]
 			.reverse()
-			.find((request) => request.status === 'open' || request.status === 'approving')
+			.find((request) => request.state === 'draft' || request.state === 'ready')
 	);
 	const missingFacilities = $derived(
 		(snapshot?.facilities ?? []).filter((facility) => !facility.available)
 	);
 	const duration = $derived.by(() => {
-		if (receipt === undefined) return undefined;
-		const milliseconds = Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt);
+		if (logs.build === undefined) return undefined;
+		const milliseconds = Date.parse(logs.build.completedAt) - Date.parse(logs.build.startedAt);
 		return Number.isFinite(milliseconds) && milliseconds >= 0
 			? t('bolt.studio.durationSeconds', {
 					count: (milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)
@@ -100,23 +106,40 @@
 				{hostStatus}
 			</p>
 		{/if}
+		{#if memory !== null || liveLogs.length > 0}
+			<Stack gap="sm">
+				<h3 class="text-overline">{t('bolt.studio.live.logs')}</h3>
+				{#if memory !== null}
+					<p class="text-xs text-muted-foreground" data-testid="studio-workbench-memory">
+						{t('bolt.studio.live.memory', { rss: memory.rssMiB, limit: memory.limitMiB })}
+					</p>
+				{/if}
+				{#if liveLogs.length > 0}
+					<ol class="divide-y divide-border/50 border-y border-border/50">
+						{#each liveLogs.slice(-12) as entry (entry.at + entry.line)}
+							<li class="py-1.5 font-mono text-micro text-foreground">{entry.line}</li>
+						{/each}
+					</ol>
+				{/if}
+			</Stack>
+		{/if}
 		<Stack gap="sm">
 			<h3 class="text-overline">{t('bolt.studio.latest')}</h3>
 			<ol class="divide-y divide-border/50 border-y border-border/50">
-				{#if receipt !== undefined}
+				{#if logs.build !== undefined}
 					<li class="py-2">
 						<Inline gap="sm" align="start">
 							<Icon
-								icon={receipt.outcome === 'succeeded'
+								icon={logs.build.outcome === 'succeeded'
 									? 'lucide:circle-check'
 									: 'lucide:circle-alert'}
 								class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
 							/>
 							<Stack gap="xs" grow class="min-w-0">
 								<p class="text-xs font-medium text-foreground">
-									{t('bolt.studio.previewOutcome', { outcome: buildOutcomeLabel(receipt.outcome) })}
+									{t('bolt.studio.previewOutcome', { outcome: buildOutcomeLabel(logs.build.outcome) })}
 								</p>
-								<p class="text-micro text-muted-foreground">{receipt.summary}</p>
+								<p class="text-micro text-muted-foreground">{logs.build.summary}</p>
 							</Stack>
 						</Inline>
 					</li>
@@ -144,23 +167,23 @@
 							<Stack gap="xs">
 								<p class="text-xs font-medium text-foreground">
 									{t('bolt.studio.reviewOutcome', {
-										status: t(reviewStatusMessageKey(openReview.status))
+										status: t(reviewStatusMessageKey(openReview.state))
 									})}
 								</p>
 								<p class="text-micro text-muted-foreground">
-									{openReview.authorId} · {openReview.commit.slice(0, 12)}
+									{openReview.openedBy} · {openReview.head.slice(0, 12)}
 								</p>
 							</Stack>
 						</Inline>
 					</li>
 				{/if}
-				{#if receipt === undefined && snapshot?.preview == null && openReview === undefined}
+				{#if logs.build === undefined && snapshot?.preview == null && openReview === undefined}
 					<li class="py-2 text-meta">{hostStatus}</li>
 				{/if}
 			</ol>
 		</Stack>
 
-		{#if receipt !== undefined}
+		{#if logs.build !== undefined}
 			<Stack as="section" gap="sm">
 				{@render disclosureButton(
 					t('bolt.studio.buildDetails'),
@@ -170,32 +193,52 @@
 				)}
 				{#if buildOpen}
 					<Stack id="activity-build-details" gap="sm" class="rounded-md bg-muted/35 p-3">
-						<p class="text-xs text-foreground">{receipt.summary}</p>
+						<p class="text-xs text-foreground">{logs.build.summary}</p>
 						<Grid as="dl" gap="xs" tracks="auto 1fr" class="text-micro">
 							<dt class="text-muted-foreground">{t('bolt.studio.phase')}</dt>
-							<dd>{buildPhaseLabel(receipt.phase)}</dd>
+							<dd>{buildPhaseLabel(logs.build.phase)}</dd>
 							<dt class="text-muted-foreground">{t('bolt.studio.commit')}</dt>
-							<dd class="break-all font-mono">{receipt.commit}</dd>
+							<dd class="break-all font-mono">{logs.build.commit}</dd>
 							<dt class="text-muted-foreground">{t('bolt.studio.cache')}</dt>
-							<dd>{cacheLabel(receipt.cache)}</dd>
+							<dd>{cacheLabel(logs.build.cache)}</dd>
 							{#if duration !== undefined}<dt class="text-muted-foreground">
 									{t('bolt.studio.duration')}
 								</dt>
 								<dd>{duration}</dd>{/if}
 						</Grid>
-						{#if receipt.stdout !== undefined}
+						{#if logs.build.stdout !== undefined}
 							<Scroll name="Build stdout" class="max-h-64">
 							<pre
-								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-foreground">{receipt.stdout}</pre>
+								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-foreground">{logs.build.stdout}</pre>
 							</Scroll>
 						{/if}
-						{#if receipt.stderr !== undefined}
+						{#if logs.build.stderr !== undefined}
 							<Scroll name="Build stderr" class="max-h-64">
 							<pre
-								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-destructive">{receipt.stderr}</pre>
+								class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-destructive">{logs.build.stderr}</pre>
 							</Scroll>
 						{/if}
 					</Stack>
+				{/if}
+			</Stack>
+		{/if}
+
+		{#if logs.deploy.length > 0}
+			<Stack as="section" gap="sm">
+				{@render disclosureButton(
+					t('bolt.studio.runtimeDetails'),
+					deployOpen,
+					'activity-deploy-details',
+					() => (deployOpen = !deployOpen)
+				)}
+				{#if deployOpen}
+					<Scroll id="activity-deploy-details" name="Deploy log" class="max-h-64">
+						<ul class="rounded-md bg-muted/35 p-3 font-mono text-micro text-foreground">
+							{#each logs.deploy as line, index (`${line.at}:${index}`)}
+								<li class="whitespace-pre-wrap break-all">{line.at} {line.level} {line.line}</li>
+							{/each}
+						</ul>
+					</Scroll>
 				{/if}
 			</Stack>
 		{/if}

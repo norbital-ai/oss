@@ -1,0 +1,18 @@
+id: OVERLAP_CLAMP
+summary: nested Math.min/Math.max reimplements a library clamp
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  any:
+    - pattern: 'Math.min(Math.max($A, $B), $C)'
+    - pattern: 'Math.min($A, Math.max($B, $C))'
+    - pattern: 'Math.max(Math.min($A, $B), $C)'
+    - pattern: 'Math.max($A, Math.min($B, $C))'
+examples:
+  bad:
+    - 'export const bounded = Math.min(Math.max(value, low), high);'
+    - 'export const bounded = Math.max(Math.min(value, high), low);'
+    - 'export const bounded = Math.min(value, Math.max(low, high));'
+  good:
+    - 'export const bounded = clamp(value, low, high);'
+    - 'export const bounded = Math.min(value, high);'

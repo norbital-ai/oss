@@ -1,0 +1,19 @@
+id: UI15
+summary: fixed layout dimension on a primitive instead of Bound size
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:h|w|min-h|min-w)-\['
+    - inside:
+        regex: '^<(?:Stack|Inline|Cluster|Grid|Bound|Cover|Scroll)\b'
+      stopBy: end
+examples:
+  bad:
+    - '<Stack class="h-[4rem]"><p>x</p></Stack>'
+  good:
+    - '<Bound height="4rem"><p>x</p></Bound>'
+    - '<div class="h-[calc(100dvh-4rem)]"></div>'

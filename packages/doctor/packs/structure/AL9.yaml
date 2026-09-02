@@ -1,7 +1,7 @@
 id: AL9
 summary: large inline data parameter has no named schema-derived owner
 severity: error
-principles: [simplicity, straightforwardness, type-safety]
+principles: [ simplicity, straightforwardness, type-safety ]
 rule:
   all:
     - kind: Parameter
@@ -17,3 +17,6 @@ examples:
     - 'export const f = (o: { a: string; b: string; c: string; d: string }) => o;'
   good:
     - 'export const f = (o: Options) => o;'
+    - "export function save(input: { a: string; b: string; c: string }) { return input; }"
+    - "export function save(input: SavePayload) { return input; }"
+    - "export const shape: { a: string; b: string; c: string; d: string } = value;"

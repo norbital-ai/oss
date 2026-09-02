@@ -1,7 +1,7 @@
 id: TRANS2
 summary: canonical data falls back to an explicit legacy field
 severity: error
-principles: [simplicity, straightforwardness, type-safety, no-bloat]
+principles: [ simplicity, straightforwardness, type-safety, no-bloat ]
 rule:
   any:
     - all:
@@ -23,3 +23,5 @@ examples:
     - 'export const n = row.name ?? row.legacy_name;'
   good:
     - 'export const n = row.name ?? row.preview;'
+    - export const n = row.name ?? row.display_name;
+    - export const n = row.legacy_name ?? row.name;

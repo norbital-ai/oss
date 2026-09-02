@@ -3,6 +3,7 @@ import { Schema } from 'effect';
 import {
 	AIGenerationResult,
 	AIResponse,
+	MAX_SYNC_INITIAL_ANSWER_BYTES,
 	ModelId,
 	PROTOCOL_VERSION,
 	ProviderObservation,
@@ -596,6 +597,70 @@ describe('runnable Bolt vertical slice', () => {
 			{ teamPath: ['forged-role'], policies: [] }
 		);
 		expect(claimed).toMatchObject({ _tag: 'Success', response: { value: [] } });
+	});
+
+	it('maps a prefix-bytes live refusal to invalid_input 400', async () => {
+		const huge = 'x'.repeat(MAX_SYNC_INITIAL_ANSWER_BYTES + 64);
+		const oversized: FacilityBindings = {
+			...facilities,
+			database: {
+				call: (metadata, request) => {
+					if (
+						request._tag === 'Query' &&
+						request.sql.includes('from "employees"') &&
+						!request.sql.includes('to_jsonb') &&
+						!request.sql.includes('__bolt_write_wave')
+					) {
+						return Promise.resolve({
+							_tag: 'Success',
+							value: {
+								rows: [{ id: employeeRecordId, name: huge, row_version: 1 }],
+								affectedRows: 0
+							}
+						});
+					}
+					return database.call(metadata, request);
+				}
+			}
+		};
+		const result = await bundle.dispatch(
+			{
+				_tag: 'Command',
+				protocolVersion: PROTOCOL_VERSION,
+				id: InvocationId.make('sync-prefix-bytes'),
+				scope,
+				deadlineEpochMs: Date.now() + 10_000,
+				command: 'sync.connect',
+				input: {
+					queries: [
+						{
+							queryKey: 'employees',
+							input: {
+								kind: 'findMany',
+								collection: 'employees',
+								columns: { id: true, name: true },
+								orderBy: { id: 'asc' },
+								limit: 100
+							},
+							requestedPrefix: 100
+						}
+					],
+					detached: [],
+					pending: []
+				},
+				headers: { authorization: ['Bearer test-session'] }
+			},
+			oversized,
+			new AbortController().signal
+		);
+		expect(result).toMatchObject({
+			_tag: 'Failure',
+			error: {
+				code: 'invalid_input',
+				httpStatus: 400,
+				message: 'The initial live prefix exceeds its encoded byte ceiling.'
+			}
+		});
 	});
 
 	it('never mixes actor roles with an impersonated target', async () => {

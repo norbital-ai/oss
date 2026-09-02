@@ -298,6 +298,68 @@ describe('atomic version application and reset', () => {
 		expect(replayEffects).toMatchObject([{ kind: 'restart' }]);
 	});
 
+	it('keeps the link live when a month hop detaches one query and mounts the next', () => {
+		const january = queryInput('work_days_jan');
+		const february = queryInput('work_days_feb');
+		const janKey = stableKey(january);
+		const febKey = stableKey(february);
+		let state: ClientState = {
+			...initialClientState(0),
+			link: 'live',
+			queries: new Map([[janKey, heldQuery(january, retained(2, [{ id: 'd1' }]))]])
+		};
+		[state] = step(state, { kind: 'detached', key: janKey, at: 10 });
+		const [next, effects] = step(state, { kind: 'mounted', key: febKey, input: february });
+		expect(next.link).toBe('live');
+		expect(next.queries.get(janKey)).toMatchObject({ subscribers: 0, phase: 'fresh' });
+		expect(next.queries.get(febKey)).toMatchObject({
+			phase: 'pending',
+			validating: true,
+			subscribers: 1
+		});
+		expect(effects).toMatchObject([
+			{ kind: 'register', request: { queries: [{ queryKey: febKey }] } }
+		]);
+	});
+
+	it('fails only the refused keys when a live registration is rejected', () => {
+		const calendar = queryInput('jobs');
+		const people = queryInput('people');
+		const calendarKey = stableKey(calendar);
+		const peopleKey = stableKey(people);
+		const state: ClientState = {
+			...initialClientState(0),
+			link: 'live',
+			queries: new Map([
+				[peopleKey, heldQuery(people, retained(1, [{ id: 'p1' }]))],
+				[
+					calendarKey,
+					{
+						input: calendar,
+						requestedPrefix: 100,
+						phase: 'pending',
+						validating: true,
+						extending: false,
+						subscribers: 1
+					} satisfies QueryState
+				]
+			])
+		};
+		const [next, effects] = step(state, {
+			kind: 'registrationRejected',
+			keys: [calendarKey],
+			message: 'Live projection must include ordering field jobs.id',
+			terminal: true
+		});
+		expect(next.link).toBe('live');
+		expect(next.queries.get(peopleKey)?.prefix).toBe(state.queries.get(peopleKey)?.prefix);
+		expect(next.queries.get(calendarKey)).toMatchObject({
+			phase: 'failed',
+			error: 'Live projection must include ordering field jobs.id'
+		});
+		expect(effects).toEqual([]);
+	});
+
 	it('reopens a server-reset query without disturbing another retained prefix', () => {
 		const firstInput = queryInput('steps');
 		const secondInput = queryInput('tasks');

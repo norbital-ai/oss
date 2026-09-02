@@ -1,7 +1,7 @@
 id: BOOT1
 summary: environment file is loaded after configuration is captured
 severity: error
-principles: [straightforwardness, testability]
+principles: [ straightforwardness, testability ]
 files:
   - 'scripts/**'
   - 'bin/**'
@@ -22,7 +22,14 @@ rule:
           pattern: $F($...A)
         stopBy: end
 examples:
+  file: scripts/server.mjs
   bad:
     - "const hydrate = () => loadEnvFile('.env'); const environment = process.env; hydrate();"
   good:
     - "loadEnvFile('.env'); const port = process.env.PORT;"
+    - export const environment = process.env;
+    - |-
+      const hydrate = () => loadEnvFile('.env');
+      hydrate();
+      const environment = process.env;
+    - const environment = readConfig();

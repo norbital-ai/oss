@@ -1,7 +1,7 @@
 id: V6
 summary: async IIFE in lifecycle code
 severity: error
-principles: [straightforwardness, testability]
+principles: [ straightforwardness, testability ]
 rule:
   any:
     - '(async () => $BODY)()'
@@ -9,6 +9,8 @@ rule:
     - '(async () => { $BODY })()'
 examples:
   bad:
-    - 'export const f = () => { void (async () => { await go(); })(); };'
+    - export const f = () => { void (async () => { await go(); })(); };
   good:
     - 'export const f = () => { void go(); };'
+    - export const f = async () => { await go(); };
+    - export const f = () => { (() => { go(); })(); };

@@ -126,11 +126,6 @@ const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => 
 	return record;
 };
 
-const CollectionAnchoredPage = Schema.Struct({
-	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-	nextCursor: Schema.NullOr(Schema.String)
-});
-const CollectionOptionalRecord = Schema.NullOr(Schema.Record(Schema.String, Schema.Json));
 const CollectionCount = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 const CollectionGroupedRows = Schema.Record(
 	Schema.String,
@@ -143,9 +138,18 @@ const JsonGroupedRows = Schema.Record(Schema.String, Schema.Array(Schema.Json));
 const syncInputOf = (input: Record<string, Schema.Json>): SyncQueryInputType =>
 	Schema.decodeUnknownSync(SyncQueryInput)(input);
 
-const decodedCommandEffect = <Output extends Schema.Top>(
+/** Authored remotes are a prefix, not a fixed catalogue entry. Everything else is. */
+type ClientCommandName = FixedCommandName | `invoke.${string}`;
+
+/** Live contiguous prefix, or one answered-only keyset page. RFC/sync-engine.md §paging. */
+type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
+
+const collectionReadMode = (after: Schema.Json | undefined): CollectionReadMode =>
+	after === undefined ? { kind: 'live' } : { kind: 'anchored' };
+
+const decodedCommandEffect = <Name extends FixedCommandName, Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,
-	command: string,
+	command: Name,
 	input: Schema.Json,
 	output: Output
 ): Effect.Effect<Schema.Schema.Type<Output>, Error> =>
@@ -255,66 +259,71 @@ const pageQueryOf = (
 		collection,
 		...mergeWhere(asJsonRecord(input), options)
 	};
-	const after = requestFields['after'];
-	if (after !== undefined) {
-		const request = Schema.decodeUnknownSync(Schema.Json)(
-			Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields)
-		);
-		let nextCursor: string | null | undefined;
-		const query = createRemoteQuery(
-			() =>
-				decodedCommandEffect(runtime, 'collections.findMany', request, CollectionAnchoredPage).pipe(
-					Effect.map((page) => {
-						nextCursor = page.nextCursor;
-						return project(page.rows, pendingGraphs(runtime.sync.current()), collection);
-					})
-				),
-			JsonRows
-		);
-		return {
-			get current() {
-				return query.current;
-			},
-			get error() {
-				return query.error;
-			},
-			get loading() {
-				return query.loading;
-			},
-			then: query.then,
-			get nextCursor() {
-				void query.current;
-				return nextCursor;
-			},
-			extend: () => {
-				throw new Error('Anchored collection pages are one-shot and cannot extend a live prefix');
-			}
-		};
+	const mode = collectionReadMode(requestFields['after']);
+	switch (mode.kind) {
+		case 'anchored': {
+			const request = Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields);
+			let nextCursor: string | null | undefined;
+			const query = createRemoteQuery(
+				() =>
+					commandEffectOf(runtime, 'collections.findMany', request).pipe(
+						Effect.map((page) => {
+							nextCursor = page.nextCursor;
+							return project(page.rows, pendingGraphs(runtime.sync.current()), collection);
+						})
+					),
+				JsonRows
+			);
+			return {
+				get current() {
+					return query.current;
+				},
+				get error() {
+					return query.error;
+				},
+				get loading() {
+					return query.loading;
+				},
+				then: query.then,
+				get nextCursor() {
+					void query.current;
+					return nextCursor;
+				},
+				extend: () => {
+					throw new Error('Anchored collection pages are one-shot and cannot extend a live prefix');
+				}
+			};
+		}
+		case 'live': {
+			const request = syncInputOf({
+				kind: 'findMany',
+				...requestFields
+			});
+			const mounted = runtime.sync.mount(request);
+			const query = createMachineQuery(runtime.sync, mounted, (state) => {
+				const rows = queryAt(state, mounted.key)?.prefix?.rows;
+				return rows === undefined ? undefined : project(rows, pendingGraphs(state), collection);
+			});
+			return {
+				get current() {
+					return query.current;
+				},
+				get error() {
+					return query.error;
+				},
+				get loading() {
+					return query.loading;
+				},
+				then: query.then,
+				nextCursor: null,
+				extend: mounted.extend
+			};
+		}
+		default: {
+			const _exhaustive: never = mode;
+			return _exhaustive;
+		}
 	}
-
-	const request = syncInputOf({
-		kind: 'findMany',
-		...requestFields
-	});
-	const mounted = runtime.sync.mount(request);
-	const query = createMachineQuery(runtime.sync, mounted, (state) => {
-		const rows = queryAt(state, mounted.key)?.prefix?.rows;
-		return rows === undefined ? undefined : project(rows, pendingGraphs(state), collection);
-	});
-	return {
-		get current() {
-			return query.current;
-		},
-		get error() {
-			return query.error;
-		},
-		get loading() {
-			return query.loading;
-		},
-		then: query.then,
-		nextCursor: null,
-		extend: mounted.extend
-	};
 };
 
 const firstQueryOf = (
@@ -326,24 +335,45 @@ const firstQueryOf = (
 		collection,
 		...asJsonRecord(input)
 	};
-	if (requestFields['after'] !== undefined) {
-		return commandQueryOf(
-			runtime,
-			'collections.findFirst',
-			Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields),
-			CollectionQueryRequest,
-			CollectionOptionalRecord
-		);
-	}
-	return liveQueryOf(
-		runtime,
-		syncInputOf({ kind: 'findFirst', ...requestFields }),
-		(state, key) => {
-			const rows = queryAt(state, key)?.prefix?.rows;
-			if (rows === undefined) return undefined;
-			return project(rows, pendingGraphs(state), collection)[0];
+	const mode = collectionReadMode(requestFields['after']);
+	switch (mode.kind) {
+		case 'anchored': {
+			const query = commandQueryFromContract(
+				runtime,
+				'collections.findFirst',
+				Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields)
+			);
+			return {
+				get current() {
+					return query.current ?? undefined;
+				},
+				get error() {
+					return query.error;
+				},
+				get loading() {
+					return query.loading;
+				},
+				then: (onfulfilled, onrejected) =>
+					Promise.resolve(query)
+						.then((row) => row ?? undefined)
+						.then(onfulfilled, onrejected)
+			};
 		}
-	);
+		case 'live':
+			return liveQueryOf(
+				runtime,
+				syncInputOf({ kind: 'findFirst', ...requestFields }),
+				(state, key) => {
+					const rows = queryAt(state, key)?.prefix?.rows;
+					if (rows === undefined) return undefined;
+					return project(rows, pendingGraphs(state), collection)[0];
+				}
+			);
+		default: {
+			const _exhaustive: never = mode;
+			return _exhaustive;
+		}
+	}
 };
 
 const countQueryOf = (
@@ -394,7 +424,7 @@ const groupedQueryOf = (
 
 const commandQueryOf = <Input extends Schema.Top, Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,
-	command: string,
+	command: ClientCommandName,
 	input: unknown,
 	inputSchema: Input,
 	outputSchema: Output,

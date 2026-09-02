@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	retryableAdmission,
+	visibleUnsettledAdmission,
 	type UnsettledTaskAdmission
 } from '../../src/client/ui/agent/admission-reconciliation.js';
 
@@ -23,6 +24,12 @@ describe('Task admission reconciliation', () => {
 				priority: 'normal'
 			})
 		).toBe(unsettled);
+	});
+
+	it('shows the operator text immediately until the Task is a live findMany row', () => {
+		expect(visibleUnsettledAdmission(unsettled, new Set())).toBe(unsettled);
+		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']))).toBeNull();
+		expect(visibleUnsettledAdmission(null, new Set())).toBeNull();
 	});
 
 	it('rejects any changed Task identity instead of retrying a different directive', () => {

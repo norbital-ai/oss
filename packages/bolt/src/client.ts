@@ -92,6 +92,7 @@ export { AGENT_PATH, WORKSPACE_SETTINGS_PATH } from './client/ui/shell/workspace
 export type { TenantMessageCatalogs } from './client/ui/agent/i18n.js';
 export { getPlatformStateContext, setPlatformStateContext } from './client/ui/state/platform.js';
 export {
+	collectionExportCommandInput,
 	downloadCollectionExport,
 	importCollectionRecords
 } from './client/ui/state/import-export.js';

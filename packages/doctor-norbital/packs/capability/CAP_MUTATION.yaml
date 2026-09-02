@@ -1,0 +1,58 @@
+id: CAP_MUTATION
+summary: a scope rebuilds mutation lifecycle the generated client already provides
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: ArrowFunction
+        - kind: FunctionExpression
+        - kind: MethodDeclaration
+        - kind: SourceFile
+    - atLeast: 3
+      of:
+        - all:
+            - kind: VariableDeclaration
+            - regex: '\b(saving|submitting|pending|inFlight)\b'
+            - has: '$state($...ARGS)'
+              stopBy: end
+        - all:
+            - kind: VariableDeclaration
+            - regex: '\b(error|failure|lastError)\b'
+            - has: '$state($...ARGS)'
+              stopBy: end
+        - all:
+            - kind: TryStatement
+            - has:
+                regex: '\bawait\b'
+              stopBy: end
+        - all:
+            - kind: CallExpression
+            - regex: '^toast\.(success|error)\b'
+    - not:
+        has:
+          any:
+            - '$CLIENT.db.$COLLECTION.$METHOD($...ARGS)'
+            - '$MUTATION.mutate($...ARGS)'
+        stopBy: end
+examples:
+  bad:
+    - |
+      async function save() {
+        let saving = $state(false);
+        let error = $state(undefined);
+        try { await send(); } catch (cause) { error = cause; }
+        void saving;
+      }
+  good:
+    - |
+      async function save() {
+        const result = client.db.things.create(input);
+        void result;
+      }
+    - |
+      async function save() {
+        let saving = $state(false);
+        void saving;
+      }

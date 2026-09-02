@@ -231,3 +231,30 @@ test('V1 leaves an effect that returns a teardown or performs a call', (context)
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 	assert.equal(rulesFor(root).includes('V1'), false);
 });
+
+test('the nine-violation component reports nine layout findings', (context) => {
+	const root = component(
+		'nine-violation',
+		`<script lang="ts">
+	const shell = 'flex';
+	const open = true;
+</script>
+<div class="flex items-center justify-between"></div>
+<div class="absolute inset-0 z-50"></div>
+<div class="sticky top-0 z-10"></div>
+<div class="h-screen w-screen"></div>
+<div class="h-[calc(100dvh-4rem)]"></div>
+<div class="overflow-hidden"></div>
+<div style="display:flex; position:absolute"></div>
+<div class={shell}></div>
+<div class:grid={open}></div>
+<style>.panel { display:grid; position:fixed }</style>
+`
+	);
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	const findings = runRules({ root, rules: [...svelteRules], files: ['src/Thing.svelte'] });
+	assert.ok(
+		findings.length >= 9,
+		`expected at least nine findings, got ${findings.length}: ${findings.map((row) => row.rule).join(',')}`
+	);
+});

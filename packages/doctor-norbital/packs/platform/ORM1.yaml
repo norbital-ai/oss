@@ -1,0 +1,16 @@
+id: ORM1
+summary: ORM column declares a second physical-name vocabulary
+severity: error
+principles: [simplicity, straightforwardness, no-bloat]
+rule:
+  all:
+    - kind: PropertyAssignment
+    - regex: '\b(?:text|integer|boolean|timestamp|uuid|jsonb?|numeric|date|real|serial)\(\s*[''"][^''"]+[''"]'
+    - not:
+        regex: '\b(\w+)\s*:\s*(?:text|integer|boolean|timestamp|uuid|jsonb?|numeric|date|real|serial)\(\s*[''"]\1[''"]'
+examples:
+  bad:
+    - "export const t = { id: text('thing_id') };"
+  good:
+    - 'export const t = { id: text() };'
+    - "export const t = { id: text('id') };"

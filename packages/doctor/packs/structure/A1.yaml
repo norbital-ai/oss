@@ -1,7 +1,7 @@
 id: A1
 summary: discarded timer requires cleanup review
 severity: error
-principles: [straightforwardness, testability]
+principles: [ straightforwardness, testability ]
 rule:
   all:
     - any:
@@ -21,6 +21,8 @@ rule:
             - kind: SourceFile
 examples:
   bad:
+    - export const f = () => { timers.push(setTimeout(tick, 10)); };
     - 'export const f = () => { setInterval(tick, 10); };'
   good:
     - 'export const f = () => { const t = setInterval(tick, 10); return () => clearInterval(t); };'
+    - export const f = () => queueMicrotask(tick);

@@ -14,6 +14,8 @@
  * spelled a second way, so nobody noticed it recognised only the first.
  */
 import ts from 'typescript';
+import './analyses/index.js';
+import { projectFile } from './frontend/markup.js';
 import {
 	bindMatchHost,
 	bindingTexts,
@@ -27,6 +29,7 @@ import {
 	type Matcher,
 	type Utils
 } from './matcher.js';
+import { hasNamespacedKind, lineOf, matchTree } from './model.js';
 import {
 	defineVisitorRule,
 	type NodeKind,
@@ -43,6 +46,23 @@ export type { Matcher, StopBy } from './matcher.js';
 export type Examples = Readonly<{
 	readonly bad: ReadonlyArray<string>;
 	readonly good: ReadonlyArray<string>;
+	/**
+	 * Other files the examples need, keyed by repository-relative path.
+	 *
+	 * A rule whose claim is about the file system cannot state it in one buffer: `MOD1` asks whether
+	 * a specifier resolves back to the importing file, and `IMP1` asks whether a declared path alias
+	 * already covers it. Both were unprovable by an example until the example could bring a
+	 * neighbouring module and a `tsconfig.json` with it.
+	 */
+	readonly fixture?: Readonly<Record<string, string>> | undefined;
+	/**
+	 * Repository-relative path the example is written to.
+	 *
+	 * `IMP1` claims a `../../` specifier is already covered by a declared alias, which is only true
+	 * from a file deep enough for `../../` to land back inside the aliased tree. The default path is
+	 * `src/probe.ts`, and no example written there can state that.
+	 */
+	readonly file?: string | undefined;
 }>;
 
 type Common = Readonly<{
@@ -183,6 +203,25 @@ export function defineRule(definition: RuleDefinition): Rule {
 				withUtils(utils ?? {}, () => compile(constraint))
 			] as const
 	);
+
+	if (hasNamespacedKind(rule)) {
+		return defineVisitorRule({
+			...rest,
+			when: ['SourceFile'],
+			check(_node, context) {
+				bindMatchHost(context.sourceFile, { root: context.root, file: context.file });
+				const tree = projectFile(context.file, context.source);
+				for (const matched of matchTree(rule, tree, {
+					file: context.file,
+					root: context.root,
+					source: context.sourceFile,
+					original: context.source
+				})) {
+					context.reportAt(lineOf(context.source, matched.range.start), 'matched');
+				}
+			}
+		});
+	}
 
 	return defineVisitorRule({
 		...rest,

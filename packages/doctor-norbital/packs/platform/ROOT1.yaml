@@ -1,7 +1,7 @@
 id: ROOT1
 summary: legacy tenant substrate root override bypasses the canonical one-root contract
 severity: error
-principles: [simplicity, straightforwardness, modularity, testability, no-bloat]
+principles: [ simplicity, straightforwardness, modularity, testability, no-bloat ]
 ignore:
   - '**/scripts/tenant-substrate-root.mjs'
   - '**/*.{test,spec}.{ts,js,mts,mjs,cts,cjs}'
@@ -21,3 +21,5 @@ examples:
     - 'export const root = process.env.COLONY_DATA_DIRECTORY;'
   good:
     - 'export const root = process.env.TENANT_SUBSTRATE_ROOT;'
+    - export const p = process.env.COLONY_NEON_PROJECT;
+    - export const dataDirectory = resolve(root);

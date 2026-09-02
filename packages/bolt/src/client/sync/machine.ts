@@ -81,6 +81,12 @@ export type ClientEvent = Readonly<
 			readonly at: number;
 			readonly requestedKeys: ReadonlyArray<string>;
 	  }
+	| {
+			readonly kind: 'registrationRejected';
+			readonly keys: ReadonlyArray<string>;
+			readonly message: string;
+			readonly terminal: boolean;
+	  }
 	| { readonly kind: 'extensionAccepted'; readonly response: SyncExtendPrefixResponse }
 	| {
 			readonly kind: 'extensionRejected';
@@ -528,6 +534,41 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 		}
 		case 'registered':
 			return onRegistered(state, event.response, event.at, event.requestedKeys);
+		case 'registrationRejected': {
+			/**
+			 * One refused registration is that request's failure.
+			 *
+			 * Putting the whole machine into `reconnecting` here is what a calendar date pick and a
+			 * month hop looked like: the EventSource was still open, every other query went pending,
+			 * and the next register reused a connection the host had just 410'd. Fail or retry only
+			 * the keys that were asked; leave `current` identity on every other query alone.
+			 */
+			const queries = new Map(state.queries);
+			const retry: string[] = [];
+			for (const key of event.keys) {
+				const query = queries.get(key);
+				if (query === undefined) continue;
+				if (event.terminal) {
+					queries.set(key, {
+						...withoutPrefix(query),
+						phase: 'failed',
+						validating: false,
+						extending: false,
+						error: event.message
+					});
+					continue;
+				}
+				queries.set(key, {
+					...withoutPrefix(query),
+					phase: 'pending',
+					validating: false,
+					extending: false
+				});
+				if (state.link === 'live' && query.subscribers > 0) retry.push(key);
+			}
+			const next = { ...state, queries };
+			return [next, retry.length > 0 ? [registrationEffect(next, retry)] : []];
+		}
 		case 'extensionAccepted': {
 			const query = state.queries.get(event.response.queryKey);
 			if (query === undefined) return [state, []];

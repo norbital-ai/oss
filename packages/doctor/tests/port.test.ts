@@ -235,6 +235,11 @@ const CASES: ReadonlyArray<Case> = [
 		good: 'export const f = (owner?: string) => owner;'
 	},
 	{
+		rule: 'RET1',
+		bad: 'export function labeled(name: string): string { return name.trim(); }',
+		good: 'export function labeled(name: string) { return name.trim(); }'
+	},
+	{
 		rule: 'GUARD1',
 		bad: "export const record = (v) => typeof v === 'object' && v !== null ? v : undefined;",
 		good: 'export const record = (v) => Schema.decodeUnknownOption(JsonObject)(v);'

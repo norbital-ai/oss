@@ -1,7 +1,7 @@
 id: P9
 summary: export-star barrel
 severity: hint
-principles: [simplicity, colocation, no-bloat]
+principles: [ simplicity, colocation, no-bloat ]
 rule:
   all:
     - kind: ExportDeclaration
@@ -11,3 +11,8 @@ examples:
     - "export * from './other.js';"
   good:
     - "export { thing } from './other.js';"
+    - export { a, b } from './x.js';
+    - export type { A } from './x.js';
+    - |-
+      import * as ns from './x.js';
+      export const n = ns;

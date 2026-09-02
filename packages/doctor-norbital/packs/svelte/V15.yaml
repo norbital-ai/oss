@@ -1,0 +1,34 @@
+id: V15
+summary: computed binding in a rune module should be $derived
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: VariableDeclaration
+    - inside:
+        kind: SourceFile
+      stopBy: end
+    - not:
+        inside:
+          any:
+            - kind: FunctionDeclaration
+            - kind: ArrowFunction
+            - kind: FunctionExpression
+            - kind: MethodDeclaration
+        stopBy: end
+    - not:
+        regex: '^\$(?:state|derived|props|bindable|effect)'
+    - any:
+        - has:
+            kind: PropertyAccessExpression
+        - has:
+            kind: BinaryExpression
+    - regex: '\.(?:current|value)\b|\$state\b|\$props\b'
+examples:
+  bad:
+    - 'const label = props.current + suffix;'
+  good:
+    - 'const label = $derived(props.current + suffix);'
+    - 'const count = $state(0);'

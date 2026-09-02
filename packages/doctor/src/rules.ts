@@ -133,7 +133,10 @@ export function defineVisitorRule(rule: Rule): Rule {
 			`norbital-doctor: rule ${rule.id} matches no syntax kinds; "when" cannot be empty`
 		);
 	for (const kind of rule.when)
-		if (ts.SyntaxKind[kind] === undefined)
+		if (
+			ts.SyntaxKind[kind] === undefined &&
+			!/^(?:ts|svelte|css|trivia|sql):/.test(kind)
+		)
 			throw new Error(`norbital-doctor: rule ${rule.id} names an unknown syntax kind "${kind}"`);
 	if (rule.principles.length === 0)
 		throw new Error(`norbital-doctor: rule ${rule.id} must carry at least one principle`);

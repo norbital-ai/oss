@@ -1,0 +1,48 @@
+id: OVERLAP_CACHE
+summary: has/get/set memo around a computation reimplements a library cache
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  any:
+    - all:
+        - kind: FunctionDeclaration
+        - regex: '\.has\s*\('
+        - regex: '\.get\s*\('
+        - regex: '\.set\s*\('
+        - regex: '\breturn\b'
+    - all:
+        - kind: ArrowFunction
+        - regex: '\.has\s*\('
+        - regex: '\.get\s*\('
+        - regex: '\.set\s*\('
+        - regex: '\breturn\b'
+    - all:
+        - kind: FunctionExpression
+        - regex: '\.has\s*\('
+        - regex: '\.get\s*\('
+        - regex: '\.set\s*\('
+        - regex: '\breturn\b'
+examples:
+  bad:
+    - |
+      const store = new Map<string, number>();
+      export function memo(key: string): number {
+        if (store.has(key)) return store.get(key)!;
+        const value = compute(key);
+        store.set(key, value);
+        return value;
+      }
+    - |
+      const store = new Map<string, number>();
+      export const memo = (key: string): number => {
+        if (store.has(key)) return store.get(key)!;
+        const value = compute(key);
+        store.set(key, value);
+        return value;
+      };
+  good:
+    - |
+      export function memo(key: string): number {
+        return compute(key);
+      }
+    - 'export const memo = Cache.make({ lookup: (key: string) => compute(key) });'

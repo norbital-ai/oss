@@ -1,0 +1,19 @@
+id: OVERLAP_UNIQUE
+summary: Set round-trip reimplements a library unique
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  any:
+    - all:
+        - kind: ArrayLiteralExpression
+        - regex: '^\[\s*\.\.\.\s*new Set\s*\('
+    - all:
+        - kind: CallExpression
+        - pattern: '$A.from(new Set($X))'
+examples:
+  bad:
+    - 'export const unique = [...new Set(items)];'
+    - 'export const unique = Array.from(new Set(items));'
+  good:
+    - 'export const unique = uniq(items);'
+    - 'export const unique = Array.from(items);'

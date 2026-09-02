@@ -1,9 +1,9 @@
 /**
  * YAML is the rule authoring surface.
  *
- * A pack is a directory of YAML files. Each file is one rule. `rule` is an ast-grep matcher;
- * `detect`/`prefer` names an overlap detector. `defineRule` compiles that document into the
- * runner's `Rule` object — it is not a second place to declare pack rules.
+ * A pack is a directory of YAML files. Each file is one rule. `rule` is the matcher.
+ * `defineRule` compiles that document into the runner's `Rule` object — it is not a second
+ * place to declare pack rules.
  *
  * Strictness is the contract. A misspelled field, a principle outside `PRINCIPLE_ORDER`, or a glob
  * that matches nothing throws at load time with the file named — never a rule that silently reports
@@ -17,7 +17,6 @@ import { parse as parseYaml } from 'yaml';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import { jsonRecord } from './manifest.js';
-import { OVERLAP_SHAPES, overlapRules, type OverlapShape } from './overlaps.js';
 import { defineRule, type Examples, type Matcher } from './pattern.js';
 import { PRINCIPLE_ORDER, type Confidence, type Principle, type Rule, type Severity } from './rules.js';
 
@@ -37,24 +36,14 @@ const FIELDS: ReadonlyArray<string> = [
 	'files',
 	'ignore',
 	'dominates',
-	'detect',
-	'prefer',
-	'module',
 	'rule',
+	'utils',
+	'constraints',
 	'examples'
 ];
 
 /** A rule file is YAML; `.yaml` is accepted beside `.yml` because globs do not distinguish them. */
 const RULE_FILE = /\.ya?ml$/;
-
-/**
- * `defineRule` demands inline examples for a matcher rule and discards them before the `Rule` is
- * built — they exist to be executed by `verifyExamples`, not carried on the rule. A YAML rule's
- * proof lives in the consuming repository's own suite instead, so the assertion is met here with a
- * placeholder that never reaches a catalogue row. Named for what it is so nobody mistakes it for
- * checked behaviour.
- */
-const DELEGATED_EXAMPLES = { bad: [''], good: [''] } as const;
 
 /** Directories that hold dependencies and outputs, not authored rules. Mirrors runner's IGNORED. */
 const SKIPPED =
@@ -105,17 +94,6 @@ function readPrinciples(file: string, value: unknown): ReadonlyArray<Principle> 
 		if (!PRINCIPLE_ORDER.includes(principle as Principle))
 			fail(file, `"${principle}" is not a principle; choose from ${PRINCIPLE_ORDER.join(', ')}`);
 	return listed as ReadonlyArray<Principle>;
-}
-
-/** Split an `owner#member` binding at the last `#`; an owner may name a scope such as `effect/Number`. */
-function readPrefer(file: string, value: unknown): { owner: string; member: string } {
-	const prefer = readString(file, 'prefer', value);
-	const hash = prefer.lastIndexOf('#');
-	const owner = prefer.slice(0, hash);
-	const member = prefer.slice(hash + 1);
-	if (hash <= 0 || member === '')
-		fail(file, `"prefer" must read owner#member like es-toolkit#clamp, received "${prefer}"`);
-	return { owner, member };
 }
 
 /**
@@ -193,6 +171,30 @@ function expandPatterns(
 	return selected;
 }
 
+/**
+ * A mapping of name to matcher — `utils`, which a rule references through `{ matches: name }`, and
+ * `constraints`, one rule per metavariable.
+ *
+ * Both were accepted by `defineRule` in TypeScript and absent from the YAML field list, so a YAML
+ * rule could not name a reusable shape, could not recurse, and could not narrow a metavariable with
+ * anything but a regular expression. `GUARD1` is twenty-one literal spellings of one idea because
+ * of it.
+ */
+function readMatcherMap(
+	file: string,
+	field: string,
+	value: unknown
+): Readonly<Record<string, Matcher>> {
+	const record = jsonRecord(value) ?? fail(file, `"${field}" must be a mapping of name to rule`);
+	for (const [name, matcher] of Object.entries(record))
+		if (
+			typeof matcher !== 'string' &&
+			(typeof matcher !== 'object' || matcher === null || Array.isArray(matcher))
+		)
+			fail(file, `"${field}.${name}" must be a pattern string or a matcher object`);
+	return record as Readonly<Record<string, Matcher>>;
+}
+
 function readExamples(file: string, value: unknown): Examples {
 	const record = jsonRecord(value) ?? fail(file, '"examples" must be a mapping with bad and good');
 	const bad = record.bad;
@@ -201,6 +203,23 @@ function readExamples(file: string, value: unknown): Examples {
 		fail(file, '"examples.bad" must be a non-empty array of strings');
 	if (!Array.isArray(good) || good.length === 0 || good.some((item) => typeof item !== 'string'))
 		fail(file, '"examples.good" must be a non-empty array of strings');
+	const at = record.file === undefined ? undefined : readString(file, 'examples.file', record.file);
+	const fixture = record.fixture;
+	if (fixture !== undefined || at !== undefined) {
+		const files =
+			fixture === undefined
+				? {}
+				: (jsonRecord(fixture) ?? fail(file, '"examples.fixture" must be a mapping of path to content'));
+		for (const [path, content] of Object.entries(files))
+			if (typeof content !== 'string')
+				fail(file, `"examples.fixture.${path}" must be file content as a string`);
+		return {
+			bad: bad as ReadonlyArray<string>,
+			good: good as ReadonlyArray<string>,
+			fixture: files as Readonly<Record<string, string>>,
+			...(at === undefined ? {} : { file: at })
+		};
+	}
 	return { bad: bad as ReadonlyArray<string>, good: good as ReadonlyArray<string> };
 }
 
@@ -246,19 +265,12 @@ function loadFile(
 		fail(file, `"confidence" must be "high" or "medium", received ${JSON.stringify(yaml.confidence)}`);
 	const confidence = yaml.confidence as Confidence | undefined;
 
-	const hasRule = yaml.rule !== undefined;
-	const hasDetect = yaml.detect !== undefined;
-	if (hasRule && hasDetect)
-		fail(file, '"rule" and "detect" are two structural claims; state one');
-	if (!hasRule && !hasDetect) fail(file, '"rule" or "detect" is required');
-
-	if (yaml.prefer !== undefined && !hasDetect) fail(file, '"prefer" belongs beside "detect"');
-	if (yaml.module !== undefined && !hasDetect) fail(file, '"module" belongs beside "detect"');
-	if (hasDetect) {
-		if (typeof yaml.detect !== 'string' || !OVERLAP_SHAPES.includes(yaml.detect as OverlapShape))
-			fail(file, `"detect" must be one of ${OVERLAP_SHAPES.join(', ')}`);
-		if (yaml.prefer === undefined) fail(file, '"detect" requires "prefer" as owner#member');
-	}
+	if (yaml.rule === undefined) fail(file, '"rule" is required');
+	if (
+		typeof yaml.rule !== 'string' &&
+		(typeof yaml.rule !== 'object' || yaml.rule === null || Array.isArray(yaml.rule))
+	)
+		fail(file, '"rule" must be a pattern string or a matcher object');
 
 	const common = {
 		id,
@@ -276,28 +288,26 @@ function loadFile(
 
 	declared.set(id, file);
 
-	if (hasRule) {
-		if (
-			typeof yaml.rule !== 'string' &&
-			(typeof yaml.rule !== 'object' || yaml.rule === null || Array.isArray(yaml.rule))
-		)
-			fail(file, '"rule" must be a pattern string or a matcher object');
-		const examples =
-			yaml.examples === undefined ? DELEGATED_EXAMPLES : readExamples(file, yaml.examples);
-		rules.push(defineRule({ ...common, rule: yaml.rule as Matcher, examples }));
-		return;
-	}
-
-	const { owner, member } = readPrefer(file, yaml.prefer);
-	const module = yaml.module === undefined ? undefined : readString(file, 'module', yaml.module);
-	const produced = overlapRules([
-		{ shape: yaml.detect as OverlapShape, owner, member, module, severity, id }
-	])[0];
-	if (produced === undefined) fail(file, `detector "${yaml.detect}" produced no rule`);
-	// The detector fixes its own summary, principles and confidence; YAML owns the identity
-	// fields, so the detector's dispatch and check are kept and the description is rebuilt
-	// around them through the ordinary visitor form of defineRule.
-	rules.push(defineRule({ ...common, when: produced.when, check: produced.check }));
+	// Examples are mandatory. They used to be filled in with `{ bad: [''], good: [''] }` when a
+	// YAML rule omitted them, which meant the counter-example contract was suspended for exactly
+	// the authoring surface every rule is moving to.
+	if (yaml.examples === undefined)
+		fail(file, '"examples" is required, with at least one "bad" and one "good"');
+	const examples = readExamples(file, yaml.examples);
+	const utils = yaml.utils === undefined ? undefined : readMatcherMap(file, 'utils', yaml.utils);
+	const constraints =
+		yaml.constraints === undefined
+			? undefined
+			: readMatcherMap(file, 'constraints', yaml.constraints);
+	rules.push(
+		defineRule({
+			...common,
+			rule: yaml.rule as Matcher,
+			examples,
+			...(utils === undefined ? {} : { utils }),
+			...(constraints === undefined ? {} : { constraints })
+		})
+	);
 }
 
 type PatternLoadOptions = Readonly<{
@@ -314,7 +324,7 @@ type PatternLoadOptions = Readonly<{
  * Load YAML-authored pattern rules from a repository.
  *
  * Patterns are repository-relative globs (`**`, `*`, or literal paths); each file holds exactly one
- * rule. A `rule` or `detect` half becomes an ordinary `Rule` indistinguishable from an authored one.
+ * rule. The `rule` half becomes an ordinary `Rule` indistinguishable from an authored one.
  */
 export async function loadPatternFiles(
 	root: string,

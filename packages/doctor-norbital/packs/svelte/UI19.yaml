@@ -1,0 +1,15 @@
+id: UI19
+summary: raw positioning class bypasses the layout primitives
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:absolute|fixed|sticky)$'
+examples:
+  bad:
+    - '<div class="absolute inset-0"></div>'
+  good:
+    - '<Cover><p>x</p></Cover>'

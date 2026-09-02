@@ -11,3 +11,9 @@ rule:
     - pattern: try { $...BODY } catch ( $...E ) { $...HANDLE }
     - pattern: try { $...BODY } catch { $...HANDLE }
 files: ['packages/doctor/src/**']
+examples:
+  bad:
+    - 'export const f = () => { try { go(); } catch (cause) { report(cause); } };'
+    - 'export const f = () => { try { go(); } catch { report(); } };'
+  good:
+    - 'export const f = () => Effect.try(go);'

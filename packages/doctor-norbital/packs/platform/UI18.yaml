@@ -7,14 +7,10 @@ files:
   - '**/*.svelte'
 rule:
   all:
-    - any:
-        - pattern: '$T.command($A)'
-        - pattern: '$T.execute($A)'
-        - pattern: '$T.send($A)'
-        - pattern: '$T.invoke($A)'
-    - regex: '(?:transport|connection|socket)$'
-      on: T
+    - kind: CallExpression
+    - regex: '\b(?:transport|connection|socket)\.(?:command|execute|send|invoke)\b'
 examples:
+  file: src/ui/probe.ts
   bad:
     - 'export const f = () => transport.command({});'
   good:

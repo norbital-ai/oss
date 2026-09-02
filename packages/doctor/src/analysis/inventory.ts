@@ -125,7 +125,7 @@ export function collectSourceFiles(roots: ReadonlyArray<string>): Array<string> 
 	return [...new Set(files)].sort();
 }
 
-/** Classify mixed Svelte/HTML/CSS lines without treating quoted comment markers as comments. */
+/** Classify mixed `.svelte`/HTML/CSS lines without treating quoted comment markers as comments. */
 function mixedLineCounts(source: string): LineCounts {
 	const lines = source.split(/\r?\n/);
 	if (source.endsWith('\n')) lines.pop();
@@ -258,12 +258,12 @@ function scriptLineCounts(source: string): LineCounts {
 	return { physical: lines.length, code: code.size, comments: commentLines, blank };
 }
 
-/** Classify physical lines: Svelte takes the mixed classifier, everything else the compiler's. */
+/** Classify physical lines: `.svelte` takes the mixed classifier, everything else the compiler's. */
 export function lineCounts(path: string, source: string): LineCounts {
 	return path.endsWith('.svelte') ? mixedLineCounts(source) : scriptLineCounts(source);
 }
 
-/** Extract component scripts for compiler analysis while LOC continues to cover the whole Svelte file. */
+/** Extract component scripts for compiler analysis while LOC continues to cover the whole `.svelte` file. */
 export function analyzableSource(path: string, source: string): string {
 	if (!path.endsWith('.svelte')) return source;
 	return [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]

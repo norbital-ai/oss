@@ -11,6 +11,7 @@ import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -373,11 +374,11 @@ describe('approval gate over SQL', () => {
 			)
 		);
 
-		// The changelog captures committed writes only. A held create has not reached COMMIT, so it has
-		// neither a domain row nor an outbox entry while approval is pending.
-		const outbox = (await harness.database.query(
-			"select collection_name from bolt_sync_outbox where collection_name = 'people'"
-		)) as ReadonlyArray<{ readonly collection_name: string }>;
-		expect(outbox).toEqual([]);
+		// A held create never reaches COMMIT, so it has neither a domain row nor a SyncChange.
+		const changes = await runtime.runPromise(
+			Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges)
+		);
+		expect(await rowCount(harness, 'people')).toBe(0);
+		expect(changes).toEqual([]);
 	});
 });

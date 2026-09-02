@@ -1,0 +1,41 @@
+id: RET1
+summary: implementation return type is written instead of inferred
+severity: hint
+principles: [simplicity, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: FunctionExpression
+        - kind: ArrowFunction
+        - kind: MethodDeclaration
+        - kind: GetAccessor
+    - has:
+        regex: '.'
+      field: type
+    - has:
+        regex: '.'
+      field: body
+    - not:
+        has:
+          kind: TypePredicate
+        field: type
+examples:
+  bad:
+    - 'export function labeled(name: string): string { return name.trim(); }'
+    - 'export const labeled = (name: string): string => name.trim();'
+    - 'export const labeled = async (name: string): Promise<string> => name.trim();'
+    - 'export const boxed = function named(name: string): string { return name.trim(); };'
+    - 'export class Box { read(name: string): string { return name; } }'
+    - 'export class Box { get title(): string { return this.name; } }'
+    - 'export function ignore(): void {}'
+  good:
+    - 'export function labeled(name: string) { return name.trim(); }'
+    - 'export const labeled = (name: string) => name.trim();'
+    - 'export const labeled = async (name: string) => name.trim();'
+    - 'export function isTrimmed(name: string): name is string { return name.trim() === name; }'
+    - 'export function assertTrimmed(name: string): asserts name is string { if (name.trim() !== name) throw new Error(name); }'
+    - 'export function labeled(name: string): string; export function labeled(name: string) { return name.trim(); }'
+    - 'export interface Reader { read(name: string): string; }'
+    - 'export declare function labeled(name: string): string;'
+    - "export const labeled: (name: string) => string = (name) => name.trim();"

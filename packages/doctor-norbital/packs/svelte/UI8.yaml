@@ -1,0 +1,15 @@
+id: UI8
+summary: literal app inset classes bypass the inset tokens
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:Attribute
+    - regex: '\bclass="[^"]*\b(?:px-4 (?:py-2 )?sm:px-6|mx-4 sm:mx-6)\b'
+examples:
+  bad:
+    - '<div class="px-4 sm:px-6"></div>'
+  good:
+    - '<Bound inset="md"></Bound>'

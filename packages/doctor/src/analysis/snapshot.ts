@@ -1,22 +1,7 @@
-/**
- * The analysis pipeline: one immutable file inventory in, one byte-stable snapshot out, ported
- * from `engine/scripts/analyze.mjs`.
- *
- * `assembleReport` is the single entrypoint the cutover wires the CLI onto. It mirrors the
- * engine's `main()` semantics exactly — option normalization and its error strings, the
- * overlap-only shortcut, baseline comparison, the four-value verdict, paired atomic output —
- * while returning what a library caller needs instead of setting exit codes. Exit-code mapping
- * lives with the consumer: `regression`/`fail` → 1, `incomplete` → 2, overlap `findings` → 1.
- *
- * Byte stability rules that shaped this file: every object literal below is written in
- * serialization order, every sort comparator is copied verbatim (including which ones use
- * `localeCompare` and which use default string ordering), rounding happens once per value at the
- * same arithmetic step as the engine, and no timestamp or environment-dependent value enters the
- * report.
- */
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { Option, Schema } from 'effect';
+import { LANGUAGE_HEALTH_PROFILE, type HealthProfile } from '../health-profile.js';
 import { collectSourceFiles, describeRoots, isTestPath, lineCounts } from './inventory.js';
 import type { LineCounts, RootDescription } from './inventory.js';
 import { moduleMappings, packageFor, resolveImport, stronglyConnected, testReach } from './graph.js';
@@ -61,7 +46,6 @@ import type {
 	ServiceReport
 } from './report.js';
 
-/** One analyzed file: ownership, classification, LOC, and the whole AST summary. */
 type FileRecord = {
 	path: string;
 	displayPath: string;
@@ -83,7 +67,6 @@ type FileRecord = {
 	services: ReadonlyArray<string>;
 };
 
-/** The static-quality section while it is still being assembled. */
 type WorkingQuality = {
 	catalogues: StaticQualityBase['catalogues'];
 	totals: StaticQualityBase['totals'];
@@ -105,7 +88,6 @@ type WorkingQuality = {
 	};
 };
 
-/** A hotspot row, in serialization order. */
 type Hotspot = {
 	file: string;
 	concept: string;
@@ -115,7 +97,6 @@ type Hotspot = {
 	p95Complexity: number;
 };
 
-/** The snapshot as this module builds it: finished content, still-open verdict fields. */
 type BuiltReport = Omit<HealthReport, 'quality' | 'comparison' | 'verdict'> & {
 	quality: WorkingQuality | null;
 	comparison?: Comparison;
@@ -124,37 +105,24 @@ type BuiltReport = Omit<HealthReport, 'quality' | 'comparison' | 'verdict'> & {
 
 export type ReportFormat = 'json' | 'markdown' | 'both';
 
-/** What a caller hands `assembleReport`: the engine's option surface, already out of argv form. */
 export type AssembleOptions = Readonly<{
-	/** Repository roots to scan; required, because argv parsing (including the git fallback) belongs to the CLI layer. */
 	readonly roots: ReadonlyArray<string>;
-	/** Canonical scanner receipts, one per root; presence turns on static quality. */
 	readonly receipts?: ReadonlyArray<string> | undefined;
-	/** A previous report JSON to compute deltas and regressions against. */
 	readonly baseline?: string | undefined;
-	/** Where to write; `--format both` normalizes a trailing `.json`/`.md` into a pair. */
 	readonly out?: string | undefined;
 	readonly format?: ReportFormat | undefined;
-	/** Downgrade a positive delta count to a `regression` verdict. Requires `baseline`. */
 	readonly failOnRegression?: boolean | undefined;
-	/** Treat any root without type-aware coverage as incomplete evidence. */
 	readonly requireTypeAware?: boolean | undefined;
-	/** Run only the production-entity overlap pass and emit no health score. */
 	readonly overlapOnly?: boolean | undefined;
+	readonly healthProfile?: HealthProfile | undefined;
 }>;
 
-/** Everything `main()` would have communicated, minus the process side effects. */
 export type AssembleResult = Readonly<{
 	verdict: string;
-	/** The exit code `main()` would have set: 0 pass, 1 findings/fail/regression, 2 incomplete. */
 	exitCode: number;
-	/** Exactly the bytes `main()` would have written to stdout (the markdown brief for `both`). */
 	stdout: string;
-	/** Full JSON serialization, newline included, whether or not it was written to disk. */
 	json: string;
-	/** Markdown brief serialization, newline included. */
 	brief: string;
-	/** Files published through atomic writes, in write order. */
 	wrote: ReadonlyArray<string>;
 }>;
 
@@ -167,12 +135,9 @@ type NormalizedOptions = Readonly<{
 	failOnRegression: boolean;
 	requireTypeAware: boolean;
 	overlapOnly: boolean;
+	healthProfile: HealthProfile;
 }>;
 
-/**
- * Normalize options exactly as `parseArguments` did after collecting tokens, so the CLI cutover
- * inherits identical canonicalization and identical error messages.
- */
 function normalizeOptions(options: AssembleOptions): NormalizedOptions {
 	const format = options.format ?? 'both';
 	if (!['json', 'markdown', 'both'].includes(format))
@@ -204,11 +169,11 @@ function normalizeOptions(options: AssembleOptions): NormalizedOptions {
 		format,
 		failOnRegression,
 		requireTypeAware: options.requireTypeAware === true,
-		overlapOnly
+		overlapOnly,
+		healthProfile: options.healthProfile ?? LANGUAGE_HEALTH_PROFILE
 	};
 }
 
-/** Baseline numbers decode as numbers, null, or NaN — never silently coerced strings. */
 function numericFields(value: unknown): Record<string, number | null> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
 	return Object.fromEntries(
@@ -227,7 +192,6 @@ const BaselineRecord = Schema.Struct({
 	totals: Schema.optionalKey(Schema.Unknown)
 });
 
-/** Decode a baseline defensively while preserving the comparison's own validation errors. */
 function decodeBaseline(text: string): ComparisonSide {
 	// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
 	const parsed: unknown = JSON.parse(text);
@@ -242,7 +206,6 @@ function decodeBaseline(text: string): ComparisonSide {
 	};
 }
 
-/** Publish outputs with `main()`'s exact format/out matrix and return its stdout bytes. */
 function publish(
 	json: string,
 	brief: string,
@@ -251,19 +214,13 @@ function publish(
 	defaultPath: string
 ): { stdout: string; wrote: Array<string> } {
 	const outputRoot = out ?? resolve(defaultPath);
-	if (format === 'json') {
+	if (format === 'json' || format === 'markdown') {
+		const body = format === 'json' ? json : brief;
 		if (out) {
-			atomicWrite(outputRoot, json);
+			atomicWrite(outputRoot, body);
 			return { stdout: '', wrote: [outputRoot] };
 		}
-		return { stdout: json, wrote: [] };
-	}
-	if (format === 'markdown') {
-		if (out) {
-			atomicWrite(outputRoot, brief);
-			return { stdout: '', wrote: [outputRoot] };
-		}
-		return { stdout: brief, wrote: [] };
+		return { stdout: body, wrote: [] };
 	}
 	const pairRoot = pairedOutputRoot(outputRoot);
 	atomicWrite(`${pairRoot}.json`, json);
@@ -271,11 +228,10 @@ function publish(
 	return { stdout: brief, wrote: [`${pairRoot}.json`, `${pairRoot}.md`] };
 }
 
-/** Execute the scan with stable default outputs and explicit regression semantics. */
 export function assembleReport(options: AssembleOptions): AssembleResult {
 	const normalized = normalizeOptions(options);
 	if (normalized.overlapOnly) {
-		const report = analyzeOverlaps(normalized.roots);
+		const report = analyzeOverlaps(normalized.roots, normalized.healthProfile);
 		const json = `${JSON.stringify(report, null, 2)}\n`;
 		const brief = `${overlapMarkdown(report)}\n`;
 		const { stdout, wrote } = publish(
@@ -294,13 +250,12 @@ export function assembleReport(options: AssembleOptions): AssembleResult {
 			wrote
 		};
 	}
-	const report = analyze(normalized.roots, normalized.receipts);
+	const report = analyze(normalized.roots, normalized.receipts, normalized.healthProfile);
 	if (normalized.baseline)
 		report.comparison = compare(
 			report,
 			decodeBaseline(readFileSync(normalized.baseline, 'utf8'))
 		);
-	// Short-circuit order matters: with no receipts there is no `quality` to inspect at all.
 	report.verdict =
 		normalized.receipts.length === 0 ||
 		(report.quality?.coverage?.unscannedProductionFiles ?? 0) > 0 ||
@@ -331,8 +286,7 @@ export function assembleReport(options: AssembleOptions): AssembleResult {
 	};
 }
 
-/** Parse only named code entities and skip graph/LOC/receipt work for a fast overlap check. */
-function analyzeOverlaps(roots: ReadonlyArray<string>): OverlapReport {
+function analyzeOverlaps(roots: ReadonlyArray<string>, profile: HealthProfile): OverlapReport {
 	const files = collectSourceFiles(roots).filter((path) => !isTestPath(path));
 	if (files.length === 0) throw new Error('selected zero production source files');
 	const rootDescriptions = describeRoots(roots);
@@ -349,10 +303,10 @@ function analyzeOverlaps(roots: ReadonlyArray<string>): OverlapReport {
 		const displayPath = `${root.id}/${relative(containingRoot, path).split(sep).join('/')}`;
 		const concept = conceptFor(path, owner);
 		const pillar = pillarFor(path, owner);
-		for (const item of analyzeAst(path, readFileSync(path, 'utf8')).duplicateEntities)
+		for (const item of analyzeAst(path, readFileSync(path, 'utf8'), profile).duplicateEntities)
 			entities.push({ ...item, file: displayPath, concept, pillar, rootId: root.id });
 	}
-	const pathways = pathwayEvidence(entities);
+	const pathways = pathwayEvidence(entities, profile.genericLabels);
 	return {
 		schemaVersion: SCHEMA_VERSION,
 		analyzerVersion: ANALYZER_VERSION,
@@ -385,8 +339,11 @@ function analyzeOverlaps(roots: ReadonlyArray<string>): OverlapReport {
 	};
 }
 
-/** Build the complete snapshot and its evidence tables from one immutable file inventory. */
-function analyze(roots: ReadonlyArray<string>, receiptPaths: ReadonlyArray<string>): BuiltReport {
+function analyze(
+	roots: ReadonlyArray<string>,
+	receiptPaths: ReadonlyArray<string>,
+	profile: HealthProfile
+): BuiltReport {
 	const files = collectSourceFiles(roots);
 	if (files.length === 0) throw new Error('selected zero source files');
 	const rootDescriptions = describeRoots(roots);
@@ -402,7 +359,7 @@ function analyze(roots: ReadonlyArray<string>, receiptPaths: ReadonlyArray<strin
 		const owner = packageFor(path, containingRoot, root.id, packageCache);
 		const localPath = relative(containingRoot, path).split(sep).join('/');
 		const test = isTestPath(path);
-		const ast = analyzeAst(path, source);
+		const ast = analyzeAst(path, source, profile);
 		return {
 			path,
 			displayPath: `${root.id}/${localPath}`,
@@ -551,7 +508,7 @@ function analyze(roots: ReadonlyArray<string>, receiptPaths: ReadonlyArray<strin
 			rootId: record.root.id
 		}))
 	);
-	const pathwayReport = pathwayEvidence(duplicateEntities);
+	const pathwayReport = pathwayEvidence(duplicateEntities, profile.genericLabels);
 	const duplicatePathways: Array<DuplicateGroup> = pathwayReport.exact;
 	const overlappingPathways: Array<OverlapPair> = pathwayReport.overlapping;
 	const functionalityClusters: Array<FunctionalityCluster> = pathwayReport.clusters;

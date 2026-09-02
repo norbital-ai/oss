@@ -4,99 +4,113 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
-	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import type { WorkbenchView } from '#lib/client/ui/studio/studio-state.js';
+	import {
+		lifecycleRailCurrent,
+		lifecycleRailMessageKey,
+		type MergeRequest,
+		type WorkbenchDiffBaselineKey
+	} from '#lib/client/ui/studio/studio-state.js';
 	import { presentWorkbenchStatus } from '#lib/client/ui/studio/workbench-status-presentation.js';
 
 	let {
 		hostStatus,
 		busy = false,
-		view = 'manifest',
-		previewReady = false,
+		liveStatus,
+		tracking = 'live',
+		requests = [],
+		principal = '',
+		newCommits = 0,
+		baselineKey,
 		draftCount = 0,
-		currentCommit,
-		previewExpiresAt,
-		previewExpired = false,
-		buildFailed = false,
 		updateRequired = false,
 		updateDisabled = false,
 		updateReason,
-		previewDisabled = true,
-		previewReason,
-		reviewRequested = false,
-		reviewDisabled = true,
-		reviewReason,
-		onview,
-		onpreview,
-		onopenpreview,
-		onreview,
-		onopenreview,
-		onrebase,
-		onactivity
+		publishDisabled = true,
+		publishReason,
+		onswitch,
+		onpublish,
+		ondiagnose,
+		onupdate
 	}: {
 		hostStatus: string;
 		busy?: boolean;
-		view?: WorkbenchView;
-		previewReady?: boolean;
+		liveStatus?: string | undefined;
+		tracking?: 'live' | string;
+		requests?: ReadonlyArray<MergeRequest>;
+		principal?: string;
+		newCommits?: number;
+		baselineKey: WorkbenchDiffBaselineKey;
 		draftCount?: number;
-		currentCommit?: string | undefined;
-		previewExpiresAt?: number | undefined;
-		previewExpired?: boolean;
-		buildFailed?: boolean;
 		updateRequired?: boolean;
 		updateDisabled?: boolean;
 		updateReason: string;
-		previewDisabled?: boolean;
-		previewReason: string;
-		reviewRequested?: boolean;
-		reviewDisabled?: boolean;
-		reviewReason: string;
-		onview?: ((next: WorkbenchView) => void) | undefined;
-		onpreview?: (() => void) | undefined;
-		onopenpreview?: (() => void) | undefined;
-		onreview?: (() => void) | undefined;
-		onopenreview?: (() => void) | undefined;
-		onrebase?: (() => void) | undefined;
-		onactivity?: (() => void) | undefined;
+		publishDisabled?: boolean;
+		publishReason: string;
+		onswitch?: ((to: 'live' | string) => void) | undefined;
+		onpublish?: (() => void) | undefined;
+		ondiagnose?: (() => void) | undefined;
+		onupdate?: (() => void) | undefined;
 	} = $props();
 	const { t } = useI18n();
 
-	const toolbarStatus = $derived(presentWorkbenchStatus({ hostStatus, busy, previewReady }));
+	const toolbarStatus = $derived(
+		presentWorkbenchStatus({ hostStatus, busy, previewReady: false, liveStatus })
+	);
 	const supportingState = $derived.by(() => {
 		if (draftCount > 0) return t('bolt.studio.unsavedFiles', { count: draftCount });
 		if (hostStatus.startsWith('Migration ready')) return t('bolt.studio.reviewMigration');
-		if (previewExpired) return t('bolt.studio.previewExpired');
-		if (buildFailed) return t('bolt.studio.lastPreviewFailed');
-		if (previewReady && previewExpiresAt !== undefined) {
-			return t('bolt.studio.previewUntil', {
-				time: new Intl.DateTimeFormat(undefined, {
-					hour: 'numeric',
-					minute: '2-digit'
-				}).format(previewExpiresAt)
-			});
-		}
-		if (currentCommit !== undefined)
-			return t('bolt.studio.commitValue', { commit: currentCommit.slice(0, 12) });
 		return undefined;
 	});
+	const switcherRequests = $derived.by(() => {
+		const open = requests.filter(
+			(request) => request.state === 'draft' || request.state === 'ready'
+		);
+		if (tracking === 'live' || open.some((request) => request.id === tracking)) return open;
+		const current = requests.find((request) => request.id === tracking);
+		return current === undefined ? open : [current, ...open];
+	});
+
+	const requestOptionLabel = (request: MergeRequest): string => {
+		const title = request.title.trim() === '' ? request.id : request.title;
+		const stage = lifecycleRailCurrent(request.state);
+		const stageLabel =
+			stage === 'closed' ? t('bolt.studio.reviewStatus.closed') : t(lifecycleRailMessageKey(stage));
+		const people = request.trackedBy
+			.map((id) => (id === principal ? t('bolt.studio.you') : id))
+			.join(', ');
+		return people === '' ? `${title} · ${stageLabel}` : `${title} · ${stageLabel} · ${people}`;
+	};
 </script>
 
 <Inline shrink={false} class="h-10 border-b border-border/60 sm:h-9">
 	<Scroll name={t('bolt.studio.workbench')} axis="x" layout="inline" gap="xs" grow class="min-w-0">
-		<Tabs
-			value={view}
-			onValueChange={(next) => {
-				if (next === 'manifest' || next === 'editor') onview?.(next);
-			}}
-			showContent={false}
-			animate={false}
-			variant="underline"
-			listClass="mx-1"
-			config={[
-				{ name: 'manifest', label: t('bolt.studio.manifest'), icon: 'lucide:braces', content: '' },
-				{ name: 'editor', label: t('bolt.studio.source'), icon: 'lucide:code-2', content: '' }
-			] satisfies TabConfig[]}
-		/>
+		<label class="sr-only" for="studio-mr-switcher">{t('bolt.studio.switcherAria')}</label>
+		<select
+			id="studio-mr-switcher"
+			data-testid="studio-mr-switcher"
+			class="h-7 max-w-64 shrink-0 rounded-sm border border-border/60 bg-background px-1.5 text-xs text-foreground"
+			value={tracking}
+			onchange={(event) => onswitch?.(event.currentTarget.value)}
+		>
+			<option value="live">
+				{t('bolt.studio.localBase')} · {t('bolt.studio.localBaseOnLive')}
+			</option>
+			{#each switcherRequests as request (request.id)}
+				<option value={request.id}>{requestOptionLabel(request)}</option>
+			{/each}
+		</select>
+		<span class="shrink-0 text-micro text-muted-foreground" data-testid="studio-diff-baseline">
+			{t(baselineKey)}
+		</span>
+		{#if newCommits > 0}
+			<Badge
+				variant="warning"
+				class="h-5 max-w-48 shrink-0 gap-1 px-2 py-0 text-micro"
+				data-testid="studio-new-commits"
+			>
+				{t('bolt.studio.newCommits', { count: newCommits })}
+			</Badge>
+		{/if}
 		{#if toolbarStatus}
 			<Badge
 				variant={toolbarStatus.variant}
@@ -132,13 +146,14 @@
 			variant="ghost"
 			size="sm"
 			class="h-8 gap-1 px-2 text-xs sm:h-7 sm:text-micro"
-			aria-label={t('bolt.studio.openActivity')}
-			onclick={() => onactivity?.()}
+			disabled={busy}
+			data-testid="studio-diagnose"
+			onclick={() => ondiagnose?.()}
 		>
-			<Icon icon="lucide:activity" class="size-3.5" />
-			<span class="hidden sm:inline">{t('bolt.studio.activity')}</span>
+			<Icon icon="lucide:stethoscope" class="size-3.5" />
+			{t('bolt.studio.diagnose')}
 		</Button>
-		{#if updateRequired}
+		{#if updateRequired || newCommits > 0}
 			<Button
 				type="button"
 				variant="default"
@@ -146,38 +161,11 @@
 				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
 				disabled={updateDisabled}
 				disabledMessage={updateReason}
-				data-testid="studio-rebase"
-				onclick={() => onrebase?.()}
+				data-testid="studio-update"
+				onclick={() => onupdate?.()}
 			>
-				<Icon icon="lucide:git-rebase" class="size-3.5" />
-				{t('bolt.studio.rebase')}
-			</Button>
-		{:else if previewReady}
-			<Button
-				type="button"
-				variant="outline"
-				size="sm"
-				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
-				disabled={previewDisabled}
-				disabledMessage={previewReason}
-				data-testid="studio-preview"
-				onclick={() => onopenpreview?.()}
-			>
-				<Icon icon="lucide:external-link" class="size-3.5" />
-				{t('bolt.studio.openPreview')}
-			</Button>
-			<Button
-				type="button"
-				variant="default"
-				size="sm"
-				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
-				disabled={!reviewRequested && reviewDisabled}
-				disabledMessage={reviewReason}
-				data-testid={reviewRequested ? 'studio-open-review' : 'studio-request-review'}
-				onclick={() => (reviewRequested ? onopenreview?.() : onreview?.())}
-			>
-				<Icon icon="lucide:git-pull-request" class="size-3.5" />
-				{t(reviewRequested ? 'bolt.studio.openReview' : 'bolt.studio.requestReview')}
+				<Icon icon="lucide:arrow-up-from-line" class="size-3.5" />
+				{t(updateRequired ? 'bolt.studio.updateFromLive' : 'bolt.studio.update')}
 			</Button>
 		{:else}
 			<Button
@@ -185,13 +173,13 @@
 				variant="default"
 				size="sm"
 				class="h-8 gap-1 px-2 text-xs font-semibold sm:h-7 sm:text-micro"
-				disabled={previewDisabled}
-				disabledMessage={previewReason}
-				data-testid="studio-preview"
-				onclick={() => onpreview?.()}
+				disabled={publishDisabled}
+				disabledMessage={publishReason}
+				data-testid="studio-publish"
+				onclick={() => onpublish?.()}
 			>
-				<Icon icon="lucide:scan-eye" class="size-3.5" />
-				{t('bolt.studio.preview')}
+				<Icon icon="lucide:upload" class="size-3.5" />
+				{t('bolt.studio.publish')}
 			</Button>
 		{/if}
 	</Inline>

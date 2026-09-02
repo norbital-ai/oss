@@ -645,9 +645,9 @@ export const makeGraphPreparers = <Error, Requirements>(
 								// payslip_work_day_inputs …". Minting those ids is not incidental; the run's
 								// adjustments carry foreign keys naming the junction rows in the same statement.
 								//
-								// A server-only mutation (`browserMutation === undefined`) still takes the claim
-								// path below, where read planning does read child ids and absence is a real
-								// refusal.
+								// Server-only mutations take the stored-row branch below. Do not fold that
+								// branch into this one: an undeclared browser id must stay a create so a
+								// hook-minted payroll graph can persist (learning 50 / 5ddd4c09).
 								const declaredExisting = ports.browserMutation.baseVersions.some(
 									(entry) =>
 										entry.row.collection === relation.edge.childCollection &&
@@ -666,9 +666,9 @@ export const makeGraphPreparers = <Error, Requirements>(
 									ownerTransition: 'preserve'
 								};
 							} else {
-								// Only a relation introduced by trusted authored code reaches this branch. Resolve the
-								// explicit identity as an existing row: absence is never reinterpreted as a create, and
-								// a non-null owner is never overwritten. This is the sole ownership-claim transition.
+								// Trusted authored code. An unstored id is a nested create — agents mint
+								// message and directive ids on the same statement. A stored row owned by
+								// another parent cannot move. Null owner or this parent is claim / update.
 								const stored = yield* ports.storedGraphRow(
 									EffectId.make(
 										`${ports.effectId}:claim-owner:${relation.edge.childCollection}:${childId}`
@@ -676,25 +676,28 @@ export const makeGraphPreparers = <Error, Requirements>(
 									relation.edge.childCollection,
 									childId
 								);
-								if (stored === undefined)
-									return yield* ports.graphRefusal(
-										relation.edge.childCollection,
-										'update',
-										`${childId} does not identify an existing ${relation.edge.childCollection} row, so it cannot be claimed by ${collection} ${id}.`
-									);
-								const storedOwner = stored.row[relation.edge.childColumn];
-								if (storedOwner !== null && storedOwner !== id)
-									return yield* ports.graphRefusal(
-										relation.edge.childCollection,
-										'update',
-										`${childId} is already owned by another ${collection} row, so this relationship mutation cannot move or overwrite it.`
-									);
-								childIdentity = {
-									id: childId,
-									action: 'update',
-									clearLock: false,
-									ownerTransition: storedOwner === null ? 'claim' : 'preserve'
-								};
+								if (stored === undefined) {
+									childIdentity = {
+										id: childId,
+										action: 'create',
+										clearLock: false,
+										ownerTransition: 'preserve'
+									};
+								} else {
+									const storedOwner = stored.row[relation.edge.childColumn];
+									if (storedOwner !== null && storedOwner !== id)
+										return yield* ports.graphRefusal(
+											relation.edge.childCollection,
+											'update',
+											`${childId} is already owned by another ${collection} row, so this relationship mutation cannot move or overwrite it.`
+										);
+									childIdentity = {
+										id: childId,
+										action: 'update',
+										clearLock: false,
+										ownerTransition: storedOwner === null ? 'claim' : 'preserve'
+									};
+								}
 							}
 							desiredIds.add(childId);
 						}

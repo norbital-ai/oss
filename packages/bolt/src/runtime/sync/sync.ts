@@ -24,6 +24,8 @@ import {
 	resolveInitialPrefix
 } from './delta-engine.js';
 
+export { SyncPrefixResolutionError } from './delta-engine.js';
+
 class SyncInputError extends Schema.TaggedError<SyncInputError>()('Bolt.Sync.InputError', {
 	message: Schema.NonEmptyString
 }) {

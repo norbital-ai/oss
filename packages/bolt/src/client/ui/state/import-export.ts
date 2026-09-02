@@ -1,3 +1,4 @@
+import { toError } from '@norbital-ai/std';
 import { Effect, Schema } from 'effect';
 import { workspaceSession } from '#lib/client/session.js';
 
@@ -5,7 +6,9 @@ const ExportSelectionSchema = {
 	records: Schema.optionalKey(Schema.Array(Schema.String)),
 	record_ids: Schema.optionalKey(Schema.Array(Schema.String)),
 	pipeline: Schema.optionalKey(Schema.String),
-	scope: Schema.optionalKey(Schema.Json)
+	scope: Schema.optionalKey(Schema.Json),
+	where: Schema.optionalKey(Schema.Json),
+	limit: Schema.optionalKey(Schema.Number)
 };
 const CollectionExportInputSchema = Schema.Union([
 	Schema.Struct({ collection: Schema.String, ...ExportSelectionSchema }),
@@ -60,15 +63,46 @@ const decodeImportResult = Schema.decodeUnknownEffect(Schema.Struct({ imported: 
  * which was a third implementation of the one thing `BoltTransport` already is — one that could
  * disagree with the other two about where a command goes and who is issuing it.
  */
+/**
+ * `collections.export` decodes `CollectionQueryRequest`. The browser used to post
+ * `collection_name` / `record_ids`, which the decoder refuses as `invalid_input` (HTTP 400)
+ * before any authored pipeline runs.
+ */
+export function collectionExportCommandInput(input: CollectionExportInput): {
+	readonly collection: string;
+	readonly where?: Schema.Json;
+	readonly limit?: number;
+} {
+	const collection = 'collection' in input ? input.collection : input.collection_name;
+	const ids = input.record_ids ?? input.records;
+	if (ids != null && ids.length > 0) {
+		return {
+			collection,
+			where: { id: { in: [...ids] } },
+			limit: ids.length
+		};
+	}
+	return {
+		collection,
+		...(input.where != null ? { where: input.where } : {}),
+		...(input.limit != null ? { limit: input.limit } : {})
+	};
+}
+
 const CollectionTransfer = {
 	download: (input: CollectionExportInput, options: CollectionExportOptions = {}) =>
 		Effect.runPromise(
-			Effect.tryPromise(() =>
-				// repository-health:allow UI18 -- `collections.export` has no generated method, and a
-				// WorkspaceSession carries a BoltTransport rather than a client. Routing it needs a
-				// `collections` namespace on SystemClientApi: a public-API change, not a refactor.
-				workspaceSession().transport.command('collections.export', input)
-			).pipe(
+			Effect.tryPromise({
+				try: () =>
+					// repository-health:allow UI18 -- `collections.export` has no generated method, and a
+					// WorkspaceSession carries a BoltTransport rather than a client. Routing it needs a
+					// `collections` namespace on SystemClientApi: a public-API change, not a refactor.
+					workspaceSession().transport.command(
+						'collections.export',
+						collectionExportCommandInput(input)
+					),
+				catch: toError
+			}).pipe(
 				Effect.flatMap(decodeExportManifest),
 				Effect.map((manifest) =>
 					options.includeAction === undefined ? manifest : manifest.filter(options.includeAction)
@@ -77,10 +111,12 @@ const CollectionTransfer = {
 		),
 	importRecords: (input: CollectionImportInput) =>
 		Effect.runPromise(
-			Effect.tryPromise(() =>
-				// repository-health:allow UI18 -- the import half of the same gap; see the note above.
-				workspaceSession().transport.command('collections.import', input)
-			).pipe(
+			Effect.tryPromise({
+				try: () =>
+					// repository-health:allow UI18 -- the import half of the same gap; see the note above.
+					workspaceSession().transport.command('collections.import', input),
+				catch: toError
+			}).pipe(
 				Effect.flatMap(decodeImportResult),
 				Effect.map((result) => result.imported)
 			)

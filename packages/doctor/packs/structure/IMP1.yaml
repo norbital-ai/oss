@@ -1,14 +1,28 @@
 id: IMP1
 summary: deep relative import bypasses a declared alias for the same target
 severity: error
-principles: [simplicity, straightforwardness, colocation]
+principles: [ simplicity, straightforwardness, colocation ]
 rule:
   all:
     - kind: ImportDeclaration
     - regex: "from ['\"]\\.\\./\\.\\./"
     - aliasCovered: true
 examples:
+  file: src/feature/panel/probe.ts
+  fixture:
+    tsconfig.json: |-
+      { "compilerOptions": { "baseUrl": ".", "paths": { "#lib/*": ["src/lib/*"] } } }
+    src/lib/value.ts: "export const v = 1;"
   bad:
     - "import { v } from '../../lib/value.js';\nexport const x = v;"
   good:
     - "import { v } from '#lib/value.js';\nexport const x = v;"
+    - |-
+      import { a } from '../sibling/x.js';
+      export const b = a;
+    - |-
+      import { a } from './x.js';
+      export const b = a;
+    - |-
+      import { a } from '@scope/pkg';
+      export const b = a;

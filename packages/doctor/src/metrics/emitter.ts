@@ -257,7 +257,7 @@ export function buildMetrics(options: EmitMetricsOptions): { tsv: string; summar
 		const read = Effect.runSync(Effect.result(Effect.try(() => readFileSync(absolute, 'utf8'))));
 		const raw = Result.getOrElse(read, () => undefined);
 		if (raw === undefined) continue;
-		// Svelte scripts parse like TS while LOC stays whole-file, matching every other consumer.
+		// `.svelte` scripts parse like TS while LOC stays whole-file, matching every other consumer.
 		const text = file.endsWith('.svelte') ? (svelteScript(raw) ?? '') : raw;
 		const parsedFile = Effect.runSync(
 			Effect.result(

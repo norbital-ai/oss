@@ -1,7 +1,7 @@
 id: MOD1
 summary: module imports or re-exports itself
 severity: error
-principles: [simplicity, modularity, colocation, no-bloat]
+principles: [ simplicity, modularity, colocation, no-bloat ]
 rule:
   all:
     - any:
@@ -19,7 +19,16 @@ rule:
           - not:
               regex: 'import \*|import \{|import type'
 examples:
+  fixture:
+    src/probe.ts: "export const value = 1;"
   bad:
-    - "export const Workbench = import('./workbench.js');"
+    - "import { value } from './probe.js';\nexport const echoed = value;"
   good:
     - "export * as Workbench from './workbench-contract.js';"
+    - |-
+      import { a } from './other.js';
+      export const b = a;
+    - export { a } from './other.js';
+    - |-
+      const m = await import('./other.js');
+      export const b = m;

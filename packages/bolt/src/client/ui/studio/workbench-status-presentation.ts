@@ -31,11 +31,14 @@ export const presentWorkbenchStatus = (input: {
 	readonly hostStatus: string;
 	readonly busy: boolean;
 	readonly previewReady: boolean;
+	readonly liveStatus?: string;
 }): WorkbenchStatusPresentation | undefined => {
-	const { hostStatus, busy, previewReady } = input;
+	const { hostStatus, busy, previewReady, liveStatus } = input;
 	if (busy)
 		return status('bolt.studio.status.updating', {
-			detailKey: 'bolt.studio.status.updatingDetail',
+			...(liveStatus === undefined
+				? { detailKey: 'bolt.studio.status.updatingDetail' as const }
+				: { detail: liveStatus }),
 			icon: 'lucide:loader-2',
 			variant: 'outline',
 			loading: true

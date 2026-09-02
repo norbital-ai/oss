@@ -13,7 +13,8 @@
 	} from '#lib/client/ui/system/automation-presentation.js';
 	import {
 		MANIFEST_SECTION_MESSAGES,
-		manifestInspectionState
+		manifestInspectionState,
+		policyActionVerbs
 	} from '#lib/client/ui/studio/studio-state.js';
 	import type {
 		EnvironmentVariable,
@@ -52,10 +53,11 @@
 	const canEnterStudio = $derived(canShowStudioSource(studioSource().canEnterStudio));
 
 	let expandedPolicies = $state<ReadonlyArray<string>>([]);
-	let expandedDescriptions = $state<ReadonlyArray<string>>([]);
+	let localSelected = $state<string | undefined>();
+	const activeSelected = $derived(localSelected ?? selected);
 
-	const kind = $derived(selected.split(':')[0] ?? 'collections');
-	const name = $derived(selected.slice(kind.length + 1));
+	const kind = $derived(activeSelected.split(':')[0] ?? 'collections');
+	const name = $derived(activeSelected.slice(kind.length + 1));
 	const section = $derived(sections.find((candidate) => candidate.id === kind));
 	const collection = $derived(
 		kind === 'collections' ? manifest?.collections.find((item) => item.name === name) : undefined
@@ -122,14 +124,11 @@
 	const toggle = (values: ReadonlyArray<string>, value: string): ReadonlyArray<string> =>
 		values.includes(value) ? values.filter((candidate) => candidate !== value) : [...values, value];
 	const grantGroups = (policy: WorkspaceManifest['policies'][number]) => {
-		const groups = new Map<
-			string,
-			Array<WorkspaceManifest['policies'][number]['grants'][number]>
-		>();
+		const groups: Record<string, Array<(typeof policy.grants)[number]>> = {};
 		for (const grant of policy.grants) {
-			groups.set(grant.collection, [...(groups.get(grant.collection) ?? []), grant]);
+			groups[grant.collection] = [...(groups[grant.collection] ?? []), grant];
 		}
-		return [...groups.entries()].map(([collectionName, grants]) => ({ collectionName, grants }));
+		return Object.entries(groups).map(([collectionName, grants]) => ({ collectionName, grants }));
 	};
 	const listEntries = $derived.by<ReadonlyArray<ListEntry>>(() => {
 		if (manifest === undefined) return [];
@@ -195,6 +194,30 @@
 	});
 </script>
 
+{#snippet sectionRail()}
+	<Inline
+		gap="xs"
+		shrink={false}
+		class="flex-wrap border-b border-border/60 px-4 py-2 sm:px-6"
+		data-testid="studio-manifest-sections"
+	>
+		{#each sections as branch (branch.id)}
+			<button
+				type="button"
+				class={cn(
+					'rounded-full px-2 py-0.5 text-micro',
+					kind === branch.id
+						? 'bg-primary/10 font-semibold text-foreground'
+						: 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
+				)}
+				onclick={() => (localSelected = branch.id)}
+			>
+				{sectionLabel(branch.id)}
+			</button>
+		{/each}
+	</Inline>
+{/snippet}
+
 {#snippet panelHeading(branch: ManifestSection, count: number)}
 	<Inline gap="sm" align="start">
 		<ProductIcon name={branch.icon} class="mt-0.5 size-4 text-muted-foreground" />
@@ -220,23 +243,8 @@
 	{/if}
 {/snippet}
 
-{#snippet description(text: string, key: string)}
-	{@const open = expandedDescriptions.includes(key)}
-	{@const regionId = stableId('manifest-description', key)}
-	<Stack gap="xs">
-		<p id={regionId} class={cn('max-w-3xl text-meta', !open && 'line-clamp-2')}>{text}</p>
-		{#if text.length > 80}
-			<button
-				type="button"
-				class="w-fit text-micro text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-				aria-expanded={open}
-				aria-controls={regionId}
-				onclick={() => (expandedDescriptions = toggle(expandedDescriptions, key))}
-			>
-				{t(open ? 'bolt.studio.showLess' : 'bolt.studio.showFullDescription')}
-			</button>
-		{/if}
-	</Stack>
+{#snippet description(text: string)}
+	<p class="line-clamp-2 max-w-3xl text-meta">{text}</p>
 {/snippet}
 
 {#snippet sourceAction(path: string | undefined, entity: string)}
@@ -296,14 +304,20 @@
 								/>
 								<Stack gap="xs" grow class="min-w-0">
 									<Inline gap="xs" class="min-w-0">
-										<h3
-											class={cn(
-												'min-w-0 truncate text-xs font-medium text-foreground',
-												kind !== 'apps' && 'font-mono'
-											)}
+										<button
+											type="button"
+											class="min-w-0 truncate text-left"
+											onclick={() => (localSelected = `${kind}:${entry.name}`)}
 										>
-											{entry.label ?? entry.name}
-										</h3>
+											<h3
+												class={cn(
+													'min-w-0 truncate text-xs font-medium text-foreground',
+													kind !== 'apps' && 'font-mono'
+												)}
+											>
+												{entry.label ?? entry.name}
+											</h3>
+										</button>
 										{@render systemMarker(entry.origin)}
 										{#if entry.versioned}<span
 												class="shrink-0 text-micro text-muted-foreground"
@@ -311,7 +325,7 @@
 											>{/if}
 									</Inline>
 									{#if entry.description !== undefined}
-										{@render description(entry.description, `${kind}-${entry.name}`)}
+										{@render description(entry.description)}
 									{/if}
 									{#if entry.detail !== undefined}
 										<Cluster gap="xs" class="text-micro text-muted-foreground">
@@ -359,14 +373,14 @@
 										<span class="text-micro text-muted-foreground">
 											{countLabel(grantCount(policy), 'grants')}
 										</span>
-										{#if policy.grants.some((grant) => grant.approval === true)}
-											<span class="text-micro text-amber-700 dark:text-amber-300">
-												{t('bolt.studio.approvalRequired')}
+										{#if policyActionVerbs(policy.grants) !== ''}
+											<span class="text-micro text-muted-foreground">
+												{policyActionVerbs(policy.grants)}
 											</span>
 										{/if}
 									</Cluster>
 									{#if policy.description !== ''}
-										{@render description(policy.description, `policy-${policy.name}`)}
+										{@render description(policy.description)}
 									{/if}
 								</Stack>
 								<Cluster gap="sm" shrink={false} class="w-full justify-end sm:w-auto">
@@ -487,15 +501,20 @@
 			{t('bolt.studio.rebuildDescription')}
 		</p>
 	</Stack>
-{:else if collection !== undefined}
-	<CollectionDetail {collection} {manifest} {onopenSource} />
-{:else if section === undefined}
-	<Stack gap="sm" fill align="center" justify="center" class="px-6 text-muted-foreground">
-		<Icon icon="lucide:list-tree" class="size-9 opacity-40" />
-		<p class="text-sm font-medium text-foreground">{t('bolt.studio.nothingSelected')}</p>
-	</Stack>
-{:else if kind === 'policies'}
-	{@render policiesPanel(section, manifest)}
 {:else}
-	{@render listPanel(section, listEntries)}
+	<Stack gap="none" fill class="min-h-0">
+		{@render sectionRail()}
+		{#if collection !== undefined}
+			<CollectionDetail {collection} {manifest} {onopenSource} />
+		{:else if section === undefined}
+			<Stack gap="sm" fill align="center" justify="center" class="px-6 text-muted-foreground">
+				<Icon icon="lucide:list-tree" class="size-9 opacity-40" />
+				<p class="text-sm font-medium text-foreground">{t('bolt.studio.nothingSelected')}</p>
+			</Stack>
+		{:else if kind === 'policies'}
+			{@render policiesPanel(section, manifest)}
+		{:else}
+			{@render listPanel(section, listEntries)}
+		{/if}
+	</Stack>
 {/if}

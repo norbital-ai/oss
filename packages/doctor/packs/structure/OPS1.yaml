@@ -2,31 +2,26 @@ id: OPS1
 summary: operational health or admission state is hard-coded
 severity: error
 principles: [straightforwardness, testability]
-files:
-  - '**/*health*'
-  - '**/*ready*'
-  - '**/*status*'
-  - '**/*operation*'
-  - '**/*capacit*'
-  - '**/*admission*'
 ignore:
-  - '**/*.test.ts'
-  - '**/*.test.js'
-  - '**/*.spec.ts'
-  - '**/*.spec.js'
+  - '**/test/**'
+  - '**/tests/**'
+  - '**/fixtures/**'
+  - '**/*.test.*'
+  - '**/*.spec.*'
 rule:
-  any:
-    - pattern:
-        context: "const $X = { status: 'ready', $...REST }"
-        selector: ObjectLiteralExpression
-    - pattern:
-        context: "const $X = { health: 'ready', $...REST }"
-        selector: ObjectLiteralExpression
-    - pattern:
-        context: 'const $X = { accepting: $A, outstanding: $B }'
-        selector: ObjectLiteralExpression
+  all:
+    - kind: ObjectLiteralExpression
+    - fact:
+        name: enclosingOwnerMatches
+        regex: '(?:health|ready|status|operations?|capacity|admission|tenant[-_.]?matrix)'
+    - any:
+        - regex: '\b(?:health|status)\s*:\s*[''"]ready[''"]'
+        - all:
+            - regex: '\baccepting\s*:\s*true'
+            - regex: '\boutstanding\s*:\s*0'
 examples:
+  file: src/health.ts
   bad:
-    - "{ status: 'ready', service: 'colony' }"
+    - "export const route = { status: 'ready', service: 'colony' };"
   good:
-    - "{ status: snapshot.ready ? 'ready' : 'starting' }"
+    - "export const route = { status: snapshot.ready ? 'ready' : 'starting' };"

@@ -69,7 +69,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 				'session',
 				'user',
 				'bolt_collection_history',
-				'bolt_sync_outbox'
+				'bolt_browser_mutation'
 			])
 		);
 	});
@@ -227,6 +227,12 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			`select data_type from information_schema.columns where table_name = 'leave_requests' and column_name = 'employment_id'`
 		);
 		expect(keyType.rows[0]?.data_type).toBe('uuid');
+		const foreignKeys = await database.query<{ constraint_name: string }>(
+			`select constraint_name from information_schema.table_constraints where table_schema = 'public' and constraint_type = 'FOREIGN KEY' order by constraint_name`
+		);
+		expect(foreignKeys.rows.map(({ constraint_name }) => constraint_name)).toEqual([
+			'leave_requests_employment_id_employments_fk'
+		]);
 
 		const employment = rid('employment-1');
 		const company = rid('company-1');
@@ -238,6 +244,12 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			rid('leave-1'),
 			employment
 		]);
+		await expect(
+			database.query('insert into leave_requests (id, employment_id) values ($1, $2)', [
+				rid('leave-dangle'),
+				rid('missing-employment')
+			])
+		).rejects.toThrow(/foreign key|violates/i);
 		// The excluded row now points at a real employment in a different company. It used to dangle,
 		// which the schema plan permitted because it rendered no foreign keys at all; the lineage does,
 		// so a reference to nothing is refused by the database rather than quietly stored.

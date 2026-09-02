@@ -1,0 +1,15 @@
+id: UI12
+summary: Tailwind arbitrary value built at runtime emits no CSS
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:Attribute
+    - regex: 'class=\{[^}]*[''"`][a-z-]+-\[\$\{'
+examples:
+  bad:
+    - '<div class={`mt-[${n}px]`}></div>'
+  good:
+    - '<div class="mt-4"></div>'

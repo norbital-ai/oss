@@ -1,0 +1,19 @@
+id: STR1
+summary: branches on an open-domain identifier compared to a source literal
+severity: error
+principles: [straightforwardness, type-safety, testability]
+rule:
+  all:
+    - kind: BinaryExpression
+    - fact:
+        name: openDomainIdentifier
+        shape: comparison
+        properties: '^(?:name|slug|handle|title|label|displayName|email|username|teamName|collectionName|workspaceName)$'
+        entities: '^(?:team|teams|collection|collections|workspace|tenant|policy|policies|app|apps|role|group|member|organization|org|project)$'
+examples:
+  bad:
+    - 'export const canPublish = team.name === "Engineering";'
+  good:
+    - 'export const isAssistant = message.role === "assistant";'
+    - 'export const hasEmail = user.email !== "";'
+    - 'export const same = team.name === user.email;'

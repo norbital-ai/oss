@@ -1,0 +1,32 @@
+id: DDL1
+summary: authored table, column, constraint, or index DDL bypasses the model compiler
+severity: error
+principles: [simplicity, straightforwardness, modularity, testability, no-bloat]
+ignore:
+  - '**/migrations/**'
+  - '**/migration/**'
+  - '**/compiler/**'
+  - '**/generator/**'
+  - '**/schema/**'
+  - '**/drizzle/**'
+rule:
+  all:
+    - kind: CallExpression
+    - pattern: '$CALLEE($...A)'
+    - regex: '^(?:pgTable|pgView|index|uniqueIndex|primaryKey|foreignKey|check)$'
+      on: CALLEE
+    - not:
+        regex: '\.'
+        on: CALLEE
+    - any:
+        - regex: '^(?:pgTable|pgView|uniqueIndex|foreignKey)$'
+          on: CALLEE
+        - fact:
+            name: importsFrom
+            module: drizzle-orm
+examples:
+  bad:
+    - "export const t = pgTable('things', {});"
+  good:
+    - 'export const t = defineModel({});'
+    - 'export const refined = Schema.Array(Row).check(nonEmpty);'

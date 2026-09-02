@@ -1,11 +1,10 @@
 /**
  * The YAML authoring surface.
  *
- * Translation must be lossless in both directions that matter: a `rule` written in YAML behaves
- * exactly like the same matcher handed to the engine from TypeScript, and a `detect`/`prefer` pair
- * behaves exactly like the equivalent `overlapRules` binding. Everything else is strictness — a
- * bad field, a bad principle, a bad glob or a duplicate id throws with the file named, because
- * "zero findings" has to mean "clean" and never "misconfigured".
+ * Translation must be lossless: a `rule` written in YAML behaves exactly like the same matcher
+ * handed to the engine from TypeScript. Everything else is strictness — a bad field, a bad
+ * principle, a bad glob or a duplicate id throws with the file named, because "zero findings"
+ * has to mean "clean" and never "misconfigured".
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,12 +14,7 @@ import test from 'node:test';
 import { parse as parseYaml } from 'yaml';
 // The suite runs after `pnpm build`, so translation targets are imported as built modules —
 // exactly how every authored rule reaches the engine.
-import {
-	matchSource,
-	overlapRules,
-	runRules,
-	type Matcher
-} from '../build/index.js';
+import { matchSource, runRules, type Matcher } from '../build/index.js';
 import { loadPatternFiles } from '../build/patterns-yaml.js';
 
 const PACKAGE_ROOT = join(import.meta.dirname, '..');
@@ -84,9 +78,9 @@ test('every fixture loads once, with absolute sources for receipts', async () =>
 test('a loaded yaml rule reports against a repository like an authored one', async (context) => {
 	const root = repository('fires', {
 		'patterns/raw.yml':
-			'id: TMPRAW\nsummary: raw fetch bypasses the http client\nseverity: error\nprinciples: [modularity]\nrule: fetch($...ARGS)\n',
+			'id: TMPRAW\nsummary: raw fetch bypasses the http client\nseverity: error\nprinciples: [modularity]\nrule: fetch($...ARGS)\nexamples:\n  bad: ["const r = fetch(url);"]\n  good: ["const r = client.get(url);"]\n',
 		'patterns/hybrid.yml':
-			'id: TMPHYBRID\nsummary: sql assembled as text\nseverity: error\nprinciples: [type-safety]\nrule: query($SQL)\n',
+			'id: TMPHYBRID\nsummary: sql assembled as text\nseverity: error\nprinciples: [type-safety]\nrule: query($SQL)\nexamples:\n  bad: ["const r = query(sql);"]\n  good: ["const r = client.db.job.findMany({});"]\n',
 		'src/app.ts': `await fetch('/api/items');\nquery('SELECT * FROM users');\n`
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -100,39 +94,28 @@ test('a loaded yaml rule reports against a repository like an authored one', asy
 	);
 });
 
-test('detect/prefer behaves identically to overlapRules on the same repository', async (context) => {
+test('a clamp YAML rule reports nested min/max', async (context) => {
 	const source =
 		'export const clip = (value: number, low: number, high: number): number => Math.min(Math.max(value, low), high);\n';
 	const root = repository('clamp', {
 		'patterns/clamp.yml':
-			'id: TMPCLAMP\nsummary: local clamp reimplements es-toolkit#clamp\nseverity: error\nprinciples: [simplicity, efficiency]\ndetect: clamp\nprefer: es-toolkit#clamp\n',
+			'id: TMPCLAMP\nsummary: local clamp reimplements a library clamp\nseverity: error\nprinciples: [simplicity, efficiency]\nrule:\n  any:\n    - pattern: "Math.min(Math.max($A, $B), $C)"\n    - pattern: "Math.min($A, Math.max($B, $C))"\n    - pattern: "Math.max(Math.min($A, $B), $C)"\n    - pattern: "Math.max($A, Math.min($B, $C))"\nexamples:\n  bad: ["const b = Math.min(Math.max(v, lo), hi);"]\n  good: ["const b = clamp(v, lo, hi);"]\n',
 		'src/math.ts': source
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const loaded = await loadPatternFiles(root, 'patterns/clamp.yml');
-	const viaYaml = runRules({ root, rules: loaded.rules, files: ['src/math.ts'] }).filter(
+	const findings = runRules({ root, rules: loaded.rules, files: ['src/math.ts'] }).filter(
 		(finding) => finding.rule === 'TMPCLAMP'
 	);
-	const direct = runRules({
-		root,
-		rules: overlapRules([
-			{ shape: 'clamp', owner: 'es-toolkit', member: 'clamp', severity: 'error', id: 'TMPCLAMP' }
-		]),
-		files: ['src/math.ts']
-	}).filter((finding) => finding.rule === 'TMPCLAMP');
-
-	assert.ok(viaYaml.length >= 1);
-	assert.deepEqual(
-		viaYaml.map((finding) => `${finding.rule} ${finding.location}`),
-		direct.map((finding) => `${finding.rule} ${finding.location}`)
-	);
+	assert.ok(findings.length >= 1);
+	assert.match(findings[0]?.location ?? '', /^src\/math\.ts:/);
 });
 
-test('module reaches the detector, so the evidence names the qualified owner', async (context) => {
-	const root = repository('module', {
+test('a deep-equal YAML rule reports JSON.stringify comparison', async (context) => {
+	const root = repository('equal', {
 		'patterns/equal.yml':
-			"id: TMPEQUAL\nsummary: json comparison reimplements @acme/std#deepEqual\nseverity: error\nprinciples: [type-safety]\ndetect: deep-equal\nprefer: '@acme/std#deepEqual'\nmodule: compare\n",
+			"id: TMPEQUAL\nsummary: json comparison reimplements a library deep equal\nseverity: error\nprinciples: [type-safety]\nrule:\n  any:\n    - pattern: 'JSON.stringify($A) === JSON.stringify($B)'\n    - pattern: 'JSON.stringify($A) == JSON.stringify($B)'\nexamples:\n  bad: ['const same = JSON.stringify(a) === JSON.stringify(b);']\n  good: ['const same = deepEqual(a, b);']\n",
 		'src/same.ts':
 			'export const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);\n'
 	});
@@ -141,15 +124,14 @@ test('module reaches the detector, so the evidence names the qualified owner', a
 	const loaded = await loadPatternFiles(root, 'patterns/equal.yml');
 	const findings = runRules({ root, rules: loaded.rules, files: ['src/same.ts'] });
 	assert.equal(findings.length, 1);
-	assert.match(
-		findings[0]?.location ?? '',
-		/\[shape=deep-equal prefer=@acme\/std\/compare#deepEqual\]$/
-	);
+	assert.equal(findings[0]?.rule, 'TMPEQUAL');
+	assert.match(findings[0]?.location ?? '', /^src\/same\.ts:/);
 });
 
 test('globs discover nested files and refuse to match nothing', async (context) => {
 	const header = (id: string): string =>
-		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n`;
+		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n` +
+		"examples:\n  bad: ['const r = fetch(url);']\n  good: ['const r = client.get(url);']\n";
 	const root = repository('globs', {
 		'patterns/one.yml': `${header('GLOBONE')}rule: fetch($...ARGS)\n`,
 		'patterns/nested/two.yml': `${header('GLOBTWO')}rule: query($SQL)\n`,
@@ -173,17 +155,15 @@ test('globs discover nested files and refuse to match nothing', async (context) 
 
 test('bad input throws naming the file and the problem', async (context) => {
 	const plain = (id: string): string =>
-		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n`;
+		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n` +
+		"examples:\n  bad: ['const r = fetch(url);']\n  good: ['const r = client.get(url);']\n";
 	const root = repository('invalid', {
 		'patterns/unknown-field.yml': `${plain('BADUNK')}ruls: fetch($A)\n`,
 		'patterns/missing-principles.yml': 'id: BADREQ\nsummary: x\nseverity: error\n',
 		'patterns/foreign-principle.yml':
 			'id: BADPRIN\nsummary: x\nseverity: error\nprinciples: [speed]\n',
-		'patterns/detect-without-prefer.yml': `${plain('BADDETECT')}detect: clamp\n`,
-		'patterns/prefer-malformed.yml': `${plain('BADPREF')}detect: clamp\nprefer: es-toolkit\n`,
-		'patterns/prefer-without-detect.yml': `${plain('BADLONE')}rule: fetch($A)\nprefer: es-toolkit#clamp\n`,
-		'patterns/unknown-shape.yml': `${plain('BADSHAPE')}detect: flatten\nprefer: es-toolkit#flatten\n`,
-		'patterns/rule-and-detect.yml': `${plain('BADBOTH')}rule: fetch($A)\ndetect: clamp\nprefer: es-toolkit#clamp\n`,
+		'patterns/detect-retired.yml': `${plain('BADDETECT')}detect: clamp\nprefer: es-toolkit#clamp\n`,
+		'patterns/prefer-retired.yml': `${plain('BADLONE')}rule: fetch($A)\nprefer: es-toolkit#clamp\n`,
 		'patterns/missing-claim.yml': `${plain('BADNONE')}`,
 		'patterns/unknown-kind.yml': `${plain('BADKIND')}pseudocode: something\n`,
 		'patterns/threshold-alone.yml': `${plain('BADALONE')}threshold: 0.5\n`,
@@ -210,12 +190,9 @@ test('bad input throws naming the file and the problem', async (context) => {
 	await rejects('unknown-field', /unknown field "ruls"/);
 	await rejects('missing-principles', /missing required field "principles"/);
 	await rejects('foreign-principle', /"speed" is not a principle/);
-	await rejects('detect-without-prefer', /"detect" requires "prefer"/);
-	await rejects('prefer-malformed', /"prefer" must read owner#member/);
-	await rejects('prefer-without-detect', /"prefer" belongs beside "detect"/);
-	await rejects('unknown-shape', /"detect" must be one of/);
-	await rejects('rule-and-detect', /two structural claims/);
-	await rejects('missing-claim', /"rule" or "detect" is required/);
+	await rejects('detect-retired', /unknown field "detect"/);
+	await rejects('prefer-retired', /unknown field "prefer"/);
+	await rejects('missing-claim', /"rule" is required/);
 	await rejects('unknown-kind', /unknown field "pseudocode"/);
 	await rejects('threshold-alone', /unknown field "threshold"/);
 	await rejects('bad-id', /is not a valid rule id/);
@@ -225,7 +202,8 @@ test('bad input throws naming the file and the problem', async (context) => {
 
 test('duplicate ids across two files throw naming the earlier declaration', async (context) => {
 	const header = (id: string): string =>
-		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n`;
+		`id: ${id}\nsummary: described elsewhere\nseverity: error\nprinciples: [simplicity]\n` +
+		"examples:\n  bad: ['const r = fetch(url);']\n  good: ['const r = client.get(url);']\n";
 	const root = repository('duplicates', {
 		'patterns/a.yml': `${header('DUPED')}rule: fetch($A)\n`,
 		'patterns/b.yml': `${header('DUPED')}rule: query($SQL)\n`

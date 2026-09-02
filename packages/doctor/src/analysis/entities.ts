@@ -1,86 +1,25 @@
-/**
- * Duplicate and near-overlap detection over named code entities, ported from `analyze.mjs`.
- *
- * The compiler scanner strips trivia and normalizes identifiers while preserving literal text, so
- * an exact hash proves byte-level structural equality where it matters — behavior-changing literal
- * differences still hash apart. Near overlap is deliberately narrow: candidates must first share an
- * operation profile (the same non-generic call names at the same counts, plus control-flow shape),
- * then pass an 85% size ratio and 88% Jaccard similarity over sorted five-token structural
- * shingles. That indexing step keeps the quadratic comparison inside one bucket instead of across
- * the whole repository.
- *
- * Exact and near relationships form one undirected graph; each connected component is a
- * functionality cluster whose label comes from stable API evidence only.
- */
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { LANGUAGE_HEALTH_PROFILE } from '../health-profile.js';
 import type { Distribution } from './composite.js';
 import { distribution, roundedRatio } from './composite.js';
 
-/** Call names too generic to fingerprint an operation. */
 export const GENERIC_CALLS: ReadonlySet<string> = new Set([
-	'add',
-	'at',
-	'every',
-	'filter',
-	'find',
-	'flatMap',
-	'forEach',
-	'get',
-	'has',
-	'includes',
-	'join',
-	'map',
-	'push',
-	'reduce',
-	'set',
-	'slice',
-	'some',
-	'sort',
-	'trim'
+	'add', 'at', 'every', 'filter', 'find', 'flatMap', 'forEach', 'get', 'has', 'includes',
+	'join', 'map', 'push', 'reduce', 'set', 'slice', 'some', 'sort', 'trim'
 ]);
 
-/** Words too generic to name a duplicated family when no call evidence exists. */
 const GENERIC_LABEL_WORDS: ReadonlySet<string> = new Set([
-	'anonymous',
-	'build',
-	'calculate',
-	'create',
-	'from',
-	'get',
-	'handle',
-	'load',
-	'make',
-	'of',
-	'process',
-	'run',
-	'set',
-	'to'
+	'anonymous', 'build', 'calculate', 'create', 'from', 'get', 'handle', 'load',
+	'make', 'of', 'process', 'run', 'set', 'to'
 ]);
 
-const GENERIC_LABEL_CALLS: ReadonlySet<string> = new Set([
-	...GENERIC_CALLS,
-	'Array',
-	'Date',
-	'Error',
-	'Map',
-	'Number',
-	'Object',
-	'Set',
-	'String',
-	'bind',
-	'effect',
-	'fn',
-	'gen',
-	'make',
-	'of',
-	'succeed',
-	'success',
-	't',
-	'update'
-]);
+function genericLabelCalls(
+	labels: ReadonlyArray<string> = LANGUAGE_HEALTH_PROFILE.genericLabels
+): ReadonlySet<string> {
+	return new Set([...GENERIC_CALLS, ...labels]);
+}
 
-/** A named entity eligible for duplicate evidence, after attribution to its file. */
 export type PathwayEntity = Readonly<{
 	name: string;
 	kind: 'function' | 'method' | 'class';
@@ -99,12 +38,10 @@ export type PathwayEntity = Readonly<{
 	rootId: string;
 }>;
 
-/** The same entity as the AST emits it, before file attribution. */
 export type PathwayEntityCore = Omit<PathwayEntity, 'file' | 'concept' | 'pillar' | 'rootId'> & {
 	overlapBucket?: string;
 };
 
-/** One occurrence inside a duplicate group or cluster. Serialized in exactly this key order. */
 export type EntityOccurrence = Readonly<{
 	id: string;
 	file: string;
@@ -160,12 +97,10 @@ export type FunctionalityCluster = Readonly<{
 	indirection: Readonly<{ passThroughMembers: number; passThroughShare: number }>;
 }>;
 
-/** The node's declared `name`, whatever kind of declaration it is. */
 function rawName(node: ts.Node): ts.Node | undefined {
 	return (node as { name?: ts.Node }).name;
 }
 
-/** Return a declaration name suitable for stable evidence, including assigned arrow functions. */
 export function declarationName(node: ts.Node): string {
 	const name = rawName(node);
 	if (name && ts.isIdentifier(name)) return name.text;
@@ -237,7 +172,6 @@ export function duplicateCallableName(node: ts.Node, file: ts.SourceFile): strin
 	return declarationName(node);
 }
 
-/** Normalize a non-trivial function body into a deterministic structural pathway hash. */
 export function pathwayHash(text: string): {
 	hash: string;
 	tokens: number;
@@ -294,7 +228,6 @@ export function pathwayHash(text: string): {
 	};
 }
 
-/** Hash a class by its members' text, salted with the public member shape. */
 export function classPathway(
 	node: ts.ClassDeclaration | ts.ClassExpression,
 	file: ts.SourceFile
@@ -314,7 +247,6 @@ export function classPathway(
 	};
 }
 
-/** Index a function by stable API/control-flow evidence before any similarity comparison. */
 export function overlapProfile(body: ts.Node): { overlapBucket: string } | undefined {
 	const calls = new Map<string, number>();
 	const controls = new Map<string, number>();
@@ -356,7 +288,6 @@ export function overlapProfile(body: ts.Node): { overlapBucket: string } | undef
 	return { overlapBucket: `${encode(calls)}|${encode(controls)}` };
 }
 
-/** Jaccard similarity over two sorted shingle lists, walked as a merge. */
 export function shingleSimilarity(left: ReadonlyArray<string>, right: ReadonlyArray<string>): number {
 	let leftIndex = 0;
 	let rightIndex = 0;
@@ -373,21 +304,27 @@ export function shingleSimilarity(left: ReadonlyArray<string>, right: ReadonlyAr
 	return intersection / Math.max(left.length + right.length - intersection, 1);
 }
 
-function operationCalls(signature: string | null | undefined): Array<[string, number]> {
+function operationCalls(
+	signature: string | null | undefined,
+	labels: ReadonlyArray<string>
+): Array<[string, number]> {
 	if (!signature) return [];
+	const generic = genericLabelCalls(labels);
 	return (signature.split('|', 1)[0] ?? '')
 		.split(',')
 		.map((item) => /^(.+):(\d+)$/.exec(item))
 		.filter((match): match is RegExpExecArray => match !== null)
 		.map((match): [string, number] => [match[1] ?? '', Number(match[2] ?? '')])
-		.filter(([name]) => !GENERIC_LABEL_CALLS.has(name));
+		.filter(([name]) => !generic.has(name));
 }
 
-/** Label one connected pathway family from stable API evidence, never embeddings or an LLM. */
-export function clusterLabel(members: ReadonlyArray<EntityOccurrence>): string {
+export function clusterLabel(
+	members: ReadonlyArray<EntityOccurrence>,
+	labels: ReadonlyArray<string> = LANGUAGE_HEALTH_PROFILE.genericLabels
+): string {
 	const calls = new Map<string, number>();
 	for (const member of members)
-		for (const [name, count] of operationCalls(member.operationSignature))
+		for (const [name, count] of operationCalls(member.operationSignature, labels))
 			calls.set(name, (calls.get(name) ?? 0) + count);
 	const rankedCalls = [...calls]
 		.sort(
@@ -417,10 +354,10 @@ export function clusterLabel(members: ReadonlyArray<EntityOccurrence>): string {
 		: 'structurally duplicated pathway';
 }
 
-/** Collapse exact and near-duplicate relationships into deterministic functionality clusters. */
 export function clusterPathways(
 	exact: ReadonlyArray<DuplicateGroup>,
-	overlapping: ReadonlyArray<OverlapPair>
+	overlapping: ReadonlyArray<OverlapPair>,
+	labels: ReadonlyArray<string> = LANGUAGE_HEALTH_PROFILE.genericLabels
 ): Array<FunctionalityCluster> {
 	const nodes = new Map<string, EntityOccurrence>();
 	const parents = new Map<string, string>();
@@ -508,9 +445,13 @@ export function clusterPathways(
 			.map(({ id }) => id)
 			.sort()
 			.join('\0');
+		const samePillar = relationships.filter(
+			({ left, right }) => nodes.get(left)?.pillar === nodes.get(right)?.pillar
+		).length;
+		const passThroughMembers = members.filter(({ passThrough }) => passThrough).length;
 		clusters.push({
 			id: createHash('sha256').update(identity).digest('hex').slice(0, 12),
-			label: clusterLabel(members),
+			label: clusterLabel(members, labels),
 			members,
 			concepts,
 			crossConcept: concepts.length > 1,
@@ -543,22 +484,12 @@ export function clusterPathways(
 				sameConceptRelationships: relationships.filter(
 					({ left, right }) => nodes.get(left)?.concept === nodes.get(right)?.concept
 				).length,
-				samePillarRelationships: relationships.filter(
-					({ left, right }) => nodes.get(left)?.pillar === nodes.get(right)?.pillar
-				).length,
-				samePillarShare: roundedRatio(
-					relationships.filter(
-						({ left, right }) => nodes.get(left)?.pillar === nodes.get(right)?.pillar
-					).length,
-					relationshipCount
-				)
+				samePillarRelationships: samePillar,
+				samePillarShare: roundedRatio(samePillar, relationshipCount)
 			},
 			indirection: {
-				passThroughMembers: members.filter(({ passThrough }) => passThrough).length,
-				passThroughShare: roundedRatio(
-					members.filter(({ passThrough }) => passThrough).length,
-					members.length
-				)
+				passThroughMembers,
+				passThroughShare: roundedRatio(passThroughMembers, members.length)
 			}
 		});
 	}
@@ -571,8 +502,10 @@ export function clusterPathways(
 	);
 }
 
-/** Build exact and high-confidence near-duplicate evidence for named code entities. */
-export function pathwayEvidence(entities: ReadonlyArray<PathwayEntity>): {
+export function pathwayEvidence(
+	entities: ReadonlyArray<PathwayEntity>,
+	labels: ReadonlyArray<string> = LANGUAGE_HEALTH_PROFILE.genericLabels
+): {
 	exact: Array<DuplicateGroup>;
 	overlapping: Array<OverlapPair>;
 	clusters: Array<FunctionalityCluster>;
@@ -674,5 +607,5 @@ export function pathwayEvidence(entities: ReadonlyArray<PathwayEntity>): {
 			a.right.file.localeCompare(b.right.file) ||
 			a.right.line - b.right.line
 	);
-	return { exact, overlapping, clusters: clusterPathways(exact, overlapping) };
+	return { exact, overlapping, clusters: clusterPathways(exact, overlapping, labels) };
 }

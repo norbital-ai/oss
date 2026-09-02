@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Effect, Schema } from 'effect';
-	import { getErrorMessage } from '@norbital-ai/std';
+	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
-	import ActivityPane from './activity-pane.svelte';
-	import ManifestPane from './manifest-pane.svelte';
+	import DiagnosisPane from './diagnosis-pane.svelte';
+	import LivePane from './live-pane.svelte';
+	import LiveSidebar from './live-sidebar.svelte';
 	import ManifestTree from './manifest-tree.svelte';
-	import SourceEditor from './source-editor.svelte';
 	import ReviewPane from './review-pane.svelte';
 	import ReviewSidebar from './review-sidebar.svelte';
+	import SourceEditor from './source-editor.svelte';
 	import WorkbenchToolbar from './workbench-toolbar.svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -28,16 +29,27 @@
 	import {
 		currentRoutedRelease,
 		HostSnapshotSchema,
+		isStudioRootTab,
+		liveReleaseTimeline,
 		manifestSections,
+		newCommitsBehindHead,
 		releaseControls,
+		workbenchDiffBaselineKey,
 		workspaceEnvoys,
-		workbenchPreviewState,
-		WorkbenchBuildReceiptSchema,
+		type ChangesView,
 		type HostSnapshot,
 		type ManifestDestination,
-		type WorkbenchView,
 		type StudioRootTab
 	} from '#lib/client/ui/studio/studio-state.js';
+	import {
+		applyAuthoringLiveEvent,
+		authoringJobBusy,
+		authoringLiveJobMessageKey,
+		authoringLivePhaseMessageKey,
+		emptyAuthoringLiveState,
+		openAuthoringLiveStream,
+		type AuthoringLiveState
+	} from '#lib/client/ui/studio/authoring-live.js';
 
 	let {
 		client,
@@ -52,21 +64,17 @@
 	const queryMessage = (error: unknown): string | undefined =>
 		error === undefined ? undefined : getErrorMessage(error);
 
-	const PreviewBuildResponseSchema = Schema.Struct({
-		preview: Schema.Struct({ receipt: WorkbenchBuildReceiptSchema })
-	});
-
 	let snapshot = $state<HostSnapshot | undefined>();
 	let view = $state<{
 		rootTab: StudioRootTab;
-		workbench: WorkbenchView;
-		selected: string;
-		expanded: ReadonlyArray<string>;
+		changes: ChangesView;
+		file: string;
+		manifestSection: string;
 	}>({
 		rootTab: 'workbench',
-		workbench: 'manifest',
-		selected: 'collections',
-		expanded: ['collections']
+		changes: 'manifest',
+		file: '',
+		manifestSection: 'collections'
 	});
 	let editor = $state({ path: '', value: '' });
 	let sourceDrafts = $state<SourceDrafts>({});
@@ -84,26 +92,19 @@
 		error: queryMessage(environmentQuery?.error)
 	});
 	let host = $state({ status: 'Loading workspace state…', busy: false });
+	let live = $state<AuthoringLiveState>(emptyAuthoringLiveState());
 	let selectedRequestId = $state<string | undefined>();
+	let selectedReleaseId = $state<string | undefined>();
 	let navigatorSheetOpen = $state(false);
-	let activitySheetOpen = $state(false);
-	let latestBuildReceipt = $state<HostSnapshot['buildReceipt']>();
-	let previewNowEpochMs = $state(Date.now());
-	$effect(() => {
-		const expiresAt = snapshot?.preview?.expiresAtEpochMs;
-		if (expiresAt === undefined || expiresAt <= previewNowEpochMs) return;
-		const timeout = window.setTimeout(
-			() => (previewNowEpochMs = Date.now()),
-			Math.min(expiresAt - previewNowEpochMs + 1, 2_147_483_647)
-		);
-		return () => window.clearTimeout(timeout);
-	});
 
 	const session = workspaceSession();
-	const rootTabs = $derived([
-		{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
-		{ name: 'review', label: t('bolt.studio.reviews'), content: '' }
-	] satisfies TabConfig[]);
+	const rootTabs = $derived(
+		[
+			{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
+			{ name: 'changes', label: t('bolt.studio.changes'), content: '' },
+			{ name: 'live', label: t('bolt.studio.live'), content: '' }
+		] satisfies TabConfig[]
+	);
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
 	const files = $derived(Object.keys(sourceFiles).sort());
@@ -121,42 +122,36 @@
 		})
 	);
 	const isWorkbench = $derived(view.rootTab === 'workbench');
-	const isReview = $derived(view.rootTab === 'review');
+	const isChanges = $derived(view.rootTab === 'changes');
+	const isLive = $derived(view.rootTab === 'live');
 	const currentReleaseId = $derived(currentRelease?.releaseId);
-	const buildReceipt = $derived(latestBuildReceipt ?? snapshot?.buildReceipt);
 	const sourceDraftCount = $derived(Object.keys(sourceDrafts).length);
-	const previewState = $derived(
-		workbenchPreviewState({
-			preview: snapshot?.preview,
+	const tracking = $derived(snapshot?.tracking ?? 'live');
+	const baselineKey = $derived(workbenchDiffBaselineKey(tracking));
+	const newCommits = $derived(
+		newCommitsBehindHead({
 			sourceCommit: snapshot?.source.commit,
-			nowEpochMs: previewNowEpochMs
+			tracking,
+			mergeRequests: snapshot?.mergeRequests ?? []
 		})
 	);
-	const openReviewForCurrentCommit = $derived(
-		(snapshot?.releaseRequests ?? []).find(
-			(request) =>
-				request.commit === snapshot?.source.commit &&
-				(request.status === 'open' || request.status === 'approving')
-		)
+	const updateRequired = $derived(snapshot?.needsRebase === true || newCommits > 0);
+	const releases = $derived(liveReleaseTimeline(snapshot));
+	const activeReleaseId = $derived(
+		selectedReleaseId ??
+			releases.find((release) => release.current)?.releaseId ??
+			releases[0]?.releaseId
 	);
-	const currentCommitAlreadyRequested = $derived(openReviewForCurrentCommit !== undefined);
-	const requestReviewDisabled = $derived(
-		!controls.canRequestReview ||
-			sourceDraftCount > 0 ||
-			previewState !== 'current' ||
-			currentCommitAlreadyRequested
-	);
-	const requestReviewReason = $derived(
-		(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
-			(sourceDraftCount > 0
-				? t('bolt.studio.reviewReason.saveDrafts')
-				: previewState !== 'current'
-					? t('bolt.studio.reviewReason.buildPreview')
-					: currentCommitAlreadyRequested
-						? t('bolt.studio.reviewReason.alreadyRequested')
-						: t('bolt.studio.reviewReason.sendExact'))
-	);
+	const editorDirty = $derived(Object.hasOwn(sourceDrafts, editor.path));
+	const liveWorking = $derived.by(() => {
+		if (live.job === null) return undefined;
+		return t('bolt.studio.live.working', {
+			job: t(authoringLiveJobMessageKey(live.job.action)),
+			phase: t(authoringLivePhaseMessageKey(live.job.phase))
+		});
+	});
 	const hostStatusAnnouncement = $derived.by(() => {
+		if (liveWorking !== undefined && (host.busy || authoringJobBusy(live))) return liveWorking;
 		const { status } = host;
 		if (status === 'Ready') return t('bolt.studio.status.ready');
 		if (status.startsWith('Loading')) return t('bolt.studio.status.loading');
@@ -173,12 +168,17 @@
 			return t('bolt.studio.status.resolveConflicts', { count: snapshot?.conflicts.length ?? 1 });
 		return status;
 	});
+	const navigatorDescriptionKey = $derived.by(() => {
+		if (isWorkbench) return 'bolt.studio.navigatorWorkbenchDescription' as const;
+		if (isChanges) return 'bolt.studio.navigatorChangesDescription' as const;
+		return 'bolt.studio.navigatorLiveDescription' as const;
+	});
 
 	let openedInitialSource = $state(false);
 	const openSource = (path: string): void => {
 		if (path === '') return;
-		view.workbench = 'editor';
-		view.selected = `source:${path}`;
+		view.rootTab = 'workbench';
+		view.file = path;
 		editor = { path, value: sourceDraftValue(sourceDrafts, sourceFiles, path) };
 	};
 
@@ -188,15 +188,18 @@
 		editor = { ...editor, value };
 	};
 
-	const openCurrentReview = (): void => {
-		selectedRequestId = openReviewForCurrentCommit?.id;
-		view.rootTab = 'review';
+	const openDestination = (destination: ManifestDestination): void => {
+		const href = manifestDestinationHref(destination);
+		if (href !== null) onnavigate?.(href);
 	};
 
 	const actions = {
 		readHostState: (): Effect.Effect<void> =>
 			Effect.gen(function* () {
-				const raw = yield* Effect.tryPromise(() => session.operations.read());
+				const raw = yield* Effect.tryPromise({
+					try: () => session.operations.read(),
+					catch: toError
+				});
 				snapshot = yield* Schema.decodeUnknownEffect(HostSnapshotSchema)(raw);
 				host.status = 'Ready';
 				if (!openedInitialSource && initialSource !== undefined && initialSource.trim() !== '') {
@@ -220,7 +223,7 @@
 		): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				host.busy = true;
-				yield* Effect.tryPromise(() => session.operations.run(body));
+				yield* Effect.tryPromise({ try: () => session.operations.run(body), catch: toError });
 				host.status = describe();
 				yield* actions.readHostState();
 				afterSuccess?.();
@@ -238,14 +241,9 @@
 				}),
 				Effect.ensuring(Effect.sync(() => (host.busy = false)))
 			),
-		requestReview: () =>
-			actions.operation(
-				{ action: 'release_request', operation: 'open' },
-				() => t('bolt.studio.action.sentReview'),
-				() => {
-					view.rootTab = 'review';
-					selectedRequestId = snapshot?.releaseRequests.at(-1)?.id;
-				}
+		requestReview: (requestId: string) =>
+			actions.operation({ action: 'merge_request', operation: 'ready', requestId }, () =>
+				t('bolt.studio.action.sentReview')
 			),
 		reviewPreview: (requestId: string) =>
 			actions.operation(
@@ -254,42 +252,90 @@
 				() => window.location.reload()
 			),
 		approveRelease: (requestId: string) =>
-			actions.operation({ action: 'release_request', operation: 'approve', requestId }, () =>
+			actions.operation({ action: 'merge_request', operation: 'approve', requestId }, () =>
 				t('bolt.studio.action.approvedRelease')
 			),
 		requestReleaseChanges: (requestId: string, reason: string) =>
 			actions.operation(
-				{ action: 'release_request', operation: 'request_changes', requestId, reason },
+				{ action: 'merge_request', operation: 'request_changes', requestId, reason },
 				() => t('bolt.studio.action.requestedChanges')
 			),
 		rejectRelease: (requestId: string, reason: string) =>
-			actions.operation({ action: 'release_request', operation: 'reject', requestId, reason }, () =>
+			actions.operation({ action: 'merge_request', operation: 'reject', requestId, reason }, () =>
 				t('bolt.studio.action.rejectedReview')
+			),
+		commentReview: (requestId: string, body: string) =>
+			actions.operation(
+				{ action: 'merge_request', operation: 'comment', requestId, body },
+				() => t('bolt.studio.action.commented')
 			),
 		rollback: () =>
 			actions.operation({ action: 'rollback' }, () => t('bolt.studio.action.rolledBack')),
-		preview: () => {
+		diagnose: () =>
+			actions.operation({ action: 'diagnose' }, () => t('bolt.studio.action.diagnosed')),
+		switchWorkbench: (to: 'live' | string) =>
+			actions.operation({ action: 'workbench', operation: 'switch', to }, () =>
+				t('bolt.studio.action.switched')
+			),
+		workOn: (requestId: string) =>
+			actions.operation(
+				{ action: 'workbench', operation: 'switch', to: requestId },
+				() => t('bolt.studio.action.switched'),
+				() => {
+					view.rootTab = 'workbench';
+				}
+			),
+		updateWorkbench: () => {
+			const requestId = tracking === 'live' ? undefined : tracking;
+			if (requestId !== undefined && newCommits > 0) {
+				return actions.operation(
+					{ action: 'merge_request', operation: 'update', requestId },
+					() => t('bolt.studio.action.updated')
+				);
+			}
+			return actions.operation(
+				{ action: 'workbench', operation: 'rebase' },
+				() => t('bolt.studio.action.rebased'),
+				undefined,
+				(message) => {
+					const first = snapshot?.conflicts[0];
+					if (first === undefined) {
+						host.status = `Failed: ${message}`;
+						return;
+					}
+					host.status = `Resolve ${snapshot?.conflicts.length ?? 1} conflicted file${
+						(snapshot?.conflicts.length ?? 1) === 1 ? '' : 's'
+					}, then Rebase again.`;
+					openSource(first);
+				}
+			);
+		},
+		publish: () => {
 			const committedFiles = sourceCommitFiles(sourceDrafts);
 			return Effect.gen(function* () {
 				host.busy = true;
 				if (Object.keys(committedFiles).length > 0) {
-					yield* Effect.tryPromise(() =>
-						session.operations.run({
-							action: 'source',
-							expectedCommit: snapshot?.source.commit ?? '',
-							files: committedFiles
-						})
-					);
+					yield* Effect.tryPromise({
+						try: () =>
+							session.operations.run({
+								action: 'source',
+								expectedCommit: snapshot?.source.commit ?? '',
+								files: committedFiles
+							}),
+						catch: toError
+					});
 					sourceDrafts = settleSourceCommit(sourceDrafts, committedFiles);
 					yield* actions.readHostState();
 				}
-				const response = yield* Effect.tryPromise(() =>
-					session.operations.run({ action: 'preview', operation: 'build' })
-				);
-				if (Schema.is(PreviewBuildResponseSchema)(response)) {
-					latestBuildReceipt = response.preview.receipt;
-				}
-				host.status = t('bolt.studio.previewReady');
+				yield* Effect.tryPromise({
+					try: () => session.operations.run({ action: 'diagnose' }),
+					catch: toError
+				});
+				yield* Effect.tryPromise({
+					try: () => session.operations.run({ action: 'publish' }),
+					catch: toError
+				});
+				host.status = t('bolt.studio.action.published');
 				yield* actions.readHostState();
 				window.location.reload();
 			}).pipe(
@@ -317,67 +363,51 @@
 				}),
 				Effect.ensuring(Effect.sync(() => (host.busy = false)))
 			);
-		},
-		openPreview: () =>
-			actions.operation(
-				{ action: 'preview', operation: 'build' },
-				() => t('bolt.studio.action.openedPreview'),
-				() => window.location.reload()
-			),
-		rebaseWorkbench: () =>
-			actions.operation(
-				{ action: 'workbench', operation: 'rebase' },
-				() => t('bolt.studio.action.rebased'),
-				undefined,
-				(message) => {
-					const first = snapshot?.conflicts[0];
-					if (first === undefined) {
-						host.status = `Failed: ${message}`;
-						return;
-					}
-					host.status = `Resolve ${snapshot?.conflicts.length ?? 1} conflicted file${
-						(snapshot?.conflicts.length ?? 1) === 1 ? '' : 's'
-					}, then Rebase again.`;
-					openSource(first);
-				}
-			)
+		}
 	};
 
 	onMount(() => {
 		browserReady = true;
 		Effect.runFork(actions.readHostState());
+		return openAuthoringLiveStream({
+			url: session.authoringStreamUrl,
+			tenantId: session.tenantId,
+			onEvent: (event) => {
+				live = applyAuthoringLiveEvent(live, event);
+			}
+		});
 	});
 </script>
 
 {#snippet navigator()}
 	{#if isWorkbench}
 		<ManifestTree
-			{sections}
 			{files}
 			{fileSizes}
-			selected={view.selected}
-			expanded={view.expanded}
-			view={view.workbench}
+			{sourceFiles}
+			drafts={sourceDrafts}
+			selected={view.file === '' ? '' : `source:${view.file}`}
 			onselect={(key) => {
-				view.selected = key;
-				if (key.startsWith('source:')) {
-					openSource(key.slice('source:'.length));
-				}
+				if (key.startsWith('source:')) openSource(key.slice('source:'.length));
 				navigatorSheetOpen = false;
 			}}
-			ontoggle={(id) => {
-				view.expanded = view.expanded.includes(id)
-					? view.expanded.filter((candidate) => candidate !== id)
-					: [...view.expanded, id];
-			}}
 		/>
-	{:else}
+	{:else if isChanges}
 		<ReviewSidebar
-			requests={snapshot?.releaseRequests ?? []}
+			requests={snapshot?.mergeRequests ?? []}
 			{selectedRequestId}
 			{currentReleaseId}
 			onselect={(requestId) => {
 				selectedRequestId = requestId;
+				navigatorSheetOpen = false;
+			}}
+		/>
+	{:else}
+		<LiveSidebar
+			{releases}
+			selectedReleaseId={activeReleaseId}
+			onselect={(releaseId) => {
+				selectedReleaseId = releaseId;
 				navigatorSheetOpen = false;
 			}}
 		/>
@@ -397,7 +427,7 @@
 				<Tabs
 					value={view.rootTab}
 					onValueChange={(next) => {
-						if (next === 'workbench' || next === 'review') view.rootTab = next;
+						if (isStudioRootTab(next)) view.rootTab = next;
 					}}
 					showContent={false}
 					animate={false}
@@ -426,37 +456,29 @@
 				<WorkbenchToolbar
 					hostStatus={host.status}
 					busy={host.busy}
-					view={view.workbench}
-					previewReady={sourceDraftCount === 0 && previewState === 'current'}
+					liveStatus={liveWorking}
+					{tracking}
+					requests={snapshot?.mergeRequests ?? []}
+					principal={session.principal}
+					{newCommits}
+					{baselineKey}
 					draftCount={sourceDraftCount}
-					currentCommit={snapshot?.source.commit}
-					previewExpiresAt={previewState === 'current'
-						? snapshot?.preview?.expiresAtEpochMs
-						: undefined}
-					previewExpired={previewState === 'expired'}
-					buildFailed={buildReceipt?.outcome === 'failed'}
-					updateRequired={snapshot?.needsRebase === true}
+					{updateRequired}
 					updateDisabled={host.busy || snapshot === undefined}
 					updateReason={(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
 						t('bolt.studio.updateReason.rebaseLatest')}
-					previewDisabled={!controls.canPreview || snapshot?.needsRebase === true}
-					previewReason={(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
-						(snapshot?.needsRebase === true
-							? t('bolt.studio.previewReason.rebaseFirst')
-							: t('bolt.studio.previewReason.ready'))}
-					reviewRequested={currentCommitAlreadyRequested}
-					reviewDisabled={requestReviewDisabled}
-					reviewReason={requestReviewReason}
-					onview={(next) => (view.workbench = next)}
-					onpreview={() => void Effect.runPromise(actions.preview())}
-					onopenpreview={() => void Effect.runPromise(actions.openPreview())}
-					onreview={() => void Effect.runPromise(actions.requestReview())}
-					onopenreview={openCurrentReview}
-					onrebase={() => void Effect.runPromise(actions.rebaseWorkbench())}
-					onactivity={() => (activitySheetOpen = true)}
+					publishDisabled={host.busy || snapshot === undefined || updateRequired}
+					publishReason={(controls.reasonKey === undefined ? undefined : t(controls.reasonKey)) ??
+						(updateRequired
+							? t('bolt.studio.publishReason.updateFirst')
+							: t('bolt.studio.publishReason.ready'))}
+					onswitch={(to) => void Effect.runPromise(actions.switchWorkbench(to))}
+					onpublish={() => void Effect.runPromise(actions.publish())}
+					ondiagnose={() => void Effect.runPromise(actions.diagnose())}
+					onupdate={() => void Effect.runPromise(actions.updateWorkbench())}
 				/>
 			{/if}
-			{#if isWorkbench && workspace.error !== undefined}
+			{#if (isChanges || isLive) && workspace.error !== undefined}
 				<Inline
 					gap="xs"
 					shrink={false}
@@ -490,50 +512,88 @@
 			class="relative min-w-0 bg-background font-sans"
 			data-testid="studio-viewport"
 		>
-			{#if isReview}
+			{#if isChanges}
 				<ReviewPane
-					releaseRequests={snapshot?.releaseRequests ?? []}
+					releaseRequests={snapshot?.mergeRequests ?? []}
 					{selectedRequestId}
 					{currentReleaseId}
 					busy={host.busy}
+					comments={live.comments}
 					canDecide={snapshot?.capabilities.canDecideReview === true}
 					failure={host.status.startsWith('Failed:') ||
 					host.status.startsWith('Unavailable:') ||
 					host.status.includes('trusted Colony routing headers are required')
 						? host.status
 						: undefined}
+					{tracking}
+					changesView={view.changes}
+					manifest={workspace.manifest}
+					loading={!browserReady || (manifestQuery?.loading ?? false)}
+					{sections}
+					{envoys}
+					selectedManifest={view.manifestSection}
+					environment={vault.entries}
+					environmentError={vault.error}
+					liveLogs={live.logs}
+					onview={(next) => (view.changes = next)}
 					onpreview={(requestId) => void Effect.runPromise(actions.reviewPreview(requestId))}
 					onapprove={(requestId) => void Effect.runPromise(actions.approveRelease(requestId))}
 					onrequestchanges={(requestId, reason) =>
 						void Effect.runPromise(actions.requestReleaseChanges(requestId, reason))}
 					onreject={(requestId, reason) =>
 						void Effect.runPromise(actions.rejectRelease(requestId, reason))}
+					oncomment={(requestId, body) =>
+						void Effect.runPromise(actions.commentReview(requestId, body))}
+					onworkon={(requestId) => void Effect.runPromise(actions.workOn(requestId))}
+					onready={(requestId) => void Effect.runPromise(actions.requestReview(requestId))}
+					onopenSource={openSource}
+					onopenDestination={openDestination}
+					canOpenDestination={(destination: ManifestDestination) =>
+						manifestDestinationHref(destination) !== null}
+					onretry={() => window.location.reload()}
 				/>
-			{:else if view.workbench === 'manifest'}
-				<ManifestPane
+			{:else if isLive}
+				<LivePane
+					{releases}
+					selectedReleaseId={activeReleaseId}
+					busy={host.busy}
+					canRestore={controls.canRollback}
 					manifest={workspace.manifest}
 					loading={!browserReady || (manifestQuery?.loading ?? false)}
 					{sections}
 					{envoys}
-					selected={view.selected}
+					selectedManifest={view.manifestSection}
 					environment={vault.entries}
 					environmentError={vault.error}
+					liveLogs={live.logs}
+					onrestore={() => void Effect.runPromise(actions.rollback())}
 					onopenSource={openSource}
-					onopenDestination={(destination: ManifestDestination) => {
-						const href = manifestDestinationHref(destination);
-						if (href !== null) onnavigate?.(href);
-					}}
+					onopenDestination={openDestination}
 					canOpenDestination={(destination: ManifestDestination) =>
 						manifestDestinationHref(destination) !== null}
 					onretry={() => window.location.reload()}
 				/>
 			{:else}
-				<SourceEditor
-					path={editor.path}
-					value={editor.value}
-					fileCount={files.length}
-					onValueChange={updateEditor}
-				/>
+				<Stack gap="none" fill class="min-h-0">
+					<Bound size="full" grow clip class="min-h-0">
+						<SourceEditor
+							path={editor.path}
+							value={editor.value}
+							fileCount={files.length}
+							{baselineKey}
+							before={sourceFiles[editor.path] ?? null}
+							dirty={editorDirty}
+							onValueChange={updateEditor}
+						/>
+					</Bound>
+					<DiagnosisPane
+						diagnosis={snapshot?.diagnosis ?? null}
+						draftCount={sourceDraftCount}
+						busy={host.busy}
+						onopenSource={openSource}
+						onrerun={() => void Effect.runPromise(actions.diagnose())}
+					/>
+				</Stack>
 			{/if}
 		</Bound>
 	</Inline>
@@ -545,35 +605,11 @@
 			<Sheet.Header class="shrink-0 border-b border-border px-4 py-3 pr-12">
 				<Sheet.Title>{t('bolt.studio.navigator')}</Sheet.Title>
 				<Sheet.Description>
-					{t(
-						isWorkbench
-							? 'bolt.studio.navigatorWorkbenchDescription'
-							: 'bolt.studio.navigatorReviewsDescription'
-					)}
+					{t(navigatorDescriptionKey)}
 				</Sheet.Description>
 			</Sheet.Header>
 			<Stack gap="none" grow class="min-h-0 bg-card">
 				{@render navigator()}
-			</Stack>
-		</Sheet.Content>
-	{/if}
-</Sheet.Root>
-
-<Sheet.Root bind:open={activitySheetOpen}>
-	{#if activitySheetOpen}
-		<Sheet.Content flush side="right" class="w-[min(34rem,100%)] sm:max-w-[34rem]">
-			<Sheet.Header class="shrink-0 border-b border-border px-4 py-3 pr-12 sm:px-5">
-				<Sheet.Title>{t('bolt.studio.activity')}</Sheet.Title>
-				<Sheet.Description>{t('bolt.studio.activityDescription')}</Sheet.Description>
-			</Sheet.Header>
-			<Stack gap="none" grow class="min-h-0 bg-background">
-				<ActivityPane
-					snapshot={snapshot}
-					receipt={buildReceipt}
-					hostStatus={host.status}
-					{controls}
-					onrollback={() => void Effect.runPromise(actions.rollback())}
-				/>
 			</Stack>
 		</Sheet.Content>
 	{/if}

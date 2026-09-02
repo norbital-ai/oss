@@ -9,6 +9,7 @@ import { authoredHooks } from '../../src/authoring/contracts-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -293,6 +294,9 @@ const mutateBudget = (
 		})
 	);
 
+const drainChanges = (runtime: BoltTestRuntime) =>
+	runtime.runtime.runPromise(Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges));
+
 const requiredId = (row: Readonly<Record<string, unknown>> | undefined, label: string): string => {
 	const id = row?.['id'];
 	if (typeof id !== 'string') throw new Error(`${label} has no id`);
@@ -461,11 +465,7 @@ describe('declarative relationship reconciliation', () => {
 			});
 		expect(await harness.database.query('select id from budgets')).toEqual([]);
 		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
-		expect(
-			await harness.database.query(
-				"select collection_name from bolt_sync_outbox where collection_name in ('budgets', 'cost_estimates')"
-			)
-		).toEqual([]);
+		expect(await drainChanges(harness)).toEqual([]);
 	}, 60_000);
 
 	it('rolls back child reconciliation when the root update predicate rejects the row', async () => {
@@ -478,9 +478,7 @@ describe('declarative relationship reconciliation', () => {
 			(await harness.database.query('select id from budgets'))[0],
 			'budget'
 		);
-		const beforeOutbox = await harness.database.query(
-			"select count(*)::int as total from bolt_sync_outbox where collection_name in ('budgets', 'cost_estimates')"
-		);
+		await drainChanges(harness);
 
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
@@ -501,11 +499,7 @@ describe('declarative relationship reconciliation', () => {
 		expect(await harness.database.query('select label from cost_estimates')).toEqual([
 			{ label: 'Must remain' }
 		]);
-		expect(
-			await harness.database.query(
-				"select count(*)::int as total from bolt_sync_outbox where collection_name in ('budgets', 'cost_estimates')"
-			)
-		).toEqual(beforeOutbox);
+		expect(await drainChanges(harness)).toEqual([]);
 	}, 60_000);
 
 	it('strips a nested owner key and retains an id-only child without false update side effects', async () => {
@@ -524,9 +518,7 @@ describe('declarative relationship reconciliation', () => {
 			)
 		)[0];
 		const childId = requiredId(child, 'retained child');
-		const outboxBefore = await harness.database.query(
-			"select count(*)::int as total from bolt_sync_outbox where collection_name = 'cost_estimates'"
-		);
+		await drainChanges(harness);
 
 		await mutateBudget(harness, 'owner-retain', {
 			id: firstId,
@@ -539,10 +531,8 @@ describe('declarative relationship reconciliation', () => {
 			)
 		).toEqual([child]);
 		expect(
-			await harness.database.query(
-				"select count(*)::int as total from bolt_sync_outbox where collection_name = 'cost_estimates'"
-			)
-		).toEqual(outboxBefore);
+			(await drainChanges(harness)).filter((change) => change.collection === 'cost_estimates')
+		).toEqual([]);
 	}, 60_000);
 
 	it('routes the hook-prepared graph and revalidates the same preparation on resume', async () => {

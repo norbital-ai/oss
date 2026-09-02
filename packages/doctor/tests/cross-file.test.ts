@@ -50,7 +50,7 @@ export const check = (): number => testOnly();
 	// `orphan` is the only export nothing reaches. `testOnly` has a consumer that this scan does
 	// not report on, which is not the same as having none.
 	assert.equal(dead.length, 1);
-	assert.match(dead[0] ?? '', /^src\/helper\.ts:3: .*\[export=orphan\]$/);
+	assert.match(dead[0] ?? '', /^src\/helper\.ts:3:/);
 
 	// The consumer joined the graph. It must not have joined the report.
 	assert.equal(

@@ -1,7 +1,7 @@
 id: AL8
 summary: inline message shape redeclares the canonical message type
 severity: error
-principles: [simplicity, type-safety, no-bloat]
+principles: [ simplicity, type-safety, no-bloat ]
 rule:
   all:
     - kind: TypeLiteral
@@ -12,3 +12,6 @@ examples:
     - 'export const f = (m: { role: string; content: string }) => m;'
   good:
     - 'export const f = (m: Message) => m;'
+    - "export function send(m: { role: string }) { return m; }"
+    - "export function send(m: { kind: string; content: string }) { return m; }"
+    - "export function send(m: Message) { return m; }"

@@ -1,10 +1,13 @@
 id: D2
 summary: conditional has identical branches
 severity: error
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule: '$COND ? $X : $X'
 examples:
   bad:
     - 'export const v = flag ? 42 : 42;'
   good:
     - 'export const v = flag ? 42 : 0;'
+    - "export const v = cond ? left : right;"
+    - "export const v = cond ? a.b : a.c;"
+    - "export const v = cond ? f(1) : f(2);"

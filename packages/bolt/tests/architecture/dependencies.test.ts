@@ -175,11 +175,9 @@ describe('Bolt architecture boundaries', () => {
 
 		expect(amendedAggregate).toBeLessThanOrEqual(17_900);
 		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_700);
-		// 800 -> 816: the hook-minted nested id fix carries the cross-file invariant it restores.
-		// Read planning and identity planning read the same fact ("the browser never declared this
-		// row") and drew opposite conclusions, which is only visible if the reason sits at the branch
-		// that changed. See RFC/toolchain.md §6.1.5.
-		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(816);
+		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
+		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);
 		// 825 -> 837: the staged hook-write-ops work already in this tree — `HookWriteOps` made
 		// generic in the error channel, and `buildApi`/`runMutateBefore` threading `stageHookWrites`
 		// through `makeGraphPreparers`. Not from the engine.ts fix beside it, which does not touch

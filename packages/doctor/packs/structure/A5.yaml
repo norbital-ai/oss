@@ -1,10 +1,13 @@
 id: A5
 summary: catch only rethrows
 severity: hint
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule: 'try { $B } catch ($ERR) { throw $ERR; }'
 examples:
   bad:
     - 'export const f = () => { try { go(); } catch (e) { throw e; } };'
   good:
     - 'export const f = () => { try { go(); } catch (e) { throw wrap(e); } };'
+    - export const f = () => { try { go(); } catch (cause) { throw new Wrapped(cause); } };
+    - export const f = () => { try { go(); } catch (cause) { report(cause); throw cause; } };
+    - export const f = () => { try { go(); } catch { throw new Error('x'); } };

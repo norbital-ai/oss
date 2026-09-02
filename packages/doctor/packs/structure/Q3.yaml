@@ -1,34 +1,23 @@
 id: Q3
-summary: private one-use function forwards its parameters unchanged
+summary: private function has one same-file direct call and forwards its parameters unchanged
 severity: error
-principles: [simplicity, colocation, no-bloat]
-dominates: [Q1]
+principles: [simplicity, no-bloat]
 rule:
   all:
     - any:
-        - pattern:
-            context: 'const $NAME = ($A) => $CALLEE($A)'
-            selector: VariableDeclaration
-        - pattern:
-            context: 'const $NAME = ($A: $T) => $CALLEE($A)'
-            selector: VariableDeclaration
-        - pattern:
-            context: 'const $NAME = ($A, $B) => $CALLEE($A, $B)'
-            selector: VariableDeclaration
-        - pattern:
-            context: 'const $NAME = ($A: $T, $B: $U) => $CALLEE($A, $B)'
-            selector: VariableDeclaration
-        - pattern: 'function $NAME($A) { return $CALLEE($A); }'
-        - pattern: 'function $NAME($A: $T) { return $CALLEE($A); }'
-    - not:
-        inside:
-          regex: '^export '
-        stopBy: end
-    - calls:
-        of: NAME
+        - kind: FunctionDeclaration
+        - kind: VariableDeclaration
+    - fact:
+        name: callSites
         exactly: 1
+        candidate: transparent-forwarder
 examples:
   bad:
-    - "const shim = (input) => bridge(input);\nexport const kickoff = (input) => shim(input);"
+    - |
+      const shim = (input) => bridge(input);
+      export const kickoff = (input) => shim(input);
   good:
     - 'export const kickoff = (input) => bridge(input);'
+    - |
+      export const shim = (input) => bridge(input);
+      export const kickoff = (input) => shim(input);

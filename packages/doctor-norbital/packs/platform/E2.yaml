@@ -1,7 +1,7 @@
 id: E2
 summary: feature flag declared in source
 severity: hint
-principles: [straightforwardness, no-bloat]
+principles: [ straightforwardness, no-bloat ]
 rule:
   any:
     - all:
@@ -33,3 +33,6 @@ examples:
     - 'export const ENABLE_BETA = true;'
   good:
     - 'export const enableBeta = config.beta;'
+    - export const BETA = true;
+    - export const ENABLE_BETA = config.beta;
+    - export const ENABLE_BETA = 1;

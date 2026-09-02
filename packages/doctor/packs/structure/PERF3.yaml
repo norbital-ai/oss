@@ -1,7 +1,7 @@
 id: PERF3
 summary: three or more eager collection traversals are chained
 severity: error
-principles: [simplicity, efficiency, no-bloat]
+principles: [ simplicity, efficiency, no-bloat ]
 rule:
   all:
     - pattern: $S.$A($X).$B($Y).$C($Z)
@@ -19,3 +19,6 @@ examples:
     - 'export const f = (xs) => xs.map(a).filter(b).map(c);'
   good:
     - 'export const f = (xs) => xs.flatMap(ab);'
+    - export const r = rows.map(f).filter(g);
+    - export const r = rows.filter(g);
+    - export const r = Effect.map(Effect.map(Effect.map(a, f), g), h);

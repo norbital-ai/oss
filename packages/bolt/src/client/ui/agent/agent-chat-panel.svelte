@@ -1,14 +1,20 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
-	import type { Prompt } from 'effect/unstable/ai';
+	import { ImageAsset } from '@norbital-ai/bolt-protocol/facilities';
 	import Icon from '@iconify/svelte';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import { workspaceSession } from '#lib/client/session.js';
+	import {
+		encodeUserMessageWithImages,
+		taskAssetStorageKey
+	} from '#lib/runtime/agents/image-descriptors.js';
 	import { useAgentClient } from './client.svelte.js';
+	import { runComposerCommand } from './composer-send.js';
 	import TaskSelector from './conversation-selector.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import {
@@ -48,6 +54,7 @@
 	import { isAgentModeShortcut, parseTaskSlashCommand } from './intent.js';
 	import {
 		retryableAdmission,
+		visibleUnsettledAdmission,
 		type UnsettledTaskAdmission
 	} from './admission-reconciliation.js';
 
@@ -72,8 +79,10 @@
 	let controlPending = $state(false);
 	let unsettledAdmission = $state<UnsettledTaskAdmission | null>(null);
 	let composer = $state<HTMLTextAreaElement | null>(null);
+	let imagePicker = $state<HTMLInputElement | null>(null);
 	let transcriptTab = $state<'focus' | 'history'>('focus');
 	let revisedMessage = $state<{ readonly id: string; readonly sequence: number } | null>(null);
+	let pendingImages = $state<Array<{ id: string; file: File; previewUrl: string }>>([]);
 
 	const taskQuery = $derived(
 		runtime.client.db.agent_task.findMany({ orderBy: { updated_at: 'desc' }, limit: 500 })
@@ -216,6 +225,7 @@
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
+		if (pendingImages.length > 0) return true;
 		switch (parsed.kind) {
 			case 'message':
 				return parsed.message.trim().length > 0;
@@ -246,6 +256,10 @@
 				return 'Verified';
 			case 'superseded':
 				return 'Superseded';
+			default: {
+				const _exhaustive: never = activePlan.status;
+				return _exhaustive;
+			}
 		}
 	}
 
@@ -334,40 +348,118 @@
 		transcriptTab = 'focus';
 	}
 
-	function canonicalUserMessage(message: string): Prompt.UserMessageEncoded {
-		return { role: 'user', content: message };
+	function addImageFiles(files: readonly File[]): void {
+		const images = files.filter((file) => file.type.startsWith('image/') && file.size > 0);
+		if (images.length === 0) return;
+		pendingImages = [
+			...pendingImages,
+			...images.map((file) => ({
+				id: globalThis.crypto.randomUUID(),
+				file,
+				previewUrl: URL.createObjectURL(file)
+			}))
+		];
+	}
+
+	function removePendingImage(id: string): void {
+		const next: Array<{ id: string; file: File; previewUrl: string }> = [];
+		for (const image of pendingImages) {
+			if (image.id === id) {
+				URL.revokeObjectURL(image.previewUrl);
+				continue;
+			}
+			next.push(image);
+		}
+		pendingImages = next;
+	}
+
+	function clearPendingImages(): void {
+		for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
+		pendingImages = [];
+	}
+
+	function storePendingImages(taskId: string) {
+		const images = pendingImages;
+		return Effect.tryPromise({
+			try: async () => {
+				if (images.length === 0) return [];
+				const session = workspaceSession();
+				const assets: ImageAsset[] = [];
+				for (const image of images) {
+					const key = taskAssetStorageKey(taskId, image.id, image.file.name);
+					await session.files.store(key, image.file);
+					assets.push(
+						ImageAsset.make({
+							key,
+							name: image.file.name,
+							mimeType: image.file.type.startsWith('image/') ? image.file.type : 'image/jpeg',
+							size: image.file.size
+						})
+					);
+				}
+				return assets;
+			},
+			catch: (cause) =>
+				new Error(cause instanceof Error ? cause.message : 'The image could not be stored.')
+		});
+	}
+
+	function onComposerPaste(event: ClipboardEvent): void {
+		const files = [...(event.clipboardData?.files ?? [])];
+		if (!files.some((file) => file.type.startsWith('image/'))) return;
+		event.preventDefault();
+		addImageFiles(files);
+	}
+
+	function onImagePicked(event: Event): void {
+		const input = event.currentTarget;
+		if (!(input instanceof HTMLInputElement) || input.files === null) return;
+		addImageFiles([...input.files]);
+		input.value = '';
 	}
 
 	function editRevision() {
 		return Effect.suspend(() => {
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
-			if (message.length === 0 || revisedMessage === null || activeTaskId === undefined) {
+			const revision = revisedMessage;
+			if (
+				(message.length === 0 && pendingImages.length === 0) ||
+				revision === null ||
+				activeTaskId === undefined
+			) {
 				return Effect.void;
 			}
 			pending = true;
 			sendFailure = null;
-			return agentClient
-				.editMessage({
-					taskId: activeTaskId,
-					messageId: revisedMessage.id,
-					message: canonicalUserMessage(message)
-				})
-				.pipe(
-					Effect.tap(() =>
-						Effect.sync(() => {
-							draft = '';
-							revisedMessage = null;
-						})
-					),
-					Effect.tapError((error) =>
-						Effect.sync(() => {
-							sendFailure = error.message;
-						})
-					),
-					Effect.ensuring(Effect.sync(() => (pending = false))),
-					Effect.asVoid
-				);
+			return runComposerCommand(
+				storePendingImages(activeTaskId).pipe(
+					Effect.flatMap((assets) =>
+						encodeUserMessageWithImages(message, assets).pipe(
+							Effect.flatMap((encoded) =>
+								agentClient.editMessage({
+									taskId: activeTaskId,
+									messageId: revision.id,
+									message: encoded
+								})
+							)
+						)
+					)
+				),
+				{
+					onSuccess: () => {
+						draft = '';
+						revisedMessage = null;
+						clearPendingImages();
+					},
+					onFailure: (failure) => {
+						sendFailure = failure;
+					},
+					onSettled: () => {
+						pending = false;
+					}
+				}
+			);
 		});
 	}
 
@@ -375,7 +467,7 @@
 		return Effect.suspend(() => {
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
-			if (message.length === 0) return Effect.void;
+			if (message.length === 0 && pendingImages.length === 0) return Effect.void;
 			const mode = parsed.kind === 'submission' ? parsed.mode : planMode ? 'plan' : 'agent';
 			const retry = retryableAdmission(visibleAdmission, {
 				agentId: runtime.agentId,
@@ -398,26 +490,38 @@
 			unsettledAdmission = admission;
 			pending = true;
 			sendFailure = null;
-			return agentClient
-				.submit({ taskId, message: canonicalUserMessage(message), mode, priority })
-				.pipe(
-					Effect.tap((result) =>
-						Effect.sync(() => {
-							selectedTaskId = result.taskId;
-							composingNew = false;
-							unsettledAdmission = null;
-							draft = '';
-							revisedMessage = null;
-						})
-					),
-					Effect.tapError((error) =>
-						Effect.sync(() => {
-							sendFailure = error.message;
-						})
-					),
-					Effect.ensuring(Effect.sync(() => (pending = false))),
-					Effect.asVoid
-				);
+			return runComposerCommand(
+				storePendingImages(taskId).pipe(
+					Effect.flatMap((assets) =>
+						encodeUserMessageWithImages(message, assets).pipe(
+							Effect.flatMap((encoded) =>
+								agentClient.submit({
+									taskId,
+									message: encoded,
+									mode,
+									priority
+								})
+							)
+						)
+					)
+				),
+				{
+					onSuccess: (result) => {
+						selectedTaskId = result.taskId;
+						composingNew = false;
+						unsettledAdmission = null;
+						draft = '';
+						revisedMessage = null;
+						clearPendingImages();
+					},
+					onFailure: (failure) => {
+						sendFailure = failure;
+					},
+					onSettled: () => {
+						pending = false;
+					}
+				}
+			);
 		});
 	}
 
@@ -466,6 +570,10 @@
 		}
 	}
 
+	onDestroy(() => {
+		clearPendingImages();
+	});
+
 	onMount(() => {
 		function onFocusRequest(event: Event): void {
 			const seed =
@@ -491,12 +599,10 @@
 	});
 
 	const visibleAdmission = $derived(
-		unsettledAdmission !== null &&
-			// `?.` for the checker only: `unsettledAdmission` is `$state`, so its narrowing does not
-			// survive into the callback, and the guard above already proved it non-null.
-			allTasks.some((task) => task.id === unsettledAdmission?.taskId)
-			? null
-			: unsettledAdmission
+		visibleUnsettledAdmission(
+			unsettledAdmission,
+			new Set(allTasks.map((task) => task.id))
+		)
 	);
 </script>
 
@@ -611,10 +717,23 @@
 
 	<Scroll class="min-h-0 flex-1" name="Task transcript">
 		<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
-			{#if activeTask === undefined}
+			{#if activeTask === undefined && visibleAdmission === null}
 				<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
 					<p class="max-w-sm">Start a Task. Agent and Plan submissions share one durable transcript.</p>
 				</div>
+			{:else if activeTask === undefined && visibleAdmission !== null}
+				<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
+					<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
+						<Stack gap="xs" align="end">
+							<span class="text-tiny font-medium text-muted-foreground">You</span>
+							<div
+								class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
+							>
+								<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
+							</div>
+						</Stack>
+					</li>
+				</ol>
 			{:else}
 				<Inline
 					align="center"
@@ -761,9 +880,21 @@
 										: reviseMessage}
 								/>
 							{/each}
+							{#if visibleAdmission !== null}
+								<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
+									<Stack gap="xs" align="end">
+										<span class="text-tiny font-medium text-muted-foreground">You</span>
+										<div
+											class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
+										>
+											<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
+										</div>
+									</Stack>
+								</li>
+							{/if}
 						</ol>
 
-						{#each directChildren(activeTask.id) as child (child.id)}
+						{#each directChildren(activeTask?.id ?? '') as child (child.id)}
 							{@render childConversation(child)}
 						{/each}
 					</Stack>
@@ -858,12 +989,48 @@
 				bind:this={composer}
 				bind:value={draft}
 				onkeydown={onComposerKeydown}
+				onpaste={onComposerPaste}
 				rows={3}
 				placeholder="Ask anything, or type /plan or /compact"
 				class={AGENT_COMPOSER_EDITOR_CLASS}
 				disabled={pending || controlPending || !taskAcceptsSubmission}
 			></textarea>
+			{#if pendingImages.length > 0}
+				<Inline gap="xs" class="px-2.5">
+					{#each pendingImages as image (image.id)}
+						<button
+							type="button"
+							class="relative size-10 overflow-hidden rounded-md border border-border/70"
+							aria-label={`Remove ${image.file.name}`}
+							onclick={() => removePendingImage(image.id)}
+						>
+							<img
+								src={image.previewUrl}
+								alt={image.file.name}
+								class="size-full object-cover"
+							/>
+						</button>
+					{/each}
+				</Inline>
+			{/if}
 			<Inline align="center" gap="xs" class="px-2.5 pb-2">
+				<input
+					bind:this={imagePicker}
+					type="file"
+					accept="image/*"
+					multiple
+					class="sr-only"
+					onchange={onImagePicked}
+				/>
+				<button
+					type="button"
+					aria-label="Attach image"
+					disabled={pending || controlPending || !taskAcceptsSubmission}
+					onclick={() => imagePicker?.click()}
+					class={`rounded-md px-1.5 py-0.5 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} text-muted-foreground hover:bg-muted`}
+				>
+					<Icon icon="lucide:image" class="size-4" />
+				</button>
 				<button
 					type="button"
 					aria-pressed={planMode}

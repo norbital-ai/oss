@@ -4,20 +4,16 @@ severity: error
 principles: [simplicity, efficiency, no-bloat]
 rule:
   all:
-    - kind: SourceFile
-    - has:
-        regex: '\breaddir(?:Sync)?\('
-      stopBy: end
-    - not:
-        has:
-          regex: 'recursive\s*:\s*true'
-        stopBy: end
-    - not:
-        regex: 'ignor\w*\([^;{]*\)\s*\)\s*(?:continue|return|throw)'
-    - not:
-        regex: 'ignor\w*\([^;{]*\)\s*\)[^{]*else'
+    - any:
+        - kind: FunctionDeclaration
+        - kind: MethodDeclaration
+        - kind: VariableDeclaration
+    - fact:
+        name: callGraphCycle
+        prune: '\b(?:exclude|ignore|prun|skip|descendInto|ignoredFile)\w*\b'
 examples:
   bad:
     - 'async function scan(directory: string) { const entries = await readdir(directory); return descend(entries); } function descend(entries) { for (const entry of entries) if (entry.isDirectory()) scan(entry.name); }'
   good:
     - 'export const files = readdir(root, { withFileTypes: true, recursive: true });'
+    - 'async function scan(directory: string) { const entries = await readdir(directory); for (const entry of entries) { if (ignoredFile(entry.name)) continue; if (entry.isDirectory()) await scan(entry.name); } }'

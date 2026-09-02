@@ -173,7 +173,7 @@ by the database's own cascade — and then asserts another run's payslips surviv
 ## 7. The restatement that drifts
 
 A test that reimplements the rule it is checking passes forever against its own copy.
-`templates/hr-payroll/src/lib/policy_grants.test.ts` does exactly this — and is in this skill as the
+`templates/hr-payroll/tests/lib/policy_grants.test.ts` does exactly this — and is in this skill as the
 _good_ example, because of how it handles it:
 
 ```

@@ -4,3 +4,8 @@ summary: raw fetch bypasses the http client
 severity: error
 principles: [modularity, no-bloat]
 rule: fetch($...ARGS)
+examples:
+  bad:
+    - "export const load = () => fetch('/api');"
+  good:
+    - "export const load = () => client.get('/api');"

@@ -1,0 +1,26 @@
+id: UI6
+dominates:
+  - UI7
+summary: raw flex/grid container bypasses the layout primitives
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:ClassToken
+    - regex: '^(?:flex|grid)$'
+    - not:
+        inside:
+          all:
+            - kind: svelte:Element
+            - has:
+                field: tagName
+                regex: '^(?:Stack|Inline|Cluster|Grid|Bound|Cover|Scroll)$'
+        stopBy: end
+examples:
+  bad:
+    - '<div class="flex gap-2"><span>one</span></div>'
+    - '<div class="flex items-center justify-between"></div>'
+  good:
+    - '<Stack gap="sm"><span>one</span></Stack>'

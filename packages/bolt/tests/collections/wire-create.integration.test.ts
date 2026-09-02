@@ -249,7 +249,6 @@ const syncConnect = async (
 	}> = {}
 ) =>
 	post(runtime, 'sync.connect', {
-		head: { sequence: 0 },
 		queries: input.queries ?? [],
 		detached: [],
 		pending: input.pending ?? []
@@ -318,21 +317,15 @@ describe('collections.mutate over the wire', () => {
 		const response = await syncConnect(harness);
 		const value = response.value as Readonly<Record<string, unknown>>;
 
-		// The handshake resolves no query, so a subject holding only a `mutate.new` grant is not excluded
-		// from it: the head is answered and nothing is resolved that the subject could not read.
-		//
-		// The head is read back rather than written as a literal zero. `user` and `team` are synced
-		// collections and carry the capture trigger, so seeding the session that authenticates this
-		// very handshake already advances the changelog; a literal would be asserting that the
-		// fixture wrote nothing, not that the handshake answered.
-		const [changelog] = await harness.database.query(
-			'select coalesce(max(sequence), 0)::int as sequence from bolt_sync_outbox'
-		);
-		expect(Reflect.get(value, 'head')).toEqual({ sequence: changelog?.['sequence'] });
+		// The handshake resolves no query, so a subject holding only a `mutate.new` grant is not
+		// excluded from it: nothing is resolved that the subject could not read. The answer is
+		// versioned-prefix facts, not a changelog head.
 		expect(value).toMatchObject({ results: [], outcomes: [] });
+		expect(value).not.toHaveProperty('head');
+		expect(value).not.toHaveProperty('digest');
 	}, 60_000);
 
-	it('deduplicates a browser mutation push under its original key and digest and emits one ordinary outbox commit', async () => {
+	it('deduplicates a browser mutation push under its original key and digest and emits one ChangeBatch', async () => {
 		harness = await open();
 		const fingerprint = await schemaFingerprint(harness);
 		const input = mutationPush(fingerprint, {
@@ -381,11 +374,18 @@ describe('collections.mutate over the wire', () => {
 		expect(first.value).toMatchObject({
 			resolution: 'accepted',
 			mutationId: 'm4-accepted-once',
-			schemaFingerprint: fingerprint
+			schemaFingerprint: fingerprint,
+			changes: [
+				expect.objectContaining({
+					collection: 'orders',
+					operation: 'insert',
+					id: '00000000-0000-4000-8000-000000000041'
+				})
+			]
 		});
 		expect(storedRecordsOf(first.value)?.[0]?.['id']).toBe('00000000-0000-4000-8000-000000000041');
-		// The authoritative read is the sync handshake: the commit is resolved into the changelog and
-		// the journal answer, one query resolution beside the pending outcome.
+		// The authoritative read is the sync handshake: one prefix resolution beside the pending
+		// journal outcome.
 		const authoritative = await syncConnect(harness, {
 			queries: [
 				{
@@ -397,12 +397,10 @@ describe('collections.mutate over the wire', () => {
 			pending: ['m4-accepted-once']
 		});
 		expect(authoritative.value).toMatchObject({
-			head: { sequence: expect.any(Number) },
 			results: [
 				{
 					key: 'orders',
-					changed: true,
-					answer: [expect.objectContaining({ reference: 'BROWSER-MUTATION-ONCE' })]
+					rows: [expect.objectContaining({ reference: 'BROWSER-MUTATION-ONCE' })]
 				}
 			],
 			outcomes: [
@@ -542,7 +540,6 @@ describe('collections.mutate over the wire', () => {
 		// the journal's terminal outcome for the pending mutation id.
 		const status = await syncConnect(harness, { pending: [mutationId] });
 		expect(status.value).toMatchObject({
-			head: { sequence: expect.any(Number) },
 			results: [],
 			outcomes: [
 				{
@@ -774,7 +771,6 @@ describe('collections.mutate over the wire', () => {
 		);
 		const status = await syncConnect(harness, { pending: ['m4-pending-approval'] });
 		expect(status.value).toMatchObject({
-			head: { sequence: expect.any(Number) },
 			results: [],
 			outcomes: [
 				{

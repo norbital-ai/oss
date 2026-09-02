@@ -1,7 +1,7 @@
 id: NODE4
 summary: glob entrypoint uses substring matching instead of node:fs glob
 severity: error
-principles: [simplicity, straightforwardness, testability]
+principles: [ simplicity, straightforwardness, testability ]
 rule:
   all:
     - kind: SourceFile
@@ -16,3 +16,6 @@ examples:
     - "import { glob } from 'node:fs/promises'; export const run = (entry, input) => input.tool === 'sandbox_glob' ? entry.name.indexOf(input.pattern) >= 0 : glob(input.pattern);"
   good:
     - "import { glob } from 'node:fs/promises'; export const run = (pattern) => glob(pattern);"
+    - export function glob(pattern) { return fsGlob(pattern); }
+    - export function find(name) { return names.includes(name); }
+    - export function globFiles(p) { return files.filter((f) => minimatch(f, p)); }

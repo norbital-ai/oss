@@ -1,0 +1,60 @@
+id: SQL1
+summary: raw SQL outside transaction ownership or schema bootstrap DDL
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  all:
+    - any:
+        - kind: sql:Statement
+        - all:
+            - any:
+                - kind: StringLiteral
+                - kind: NoSubstitutionTemplateLiteral
+                - kind: TemplateExpression
+            - regex: '\b(?:SELECT\b[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*\bSET\b|DELETE\s+FROM\b|MERGE\s+INTO\b|TRUNCATE\s+(?:TABLE\s+)?(?:\"[\w$]+\"|''[\w$]+''|[\w$]+)|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|ALTER\s+(?:TABLE|POLICY|VIEW)\b|DROP\s+(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b)'
+    - not:
+        regex: '(?:begin|commit|rollback|BEGIN|COMMIT|ROLLBACK)(?:\s+(?:work|transaction|WORK|TRANSACTION))?|start\s+transaction|START\s+TRANSACTION|savepoint\b|SAVEPOINT\b'
+    - not:
+        fact:
+          name: enclosingOwnerMatches
+          regex: '(?:^|/)(?:migrations?|compiler|generator|schema|drizzle)(?:/|$)|(?:^|/)runtime/(?:access|collections|identity)(?:/|$)|(?:^|/)hosting/tenant-database\.[cm]?[jt]s$|(?:^|/)runtime/schema/system-collections\.[cm]?[jt]s$|(?:^|/)(?:model-introspection|system-models|system-row-model)\.[cm]?[jt]s$'
+    - not:
+        regex: '(?:create|CREATE)\s+(?:(?:or|OR)\s+(?:replace|REPLACE)\s+)?(?:trigger|function|policy|TRIGGER|FUNCTION|POLICY)\b|(?:create|CREATE)\s+(?:extension|EXTENSION)\s+(?:if|IF)\s+(?:not|NOT)\s+(?:exists|EXISTS)\b|(?:create|CREATE)\s+(?:table|index|schema|TABLE|INDEX|SCHEMA)\s+(?:if|IF)\s+(?:not|NOT)\s+(?:exists|EXISTS)\b|_history\b'
+    - not:
+        inside:
+          all:
+            - kind: CallExpression
+            - regex: '^policySql\b'
+        stopBy: end
+    - not:
+        all:
+          - inside:
+              all:
+                - kind: CallExpression
+                - regex: '^transactionSql\b'
+            stopBy: end
+          - fact:
+              name: importsFrom
+              module: '#lib/runtime/persistence.js'
+    - not:
+        inside:
+          regex: "_tag\\s*:\\s*['\"]Transaction['\"]"
+        stopBy: end
+    - not:
+        inside:
+          regex: 'generatedAlwaysAs\b'
+        stopBy: end
+examples:
+  bad:
+    - "export const q = 'SELECT id FROM users';"
+    - "export const wipe = 'truncate things';"
+  good:
+    - 'export const q = db.users.findMany({});'
+    - 'export const boot = `create table if not exists ${t} (id uuid)`;'
+    - 'export const hist = `create table ${t}_history (id uuid)`;'
+    - 'export const trig = `create trigger t after insert on x execute function f()`;'
+    - "export const policy = 'create policy tenant_rows on things using (tenant_id = current_user)';"
+    - "export const begin = 'begin';"
+    - "export const commit = 'commit';"
+    - "export const rollback = 'rollback';"
+    - "export const disk = 'truncate -s 8G image';"

@@ -1,0 +1,21 @@
+id: QRY2
+summary: live query is refreshed manually instead of updating through sync
+severity: error
+principles: [straightforwardness, modularity, testability]
+rule:
+  any:
+    - all:
+        - kind: CallExpression
+        - pattern: '$RECEIVER.refresh()'
+        - regex: 'query|rows|records|history|approvals|operations'
+          on: RECEIVER
+    - all:
+        - kind: CallExpression
+        - pattern: '$RECEIVER.refetch()'
+examples:
+  bad:
+    - 'export const f = () => { void query.refresh(); };'
+  good:
+    - |
+      export const f = () => { const rows = client.db.things.findMany({}); return rows; };
+      export const updateToc = () => toc.refresh();

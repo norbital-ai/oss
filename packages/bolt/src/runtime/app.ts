@@ -723,6 +723,15 @@ const BundleDispatch = {
 							_tag: 'Failure',
 							error: makeWireError('invalid_input', error.message, { httpStatus: 400 })
 						};
+					// A live prefix the engine refuses is the same class of caller input: a window
+					// over the byte ceiling, a limit it will not admit, a retained receipt it cannot
+					// resolve. It reached the catch-all as a 500, and a 500 told the sync client to
+					// retry the same registration forever (learning 59).
+					if (error instanceof Sync.SyncPrefixResolutionError)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('invalid_input', error.message, { httpStatus: 400 })
+						};
 					if (error instanceof Collections.MutationVersionConflict)
 						return {
 							_tag: 'Failure',

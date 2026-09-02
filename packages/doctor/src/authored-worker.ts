@@ -74,7 +74,12 @@ const scanned = new Set(allFiles);
 const consumers = parse(
 	sourceFiles(request.root, { includeTests: true }).filter((file) => !scanned.has(file))
 );
-const crossFile = runCrossFile({ root: request.root, files: parsed, consumers }).filter(
+const crossFile = runCrossFile({
+	root: request.root,
+	files: parsed,
+	consumers,
+	profile: config.profile
+}).filter(
 	(finding) =>
 		request.paths.length === 0 ||
 		selectedFiles.some((file) => finding.location.startsWith(`${file}:`))

@@ -24,11 +24,14 @@ import { existsSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+	LANGUAGE_HEALTH_PROFILE,
+	mergeHealthProfile,
+	type HealthProfile
+} from './health-profile.js';
 import { loadRegisteredPack } from './packs/registry.js';
 import { loadPatternFiles } from './patterns-yaml.js';
 import { definePack, type Pack, type Rule } from './rules.js';
-
-export type { OverlapBinding } from './overlaps.js';
 
 /** Authored doctor extensions for any Norbital workspace or repository. */
 export const DOCTOR_CONFIG_DIRECTORY = '.norbital/config/doctor';
@@ -52,6 +55,11 @@ export type ProbeConfig = Readonly<{
 	readonly rules?: ReadonlyArray<Rule> | undefined;
 	/** Authored, pack, or pattern rule ids to switch off. */
 	readonly disable?: ReadonlyArray<string> | undefined;
+	/**
+	 * Health-tier opinions layered on the language default: framework entry paths, service
+	 * heritage, and extra generic call labels. Absent means language vocabulary only.
+	 */
+	readonly profile?: Partial<HealthProfile> | undefined;
 }>;
 
 /** Identity with inference. Every `doctor.config.ts` goes through this. */
@@ -129,6 +137,7 @@ export type LoadedConfig = Readonly<{
 	readonly configPath: string | undefined;
 	readonly rules: ReadonlyArray<Rule>;
 	readonly packs: ReadonlyArray<string>;
+	readonly profile: HealthProfile;
 }>;
 
 /**
@@ -147,7 +156,8 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 		return {
 			configPath: undefined,
 			rules: patterns.rules,
-			packs: []
+			packs: [],
+			profile: LANGUAGE_HEALTH_PROFILE
 		};
 	}
 
@@ -204,6 +214,7 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	return {
 		configPath,
 		rules: resolved,
-		packs: packNames
+		packs: packNames,
+		profile: mergeHealthProfile(LANGUAGE_HEALTH_PROFILE, config.profile)
 	};
 }

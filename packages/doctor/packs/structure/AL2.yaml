@@ -1,7 +1,7 @@
 id: AL2
 summary: primitive type alias
 severity: hint
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule:
   all:
     - kind: TypeAliasDeclaration
@@ -20,3 +20,6 @@ examples:
     - 'export type Count = number;'
   good:
     - 'export type Count = { readonly value: number };'
+    - export type X = 'a' | 'b';
+    - export type X = Branded<string>;
+    - "export type X = { id: string };"

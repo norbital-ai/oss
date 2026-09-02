@@ -1,8 +1,13 @@
 id: S5
 summary: Array.from(new Set(...))
 severity: hint
-principles: [simplicity, no-bloat]
+principles: [ simplicity, no-bloat ]
 rule: Array.from(new Set($VALUE))
 examples:
-  bad: ["const unique = Array.from(new Set(items));"]
-  good: ["const unique = [...new Set(items)];"]
+  bad:
+    - "const unique = Array.from(new Set(items));"
+  good:
+    - "const unique = [...new Set(items)];"
+    - export const unique = [...new Set(items)];
+    - export const list = Array.from(items);
+    - export const list = Array.from(new Map(entries).values());

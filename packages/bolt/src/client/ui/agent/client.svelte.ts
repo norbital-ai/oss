@@ -12,6 +12,7 @@ import { getErrorMessage } from '@norbital-ai/std';
 import { getContext, setContext } from 'svelte';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
+import { COMPOSER_COMMAND_DEADLINE_MILLIS } from './composer-send.js';
 
 type TaskSubmissionInput = Readonly<{
 	readonly taskId?: string;
@@ -104,7 +105,7 @@ function submitTask(
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.tasks
-					.submit(request)
+					.submit(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
 					.pipe(
 						Effect.map((result) => ({ taskId: request.taskId, directiveId: result.directiveId }))
 					)
@@ -126,7 +127,7 @@ function editTask(
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.tasks
-					.editMessage(request)
+					.editMessage(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
 					.pipe(
 						Effect.map((result) => ({
 							taskId: request.taskId,
@@ -148,7 +149,12 @@ function controlTask(
 	return agentRequest(
 		'tasks.control',
 		Schema.decodeUnknownEffect(TaskControlRequest)({ taskId, action }).pipe(
-			Effect.flatMap((request) => active.client.system.tasks.control(request))
+			Effect.flatMap((request) =>
+				active.client.system.tasks.control(
+					request,
+					AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS)
+				)
+			)
 		)
 	);
 }

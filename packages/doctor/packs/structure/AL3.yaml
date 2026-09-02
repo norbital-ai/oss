@@ -1,7 +1,7 @@
 id: AL3
 summary: loose-record type alias
 severity: hint
-principles: [simplicity, type-safety, no-bloat]
+principles: [ simplicity, type-safety, no-bloat ]
 rule:
   all:
     - kind: TypeAliasDeclaration
@@ -11,3 +11,6 @@ examples:
     - 'export type Bag = Record<string, unknown>;'
   good:
     - 'export type Bag = { readonly id: string };'
+    - export type X = Record<string, Row>;
+    - export type X = ReadonlyMap<string, unknown>;
+    - "export type X = { [k: string]: unknown };"

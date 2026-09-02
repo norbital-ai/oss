@@ -388,9 +388,11 @@ describe('sync lane over the live runtime: opening race (S3)', () => {
 				])
 			)
 		).rejects.toThrow();
-		// Fail-closed, so the browser reopens from PostgreSQL truth rather than half-registering.
-		expect(reader.closes).toEqual(['guest-failed']);
-		expect(host.lane.get('reader')).toBeUndefined();
+		// The refused registration is that request's failure. Closing the stream here is what
+		// turned one bad sibling query (month hop, calendar expansion) into a 410 storm.
+		expect(reader.closes).toEqual([]);
+		expect(host.lane.get('reader')).toBe(reader.connection);
+		expect(reader.connection.subscriptions.get('people')).toEqual(expect.any(String));
 	});
 });
 

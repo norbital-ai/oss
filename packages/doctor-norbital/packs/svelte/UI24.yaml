@@ -1,0 +1,15 @@
+id: UI24
+summary: stylesheet layout declaration bypasses the layout primitives
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: css:Declaration
+    - regex: '(?:display\s*:\s*(?:flex|grid)|position\s*:\s*(?:absolute|fixed|sticky))'
+examples:
+  bad:
+    - '<style>.panel { display:grid; position:fixed }</style>'
+  good:
+    - '<style>.panel { color: inherit }</style>'

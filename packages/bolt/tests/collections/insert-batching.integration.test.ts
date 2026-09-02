@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId, type SyncChange } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import {
@@ -8,6 +8,7 @@ import {
 	insertionLayers,
 	type PlannedInsert
 } from '../../src/runtime/collections/collections.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -64,23 +65,31 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-/** Every statement the write issued, setup excluded. */
-const statementsFor = async (
+/** Every statement the write issued, setup excluded, plus the ChangeBatch it captured. */
+const batchFor = async (
 	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-): Promise<ReadonlyArray<string>> => {
+): Promise<{
+	readonly statements: ReadonlyArray<string>;
+	readonly changes: ReadonlyArray<SyncChange>;
+}> => {
 	harness = await makeBoltTestRuntime(definition);
 	harness.database.forget();
-	await harness.runtime.runPromise(
+	const changes = await harness.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
 			yield* collections.mutate(EffectId.make('batching'), adminSubject, 'notes', rows);
+			return yield* (yield* SyncCommit.Service).drainChanges;
 		})
 	);
 	const statements = [...harness.database.statements];
 	await harness.dispose();
 	harness = undefined;
-	return statements;
+	return { statements, changes };
 };
+
+const statementsFor = async (
+	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
+): Promise<ReadonlyArray<string>> => (await batchFor(rows)).statements;
 
 const insertsInto = (statements: ReadonlyArray<string>, table: string): ReadonlyArray<string> =>
 	statements.filter((statement) => statement.startsWith(`insert into "${table}" `));
@@ -97,7 +106,7 @@ const parameterCount = (sql: string): number =>
 
 describe('the statements a batch of creates is', () => {
 	it('writes rows of one shape as one insert, not one each', async () => {
-		const statements = await statementsFor(
+		const { statements, changes } = await batchFor(
 			Array.from({ length: 40 }, (_, index) => ({ body: `note ${index}` }))
 		);
 
@@ -105,11 +114,14 @@ describe('the statements a batch of creates is', () => {
 		// One, not forty. This is the whole claim: 40 rows of one shape are one round trip.
 		expect(rows).toHaveLength(1);
 		expect(tuples(rows[0] ?? '')).toBe(40);
-		// History remains one explicit batch statement. Sync bookkeeping is database-owned now: the
-		// collection trigger records each changed row in the same transaction, so the application must
-		// not manufacture a second outbox insert or another round trip.
+		// History remains one explicit batch statement. Sync is a ChangeBatch in-process after
+		// the write, not a second bookkeeping table.
 		expect(insertsInto(statements, 'bolt_collection_history')).toHaveLength(1);
 		expect(insertsInto(statements, 'bolt_sync_outbox')).toHaveLength(0);
+		expect(changes).toHaveLength(40);
+		expect(changes.every((change) => change.collection === 'notes' && change.operation === 'insert')).toBe(
+			true
+		);
 	}, 60_000);
 
 	/**

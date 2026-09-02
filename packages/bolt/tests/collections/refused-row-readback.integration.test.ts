@@ -16,6 +16,7 @@ import { automation } from '../../src/authoring/automations-schema.js';
 import { authoredHooks, type CollectionHooks } from '../../src/authoring/contracts-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { unwrapMutationPhase } from '../support/mutation-phase.js';
 
@@ -36,8 +37,8 @@ interface RefusedReadbackSchema {
  * The create's row predicate is asserted in the same transaction that inserts the row: the
  * candidate is written first and `bolt_assert` then proves its stored row against the predicate,
  * so a refused row raises and rolls the whole graph back. Nothing in the workspace may act as
- * though a refused write happened — no `after` hook, no change trigger, no history, sync or
- * delivery row — and the caller is told, not answered with a partial batch.
+ * though a refused write happened — no `after` hook, no history, SyncChange, or delivery
+ * row — and the caller is told, not answered with a partial batch.
  *
  * The refusal is a mutation authorization over the prepared row. Aggregate quotas do not belong in
  * opaque read predicates: production limits use the policy limit surface, while row-local business
@@ -437,11 +438,11 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		// The refusal is the whole batch, so the tables hold nothing — and there is no phantom row in
 		// any of them for a reader, a partner or an audit to trip over.
 		expect(await harness.database.query('select id, body from notes')).toEqual([]);
-		const sync = await harness.database.query(
-			'select collection_name from bolt_sync_outbox where collection_name = $1',
-			['notes']
-		);
-		expect(sync).toEqual([]);
+		expect(
+			await harness.runtime.runPromise(
+				Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges)
+			)
+		).toEqual([]);
 		const history = await harness.database.query(
 			'select record_id from bolt_collection_history where collection_name = $1 and operation = $2',
 			['notes', 'create']
@@ -459,8 +460,8 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 	 *
 	 * Bookkeeping is written after every record of the batch under the row's own existence, so a
 	 * row-dependent predicate that stays true for the whole batch still finds every row and every
-	 * entry it owes: history, sync and deliveries for two stored records, and none for a third the
-	 * caller never sent.
+	 * entry it owes: history, SyncChange, and deliveries for two stored records, and none for a
+	 * third the caller never sent.
 	 */
 	it('keeps the bookkeeping of a batch the predicate allowed in full', async () => {
 		const admitted = workspaceWith(described.declarations);
@@ -481,13 +482,15 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		const stored = await harness.database.query('select id, body from notes');
 		expect(bodiesOf(stored)).toEqual(['note 0', 'note 1']);
 		const storedIds = stored.map((row) => String(row['id'])).toSorted();
-		// The changelog rows are written by the collection's sync trigger, one per row the insert
-		// wrote, inside the same transaction.
-		const sync = await harness.database.query(
-			'select collection_name from bolt_sync_outbox where collection_name = $1',
-			['notes']
+		const changes = await harness.runtime.runPromise(
+			Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges)
 		);
-		expect(sync).toHaveLength(storedIds.length);
+		expect(
+			changes
+				.filter((change) => change.collection === 'notes')
+				.map((change) => change.id)
+				.toSorted()
+		).toEqual(storedIds);
 		const history = await harness.database.query(
 			'select record_id from bolt_collection_history where collection_name = $1 and operation = $2',
 			['notes', 'create']

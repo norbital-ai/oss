@@ -14,6 +14,7 @@ import { SyncCommit } from '../../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
 
@@ -358,19 +359,28 @@ describe('a nested write', () => {
 		).toEqual([{ id: lineId, order_id: orderId, sku: 'attendance-only-facts' }]);
 	}, 60_000);
 
-	it('refuses a browser-supplied attempt to claim a null-owned child', async () => {
+	it('lets a server-only payload claim a stored null-owned child', async () => {
 		harness = await makeBoltTestRuntime(definition);
-		const lineId = await createLine(harness, 'browser-claim-seed', { sku: 'must-stay-unowned' });
-
-		const outcome = await harness.runtime.runPromise(
-			Effect.result(write({ reference: 'BROWSER-CLAIM', order_line_order: [{ id: lineId }] }))
+		const lineId = await createLine(harness, 'server-claim-seed', { sku: 'claim-from-payload' });
+		const orderId = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const result = yield* (yield* Collections.Service).mutate(
+					EffectId.make('server-only-payload-claim'),
+					adminSubject,
+					'orders',
+					[{ reference: 'SERVER-CLAIM', order_line_order: [{ id: lineId }] }]
+				);
+				const id = result.records[0]?.['id'];
+				if (typeof id !== 'string') throw new Error('created order has no id');
+				return id;
+			})
 		);
 
-		expect(outcome._tag).toBe('Failure');
-		expect(await harness.database.query('select id from orders')).toEqual([]);
 		expect(
-			await harness.database.query('select order_id, sku from order_lines where id = $1', [lineId])
-		).toEqual([{ order_id: null, sku: 'must-stay-unowned' }]);
+			await harness.database.query('select id, order_id, sku from order_lines where id = $1', [
+				lineId
+			])
+		).toEqual([{ id: lineId, order_id: orderId, sku: 'claim-from-payload' }]);
 	}, 60_000);
 
 	it('refuses a trusted authored graph that names a child owned by another parent', async () => {
@@ -407,29 +417,64 @@ describe('a nested write', () => {
 		).toEqual([{ order_id: existingOwnerId }]);
 	}, 60_000);
 
-	it('refuses a nonexistent explicit child id instead of forging a nested create', async () => {
-		const missingId = '00000000-0000-4000-8000-000000000404';
-		harness = await makeBoltTestRuntime(definition, {
-			authored: claimLinesAuthored([missingId])
-		});
-
-		const outcome = await harness.runtime.runPromise(
-			Effect.result(
-				Effect.gen(function* () {
-					return yield* (yield* Collections.Service).mutate(
-						EffectId.make('missing-child-claim'),
-						adminSubject,
-						'orders',
-						[{ reference: 'MISSING-CHILD' }]
-					);
-				})
-			)
+	it('persists nested children with explicit ids on a server-only create', async () => {
+		harness = await makeBoltTestRuntime(definition);
+		const orderId = recordId('server-only-nested-order');
+		const lineId = recordId('server-only-nested-line');
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).mutate(
+					EffectId.make('server-only-nested-create'),
+					adminSubject,
+					'orders',
+					[
+						{
+							id: orderId,
+							reference: 'ORD-NESTED',
+							order_line_order: [{ id: lineId, sku: 'nested-1' }]
+						}
+					],
+					true,
+					0,
+					{ root: { id: orderId, action: 'create' } }
+				);
+			})
 		);
 
-		expect(outcome._tag).toBe('Failure');
-		expect(JSON.stringify(outcome)).toContain('cannot be claimed');
-		expect(await harness.database.query('select id from orders')).toEqual([]);
-		expect(await harness.database.query('select id from order_lines')).toEqual([]);
+		expect(await harness.database.query('select id, reference from orders')).toEqual([
+			{ id: orderId, reference: 'ORD-NESTED' }
+		]);
+		expect(
+			await harness.database.query('select id, order_id, sku from order_lines')
+		).toEqual([{ id: lineId, order_id: orderId, sku: 'nested-1' }]);
+	}, 60_000);
+
+	it('persists a new nested child id on a server-only update', async () => {
+		harness = await makeBoltTestRuntime(definition);
+		const orderId = await createOrder(harness, 'server-only-update-parent', 'ORD-EXISTING');
+		const lineId = recordId('server-only-update-line');
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).mutate(
+					EffectId.make('server-only-nested-update'),
+					adminSubject,
+					'orders',
+					[
+						{
+							id: orderId,
+							order_line_order: [{ id: lineId, sku: 'added-1' }]
+						}
+					],
+					true,
+					0,
+					{ root: { id: orderId, action: 'update' } }
+				);
+			})
+		);
+
+		expect(
+			await harness.database.query('select id, order_id, sku from order_lines')
+		).toEqual([{ id: lineId, order_id: orderId, sku: 'added-1' }]);
 	}, 60_000);
 
 	it('rolls back every claim and the parent when any claimed child hook refuses', async () => {

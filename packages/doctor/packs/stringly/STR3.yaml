@@ -1,0 +1,33 @@
+id: STR3
+summary: dispatches on an open-domain identifier
+severity: error
+principles: [straightforwardness, type-safety, modularity]
+rule:
+  all:
+    - kind: SwitchStatement
+    - fact:
+        name: openDomainIdentifier
+        shape: dispatch
+        properties: '^(?:name|slug|handle|title|label|displayName|email|username|teamName|collectionName|workspaceName)$'
+        entities: '^(?:team|teams|collection|collections|workspace|tenant|policy|policies|app|apps|role|group|member|organization|org|project)$'
+examples:
+  bad:
+    - |
+      export function route() {
+        switch (team.name) {
+          case 'Engineering':
+            return 1;
+          default:
+            return 0;
+        }
+      }
+  good:
+    - |
+      export function route() {
+        switch (message.role) {
+          case 'assistant':
+            return 1;
+          default:
+            return 0;
+        }
+      }

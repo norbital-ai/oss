@@ -1,0 +1,19 @@
+id: UI25
+summary: class string composed in the script is unreachable as tokens
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+files:
+  - '**/*.svelte'
+rule:
+  all:
+    - kind: svelte:Attribute
+    - regex: '^class=\{'
+    - has:
+        kind: svelte:Interpolation
+    - not:
+        regex: 'class=\{[^}]*[''"`][a-z-]+-\[\$\{'
+examples:
+  bad:
+    - '<div class={shell}></div>'
+  good:
+    - '<div class="flex gap-2"></div>'

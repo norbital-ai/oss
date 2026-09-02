@@ -3,3 +3,8 @@ summary: sql assembled as text rather than a typed query
 severity: error
 principles: [type-safety]
 rule: query($SQL)
+examples:
+  bad:
+    - "export const rows = query('select * from job');"
+  good:
+    - 'export const rows = client.db.job.findMany({});'

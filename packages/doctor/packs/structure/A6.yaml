@@ -1,8 +1,8 @@
 id: A6
 summary: await inside a synchronous loop
 severity: error
-principles: [efficiency, straightforwardness]
-dominates: [EFF3]
+principles: [ efficiency, straightforwardness ]
+dominates: [ EFF3 ]
 rule:
   all:
     - kind: AwaitExpression
@@ -22,6 +22,9 @@ rule:
           - kind: ConstructorDeclaration
 examples:
   bad:
+    - export async function f() { const go = async () => { for (const i of items) await send(i); }; return go; }
     - 'export async function f(xs: number[]) { for (const x of xs) { await go(x); } }'
   good:
     - 'export async function f(xs: number[]) { await Promise.all(xs.map(go)); }'
+    - export async function f(items) { await Promise.all(items.map(send)); }
+    - export async function f(items) { for (const i of items) { queue(i); } await flush(); }

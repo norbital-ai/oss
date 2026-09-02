@@ -44,6 +44,7 @@ import {
 	indirectionFindings,
 	isPassThrough
 } from '../../build/analysis/complexity.js';
+import { LANGUAGE_HEALTH_PROFILE, mergeHealthProfile } from '../../build/health-profile.js';
 import {
 	pathwayHash,
 	shingleSimilarity,
@@ -521,7 +522,14 @@ const legacy = require('./old.cjs');
 const asset = new URL('./asset.txt', import.meta.url);
 export * from './reexports.js';
 `;
-	const summary = analyzeAst('/probe/store.ts', source);
+	const realm = mergeHealthProfile(LANGUAGE_HEALTH_PROFILE, {
+		serviceHeritage: [
+			'(?:Effect|Context|ServiceMap)\\.Service',
+			'(?:Context|ServiceMap)\\.(?:(?:Generic)?Tag|Service)\\s*(?:<[^;]+?>)?\\s*\\('
+		]
+	});
+	assert.deepEqual(analyzeAst('/probe/store.ts', source).services, []);
+	const summary = analyzeAst('/probe/store.ts', source, realm);
 	assert.deepEqual(
 		summary.imports.map(({ specifier, typeOnly }) => [specifier, typeOnly]),
 		[
@@ -767,7 +775,7 @@ function minimalReport(): Parameters<typeof markdown>[0] {
 // --- snapshot -------------------------------------------------------------------------------
 
 test('snapshot: assembleReport publishes pairs and reports what it wrote', async () => {
-	const { assembleReport } = await import('../../build/analysis/index.js');
+	const { assembleReport } = await import('../../build/analysis/snapshot.js');
 	const root = scratch('doctor-snap');
 	writeTree(root, {
 		'package.json': `${JSON.stringify({ name: 'tiny', scripts: { test: 'node --test' } })}\n`,

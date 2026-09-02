@@ -15,16 +15,20 @@
  */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runAuthored } from './authored.js';
 import { publishEvidence } from './evidence.js';
 import { buildMetrics } from './metrics/emitter.js';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
-import { assembleReport } from './analysis/index.js';
+import { assembleReport } from './analysis/snapshot.js';
+import { loadConfig } from './config.js';
+import { LANGUAGE_HEALTH_PROFILE, mergeHealthProfile } from './health-profile.js';
+import { loadPackDirectory } from './patterns-yaml.js';
+import { definePack, type Confidence, type Severity } from './rules.js';
 export { computeCheckpointDelta, deltaSummary } from './analysis/delta.js';
 export type { CheckpointDelta, DeltaOptions, DeltaSide, PillarDelta } from './analysis/delta.js';
-import type { Confidence, Severity } from './rules.js';
 
 export { definePack } from './rules.js';
 export type {
@@ -37,18 +41,20 @@ export type {
 	Severity
 } from './rules.js';
 export { defineConfig, DOCTOR_CONFIG_DIRECTORY, findConfig, loadConfig } from './config.js';
-export type { LoadedConfig, OverlapBinding, ProbeConfig } from './config.js';
-export { overlapRules } from './overlaps.js';
-export type { OverlapShape } from './overlaps.js';
+export type { LoadedConfig, ProbeConfig } from './config.js';
+export {
+	LANGUAGE_HEALTH_PROFILE,
+	assertHealthProfileShape,
+	compileHealthProfile,
+	mergeHealthProfile,
+	matchesAny
+} from './health-profile.js';
+export type { CompiledHealthProfile, HealthProfile } from './health-profile.js';
 export { runRules, sourceFiles, svelteMarkup, svelteScript } from './runner.js';
-export { stringlyPack, stringlyTyped } from './packs/stringly.js';
-export type { StringlyOptions } from './packs/stringly.js';
 export { defineRule, defineScope, verifyExamples, matchSource } from './pattern.js';
 export { loadMatcherFile, loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
 export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
-export { nameOf } from './nameof.js';
-export { boundariesPack, boundaryRules } from './packs/boundaries.js';
-export { structurePack, structureRules } from './packs/structure.js';
+export { nameOf } from './model.js';
 export { runCrossFile } from './cross-file.js';
 export type {
 	Bindings,
@@ -65,6 +71,25 @@ export type {
 } from './matcher.js';
 export type { ShapeRule, VisitorRule, RuleDefinition, ScopeRule, Examples } from './pattern.js';
 export type { RunOptions, SourceFileOptions } from './runner.js';
+
+const SHIPPED_PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
+
+export const structureRules = loadPackDirectory(join(SHIPPED_PACKS, 'structure'));
+export const structurePack = definePack({ name: 'norbital/structure', rules: structureRules });
+export const boundaryRules = loadPackDirectory(join(SHIPPED_PACKS, 'boundaries'));
+export const boundariesPack = definePack({ name: 'norbital/boundaries', rules: boundaryRules });
+export const overlapRules = loadPackDirectory(join(SHIPPED_PACKS, 'overlaps'));
+export const overlapPack = definePack({ name: 'norbital/overlaps', rules: overlapRules });
+export const graphRules = loadPackDirectory(join(SHIPPED_PACKS, 'graph'));
+export const graphPack = definePack({ name: 'norbital/graph', rules: graphRules });
+export const stringlyPack = definePack({
+	name: 'norbital/stringly-typed',
+	rules: loadPackDirectory(join(SHIPPED_PACKS, 'stringly'))
+});
+export type StringlyOptions = Readonly<{
+	readonly entities?: ReadonlyArray<string> | undefined;
+}>;
+export const stringlyTyped = (_options: StringlyOptions = {}) => stringlyPack;
 
 /** Where every root writes its findings, receipt, and reports. */
 export const DIAGNOSIS_DIRECTORY = '.norbital/diagnosis';
@@ -338,6 +363,11 @@ export async function assess(
 	// Consolidation runs in-process now: the analyzer is typed source, byte-proven against the
 	// `.mjs` it replaced, and a subprocess bought nothing but an exec boundary. The receipt of
 	// every root is handed over explicitly, exactly as the argv form did.
+	const profiles = await Promise.all(roots.map(async (root) => (await loadConfig(root)).profile));
+	const healthProfile = profiles.reduce(
+		(combined, profile) => mergeHealthProfile(combined, profile),
+		LANGUAGE_HEALTH_PROFILE
+	);
 	const run = assembleReport({
 		roots,
 		receipts: roots.map((root) => join(root, DIAGNOSIS_DIRECTORY, 'receipt.json')),
@@ -345,7 +375,8 @@ export async function assess(
 		// is describing a scan this consolidation cannot speak for.
 		requireTypeAware: true,
 		format: options.format ?? (options.out ? 'both' : 'json'),
-		out: options.out
+		out: options.out,
+		healthProfile
 	});
 	return { status: run.exitCode, report: run.stdout, stderr: '' };
 }

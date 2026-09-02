@@ -1,0 +1,27 @@
+id: LEGACY1
+summary: authored declaration is explicitly deprecated
+severity: error
+principles: [simplicity, straightforwardness, modularity, no-bloat]
+rule:
+  all:
+    - any:
+        - kind: FunctionDeclaration
+        - kind: VariableStatement
+        - kind: ClassDeclaration
+        - kind: MethodDeclaration
+        - kind: TypeAliasDeclaration
+        - kind: InterfaceDeclaration
+    - has:
+        all:
+          - kind: trivia:JSDocTag
+          - regex: 'deprecated'
+        stopBy: end
+examples:
+  bad:
+    - "/** @deprecated use next */\nexport function old() { return 1; }"
+  good:
+    - |
+      /** Current. */
+      export function current() { return 1; }
+      /** Reads the `@deprecated` tag. */
+      export function reader() { return 2; }

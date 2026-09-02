@@ -11,3 +11,8 @@ rule:
     - inside:
         kind: ForStatement
       stopBy: end
+examples:
+  bad:
+    - 'export async function run(items) { for (let i = 0; i < items.length; i++) { await send(items[i]); } }'
+  good:
+    - 'export async function run(items) { await Promise.all(items.map(send)); }'

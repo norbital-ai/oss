@@ -2,21 +2,26 @@ id: E1
 summary: environment-dependent behavior
 severity: error
 principles: [straightforwardness, testability]
-ignore:
-  - '**/*config.*'
-  - '**/vitest.config.*'
-  - '**/*.config.ts'
-  - '**/*.config.js'
 rule:
   all:
-    - pattern: process.env.$KEY
+    - any:
+        - pattern: process.env.$KEY
+        - pattern: process.env[$KEY]
+    # Reading any variable is configuration; only the owned prefixes make behaviour environmental.
+    # A quote survives in a bound literal's text, so `['SECRET_URL']` and `.SECRET_URL` both match.
+    - regex: '^[''"]?(?:SECRET_|PUBLIC_|NORBITAL_|NODE_ENV)'
+      on: KEY
     - inside:
         any:
+          - kind: IfStatement
+          - kind: ConditionalExpression
           - pattern: $A === $B
           - pattern: $A !== $B
       stopBy: end
 examples:
   bad:
-    - "export const prod = process.env.NODE_ENV === 'production' ? 1 : 2;"
+    - "export const v = process.env.SECRET_MODE === 'live' ? a : b;"
   good:
-    - 'export const prod = config.isProduction ? 1 : 2;'
+    - 'export const url = process.env.SECRET_URL;'
+    - "export const v = process.env.OTHER_THING === 'x' ? a : b;"
+    - "export const v = config.mode === 'live' ? a : b;"

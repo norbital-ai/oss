@@ -4,31 +4,27 @@ severity: error
 principles: [simplicity, straightforwardness, testability]
 rule:
   all:
-    - any:
-        - '($ID, $REST) => { void $ID; $BODY }'
-        - '($ID, $REST) => { void $ID; return $REST(); }'
-        - '($ID: $T, $REST: $U) => { void $ID; $BODY }'
-        - '($ID: $T, $REST: $U) => { void $ID; return $REST(); }'
-        - all:
-            - '($ID: $T) => $LIT'
-            - regex: '^(?:\d+|true|false|null|undefined|[''"].*[''"])$'
-              on: LIT
-        - all:
-            - '($ID) => $LIT'
-            - regex: '^(?:\d+|true|false|null|undefined|[''"].*[''"])$'
-              on: LIT
-        - '($ID: $T) => void $ID'
-        - '($ID) => void $ID'
-        - '($ID: $T) => console.log($...A)'
-        - '($ID) => console.log($...A)'
-        - '($ID: $T) => { const $K = $ID; return console.log($...A); }'
-        - '($ID: $T) => $ID'
-        - '($ID) => $ID'
-        - '($ID: $T, $E: $U) => $E ? $ID : $X'
-        - '($ID: $T) => $ID.length'
-    - regex: 'tenant|workspace|account|organization|subject|principal|user'
-      on: ID
+    - kind: Parameter
+    - regex: '(?:^|\W)_?(?:tenant|workspace|account|organization|subject|principal|user)(?:Id|Key)?\b'
+    - inside:
+        any:
+          - kind: ArrowFunction
+          - kind: FunctionDeclaration
+          - kind: FunctionExpression
+          - kind: MethodDeclaration
+      stopBy: end
+    - fact:
+        name: enclosingOwnerMatches
+        regex: '(?:capacity|admission|authori[sz]|access|permissions?|policy|quota|routing?|rbac|acl|gate)'
+    - not:
+        fact:
+          name: flowsInto
+          excluding:
+            fact:
+              name: calleeMatches
+              regex: '(?:^|\.)(?:log|debug|trace|info|warn|error|metric|record|observe)$'
 examples:
+  file: src/capacity.ts
   bad:
     - 'export const admit = (tenantId: string, work: () => void) => { void tenantId; return work(); };'
   good:

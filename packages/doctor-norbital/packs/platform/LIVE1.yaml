@@ -1,0 +1,41 @@
+id: LIVE1
+summary: handwritten polling bypasses the live sync engine
+severity: error
+principles: [simplicity, straightforwardness, efficiency, testability, no-bloat]
+ignore:
+  - 'packages/doctor/src/**'
+  - 'packages/doctor-norbital/src/**'
+  - 'src/packs/platform.ts'
+  - 'src/packs/reactive.ts'
+rule:
+  any:
+    - all:
+        - any:
+            - kind: VariableDeclaration
+            - kind: FunctionDeclaration
+        - regex: '(?:^poll(?:ing|ed|s)?(?:[A-Z]|$)|(?:^|_)POLL(?:ING|ED|S)?(?:_|$)|(?:^|_)Poll(?:ing|ed|s)?(?:[A-Z]|$))'
+    - all:
+        - kind: CallExpression
+        - any:
+            - pattern: 'setInterval($...A)'
+            - pattern: 'setTimeout($...A)'
+        - regex: '\b(?:poll|status|refresh|refetch|fetch|request|query|findMany|findFirst|count|groupBy|operations\.run)\b'
+    - all:
+        - any:
+            - kind: ForStatement
+            - kind: WhileStatement
+            - kind: DoStatement
+        - regex: '\b(?:Effect\.sleep|sleep|delay|setTimeout)\s*\('
+        - regex: '\b(?:fetch|request|call|status|refresh|refetch|query|findMany|findFirst|count|groupBy)\s*\('
+        - not:
+            regex: '\bretry'
+examples:
+  bad:
+    - 'export const pollStatus = () => status();'
+    - 'export async function watch() { while (true) { await sleep(1000); await status(); } }'
+  good:
+    - |
+      export const rows = client.db.things.findMany({});
+      export const clock = setInterval(() => { currentTime = new Date(); }, 60_000);
+      export const watchdogPollMillis = 250;
+    - 'export function transform(rows) { for (const row of rows) emit(row); }'

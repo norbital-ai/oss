@@ -25,6 +25,12 @@ import {
 	WorkbenchId
 } from '@norbital-ai/bolt-protocol/facilities';
 import {
+	imageAssetsFromMessage,
+	stripImageFileParts,
+	taskAssetKeyPrefix,
+	taskAssetStorageKey as taskScopedImageKey
+} from './image-descriptors.js';
+import {
 	type TaskControlRequest,
 	type TaskControlResult,
 	type TaskEditMessageRequest,
@@ -240,23 +246,14 @@ const providerCallIdFor = (scope: string): ProviderCallId =>
 
 const MAX_IMAGE_COUNT = 8;
 const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
-const keySegment = (value: string): string => {
-	let binary = '';
-	for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte);
-	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-};
 export const taskAssetStorageKey = (
 	taskId: TaskId,
 	documentId: string,
 	fileName: string
-): string => {
-	const suffix = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.') + 1) : '';
-	const extension = /^[a-z0-9]{1,12}$/i.test(suffix) ? `.${suffix.toLowerCase()}` : '';
-	return `agent-tasks/${keySegment(taskId)}/${keySegment(documentId)}${extension}`;
-};
+): string => taskScopedImageKey(taskId, documentId, fileName);
 const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) =>
 	Effect.gen(function* () {
-		const prefix = `agent-tasks/${keySegment(taskId)}/`;
+		const prefix = taskAssetKeyPrefix(taskId);
 		if (
 			assets.length > MAX_IMAGE_COUNT ||
 			assets.reduce((sum, asset) => sum + asset.size, 0) > MAX_IMAGE_SOURCE_BYTES
@@ -392,7 +389,7 @@ const projectTaskPrompt = (input: {
 						)
 					]
 				: []),
-		...messages.map(({ message }) => message)
+		...messages.map(({ message }) => stripImageFileParts(message))
 	];
 };
 
@@ -1525,6 +1522,7 @@ export const layer = Layer.effect(
 		): ReadonlyArray<ImageAsset> => {
 			const assets: Array<ImageAsset> = [];
 			for (const row of messages) {
+				assets.push(...imageAssetsFromMessage(row.message));
 				if (row.run_id !== runId) continue;
 				if (typeof row.message.content === 'string') continue;
 				for (const part of row.message.content) {

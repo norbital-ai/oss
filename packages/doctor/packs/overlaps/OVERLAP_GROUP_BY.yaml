@@ -1,0 +1,20 @@
+id: OVERLAP_GROUP_BY
+summary: reduce into keyed buckets reimplements a library groupBy
+severity: error
+principles: [simplicity, straightforwardness, efficiency, no-bloat]
+rule:
+  all:
+    - kind: CallExpression
+    - pattern: '$ARR.reduce($...ARGS)'
+    - regex: '\[[^\]]+\]\s*(?:\?\?=|\|\|=|=)'
+    - regex: 'push\s*\('
+examples:
+  bad:
+    - |
+      export const grouped = items.reduce((acc: Record<string, Array<Item>>, item) => {
+        (acc[item.kind] ??= []).push(item);
+        return acc;
+      }, {});
+  good:
+    - 'export const grouped = groupBy(items, (item) => item.kind);'
+    - 'export const total = items.reduce((acc, item) => acc + item.n, 0);'

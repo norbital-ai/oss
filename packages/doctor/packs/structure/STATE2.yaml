@@ -8,11 +8,18 @@ rule:
   all:
     - kind: SourceFile
     - has:
-        any:
-          - pattern: const $NAME = new Map()
-          - pattern: const $NAME = new Set()
-          - pattern: const $NAME = new WeakMap()
-          - pattern: const $NAME = new WeakSet()
+        all:
+          - any:
+              - pattern: const $NAME = new Map()
+              - pattern: const $NAME = new Set()
+              - pattern: const $NAME = new WeakMap()
+              - pattern: const $NAME = new WeakSet()
+          # The summary says *module* state, and until patterns began matching through type
+          # arguments nothing here said so: `new Map<K, V>()` simply never matched, and the
+          # unconstrained search was never exercised on a local. It is, now — a pure function
+          # building a `new Set<string>()` and returning it was reported as shared mutable state.
+          - inside:
+              kind: SourceFile
       stopBy: end
     - has:
         all:

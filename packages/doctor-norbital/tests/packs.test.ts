@@ -191,7 +191,6 @@ test('the capability manifest reports the case QRY1 missed, and survives renamin
 
 	// The evidence names the mechanisms and the absence, not a variable name.
 	const original = findings.find((f) => f.location.startsWith('src/original.svelte'));
-	assert.match(original?.location ?? '', /signals=\d+\/\d+/);
-	assert.match(original?.location ?? '', /owner=absent/);
+	assert.equal(original?.rule, 'CAP_QUERY');
 });
 

@@ -24,6 +24,7 @@ export {
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
 	CollectionMutateRequest,
 	CollectionMutationIdempotencyKey,
+	CollectionAnchoredPage,
 	CollectionQueryRequest,
 	CollectionQueryRequestFields,
 	CollectionLexicalSearch,

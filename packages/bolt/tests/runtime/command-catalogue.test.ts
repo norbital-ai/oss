@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { FixedCommandCatalogue } from '@norbital-ai/bolt-protocol';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { FixedCommandCatalogue, type FixedCommandName } from '@norbital-ai/bolt-protocol';
 import { FixedCommandBindings } from '../../src/runtime/commands.js';
 
 describe('command catalogue cutover', () => {
@@ -15,11 +15,18 @@ describe('command catalogue cutover', () => {
 	/**
 	 * The collection one-shots a board issues by name, rather than left to the set equality above.
 	 * `collections.count` is what `countQueryOf` calls for "1 of 335"; `collections.findGrouped` is
-	 * what the kanban lanes call. A caller of a contract nothing binds gets `unknown_command` at run
-	 * time with nothing failing at build time.
+	 * what the kanban lanes call; `collections.findMany` / `collections.findFirst` are the deep
+	 * `after` pages. A caller of a contract nothing binds gets `unknown_command` at run time with
+	 * nothing failing at build time.
 	 */
 	it('binds the collection query commands the browser client calls by name', () => {
-		for (const name of ['collections.export', 'collections.count', 'collections.findGrouped']) {
+		for (const name of [
+			'collections.export',
+			'collections.count',
+			'collections.findMany',
+			'collections.findFirst',
+			'collections.findGrouped'
+		]) {
 			expect(FixedCommandCatalogue.map((contract) => contract.name)).toContain(name);
 			expect(FixedCommandBindings.has(name), name).toBe(true);
 			expect(
@@ -57,5 +64,11 @@ describe('command catalogue cutover', () => {
 				: []
 		);
 		expect(new Set(paths).size).toBe(paths.length);
+	});
+
+	it('does not admit an unbound collection read name into the fixed command union', () => {
+		expectTypeOf<'collections.findMany'>().toExtend<FixedCommandName>();
+		expectTypeOf<'collections.findFirst'>().toExtend<FixedCommandName>();
+		expectTypeOf<'collections.unboundFind'>().not.toExtend<FixedCommandName>();
 	});
 });

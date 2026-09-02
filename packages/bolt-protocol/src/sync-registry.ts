@@ -27,7 +27,14 @@ import {
 } from './sync.js';
 
 export interface SyncRegistryConnection {
-	readonly credential: string;
+	/**
+	 * The caller token the guest evaluates this connection under.
+	 *
+	 * Writable so a second tab of the same principal can present a newer session token without
+	 * forcing `410` on a stream that is still open. The physical connection is keyed by principal,
+	 * not by this string.
+	 */
+	credential: string;
 	readonly sink: {
 		readonly writable: () => boolean;
 		readonly write: (frame: SyncApplyFrame) => boolean;
@@ -687,7 +694,9 @@ export class SyncConnectionLane<
 			try {
 				evaluation = await this.#connect(connection, options.request);
 			} catch (cause) {
-				this.detach(connection.id, this.#guestFailure);
+				// A refused or exploded registration is that request's failure. Detaching here closed
+				// the physical stream for every other live query — month-board hops and calendar
+				// expansions then 410'd on a connection the EventSource still believed it owned.
 				throw cause;
 			}
 			if (connection.closed || this.#closed) throw options.unavailable();
@@ -702,23 +711,28 @@ export class SyncConnectionLane<
 						result.rows.length !== result.loadedPrefix ||
 						result.loadedPrefix > result.prefixKeys.length
 				)
-			)
-				return this.#fail(connection, 'sync initial answer does not match its prefix');
+			) {
+				// This request's answer is unusable. Detaching here is what turned one refused
+				// calendar/month-board query into a 410 on every other live query that still owned
+				// this EventSource.
+				throw new Error('sync initial answer does not match its prefix');
+			}
 			try {
 				this.registry.attach(connection, evaluation.results);
 			} catch (cause) {
-				this.detach(connection.id, this.#guestFailure);
+				// Same as a guest throw: the registration fails; already-attached queries stay.
 				throw cause;
 			}
 			// Built after attachment, because the version a query is registered at is the registry's
-			// answer and not the evaluation's. `#fail` below still detaches, which releases everything
-			// this attachment just installed.
+			// answer and not the evaluation's.
 			const response = syncClientResponse(
 				evaluation,
 				(queryKey) => this.registry.prefixViewer(connection, queryKey)?.version
 			);
-			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES)
-				return this.#fail(connection, 'sync initial answer exceeds its encoded byte ceiling');
+			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES) {
+				this.registry.release(connection, requestedKeys);
+				throw new Error('sync initial answer exceeds its encoded byte ceiling');
+			}
 			return response;
 		});
 	}
@@ -731,7 +745,7 @@ export class SyncConnectionLane<
 			try {
 				evaluation = await this.#extendPrefix(connection, options.request);
 			} catch (cause) {
-				this.detach(connection.id, this.#guestFailure);
+				// Same as connect: the prefix request fails; already-attached queries stay on the stream.
 				throw cause;
 			}
 			if (connection.closed || this.#closed) throw options.unavailable();

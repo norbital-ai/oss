@@ -31,6 +31,9 @@ const YAML_RULE = [
 	'principles: [straightforwardness]',
 	'rule:',
 	'  pattern: fetch($...ARGS)',
+	'examples:',
+	"  bad: ['export const load = () => fetch(url);']",
+	"  good: ['export const load = () => client.get(url);']",
 	''
 ].join('\n');
 

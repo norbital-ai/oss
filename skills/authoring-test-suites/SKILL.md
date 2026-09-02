@@ -161,7 +161,7 @@ deliberately not covered and who covers it instead; which single assertion fails
 reverted; and any known weakness you are accepting. `policy_grants.test.ts` restates three runtime
 rules as one-line helpers, quotes each from its source, and states in its own header that drift is
 the price and why it is worth paying
-(`templates/hr-payroll/src/lib/policy_grants.test.ts:16`). A documented weakness is a maintained
+(`templates/hr-payroll/tests/lib/policy_grants.test.ts:16`). A documented weakness is a maintained
 test. An undocumented one is a trap.
 
 ## Deleting

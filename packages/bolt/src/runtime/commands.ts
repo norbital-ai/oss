@@ -1,5 +1,6 @@
 import { Clock, Effect, Number as ENumber, Option, Result, Schema } from 'effect';
 import {
+	CollectionAnchoredPage,
 	CollectionSearch,
 	DataBrowserCommandContract,
 	EffectId,
@@ -13,6 +14,8 @@ import {
 	type FixedCommandName,
 	type TenantId
 } from '@norbital-ai/bolt-protocol';
+import { compileOrderTerms } from '#lib/runtime/access/effective-plan.js';
+import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
 import { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
@@ -195,6 +198,29 @@ const groupedQuery = (input: {
 	};
 };
 export { collectionQuery };
+
+const anchoredFindMany = (
+	context: ExecutionContext,
+	input: Parameters<typeof collectionQuery>[0]
+) =>
+	Effect.gen(function* () {
+		const query = collectionQuery(input);
+		const limit = query.limit ?? 100;
+		const rows = yield* (yield* Collections.Service).findMany(
+			context.effectId,
+			principal(context),
+			query
+		);
+		const last = rows.at(-1);
+		const nextCursor =
+			last === undefined || rows.length < limit
+				? null
+				: encodeCollectionCursor(
+						compileOrderTerms((yield* Workspace.Service).definition, query.collection, query.orderBy),
+						last
+					);
+		return json(Schema.decodeUnknownSync(CollectionAnchoredPage)({ rows, nextCursor }));
+	});
 
 const jsonObject = (
 	entry: Readonly<Record<string, Schema.Json | undefined>>
@@ -545,6 +571,13 @@ const remainingBindings = [
 	binding('collections.count', { Command: session('collection query policy') },
 		(context, input) =>
 			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.count(context.effectId, principal(context), collectionQuery(input)), json))),
+	binding('collections.findMany', { Command: session('collection query policy') },
+		(context, input) => anchoredFindMany(context, input)),
+	binding('collections.findFirst', { Command: session('collection query policy') },
+		(context, input) =>
+			Effect.flatMap(Collections.Service, (collections) =>
+				Effect.map(collections.findFirst(context.effectId, principal(context), collectionQuery(input)), (row) =>
+					json(row ?? null)))),
 	binding('collections.findGrouped', { Command: session('collection query policy') },
 		(context, input) =>
 			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.findGrouped(context.effectId, principal(context), groupedQuery(input)), json))),
