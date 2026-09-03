@@ -507,7 +507,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 					context.effectId,
 					context.subject,
 					parsed.collection,
-					parsed.id
+					[parsed.id]
 				);
 			} else {
 				yield* context.collections.mutate(

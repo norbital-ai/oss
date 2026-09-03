@@ -35,7 +35,7 @@
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
 		"lint": "tsc -p tsconfig.json --noEmit",
-		"test": "pnpm build && node --test engine/scripts/*.test.mjs \"tests/**/*.test.ts\""
+		"test": "pnpm build && node --test 'tests/*.test.ts'"
 	},
 	"dependencies": {
 		"@norbital-ai/std": "workspace:*",

@@ -71,7 +71,12 @@ const canonicalPath = (input) => {
  */
 export const resolveTenantSubstrateRoot = ({ environment = process.env } = {}) => {
 	const configured = environment[tenantSubstrateRootEnvironment]?.trim();
-	const selected = configured || path.resolve(repositoryRoot, '../norbital/.tenant_substrate');
+	if (!configured) {
+		throw new Error(
+			`${tenantSubstrateRootEnvironment} is required; oss scripts do not guess a sibling norbital substrate`
+		);
+	}
+	const selected = configured;
 	if (!path.isAbsolute(selected)) {
 		throw new Error(`${tenantSubstrateRootEnvironment} must be an absolute path: ${selected}`);
 	}
@@ -110,9 +115,9 @@ export const tenantSubstratePackagePaths = (root) => {
 	const paths = {
 		pnpmStore: path.join(root, 'packages/pnpm-store'),
 		pnpmCache: path.join(root, 'packages/pnpm-cache'),
-		hostPnpmStore: path.join(root, 'packages/host-pnpm-store'),
-		hostPnpmCache: path.join(root, 'packages/host-pnpm-cache'),
-		yalcStore: path.join(root, 'packages/local/yalc')
+		hostPnpmStore: path.join(root, 'packages/pnpm-store'),
+		hostPnpmCache: path.join(root, 'packages/pnpm-cache'),
+		yalcStore: path.join(root, 'packages/registry')
 	};
 	for (const [name, candidate] of Object.entries(paths)) {
 		if (canonicalPath(candidate) !== candidate) {

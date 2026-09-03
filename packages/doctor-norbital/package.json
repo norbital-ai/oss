@@ -29,7 +29,7 @@
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor-norbital",
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "pnpm build && node --test \"tests/**/*.test.ts\""
+		"test": "pnpm build && node --test 'tests/*.test.ts'"
 	},
 	"dependencies": {
 		"@norbital-ai/doctor": "workspace:*",

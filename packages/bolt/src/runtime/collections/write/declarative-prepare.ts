@@ -78,6 +78,7 @@ type DeclarativePreparationOptions<ReadError> = Readonly<{
 	readonly readSession: GraphReadSession<ReadError>;
 	readonly primeRoots: ReadonlyArray<GraphRootSeed>;
 	readonly rootPreparation: Deferred.Deferred<unknown, AuthoredRefusal>;
+	readonly rootDeletePreparation: Deferred.Deferred<unknown, AuthoredRefusal>;
 }>;
 
 type ActiveGraphEnginePorts<Error, Requirements> = Omit<
@@ -103,6 +104,7 @@ type ActiveGraphEnginePorts<Error, Requirements> = Omit<
 	| 'primeRelatedRows'
 	| 'stageHookWrites'
 	| 'runMutatePrepare'
+	| 'runDeletePrepare'
 >;
 
 export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = ActiveGraphEnginePorts<
@@ -121,6 +123,15 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 			subject: Identity.Subject,
 			collection: string,
 			inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
+			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
+			depth: number,
+			staged?: Pick<HookWriteOps<Error>, 'mutate'>
+		) => Effect.Effect<unknown, AuthoredRefusal, Requirements>;
+		readonly runDeletePrepare: (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
 			depth: number,
 			staged?: Pick<HookWriteOps<Error>, 'mutate'>
@@ -289,7 +300,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		const operations: Array<GraphPreparedOperation> = [];
 		const graphCoordinates = new Set<string>();
 		const relationshipSnapshots = new Map<string, RelationshipSnapshot>();
-		const { readSession, rootPreparation } = options;
+		const { readSession, rootPreparation, rootDeletePreparation } = options;
 		const relatedRowsCache = readSession.relatedRows;
 		const storedGraphRowsCache = readSession.storedRows;
 		const cacheRelatedRows = (request: RelatedRowsRequest, value: RelatedRowsResult): void => {
@@ -575,6 +586,16 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				),
 			runMutatePrepare: (effectId, subject, collection, inputs, module, depth) =>
 				ports.runMutatePrepare(effectId, subject, collection, inputs, module, depth, stageHookWrites),
+			runDeletePrepare: (effectId, subject, collection, existing, module, depth) =>
+				ports.runDeletePrepare(
+					effectId,
+					subject,
+					collection,
+					existing,
+					module,
+					depth,
+					stageHookWrites
+				),
 			effectId,
 			subject,
 			rootCollection,
@@ -667,6 +688,36 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			}
 		}
 		if (options.rootAction === 'delete') {
+			const deleteSeeds = options.primeRoots.filter((seed) => seed.action === 'delete');
+			const deleteOwner = deleteSeeds[0];
+			if (deleteOwner === undefined || deleteOwner.id === options.rootId) {
+				const existing: Array<Readonly<Record<string, unknown>>> = [];
+				for (const seed of deleteSeeds) {
+					const storedExisting = storedGraphRowsCache.get(
+						storedGraphRowKey(seed.collection, seed.id)
+					);
+					if (storedExisting !== undefined) existing.push(storedExisting.row);
+				}
+				const attempted = yield* Effect.result(
+					ports.runDeletePrepare(
+						effectId,
+						subject,
+						rootCollection,
+						existing,
+						ports.authoredHooks[rootCollection],
+						hookDepth,
+						stageHookWrites
+					)
+				);
+				if (Result.isFailure(attempted)) {
+					yield* Deferred.fail(rootDeletePreparation, attempted.failure);
+					return yield* Effect.fail(attempted.failure);
+				}
+				rootPrepared = attempted.success;
+				yield* Deferred.succeed(rootDeletePreparation, rootPrepared);
+			} else {
+				rootPrepared = yield* Deferred.await(rootDeletePreparation);
+			}
 			const stored = yield* storedGraphRow(
 				EffectId.make(`${effectId}:graph:root-delete`),
 				rootCollection,
@@ -681,7 +732,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					`${rootCollection} ${rootId} no longer exists.`
 				);
 			}
-			yield* graphPreparers.prepareDelete(rootCollection, stored.row, 0, true);
+			yield* graphPreparers.prepareDelete(rootCollection, stored.row, 0, true, rootPrepared);
 		} else {
 			yield* graphPreparers.prepareNode(
 				rootCollection,

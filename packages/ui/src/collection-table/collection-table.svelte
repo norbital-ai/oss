@@ -13,7 +13,7 @@
 	import { isSystemCollectionField, labelTermText } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
-	import { Number as Number_ } from 'effect';
+	import { Effect, Number as Number_ } from 'effect';
 	import { onDestroy, onMount } from 'svelte';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet } from '#lib/utils';
@@ -24,6 +24,8 @@
 	import {
 		CollectionActionToolbar,
 		CollectionPagination,
+		collectionDeleteBatch,
+		collectionOperationsAvailable,
 		type CollectionToolbarComposition
 	} from '#lib/collection-toolbar';
 	import {
@@ -136,6 +138,7 @@
 		exportPipelines = [],
 		importPipelines = [],
 		integrations = [],
+		deletion,
 		columns,
 		ListCard
 	}: CollectionTableProps<TCollections, TName, TRow> = $props();
@@ -155,6 +158,23 @@
 	);
 	const operations = $derived(
 		client.db[collection] as unknown as CollectionOperations<CollectionType<TRow, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row override; the client key remains constrained by TName.
+	);
+	const resolvedDeletion = $derived(
+		deletion == null
+			? undefined
+			: {
+					...deletion,
+					run:
+						deletion.run ??
+						(({ selectedRows }) =>
+							collectionDeleteBatch(
+								operations,
+								selectedRows.flatMap((row) => {
+									const id = Reflect.get(row, 'id');
+									return typeof id === 'string' && id.length > 0 ? [id] : [];
+								})
+							))
+				}
 	);
 	const recordIdField = 'id';
 	const recordScope = getCollectionRecordScope();
@@ -182,6 +202,7 @@
 	const filterEnabled = $derived(features.filter !== false);
 	const effectiveSelectable = $derived(
 		selectable ||
+			deletion != null ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
 			importPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
@@ -333,7 +354,12 @@
 
 	const createEnabled = $derived(features.create !== false);
 	const operationsEnabled = $derived(
-		exportPipelines.length > 0 || importPipelines.length > 0 || integrations.length > 0
+		collectionOperationsAvailable({
+			exportCount: exportPipelines.length,
+			importCount: importPipelines.length,
+			integrationCount: integrations.length,
+			deletion: deletion != null
+		})
 	);
 	const createLabel = $derived(createCollectionActionLabel(String(collection), t));
 
@@ -636,6 +662,7 @@
 					exportPipelines,
 					importPipelines,
 					integrations,
+					deletion: resolvedDeletion,
 					selectedRows: selectedRecords,
 					disabled: operations.pending > 0
 				}

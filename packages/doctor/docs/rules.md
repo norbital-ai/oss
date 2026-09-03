@@ -324,7 +324,7 @@ set those styles themselves (Cover rows, Grid tracks).
 | UI17c | error | high       | `recordLabel` naming a `uuid()`/`file()` id, a `custom()`/`json()` object, or a name that is not a column                                                              | Name a column that holds text; never a SQL label column                                      |
 | UI18  | error | high       | Client Svelte feature calls raw `transport.command`/`command`                                                                                                          | Reads use typed reactive db/system collections; imperative work uses generated `api.invoke`. |
 
-UI17 enforces [controller-surfaces.md](../../../../oss/skills/authoring-tenant-workspace/references/controller-surfaces.md)
+UI17 enforces [controller-surfaces.md](../../../../agent-skills/authoring-tenant-workspace/references/controller-surfaces.md)
 rule 2 for authored `.svelte` templates (not `packages/ui` internals).
 
 UI17a–c cover uuid surfaces that reach an operator without appearing as a standard field control.

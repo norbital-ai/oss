@@ -311,6 +311,8 @@ interface CompiledSkillPackage {
 	readonly name: string;
 	readonly description: string;
 	readonly digest: string;
+	/** Authored `SKILL.md` body. The capability index stores the digest; the artifact workspace carries this. */
+	readonly body: string;
 	readonly files: ReadonlyArray<{
 		readonly path: string;
 		readonly sha256: string;

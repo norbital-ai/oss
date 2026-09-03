@@ -18,8 +18,6 @@
 		"packages:build": "pnpm --filter @norbital-ai/ui... build",
 		"packages:resolve": "node scripts/resolve-published-packages.mjs",
 		"publication:check": "node scripts/validate-package-publication.mjs",
-		"skills:check": "node scripts/generate-skills.mjs --check",
-		"skills:generate": "node scripts/generate-skills.mjs",
 		"test": "turbo test",
 		"test:integration": "turbo test:integration",
 		"test:scripts": "node --test scripts/tests/*.test.mjs"

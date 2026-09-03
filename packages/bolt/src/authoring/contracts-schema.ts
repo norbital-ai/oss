@@ -223,7 +223,7 @@ export type AppName = DeclaredName<'appName'>;
 type DeclaredToolName = DeclaredName<'toolName'>;
 /** An MCP server, by its `src/capabilities/mcp/+<name>.ts` file. */
 type McpServerName = DeclaredName<'mcpServerName'>;
-/** A release-indexed skill declared from `.norbital/shared/<name>/SKILL.md`. */
+/** A release-indexed skill declared from `src/capabilities/skills/<name>/SKILL.md`. */
 type DeclaredSkillName = DeclaredName<'skillName'>;
 
 /**
@@ -1010,6 +1010,11 @@ type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
 	readonly api: Api<S>;
 }) => Effect.Effect<Prepared, AuthoredRefusal, never> | Prepared;
 
+type DeletePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
+	readonly existing: ReadonlyArray<SchemaRow<S, N>>;
+	readonly api: Api<S>;
+}) => Effect.Effect<Prepared, AuthoredRefusal, never> | Prepared;
+
 /**
  * Everything a collection may say about a write, arranged by how often it runs.
  *
@@ -1019,6 +1024,13 @@ type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  *   perRecord: {           //                      │  what prepare returns
  *     before,              // ONCE per record  ◄───┤  arrives here as `prepared`
  *     after                // ONCE per settled record, with the stored `record`
+ *   }
+ * }
+ * delete: {
+ *   prepare,               // ONCE for the batch  ─┐
+ *   perRecord: {           //                      │  same prepared value
+ *     before,              // ONCE per record  ◄───┘
+ *     after
  *   }
  * }
  * ```
@@ -1075,6 +1087,15 @@ export type MutateAfterContext<H> = H extends {
 		: never
 	: never;
 
+/** The context one `delete.prepare` phase receives. */
+export type DeletePrepareContext<H> = H extends {
+	readonly delete?: { readonly prepare?: infer P };
+}
+	? P extends (context: infer C) => unknown
+		? C
+		: never
+	: never;
+
 /** The context one `delete.before` phase receives. */
 export type DeleteBeforeContext<H> = H extends {
 	readonly delete?: { readonly perRecord?: { readonly before?: infer B } };
@@ -1114,10 +1135,12 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 		};
 	};
 	readonly delete?: {
+		readonly prepare?: DeletePrepare<S, N, Prepared>;
 		readonly perRecord?: {
 			readonly before?: DescribedHook<
 				(context: {
 					readonly existing: SchemaRow<S, N>;
+					readonly prepared: Prepared;
 					readonly api: Api<S>;
 				}) => Effect.Effect<void, AuthoredRefusal, never> | void
 			>;

@@ -23,6 +23,15 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
 	}
 ) {
 	readonly category = 'access-denied' as const;
+	/**
+	 * The sentence is an own field, not a getter. These errors are `Error` subclasses whose
+	 * `message` is an own property the base constructor writes empty — a getter on the subclass is
+	 * shadowed by it, and the caller would see `''` even though `reason` already names the refusal
+	 * (`write authorization ${id} refused the prepared record`). Copying `reason` here is the same
+	 * seam `MutationQuarantined` and `NestingLimitExceeded` already pay: the typed channel is
+	 * correct; the sentence has to survive crossing out of it as `.message`.
+	 */
+	readonly message = this.reason;
 }
 
 /** The read grant frozen for one invocation. */

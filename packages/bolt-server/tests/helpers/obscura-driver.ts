@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import WebSocket from 'ws';
 
@@ -7,8 +8,9 @@ const execFileAsync = promisify(execFile);
 /** Same pin as Colony compose (`supporting-services.compose.yml`). */
 export const OBSCURA_IMAGE = 'h4ckf0r0day/obscura:0.2.1';
 
-const CONTAINER_NAME = 'bolt-server-obscura-probe';
 const CDP_PATH = '/devtools/browser';
+const uniqueContainerName = (): string =>
+	`bolt-server-obscura-${process.pid}-${randomUUID().slice(0, 8)}`;
 
 export type ObscuraSkip = Readonly<{
 	readonly skip: 'missing_obscura';
@@ -157,13 +159,14 @@ const hostPortOf = async (container: string): Promise<number> => {
 };
 
 const startContainer = async (): Promise<{ readonly id: string; readonly endpoint: string }> => {
-	await docker(['rm', '-f', CONTAINER_NAME]).catch(() => undefined);
+	const containerName = uniqueContainerName();
+	await docker(['rm', '-f', containerName]).catch(() => undefined);
 	const { stdout } = await docker([
 		'run',
 		'-d',
 		'--rm',
 		'--name',
-		CONTAINER_NAME,
+		containerName,
 		'--add-host=host.docker.internal:host-gateway',
 		'-p',
 		'127.0.0.1::9222',
@@ -178,7 +181,7 @@ const startContainer = async (): Promise<{ readonly id: string; readonly endpoin
 		'--allow-private-network'
 	]);
 	const id = stdout.trim();
-	const port = await hostPortOf(CONTAINER_NAME);
+	const port = await hostPortOf(containerName);
 	const endpoint = `ws://127.0.0.1:${port}${CDP_PATH}`;
 	const deadline = Date.now() + 15_000;
 	let last: unknown;
@@ -191,7 +194,7 @@ const startContainer = async (): Promise<{ readonly id: string; readonly endpoin
 			await new Promise((resolve) => setTimeout(resolve, 250));
 		}
 	}
-	await docker(['rm', '-f', CONTAINER_NAME]).catch(() => undefined);
+	await docker(['rm', '-f', containerName]).catch(() => undefined);
 	throw new Error(`Obscura CDP never answered: ${String(last)}`);
 };
 
@@ -294,7 +297,7 @@ const makeDriver = (input: {
 				'--no-stream',
 				'--format',
 				'{{.MemUsage}}',
-				CONTAINER_NAME
+				input.containerId ?? ''
 			]);
 			const used = stdout.split('/')[0] ?? stdout;
 			return parseMemUsage(used);
@@ -304,6 +307,8 @@ const makeDriver = (input: {
 	},
 	stop: async () => {
 		if (!input.startedContainer) return;
-		await docker(['rm', '-f', CONTAINER_NAME]).catch(() => undefined);
+		if (input.containerId !== undefined) {
+			await docker(['rm', '-f', input.containerId]).catch(() => undefined);
+		}
 	}
 });

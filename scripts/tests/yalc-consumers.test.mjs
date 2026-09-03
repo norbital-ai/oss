@@ -17,11 +17,20 @@ import {
 	ensurePureInstallation,
 	linkConsumers,
 	managedPackages,
+	resolveTenantSubstrateRoot,
 	resolveYalcStoreDirectory,
 	stalePackages
 } from '../lib/yalc-consumers.mjs';
 
 const fixture = () => mkdtempSync(path.join(tmpdir(), 'norbital-yalc-consumer-'));
+
+test('tenant substrate root is required and is never guessed from a sibling checkout', () => {
+	assert.throws(
+		() => resolveTenantSubstrateRoot({ environment: {} }),
+		/NORBITAL_TENANT_SUBSTRATE_ROOT is required/
+	);
+});
+
 const writeJson = (file, value) => {
 	mkdirSync(path.dirname(file), { recursive: true });
 	writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -49,7 +58,7 @@ test('yalc store resolves beneath the configured owned tenant substrate root', (
 			resolveYalcStoreDirectory({
 				environment: { NORBITAL_TENANT_SUBSTRATE_ROOT: root }
 			}),
-			path.join(root, 'packages/local/yalc')
+			path.join(root, 'packages/registry')
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

@@ -10,5 +10,6 @@ export type {
 	CollectionIntegrationState,
 	CollectionIntegrationStatus,
 	CollectionPipeline,
-	CollectionPipelineContext
+	CollectionPipelineContext,
+	CollectionRecordDeletion
 } from './collection-surface.types.js';

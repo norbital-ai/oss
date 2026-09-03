@@ -9,4 +9,5 @@ Parent map: [Bolt internals](../README.md).
 
 Beside the pillars: [access](../access/README.md), [agents](../agents/README.md).
 
-P1, P2, P3, P6 live in [`norbital/apps/colony/docs/pillars`](../../../../../norbital/apps/colony/docs/pillars/README.md).
+P1, P2, P3, P6 live in the Colony product repository. This package does not resolve a sibling
+`norbital/` checkout.

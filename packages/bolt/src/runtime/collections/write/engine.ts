@@ -228,6 +228,15 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 		depth: number,
 		staged?: HookWriteOps<Error>
 	) => Effect.Effect<unknown, Error, Requirements>;
+	readonly runDeletePrepare: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		collection: string,
+		existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
+		module: CollectionHookModule | undefined,
+		depth: number,
+		staged?: HookWriteOps<Error>
+	) => Effect.Effect<unknown, Error, Requirements>;
 	readonly primeRelatedRows: (
 		seeds?: ReadonlyArray<GraphRootSeed>
 	) => Effect.Effect<void, Error, Requirements>;
@@ -240,7 +249,8 @@ type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 		collection: string,
 		row: Readonly<Record<string, unknown>>,
 		depth: number,
-		requiresBrowserBaseVersion: boolean
+		requiresBrowserBaseVersion: boolean,
+		wavePrepared?: unknown
 	) => Effect.Effect<void, E, R>;
 	readonly prepareNode: (
 		collection: string,
@@ -260,7 +270,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 ): GraphPrepareFns<Error | AuthoredRefusal, Requirements> => {
 	const prepareDelete: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareDelete'] =
 		Effect.fn('Collections.prepareGraphDelete')(
-			function* (collection, row, depth, requiresBrowserBaseVersion) {
+			function* (collection, row, depth, requiresBrowserBaseVersion, wavePrepared) {
 				const operationPosition = ports.operations.length;
 				const id = row['id'];
 				if (typeof id !== 'string' || id.length === 0)
@@ -311,7 +321,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 					);
 					yield* ports.runHook(
 						module.delete.perRecord.before,
-						{ existing: row, api },
+						{ existing: row, prepared: wavePrepared, api },
 						{
 							collection,
 							action: 'delete.before'
@@ -354,8 +364,24 @@ export const makeGraphPreparers = <Error, Requirements>(
 					if (edge === undefined || !ownsManyRelation(edge)) continue;
 					const related = yield* ports.relatedRows(ports.scope(), edge, id);
 					ports.registerRelationshipSnapshot(edge, id, related.json);
+					const childModule = ports.authoredHooks[edge.childCollection];
+					const childPrepared = yield* ports.runDeletePrepare(
+						ports.effectId,
+						ports.subject,
+						edge.childCollection,
+						related.rows,
+						childModule,
+						ports.hookDepth + depth + 1,
+						ports.stageHookWrites
+					);
 					for (const child of related.rows)
-						yield* prepareDelete(edge.childCollection, child, depth + 1, false);
+						yield* prepareDelete(
+							edge.childCollection,
+							child,
+							depth + 1,
+							false,
+							childPrepared
+						);
 				}
 				ports.operations.splice(operationPosition, 0, {
 					action: 'delete',

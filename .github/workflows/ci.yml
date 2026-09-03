@@ -20,12 +20,14 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      NORBITAL_TEMPLATE_SOURCE: ${{ github.workspace }}/template-fixtures
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Schedule parity is intentionally checked against the real public authoring tree. Local realm
-      # checkouts keep it beside OSS; the isolated Actions workspace needs the same source explicitly.
+      # Schedule parity reads templates only when NORBITAL_TEMPLATE_SOURCE is set. This checkout is
+      # that explicit tree — not a sibling `templates/` guess beside oss.
       - name: Checkout public template fixtures
         uses: actions/checkout@v7
         with:

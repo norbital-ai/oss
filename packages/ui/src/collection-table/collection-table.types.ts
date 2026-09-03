@@ -26,7 +26,8 @@ import type {
 import type {
 	CollectionInitialFilter,
 	CollectionIntegrationStatus,
-	CollectionPipeline
+	CollectionPipeline,
+	CollectionRecordDeletion
 } from '#lib/collection-surface';
 
 export type CollectionName<TCollections extends CollectionRegistry> = Extract<
@@ -196,6 +197,7 @@ interface CollectionTableBaseProps<
 	exportPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
 	importPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
 	integrations?: readonly CollectionIntegrationStatus[];
+	deletion?: CollectionRecordDeletion<NoInfer<TRow>>;
 	rowActions?: readonly Snippet<[CollectionTableRowActionContext<NoInfer<TRow>>]>[];
 	emptyPlaceholder?: Snippet;
 	/**

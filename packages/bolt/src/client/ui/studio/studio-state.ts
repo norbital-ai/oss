@@ -864,12 +864,14 @@ type HookSummaryMessageKey =
 	| 'bolt.studio.hook.mutatePrepare'
 	| 'bolt.studio.hook.mutateBefore'
 	| 'bolt.studio.hook.mutateAfter'
+	| 'bolt.studio.hook.deletePrepare'
 	| 'bolt.studio.hook.deleteBefore';
 
 export const hookSummaryKey = (name: string): HookSummaryMessageKey | undefined => {
 	if (name === 'mutate.prepare') return 'bolt.studio.hook.mutatePrepare';
 	if (name === 'mutate.before') return 'bolt.studio.hook.mutateBefore';
 	if (name === 'mutate.after') return 'bolt.studio.hook.mutateAfter';
+	if (name === 'delete.prepare') return 'bolt.studio.hook.deletePrepare';
 	if (name === 'delete.before') return 'bolt.studio.hook.deleteBefore';
 	return undefined;
 };

@@ -16,6 +16,7 @@ import {
 	runScheduleTick
 } from './schedules.js';
 import { makeTimekeeper } from './timekeeper.js';
+import { waitUntilReady } from './ready.js';
 import {
 	startServer,
 	type RunningServer,
@@ -44,6 +45,28 @@ export interface ApplicationOptions {
 export interface RunningApplication extends RunningServer {
 	readonly stop: RunningServer['close'];
 }
+
+export interface RunningLocalApplication extends RunningApplication {
+	readonly baseUrl: string;
+}
+
+/**
+ * `startApplication` plus `/readyz`. The caller still forms `FacilityBindings` — this does not
+ * invent database, AI, or files.
+ */
+export const startLocalApplication = async (
+	options: ApplicationOptions
+): Promise<RunningLocalApplication> => {
+	const application = await startApplication(options);
+	const baseUrl = `http://${application.address.host}:${application.address.port}`;
+	try {
+		await waitUntilReady(baseUrl);
+	} catch (error) {
+		await application.stop();
+		throw error;
+	}
+	return { ...application, baseUrl };
+};
 
 /** Installs one-shot Node process shutdown hooks and returns a hook disposer. */
 export const installProcessShutdown = (application: RunningApplication): (() => void) => {

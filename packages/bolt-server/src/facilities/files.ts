@@ -1,8 +1,9 @@
 import { FileRequest, FileResponse, type FacilityBinding } from '@norbital-ai/bolt-protocol';
 import { Config, Effect } from 'effect';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
 	makeWireBinding,
 	selectConfiguredProvider,
@@ -119,3 +120,19 @@ export const makeFilesBindingFromConfig = <Error>(
 		if (provider === 'local') return yield* makeLocalFilesBindingFromConfig();
 		return yield* selectConfiguredProvider('FILES', factories);
 	});
+
+export type StartedLocalFiles = {
+	readonly binding: ReturnType<typeof makeLocalFilesBinding>;
+	readonly rootDirectory: string;
+	readonly close: () => Promise<void>;
+};
+
+/** Local files binding rooted in a temp directory. Close removes the directory. */
+export const startLocalFiles = async (): Promise<StartedLocalFiles> => {
+	const rootDirectory = await mkdtemp(join(tmpdir(), 'bolt-server-files-'));
+	return {
+		binding: makeLocalFilesBinding({ rootDirectory }),
+		rootDirectory,
+		close: () => rm(rootDirectory, { recursive: true, force: true })
+	};
+};

@@ -45,8 +45,9 @@ export class NestingLimitExceeded extends Schema.TaggedError<NestingLimitExceede
 	/**
 	 * The sentence is a field rather than a getter, because these errors are `Error` subclasses whose
 	 * `message` is an own property the base constructor writes — a getter on the subclass is shadowed
-	 * by it, and the failure would report an empty sentence. `AccessDenied` carries `reason` for the
-	 * same reason and pays for it at the boundary, where `app.ts` has to substitute a fallback.
+	 * by it, and the failure would report an empty sentence. `AccessDenied` copies `reason` onto
+	 * `message` for the same reason, so a caller that reads `.message` still sees the authorization
+	 * sentence instead of `''`.
 	 */
 	static at(what: string, depth: number, limit: number): NestingLimitExceeded {
 		return new NestingLimitExceeded({

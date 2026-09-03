@@ -124,6 +124,7 @@
 		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@norbital-ai/config": "workspace:*",
 		"@norbital-ai/doctor": "workspace:*",
+		"@norbital-ai/test-utilities": "workspace:*",
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.2.0",
 		"@types/qrcode": "^1.5.6",

@@ -323,6 +323,10 @@ export type CollectionOperations<TCollection extends CollectionType<object, obje
 	mutate(
 		values: TCollection['mutation']
 	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+	delete(
+		ids: readonly string[]
+	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
 	/** Number of in-flight writes for this collection. */
 	readonly pending: number;
 }>;

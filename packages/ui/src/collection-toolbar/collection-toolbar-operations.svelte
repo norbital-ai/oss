@@ -4,15 +4,17 @@
 	import * as Accordion from '#lib/accordion';
 	import { Button, buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline, SCROLL_AXIS_CLASSES } from '#lib/layout';
+	import { Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { toast } from 'svelte-sonner';
 	import type {
 		CollectionIntegrationStatus,
 		CollectionPipeline,
-		CollectionPipelineContext
+		CollectionPipelineContext,
+		CollectionRecordDeletion
 	} from '#lib/collection-surface';
+	import { collectionOperationsAvailable } from './collection-operations-available.js';
 	import CollectionToolbarIntegrationsPanel from './collection-toolbar-integrations-panel.svelte';
 	import CollectionToolbarPipelinePanel from './collection-toolbar-pipeline-panel.svelte';
 
@@ -24,6 +26,7 @@
 		exportPipelines,
 		importPipelines,
 		integrations,
+		deletion,
 		selectedRows,
 		selectionControls,
 		disabled
@@ -32,6 +35,7 @@
 		exportPipelines: readonly CollectionPipeline<TRow>[];
 		importPipelines: readonly CollectionPipeline<TRow>[];
 		integrations: readonly CollectionIntegrationStatus[];
+		deletion?: CollectionRecordDeletion<TRow>;
 		selectedRows: readonly TRow[];
 		selectionControls?: {
 			readonly totalRows: number;
@@ -44,11 +48,27 @@
 	const { t } = useI18n<UiKeys>();
 
 	let pendingOperation = $state<string | null>(null);
-	let expandedSections = $state<string[]>(['export']);
-	let actionsOpen = $state(false);
-	const menuAvailable = $derived(
-		exportPipelines.length > 0 || importPipelines.length > 0 || integrations.length > 0
+	let expandedOverride = $state<string[] | undefined>(undefined);
+	const expandedSections = $derived(
+		expandedOverride ??
+			(exportPipelines.length > 0 ? ['export'] : deletion != null ? ['delete'] : ['export'])
 	);
+	let actionsOpen = $state(false);
+	let deleteArmed = $state(false);
+	const menuAvailable = $derived(
+		collectionOperationsAvailable({
+			exportCount: exportPipelines.length,
+			importCount: importPipelines.length,
+			integrationCount: integrations.length,
+			deletion: deletion != null
+		})
+	);
+	const deletionLabel = $derived(deletion?.label ?? t('table.deleteRecords'));
+	const deletionDisabledReason = $derived.by(() => {
+		if (!deletion) return null;
+		if (selectedRows.length === 0) return t('table.pipelineSelectRows', { label: deletionLabel });
+		return deletion.getDisabledReason?.(selectedRows) ?? null;
+	});
 
 	function runPipeline(kind: OperationKind, pipeline: CollectionPipeline<TRow>): void {
 		const { id: pipelineId } = pipeline;
@@ -84,6 +104,42 @@
 			)
 		);
 	}
+
+	function runDeletion(): void {
+		if (!deletion || pendingOperation || disabled || deletionDisabledReason) return;
+		if (!deleteArmed) {
+			deleteArmed = true;
+			return;
+		}
+		pendingOperation = 'delete';
+		const context: CollectionPipelineContext<TRow> = {
+			collectionName,
+			selectedRows
+		};
+		const label = deletionLabel;
+		Effect.runFork(
+			deletion.run(context).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => {
+						toast.success(t('table.bulkDeleted', { label }));
+						deleteArmed = false;
+					})
+				),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						toast.error(
+							error instanceof Error ? error.message : t('table.bulkFailed', { kind: 'delete' })
+						);
+					})
+				),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						pendingOperation = null;
+					})
+				)
+			)
+		);
+	}
 </script>
 
 {#snippet pipelinePanel(kind: OperationKind)}
@@ -104,7 +160,14 @@
 			<p class="mt-0.5 text-meta">{t('table.collectionActionsDescription')}</p>
 		</div>
 	</Inline>
-	<Accordion.Root type="multiple" bind:value={expandedSections} class="p-2">
+	<Accordion.Root
+		type="multiple"
+		value={expandedSections}
+		onValueChange={(next) => {
+			expandedOverride = Array.isArray(next) ? next : [next];
+		}}
+		class="p-2"
+	>
 		{#if importPipelines.length > 0}
 			<Accordion.Item value="import">
 				<Accordion.Trigger class="px-2 hover:no-underline">
@@ -146,6 +209,68 @@
 				</Accordion.Trigger>
 				<Accordion.Content class="px-1">
 					<CollectionToolbarIntegrationsPanel {integrations} />
+				</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if deletion}
+			<Accordion.Item value="delete">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:trash-2" class="size-4 shrink-0" />
+						<span>{t('table.deleteRecords')}</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">
+					<section class="rounded-md border border-border bg-background p-3 shadow-xs">
+						<Inline align="start" gap="md">
+							<div
+								class="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+							>
+								<Icon icon="lucide:trash-2" class="size-4" />
+							</div>
+							<div class="min-w-0 flex-1">
+								<p class="text-sm font-medium">{deletionLabel}</p>
+								<Stack gap="sm">
+									<p class="text-xs leading-relaxed text-muted-foreground">
+										{deletion.description ?? t('table.confirmDeleteDescription')}
+									</p>
+									<p class="text-xs leading-relaxed text-muted-foreground">
+										{t('table.deleteSelectedLabel', { label: deletionLabel })}
+									</p>
+									{#if deletionDisabledReason}
+										<p class="text-xs leading-relaxed text-muted-foreground">
+											{deletionDisabledReason}
+										</p>
+									{:else if deleteArmed}
+										<Stack gap="xs">
+											<p class="text-sm font-medium">
+												{t('table.confirmDeleteTitle', { label: deletionLabel })}
+											</p>
+											<p class="text-xs leading-relaxed text-muted-foreground">
+												{t('table.confirmDeleteDescription')}
+											</p>
+										</Stack>
+									{/if}
+								</Stack>
+							</div>
+							<Button
+								type="button"
+								size="sm"
+								variant="destructive"
+								class="shrink-0"
+								disabled={disabled || pendingOperation !== null || deletionDisabledReason != null}
+								onclick={() => void runDeletion()}
+							>
+								<Icon
+									icon={pendingOperation === 'delete' ? 'lucide:loader-circle' : 'lucide:trash-2'}
+									class={cn('size-4', pendingOperation === 'delete' && 'animate-spin')}
+								/>
+								{deleteArmed
+									? t('table.confirmDeleteTitle', { label: deletionLabel })
+									: t('table.reviewDeletion')}
+							</Button>
+						</Inline>
+					</section>
 				</Accordion.Content>
 			</Accordion.Item>
 		{/if}

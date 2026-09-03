@@ -133,6 +133,9 @@ importers:
       '@norbital-ai/doctor':
         specifier: workspace:*
         version: link:../doctor
+      '@norbital-ai/test-utilities':
+        specifier: workspace:*
+        version: link:../test-utilities
       '@sveltejs/package':
         specifier: ^2.5.8
         version: 2.5.8(svelte@5.56.10)(typescript@6.0.3)
@@ -203,6 +206,9 @@ importers:
       '@norbital-ai/config':
         specifier: workspace:*
         version: link:../config
+      '@norbital-ai/test-utilities':
+        specifier: workspace:*
+        version: link:../test-utilities
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -296,6 +302,27 @@ importers:
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+  packages/test-utilities:
+    devDependencies:
+      '@norbital-ai/bolt-protocol':
+        specifier: workspace:*
+        version: link:../bolt-protocol
+      '@norbital-ai/bolt-server':
+        specifier: workspace:*
+        version: link:../bolt-server
+      '@norbital-ai/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
+      effect:
+        specifier: 4.0.0-rc.112
+        version: 4.0.0-rc.112
       typescript:
         specifier: 6.0.3
         version: 6.0.3

@@ -508,7 +508,7 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Subject,
 		collection: string,
-		id: string,
+		ids: ReadonlyArray<string>,
 		options?: Readonly<{
 			readonly baseVersion?: number;
 			readonly browserMutation?: BrowserMutationFence;

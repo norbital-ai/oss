@@ -76,6 +76,33 @@ describe('the declarative mutation request', () => {
 		).toBe(false);
 	});
 
+	it('accepts a delete batch of unique ids and rejects a single-id graph', () => {
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				graph: { action: 'delete', collection: 'orders', ids: ['order-1', 'order-2'] }
+			})
+		).toBe(true);
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				graph: { action: 'delete', collection: 'orders', id: 'order-1' }
+			})
+		).toBe(false);
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				graph: { action: 'delete', collection: 'orders', ids: [] }
+			})
+		).toBe(false);
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				graph: { action: 'delete', collection: 'orders', ids: ['order-1', 'order-1'] }
+			})
+		).toBe(false);
+	});
+
 	it('bounds the attacker-controlled idempotency key', () => {
 		expect(
 			Schema.is(CollectionMutateRequest)({

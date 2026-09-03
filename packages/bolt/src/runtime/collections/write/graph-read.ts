@@ -112,19 +112,69 @@ const graphWaveRead = <Error, Requirements>(
 		const related = new Map<string, RelatedRowsResult>();
 		if (orderedRows.length === 0 && orderedRelations.length === 0) return { stored, related };
 		const parameters: Array<Schema.Json> = [];
-		const rowBranches = orderedRows.map(([, request], ordinal) => {
-			const ordinalParameter = parameters.push(ordinal);
-			const idParameter = parameters.push(request.id);
-			return `select 'row'::text as "__bolt_write_wave_kind", $${ordinalParameter}::integer as "__bolt_write_wave_ordinal", to_jsonb(record) as "__bolt_write_wave_record" from ${ports.quoteIdentifier(request.collection)} as record where record.id = $${idParameter}`;
-		});
-		const relationBranches = orderedRelations.map(([, request], ordinal) => {
-			const ordinalParameter = parameters.push(ordinal);
-			const parentParameter = parameters.push(request.parentId);
-			return `select 'relation'::text as "__bolt_write_wave_kind", $${ordinalParameter}::integer as "__bolt_write_wave_ordinal", to_jsonb(child) as "__bolt_write_wave_record" from ${ports.quoteIdentifier(request.edge.childCollection)} as child where child.${ports.quoteIdentifier(request.edge.childColumn)} = $${parentParameter}`;
-		});
+		const rowsByCollection = new Map<string, Array<{ ordinal: number; id: string }>>();
+		for (const [ordinal, [, request]] of orderedRows.entries()) {
+			const group = rowsByCollection.get(request.collection) ?? [];
+			group.push({ ordinal, id: request.id });
+			rowsByCollection.set(request.collection, group);
+		}
+		const relationsByEdge = new Map<
+			string,
+			{
+				edge: RelatedRowsRequest['edge'];
+				parents: Array<{ ordinal: number; parentId: string }>;
+			}
+		>();
+		for (const [ordinal, [, request]] of orderedRelations.entries()) {
+			const key = `${request.edge.childCollection}\u0000${request.edge.childColumn}`;
+			const group = relationsByEdge.get(key) ?? { edge: request.edge, parents: [] };
+			group.parents.push({ ordinal, parentId: request.parentId });
+			relationsByEdge.set(key, group);
+		}
+		/**
+		 * One `values` list per collection (or relation edge), not one `union all` select per id.
+		 *
+		 * Ten thousand creates used to send a 2 MB prepare-phase lookup — a select fragment and two
+		 * parameters per id — and PGlite refused that statement as an unnamed prepared statement that
+		 * does not exist. The answer is the same rows; the statement is a join against a wanted list.
+		 */
+		const ctes: string[] = [];
+		const branches: string[] = [];
+		for (const collection of [...rowsByCollection.keys()].toSorted()) {
+			const group = rowsByCollection.get(collection);
+			if (group === undefined) continue;
+			const cte = `wanted_rows_${ctes.length}`;
+			const values = group.map(({ ordinal, id }, index) => {
+				const ordinalParameter = parameters.push(ordinal);
+				const idParameter = parameters.push(id);
+				return index === 0
+					? `($${ordinalParameter}::integer, $${idParameter}::text)`
+					: `($${ordinalParameter}, $${idParameter})`;
+			});
+			ctes.push(`${cte}(ordinal, id) as (values ${values.join(', ')})`);
+			branches.push(
+				`select 'row'::text as "__bolt_write_wave_kind", wanted.ordinal as "__bolt_write_wave_ordinal", to_jsonb(record) as "__bolt_write_wave_record" from ${cte} as wanted join ${ports.quoteIdentifier(collection)} as record on record.id::text = wanted.id`
+			);
+		}
+		for (const edgeKey of [...relationsByEdge.keys()].toSorted()) {
+			const group = relationsByEdge.get(edgeKey);
+			if (group === undefined) continue;
+			const cte = `wanted_relations_${ctes.length}`;
+			const values = group.parents.map(({ ordinal, parentId }, index) => {
+				const ordinalParameter = parameters.push(ordinal);
+				const parentParameter = parameters.push(parentId);
+				return index === 0
+					? `($${ordinalParameter}::integer, $${parentParameter}::text)`
+					: `($${ordinalParameter}, $${parentParameter})`;
+			});
+			ctes.push(`${cte}(ordinal, parent_id) as (values ${values.join(', ')})`);
+			branches.push(
+				`select 'relation'::text as "__bolt_write_wave_kind", wanted.ordinal as "__bolt_write_wave_ordinal", to_jsonb(child) as "__bolt_write_wave_record" from ${cte} as wanted join ${ports.quoteIdentifier(group.edge.childCollection)} as child on child.${ports.quoteIdentifier(group.edge.childColumn)}::text = wanted.parent_id`
+			);
+		}
 		const rows = yield* ports.execute(
 			effectId,
-			`select * from (${[...rowBranches, ...relationBranches].join(' union all ')}) as planned order by "__bolt_write_wave_kind", "__bolt_write_wave_ordinal", "__bolt_write_wave_record"->>'id'`,
+			`with ${ctes.join(', ')} select * from (${branches.join(' union all ')}) as planned order by "__bolt_write_wave_kind", "__bolt_write_wave_ordinal", "__bolt_write_wave_record"->>'id'`,
 			parameters
 		);
 		const rawRows = new Map<number, Readonly<Record<string, unknown>>>();

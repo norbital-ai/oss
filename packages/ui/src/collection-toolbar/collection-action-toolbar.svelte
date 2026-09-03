@@ -18,6 +18,7 @@
 	import CollectionToolbarQueryControls from './collection-toolbar-query-controls.svelte';
 	import CollectionToolbarOperations from './collection-toolbar-operations.svelte';
 	import CollectionToolbarAction from './collection-toolbar-action.svelte';
+	import { collectionOperationsAvailable } from './collection-operations-available.js';
 	import type {
 		CollectionActionToolbarProps,
 		CollectionToolbarName
@@ -53,9 +54,12 @@
 	const filterEnabled = $derived(features.filter !== false);
 	const operationsVisible = $derived(
 		operations != null &&
-			((operations.exportPipelines?.length ?? 0) > 0 ||
-				(operations.importPipelines?.length ?? 0) > 0 ||
-				(operations.integrations?.length ?? 0) > 0 ||
+			(collectionOperationsAvailable({
+				exportCount: operations.exportPipelines?.length ?? 0,
+				importCount: operations.importPipelines?.length ?? 0,
+				integrationCount: operations.integrations?.length ?? 0,
+				deletion: operations.deletion != null
+			}) ||
 				operations.selectionControls != null)
 	);
 
@@ -133,6 +137,7 @@
 					exportPipelines={operations.exportPipelines ?? []}
 					importPipelines={operations.importPipelines ?? []}
 					integrations={operations.integrations ?? []}
+					deletion={operations.deletion}
 					selectedRows={operations.selectedRows ?? []}
 					selectionControls={operations.selectionControls}
 					disabled={disabled || (operations.disabled ?? false)}

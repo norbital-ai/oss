@@ -31,6 +31,7 @@ import {
 	EffectId,
 	ModelId,
 	ProviderCallId,
+	mutationGraphDeleteIds,
 	type CollectionMutateRequest,
 	type CollectionMutationSettlement,
 	type SyncChange,
@@ -492,6 +493,44 @@ export const groupedInsertStatements = (
 		}
 	}
 	return statements;
+};
+
+const quoteStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+/**
+ * The one COMMIT-end read of the rows this transaction just wrote.
+ *
+ * A `union all` per row was one select fragment and three parameters per create. Ten thousand
+ * creates therefore sent a multi-megabyte statement, and the after-insert `bolt_assert` list next
+ * to it was ten thousand further round trips — enough to trip PGlite's unnamed-prepared-statement
+ * protocol and to spend minutes on Neon. The wanted list is one `values` clause; each collection
+ * is one join. The capture guard still refuses a missing row.
+ */
+export const ordinaryMutationCaptureStatement = (
+	operations: ReadonlyArray<Pick<GraphPreparedOperation, 'collection' | 'id'>>
+): { readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> } => {
+	if (operations.length === 0)
+		return transactionSql(
+			'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false'
+		);
+	const parameters: Array<Schema.Json> = [];
+	const values = operations.map((operation, index) => {
+		const ordinal = parameters.push(index);
+		const collection = parameters.push(operation.collection);
+		const id = parameters.push(operation.id);
+		return index === 0
+			? `($${ordinal}::integer, $${collection}::text, $${id}::text)`
+			: `($${ordinal}, $${collection}, $${id})`;
+	});
+	const collections = [...new Set(operations.map((operation) => operation.collection))].toSorted();
+	const capturedSelects = collections.map((collection) => {
+		const table = quoteIdentifier(collection);
+		return `select wanted.ordinal as "__bolt_graph_ordinal", wanted.collection as "__bolt_graph_collection", wanted.id as "__bolt_graph_id", to_jsonb(stored) as "__bolt_graph_record" from wanted join ${table} as stored on wanted.collection = ${quoteStringLiteral(collection)} and stored.id::text = wanted.id`;
+	});
+	return transactionSql(
+		`with wanted(ordinal, collection, id) as (values ${values.join(', ')}), captured as materialized (${capturedSelects.join(' union all ')}), capture_guard as materialized (select bolt_assert((select count(*) = ${operations.length} from captured), 'The ordinary mutation capture omitted an expected row.')) select captured.* from capture_guard left join captured on true where captured."__bolt_graph_ordinal" is not null order by captured."__bolt_graph_ordinal"`,
+		parameters
+	);
 };
 
 /**
@@ -1872,6 +1911,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'mutate.prepare' }))
 				);
 			});
+			const runDeletePrepare = Effect.fn('Collections.runDeletePrepare')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
+				module: AuthoredCollectionHookModule | undefined,
+				depth: number,
+				staged?: HookWriteOps<Error>
+			) {
+				const prepare = module?.delete?.prepare;
+				if (prepare === undefined) return undefined;
+				const api = authoringApi(effectId, subject, false, depth + 1, staged);
+				return yield* runAuthoredHandler(() => prepare({ existing, api })).pipe(
+					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'delete.prepare' }))
+				);
+			});
 			/**
 			 * The one per-record rule, for the one write.
 			 *
@@ -2906,23 +2961,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const capturedOperations = operations.filter(
 					(operation) => operation.action === 'create' || operation.action === 'update'
 				);
-				const captureParameters: Array<Schema.Json> = [];
-				const captureSql = capturedOperations
-					.map((operation, index) => {
-						const ordinalParameter = captureParameters.push(index);
-						const collectionParameter = captureParameters.push(operation.collection);
-						const idParameter = captureParameters.push(operation.id);
-						return transactionSql(
-							`select $${ordinalParameter}::integer as "__bolt_graph_ordinal", $${collectionParameter}::text as "__bolt_graph_collection", $${idParameter}::text as "__bolt_graph_id", to_jsonb(stored) as "__bolt_graph_record" from ${quoteIdentifier(operation.collection)} as stored where stored.id = $${idParameter}::uuid`
-						).sql;
-					})
-					.join(' union all ');
-				const captureStatement = transactionSql(
-					captureSql.length > 0
-						? `with captured as materialized (${captureSql}), capture_guard as materialized (select bolt_assert((select count(*) = ${capturedOperations.length} from captured), 'The ordinary mutation capture omitted an expected row.')) select captured.* from capture_guard left join captured on true where captured."__bolt_graph_ordinal" is not null order by captured."__bolt_graph_ordinal"`
-						: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
-					captureParameters
-				);
+				const captureStatement = ordinaryMutationCaptureStatement(capturedOperations);
 				// A record created in this transaction has exactly one history entry, and the prune only
 				// acts where `total > horizon`, so pruning a create is a guaranteed no-op. It was not a
 				// free one: the prune is a fixed ~1.8 KB recursive statement emitted once per record, so
@@ -2992,8 +3031,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					statements.push(
 						...createStatements(effectId, subject, creates.map(createNodeFor), approvalRequestId)
 					);
-				for (const expectation of statementPlan.after)
+				for (const expectation of statementPlan.after) {
+					// An unrestricted after-insert only proves the row exists. The capture guard already
+					// asserts that every expected create/update is present, so repeating `bolt_assert`
+					// once per row is a no-op that costs one facility round trip each — ten thousand of
+					// them is what made the ordinary-mutation ceiling unusable (PGlite's unnamed
+					// prepared statement dies; Neon would spend minutes). A restricted predicate still
+					// needs the per-row proof: that is the write-authorization seam, not existence.
+					if (AccessControl.predicateIsUnrestricted(effectiveVisibility(expectation.operation)))
+						continue;
 					statements.push(assertionStatement(expectation));
+				}
 				statements.push(...historyPrunes);
 				if (statementPlan.claimLedger && browserMutation !== undefined)
 					statements.push(
@@ -3229,12 +3277,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					// refuses any submitted field the matching grant does not name, for creates and updates
 					// alike, on the caller-owned shape and before authored code sees it. There is no second,
 					// pre-engine validation walk beside it.
-					if (options?.browserMutation !== undefined && payloads.length !== 1)
-						return yield* graphRefusal(
-							collection,
-							'create',
-							'A browser mutation must contain exactly one declarative root.'
-						);
+					if (options?.browserMutation !== undefined && payloads.length !== 1) {
+						const batchActions = (options.roots ?? []).map((root) => root.action);
+						const deleteBatch =
+							batchActions.length === payloads.length &&
+							batchActions.every((action) => action === 'delete');
+						if (!deleteBatch)
+							return yield* graphRefusal(
+								collection,
+								'create',
+								'A browser mutation must contain exactly one declarative root.'
+							);
+					}
 					const roots = payloads.map((payload, index) => {
 						const submittedId = payload['id'];
 						const rootCollection = explicitRoots?.[index]?.collection ?? collection;
@@ -3260,6 +3314,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					});
 					const firstRoot = roots[0];
 					if (firstRoot === undefined) return { records: [], batch: { changes: [] } };
+					// A create root always becomes a changed row. Refusing here — before unbounded
+					// per-root prepare fibers — is the same ceiling the post-prepare count enforces,
+					// without building a graph that cannot be admitted.
+					const createRootCount = roots.filter((root) => root.rootAction === 'create').length;
+					if (createRootCount > MAX_ORDINARY_MUTATION_CHANGED_ROWS)
+						return yield* graphRefusal(
+							collection,
+							firstRoot.rootAction,
+							`An ordinary mutation may change at most ${MAX_ORDINARY_MUTATION_CHANGED_ROWS} rows; this graph changes ${createRootCount}.`
+						);
 					const browserMutation = options?.approval?.browserMutation ?? options?.browserMutation;
 
 					const preparedGraphs: Array<{
@@ -3321,6 +3385,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							lifecycleError(
 								Effect.gen(function* () {
 									const rootPreparation = yield* Deferred.make<unknown, AuthoredRefusal>();
+									const rootDeletePreparation = yield* Deferred.make<unknown, AuthoredRefusal>();
 									readSession.batch.participants.clear();
 									for (const root of groupRoots) readSession.batch.participants.set(root.rootId, 0);
 									readSession.batch.completed.clear();
@@ -3357,6 +3422,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 														referenceValueProblem,
 														runMutateBefore,
 														runMutatePrepare,
+														runDeletePrepare,
 														randomId,
 														refuseRunawayHooks: refuseRunawayHooksService,
 														deriveRecordId,
@@ -3414,7 +3480,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 															id: candidate.rootId,
 															action: candidate.rootAction
 														})),
-														rootPreparation
+														rootPreparation,
+														rootDeletePreparation
 													}
 												).pipe(
 													Effect.map((prepared) => ({ _tag: 'Prepared' as const, prepared })),
@@ -4029,7 +4096,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 				const graph = input.graph;
 				const baseVersions = input.baseVersions;
-				const rootId = String(graph.action === 'delete' ? graph.id : graph.values['id']);
+				const deleteIds =
+					graph.action === 'delete' ? mutationGraphDeleteIds(graph) : ([] as const);
+				const rootId = String(
+					graph.action === 'delete' ? deleteIds[0] : graph.values['id']
+				);
 				const fenceFor = (
 					outcome: BrowserMutationOutcome,
 					issuedAtEpochMs: number
@@ -4196,13 +4267,30 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				};
 				const write =
 					graph.action === 'delete'
-						? mutate(mutationEffectId, subject, graph.collection, [{ id: graph.id }], false, 0, {
-								root: { id: graph.id, action: 'delete' },
-								...(rootBaseVersion === undefined || rootBaseVersion === null
-									? {}
-									: { expectedRootVersion: rootBaseVersion }),
-								browserMutation: fence
-							})
+						? mutate(
+								mutationEffectId,
+								subject,
+								graph.collection,
+								deleteIds.map((id) => ({ id })),
+								false,
+								0,
+								{
+									...(deleteIds.length === 1
+										? { root: { id: deleteIds[0]!, action: 'delete' as const } }
+										: {}),
+									roots: deleteIds.map((id) => ({
+										collection: graph.collection,
+										id,
+										action: 'delete' as const
+									})),
+									...(deleteIds.length === 1 &&
+									rootBaseVersion !== undefined &&
+									rootBaseVersion !== null
+										? { expectedRootVersion: rootBaseVersion }
+										: {}),
+									browserMutation: fence
+								}
+							)
 						: mutate(mutationEffectId, subject, graph.collection, [graph.values], false, 0, {
 								root: { id: rootId, action: graph.action },
 								browserMutation: fence
@@ -4280,16 +4368,34 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						)
 					),
 				// Keep the internal recursion depth out of the public delete contract.
-				delete: (effectId, subject, collection, id, options) =>
-					mutate(effectId, subject, collection, [{ id }], false, 0, {
-						root: { id, action: 'delete' },
-						...(options?.baseVersion === undefined
-							? {}
-							: { expectedRootVersion: options.baseVersion }),
-						...(options?.browserMutation === undefined
-							? {}
-							: { browserMutation: options.browserMutation })
-					}).pipe(
+				delete: (effectId, subject, collection, ids, options) => {
+					const first = ids[0];
+					if (first === undefined)
+						return graphRefusal(collection, 'delete', 'A delete batch must name at least one row.');
+					return mutate(
+						effectId,
+						subject,
+						collection,
+						ids.map((recordId) => ({ id: recordId })),
+						false,
+						0,
+						{
+							roots: ids.map((recordId) => ({
+								collection,
+								id: recordId,
+								action: 'delete'
+							})),
+							...(ids.length === 1 && options?.baseVersion !== undefined
+								? {
+										root: { id: first, action: 'delete' as const },
+										expectedRootVersion: options.baseVersion
+									}
+								: {}),
+							...(options?.browserMutation === undefined
+								? {}
+								: { browserMutation: options.browserMutation })
+						}
+					).pipe(
 						Effect.catchIf(isBrowserMutationReplay, () =>
 							Effect.succeed({
 								records: [],
@@ -4300,7 +4406,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							(cause): cause is MutationPhaseFailure => cause instanceof MutationPhaseFailure,
 							(cause) => Effect.fail(cause.underlying as MutationError)
 						)
-					),
+					);
+				},
 				// SyncCommit owns the unavailable-host fallback queue and the app drains it after dispatch.
 				drainChanges: Effect.succeed([]),
 				mutateBrowser,

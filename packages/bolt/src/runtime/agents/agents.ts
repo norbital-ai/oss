@@ -28,7 +28,8 @@ import {
 	imageAssetsFromMessage,
 	stripImageFileParts,
 	taskAssetKeyPrefix,
-	taskAssetStorageKey as taskScopedImageKey
+	taskAssetStorageKey as taskScopedImageKey,
+	userMessageWithImages
 } from './image-descriptors.js';
 import {
 	type TaskControlRequest,
@@ -319,7 +320,7 @@ export const InboundBatchMessage = Schema.Struct({
 });
 export type InboundBatchMessage = typeof InboundBatchMessage.Type;
 export const inboundAgentInput = (messages: ReadonlyArray<InboundBatchMessage>) =>
-	userAgentInput(
+	userMessageWithImages(
 		[
 			'INBOUND BATCH',
 			...messages.flatMap((message) => [
@@ -330,7 +331,8 @@ export const inboundAgentInput = (messages: ReadonlyArray<InboundBatchMessage>) 
 						`[image ${asset.name} · ${asset.mimeType} · ${asset.size} bytes] provider=${provider} attachment=${attachmentId} key=${asset.key}`
 				)
 			])
-		].join('\n')
+		].join('\n'),
+		messages.flatMap(({ attachments }) => attachments.map(({ asset }) => asset))
 	);
 
 /**

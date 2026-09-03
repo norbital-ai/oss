@@ -24,7 +24,6 @@ catalog:
 engineStrict: true
 injectWorkspacePackages: true
 linkWorkspacePackages: true
-storeDir: ../norbital/.tenant_substrate/packages/pnpm-store
 syncInjectedDepsAfterScripts:
   - build
   - prepare

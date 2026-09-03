@@ -37,6 +37,7 @@ export type CollectionHookModule = Readonly<{
 		readonly perRecord?: CollectionPerRecordHooks;
 	}>;
 	readonly delete?: Readonly<{
+		readonly prepare?: (context: unknown) => unknown;
 		readonly perRecord?: CollectionPerRecordHooks;
 	}>;
 }>;

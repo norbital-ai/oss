@@ -980,11 +980,8 @@ export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
 	for (const operation of ['mutate', 'delete'] as const) {
 		const operationDeclaration = Reflect.get(declaration, operation);
 		if (operationDeclaration === null || typeof operationDeclaration !== 'object') continue;
-		if (
-			operation === 'mutate' &&
-			typeof Reflect.get(operationDeclaration, 'prepare') === 'function'
-		) {
-			named.push('mutate.prepare');
+		if (typeof Reflect.get(operationDeclaration, 'prepare') === 'function') {
+			named.push(`${operation}.prepare`);
 		}
 		const perRecord = Reflect.get(operationDeclaration, 'perRecord');
 		if (perRecord === null || typeof perRecord !== 'object') continue;

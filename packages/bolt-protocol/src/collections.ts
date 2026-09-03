@@ -34,6 +34,12 @@ const CollectionMutationRetryIdentity = {
 	issuedAtEpochMs: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isFinite())
 };
 
+const CollectionMutationDeleteIds = Schema.NonEmptyArray(Schema.NonEmptyString).check(
+	Schema.makeFilter(
+		(ids: readonly string[]) => new Set(ids).size === ids.length || 'delete ids must be unique'
+	)
+);
+
 export const CollectionMutationGraph = Schema.Union([
 	Schema.Struct({
 		action: Schema.Literal('create'),
@@ -48,10 +54,15 @@ export const CollectionMutationGraph = Schema.Union([
 	Schema.Struct({
 		action: Schema.Literal('delete'),
 		collection: Schema.NonEmptyString,
-		id: Schema.NonEmptyString
+		ids: CollectionMutationDeleteIds
 	})
 ]).annotate({ identifier: 'BoltCollectionMutationGraph' });
 export type CollectionMutationGraph = typeof CollectionMutationGraph.Type;
+
+/** The record ids a delete graph names. Delete is a batch, like mutate's payload array. */
+export const mutationGraphDeleteIds = (
+	graph: Extract<CollectionMutationGraph, { readonly action: 'delete' }>
+): readonly string[] => graph.ids;
 
 export const CollectionMutationPush = Schema.Struct({
 	protocolVersion: Schema.Literal(2),

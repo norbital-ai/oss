@@ -798,9 +798,11 @@ const BundleDispatch = {
 						(error instanceof DispatchError && error.code === 'tenant_mismatch')
 					) {
 						const message =
-							error instanceof Error && error.message.trim() !== ''
-								? error.message
-								: 'Access refused';
+							error instanceof AccessControl.AccessDenied && error.reason.trim() !== ''
+								? error.reason
+								: error instanceof Error && error.message.trim() !== ''
+									? error.message
+									: 'Access refused';
 						return {
 							_tag: 'Failure',
 							error: makeWireError('forbidden', message, { httpStatus: 403 })

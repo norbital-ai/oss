@@ -5,8 +5,8 @@ and browser client. It is not a hosted control plane.
 
 A claim here is trustworthy only when it can be found in `packages/bolt/src`.
 
-Colony owns routing, CAS, isolates, and workbenches:
-[`norbital/apps/colony/docs`](../../../../norbital/apps/colony/docs/README.md).
+Colony owns routing, CAS, isolates, and workbenches. Those host docs live in the Colony
+product repository — this package does not resolve a sibling `norbital/` checkout.
 
 ---
 
@@ -36,12 +36,12 @@ packages/bolt/docs/
 | [runtime](./runtime/README.md)                               | Dispatch admission, `invoke.*`, Data Browser 403 vs other-plugin 401 |
 | [agents](./agents/README.md)                                 | Durable Tasks, Effect AI, envoys vs automations                     |
 
-| Colony               | Folder                                                                                                                  |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **P1 Tenant matrix** | [`apps/colony/docs/pillars/01-tenant-matrix`](../../../../norbital/apps/colony/docs/pillars/01-tenant-matrix/README.md) |
-| **P2 Content store** | [`apps/colony/docs/pillars/02-content-store`](../../../../norbital/apps/colony/docs/pillars/02-content-store/README.md) |
-| **P3 Runtime**       | [`apps/colony/docs/pillars/03-runtime`](../../../../norbital/apps/colony/docs/pillars/03-runtime/README.md)             |
-| **P6 Workbench**     | [`apps/colony/docs/pillars/06-workbench`](../../../../norbital/apps/colony/docs/pillars/06-workbench/README.md)         |
+| Colony               | Owned in the Colony product repository |
+| -------------------- | -------------------------------------- |
+| **P1 Tenant matrix** | Host tenant matrix                     |
+| **P2 Content store** | Host content store                     |
+| **P3 Runtime**       | Host isolate / facility binding        |
+| **P6 Workbench**     | Host workbench                         |
 
 ---
 
@@ -91,7 +91,7 @@ src/
 ├── capabilities/
 │   ├── tools/+<name>.ts
 │   ├── mcp/+<name>.ts
-│   └── skills/<name>/+skill.md
+│   └── skills/<name>/             # tenant Skill package (SKILL.md + optional refs/scripts/assets)
 ├── collections/
 │   ├── +relationship.ts           # optional (empty relations if absent)
 │   └── <name>/
@@ -117,6 +117,20 @@ A leading `+` means the compiler reads the file. A stray `+` file is a build err
 (`discoverAuthoredSource` in `src/compiler/workspace-build.ts`). `collections/+relationship.ts` is a
 known optional file, not a stray.
 
+Tenant Skills live at `src/capabilities/skills/<name>/SKILL.md` (same package shape as Agent
+Skills: optional `references/`, `scripts/`, `assets/`). They compile into the release and are
+offered through `list_skills` / `read_skill`.
+
+Personal capabilities are `.norbital/personal/` — ignored, never committed, never a build or
+release input:
+
+```text
+.norbital/personal/
+├── skills/<name>/SKILL.md
+├── mcp/+<name>.ts
+└── scripts/
+```
+
 There is no `bolt build`, no `+agent.ts`, no `+seed.ts`. Fixtures come from `seed_bank/` via
 Colony. Generated `.norbital/{diagnosis,dist,generated,types}` is never hand-edited;
 `.norbital/migrations/` is committed lineage.
@@ -134,7 +148,7 @@ commands (`collections.mutate`, `sync.connect`, `sync.advance`, `tasks.submit`, 
 
 The guest has no Node builtins. Every I/O port is a facility the host binds per invocation
 (`packages/bolt-protocol/src/facilities.ts`). On Colony that binding happens inside a fresh
-isolated-vm context; see [P3 Runtime](../../../../norbital/apps/colony/docs/pillars/03-runtime/README.md).
+isolated-vm context (Colony P3 Runtime, in the Colony product repository).
 
 Reads and writes on `api.db.<collection>` are policy-guarded. Browser writes are one verb,
 `collections.mutate` (plus `delete`, and `resume` for approval release). Vector search

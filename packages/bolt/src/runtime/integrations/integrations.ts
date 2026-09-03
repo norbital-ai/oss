@@ -435,9 +435,14 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							Effect.mapError((error) => ({ message: describeCause(error) }))
 						),
 				remove: (effectId, collection, ids) =>
-					Effect.forEach(ids, (id) => collections.delete(effectId, subject, collection, id), {
-						discard: true
-					}).pipe(Effect.mapError((error) => ({ message: describeCause(error) }))),
+					ids.length === 0
+						? Effect.void
+						: collections
+								.delete(effectId, subject, collection, ids)
+								.pipe(
+									Effect.asVoid,
+									Effect.mapError((error) => ({ message: describeCause(error) }))
+								),
 				write: (effectId, collection, id, values, mode) =>
 					collections
 						.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {

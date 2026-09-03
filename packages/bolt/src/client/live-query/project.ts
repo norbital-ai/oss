@@ -1,5 +1,6 @@
 import {
 	MAX_SYNC_LOADED_KEYS,
+	mutationGraphDeleteIds,
 	type CollectionMutationGraph,
 	type StoredRecord,
 	type SyncPrefixDelta
@@ -15,7 +16,7 @@ const recordIdOf = (row: StoredRecord): string | undefined => {
 };
 
 const graphRecordId = (graph: CollectionMutationGraph): string | undefined => {
-	if (graph.action === 'delete') return graph.id;
+	if (graph.action === 'delete') return mutationGraphDeleteIds(graph)[0];
 	const id = graph.values['id'];
 	return typeof id === 'string' && id.length > 0 ? id : undefined;
 };
@@ -85,19 +86,39 @@ export const project = (
 		const recordId = graphRecordId(graph);
 		if (recordId === undefined) continue;
 		const index = indexes.get(recordId);
-		if (index === undefined) continue;
 
-		if (graph.action === 'delete') {
-			rows.splice(index, 1);
-			indexes.delete(recordId);
-			for (let shifted = index; shifted < rows.length; shifted += 1) {
-				const shiftedId = recordIdOf(rows[shifted] as StoredRecord);
-				if (shiftedId !== undefined) indexes.set(shiftedId, shifted);
+		switch (graph.action) {
+			case 'delete': {
+				const removeIds = new Set(mutationGraphDeleteIds(graph));
+				if (removeIds.size === 0) continue;
+				const kept = rows.filter((row) => {
+					const id = recordIdOf(row);
+					return id === undefined || !removeIds.has(id);
+				});
+				if (kept.length === rows.length) continue;
+				rows.splice(0, rows.length, ...kept);
+				indexes.clear();
+				for (let next = 0; next < rows.length; next += 1) {
+					const shiftedId = recordIdOf(rows[next] as StoredRecord);
+					if (shiftedId !== undefined) indexes.set(shiftedId, next);
+				}
+				break;
 			}
-			continue;
+			case 'create':
+			case 'update': {
+				if (index === undefined) {
+					rows.push({ ...graph.values });
+					indexes.set(recordId, rows.length - 1);
+					break;
+				}
+				rows[index] = { ...rows[index], ...graph.values };
+				break;
+			}
+			default: {
+				const _exhaustive: never = graph;
+				throw new Error(`unhandled mutation action: ${JSON.stringify(_exhaustive)}`);
+			}
 		}
-
-		rows[index] = { ...rows[index], ...graph.values };
 	}
 
 	return rows;

@@ -35,6 +35,7 @@
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-rc.112",
 		"@norbital-ai/config": "workspace:*",
+		"@norbital-ai/test-utilities": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",
 		"@types/ws": "^8.18.1",

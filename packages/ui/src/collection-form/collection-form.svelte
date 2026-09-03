@@ -11,6 +11,7 @@
 		CollectionRow,
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
+	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { FormState, maybeAsync, type FormSchema } from '#lib/form';
 	import { useI18n } from '#lib/i18n';
@@ -18,6 +19,7 @@
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import { optionalCollectionRecordId } from '#lib/collection-surface';
+	import { collectionFormSubmissionPending } from './collection-form-pending';
 	import {
 		assertCollectionFormFieldRegistration,
 		collectionFormMutationFieldNames,
@@ -313,7 +315,12 @@
 			return onAfterSubmit?.();
 		}
 	});
-	const submissionPending = $derived(onSubmit ? form.isSubmitting : operations.pending > 0);
+	const submissionPending = $derived(
+		collectionFormSubmissionPending({
+			isSubmitting: form.isSubmitting,
+			operationsPending: operations.pending
+		})
+	);
 	const dirtyFieldCount = $derived(
 		definition.fields.filter((field) => form.hasChangesForPath(field.name)).length
 	);
@@ -407,11 +414,19 @@
 			{:else}
 				<Button
 					type="submit"
+					class="gap-2"
 					disabled={loading ||
 						form.disabled ||
 						submissionPending ||
 						Boolean(recordId && !form.isDirty)}
 				>
+					{#if submissionPending}
+						<Icon
+							icon="lucide:loader-circle"
+							class="size-4 animate-spin"
+							aria-hidden="true"
+						/>
+					{/if}
 					{submissionPending
 						? t('form.saving')
 						: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}

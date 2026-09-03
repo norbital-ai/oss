@@ -5,6 +5,7 @@ import {
 	CollectionMutationIdempotencyKey,
 	CollectionMutateRequest,
 	CollectionQueryRequest,
+	mutationGraphDeleteIds,
 	FixedCommandCatalogue,
 	SyncQueryInput,
 	WorkspaceInvokeContract,
@@ -226,7 +227,9 @@ const collectionMutationBaseVersions = (
 		}
 	};
 
-	if (graph.action === 'delete') addKnown(graph.collection, graph.id);
+	if (graph.action === 'delete') {
+		for (const recordId of mutationGraphDeleteIds(graph)) addKnown(graph.collection, recordId);
+	}
 	else {
 		const rootId = graph.values['id'];
 		if (graph.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
@@ -584,8 +587,8 @@ const ClientDatabase = {
 				mutation.run(
 					Effect.sync(() => enqueueMutation(runtime, catalog, collection, asJsonRecord(input)))
 				),
-			delete: (id: string) =>
-				mutation.run(Effect.sync(() => enqueueDeletion(runtime, catalog, collection, id))),
+			delete: (ids: readonly string[]) =>
+				mutation.run(Effect.sync(() => enqueueDeletion(runtime, catalog, collection, ids))),
 			get pending() {
 				return mutation.pending;
 			}
@@ -667,10 +670,22 @@ const enqueueDeletion = (
 	runtime: WorkspaceClientRuntime,
 	catalog: CollectionCatalog,
 	collection: string,
-	id: string
+	ids: readonly string[]
 ): MemoryMutationResult => {
-	if (id.trim() === '') throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	return submitGraph(runtime, catalog, { action: 'delete', collection, id }, null);
+	if (ids.length === 0)
+		throw new TypeError(`Mutation ${collection} delete requires at least one id`);
+	for (const recordId of ids) {
+		if (recordId.trim() === '')
+			throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
+	}
+	if (new Set(ids).size !== ids.length)
+		throw new TypeError(`Mutation ${collection} delete ids must be unique`);
+	return submitGraph(
+		runtime,
+		catalog,
+		{ action: 'delete', collection, ids: ids as [string, ...string[]] },
+		null
+	);
 };
 
 /** --- automations --- */

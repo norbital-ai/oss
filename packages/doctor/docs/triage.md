@@ -3,8 +3,9 @@
 Every rule in the legacy detector (`SCANNER_VERSION = 30`, 115 rules) with a disposition and a
 reason. Nothing may stop being enforced without a row here.
 
-`fires` counts findings across oss + norbital + templates + templates_private, all tiers, tests
-included — 5246 findings, 33 of 115 rules firing at least once.
+`fires` counts findings in the doctor corpus the operator configures. oss does not guess sibling
+`norbital/`, `templates/`, or `templates_private/` checkouts. The historical snapshot was 5246
+findings, 33 of 115 rules firing at least once.
 
 A zero is **not** grounds to write a rule off. A gate earns its keep by preventing a defect, not
 by finding one today. Write-offs are justified only where the _syntax itself is extinct_, measured

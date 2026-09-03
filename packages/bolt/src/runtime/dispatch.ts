@@ -203,13 +203,10 @@ const authenticateCommand = Effect.fn('Bolt.authenticateCommand')(function* <E>(
 		})
 	) {
 		const system = SystemPrincipal.systemSubject(invocation.scope.tenantId);
-		const claimed = mintedClaim(invocation.input);
-		if (claimed !== undefined)
-			return yield* new AccessControl.AccessDenied({
-				action: 'authenticate',
-				resource: invocation.command,
-				reason: `a command may not claim boundary-owned ${claimed}`
-			});
+		// Host-signed commands stamp identity from `invocation.scope`. A payload that also names
+		// `tenantId` / `subject` is not a refusal — those keys are stripped before the case runs,
+		// which is the same overwrite the session branch already pays. Refusing here made a signed
+		// founder bootstrap fail when the payload restated a tenant the signature already bound.
 		return { principal: system, actor: system };
 	}
 	const actor = yield* resolveSession(
@@ -435,7 +432,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			: (yield* AccessControl.Service).limits(authority.principal)
 	);
 	const commandInput =
-		authority.principal !== undefined && authority.principal.system !== true
+		authority.principal !== undefined
 			? stripMintedIdentityFields(invocation.input)
 			: invocation.input;
 	const result = invoke(binding, context, commandInput);

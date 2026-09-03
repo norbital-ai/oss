@@ -5,10 +5,17 @@ import { vector } from '@electric-sql/pglite-pgvector';
 import {
 	DatabaseRequest,
 	DatabaseResponse,
-	type FacilityBinding
+	EffectId,
+	InvocationId,
+	type FacilityBinding,
+	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
 import { Config, Effect, Redacted } from 'effect';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client, type QueryResultRow } from 'pg';
 import { makeWireBinding } from '../config.js';
 
@@ -275,4 +282,83 @@ export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 		})
 	);
 
-/** Loads production PostgreSQL settings without exposing the connection URL in config errors. */
+const LOCAL_EXTENSIONS = ['pg_trgm', 'btree_gist', 'vector'] as const;
+
+export type LocalDatabaseQuery = (
+	statement: string,
+	parameters?: readonly unknown[]
+) => Promise<unknown>;
+
+/** Ephemeral PGlite: tmpdir, registered extensions, query helper, close + `rm`. */
+export type StartedLocalDatabase = {
+	readonly binding: NonNullable<FacilityBindings['database']>;
+	readonly query: LocalDatabaseQuery;
+	readonly dataDirectory: string;
+	readonly close: () => Promise<void>;
+};
+
+const localDatabaseCall = (idempotencyKey: string) => ({
+	invocationId: InvocationId.make(`local-database-${idempotencyKey}`),
+	effectId: EffectId.make(`local-database-effect-${idempotencyKey}`),
+	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
+	idempotencyKey
+});
+
+const queryThroughBinding =
+	(binding: LocalDatabase['binding']): LocalDatabaseQuery =>
+	async (statement, parameters) => {
+		const result = await binding.call(
+			localDatabaseCall(randomUUID()),
+			DatabaseRequest.cases.Query.make({
+				sql: statement,
+				parameters: [...(parameters ?? [])]
+			}),
+			new AbortController().signal
+		);
+		if (result._tag === 'Failure') {
+			throw new Error(result.error.message);
+		}
+		return result.value.rows;
+	};
+
+/**
+ * Temporary PGlite selected the same way a self-host embedder selects it: `makeLocalDatabase`,
+ * then `pg_trgm` / `btree_gist` / `vector`. No process env. Close removes the directory.
+ */
+export const startLocalDatabase = async (): Promise<StartedLocalDatabase> => {
+	const dataDirectory = await mkdtemp(join(tmpdir(), 'bolt-server-pglite-'));
+	let database: LocalDatabase | undefined;
+	try {
+		database = await makeLocalDatabase({ dataDirectory });
+		const installed = await database.binding.call(
+			localDatabaseCall('extensions'),
+			DatabaseRequest.cases.Transaction.make({
+				statements: LOCAL_EXTENSIONS.map((name) => ({
+					sql: `create extension if not exists ${name}`,
+					parameters: []
+				}))
+			}),
+			new AbortController().signal
+		);
+		if (installed._tag === 'Failure') {
+			throw new Error(installed.error.message);
+		}
+		const handle = database;
+		return {
+			binding: handle.binding,
+			query: queryThroughBinding(handle.binding),
+			dataDirectory,
+			close: async () => {
+				try {
+					await handle.close();
+				} finally {
+					await rm(dataDirectory, { recursive: true, force: true });
+				}
+			}
+		};
+	} catch (error) {
+		if (database !== undefined) await database.close().catch(() => undefined);
+		await rm(dataDirectory, { recursive: true, force: true });
+		throw error;
+	}
+};

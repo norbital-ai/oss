@@ -1,0 +1,49 @@
+{
+	"name": "@norbital-ai/test-utilities",
+	"version": "0.0.22",
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"description": "Shared isolation and public-fixture helpers for package-owned test suites.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/test-utilities"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/test-utilities",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"exports": {
+		".": {
+			"types": "./build/index.d.ts",
+			"default": "./build/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"test": "node --experimental-strip-types --import ./tests/resolve-source.mjs --test tests/*.test.ts"
+	},
+	"peerDependencies": {
+		"@norbital-ai/bolt-protocol": "0.0.22",
+		"@norbital-ai/bolt-server": "0.0.22",
+		"effect": "4.0.0-rc.111 || 4.0.0-rc.112"
+	},
+	"devDependencies": {
+		"@norbital-ai/bolt-protocol": "workspace:*",
+		"@norbital-ai/bolt-server": "workspace:*",
+		"@norbital-ai/config": "workspace:*",
+		"@types/node": "^26.2.0",
+		"effect": "4.0.0-rc.112",
+		"typescript": "catalog:"
+	}
+}

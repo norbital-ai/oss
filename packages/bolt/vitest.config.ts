@@ -10,7 +10,7 @@ import { defineConfig } from 'vitest/config';
 // minutes ran twice per push to main and nobody could ship without waiting for it, so the
 // integration suite moved off the merge path onto its own schedule.
 //
-// The suffix is enforced, not a convention: `tests/architecture/test-suite-split.test.ts` fails if
+// The suffix is enforced, not a convention: `tests/architecture-test-suite-split.test.ts` fails if
 // a file reaches PGlite without carrying it. Renaming a file is how you move it between suites.
 const integrationSuite = process.env.BOLT_TEST_SUITE === 'integration';
 
@@ -25,10 +25,10 @@ export default defineConfig({
 	},
 	test: {
 		environment: 'node',
-		include: integrationSuite ? ['tests/**/*.integration.test.ts'] : ['tests/**/*.test.ts'],
+		include: integrationSuite ? ['tests/*.integration.test.ts'] : ['tests/*.test.ts'],
 		exclude: integrationSuite
 			? ['build/**', '.norbital/**']
-			: ['build/**', '.norbital/**', 'tests/**/*.integration.test.ts'],
+			: ['build/**', '.norbital/**', 'tests/*.integration.test.ts'],
 		isolate: true,
 		restoreMocks: true,
 		unstubEnvs: true,

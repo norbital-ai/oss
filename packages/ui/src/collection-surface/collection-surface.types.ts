@@ -23,6 +23,17 @@ export interface CollectionPipeline<TRow extends object, E = Error> {
 	run(context: CollectionPipelineContext<TRow>): Effect.Effect<unknown, E>;
 }
 
+export interface CollectionRecordDeletion<TRow extends object, E = Error> {
+	readonly label?: string;
+	readonly description?: string;
+	readonly getDisabledReason?: (selectedRows: readonly TRow[]) => string | null;
+	/**
+	 * Override the collection `delete` batch. Absent, the table submits one
+	 * `client.db[collection].delete(ids)` — same write path as mutate, not N single-row loops.
+	 */
+	readonly run?: (context: CollectionPipelineContext<TRow>) => Effect.Effect<unknown, E>;
+}
+
 const collectionIntegrationStateSchema = Schema.Literals([
 	'connected',
 	'configured',

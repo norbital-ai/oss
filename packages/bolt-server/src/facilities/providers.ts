@@ -3,6 +3,8 @@ import {
 	AIResponse,
 	CommunicationRequest,
 	CommunicationResponse,
+	ConfigRequest,
+	ConfigResponse,
 	ConnectorRequest,
 	ConnectorResponse,
 	FacilityCall,
@@ -81,7 +83,13 @@ export const makeCommunicationBindingFromConfig = <Error>(
 ) =>
 	selectConfiguredProvider('COMMUNICATION', factories).pipe(Effect.map(makeCommunicationBinding));
 
-/** Validates both sides of an AI provider call at the neutral facility boundary. */
+/**
+ * Adapts any caller-supplied AI provider to the wire contract.
+ *
+ * bolt-server does not ship a model adapter and does not restrict the provider name. The host
+ * registers whatever speaks `AIRequest` / `AIResponse` — OpenRouter, Ollama, a recorded fixture,
+ * or a composite router.
+ */
 export const makeAiBinding = (provider: AiProvider): FacilityBinding<AIRequest, AIResponse> =>
 	makeWireBinding({
 		request: AIRequest,
@@ -91,10 +99,85 @@ export const makeAiBinding = (provider: AiProvider): FacilityBinding<AIRequest, 
 		invoke: provider.call.bind(provider)
 	});
 
-/** Selects and constructs the configured AI provider before adapting it to the wire contract. */
+/**
+ * Selects one factory from the host's map via `BOLT_SERVER_AI_PROVIDER`.
+ *
+ * The registered names are the host's. This package does not enumerate vendors.
+ */
 export const makeAiBindingFromConfig = <Error>(
 	factories: Readonly<Record<string, ConfiguredProviderFactory<AiProvider, Error>>>
 ) => selectConfiguredProvider('AI', factories).pipe(Effect.map(makeAiBinding));
+
+export type AiProviderRouterOptions = Readonly<{
+	readonly providers: Readonly<Record<string, AiProvider>>;
+	readonly aliases?: Readonly<Record<string, string>>;
+	readonly defaultProvider: string;
+}>;
+
+const registeredProvider = (
+	options: AiProviderRouterOptions,
+	name: string
+): AiProvider => {
+	const provider = options.providers[name];
+	if (provider === undefined) {
+		throw new Error(
+			`No AI provider is registered for ${JSON.stringify(name)}; registered providers: ${Object.keys(options.providers).join(', ')}`
+		);
+	}
+	return provider;
+};
+
+const providerNameForModelId = (
+	options: AiProviderRouterOptions,
+	modelId: string
+): string => {
+	const slash = modelId.indexOf('/');
+	const namespace = slash === -1 ? options.defaultProvider : modelId.slice(0, slash);
+	return options.aliases?.[namespace] ?? namespace;
+};
+
+/**
+ * Routes Catalog / Generate / Embed to host-registered providers.
+ *
+ * Catalog uses `defaultProvider`. Generate and Embed use the first `modelId` segment, then
+ * `aliases`, then the registered name. Unprefixed ids use `defaultProvider`. No vendor is implied.
+ */
+export const makeAiProviderRouter = (options: AiProviderRouterOptions): AiProvider => ({
+	call: (metadata: FacilityCall, request: AIRequest, signal: AbortSignal) => {
+		switch (request._tag) {
+			case 'Catalog':
+				return registeredProvider(options, options.defaultProvider).call(
+					metadata,
+					request,
+					signal
+				);
+			case 'Generate':
+			case 'Embed':
+				return registeredProvider(options, providerNameForModelId(options, request.modelId)).call(
+					metadata,
+					request,
+					signal
+				);
+			default: {
+				const _exhaustive: never = request;
+				throw new Error(`unhandled AI request: ${JSON.stringify(_exhaustive)}`);
+			}
+		}
+	}
+});
+
+/** Answers named config keys from a host-owned map. Missing keys return no value. */
+export const makeConfigBinding = (
+	values: Readonly<Record<string, string>>
+): FacilityBinding<ConfigRequest, ConfigResponse> =>
+	makeWireBinding({
+		request: ConfigRequest,
+		response: ConfigResponse,
+		cancelled: { code: 'config.cancelled', message: 'Config call was cancelled' },
+		failed: { code: 'config.failed', message: 'Config provider operation failed' },
+		invoke: async (_metadata, input) =>
+			Object.hasOwn(values, input.key) ? { value: values[input.key] } : {}
+	});
 
 /** Adapts a configured connector map to the schema-checked neutral facility contract. */
 export const makeConnectorBinding = (

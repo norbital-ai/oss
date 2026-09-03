@@ -8,7 +8,8 @@ import type { CollectionQueryState } from '#lib/collection-query';
 import type {
 	CollectionInitialFilter,
 	CollectionIntegrationStatus,
-	CollectionPipeline
+	CollectionPipeline,
+	CollectionRecordDeletion
 } from '#lib/collection-surface';
 import type { Effect } from 'effect';
 
@@ -50,6 +51,7 @@ export interface CollectionToolbarOperations<TRow extends object> {
 	readonly exportPipelines?: readonly CollectionPipeline<TRow>[];
 	readonly importPipelines?: readonly CollectionPipeline<TRow>[];
 	readonly integrations?: readonly CollectionIntegrationStatus[];
+	readonly deletion?: CollectionRecordDeletion<TRow>;
 	readonly selectedRows?: readonly TRow[];
 	readonly selectionControls?: {
 		readonly totalRows: number;

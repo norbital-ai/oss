@@ -14,7 +14,7 @@ import { createHmac } from 'node:crypto';
  * unauthorized, which would send an operator looking at the wrong thing. Failing here names the
  * variable that has to be set.
  */
-class HostUnsignedError extends Schema.TaggedError<HostUnsignedError>()(
+export class HostUnsignedError extends Schema.TaggedError<HostUnsignedError>()(
 	'BoltServer.HostUnsignedError',
 	{
 		operation: Schema.String,

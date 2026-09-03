@@ -730,7 +730,11 @@ export const buildAssetIndex = (
 			yield* Effect.tryPromise(() =>
 				writeFile(
 					capabilityIndexPath,
-					`${JSON.stringify({ format: 'norbital-capabilities-v1', ...capabilities })}\n`,
+					`${JSON.stringify({
+						format: 'norbital-capabilities-v1',
+						skills: capabilities.skills.map(({ body: _body, ...skill }) => skill),
+						mcp: capabilities.mcp
+					})}\n`,
 					'utf8'
 				)
 			);
@@ -741,13 +745,13 @@ export const buildAssetIndex = (
 						skill.files.map((file) =>
 							Effect.gen(function* () {
 								const entry = yield* store(
-									join(root, '.norbital', 'shared', skill.name, file.path),
+									join(root, 'src', 'capabilities', 'skills', skill.name, file.path),
 									`capabilities/skills/${skill.name}/${file.path}`
 								);
 								if (entry.sha256 !== file.sha256 || entry.byteLength !== file.byteLength)
 									return yield* Effect.fail(
 										new Error(
-											`Shared skill ${skill.name}/${file.path} changed after capability compilation.`
+											`Tenant skill ${skill.name}/${file.path} changed after capability compilation.`
 										)
 									);
 								return entry;
@@ -994,7 +998,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			policies: [],
 			prompt,
 			tools: authoredTools,
-			skills: [],
+			skills: compiledAuthoring.capabilities.skills.map(({ name, body }) => ({ name, body })),
 			automations: automations.map((name) => ({
 				name,
 				trigger: { _tag: 'Schedule', cron: '0 * * * *' },
@@ -1211,45 +1215,44 @@ const skillMetadata = (path: string, source: string): { name: string; descriptio
 	return { name, description };
 };
 
-export const compileTenantCapabilities = (
+const listCapabilityDirectories = (directory: string) =>
+	Effect.tryPromise({
+		try: () => readdir(directory, { withFileTypes: true }),
+		catch: (cause) => toError(cause)
+	}).pipe(
+		Effect.catch((cause) =>
+			Reflect.get(cause, 'code') === 'ENOENT'
+				? Effect.succeed<Array<Dirent>>([])
+				: Effect.fail(cause)
+		)
+	);
+
+const compileSkillPackages = (
 	workspaceRoot: string,
-	mcpFiles: ReadonlyArray<string>
-): Effect.Effect<CompiledTenantCapabilities, Error> =>
+	relativeRoot: string
+): Effect.Effect<CompiledTenantCapabilities['skills'], Error> =>
 	Effect.gen(function* () {
-		const root = resolve(workspaceRoot);
-		const sharedRoot = join(root, '.norbital', 'shared');
-		const packages = yield* Effect.tryPromise({
-			try: () => readdir(sharedRoot, { withFileTypes: true }),
-			catch: (cause) => toError(cause)
-		}).pipe(
-			Effect.catch((cause) =>
-				Reflect.get(cause, 'code') === 'ENOENT'
-					? Effect.succeed<Array<Dirent>>([])
-					: Effect.fail(cause)
-			)
-		);
+		const packagesRoot = join(workspaceRoot, ...relativeRoot.split('/'));
+		const packages = yield* listCapabilityDirectories(packagesRoot);
 		if (packages.length > 64)
-			return yield* Effect.fail(new Error('A workspace may ship at most 64 shared skill packages.'));
-		const skills = yield* Effect.all(
+			return yield* Effect.fail(new Error('A workspace may ship at most 64 tenant skill packages.'));
+		return yield* Effect.all(
 			packages
 				.toSorted((left, right) => left.name.localeCompare(right.name))
 				.map((entry) =>
 					Effect.gen(function* () {
+						const authored = `${relativeRoot}/${entry.name}`;
 						if (!entry.isDirectory() || !capabilityName.test(entry.name) || entry.name.length > 64)
 							return yield* Effect.fail(
-								new Error(
-									`.norbital/shared/${entry.name} must be a lower-kebab-case skill directory.`
-								)
+								new Error(`${authored} must be a lower-kebab-case skill directory.`)
 							);
-						const packageRoot = join(sharedRoot, entry.name);
+						const packageRoot = join(packagesRoot, entry.name);
 						const paths = (yield* WorkspaceCompiler.filesUnder(packageRoot)).toSorted();
 						if (paths.length === 0 || !paths.includes(join(packageRoot, 'SKILL.md')))
-							return yield* Effect.fail(
-								new Error(`.norbital/shared/${entry.name} must contain SKILL.md.`)
-							);
+							return yield* Effect.fail(new Error(`${authored} must contain SKILL.md.`));
 						if (paths.length > 256)
 							return yield* Effect.fail(
-								new Error(`Shared skill ${entry.name} may contain at most 256 files.`)
+								new Error(`Tenant skill ${entry.name} may contain at most 256 files.`)
 							);
 						let packageBytes = 0;
 						const files = yield* Effect.all(
@@ -1266,18 +1269,20 @@ export const compileTenantCapabilities = (
 									)
 										return yield* Effect.fail(
 											new Error(
-												`Shared skill ${entry.name} contains unsupported path ${relativePath}.`
+												`Tenant skill ${entry.name} contains unsupported path ${relativePath}.`
 											)
 										);
 									const status = yield* Effect.tryPromise(() => lstat(path));
 									if (status.isSymbolicLink() || !status.isFile())
 										return yield* Effect.fail(
-											new Error(`Shared skill ${entry.name} contains a non-regular file at ${relativePath}.`)
+											new Error(
+												`Tenant skill ${entry.name} contains a non-regular file at ${relativePath}.`
+											)
 										);
 									const bytes = yield* Effect.tryPromise(() => readFile(path));
 									if (bytes.byteLength > 1024 * 1024)
 										return yield* Effect.fail(
-											new Error(`Shared skill ${entry.name}/${relativePath} exceeds 1 MiB.`)
+											new Error(`Tenant skill ${entry.name}/${relativePath} exceeds 1 MiB.`)
 										);
 									packageBytes += bytes.byteLength;
 									return {
@@ -1291,24 +1296,33 @@ export const compileTenantCapabilities = (
 						);
 						if (packageBytes > 8 * 1024 * 1024)
 							return yield* Effect.fail(
-								new Error(`Shared skill ${entry.name} exceeds 8 MiB in total.`)
+								new Error(`Tenant skill ${entry.name} exceeds 8 MiB in total.`)
 							);
 						const source = yield* Effect.tryPromise(() =>
 							readFile(join(packageRoot, 'SKILL.md'), 'utf8')
 						);
-						const metadata = skillMetadata(`.norbital/shared/${entry.name}/SKILL.md`, source);
+						const metadata = skillMetadata(`${authored}/SKILL.md`, source);
 						if (metadata.name !== entry.name)
 							return yield* Effect.fail(
 								new Error(
-									`Shared skill directory ${entry.name} disagrees with frontmatter name ${metadata.name}.`
+									`Tenant skill directory ${entry.name} disagrees with frontmatter name ${metadata.name}.`
 								)
 							);
 						const semantic = { name: entry.name, description: metadata.description, files };
-						return { ...semantic, digest: capabilityDigest(semantic) };
+						return { ...semantic, body: source, digest: capabilityDigest(semantic) };
 					})
 				),
 			{ concurrency: 'unbounded' }
 		);
+	});
+
+export const compileTenantCapabilities = (
+	workspaceRoot: string,
+	mcpFiles: ReadonlyArray<string>
+): Effect.Effect<CompiledTenantCapabilities, Error> =>
+	Effect.gen(function* () {
+		const root = resolve(workspaceRoot);
+		const skills = yield* compileSkillPackages(root, 'src/capabilities/skills');
 		const mcp = yield* Effect.all(
 			mcpFiles.toSorted().map((path) =>
 				Effect.gen(function* () {
@@ -1501,7 +1515,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 						'  a permission                  access/policies/+<name>.ts',
 						'  a team                        access/+teams.ts',
 						'  pre-sign-in limits            access/+anonymous_limits.ts',
-						'  a tool or MCP registration    capabilities/tools|mcp/',
+						'  a tool, MCP, or tenant skill  capabilities/tools|mcp|skills/',
 						'  an agent on a transport       envoys/+<name>.ts',
 						'  something on a schedule       automations/+<name>.ts',
 						'  something a page calls        functions/+<name>.ts',

@@ -19,6 +19,7 @@ export {
 	CollectionMutationBaseVersion,
 	CollectionMutationGraph,
 	CollectionMutationPush,
+	mutationGraphDeleteIds,
 	CollectionMutationSettlement,
 	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,

@@ -70,6 +70,8 @@ export type AuthoredCollectionHookModule = Readonly<{
 		readonly perRecord?: AuthoredPerRecord;
 	}>;
 	readonly delete?: Readonly<{
+		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
+		readonly prepare?: (context: unknown) => unknown;
 		readonly perRecord?: AuthoredPerRecord;
 	}>;
 }>;

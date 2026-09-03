@@ -98,6 +98,7 @@ export const readOnly = (
 	},
 	count: (query, options) => settled(matchingRows(rows, query, options?.filters).length),
 	mutate: () => Effect.runPromise(Effect.fail(new Error('This in-memory collection is read-only'))),
+	delete: () => Effect.runPromise(Effect.fail(new Error('This in-memory collection is read-only'))),
 	pending: 0
 });
 

@@ -2,8 +2,10 @@ export {
 	ApplicationStartError,
 	installProcessShutdown,
 	startApplication,
+	startLocalApplication,
 	type ApplicationOptions,
-	type RunningApplication
+	type RunningApplication,
+	type RunningLocalApplication
 } from './app.js';
 export {
 	BundleLoadError,
@@ -33,7 +35,14 @@ export {
 	startServer,
 	type RunningServer
 } from './server.js';
-export { makeAiBinding, makeAiBindingFromConfig, type AiProvider } from './facilities/providers.js';
+export {
+	makeAiBinding,
+	makeAiBindingFromConfig,
+	makeAiProviderRouter,
+	makeConfigBinding,
+	type AiProvider,
+	type AiProviderRouterOptions
+} from './facilities/providers.js';
 export {
 	makeCommunicationBinding,
 	makeCommunicationBindingFromConfig,
@@ -49,16 +58,21 @@ export {
 	makeLocalDatabase,
 	makePostgresDatabase,
 	makePostgresDatabaseFromConfig,
+	startLocalDatabase,
 	type DatabaseProvider,
 	type LocalDatabase,
 	type LocalDatabaseOptions,
-	type PostgresDatabaseOptions
+	type LocalDatabaseQuery,
+	type PostgresDatabaseOptions,
+	type StartedLocalDatabase
 } from './facilities/database.js';
 export {
 	makeFilesBindingFromConfig,
 	makeLocalFilesBinding,
 	makeLocalFilesBindingFromConfig,
-	type LocalFilesOptions
+	startLocalFiles,
+	type LocalFilesOptions,
+	type StartedLocalFiles
 } from './facilities/files.js';
 export {
 	makeHostToolBinding,
@@ -81,3 +95,19 @@ export {
 	makeTransportBinding,
 	type Provider as TransportProvider
 } from './facilities/transport.js';
+export { HostUnsignedError, systemCommandHeaders } from './system-headers.js';
+export { waitUntilReady } from './ready.js';
+export {
+	dispatchSystemCommand,
+	type DispatchSystemCommandInput,
+	type DispatchSystemCommandResult
+} from './dispatch-system.js';
+export {
+	startSessionGateway,
+	workspaceDocumentHtml,
+	type SessionGateway,
+	type SessionGatewayAddress,
+	type SessionGatewayDocument,
+	type SessionGatewayInput,
+	type WorkspaceDocumentInput
+} from './session-gateway.js';
