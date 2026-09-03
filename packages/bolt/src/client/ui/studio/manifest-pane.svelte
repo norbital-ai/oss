@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
@@ -437,14 +438,14 @@
 																<span>{t('bolt.studio.authorizationRequired')}</span>
 															{/if}
 															{#if grant.where !== undefined}
-																<Scroll name="Grant predicate" class="max-h-48">
-																<pre
-																	class="whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-micro text-foreground">{JSON.stringify(
-																		grant.where,
-																		null,
-																		2
-																	)}</pre>
-																</Scroll>
+																<CodeEditor
+																	value={JSON.stringify(grant.where, null, 2)}
+																	language="json"
+																	readonly
+																	ariaLabel="Grant predicate"
+																	minHeight="7rem"
+																	class="max-h-48 w-full min-h-0 rounded-md border-0 bg-muted/50 shadow-none"
+																/>
 															{/if}
 														</Stack>
 													</Grid>

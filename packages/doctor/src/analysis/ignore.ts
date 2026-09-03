@@ -1,9 +1,8 @@
 /**
  * `.doctorignore` — repository-scoped scan exclusions, ported from `engine/scripts/ignore.mjs`.
  *
- * The legacy analyzer imported this module directly, but the TypeScript build is rooted at `src/`,
- * so the analyzer port carries its own copy. That copy is a liability only if the two drift, so it
- * is kept line-for-line with the engine module: the analyzer's file inventory and the scanner's are
+ * The TypeScript build is rooted at `src/`, so the analyzer carries its own copy of the engine
+ * module. That copy is a liability only if the two drift, so it is kept line-for-line with it: the analyzer's file inventory and the scanner's are
  * cross-checked by digest, and an exclusion honored on one side only makes every scan report as
  * stale rather than as scoped.
  *

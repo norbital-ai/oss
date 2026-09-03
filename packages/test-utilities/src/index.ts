@@ -27,12 +27,13 @@ export { memoryFiles } from './memory-files.js';
 export type { MemoryFiles } from './memory-files.js';
 
 export {
-	guestUrlForObscura,
-	MissingObscuraError,
-	OBSCURA_IMAGE,
-	startObscura
-} from './open-obscura.js';
-export type { StartedObscura } from './open-obscura.js';
+	guestUrlForChromium,
+	isHeadedRun,
+	launchChromium,
+	launchChromiumOrSkip,
+	MissingChromiumError
+} from './headed-chromium.js';
+export type { HeadedBrowser, HeadedPage } from './headed-chromium.js';
 
 export { simpleWorkspace } from './simple-workspace.js';
 

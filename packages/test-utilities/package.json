@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/test-utilities",
-	"version": "0.0.22",
+	"version": "0.0.1",
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
@@ -31,11 +31,15 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/test-utilities",
 		"test": "node --experimental-strip-types --import ./tests/resolve-source.mjs --test tests/*.test.ts"
 	},
+	"dependencies": {
+		"playwright": "1.62.1"
+	},
 	"peerDependencies": {
-		"@norbital-ai/bolt-protocol": "0.0.22",
-		"@norbital-ai/bolt-server": "0.0.22",
+		"@norbital-ai/bolt-protocol": "0.0.1",
+		"@norbital-ai/bolt-server": "0.0.1",
 		"effect": "4.0.0-rc.111 || 4.0.0-rc.112"
 	},
 	"devDependencies": {

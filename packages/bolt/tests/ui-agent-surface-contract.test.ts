@@ -22,7 +22,7 @@ const intentSource = readFileSync(
 );
 
 describe('G1 immediate user text', () => {
-	it('keeps the operator text visible until the Task row is a live findMany fact', () => {
+	it('keeps the operator text visible until a durable human message is a live fact', () => {
 		const admission = {
 			taskId: 'task-1',
 			agentId: 'web',
@@ -32,9 +32,11 @@ describe('G1 immediate user text', () => {
 			draft: 'Export payroll'
 		};
 		expect(visibleUnsettledAdmission(admission, new Set())).toEqual(admission);
+		expect(visibleUnsettledAdmission(admission, new Set(['other-task']))).toEqual(admission);
 		expect(visibleUnsettledAdmission(admission, new Set(['task-1']))).toBeNull();
 		expect(panelSource).toContain('data-admission="pending"');
 		expect(panelSource).toContain('visibleAdmission.message');
+		expect(panelSource).toContain('author.kind === \'human\'');
 	});
 });
 

@@ -49,8 +49,7 @@ function documented(): ReadonlyArray<Documented> {
 		const packs = join(PACKAGES, pkg, 'packs');
 		if (!existsSync(packs)) continue;
 		for (const entry of readdirSync(packs, { withFileTypes: true })) {
-			// `packs/matchers` holds reusable shapes rather than rules, so it declares no examples.
-			if (!entry.isDirectory() || entry.name === 'matchers') continue;
+			if (!entry.isDirectory()) continue;
 			const directory = join(packs, entry.name);
 			const byId = new Map(loadPackDirectory(directory).map((rule) => [rule.id, rule]));
 			for (const name of readdirSync(directory).filter((n) => /\.ya?ml$/.test(n))) {

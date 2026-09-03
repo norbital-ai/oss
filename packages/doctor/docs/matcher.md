@@ -77,15 +77,15 @@ has named properties carrying the same meaning, so `{ inside: { kind: 'VariableD
 
 ## Where this differs from ast-grep
 
-`strictness` has six levels as in ast-grep, but `cst` and `smart` coincide: TypeScript's parser
-gives no CST layer, so there is no trivia to include or exclude. `relaxed`, `signature` (shape
-without text) and `template` (text without kinds) are real and distinct.
+`strictness` has four levels where ast-grep has six: `ast` (the default: named fields only), `cst`
+(modifiers and every field must correspond), `signature` (shape without text) and `template` (text
+without kinds). ast-grep's `smart` and `relaxed` collapse into `ast`: TypeScript's parser gives no
+CST layer, so there is no trivia to include or exclude.
 
 There is no `transform` and no autofix. This is a gate, not a codemod — a rule states what is wrong,
 and a person decides what to write instead.
 
-`atLeast` has no ast-grep equivalent. It is what `defineScope` and `defineCapability` are built on,
-and it is the combinator the legacy `QRY1` needed: "this scope exhibits several distinct bypass
+`atLeast` has no ast-grep equivalent. It is the combinator the legacy `QRY1` needed: "this scope exhibits several distinct bypass
 mechanisms and never calls the owner" is a claim about _mechanism plus absence_, which survives an
 agent renaming every identifier in the file.
 

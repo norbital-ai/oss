@@ -39,13 +39,7 @@ export const reactivePack = definePack({
 	rules: load('reactive')
 });
 
-/**
- * Every syntactic rule the base enforces.
- *
- * Capability rows come last because they replaced `QRY1` and `MUT1`: those two legacy rules are
- * not in `platformRules`, deliberately, because a co-occurrence rule keyed on variable names is
- * the specific mistake this rebuild exists to correct.
- */
+/** Every syntactic rule the base enforces. */
 export const norbitalRules: ReadonlyArray<Rule> = [
 	...boundaryRules,
 	...effectRules,

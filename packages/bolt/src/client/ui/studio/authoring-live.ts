@@ -20,7 +20,7 @@ export const AuthoringLivePhase = Schema.Literals([
 export type AuthoringLivePhase = typeof AuthoringLivePhase.Type;
 
 export const AuthoringLiveLogStream = Schema.Literals(['build', 'deploy', 'guest']);
-export type AuthoringLiveLogStream = typeof AuthoringLiveLogStream.Type;
+type AuthoringLiveLogStream = typeof AuthoringLiveLogStream.Type;
 
 export const AUTHORING_LOG_LINE_MAX_CHARS = 800;
 export const AUTHORING_LOG_RING = 256;
@@ -214,6 +214,25 @@ export const diagnosisFindingTone = (
 	}
 };
 
+/** Level color for captured build/deploy/guest lines. ANSI is stripped at the host; this is the UI tone. */
+export const authoringLogTone = (
+	level: string
+): 'danger' | 'warning' | 'info' | 'default' => {
+	switch (level) {
+		case 'error':
+		case 'stderr':
+			return 'danger';
+		case 'warning':
+		case 'warn':
+			return 'warning';
+		case 'hint':
+		case 'info':
+			return 'info';
+		default:
+			return 'default';
+	}
+};
+
 export const authoringJobBusy = (state: AuthoringLiveState): boolean =>
 	state.job !== null && state.job.phase !== 'complete';
 
@@ -266,7 +285,7 @@ export const AUTHORING_LIVE_EVENT_SOURCE_INIT = { withCredentials: true } as con
 
 export type AuthoringEventSourceInit = typeof AUTHORING_LIVE_EVENT_SOURCE_INIT;
 
-export type AuthoringEventSourceLike = {
+type AuthoringEventSourceLike = {
 	addEventListener: (type: string, listener: (event: { data: string }) => void) => void;
 	close: () => void;
 };
@@ -275,7 +294,7 @@ export type AuthoringEventSourceLike = {
  * Decode one EventSource `data` payload. `kind: poll`, a foreign tenant, or malformed JSON
  * is none — the stream never installs an interval and never re-reads a snapshot.
  */
-export const decodeAuthoringLiveFrame = (
+const decodeAuthoringLiveFrame = (
 	data: string,
 	tenantId: string
 ): Option.Option<AuthoringLiveEvent> => {

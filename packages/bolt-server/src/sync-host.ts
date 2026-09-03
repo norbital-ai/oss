@@ -247,6 +247,24 @@ export const makeSyncHost = (bridge: SyncGuestBridge): SyncInterface => {
 			});
 		},
 		connect: (input) => {
+			// Obscura's EventSource reports OPEN then drops the socket; connect still needs a physical.
+			const existing = connectionIndex.get(input.connectionId);
+			if (existing === undefined || existing.closed) {
+				const principal = input.principal.trim();
+				if (principal.length > 0) {
+					connectionIndex.set(input.connectionId, {
+						id: input.connectionId,
+						principal,
+						sink: {
+							writable: () => true,
+							write: () => true,
+							close: () => undefined
+						},
+						scopes: new Map(),
+						closed: false
+					});
+				}
+			}
 			const connection = attachScope(input);
 			const lane = lanes.get(scopeKey(input.scope));
 			if (connection === undefined || lane === undefined || lane.pump.closed)

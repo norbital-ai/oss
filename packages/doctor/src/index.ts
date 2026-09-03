@@ -50,12 +50,13 @@ export {
 	matchesAny
 } from './health-profile.js';
 export type { CompiledHealthProfile, HealthProfile } from './health-profile.js';
-export { runRules, sourceFiles, svelteMarkup, svelteScript } from './runner.js';
-export { defineRule, defineScope, verifyExamples, matchSource } from './pattern.js';
-export { loadMatcherFile, loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
+export { runRules, sourceFiles, svelteScript } from './runner.js';
+export { defineRule, verifyExamples, matchSource } from './pattern.js';
+export { loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
 export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
 export { nameOf } from './model.js';
 export { runCrossFile } from './cross-file.js';
+import { loadGraphRules } from './cross-file.js';
 export type {
 	Bindings,
 	Constraints,
@@ -69,7 +70,7 @@ export type {
 	Strictness,
 	Utils
 } from './matcher.js';
-export type { ShapeRule, VisitorRule, RuleDefinition, ScopeRule, Examples } from './pattern.js';
+export type { ShapeRule, VisitorRule, RuleDefinition, Examples } from './pattern.js';
 export type { RunOptions, SourceFileOptions } from './runner.js';
 
 const SHIPPED_PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
@@ -80,7 +81,8 @@ export const boundaryRules = loadPackDirectory(join(SHIPPED_PACKS, 'boundaries')
 export const boundariesPack = definePack({ name: 'norbital/boundaries', rules: boundaryRules });
 export const overlapRules = loadPackDirectory(join(SHIPPED_PACKS, 'overlaps'));
 export const overlapPack = definePack({ name: 'norbital/overlaps', rules: overlapRules });
-export const graphRules = loadPackDirectory(join(SHIPPED_PACKS, 'graph'));
+// The same documents the graph tier runs: loaded once, shared by reference.
+export const graphRules = loadGraphRules();
 export const graphPack = definePack({ name: 'norbital/graph', rules: graphRules });
 export const stringlyPack = definePack({
 	name: 'norbital/stringly-typed',
@@ -294,10 +296,6 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		signal: options.signal
 	});
 
-	/*
-	 * One path. The legacy detector is gone, so `packs: ['norbital']` selects a pack of ported rules
-	 * rather than a second scanner, and there is nothing left to spawn.
-	 */
 	if (options.paths?.length && authored.selectedFiles.length === 0)
 		throw new Error(
 			`norbital-doctor: --path selected zero source files (${options.paths.join(', ')}) in ${root}`

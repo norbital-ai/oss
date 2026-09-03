@@ -10,6 +10,7 @@ import {
 	symlink,
 	writeFile
 } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -76,7 +77,7 @@ const hasNamedExport = (source: string, name: string): boolean => {
 
 describe('server artifact build', () => {
 	it('executes both Vite builds and retains a closed static server facade', async () => {
-		const root = await mkdtemp(join(packageRoot, '.server-artifact-build-'));
+		const root = await mkdtemp(join(tmpdir(), 'bolt-server-artifact-build-'));
 		try {
 			const collectionDirectory = join(root, 'src', 'collections', 'tickets');
 			const packageScope = join(root, 'node_modules', '@norbital-ai');

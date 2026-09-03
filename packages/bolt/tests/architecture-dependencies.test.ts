@@ -178,14 +178,18 @@ describe('Bolt architecture boundaries', () => {
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
 		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);
-		// 825 -> 837: the staged hook-write-ops work already in this tree — `HookWriteOps` made
-		// generic in the error channel, and `buildApi`/`runMutateBefore` threading `stageHookWrites`
-		// through `makeGraphPreparers`. Not from the engine.ts fix beside it, which does not touch
-		// this file. See RFC/toolchain.md §6.1.5.
+		// 837 -> 873 (2026-09-04): the root delete-prepare wave landed in oss 5210f8d9 (+51) over the
+		// ceiling; the duplicated owner/await Deferred pattern of both waves moved to `root-wave.ts`
+		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine
+		// 844 -> 814, under its unchanged 820). The remaining +36 is the delete wave itself, which
+		// belongs here. Recorded in RFC/toolchain.md §7 (collection lifecycle budget).
 		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
-			837
+			873
 		);
-		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(300);
+		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
+		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives
+		// 10k ids. Recorded in RFC/toolchain.md §7.
+		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(322);
 		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);
 		expect(await lines('runtime/collections/hooks/boundary.ts')).toBeLessThanOrEqual(275);
 		expect(accessLines).toBeLessThanOrEqual(1_705);
@@ -260,5 +264,26 @@ describe('published surface', () => {
 			}
 		}
 		expect(missing).toEqual([]);
+	});
+
+	it('renders authored code through CodeEditor rather than raw pre', async () => {
+		const files = [
+			'client/ui/studio/source-editor.svelte',
+			'client/ui/studio/review-pane.svelte',
+			'client/ui/studio/manifest-pane.svelte',
+			'client/ui/agent/agent-transcript-item.svelte',
+			'client/ui/system/automation-run-representation.svelte'
+		];
+		const leftovers = (
+			await Promise.all(
+				files.map(async (relative) => {
+					const source = await readFile(new URL(`../src/${relative}`, import.meta.url), 'utf8');
+					const missingEditor = source.includes('CodeEditor') ? [] : [`${relative}: missing CodeEditor`];
+					const rawPre = /<pre\b/.test(source) ? [`${relative}: raw pre`] : [];
+					return [...missingEditor, ...rawPre];
+				})
+			)
+		).flat();
+		expect(leftovers).toEqual([]);
 	});
 });

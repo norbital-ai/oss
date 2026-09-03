@@ -28,10 +28,8 @@ function shippedRules(): ReadonlyArray<Rule> {
 		if (!existsSync(packs)) continue;
 		for (const entry of readdirSync(packs, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
-			// `packs/matchers` holds reusable shapes, not rules; it has no rule documents to load.
 			const directory = join(packs, entry.name);
 			if (readdirSync(directory).length === 0) continue;
-			if (entry.name === 'matchers') continue;
 			rules.push(...loadPackDirectory(directory));
 		}
 	}

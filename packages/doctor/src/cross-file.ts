@@ -420,7 +420,7 @@ const GRAPH_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs', 
 
 let graphRules: ReadonlyArray<Rule> | undefined;
 
-function loadGraphRules(): ReadonlyArray<Rule> {
+export function loadGraphRules(): ReadonlyArray<Rule> {
 	graphRules ??= loadPackDirectory(GRAPH_PACK);
 	return graphRules;
 }

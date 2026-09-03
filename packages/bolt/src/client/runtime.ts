@@ -22,7 +22,11 @@ import {
 	type BrowserSyncScope,
 	type SyncClient
 } from './sync/index.js';
-import { mutationSettlementOf } from './mutation-settlement.js';
+import {
+	mutationSettlementOf,
+	rejectedSyncOutcome,
+	syncOutcomeFromMutateCommand
+} from './mutation-settlement.js';
 import type { ClientState } from './sync/machine.js';
 import { workspaceSession } from './session.js';
 import { databaseOf } from './workspace-api.js';
@@ -97,11 +101,17 @@ const browserTransport: BoltTransport = {
 	command: (command, input, signal) => workspaceSession().transport.command(command, input, signal)
 };
 
-/** Sync controls share the stream route's host-owned prefix. */
-const syncControlUrlOf = (streamUrl: string, control: 'connect' | 'extend'): string =>
-	streamUrl.endsWith('/stream')
-		? `${streamUrl.slice(0, -'/stream'.length)}/${control}`
-		: `${streamUrl.replace(/\/$/, '')}/${control}`;
+/** Sync controls share the stream route's host-owned prefix. Keep the query (headed session token). */
+export const syncControlUrlOf = (streamUrl: string, control: 'connect' | 'extend'): string => {
+	const absolute = streamUrl.startsWith('http://') || streamUrl.startsWith('https://');
+	const parsed = absolute ? new URL(streamUrl) : new URL(streamUrl, 'http://bolt.invalid');
+	if (parsed.pathname.endsWith('/stream')) {
+		parsed.pathname = `${parsed.pathname.slice(0, -'/stream'.length)}/${control}`;
+	} else {
+		parsed.pathname = `${parsed.pathname.replace(/\/$/, '')}/${control}`;
+	}
+	return absolute ? parsed.href : `${parsed.pathname}${parsed.search}`;
+};
 
 /**
  * Creates the browser runtime for the session the host declared.
@@ -146,9 +156,26 @@ export const createBrowserWorkspaceRuntime = (
 			extensionUrl: syncControlUrlOf(session.syncStreamUrl, 'extend'),
 			authorization: () => `Bearer ${workspaceSession().credential}`,
 			push: async ({ connectionId, ...request }, signal) => {
-				await session.transport.command('collections.mutate', request, signal, {
-					[SYNC_CONNECTION_HEADER]: connectionId
-				});
+				try {
+					const value = await session.transport.command('collections.mutate', request, signal, {
+						[SYNC_CONNECTION_HEADER]: connectionId
+					});
+					const outcome = syncOutcomeFromMutateCommand(
+						request.idempotencyKey,
+						value,
+						request.schemaFingerprint
+					);
+					if (outcome !== null) acceptSettlements([outcome]);
+				} catch (cause) {
+					acceptSettlements([
+						rejectedSyncOutcome(
+							request.idempotencyKey,
+							cause instanceof Error ? cause.message : String(cause),
+							request.schemaFingerprint
+						)
+					]);
+					throw cause;
+				}
 			}
 		})
 	});

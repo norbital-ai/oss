@@ -27,7 +27,11 @@ export default defineConfig({
 		environment: 'node',
 		include: integrationSuite ? ['tests/*.integration.test.ts'] : ['tests/*.test.ts'],
 		exclude: integrationSuite
-			? ['build/**', '.norbital/**']
+			? [
+					'build/**',
+					'.norbital/**',
+					...(process.env.OPENROUTER_API_KEY ? [] : ['tests/*.live.integration.test.ts'])
+				]
 			: ['build/**', '.norbital/**', 'tests/*.integration.test.ts'],
 		isolate: true,
 		restoreMocks: true,

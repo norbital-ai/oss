@@ -106,7 +106,8 @@
 	}
 
 	function runDeletion(): void {
-		if (!deletion || pendingOperation || disabled || deletionDisabledReason) return;
+		const run = deletion?.run;
+		if (!run || pendingOperation || disabled || deletionDisabledReason) return;
 		if (!deleteArmed) {
 			deleteArmed = true;
 			return;
@@ -118,7 +119,7 @@
 		};
 		const label = deletionLabel;
 		Effect.runFork(
-			deletion.run(context).pipe(
+			run(context).pipe(
 				Effect.tap(() =>
 					Effect.sync(() => {
 						toast.success(t('table.bulkDeleted', { label }));

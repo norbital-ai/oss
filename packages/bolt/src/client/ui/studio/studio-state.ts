@@ -27,16 +27,7 @@ const UsageEstimateSchema = Schema.Struct({
 	projectedMicroSgd: Schema.Number
 });
 
-const sgd = new Intl.NumberFormat('en-SG', {
-	style: 'currency',
-	currency: 'SGD',
-	minimumFractionDigits: 2,
-	maximumFractionDigits: 2
-});
-
-export const formatMicroSgd = (microSgd: number): string => sgd.format(microSgd / 1_000_000);
-
-export const WorkbenchBuildReceiptSchema = Schema.Struct({
+const WorkbenchBuildReceiptSchema = Schema.Struct({
 	effectId: Schema.String,
 	commit: Schema.String,
 	startedAt: Schema.String,
@@ -57,7 +48,19 @@ const SourceFileChangeSchema = Schema.Struct({
 });
 
 export const HostSnapshotSchema = Schema.Struct({
-	capabilities: Schema.Struct({ canDecideReview: Schema.Boolean }),
+	capabilities: Schema.Struct({
+		canDecideReview: Schema.Boolean,
+		pointInTime: Schema.optionalKey(Schema.Boolean)
+	}),
+	checkpoints: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				at: Schema.String,
+				environment: Schema.NonEmptyString,
+				commit: Schema.NullOr(Schema.NonEmptyString)
+			})
+		)
+	),
 	entries: Schema.Array(
 		Schema.Struct({
 			tenantId: Schema.String,
@@ -222,44 +225,18 @@ export const HostSnapshotSchema = Schema.Struct({
 });
 export type HostSnapshot = typeof HostSnapshotSchema.Type;
 export type MatrixEntry = HostSnapshot['entries'][number];
-type UsageObservation = HostSnapshot['usage'][number];
-type SourceSnapshot = HostSnapshot['source'];
 export type MergeRequest = HostSnapshot['mergeRequests'][number];
-export type ReleaseRequest = MergeRequest;
-export type ReleaseEvidence = HostSnapshot['releases'][number];
+type ReleaseEvidence = HostSnapshot['releases'][number];
 
-export const evidenceLogs = (
-	snapshot: HostSnapshot | undefined
-): Readonly<{
-	readonly build: WorkbenchBuildReceipt | undefined;
-	readonly deploy: ReleaseEvidence['deployLog'];
-}> => {
-	if (snapshot === undefined) return { build: undefined, deploy: [] };
-	const tracked =
-		snapshot.tracking === 'live'
-			? undefined
-			: snapshot.mergeRequests.find((request) => request.id === snapshot.tracking);
-	const open =
-		tracked ??
-		[...snapshot.mergeRequests]
-			.reverse()
-			.find((request) => request.state === 'draft' || request.state === 'ready');
-	if (open !== undefined) return { build: open.buildReceipt, deploy: open.deployLog };
-	const routed = currentRoutedRelease(snapshot.entries);
-	const release =
-		snapshot.releases.find((entry) => entry.releaseId === routed?.releaseId) ??
-		snapshot.releases.at(-1);
-	return { build: release?.buildLog, deploy: release?.deployLog ?? [] };
-};
 type MergeRequestState = MergeRequest['state'];
 
-export const STUDIO_ROOT_TABS = ['workbench', 'changes', 'live'] as const;
+const STUDIO_ROOT_TABS = ['workbench', 'changes', 'live'] as const;
 export type StudioRootTab = (typeof STUDIO_ROOT_TABS)[number];
 
-export const CHANGES_VIEWS = ['manifest', 'files', 'data', 'conversation', 'logs'] as const;
+const CHANGES_VIEWS = ['manifest', 'files', 'data', 'conversation', 'logs'] as const;
 export type ChangesView = (typeof CHANGES_VIEWS)[number];
 
-export type StudioOwnedSurface = 'manifest' | 'logs' | 'lifecycle' | 'diagnosis';
+type StudioOwnedSurface = 'manifest' | 'logs' | 'lifecycle' | 'diagnosis';
 
 export const isStudioRootTab = (value: string): value is StudioRootTab => {
 	switch (value) {
@@ -300,20 +277,6 @@ export const studioTabOwns = (tab: StudioRootTab, surface: StudioOwnedSurface): 
 	}
 };
 
-export const studioTabOwnership = (
-	tab: StudioRootTab
-): Readonly<{
-	readonly manifest: boolean;
-	readonly logs: boolean;
-	readonly lifecycle: boolean;
-	readonly diagnosis: boolean;
-}> => ({
-	manifest: studioTabOwns(tab, 'manifest'),
-	logs: studioTabOwns(tab, 'logs'),
-	lifecycle: studioTabOwns(tab, 'lifecycle'),
-	diagnosis: studioTabOwns(tab, 'diagnosis')
-});
-
 export type WorkbenchDiffBaselineKey =
 	| 'bolt.studio.diff.againstMrHead'
 	| 'bolt.studio.diff.againstLive';
@@ -326,13 +289,6 @@ export const workbenchDiffBaselineKey = (
 		: 'bolt.studio.diff.againstMrHead';
 
 export const CHANGES_DIFF_BASELINE_KEY = 'bolt.studio.diff.againstBase' as const;
-
-export const trackedMergeRequest = (
-	snapshot: HostSnapshot | undefined
-): MergeRequest | undefined => {
-	if (snapshot === undefined || snapshot.tracking === 'live') return undefined;
-	return snapshot.mergeRequests.find((request) => request.id === snapshot.tracking);
-};
 
 export const newCommitsBehindHead = (input: {
 	readonly sourceCommit: string | undefined;
@@ -349,7 +305,7 @@ export const newCommitsBehindHead = (input: {
 };
 
 export const LIFECYCLE_RAIL = ['draft', 'ready', 'merged'] as const;
-export type LifecycleRailStage = (typeof LIFECYCLE_RAIL)[number];
+type LifecycleRailStage = (typeof LIFECYCLE_RAIL)[number];
 
 export const lifecycleRailMessageKey = (
 	stage: LifecycleRailStage
@@ -420,7 +376,10 @@ export const canWorkOnMergeRequest = (
 
 export const mergeRequestEvidence = (
 	request: MergeRequest | undefined
-): ReturnType<typeof evidenceLogs> => {
+): Readonly<{
+	readonly build: WorkbenchBuildReceipt | undefined;
+	readonly deploy: ReleaseEvidence['deployLog'];
+}> => {
 	if (request === undefined) return { build: undefined, deploy: [] };
 	return { build: request.buildReceipt, deploy: request.deployLog };
 };
@@ -429,6 +388,8 @@ export type LiveReleaseRow = Readonly<{
 	readonly releaseId: string;
 	readonly artifactId: string | undefined;
 	readonly current: boolean;
+	readonly commit: string | undefined;
+	readonly checkpointAt: string | undefined;
 	readonly build: WorkbenchBuildReceipt | undefined;
 	readonly deploy: ReleaseEvidence['deployLog'];
 }>;
@@ -454,19 +415,31 @@ export const liveReleaseTimeline = (
 	if (current !== undefined) push(current.releaseId);
 	for (const id of [...snapshot.deploymentHistory].reverse()) push(id);
 	for (const row of [...snapshot.releases].reverse()) push(row.releaseId);
+	const checkpoints = snapshot.checkpoints ?? [];
 	return ids.map((releaseId) => {
 		const row = evidence.get(releaseId);
+		const commit = row?.buildLog?.commit;
+		const tagged = checkpoints.findLast(
+			(entry) => entry.commit === releaseId || (commit !== undefined && entry.commit === commit)
+		);
 		return {
 			releaseId,
 			artifactId: artifactByRelease.get(releaseId),
 			current: current?.releaseId === releaseId,
+			commit,
+			checkpointAt: tagged?.at,
 			build: row?.buildLog,
 			deploy: row?.deployLog ?? []
 		};
 	});
 };
 
-export type SourceFileMark = 'M' | 'A' | 'D';
+export const canRestoreRelease = (input: {
+	readonly busy: boolean;
+	readonly selected: LiveReleaseRow | undefined;
+}): boolean => !input.busy && input.selected !== undefined && !input.selected.current;
+
+type SourceFileMark = 'M' | 'A' | 'D';
 
 export const sourceFileMark = (
 	path: string,
@@ -480,7 +453,7 @@ export const sourceFileMark = (
 	return 'M';
 };
 
-export const sourceTreeHasDirtyDescendant = (
+const sourceTreeHasDirtyDescendant = (
 	directoryPath: string,
 	drafts: Readonly<Record<string, string>>,
 	sourceFiles: Readonly<Record<string, string>>
@@ -521,7 +494,7 @@ export const sourceTreeEntryBadge = (
 
 export type DiagnosisFinding = NonNullable<HostSnapshot['diagnosis']>['findings'][number];
 
-export type WorkbenchDiagnosisState = 'missing' | 'stale' | 'errors' | 'clean';
+type WorkbenchDiagnosisState = 'missing' | 'stale' | 'errors' | 'clean';
 
 export const workbenchDiagnosisState = (input: {
 	readonly diagnosis: HostSnapshot['diagnosis'];
@@ -563,18 +536,6 @@ export const policyActionVerbs = (
 
 type ReviewFreshness = 'current' | 'live_advanced' | 'terminal';
 type ReviewNextOwner = 'author' | 'reviewer' | 'complete';
-type WorkbenchPreviewState = 'missing' | 'expired' | 'stale' | 'current';
-
-export const workbenchPreviewState = (input: {
-	readonly preview:
-		null | undefined | Readonly<{ readonly commit: string; readonly expiresAtEpochMs: number }>;
-	readonly sourceCommit: string | undefined;
-	readonly nowEpochMs: number;
-}): WorkbenchPreviewState => {
-	if (input.preview == null) return 'missing';
-	if (input.preview.expiresAtEpochMs <= input.nowEpochMs) return 'expired';
-	return input.preview.commit === input.sourceCommit ? 'current' : 'stale';
-};
 
 export const reviewFreshness = (
 	request: MergeRequest,
@@ -598,7 +559,7 @@ export const reviewNextOwner = (
 	return 'author';
 };
 
-export const reviewStatusMessageKey = (state: MergeRequestState) => {
+const reviewStatusMessageKey = (state: MergeRequestState) => {
 	if (state === 'draft') return 'bolt.studio.reviewStatus.open';
 	if (state === 'ready') return 'bolt.studio.reviewStatus.approving';
 	if (state === 'merged') return 'bolt.studio.reviewStatus.approved';
@@ -721,7 +682,7 @@ export const currentRoutedRelease = (
 	return routed.find((entry) => entry.environmentId === 'live') ?? routed[0];
 };
 
-export type ReleaseControls = Readonly<{
+type ReleaseControls = Readonly<{
 	readonly canPreview: boolean;
 	readonly canRequestReview: boolean;
 	readonly canRollback: boolean;
@@ -888,79 +849,4 @@ export const integrationBindingSummary = (binding: IntegrationBinding): string =
 				: binding.events.join(', ')
 			: binding.schedule;
 	return `${binding.method} ${binding.path}${timing === undefined ? '' : ` · ${timing}`}`;
-};
-
-type StudioMetric = Readonly<{
-	readonly id: string;
-	readonly labelKey:
-		| 'bolt.studio.metric.hostDisk'
-		| 'bolt.studio.metric.database'
-		| 'bolt.studio.metric.objectStorage';
-	readonly icon: string;
-	readonly value: string | undefined;
-	readonly detailKey:
-		| 'bolt.studio.metric.hostDiskDetail'
-		| 'bolt.studio.metric.databaseDetail'
-		| 'bolt.studio.metric.objectStorageDetail';
-	readonly detailValues?: Readonly<Record<string, string | number>>;
-}>;
-
-const formatBytes = (bytes: number): string => {
-	const units = ['B', 'KB', 'MB', 'GB'];
-	let value = bytes;
-	let unit = 0;
-	while (value >= 1024 && unit < units.length - 1) {
-		value = value / 1024;
-		unit = unit + 1;
-	}
-	return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
-};
-
-const meteredQuantity = new Intl.NumberFormat('en', {
-	maximumFractionDigits: 3,
-	useGrouping: false
-});
-
-export const studioMetrics = (input: {
-	readonly usage: ReadonlyArray<UsageObservation>;
-	readonly source: SourceSnapshot | undefined;
-}): ReadonlyArray<StudioMetric> => {
-	const metered = (kind: string): number | undefined =>
-		input.usage
-			.filter((observation) => observation.kind === kind)
-			.reduce<number | undefined>(
-				(total, observation) => (total ?? 0) + observation.quantity,
-				undefined
-			);
-	const files = Object.values(input.source?.files ?? {});
-	const sourceBytes = files.reduce((total, contents) => total + contents.length, 0);
-	const database = metered('database');
-	const objects = metered('files');
-	return [
-		{
-			id: 'host-disk',
-			labelKey: 'bolt.studio.metric.hostDisk',
-			icon: 'lucide:hard-drive',
-			value: input.source === undefined ? undefined : formatBytes(sourceBytes),
-			detailKey: 'bolt.studio.metric.hostDiskDetail',
-			detailValues: {
-				commit: input.source?.commit.slice(0, 12) ?? '—',
-				count: files.length
-			}
-		},
-		{
-			id: 'database',
-			labelKey: 'bolt.studio.metric.database',
-			icon: 'lucide:database',
-			value: database === undefined ? undefined : meteredQuantity.format(database),
-			detailKey: 'bolt.studio.metric.databaseDetail'
-		},
-		{
-			id: 'object-storage',
-			labelKey: 'bolt.studio.metric.objectStorage',
-			icon: 'lucide:package-open',
-			value: objects === undefined ? undefined : meteredQuantity.format(objects),
-			detailKey: 'bolt.studio.metric.objectStorageDetail'
-		}
-	];
 };

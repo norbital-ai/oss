@@ -6,10 +6,10 @@
 	import DiagnosisPane from './diagnosis-pane.svelte';
 	import LivePane from './live-pane.svelte';
 	import LiveSidebar from './live-sidebar.svelte';
-	import ManifestTree from './manifest-tree.svelte';
 	import ReviewPane from './review-pane.svelte';
 	import ReviewSidebar from './review-sidebar.svelte';
 	import SourceEditor from './source-editor.svelte';
+	import SourceTree from './source-tree.svelte';
 	import WorkbenchToolbar from './workbench-toolbar.svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -27,6 +27,7 @@
 	} from '#lib/client/ui/studio/source-drafts.js';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import {
+		canRestoreRelease,
 		currentRoutedRelease,
 		HostSnapshotSchema,
 		isStudioRootTab,
@@ -141,6 +142,15 @@
 		selectedReleaseId ??
 			releases.find((release) => release.current)?.releaseId ??
 			releases[0]?.releaseId
+	);
+	const selectedRelease = $derived(
+		releases.find((release) => release.releaseId === activeReleaseId)
+	);
+	const canRestore = $derived(
+		canRestoreRelease({
+			busy: host.busy || snapshot === undefined,
+			selected: selectedRelease
+		})
 	);
 	const editorDirty = $derived(Object.hasOwn(sourceDrafts, editor.path));
 	const liveWorking = $derived.by(() => {
@@ -269,8 +279,11 @@
 				{ action: 'merge_request', operation: 'comment', requestId, body },
 				() => t('bolt.studio.action.commented')
 			),
-		rollback: () =>
-			actions.operation({ action: 'rollback' }, () => t('bolt.studio.action.rolledBack')),
+		rollback: (releaseId?: string) =>
+			actions.operation(
+				releaseId === undefined ? { action: 'rollback' } : { action: 'rollback', releaseId },
+				() => t('bolt.studio.action.rolledBack')
+			),
 		diagnose: () =>
 			actions.operation({ action: 'diagnose' }, () => t('bolt.studio.action.diagnosed')),
 		switchWorkbench: (to: 'live' | string) =>
@@ -381,7 +394,7 @@
 
 {#snippet navigator()}
 	{#if isWorkbench}
-		<ManifestTree
+		<SourceTree
 			{files}
 			{fileSizes}
 			{sourceFiles}
@@ -557,7 +570,7 @@
 					{releases}
 					selectedReleaseId={activeReleaseId}
 					busy={host.busy}
-					canRestore={controls.canRollback}
+					canRestore={canRestore}
 					manifest={workspace.manifest}
 					loading={!browserReady || (manifestQuery?.loading ?? false)}
 					{sections}
@@ -566,7 +579,7 @@
 					environment={vault.entries}
 					environmentError={vault.error}
 					liveLogs={live.logs}
-					onrestore={() => void Effect.runPromise(actions.rollback())}
+					onrestore={() => void Effect.runPromise(actions.rollback(selectedRelease?.releaseId))}
 					onopenSource={openSource}
 					onopenDestination={openDestination}
 					canOpenDestination={(destination: ManifestDestination) =>

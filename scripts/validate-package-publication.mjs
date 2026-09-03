@@ -7,9 +7,10 @@ import { Effect } from 'effect';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 import { inspectPackageArchive, packedArchiveFilename } from './lib/package-archive.mjs';
 import { publicPackageDirectories, readManifest } from './lib/package-release.mjs';
+import { scratchPath } from './lib/scratch.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDirectory = path.join(repositoryRoot, '.tmp', 'publication-check');
+const outputDirectory = scratchPath('publication-check');
 const repositoryLicense = readFileSync(path.join(repositoryRoot, 'LICENSE'), 'utf8');
 
 function fail(message) {

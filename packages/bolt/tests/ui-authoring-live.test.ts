@@ -7,6 +7,7 @@ import {
 	AUTHORING_LOG_RING,
 	applyAuthoringLiveEvent,
 	authoringJobBusy,
+	authoringLogTone,
 	AuthoringLiveEvent,
 	clipAuthoringLogLine,
 	diagnosisFindingTone,
@@ -74,6 +75,16 @@ class FakeAuthoringEventSource {
 }
 
 describe('Studio authoring live fold', () => {
+	it('colors captured log lines by level after ANSI is stripped', () => {
+		expect(authoringLogTone('error')).toBe('danger');
+		expect(authoringLogTone('stderr')).toBe('danger');
+		expect(authoringLogTone('warning')).toBe('warning');
+		expect(authoringLogTone('warn')).toBe('warning');
+		expect(authoringLogTone('hint')).toBe('info');
+		expect(authoringLogTone('info')).toBe('info');
+		expect(authoringLogTone('log')).toBe('default');
+	});
+
 	it('advances diagnose → preview → merge phases without a snapshot re-read', () => {
 		let state = emptyAuthoringLiveState();
 		for (const phase of ['prepare', 'checks', 'publish', 'provision', 'complete'] as const) {

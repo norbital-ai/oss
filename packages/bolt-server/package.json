@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.22",
+	"version": "0.0.1",
 	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
 	"type": "module",
 	"sideEffects": false,
@@ -35,7 +35,6 @@
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-rc.112",
 		"@norbital-ai/config": "workspace:*",
-		"@norbital-ai/test-utilities": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",
 		"@types/ws": "^8.18.1",

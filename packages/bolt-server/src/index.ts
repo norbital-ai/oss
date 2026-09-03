@@ -103,6 +103,7 @@ export {
 	type DispatchSystemCommandResult
 } from './dispatch-system.js';
 export {
+	SSE_INBOX_PATH,
 	startSessionGateway,
 	workspaceDocumentHtml,
 	type SessionGateway,

@@ -96,8 +96,11 @@
 					type="button"
 					size="sm"
 					variant="outline"
-					disabled={!canRestore || busy || !selected.current}
-					disabledMessage={t('bolt.studio.restoreReason')}
+					data-testid="studio-live-restore"
+					disabled={!canRestore || busy}
+					disabledMessage={t(
+						selected.current ? 'bolt.studio.restoreCurrentReason' : 'bolt.studio.restoreReason'
+					)}
 					onclick={() => onrestore?.()}
 				>
 					<Icon icon="lucide:history" class="size-3.5" />

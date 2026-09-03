@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Grid, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import type { AuthoringLiveState } from '#lib/client/ui/studio/authoring-live.js';
+	import {
+		authoringLogTone,
+		type AuthoringLiveState
+	} from '#lib/client/ui/studio/authoring-live.js';
 	import type { WorkbenchBuildReceipt } from '#lib/client/ui/studio/studio-state.js';
 
 	let {
@@ -77,6 +80,24 @@
 			}
 		}
 	};
+
+	const logToneClass = (level: string): string => {
+		const tone = authoringLogTone(level);
+		switch (tone) {
+			case 'danger':
+				return 'text-destructive';
+			case 'warning':
+				return 'text-amber-800 dark:text-amber-300';
+			case 'info':
+				return 'text-muted-foreground';
+			case 'default':
+				return 'text-foreground';
+			default: {
+				const unhandled: never = tone;
+				throw new Error(`Unhandled authoring log tone: ${String(unhandled)}`);
+			}
+		}
+	};
 </script>
 
 <Stack gap="lg" data-testid="studio-bundle-logs">
@@ -126,10 +147,14 @@
 			<Scroll name="Deploy log" class="max-h-64">
 				<ul class="rounded-md bg-muted/35 p-3 font-mono text-micro text-foreground">
 					{#each deploy as line, index (`${line.at}:${index}`)}
-						<li class="whitespace-pre-wrap break-all">{line.at} {line.level} {line.line}</li>
+						<li class={`whitespace-pre-wrap break-all ${logToneClass(line.level)}`}
+							>{line.at} {line.level} {line.line}</li
+						>
 					{/each}
 					{#each liveLogs as entry (entry.at + entry.line)}
-						<li class="whitespace-pre-wrap break-all">{entry.line}</li>
+						<li class={`whitespace-pre-wrap break-all ${logToneClass(entry.level)}`}
+							>{entry.line}</li
+						>
 					{/each}
 				</ul>
 			</Scroll>

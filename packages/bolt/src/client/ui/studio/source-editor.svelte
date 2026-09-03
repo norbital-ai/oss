@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import * as Breadcrumb from '@norbital-ai/ui/breadcrumb';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Cover, Grid, SCROLL_AXIS_CLASSES, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cover, Grid, SCROLL_AXIS_CLASSES, Stack } from '@norbital-ai/ui/layout';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import {
 		editorLanguage,
@@ -75,14 +75,22 @@
 			gap="none"
 			class="h-full min-h-0 divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
 		>
-			<Scroll name={t('bolt.studio.before')} class="min-w-0 p-3">
-				<Stack gap="xs">
-					<span class="text-micro font-medium text-foreground">{t('bolt.studio.before')}</span>
-					<pre
-						class="whitespace-pre-wrap break-all font-mono text-micro text-muted-foreground">{before ??
-							'∅'}</pre>
-				</Stack>
-			</Scroll>
+			<Stack gap="none" class="min-h-0 min-w-0">
+				<span class="px-3 pt-3 text-micro font-medium text-foreground">{t('bolt.studio.before')}</span>
+				{#if before === null}
+					<span class="px-3 pb-3 text-micro text-muted-foreground">∅</span>
+				{/if}
+				{#key path}
+					<CodeEditor
+						value={before ?? ''}
+						language={editorLanguage(path)}
+						readonly
+						ariaLabel={path}
+						minHeight="100%"
+						class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
+					/>
+				{/key}
+			</Stack>
 			<Stack gap="none" class="min-h-0 min-w-0">
 				<span class="px-3 pt-3 text-micro font-medium text-foreground">{t('bolt.studio.after')}</span>
 				{#key path}

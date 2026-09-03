@@ -9,14 +9,15 @@ export type UnsettledTaskAdmission = Readonly<{
 }>;
 
 /**
- * Paints the operator's text immediately. Once the Task row is a live findMany fact, the
- * unsettled admission is dropped so the durable message is the only copy on screen.
+ * Paints the operator's text immediately. Drop it only when a durable human
+ * `agent_message` for that Task is a live findMany fact — the Task row arrives
+ * first, and clearing on that fact leaves the composer empty with no transcript.
  */
 export const visibleUnsettledAdmission = (
 	admission: UnsettledTaskAdmission | null,
-	knownTaskIds: ReadonlySet<string>
+	tasksWithHumanMessage: ReadonlySet<string>
 ): UnsettledTaskAdmission | null =>
-	admission !== null && knownTaskIds.has(admission.taskId) ? null : admission;
+	admission !== null && tasksWithHumanMessage.has(admission.taskId) ? null : admission;
 
 /** Reuses a Task ID only for an exact retry of the same canonical submission identity. */
 export const retryableAdmission = (

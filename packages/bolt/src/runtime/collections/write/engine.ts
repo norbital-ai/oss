@@ -13,6 +13,7 @@ import {
 	type BrowserMutationFence,
 	type MutationInput
 } from '#lib/runtime/collections/collections.contract.js';
+import { prepareOwnedDescendants } from './cascade-delete.js';
 import { WRITE_DEPTH_LIMIT, ownsManyRelation, type WritableManyRelation } from './plan.js';
 
 export type GraphPreparedOperation = Readonly<{
@@ -244,7 +245,7 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	readonly randomId: () => string;
 }>;
 
-type GraphPrepareFns<E = unknown, R = never> = Readonly<{
+export type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 	readonly prepareDelete: (
 		collection: string,
 		row: Readonly<Record<string, unknown>>,
@@ -351,38 +352,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 						action: 'delete',
 						approval
 					});
-				// Deleting an owned row necessarily deletes the rows it owns. Plan every descendant through
-				// the same authorization, approval, hooks, history, sync and event pipeline before the
-				// database's foreign-key cascade can make them disappear invisibly.
-				for (const relation of ports.workspace.definition.relations) {
-					if (relation.source !== collection || relation.cardinality !== 'many') continue;
-					const edge = ports.resolveWritableManyRelation(
-						ports.workspace.definition,
-						collection,
-						relation.name
-					);
-					if (edge === undefined || !ownsManyRelation(edge)) continue;
-					const related = yield* ports.relatedRows(ports.scope(), edge, id);
-					ports.registerRelationshipSnapshot(edge, id, related.json);
-					const childModule = ports.authoredHooks[edge.childCollection];
-					const childPrepared = yield* ports.runDeletePrepare(
-						ports.effectId,
-						ports.subject,
-						edge.childCollection,
-						related.rows,
-						childModule,
-						ports.hookDepth + depth + 1,
-						ports.stageHookWrites
-					);
-					for (const child of related.rows)
-						yield* prepareDelete(
-							edge.childCollection,
-							child,
-							depth + 1,
-							false,
-							childPrepared
-						);
-				}
+				yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth);
 				ports.operations.splice(operationPosition, 0, {
 					action: 'delete',
 					collection,

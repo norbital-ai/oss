@@ -3,11 +3,10 @@
  * How a YAML rule document is compiled.
  *
  * Pack rules are declared as YAML. `defineRule` is the compiler: a `rule` field becomes a matcher,
- * and a `visitor` field is bound to a named check. `defineScope` sits beside it for co-occurring
- * signals bound to a lexical owner.
+ * and a `visitor` field is bound to a named check.
  *
- * Both compile to an ordinary `Rule`, so the runner, the ignore file, the allowance comments and
- * the catalogue treat them identically.
+ * Both forms compile to an ordinary `Rule`, so the runner, the ignore file, the allowance comments
+ * and the catalogue treat them identically.
  *
  * Examples are mandatory on a matcher, and a composite must carry a negative. A rule with no
  * counter-example is the usual way a detector becomes noise: `QRY1` had no example of the defect
@@ -147,19 +146,6 @@ function evidence(bindings: ReadonlyMap<string, string>): string {
 	return [...bindings].map(([key, value]) => `${key}=${value.slice(0, 40)}`).join(' ');
 }
 
-/** A node and everything beneath it, which is the extent a scope's signals may occupy. */
-function subtreeOf(node: ts.Node): ReadonlyArray<ts.Node> {
-	const collected: Array<ts.Node> = [node];
-	const visit = (current: ts.Node): void => {
-		ts.forEachChild(current, (child) => {
-			collected.push(child);
-			visit(child);
-		});
-	};
-	visit(node);
-	return collected;
-}
-
 /**
  * Define a rule.
  *
@@ -238,78 +224,6 @@ export function defineRule(definition: RuleDefinition): Rule {
 				if (!constraint.run(captured, context.sourceFile, new Map(bindings))) return;
 			}
 			context.report(node, evidence(bindingTexts(bindings, context.sourceFile)) || 'matched');
-		}
-	});
-}
-
-export type ScopeRule = Common &
-	Readonly<{
-		readonly examples: Examples;
-		/**
-		 * The lexical owners this rule groups by — a function, a component script, a class.
-		 *
-		 * Dispatch happens on these kinds, not on the kinds of the individual signals. Dispatching
-		 * per signal would walk the file once for each and then have to re-associate the hits with
-		 * an owner afterwards, which is the cost that pushed the original rule into a single pass
-		 * over variable names.
-		 */
-		readonly scope: ReadonlyArray<NodeKind>;
-		/** Mechanisms. Each counts once per scope however often it occurs. */
-		readonly signals: ReadonlyArray<Matcher>;
-		/** How many distinct signals constitute a reimplementation. */
-		readonly atLeast: number;
-		/**
-		 * The owner call whose presence exonerates the scope.
-		 *
-		 * This is the half that resists an agent rewriting everything: renaming identifiers does not
-		 * remove the timer, the flag, and the missing client call. The evidence is a mechanism plus
-		 * an *absence*, and an absence cannot be renamed away.
-		 */
-		readonly owner?: Matcher | undefined;
-	}>;
-
-export function defineScope(rule: ScopeRule): Rule {
-	assertExamples(rule, true);
-	const {
-		scope,
-		signals: describedSignals,
-		atLeast,
-		owner: describedOwner,
-		examples: _examples,
-		...definition
-	} = rule;
-	if (describedSignals.length < atLeast)
-		throw new Error(
-			`norbital-doctor: ${rule.id} requires ${atLeast} of ${describedSignals.length} signals, which can never be met`
-		);
-
-	const signals = describedSignals.map(compile);
-	const owner = describedOwner === undefined ? undefined : compile(describedOwner);
-
-	return defineRule({
-		...definition,
-		when: [...scope],
-		check(node, context) {
-			const source = context.sourceFile;
-			const subtree = subtreeOf(node);
-
-			// Calling the owner anywhere in the scope exonerates it: the code is using the thing,
-			// whatever else it also does.
-			if (owner !== undefined && subtree.some((child) => owner.run(child, source, new Map())))
-				return;
-
-			const matched: Array<number> = [];
-			for (const [index, signal] of signals.entries())
-				if (subtree.some((candidate) => signal.run(candidate, source, new Map())))
-					matched.push(index);
-			if (matched.length < atLeast) return;
-
-			context.report(
-				node,
-				`signals=${matched.length}/${signals.length} matched=[${matched.join(',')}]${
-					owner === undefined ? '' : ' owner=absent'
-				}`
-			);
 		}
 	});
 }

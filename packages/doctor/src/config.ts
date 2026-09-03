@@ -51,8 +51,6 @@ export type ProbeConfig = Readonly<{
 	readonly packs?: ReadonlyArray<Pack | string> | undefined;
 	/** YAML rule files, repository-relative globs. Defaults to every `.yaml` file under `.norbital/config/doctor`. */
 	readonly patterns?: string | ReadonlyArray<string> | undefined;
-	/** Rules authored inline or imported directly — the pack-maintainer surface, not the public one. */
-	readonly rules?: ReadonlyArray<Rule> | undefined;
 	/** Authored, pack, or pattern rule ids to switch off. */
 	readonly disable?: ReadonlyArray<string> | undefined;
 	/**
@@ -172,7 +170,7 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	config = (Result.getOrElse(outcome, () => undefined) ?? {}) as ProbeConfig;
 
 	const packNames: Array<string> = [];
-	const rules: Array<Rule> = [...(config.rules ?? [])];
+	const rules: Array<Rule> = [];
 
 	// Packs resolve concurrently and are consumed in declaration order: they are independent
 	// modules, and awaiting them one at a time made startup scale with pack count for no reason.

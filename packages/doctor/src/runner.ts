@@ -1,10 +1,8 @@
 /**
  * Run authored rules over a repository's sources.
  *
- * This is the syntactic tier, and it is deliberately independent of the legacy detector: rules here
- * are per-file and pure, so they parallelise and cache by construction, and a repository that loads
- * no packs pays nothing. Findings from both sources merge into one catalogue, so a consumer never
- * has to know which mechanism produced a row.
+ * This is the syntactic tier: rules here are per-file and pure, so they parallelise and cache by
+ * construction, and a repository that loads no packs pays nothing.
  *
  * Dispatch is by syntax kind. Every node is visited once and only the rules that asked for that
  * kind are consulted, rather than every rule's guard running against every node.
@@ -151,29 +149,6 @@ export function svelteScript(source: string): string | undefined {
 		found = true;
 	}
 	return found ? assembled : undefined;
-}
-
-/**
- * A component's markup, with `<script>` and `<style>` bodies blanked out.
- *
- * The inverse of `svelteScript`, padded the same way so a reported line is still the line in the
- * file the person opens. The layout rules describe markup — `UI17`'s own comment says exactly that
- * — but they were matching every line of the file, so a query filter `{ eq: record.id }` sitting in
- * the script reported as a uuid shown to an operator.
- */
-export function svelteMarkup(source: string): string {
-	const blank = (text: string): string => '\n'.repeat(text.split('\n').length - 1);
-	return (
-		source
-			.replace(
-				/(<(script|style)\b[^>]*>)([\s\S]*?)(<\/\2>)/g,
-				(_whole, open: string, _tag: string, body: string, close: string) =>
-					`${open}${blank(body)}${close}`
-			)
-			// An HTML comment is not rendered either, and prose describing markup reads like markup: a
-			// note beginning "This used to be a `div.overflow-x-auto`" reported as a raw scroll region.
-			.replace(/<!--[\s\S]*?-->/g, blank)
-	);
 }
 
 function scriptKind(file: string): ts.ScriptKind {

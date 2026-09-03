@@ -11,7 +11,7 @@ import test from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { runRules, svelteMarkup } from '@norbital-ai/doctor';
+import { runRules } from '@norbital-ai/doctor';
 import { svelteRules } from '../build/index.js';
 
 function component(name: string, source: string): string {
@@ -29,16 +29,6 @@ function rulesFor(root: string): ReadonlyArray<string> {
 		(finding) => finding.rule
 	);
 }
-
-test('svelteMarkup blanks script and style bodies without moving a line', () => {
-	const source = '<script>\n\tconst a = 1;\n\tconst b = 2;\n</script>\n\n<p>text</p>\n';
-	const markup = svelteMarkup(source);
-	assert.equal(markup.split('\n').length, source.split('\n').length);
-	assert.equal(markup.includes('const a = 1'), false);
-	assert.equal(markup.includes('<p>text</p>'), true);
-	// The opening and closing tags survive, so markup rules still see the element boundaries.
-	assert.equal(markup.includes('<script>'), true);
-});
 
 test('UI17 reads the markup and ignores an id that never leaves the script', (context) => {
 	const root = component(

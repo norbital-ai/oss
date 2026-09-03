@@ -13,40 +13,26 @@ export type LlmProviderEndpoint<TEnvironmentName extends string = string> =
 	| string
 	| EnvironmentReference<TEnvironmentName>;
 
-export type HostedLlmProviderDescriptor<
-	TModel extends string = string,
-	TCredentialEnvironment extends string = string
-> = Readonly<{
-	readonly model: TModel;
-	readonly apiKey: EnvironmentReference<TCredentialEnvironment>;
-	readonly endpoint?: never;
-}>;
-
-export type OpenAICompatibleLlmProviderDescriptor<
-	TModel extends string = string,
-	TCredentialEnvironment extends string = string,
-	TEndpointEnvironment extends string = string
-> = Readonly<{
-	readonly model: TModel;
-	readonly apiKey?: EnvironmentReference<TCredentialEnvironment>;
-	readonly endpoint: LlmProviderEndpoint<TEndpointEnvironment>;
-}>;
-
 /**
  * Provider-neutral authored model connection. The registry key supplies the adapter name; this
  * value carries only provider model identity and references needed to establish that connection.
+ * A hosted adapter names a credential and no endpoint; an OpenAI-compatible one names an endpoint.
  */
 export type LlmProviderDescriptor<
 	TModel extends string = string,
 	TCredentialEnvironment extends string = string,
 	TEndpointEnvironment extends string = string
 > =
-	| HostedLlmProviderDescriptor<TModel, TCredentialEnvironment>
-	| OpenAICompatibleLlmProviderDescriptor<
-			TModel,
-			TCredentialEnvironment,
-			TEndpointEnvironment
-	  >;
+	| Readonly<{
+			readonly model: TModel;
+			readonly apiKey: EnvironmentReference<TCredentialEnvironment>;
+			readonly endpoint?: never;
+	  }>
+	| Readonly<{
+			readonly model: TModel;
+			readonly apiKey?: EnvironmentReference<TCredentialEnvironment>;
+			readonly endpoint: LlmProviderEndpoint<TEndpointEnvironment>;
+	  }>;
 
 export type LlmProviderConfigurationErrorCode =
 	| 'unsupported-option'

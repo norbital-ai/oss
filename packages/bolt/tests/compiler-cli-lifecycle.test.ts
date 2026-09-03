@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,4 +34,27 @@ describe('Bolt CLI lifecycle', () => {
 		expect(String(failure.stderr)).toContain('Bolt sync failed:');
 		expect(String(failure.stderr)).not.toContain('node:internal/process/promises');
 	});
+
+	it('writes doctor evidence under .norbital/diagnosis for bolt audit --json', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'bolt-cli-audit-'));
+		temporaryRoots.push(root);
+		await mkdir(join(root, 'src'), { recursive: true });
+		await writeFile(join(root, 'package.json'), '{"name":"bolt-cli-audit","type":"module"}\n');
+		await writeFile(join(root, 'src', 'ok.ts'), 'export const value = 1;\n');
+
+		const ran = await run(jiti, [cli, 'audit', '--root', root, '--json'], {
+			cwd: packageRoot
+		}).catch((failure: NodeJS.ErrnoException & { stdout?: string }) => failure);
+		const stdout = 'stdout' in ran ? String(ran.stdout) : '';
+		expect(stdout).toContain('"cataloguePath"');
+		expect(stdout).toContain('.norbital/diagnosis');
+
+		const receipt = JSON.parse(
+			await readFile(join(root, '.norbital', 'diagnosis', 'receipt.json'), 'utf8')
+		) as { complete: boolean; findings: string };
+		expect(receipt.complete).toBe(true);
+		expect(receipt.findings).toBe('findings.tsv');
+		await readFile(join(root, '.norbital', 'diagnosis', 'findings.tsv'));
+		await readFile(join(root, '.norbital', 'diagnosis', 'metrics.tsv'));
+	}, 60_000);
 });

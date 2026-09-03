@@ -3,7 +3,7 @@ import { Result, Schema } from 'effect';
 import ts from 'typescript';
 import { SYSTEM_COLUMN_NAMES } from '../authoring/system-row-model.js';
 
-export const forbiddenBoltDependencies = [
+const forbiddenBoltDependencies = [
 	'@norbital-ai/pod',
 	/*
 	 * The whole package, not just `/runtime`.

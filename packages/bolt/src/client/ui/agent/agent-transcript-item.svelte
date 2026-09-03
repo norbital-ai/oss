@@ -1,7 +1,8 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Result } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import type { CompactOrigin } from './context-view.js';
@@ -42,6 +43,11 @@
 			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
 			() => String(value)
 		);
+	}
+
+	function diagnosticLanguage(value: unknown): 'json' | 'plaintext' {
+		const text = diagnostic(value).trimStart();
+		return text.startsWith('{') || text.startsWith('[') ? 'json' : 'plaintext';
 	}
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {
@@ -160,13 +166,16 @@
 									<span class="font-medium">{part.name}</span>
 								</Inline>
 							</summary>
-							<Scroll
-								axis="both"
-								name="Tool call details"
-								class="mt-1 max-h-56 rounded-md border bg-background p-2"
-							>
-								<pre class="m-0 font-mono text-micro">{diagnostic(part.params)}</pre>
-							</Scroll>
+							<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
+								<CodeEditor
+									value={diagnostic(part.params)}
+									language={diagnosticLanguage(part.params)}
+									readonly
+									ariaLabel="Tool call"
+									minHeight="7rem"
+									class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
+								/>
+							</div>
 						</details>
 					{:else if part.type === 'tool-result'}
 						<details class="group/tool-result rounded-lg px-2 py-1.5 text-xs">
@@ -179,13 +188,16 @@
 									<span class="font-medium">{part.name}</span>
 								</Inline>
 							</summary>
-							<Scroll
-								axis="both"
-								name="Tool result details"
-								class="mt-1 max-h-56 rounded-md border bg-background p-2"
-							>
-								<pre class="m-0 font-mono text-micro">{diagnostic(part.result)}</pre>
-							</Scroll>
+							<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
+								<CodeEditor
+									value={diagnostic(part.result)}
+									language={diagnosticLanguage(part.result)}
+									readonly
+									ariaLabel="Tool result"
+									minHeight="7rem"
+									class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
+								/>
+							</div>
 						</details>
 					{:else if part.type === 'tool-approval-request'}
 						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">

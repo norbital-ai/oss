@@ -79,6 +79,7 @@ export type SelfHostSession = {
 	readonly gatewaySecret: string;
 	readonly tenantId: string;
 	readonly scope: FacilityBindings['scope'];
+	readonly files: StartedLocalFiles | undefined;
 	readonly guestCommand: (
 		command: string,
 		input: unknown,
@@ -406,6 +407,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 			gatewaySecret,
 			tenantId,
 			scope,
+			files,
 			guestCommand: (command, commandInput, authority) =>
 				guestCommand({
 					baseUrl: started.baseUrl,

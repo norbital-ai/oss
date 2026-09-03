@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
@@ -12,6 +13,7 @@
 		boundTriple,
 		canWorkOnMergeRequest,
 		CHANGES_DIFF_BASELINE_KEY,
+		editorLanguage,
 		isChangesView,
 		LIFECYCLE_RAIL,
 		lifecycleRailCurrent,
@@ -291,25 +293,35 @@
 									gap="none"
 									class="divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
 								>
-									<Scroll name="Review payload" class="min-w-0 p-3">
-										<Stack gap="xs">
-											<span class="text-micro font-medium text-foreground"
-												>{t('bolt.studio.before')}</span
-											>
-											<pre
-												class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.before ??
-													'∅'}</pre>
-										</Stack>
-									</Scroll>
-									<Scroll name="Review payload" class="min-w-0 p-3">
-										<Stack gap="xs">
-											<span class="text-micro font-medium text-foreground"
-												>{t('bolt.studio.after')}</span
-											>
-											<pre
-												class="max-h-80 whitespace-pre-wrap break-all font-mono text-micro text-foreground">{file.after}</pre>
-										</Stack>
-									</Scroll>
+									<Stack gap="xs" class="min-h-0 min-w-0 p-3">
+										<span class="text-micro font-medium text-foreground"
+											>{t('bolt.studio.before')}</span
+										>
+										{#if file.before === null}
+											<span class="text-micro text-muted-foreground">∅</span>
+										{/if}
+										<CodeEditor
+											value={file.before ?? ''}
+											language={editorLanguage(file.path)}
+											readonly
+											ariaLabel={file.path}
+											minHeight="7rem"
+											class="h-full max-h-80 w-full min-h-0 rounded-none border-0 shadow-none"
+										/>
+									</Stack>
+									<Stack gap="xs" class="min-h-0 min-w-0 p-3">
+										<span class="text-micro font-medium text-foreground"
+											>{t('bolt.studio.after')}</span
+										>
+										<CodeEditor
+											value={file.after}
+											language={editorLanguage(file.path)}
+											readonly
+											ariaLabel={file.path}
+											minHeight="7rem"
+											class="h-full max-h-80 w-full min-h-0 rounded-none border-0 shadow-none"
+										/>
+									</Stack>
 								</Grid>
 							</Stack>
 						{/each}
@@ -343,8 +355,14 @@
 										{t('bolt.studio.rawSql')}
 									</Button>
 									{#if openSql.includes(step.id)}
-										<pre
-											class="whitespace-pre-wrap break-all font-mono text-micro text-muted-foreground">{step.sql}</pre>
+										<CodeEditor
+											value={step.sql}
+											language="plaintext"
+											readonly
+											ariaLabel={step.sql}
+											minHeight="7rem"
+											class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
+										/>
 									{/if}
 								</li>
 							{/each}

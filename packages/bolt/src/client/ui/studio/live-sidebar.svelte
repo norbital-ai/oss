@@ -53,6 +53,16 @@
 							{t('bolt.studio.currentRelease')}
 						</span>
 					{/if}
+					{#if release.commit !== undefined}
+						<span class="block truncate font-mono text-micro text-muted-foreground">
+							{release.commit.slice(0, 12)}
+						</span>
+					{/if}
+					{#if release.checkpointAt !== undefined}
+						<span class="block text-micro text-muted-foreground">
+							{t('bolt.studio.restoreCheckpoint', { at: release.checkpointAt })}
+						</span>
+					{/if}
 					{#if release.artifactId !== undefined}
 						<span class="block truncate font-mono text-micro text-muted-foreground">
 							{release.artifactId}

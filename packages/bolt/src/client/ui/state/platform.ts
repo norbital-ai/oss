@@ -61,7 +61,6 @@ export type PlatformState = Readonly<{
 	readonly envoys: ReadonlyArray<PlatformEnvoy>;
 }>;
 export type DetailLocation = Readonly<{ readonly collection: string; readonly recordId: string }>;
-export type BoltRoute = Readonly<{ readonly app: string; readonly path: string }>;
 
 const [readPlatformState, writePlatformState] = createContext<() => PlatformState>();
 export const getPlatformStateContext = readPlatformState;
@@ -74,18 +73,11 @@ const PlatformNavigation = {
 		location: DetailLocation
 	): ReadonlyArray<DetailLocation> => [...stack, location],
 	popDetail: (stack: ReadonlyArray<DetailLocation>): ReadonlyArray<DetailLocation> =>
-		stack.slice(0, -1),
-	parseRoute: (pathname: string): BoltRoute => {
-		const parts = pathname.split('/').filter(Boolean);
-		return { app: parts[0] ?? '', path: `/${parts.slice(1).join('/')}` };
-	}
+		stack.slice(0, -1)
 };
 export const pushDetail = PlatformNavigation.pushDetail;
 /** Owns pop detail behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 export const popDetail = PlatformNavigation.popDetail;
-
-/** Owns parse route behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
-export const parseRoute = PlatformNavigation.parseRoute;
 
 /** Owns latest query behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 export class LatestQuery<T> {

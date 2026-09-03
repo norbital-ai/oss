@@ -38,7 +38,7 @@ const DescriptorPayload = Schema.Struct({
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
 
 /** Encodes one ImageAsset as a file-part data string. Never base64 or a data URL. */
-export function encodeImageDescriptorData(asset: ImageAsset): string {
+function encodeImageDescriptorData(asset: ImageAsset): string {
 	return `${IMAGE_DESCRIPTOR_SCHEME}${JSON.stringify({
 		key: asset.key,
 		name: asset.name,
@@ -49,7 +49,7 @@ export function encodeImageDescriptorData(asset: ImageAsset): string {
 }
 
 /** Reads one descriptor from a file-part data value. Bytes and data URLs are refused. */
-export function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
+function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
 	if (typeof data !== 'string' || !data.startsWith(IMAGE_DESCRIPTOR_SCHEME)) return undefined;
 	const raw = data.slice(IMAGE_DESCRIPTOR_SCHEME.length);
 	const parsed = Option.getOrUndefined(

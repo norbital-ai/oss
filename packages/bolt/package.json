@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.22",
+	"version": "0.0.1",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [
@@ -60,10 +60,6 @@
 			"types": "./build/host.d.ts",
 			"default": "./build/host.js"
 		},
-		"./llm_provider": {
-			"types": "./build/llm_provider.d.ts",
-			"default": "./build/llm_provider.js"
-		},
 		"./vite": {
 			"types": "./build/compiler/vite-plugin.d.ts",
 			"default": "./build/compiler/vite-plugin.js"
@@ -71,10 +67,6 @@
 		"./runtime": {
 			"types": "./build/runtime/app.d.ts",
 			"default": "./build/runtime/app.js"
-		},
-		"./quality": {
-			"types": "./build/quality/audit.d.ts",
-			"default": "./build/quality/audit.js"
 		}
 	},
 	"imports": {

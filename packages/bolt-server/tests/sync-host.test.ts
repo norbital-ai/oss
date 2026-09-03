@@ -633,6 +633,28 @@ describe('bolt-server Sync v2 host', () => {
 		assert.deepStrictEqual(probe.closed, []);
 	});
 
+	it('registers a missing physical connection on connect so a dropped SSE can still load', async () => {
+		const host = makeSyncHost(makeBridge({}));
+		const connected = await host.connect({
+			connectionId: 'orphaned-stream',
+			principal: 'reader',
+			scope: configuration.scope,
+			credential: 'reader',
+			request: {
+				queries: [
+					{
+						queryKey: 'steps',
+						input: { kind: 'findMany', collection: 'steps' },
+						requestedPrefix: 1
+					}
+				],
+				detached: [],
+				pending: []
+			}
+		});
+		expect(connected.queries).toHaveLength(1);
+	});
+
 	it('detaches non-writable consumers and closes browser replacement streams', async () => {
 		const host = makeSyncHost(makeBridge({}));
 		const { probe: slow } = await openAndConnect(

@@ -34,15 +34,14 @@ Template distribution is **not** owned here any more. Templates live in their ow
 [`norbital-ai/templates`](https://github.com/norbital-ai/templates) (public, advertised on the
 website) and `norbital-ai/templates-private` (not advertised) — and each carries the tooling that
 used to sit in this repository: projection to `refs/heads/templates/<key>`, per-template lockfile
-resolution and offline-install verification, standalone projection validation, depset
-materialization, and the runtime bundle smoke test.
+resolution and offline-install verification, and standalone projection validation.
 
 The contract a host consumes is unchanged, only wider: it resolves the active set with one
 `git ls-remote --heads <url> 'refs/heads/templates/*'` **per configured remote** and merges the
 results, so template keys must be unique across the remotes. Which repository a template lives in
 decides exactly one thing — whether the website advertises it.
 
-See the template repositories' own READMEs for the projection, lockfile, and depset contracts.
+See the template repositories' own READMEs for the projection and lockfile contracts.
 
 ## Package archives
 

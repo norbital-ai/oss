@@ -167,15 +167,15 @@ export default definePack({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({ 	rules: [noFetch],
-	packs: ['./dr/packs/house.ts']
+export default defineConfig({
+	packs: [{ name: 'acme', rules: [noFetch] }, './dr/packs/house.ts']
 });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const config = await loadConfig(root);
-	assert.deepEqual(config.packs, ['house']);
+	assert.deepEqual(config.packs, ['acme', 'house']);
 	assert.deepEqual(config.rules.map((rule) => rule.id).sort(), ['ACME1', 'HOUSE1']);
 });
 
@@ -188,7 +188,7 @@ const make = (id) => defineRule({
 	id, severity: 'error', summary: 's', principles: ['simplicity'],
 	when: ['CallExpression'], check() {}
 });
-export default defineConfig({  rules: [make('KEEP'), make('DROP')], disable: ['DROP'] });
+export default defineConfig({ packs: [{ name: 'local', rules: [make('KEEP'), make('DROP')] }], disable: ['DROP'] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -309,7 +309,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({  rules: [noFetch] });
+export default defineConfig({ packs: [{ name: 'acme', rules: [noFetch] }] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -335,11 +335,12 @@ test('authored findings merge into the built-in authenticated catalogue', async 
 		'package.json': '{"name":"merged-evidence","type":"module"}',
 		'src/a.ts': 'export const value = 1;\n',
 		'doctor.config.ts': `import { defineConfig, defineRule } from '${packageRoot}build/index.js';
-export default defineConfig({ 	rules: [defineRule({
+export default defineConfig({
+	packs: [{ name: 'acme', rules: [defineRule({
 		id: 'ACME_MERGE', severity: 'error', summary: 'authored merge fixture',
 		principles: ['testability'], when: ['VariableDeclaration'], files: ['src/a.ts'],
 		check(node, context) { context.report(node); }
-	})]
+	})] }]
 });
 `
 	});
@@ -352,7 +353,7 @@ export default defineConfig({ 	rules: [defineRule({
 	assert.equal(result.receipt.tiers.graph, true);
 	assert.match(readFileSync(result.cataloguePath, 'utf8'), /\tACME_MERGE\t/);
 	assert.equal(result.receipt.counts.total, result.findings.length);
-	assert.deepEqual(result.packs, []);
+	assert.deepEqual(result.packs, ['acme']);
 });
 
 test('the dev-loop audit reloads an imported authored rule instead of reusing the ESM cache', async (context) => {
@@ -371,7 +372,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import rule from './${rulePath}';
-export default defineConfig({  rules: [rule] });
+export default defineConfig({ packs: [{ name: 'acme', rules: [rule] }] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));

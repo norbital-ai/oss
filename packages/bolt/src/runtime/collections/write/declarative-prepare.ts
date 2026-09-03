@@ -15,6 +15,7 @@ import type {
 	GraphPreparePorts,
 	GraphRootSeed
 } from './engine.js';
+import { settleRootWave } from './root-wave.js';
 import { makeGraphPreparers } from './engine.js';
 import { ownsManyRelation, WRITE_DEPTH_LIMIT, type WritableManyRelation } from './plan.js';
 import type {
@@ -665,59 +666,43 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				seed.action === 'update' ? { ...decoded, id: seed.id } : decoded
 			);
 			const preparationOwner = preparationSeeds.find((seed) => seed.action !== 'delete');
-			if (preparationOwner?.id === options.rootId) {
-				const attempted = yield* Effect.result(
-					ports.runMutatePrepare(
-						effectId,
-						subject,
-						rootCollection,
-						rootInputs,
-						rootModule,
-						hookDepth,
-						stageHookWrites
-					)
-				);
-				if (Result.isFailure(attempted)) {
-					yield* Deferred.fail(rootPreparation, attempted.failure);
-					return yield* Effect.fail(attempted.failure);
-				}
-				rootPrepared = attempted.success;
-				yield* Deferred.succeed(rootPreparation, rootPrepared);
-			} else {
-				rootPrepared = yield* Deferred.await(rootPreparation);
-			}
+			rootPrepared = yield* settleRootWave(
+				rootPreparation,
+				preparationOwner?.id === options.rootId,
+				ports.runMutatePrepare(
+					effectId,
+					subject,
+					rootCollection,
+					rootInputs,
+					rootModule,
+					hookDepth,
+					stageHookWrites
+				)
+			);
 		}
 		if (options.rootAction === 'delete') {
 			const deleteSeeds = options.primeRoots.filter((seed) => seed.action === 'delete');
 			const deleteOwner = deleteSeeds[0];
-			if (deleteOwner === undefined || deleteOwner.id === options.rootId) {
-				const existing: Array<Readonly<Record<string, unknown>>> = [];
-				for (const seed of deleteSeeds) {
-					const storedExisting = storedGraphRowsCache.get(
-						storedGraphRowKey(seed.collection, seed.id)
-					);
-					if (storedExisting !== undefined) existing.push(storedExisting.row);
-				}
-				const attempted = yield* Effect.result(
+			rootPrepared = yield* settleRootWave(
+				rootDeletePreparation,
+				deleteOwner === undefined || deleteOwner.id === options.rootId,
+				Effect.suspend(() =>
 					ports.runDeletePrepare(
 						effectId,
 						subject,
 						rootCollection,
-						existing,
+						deleteSeeds.flatMap((seed) => {
+							const storedExisting = storedGraphRowsCache.get(
+								storedGraphRowKey(seed.collection, seed.id)
+							);
+							return storedExisting === undefined ? [] : [storedExisting.row];
+						}),
 						ports.authoredHooks[rootCollection],
 						hookDepth,
 						stageHookWrites
 					)
-				);
-				if (Result.isFailure(attempted)) {
-					yield* Deferred.fail(rootDeletePreparation, attempted.failure);
-					return yield* Effect.fail(attempted.failure);
-				}
-				rootPrepared = attempted.success;
-				yield* Deferred.succeed(rootDeletePreparation, rootPrepared);
-			} else {
-				rootPrepared = yield* Deferred.await(rootDeletePreparation);
-			}
+				)
+			);
 			const stored = yield* storedGraphRow(
 				EffectId.make(`${effectId}:graph:root-delete`),
 				rootCollection,

@@ -361,17 +361,3 @@ export function loadPackDirectory(directory: string): ReadonlyArray<Rule> {
 	for (const name of names) loadFile(name, join(directory, name), rules, declared);
 	return rules;
 }
-
-/** A matcher document, or a rule file's `rule` field — reusable shapes that are not themselves rules. */
-export function loadMatcherFile(absolute: string): Matcher {
-	const read = Effect.runSync(Effect.result(Effect.try(() => parseYaml(readFileSync(absolute, 'utf8')))));
-	const document = Result.getOrElse(read, (error) => {
-		throw new Error(`norbital-doctor: ${absolute}: invalid YAML: ${getErrorMessage(error)}`);
-	});
-	if (typeof document === 'string') return document;
-	const record = jsonRecord(document);
-	if (record === undefined)
-		throw new Error(`norbital-doctor: ${absolute}: expected a matcher mapping or pattern string`);
-	if (record.rule !== undefined) return record.rule as Matcher;
-	return document as Matcher;
-}

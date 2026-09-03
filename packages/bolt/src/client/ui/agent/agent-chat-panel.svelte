@@ -465,6 +465,7 @@
 
 	function submit(priority: 'normal' | 'steer' = 'normal') {
 		return Effect.suspend(() => {
+			if (composer !== null && composer.value !== draft) draft = composer.value;
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
 			if (message.length === 0 && pendingImages.length === 0) return Effect.void;
@@ -542,7 +543,9 @@
 	}
 
 	function attemptSend(priority: 'normal' | 'steer' = 'normal'): void {
-		if (!canSend) return;
+		if (composer !== null && composer.value !== draft) draft = composer.value;
+		const parsed = parseTaskSlashCommand(draft);
+		if (pending || controlPending || !taskAcceptsSubmission || !draftSendable(parsed)) return;
 		if (revisedMessage !== null) {
 			Effect.runFork(editRevision());
 			return;
@@ -597,11 +600,15 @@
 		});
 	});
 
-	const visibleAdmission = $derived(
-		visibleUnsettledAdmission(
-			unsettledAdmission,
-			new Set(allTasks.map((task) => task.id))
+	const tasksWithHumanMessage = $derived(
+		new Set(
+			panelMessages
+				.filter((message) => message.author.kind === 'human')
+				.map((message) => message.taskId)
 		)
+	);
+	const visibleAdmission = $derived(
+		visibleUnsettledAdmission(unsettledAdmission, tasksWithHumanMessage)
 	);
 </script>
 

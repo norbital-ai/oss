@@ -44,7 +44,8 @@
 		// only as a devDependency. Default `^build` / `^lint` / `^test` walk that edge and form a
 		// cycle. Keep production build one-way: helper waits on the server; the server does not.
 		"@norbital-ai/bolt-server#build": {
-			"dependsOn": ["@norbital-ai/bolt-protocol#build", "@norbital-ai/std#build"]
+			"dependsOn": ["@norbital-ai/bolt-protocol#build", "@norbital-ai/std#build"],
+			"outputs": ["build/**"]
 		},
 		"@norbital-ai/bolt-server#lint": {
 			"dependsOn": ["@norbital-ai/bolt-protocol#build", "@norbital-ai/std#build"]

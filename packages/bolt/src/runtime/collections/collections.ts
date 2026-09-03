@@ -506,7 +506,7 @@ const quoteStringLiteral = (value: string): string => `'${value.replaceAll("'", 
  * protocol and to spend minutes on Neon. The wanted list is one `values` clause; each collection
  * is one join. The capture guard still refuses a missing row.
  */
-export const ordinaryMutationCaptureStatement = (
+const ordinaryMutationCaptureStatement = (
 	operations: ReadonlyArray<Pick<GraphPreparedOperation, 'collection' | 'id'>>
 ): { readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> } => {
 	if (operations.length === 0)
@@ -2296,19 +2296,51 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 				column: string
 			): boolean => definition.fields[column]?.type === 'json';
+			const isVectorColumn = (
+				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				column: string
+			): boolean =>
+				definition.fields[column]?.sqlType?.toLowerCase().startsWith('vector(') === true;
 			const boundParameter = (
 				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 				column: string,
 				value: Schema.Json
-			): Schema.Json =>
-				isJsonColumn(definition, column) && Array.isArray(value) ? JSON.stringify(value) : value;
+			): Schema.Json => {
+				if (Array.isArray(value)) {
+					if (isVectorColumn(definition, column) || isJsonColumn(definition, column)) {
+						return JSON.stringify(value);
+					}
+				}
+				if (
+					isJsonColumn(definition, column) &&
+					value !== null &&
+					typeof value === 'object' &&
+					!Array.isArray(value)
+				) {
+					return JSON.stringify(value);
+				}
+				return value;
+			};
 			const boundPlaceholder = (
 				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 				column: string,
 				value: Schema.Json,
 				position: number
-			): string =>
-				`$${position}${isJsonColumn(definition, column) && Array.isArray(value) ? '::jsonb' : ''}`;
+			): string => {
+				if (Array.isArray(value)) {
+					if (isVectorColumn(definition, column)) return `$${position}::vector`;
+					if (isJsonColumn(definition, column)) return `$${position}::jsonb`;
+				}
+				if (
+					isJsonColumn(definition, column) &&
+					value !== null &&
+					typeof value === 'object' &&
+					!Array.isArray(value)
+			 ) {
+					return `$${position}::jsonb`;
+				}
+				return `$${position}`;
+			};
 
 			/** One node of a batch create: the mutation, its authoring definition, the predicate that gates it, and the layer its flatten-graph position put it above. */
 			type CreateStatementNode = Readonly<{
@@ -2376,9 +2408,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						table: input.collection,
 						layer,
 						columns: columnValues.map(([name]) => name),
-						casts: columnValues.map(([name, value]) =>
-							isJsonColumn(definition, name) && Array.isArray(value) ? '::jsonb' : ''
-						),
+						casts: columnValues.map(([name, value]) => {
+							if (Array.isArray(value)) {
+								if (isVectorColumn(definition, name)) return '::vector';
+								if (isJsonColumn(definition, name)) return '::jsonb';
+							}
+							if (
+								isJsonColumn(definition, name) &&
+								value !== null &&
+								typeof value === 'object' &&
+								!Array.isArray(value)
+							) {
+								return '::jsonb';
+							}
+							return '';
+						}),
 						parameters: columnValues.map(([name, value]) =>
 							boundParameter(definition, name, value)
 						),
@@ -2449,8 +2493,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									subject.userId,
 									nodeEffectId,
 									governingApprovalRequest ?? null,
-									values
-								]
+									encodedJsonb(values as Exclude<Schema.Json, null>)
+								],
+								casts: ['', '', '', '', '', '', '::jsonb']
 							})
 						);
 					for (const delivery of outboxDeliveries(
@@ -2966,7 +3011,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// acts where `total > horizon`, so pruning a create is a guaranteed no-op. It was not a
 				// free one: the prune is a fixed ~1.8 KB recursive statement emitted once per record, so
 				// a payroll run creating 4,000 rows sent 4,000 verbatim copies — 7.1 MB, 53% of a
-				// 13.5 MB facility request that then breached the 1 MiB ceiling and failed the write.
+				// 13.5 MB facility request.
 				// Updates and deletes still prune, which is where a history log can actually outgrow it.
 				const historyPrunes = historyPruneStatements(
 					operations.filter((operation) => operation.action !== 'create')

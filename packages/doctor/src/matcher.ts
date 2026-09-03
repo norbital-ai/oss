@@ -26,7 +26,7 @@ export type MatchResult = Readonly<{ matched: boolean; bindings: ReadonlyMap<str
 
 export type StopBy = 'neighbor' | 'end' | Matcher;
 
-export type Strictness = 'cst' | 'smart' | 'ast' | 'relaxed' | 'signature' | 'template';
+export type Strictness = 'cst' | 'ast' | 'signature' | 'template';
 
 export type NthChild =
 	| number
@@ -237,7 +237,7 @@ function matchShape(
 	target: ts.Node,
 	source: ts.SourceFile,
 	bindings: Bindings,
-	strictness: Strictness = 'smart'
+	strictness: Strictness = 'ast'
 ): boolean {
 	const patternNode = unwrap(pattern);
 	const targetNode = unwrap(target);
@@ -397,7 +397,7 @@ export function compile(matcher: Matcher): Compiled {
 		const text = typeof style === 'string' ? style : style.context;
 		const selector = typeof style === 'string' ? undefined : style.selector;
 		const strictness: Strictness =
-			(typeof style === 'string' ? undefined : style.strictness) ?? 'smart';
+			(typeof style === 'string' ? undefined : style.strictness) ?? 'ast';
 		const whole = parsePattern(text);
 		const parsed = selector === undefined ? whole : (findKind(whole, selector) ?? whole);
 		const kind = ts.SyntaxKind[unwrap(parsed).kind] as NodeKind;

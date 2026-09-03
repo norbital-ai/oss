@@ -5,7 +5,6 @@ import type { AgentRuntimeConfig } from '../src/client/ui/agent/client.svelte.js
 import type { AutomationRunsClient } from '../src/client/ui/studio/workspace-client.js';
 import {
 	ManifestSchema,
-	formatMicroSgd,
 	hookSummaryKey,
 	integrationBindingSummary,
 	manifestInspectionState,
@@ -13,22 +12,20 @@ import {
 	reviewFreshness,
 	reviewNextOwner,
 	reviewRelativeTime,
-	workbenchPreviewState,
 	workspaceEnvoys,
 	boundTriple,
 	canWorkOnMergeRequest,
 	CHANGES_DIFF_BASELINE_KEY,
-	evidenceLogs,
+	editorLanguage,
 	liveReleaseTimeline,
 	newCommitsBehindHead,
 	sourceFileMark,
 	sourceTreeEntryBadge,
 	studioTabOwns,
-	studioTabOwnership,
 	workbenchDiagnosisState,
 	workbenchDiffBaselineKey,
 	type HostSnapshot,
-	type ReleaseRequest
+	type MergeRequest
 } from '../src/client/ui/studio/studio-state.js';
 import {
 	AUTOMATIONS_PATH,
@@ -38,7 +35,7 @@ import {
 	manifestDestinationHref
 } from '../src/client/ui/shell/workspace-navigation.js';
 
-const request = (overrides: Partial<ReleaseRequest> = {}): ReleaseRequest => ({
+const request = (overrides: Partial<MergeRequest> = {}): MergeRequest => ({
 	id: 'review-1',
 	tenantId: 'tenant-1',
 	environmentId: 'live',
@@ -107,34 +104,13 @@ describe('Workspace Studio collaboration presentation', () => {
 		expect(reviewNextOwner('ready', 'live_advanced')).toBe('author');
 	});
 
-	it('presents review age and Preview validity without inventing shared draft state', () => {
+	it('presents review age without inventing shared draft state', () => {
 		expect(
 			reviewRelativeTime('2026-09-01T00:30:00.000Z', Date.parse('2026-09-01T02:00:00.000Z'))
 		).toEqual({ messageKey: 'bolt.studio.hoursAgo', count: 1 });
 		expect(reviewRelativeTime('invalid', 0)).toEqual({
 			messageKey: 'bolt.studio.timeUnavailable'
 		});
-		expect(
-			workbenchPreviewState({
-				preview: { commit: 'candidate', expiresAtEpochMs: 2_000 },
-				sourceCommit: 'candidate',
-				nowEpochMs: 1_000
-			})
-		).toBe('current');
-		expect(
-			workbenchPreviewState({
-				preview: { commit: 'candidate', expiresAtEpochMs: 1_000 },
-				sourceCommit: 'candidate',
-				nowEpochMs: 1_000
-			})
-		).toBe('expired');
-		expect(
-			workbenchPreviewState({
-				preview: { commit: 'older', expiresAtEpochMs: 2_000 },
-				sourceCommit: 'candidate',
-				nowEpochMs: 1_000
-			})
-		).toBe('stale');
 	});
 });
 
@@ -324,20 +300,10 @@ describe('Workspace Studio manifest handoff', () => {
 			})
 		).toThrow(/missing authored source paths/);
 	});
-
-	it('formats only the host-provided monetary estimate', () => {
-		expect(formatMicroSgd(1_250_000)).toContain('1.25');
-	});
 });
 
 describe('workspace navigation sections', () => {
 	it('gives workbench diagnosis only; Changes and Live own the bundle furniture', () => {
-		expect(studioTabOwnership('workbench')).toEqual({
-			manifest: false,
-			logs: false,
-			lifecycle: false,
-			diagnosis: true
-		});
 		expect(studioTabOwns('workbench', 'manifest')).toBe(false);
 		expect(studioTabOwns('workbench', 'logs')).toBe(false);
 		expect(studioTabOwns('workbench', 'lifecycle')).toBe(false);
@@ -454,6 +420,8 @@ describe('workspace navigation sections', () => {
 				releaseId: 'release-live',
 				artifactId: 'artifact-live',
 				current: true,
+				commit: build.commit,
+				checkpointAt: undefined,
 				build,
 				deploy
 			},
@@ -461,35 +429,52 @@ describe('workspace navigation sections', () => {
 				releaseId: 'release-old',
 				artifactId: undefined,
 				current: false,
+				commit: undefined,
+				checkpointAt: undefined,
 				build: undefined,
 				deploy: []
 			}
 		]);
 	});
 
-	it('reads build and deploy logs from the tracked MR or a release, never a workbench buffer', () => {
-		expect(evidenceLogs(undefined)).toEqual({ build: undefined, deploy: [] });
+	it('attaches a commit-tagged database checkpoint to a past Live release', () => {
 		const build = request().buildReceipt;
-		const deploy = [{ at: '2026-09-02T00:00:00.000Z', level: 'log', line: 'guest-ok' }];
-		const snapshot = {
-			tracking: 'review-1',
-			mergeRequests: [request({ deployLog: deploy })],
-			releases: [],
-			entries: []
-		} as unknown as HostSnapshot;
-		expect(evidenceLogs(snapshot)).toEqual({ build, deploy });
-		expect(evidenceLogs({ ...snapshot, tracking: 'live' } as unknown as HostSnapshot)).toEqual({
-			build,
-			deploy
-		});
 		expect(
-			evidenceLogs({
-				tracking: 'live',
-				mergeRequests: [request({ state: 'merged', deployLog: [] })],
-				releases: [{ releaseId: 'release-live', buildLog: build, deployLog: deploy }],
-				entries: [{ tenantId: 't', environmentId: 'live', releaseId: 'release-live', artifactId: 'a', ownerEpoch: '1' }]
+			liveReleaseTimeline({
+				entries: [
+					{
+						tenantId: 't',
+						environmentId: 'development',
+						releaseId: 'release-live',
+						artifactId: 'artifact-live',
+						ownerEpoch: '1'
+					}
+				],
+				deploymentHistory: ['release-old', 'release-live'],
+				releases: [
+					{ releaseId: 'release-old', buildLog: build, deployLog: [] },
+					{ releaseId: 'release-live', deployLog: [] }
+				],
+				checkpoints: [
+					{
+						at: '2026-09-04T00:00:00.000Z',
+						environment: 'development',
+						commit: build.commit
+					}
+				],
+				mergeRequests: [],
+				tracking: 'live'
 			} as unknown as HostSnapshot)
-		).toEqual({ build, deploy });
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					releaseId: 'release-old',
+					current: false,
+					commit: build.commit,
+					checkpointAt: '2026-09-04T00:00:00.000Z'
+				})
+			])
+		);
 	});
 
 	it('keeps the shell runtime structurally capable of mounting the one Automations surface', () => {
@@ -522,5 +507,15 @@ describe('workspace navigation sections', () => {
 		expect(sections.map((section) => section.key)).toEqual(['operations', 'administration']);
 		expect(sections[0]?.items.map((item) => item.key)).toEqual(['approvals', 'automations']);
 		expect(automationsHref('daily close')).toBe('/automations?automation=daily+close');
+	});
+});
+
+describe('studio CodeEditor language', () => {
+	it('maps authored paths onto CodeEditor languages', () => {
+		expect(editorLanguage('src/collections/notes/+model.ts')).toBe('javascript');
+		expect(editorLanguage('norbital.template.json')).toBe('json');
+		expect(editorLanguage('pnpm-workspace.yaml')).toBe('yaml');
+		expect(editorLanguage('README.md')).toBe('markdown');
+		expect(editorLanguage('.norbital/migrations/0001/migration.sql')).toBe('plaintext');
 	});
 });

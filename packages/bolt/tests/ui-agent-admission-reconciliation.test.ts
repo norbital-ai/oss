@@ -26,7 +26,7 @@ describe('Task admission reconciliation', () => {
 		).toBe(unsettled);
 	});
 
-	it('shows the operator text immediately until the Task is a live findMany row', () => {
+	it('shows the operator text immediately until a durable human message exists', () => {
 		expect(visibleUnsettledAdmission(unsettled, new Set())).toBe(unsettled);
 		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']))).toBeNull();
 		expect(visibleUnsettledAdmission(null, new Set())).toBeNull();

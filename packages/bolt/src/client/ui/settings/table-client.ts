@@ -33,7 +33,7 @@ export const settled = <T>(current: T): RemoteQuery<T> => ({
  * The same predicates the wire-backed collection tables use, so a host surface that renders
  * already-loaded rows behaves exactly like one reading a collection.
  */
-export const matchingRows = (
+const matchingRows = (
 	rows: ReadonlyArray<CollectionRecord>,
 	query: CollectionBaseQuery<CollectionRecord> | undefined,
 	filters: CollectionFilterOptions['filters']
