@@ -9,6 +9,7 @@
 import { Effect } from 'effect';
 import type { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import type { GraphPrepareFns, GraphPreparePorts } from './engine.js';
+import { membershipIdentitySnapshot } from './identity-snapshot.js';
 import { ownsManyRelation } from './plan.js';
 
 export const prepareOwnedDescendants = <Error, Requirements>(
@@ -28,7 +29,7 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 			);
 			if (edge === undefined || !ownsManyRelation(edge)) continue;
 			const related = yield* ports.relatedRows(ports.scope(), edge, id);
-			ports.registerRelationshipSnapshot(edge, id, related.json);
+			ports.registerRelationshipSnapshot(edge, id, membershipIdentitySnapshot(related.rows));
 			const childModule = ports.authoredHooks[edge.childCollection];
 			const childPrepared = yield* ports.runDeletePrepare(
 				ports.effectId,

@@ -28,6 +28,7 @@
 	import WorkspaceMembers from '../settings/workspace.svelte';
 	import { EMPTY_WORKSPACE_ACCESS } from '#lib/client/ui/settings/rows.js';
 	import { SYSTEM_COLLECTION_SURFACES } from '#lib/client/ui/system/system-collection-surfaces.js';
+	import { setMembershipEditor } from '#lib/client/ui/system/membership-editor.svelte.js';
 	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
@@ -543,10 +544,24 @@
 		if (hostPlugin !== null) actions.navigate('/', { replace: true });
 	});
 
-	const memberAccessQuery = $derived(
-		workspace.frameworkClient.system.identity.workspaceAccess({})
-	);
+	let accessEpoch = $state(0);
+	const memberAccessQuery = $derived.by(() => {
+		void accessEpoch;
+		return workspace.frameworkClient.system.identity.workspaceAccess({});
+	});
 	const memberAccess = $derived(memberAccessQuery.current ?? EMPTY_WORKSPACE_ACCESS);
+
+	setMembershipEditor(() => ({
+		canManage: hostPluginsVisible,
+		teams: memberAccess.teams,
+		assignTeam: (memberId, teamId) =>
+			workspace.frameworkClient.system.identity.assignTeam({ memberId, teamId }),
+		setMemberAdmin: (memberId, admin) =>
+			workspace.frameworkClient.system.identity.setMemberAdmin({ memberId, admin }),
+		refresh: () => {
+			accessEpoch += 1;
+		}
+	}));
 </script>
 
 <svelte:head><title>{workspace.title}</title></svelte:head>

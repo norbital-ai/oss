@@ -150,6 +150,55 @@ const quotedName = (sql: string, keyword: 'into' | 'from' | 'update'): string | 
 	return match?.[1]?.replaceAll('""', '"');
 };
 
+/**
+ * The write-wave read is one VALUES list per collection or relation edge, then a join.
+ * Parameters stay (ordinal, id) or (ordinal, parentId) in CTE order — not one UNION ALL
+ * branch per id.
+ */
+const waveReadRows = (
+	sql: string,
+	parameters: ReadonlyArray<Schema.Json>,
+	tables: ReadonlyMap<string, ReadonlyMap<string, Row>>
+): Array<Schema.Json> => {
+	const rows: Array<Schema.Json> = [];
+	for (const cte of sql.matchAll(
+		/wanted_(rows|relations)_(\d+)\([^)]*\) as \(values ((?:\([^)]+\)(?:, )?)+)\)/g
+	)) {
+		const kind = cte[1] === 'rows' ? 'row' : 'relation';
+		const cteName = `wanted_${cte[1]}_${cte[2]}`;
+		const placeholders = [...(cte[3] ?? '').matchAll(/\$(\d+)/g)].map((match) => Number(match[1]));
+		const join = new RegExp(
+			`from ${cteName} as wanted join "((?:[^"]|"")+)"(?: as child on child\\."([^"]+)")?`
+		).exec(sql);
+		const table = join?.[1]?.replaceAll('""', '"') ?? '';
+		const column = join?.[2] ?? '';
+		const bucket = tables.get(table);
+		for (let index = 0; index + 1 < placeholders.length; index += 2) {
+			const ordinal = parameters[(placeholders[index] ?? 1) - 1] ?? null;
+			const key = parameters[(placeholders[index + 1] ?? 1) - 1];
+			if (kind === 'row') {
+				const row = bucket?.get(String(key));
+				if (row !== undefined)
+					rows.push({
+						__bolt_write_wave_kind: 'row',
+						__bolt_write_wave_ordinal: ordinal,
+						__bolt_write_wave_record: row
+					});
+				continue;
+			}
+			for (const child of bucket?.values() ?? []) {
+				if (String(child[column] ?? '') === String(key))
+					rows.push({
+						__bolt_write_wave_kind: 'relation',
+						__bolt_write_wave_ordinal: ordinal,
+						__bolt_write_wave_record: child
+					});
+			}
+		}
+	}
+	return rows;
+};
+
 const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 	Layer.effect(
 		Database.Service,
@@ -508,44 +557,11 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					return { rows: [next], affectedRows: 1 } satisfies DatabaseResponse;
 				}
 				if (unquotedSql.includes('__bolt_write_wave_kind')) {
-					// The write engine's wave read: one `union all` of per-row and per-relation
-					// branches, each carrying its ordinal and the id to look up. Parameters arrive
-					// in branch order — row branches bind (ordinal, id); relation branches bind
-					// (ordinal, parentId) against `child."<column>"`.
 					const current = yield* Ref.get(tables);
-					const branches = sql.split(/ union all /i);
-					const rows: Array<Schema.Json> = [];
-					let index = 0;
-					for (const branch of branches) {
-						const ordinal = parameters[index] ?? null;
-						index += 1;
-						const table = quotedName(branch, 'from');
-						const bucket = current.get(table ?? '');
-						if (branch.includes("'row'::text")) {
-							const id = parameters[index];
-							index += 1;
-							const row = bucket?.get(String(id));
-							if (row !== undefined)
-								rows.push({
-									__bolt_write_wave_kind: 'row',
-									__bolt_write_wave_ordinal: ordinal,
-									__bolt_write_wave_record: row
-								});
-						} else {
-							const parent = parameters[index];
-							index += 1;
-							const column = /child\."([^"]+)" = /.exec(branch)?.[1] ?? '';
-							for (const child of bucket?.values() ?? []) {
-								if (String(child[column] ?? '') === String(parent))
-									rows.push({
-										__bolt_write_wave_kind: 'relation',
-										__bolt_write_wave_ordinal: ordinal,
-										__bolt_write_wave_record: child
-									});
-							}
-						}
-					}
-					return { rows, affectedRows: 0 } satisfies DatabaseResponse;
+					return {
+						rows: waveReadRows(sql, parameters, current),
+						affectedRows: 0
+					} satisfies DatabaseResponse;
 				}
 				if (unquotedSql.includes('select approval_id')) {
 					const table = quotedName(sql, 'from');

@@ -14,6 +14,7 @@ import {
 	type MutationInput
 } from '#lib/runtime/collections/collections.contract.js';
 import { prepareOwnedDescendants } from './cascade-delete.js';
+import { membershipIdentitySnapshot } from './identity-snapshot.js';
 import { WRITE_DEPTH_LIMIT, ownsManyRelation, type WritableManyRelation } from './plan.js';
 
 export type GraphPreparedOperation = Readonly<{
@@ -595,7 +596,11 @@ export const makeGraphPreparers = <Error, Requirements>(
 							? undefined
 							: yield* ports.relatedRows(ports.scope(), relation.edge, id);
 					if (related !== undefined)
-						ports.registerRelationshipSnapshot(relation.edge, id, related.json);
+						ports.registerRelationshipSnapshot(
+							relation.edge,
+							id,
+							membershipIdentitySnapshot(related.rows)
+						);
 					const existing = related?.rows ?? [];
 					const byId = new Map(
 						existing.flatMap((row) =>

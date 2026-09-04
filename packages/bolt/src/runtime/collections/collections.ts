@@ -114,7 +114,7 @@ import {
 } from '#lib/runtime/collections/write/engine.js';
 import { canonicalJson } from '#lib/canonical-json.js';
 import { settleDeclarativeGraph as settleDeclarativeGraphService } from '#lib/runtime/collections/write/settle.js';
-import { makeGraphReader, storedGraphRowKey } from '#lib/runtime/collections/write/graph-read.js';
+import { makeGraphReader } from '#lib/runtime/collections/write/graph-read.js';
 import {
 	DeclarativeReview,
 	DeclarativeReviewRow,
@@ -124,6 +124,7 @@ import {
 	type PrepareDeclarativeGraphPorts,
 	type RelationshipSnapshot
 } from '#lib/runtime/collections/write/declarative-prepare.js';
+import { deleteHistoryIdentity } from '#lib/runtime/collections/write/identity-snapshot.js';
 import {
 	MAX_ORDINARY_MUTATION_CHANGED_ROWS,
 	captureFieldsForWorkspace,
@@ -2635,7 +2636,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										approval_id: governingRequest(previous),
 										// The row as it was, so a rejected delete has something to restore. Serialised
 										// the same way the approval path serialises its snapshot.
-										snapshot: JSON.stringify(previous ?? {})
+										snapshot: JSON.stringify(deleteHistoryIdentity(previous))
 									})
 									.toSQL()
 							)
@@ -2975,6 +2976,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						? []
 						: [
 								{
+									action: operation.action,
 									collection: operation.collection,
 									id: operation.id,
 									snapshot: operation.snapshot
@@ -2982,20 +2984,28 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							]
 				);
 				const recordAssertions = reviewedRows.map((row) =>
-					transactionSql(
-						`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
-						[
-							row.id,
-							row.snapshot,
-							`${row.collection} ${row.id} changed while its mutation graph was prepared`
-						]
-					)
+					row.action === 'delete'
+						? transactionSql(
+								`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(row.collection)} where id = $1 for update) as bolt_delete_row), $2)`,
+								[
+									row.id,
+									`${row.collection} ${row.id} changed while its mutation graph was prepared`
+								]
+							)
+						: transactionSql(
+								`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
+								[
+									row.id,
+									row.snapshot,
+									`${row.collection} ${row.id} changed while its mutation graph was prepared`
+								]
+							)
 				);
 				const relationshipAssertions = relationshipSnapshots
 					.map(reviewedRelationshipOf)
 					.map((snapshot) =>
 						transactionSql(
-							`select bolt_assert((select coalesce(jsonb_agg(to_jsonb(child) order by child.id), '[]'::jsonb) from ${quoteIdentifier(snapshot.childCollection)} as child where ${quoteIdentifier(snapshot.childColumn)} = $1) = $2::jsonb, $3)`,
+							`select bolt_assert((select coalesce(jsonb_agg(child.id::text order by child.id::text), '[]'::jsonb) from ${quoteIdentifier(snapshot.childCollection)} as child where ${quoteIdentifier(snapshot.childColumn)} = $1) = $2::jsonb, $3)`,
 							[
 								snapshot.parentId,
 								snapshot.snapshot,

@@ -135,6 +135,16 @@ const protect = (
 		yield* (yield* AccessControl.Service).authorize(principal(context), action, resource);
 	});
 
+const authorizeMembership = Effect.fn('Bolt.command.authorizeMembership')(function* (
+	context: ExecutionContext
+) {
+	if (principal(context).admin === true) return;
+	yield* protect('manage', 'identity')(context);
+});
+
+const membershipRefusal = (reason: string) =>
+	new AccessControl.AccessDenied({ action: 'manage', resource: 'identity', reason });
+
 const isNonEmptyRecord = (value: unknown): value is Readonly<Record<string, Schema.Json>> =>
 	value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
 
@@ -476,6 +486,30 @@ const remainingBindings = [
 		(context, input) => Effect.gen(function* () {
 			const invitationId = yield* (yield* Identity.Service).invite(context.effectId, context.tenantId, input.email, principal(context).userId);
 			return json({ invitationId });
+		})),
+	binding('identity.assignTeam', { Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) => Effect.gen(function* () {
+			const outcome = yield* (yield* Identity.Service).assignTeam(
+				context.effectId,
+				context.tenantId,
+				principal(context).userId,
+				input.memberId,
+				input.teamId
+			);
+			if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+			return json({ assigned: true });
+		})),
+	binding('identity.setMemberAdmin', { Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) => Effect.gen(function* () {
+			const outcome = yield* (yield* Identity.Service).setMemberAdmin(
+				context.effectId,
+				context.tenantId,
+				principal(context).userId,
+				input.memberId,
+				input.admin
+			);
+			if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+			return json({ updated: true });
 		})),
 	binding('identity.invitation.inspect', { Command: system('host invitation inspection') },
 		(context, input) =>

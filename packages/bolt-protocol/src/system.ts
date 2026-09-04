@@ -365,6 +365,20 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.Struct({ invitationId: Schema.NonEmptyString }))]
 	}),
 	commandContract({
+		name: 'identity.assignTeam',
+		input: Schema.Struct({ memberId: Schema.NonEmptyString, teamId: Schema.NullOr(Schema.NonEmptyString) }),
+		responses: [ok(Schema.Json)],
+		clientPath: ['identity', 'assignTeam'],
+		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'identity.setMemberAdmin',
+		input: Schema.Struct({ memberId: Schema.NonEmptyString, admin: Schema.Boolean }),
+		responses: [ok(Schema.Json)],
+		clientPath: ['identity', 'setMemberAdmin'],
+		clientMode: 'operation'
+	}),
+	commandContract({
 		name: 'identity.invitation.inspect',
 		input: Schema.Struct({ invitationId: Schema.NonEmptyString }),
 		responses: [ok(Schema.Json)]

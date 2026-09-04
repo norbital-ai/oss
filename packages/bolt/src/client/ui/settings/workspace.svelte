@@ -236,7 +236,7 @@
 			collection={MEMBERS_COLLECTION}
 			view="workspace-settings:people"
 			title="Members"
-			description="Membership is derived from sessions and linked external subjects; it is not a table that can be edited here."
+			description="Open a member to change their administrator status or team. Membership rows are a projection, not a collection mutate."
 			features={{ create: false }}
 			query={{ orderBy: { name: 'asc' } }}
 		>

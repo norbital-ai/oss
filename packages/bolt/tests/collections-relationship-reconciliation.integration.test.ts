@@ -1433,13 +1433,13 @@ describe('declarative relationship reconciliation', () => {
 			statement.includes('__bolt_write_wave_kind')
 		);
 		// The engine's own wave read answers the root alone; the declarative graph's shared wave read
-		// answers every submitted pre-image and relationship membership in one union — the engine
-		// never re-reads a row the reading session already holds. Row pre-images (8 estimates, 8
-		// lines) and complete memberships (budget's estimates plus each estimate's lines) are the
-		// twenty-five branches of that single statement. No recursive prepareNode fallback may open
-		// another row or relation statement.
+		// answers every submitted pre-image and relationship membership in one statement — one VALUES
+		// list per collection or relation edge, not one UNION ALL branch per id. Eight estimates and
+		// eight lines share two row branches; the budget's estimates and each estimate's lines share
+		// two relation branches. Four branches, three `union all`s. No recursive prepareNode fallback
+		// may open another row or relation statement.
 		expect(wavePlanning).toHaveLength(2);
-		expect(wavePlanning[1]?.match(/ union all /g)).toHaveLength(24);
+		expect(wavePlanning[1]?.match(/ union all /g)).toHaveLength(3);
 		expect(
 			harness.database.statements.some(
 				(statement) =>

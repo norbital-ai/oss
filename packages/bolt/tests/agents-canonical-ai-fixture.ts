@@ -109,6 +109,102 @@ export const modelMessages = (
 	request: GenerateRequest
 ): ReadonlyArray<Prompt.MessageEncoded> => request.messages;
 
+export const assistantToolCalls = (
+	calls: ReadonlyArray<Readonly<{ readonly name: string; readonly input: unknown; readonly id?: string }>>
+): Prompt.MessageEncoded =>
+	encodeMessage(
+		Prompt.assistantMessage({
+			content: calls.map((call, index) =>
+				Prompt.toolCallPart({
+					id: call.id ?? `${call.name}-${index + 1}`,
+					name: call.name,
+					params: call.input,
+					providerExecuted: false
+				})
+			)
+		})
+	);
+
+const encodedText = (message: Prompt.MessageEncoded): string =>
+	typeof message.content === 'string'
+		? message.content
+		: message.content
+				.flatMap((part) =>
+					part.type === 'text' || part.type === 'reasoning' ? [part.text] : []
+				)
+				.join('\n');
+
+export type GenerateInspection = Readonly<{
+	readonly callId: string;
+	readonly maxOutputTokens: number;
+	readonly promptBytes: number;
+	readonly automaticCompact: boolean;
+	readonly planMode: boolean;
+	readonly compactMode: boolean;
+	readonly roles: ReadonlyArray<string>;
+}>;
+
+export const inspectGenerate = (request: GenerateRequest): GenerateInspection => {
+	const encoded = JSON.stringify(request.messages) ?? '';
+	const texts = request.messages.map(encodedText);
+	return {
+		callId: request.callId,
+		maxOutputTokens: request.maxOutputTokens,
+		promptBytes: new TextEncoder().encode(encoded).byteLength,
+		automaticCompact: texts.some((text) => text.includes('Automatic Compact:')),
+		planMode: texts.some((text) =>
+			text.includes('Plan mode: produce one objective, implementation approach, and verification contract.')
+		),
+		compactMode: texts.some((text) =>
+			text.includes('Compact mode: summarize durable context without performing work or calling tools.')
+		),
+		roles: request.messages.map((message) => message.role)
+	};
+};
+
+export type TranscriptReply =
+	| Prompt.MessageEncoded
+	| ((request: GenerateRequest, inspection: GenerateInspection) => Prompt.MessageEncoded);
+
+/**
+ * Streams a scripted assistant transcript into the AI facility.
+ *
+ * Automatic Compact is an extra Generate the runtime inserts before the scripted turn when the
+ * projected prompt exceeds 64 KiB in agent mode. That call is answered here and does not consume
+ * a scripted reply, so the feed still records what the model was given.
+ */
+export const scriptedTranscript = (
+	script: ReadonlyArray<TranscriptReply>
+): {
+	readonly ai: FacilityBinding<AIRequest, AIResponse>;
+	readonly feed: GenerateInspection[];
+	readonly requests: GenerateRequest[];
+} => {
+	const feed: GenerateInspection[] = [];
+	const requests: GenerateRequest[] = [];
+	let scriptIndex = 0;
+	return {
+		feed,
+		requests,
+		ai: successfulAI((request) => {
+			requests.push(request);
+			const inspection = inspectGenerate(request);
+			feed.push(inspection);
+			if (inspection.automaticCompact) {
+				return assistantText(
+					'Retained: the current user instruction, open decisions, and unresolved work.'
+				);
+			}
+			const reply = script[scriptIndex];
+			scriptIndex += 1;
+			if (reply === undefined) {
+				throw new Error(`scripted transcript exhausted after ${script.length} replies`);
+			}
+			return typeof reply === 'function' ? reply(request, inspection) : reply;
+		})
+	};
+};
+
 export const lastToolResult = (
 	request: GenerateRequest
 ): Readonly<Record<string, unknown>> | undefined => {

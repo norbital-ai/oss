@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { Subject } from './subject.js';
@@ -243,6 +243,11 @@ type TeamAssignment =
 	| Readonly<{ readonly _tag: 'Assigned'; readonly memberId: string; readonly team?: TeamRecord }>
 	| Readonly<{ readonly _tag: 'Refused'; readonly reason: string }>;
 
+/** The same, for promoting or demoting a person's administration status. */
+type MemberAdminOutcome =
+	| Readonly<{ readonly _tag: 'Updated'; readonly memberId: string; readonly admin: boolean }>
+	| Readonly<{ readonly _tag: 'Refused'; readonly reason: string }>;
+
 export type Interface = Readonly<{
 	readonly authenticate: (
 		effectId: EffectId,
@@ -382,6 +387,14 @@ export type Interface = Readonly<{
 		memberId: string,
 		teamId: string | null
 	) => Effect.Effect<TeamAssignment, Database.FacilityError>;
+	/** Promotes or demotes one person's administration status without changing their team. */
+	readonly setMemberAdmin: (
+		effectId: EffectId,
+		tenantId: string,
+		actorId: string,
+		memberId: string,
+		admin: boolean
+	) => Effect.Effect<MemberAdminOutcome, Database.FacilityError>;
 }>;
 
 /** The workspace-access projection the settings surfaces render. */
@@ -1630,6 +1643,92 @@ export const layerWith = (
 							memberId,
 							...(team === undefined ? {} : { team })
 						} as const;
+					}
+				),
+				/**
+				 * Promoting or demoting one person's administration status, which writes `status` and nothing
+				 * else.
+				 *
+				 * Notably not `team_id`. Team membership and administration are separate concerns — the former
+				 * is what a team name grants, the latter is a property of the person — so this command never
+				 * moves somebody between teams.
+				 *
+				 * Scoped by `tenantId`, which the boundary mints from the credential and never reads from
+				 * the payload, so this cannot reach a person in another workspace. Demoting the last
+				 * administrator is refused: a workspace with nobody who can administer it is not one the
+				 * runtime will leave behind.
+				 */
+				setMemberAdmin: Effect.fn('Identity.setMemberAdmin')(
+					function* (effectId, tenantId, actorId, memberId, admin) {
+						if (!isRecordId(memberId))
+							return {
+								_tag: 'Refused',
+								reason: `there is nobody with id ${memberId} in this workspace`
+							} as const;
+						if (admin === false) {
+							const counted = yield* executeBuilt(
+								EffectId.make(`${effectId}:admin-count`),
+								database,
+								composer
+									.select({ count: count() })
+									.from(usersTable)
+									.where(
+										and(eq(usersTable.tenantId, tenantId), eq(usersTable.status, ADMIN_STATUS))
+									)
+							);
+							const adminCount = Number(
+								(counted.rows[0] as { count?: number | string } | undefined)?.count ?? 0
+							);
+							if (adminCount <= 1) {
+								const current = yield* executeBuilt(
+									EffectId.make(`${effectId}:member-read`),
+									database,
+									composer
+										.select({ status: usersTable.status })
+										.from(usersTable)
+										.where(and(eq(usersTable.id, memberId), eq(usersTable.tenantId, tenantId)))
+										.limit(1)
+								);
+								const row = current.rows[0] as { status?: string } | undefined;
+								if (row?.status === ADMIN_STATUS)
+									return {
+										_tag: 'Refused',
+										reason: 'this workspace must keep at least one administrator'
+									} as const;
+							}
+						}
+						const status = admin ? ADMIN_STATUS : NORMAL_STATUS;
+						const updated = yield* executeBuilt(
+							EffectId.make(`${effectId}:admin-set`),
+							database,
+							composer
+								.update(usersTable)
+								.set({ status, updated_at: dbNow() })
+								.where(and(eq(usersTable.id, memberId), eq(usersTable.tenantId, tenantId)))
+								.returning({ id: usersTable.id, email: usersTable.email })
+						);
+						const row = updated.rows[0];
+						if (row === undefined)
+							return {
+								_tag: 'Refused',
+								reason: `there is nobody with id ${memberId} in this workspace`
+							} as const;
+						const changedMember = yield* Schema.decodeUnknownEffect(AssignedMemberRow)(row).pipe(
+							Effect.mapError(() => malformedDatabaseRow('identity.setMemberAdmin'))
+						);
+						yield* recordTeamEvent(
+							EffectId.make(`${effectId}:admin-set-audit`),
+							'member_admin_changed',
+							actorId,
+							{ tenantId, memberId, admin }
+						);
+						yield* identityHooks.emit(EffectId.make(`${effectId}:admin-set-hook`), {
+							_tag: 'UserChanged',
+							userId: memberId,
+							organizationId: tenantId,
+							...(changedMember.email === null ? {} : { email: changedMember.email })
+						});
+						return { _tag: 'Updated', memberId, admin } as const;
 					}
 				),
 				workspaceSettings: Effect.fn('Identity.workspaceSettings')(function* (effectId, tenantId) {

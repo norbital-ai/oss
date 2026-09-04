@@ -80,7 +80,6 @@
 	let unsettledAdmission = $state<UnsettledTaskAdmission | null>(null);
 	let composer = $state<HTMLTextAreaElement | null>(null);
 	let imagePicker = $state<HTMLInputElement | null>(null);
-	let transcriptTab = $state<'focus' | 'history'>('focus');
 	let revisedMessage = $state<{ readonly id: string; readonly sequence: number } | null>(null);
 	let pendingImages = $state<Array<{ id: string; file: File; previewUrl: string }>>([]);
 
@@ -213,15 +212,14 @@
 	const canStop = $derived(taskWorking && !controlPending);
 	const canResume = $derived(
 		!controlPending &&
-			(activeTask?.status === 'stopped' ||
-				activeTask?.status === 'failed' ||
-				activeTask?.status === 'attention')
+			(activeTask?.status === 'stopped' || activeTask?.status === 'attention')
 	);
 	const taskAcceptsSubmission = $derived(
 		activeTask === undefined ||
 		activeTask.status === 'ready' ||
 		activeTask.status === 'running' ||
-		activeTask.status === 'waiting'
+		activeTask.status === 'waiting' ||
+		activeTask.status === 'failed'
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
@@ -335,7 +333,6 @@
 		unsettledAdmission = null;
 		sendFailure = null;
 		revisedMessage = null;
-		transcriptTab = 'focus';
 		queueMicrotask(() => composer?.focus());
 	}
 
@@ -345,7 +342,6 @@
 		unsettledAdmission = null;
 		sendFailure = null;
 		revisedMessage = null;
-		transcriptTab = 'focus';
 	}
 
 	function addImageFiles(files: readonly File[]): void {
@@ -478,7 +474,11 @@
 			});
 			const taskId =
 				retry?.taskId ??
-				(composingNew || activeTask?.status === 'done' ? undefined : activeTask?.id) ??
+				(composingNew ||
+				activeTask?.status === 'done' ||
+				activeTask?.status === 'failed'
+					? undefined
+					: activeTask?.id) ??
 				globalThis.crypto.randomUUID();
 			const admission: UnsettledTaskAdmission = {
 				taskId,
@@ -741,205 +741,125 @@
 					</li>
 				</ol>
 			{:else}
-				<Inline
-					align="center"
-					gap="xs"
-					class="rounded-lg bg-muted/50 p-1"
-					role="tablist"
-					aria-label="Conversation view"
-				>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={transcriptTab === 'focus'}
-						aria-controls="agent-focus-view"
-						id="agent-focus-tab"
-						onclick={() => (transcriptTab = 'focus')}
-						class={`min-h-8 flex-1 rounded-md px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-							transcriptTab === 'focus'
-								? 'bg-background text-foreground shadow-sm'
-								: 'text-muted-foreground hover:text-foreground'
-						}`}
-					>
-						Focus
-					</button>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={transcriptTab === 'history'}
-						aria-controls="agent-history-view"
-						id="agent-history-tab"
-						onclick={() => (transcriptTab = 'history')}
-						class={`min-h-8 flex-1 rounded-md px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-							transcriptTab === 'history'
-								? 'bg-background text-foreground shadow-sm'
-								: 'text-muted-foreground hover:text-foreground'
-						}`}
-					>
-						Full transcript
-						{#if contextView.outsideMessageIds.size > 0}
-							<span class="ml-1 text-micro">({contextView.outsideMessageIds.size} outside view)</span>
-						{/if}
-					</button>
-				</Inline>
-
-				{#if transcriptTab === 'focus'}
-					<Stack
-						gap="md"
-						id="agent-focus-view"
-						role="tabpanel"
-						aria-labelledby="agent-focus-tab"
-					>
-						{#if contextProjectionIncomplete}
-							<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs" role="status">
-								The loaded query reached its safety limit. Open Full transcript for the visible history; the active model-view boundary cannot be certified until older rows are paged.
-							</div>
-						{/if}
-						{#if activePlan !== undefined}
-							<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2" open>
-								<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-									<Inline align="center" gap="sm">
-										<Icon icon="lucide:notebook-tabs" class="size-4 text-primary" />
-										<div class="min-w-0 flex-1">
-											<p class="m-0 truncate text-xs font-semibold">Plan r{activePlan.revision}</p>
-											<p class="m-0 truncate text-tiny text-muted-foreground">
-												{activePlan.body.split('\n').find((line) => line.trim().length > 0) ?? 'Empty Plan'}
-											</p>
-										</div>
-										<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span>
-									</Inline>
-								</summary>
-								<Stack gap="sm" class="border-t border-border/60 pt-2">
-									<Inline gap="md" class="text-tiny text-muted-foreground">
-										<span>{elapsedSince(activePlan.created_at)}</span>
-										{#if costLabel !== ''}<span>{costLabel}</span>{/if}
-									</Inline>
-									<p class="m-0 whitespace-pre-wrap text-xs leading-5">{activePlan.body}</p>
-									<Inline gap="xs" justify="end">
-										{#if canStop}
-											<Button size="sm" variant="ghost" onclick={() => control('stop')}>Stop</Button>
-										{:else if canResume}
-											<Button size="sm" variant="ghost" onclick={() => control('resume')}>Resume</Button>
-										{/if}
-									</Inline>
-								</Stack>
-							</details>
-						{/if}
-
-						{#if contextView.checkpoint !== null}
-							<section class="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2" aria-label={compactTitle(contextView.checkpointOrigin)}>
+				<Stack gap="md">
+					{#if contextProjectionIncomplete}
+						<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs" role="status">
+							The loaded query reached its safety limit. Older durable rows may not be visible; the active model-view boundary cannot be certified until older rows are paged.
+						</div>
+					{/if}
+					{#if activePlan !== undefined}
+						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2" open>
+							<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
 								<Inline align="center" gap="sm">
-									<Icon icon="lucide:scan-text" class="size-4 shrink-0 text-primary" />
+									<Icon icon="lucide:notebook-tabs" class="size-4 text-primary" />
 									<div class="min-w-0 flex-1">
-										<p class="m-0 text-xs font-semibold">{compactTitle(contextView.checkpointOrigin)}</p>
-										<p class="m-0 text-tiny text-muted-foreground">
-											The agent sees this checkpoint and newer in-view messages. Full history remains saved.
+										<p class="m-0 truncate text-xs font-semibold">Plan r{activePlan.revision}</p>
+										<p class="m-0 truncate text-tiny text-muted-foreground">
+											{activePlan.body.split('\n').find((line) => line.trim().length > 0) ?? 'Empty Plan'}
 										</p>
 									</div>
+									<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span>
 								</Inline>
-								<p class="mb-0 whitespace-pre-wrap text-xs leading-5">
-									{plainMessageText(contextView.checkpoint)}
-								</p>
-							</section>
-						{/if}
+							</summary>
+							<Stack gap="sm" class="border-t border-border/60 pt-2">
+								<Inline gap="md" class="text-tiny text-muted-foreground">
+									<span>{elapsedSince(activePlan.created_at)}</span>
+									{#if costLabel !== ''}<span>{costLabel}</span>{/if}
+								</Inline>
+								<p class="m-0 whitespace-pre-wrap text-xs leading-5">{activePlan.body}</p>
+								<Inline gap="xs" justify="end">
+									{#if canStop}
+										<Button size="sm" variant="ghost" onclick={() => control('stop')}>Stop</Button>
+									{:else if canResume}
+										<Button size="sm" variant="ghost" onclick={() => control('resume')}>Resume</Button>
+									{/if}
+								</Inline>
+							</Stack>
+						</details>
+					{/if}
 
-						{#if todo !== null && todo.items.length > 0}
-							<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
-								<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-									<Inline align="center" gap="sm">
-										<span
-											class="grid size-6 place-items-center rounded-full text-micro font-semibold"
-											style={`background: conic-gradient(var(--primary) ${(todo.items.filter((item) => item.status === 'done').length / todo.items.length) * 100}%, var(--muted) 0)`}
-										>
-											<span class="grid size-4 place-items-center rounded-full bg-card">{todoPosition(todo)}</span>
-										</span>
-										<span class="text-xs font-medium">Step {todoPosition(todo)} / {todo.items.length}</span>
-									</Inline>
-								</summary>
-								<Scroll name="Task progress" class="max-h-64">
-								<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
-									{#each todo.items as item (item.id)}
-										<li class="min-w-0 text-xs">
-											<Inline align="start" gap="sm">
-											{#if item.status === 'done'}
-												<Icon icon="lucide:circle-check" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-											{:else if item.status === 'doing'}
-												<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
-											{:else}
-												<Icon icon="lucide:circle" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-											{/if}
-											<span class={item.status === 'done' ? 'min-w-0 text-muted-foreground line-through' : 'min-w-0'}>{item.text}</span>
-											</Inline>
-										</li>
-									{/each}
-								</Stack>
-								</Scroll>
-							</details>
-						{/if}
+					{#if contextView.checkpoint !== null}
+						<section class="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2" aria-label={compactTitle(contextView.checkpointOrigin)}>
+							<Inline align="center" gap="sm">
+								<Icon icon="lucide:scan-text" class="size-4 shrink-0 text-primary" />
+								<div class="min-w-0 flex-1">
+									<p class="m-0 text-xs font-semibold">{compactTitle(contextView.checkpointOrigin)}</p>
+									<p class="m-0 text-tiny text-muted-foreground">
+										The agent sees this checkpoint and newer in-view messages. Full history remains saved.
+									</p>
+								</div>
+							</Inline>
+							<p class="mb-0 whitespace-pre-wrap text-xs leading-5">
+								{plainMessageText(contextView.checkpoint)}
+							</p>
+						</section>
+					{/if}
 
-						<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
-							{#each contextView.focusMessages as message (message.key)}
-								<AgentTranscriptItem
-									{message}
-									onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
-										? undefined
-										: reviseMessage}
-								/>
-							{/each}
-							{#if visibleAdmission !== null}
-								<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
-									<Stack gap="xs" align="end">
-										<span class="text-tiny font-medium text-muted-foreground">You</span>
-										<div
-											class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
-										>
-											<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
-										</div>
-									</Stack>
-								</li>
-							{/if}
-						</ol>
+					{#if todo !== null && todo.items.length > 0}
+						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
+							<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+								<Inline align="center" gap="sm">
+									<span
+										class="grid size-6 place-items-center rounded-full text-micro font-semibold"
+										style={`background: conic-gradient(var(--primary) ${(todo.items.filter((item) => item.status === 'done').length / todo.items.length) * 100}%, var(--muted) 0)`}
+									>
+										<span class="grid size-4 place-items-center rounded-full bg-card">{todoPosition(todo)}</span>
+									</span>
+									<span class="text-xs font-medium">Step {todoPosition(todo)} / {todo.items.length}</span>
+								</Inline>
+							</summary>
+							<Scroll name="Task progress" class="max-h-64">
+							<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
+								{#each todo.items as item (item.id)}
+									<li class="min-w-0 text-xs">
+										<Inline align="start" gap="sm">
+										{#if item.status === 'done'}
+											<Icon icon="lucide:circle-check" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+										{:else if item.status === 'doing'}
+											<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
+										{:else}
+											<Icon icon="lucide:circle" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+										{/if}
+										<span class={item.status === 'done' ? 'min-w-0 text-muted-foreground line-through' : 'min-w-0'}>{item.text}</span>
+										</Inline>
+									</li>
+								{/each}
+							</Stack>
+							</Scroll>
+						</details>
+					{/if}
 
-						{#each directChildren(activeTask?.id ?? '') as child (child.id)}
-							{@render childConversation(child)}
+					<ol class="m-0 list-none p-0" aria-label="Task transcript">
+						{#each rootMessages as message (message.key)}
+							<AgentTranscriptItem
+								{message}
+								outsideModelView={contextView.outsideMessageIds.has(message.id)}
+								checkpointOrigin={message.annotation?.tag === 'compact'
+									? compactOrigin(message, rootRuns)
+									: null}
+								onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
+									? undefined
+									: reviseMessage}
+							/>
 						{/each}
-					</Stack>
-				{:else}
-					<Stack
-						gap="md"
-						id="agent-history-view"
-						role="tabpanel"
-						aria-labelledby="agent-history-tab"
-					>
-						{#if contextProjectionIncomplete}
-							<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs" role="status">
-								This view reached its bounded query limit. Older durable rows are not loaded in this browser view.
-							</div>
+						{#if visibleAdmission !== null}
+							<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
+								<Stack gap="xs" align="end">
+									<span class="text-tiny font-medium text-muted-foreground">You</span>
+									<div
+										class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
+									>
+										<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
+									</div>
+								</Stack>
+							</li>
 						{/if}
-						<div class="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-							This is the complete durable transcript. Messages labelled “Outside model view” remain saved for audit, but are not in the agent’s current prompt.
-						</div>
-						<ol class="m-0 list-none p-0" aria-label="Full Task transcript">
-							{#each rootMessages as message (message.key)}
-								<AgentTranscriptItem
-									{message}
-									outsideModelView={contextView.outsideMessageIds.has(message.id)}
-									checkpointOrigin={message.annotation?.tag === 'compact'
-										? compactOrigin(message, rootRuns)
-										: null}
-									onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
-										? undefined
-										: reviseMessage}
-								/>
-							{/each}
-						</ol>
-						{#if activeTask}
-							{#each directChildren(activeTask.id) as child (child.id)}
-								{@render childConversation(child)}
-							{/each}
-						{/if}
-					</Stack>
-				{/if}
+					</ol>
+
+					{#each directChildren(activeTask?.id ?? '') as child (child.id)}
+						{@render childConversation(child)}
+					{/each}
+				</Stack>
 			{/if}
 		</Stack>
 	</Scroll>
@@ -968,6 +888,10 @@
 		{#if activeTask?.status === 'done'}
 			<p class="text-xs text-muted-foreground">
 				This Task is complete and immutable. Start a new Task for another objective.
+			</p>
+		{:else if activeTask?.status === 'failed'}
+			<p class="text-xs text-muted-foreground">
+				This Task failed. Send a message to start a new Task.
 			</p>
 		{:else if canResume}
 			<p class="text-xs text-muted-foreground">

@@ -6,7 +6,7 @@ import {
 import { importCollectionRecords } from '../src/client/ui/state/import-export.js';
 
 const PH_REFUSAL =
-	'These PH rows are not observed holidays for the legal entity: NHPMY0023 on 2026-05-08';
+	'These PH rows are not observed holidays for the legal entity: PUBEM0023 on 2026-05-08';
 
 const sessionWithCommand = (
 	command: WorkspaceSession['transport']['command']

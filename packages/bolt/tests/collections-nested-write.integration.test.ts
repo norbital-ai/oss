@@ -298,6 +298,57 @@ describe('a nested write', () => {
 		).toBe(true);
 	}, 60_000);
 
+	it('does not put cascade-child row bodies on the delete history snapshot', async () => {
+		const fat = 'payload-body-'.repeat(200);
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					orders: authoredHooks<NestedWriteSchema, 'orders'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Expands an order into one fat line.',
+									handler: ({ input }) => ({
+										...(input.reference === undefined ? {} : { reference: input.reference }),
+										order_line_order: [{ sku: fat }]
+									})
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const created = yield* collections.mutate(
+					EffectId.make('fat-cascade-create'),
+					adminSubject,
+					'orders',
+					[{ reference: 'ORD-FAT' }]
+				);
+				const orderId = String(created.records[0]?.['id']);
+				yield* collections.delete(EffectId.make('fat-cascade-delete'), adminSubject, 'orders', [
+					orderId
+				]);
+			})
+		);
+		const history = await harness.database.query(
+			`select collection_name, record_id, snapshot::text as snapshot from bolt_collection_history where operation = 'delete' order by collection_name, record_id`
+		);
+		expect(history.length).toBeGreaterThan(0);
+		for (const row of history) {
+			const snapshot = String(row['snapshot'] ?? '');
+			expect(
+				snapshot.includes(fat),
+				`${row['collection_name']} history still carried the row body`
+			).toBe(false);
+			expect(snapshot).toContain(String(row['record_id']));
+		}
+	}, 60_000);
+
 	it('refuses a key that is neither a column nor a declared relation, rather than dropping it', async () => {
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
