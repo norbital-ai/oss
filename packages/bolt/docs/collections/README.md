@@ -37,9 +37,12 @@ declarative root + included relations
   └─ SETTLE   after-hooks, change events, embeddings and host sync handoff
 ```
 
-An included owned-many relationship is complete desired state: submitted children are inserted or
-updated and stored children omitted from that included relationship are deleted. An omitted
-relationship is untouched. Nested graph writes and cascading deletes are bounded to eight levels.
+An included `cascade(...)`-owned many relationship is complete desired state: submitted children are
+inserted or updated, stored children omitted from that included relationship are deleted through
+the same walk a parent delete uses, and `[]` deletes every owned child. Omitting a stored child from
+an included relationship the parent does not own is refused. An omitted relationship key is
+untouched. Unlinking is a write to the child's foreign key, not an omission. Nested graph writes and
+cascading deletes are bounded to eight levels.
 
 Authored hooks have five explicit sites: `mutate.prepare`, `mutate.before`, `mutate.after`,
 `delete.before`, and `delete.after`. A before refusal commits no domain write. An after refusal names

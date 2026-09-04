@@ -31,12 +31,28 @@ interface BudgetWriteSchema {
 interface DynamicWaveSchema {
 	readonly tables: {
 		readonly notes: {
-			readonly $inferSelect: { readonly id: string; readonly body: string; readonly audit_id: string };
-			readonly $inferInsert: { readonly id?: string; readonly body: string; readonly audit_id: string };
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly body: string;
+				readonly audit_id: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly body: string;
+				readonly audit_id: string;
+			};
 		};
 		readonly note_entries: {
-			readonly $inferSelect: { readonly id: string; readonly note_id: string; readonly label: string };
-			readonly $inferInsert: { readonly id?: string; readonly note_id: string; readonly label: string };
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly note_id: string;
+				readonly label: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly note_id: string;
+				readonly label: string;
+			};
 		};
 		readonly write_audit: {
 			readonly $inferSelect: { readonly id: string; readonly note_body: string };
@@ -71,7 +87,7 @@ const auditStagingHooks: CollectionHooks<BudgetWriteSchema, 'notes'> = {
 				handler: (context) => {
 					if (context.existing !== undefined) return context.input;
 					return context.api.db.write_audit
-						.mutate({ note_body: context.input.body })
+						.mutate([{ note_body: context.input.body }])
 						.pipe(Effect.as(context.input));
 				}
 			},
@@ -168,14 +184,12 @@ const dynamicAuthored = {
 							if (typeof auditId !== 'string') throw new Error('note audit id is missing');
 							const body = input.body;
 							if (typeof body !== 'string') throw new Error('note body is missing');
-							return api.db.write_audit
-								.mutate({ id: auditId, note_body: body })
-								.pipe(
-									Effect.as({
-										...input,
-										note_entries: [{ label: `entry ${body}` }]
-									})
-								);
+							return api.db.write_audit.mutate([{ id: auditId, note_body: body }]).pipe(
+								Effect.as({
+									...input,
+									note_entries: [{ label: `entry ${body}` }]
+								})
+							);
 						}
 					}
 				}
@@ -298,14 +312,15 @@ const dynamicWaveStatements = async (rows: number): Promise<ReadonlyArray<string
 		};
 	});
 	for (const input of inputs) {
-		await harness.database.query(
-			'insert into notes (id, body, audit_id) values ($1, $2, $3)',
-			[input.id, `before ${input.body}`, input.audit_id]
-		);
-		await harness.database.query(
-			'insert into write_audit (id, note_body) values ($1, $2)',
-			[input.audit_id, 'before']
-		);
+		await harness.database.query('insert into notes (id, body, audit_id) values ($1, $2, $3)', [
+			input.id,
+			`before ${input.body}`,
+			input.audit_id
+		]);
+		await harness.database.query('insert into write_audit (id, note_body) values ($1, $2)', [
+			input.audit_id,
+			'before'
+		]);
 	}
 	harness.database.forget();
 	await harness.runtime.runPromise(
@@ -352,9 +367,7 @@ describe('the facility-call budget of a batched write', () => {
 		expect(one).toHaveLength(3);
 		expect(fifty).toHaveLength(3);
 		expect(fifty.map((statement) => statement.match(/ union all /g)?.length ?? 0)).toEqual([
-			49,
-			49,
-			49
+			49, 49, 49
 		]);
 		expect(fifty[0]).toContain('from "notes" as record');
 		expect(fifty[1]).toContain('from "note_entries" as child');

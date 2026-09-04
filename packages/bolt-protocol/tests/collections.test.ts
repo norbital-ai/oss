@@ -76,6 +76,22 @@ describe('the declarative mutation request', () => {
 		).toBe(false);
 	});
 
+	it('accepts a mutate batch of write rows', () => {
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				graph: {
+					action: 'mutate',
+					collection: 'orders',
+					rows: [
+						{ action: 'create', values: { id: 'order-1', reference: 'ORD-1' } },
+						{ action: 'update', values: { id: 'order-2', reference: 'ORD-2' } }
+					]
+				}
+			})
+		).toBe(true);
+	});
+
 	it('accepts a delete batch of unique ids and rejects a single-id graph', () => {
 		expect(
 			Schema.is(CollectionMutateRequest)({

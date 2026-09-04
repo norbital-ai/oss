@@ -94,6 +94,13 @@ describe('server artifact build', () => {
 					materializeBuiltPackage(packageScope, name)
 				)
 			);
+			// The workspace's own `vite.config.ts` imports `vite`, and Vite evaluates that config from
+			// `<root>/node_modules/.vite-temp/`, so `vite` has to resolve from the root itself — a temp
+			// directory has no ancestor install to fall back on.
+			await materializeInstalledDependencies(
+				join(packagesRoot, 'bolt', 'node_modules'),
+				join(root, 'node_modules')
+			);
 			await Promise.all([
 				mkdir(join(packageScope, 'ui', 'src'), { recursive: true }),
 				cp(join(packagesRoot, 'ui', 'assets'), join(packageScope, 'ui', 'assets'), {

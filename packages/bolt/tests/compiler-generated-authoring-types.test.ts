@@ -4,10 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-	renderAuthoringTypes,
-	renderWorkspaceAuthoring
-} from '../src/compiler/workspace-build.js';
+import { renderAuthoringTypes, renderWorkspaceAuthoring } from '../src/compiler/workspace-build.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -143,8 +140,8 @@ export default {
 } satisfies PolicyDefinition;
 declare const api: Api<WorkspaceSchema>;
 void api.db.records.findMany({ where: { visible: { eq: 'open' } } });
-void api.db.records.mutate({ visible: 'open' });
-void api.db.records.mutate({ id: 'record-id', visible: 'closed' });
+void api.db.records.mutate([{ visible: 'open' }]);
+void api.db.records.mutate([{ id: 'record-id', visible: 'closed' }]);
 const invalidFieldPolicy = {
 	description: 'A field mask must name a real row field.',
 	grants: { records: { read: { fields: [
@@ -175,9 +172,7 @@ void removedUpdateGrant;
 `
 			);
 
-			const authoringSource = fileURLToPath(
-				new URL('../src/authoring/index.ts', import.meta.url)
-			);
+			const authoringSource = fileURLToPath(new URL('../src/authoring/index.ts', import.meta.url));
 			const program = ts.createProgram({
 				rootNames: [
 					join(root, 'src', 'access', '+teams.ts'),

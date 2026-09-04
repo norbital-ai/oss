@@ -174,7 +174,11 @@ describe('Bolt architecture boundaries', () => {
 			accessLines;
 
 		expect(amendedAggregate).toBeLessThanOrEqual(17_900);
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_700);
+		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
+		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
+		// check and the write call each read `mutationGraphWriteRows`; and hooks gained a `delete`
+		// write port that routes through the same `mutate` with delete roots. See RFC/toolchain.md §7.5a.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_770);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
 		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);
@@ -183,8 +187,11 @@ describe('Bolt architecture boundaries', () => {
 		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine
 		// 844 -> 814, under its unchanged 820). The remaining +36 is the delete wave itself, which
 		// belongs here. Recorded in RFC/toolchain.md §7 (collection lifecycle budget).
+		// 873 -> 910 (2026-09-04): hooks stage deletes as well as mutates (`api.db.X.delete`), so the
+		// staged wave drains a delete queue through `prepareDelete` before its writes, and staged
+		// mutate takes a batch. See RFC/toolchain.md §7.5a.
 		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
-			873
+			910
 		);
 		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
 		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives

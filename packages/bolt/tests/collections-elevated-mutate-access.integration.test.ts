@@ -92,8 +92,8 @@ const runHooks: CollectionHooks<ElevatedAccessSchema, 'runs'> = {
 				handler: ({ previous, record, api }) =>
 					Effect.gen(function* () {
 						if (previous !== undefined) return;
-						yield* api.db.outputs.mutate({ run_id: record.id, amount: 10 });
-						yield* api.db.outputs.mutate({ run_id: record.id, amount: 20 });
+						yield* api.db.outputs.mutate([{ run_id: record.id, amount: 10 }]);
+						yield* api.db.outputs.mutate([{ run_id: record.id, amount: 20 }]);
 					})
 			}
 		}

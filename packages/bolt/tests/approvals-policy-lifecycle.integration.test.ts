@@ -415,7 +415,9 @@ describe('policy and hook lifecycle', () => {
 								if (context.existing !== undefined) return context.input;
 								const predecessor = String(context.input.supersedes_id);
 								transitionEvents.push(`prepare:${predecessor}`);
-								yield* context.api.db.versions.mutate({ id: predecessor, closed_by: successorId });
+								yield* context.api.db.versions.mutate([
+									{ id: predecessor, closed_by: successorId }
+								]);
 								return context.input;
 							})
 					}

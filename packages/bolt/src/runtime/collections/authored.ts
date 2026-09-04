@@ -24,7 +24,12 @@ import type {
 } from './collections.contract.js';
 import * as Collections from './collections.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
-import { AI, Files, type AIInterface, type FilesInterface } from '#lib/runtime/facilities/services.js';
+import {
+	AI,
+	Files,
+	type AIInterface,
+	type FilesInterface
+} from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import { readFileAsset, type FileAsset } from './file-assets.js';
@@ -236,7 +241,11 @@ export type AuthoringOps<E = never> = AuthoringReadOps<E> &
 	Readonly<{
 		readonly mutate: (
 			collection: string,
-			values: Readonly<Record<string, unknown>>
+			values: ReadonlyArray<Readonly<Record<string, unknown>>>
+		) => Effect.Effect<void, E, never>;
+		readonly delete: (
+			collection: string,
+			ids: ReadonlyArray<string>
 		) => Effect.Effect<void, E, never>;
 		/**
 		 * Starts a declared automation in the current I/O flow, or waits until an explicit delay.
@@ -280,6 +289,8 @@ export const guardAuthoringOps = <E, G>(
 		guard(`db.${collection}.findNearest`).pipe(Effect.andThen(ops.findNearest(collection, input))),
 	mutate: (collection, values) =>
 		guard(`db.${collection}.mutate`).pipe(Effect.andThen(ops.mutate(collection, values))),
+	delete: (collection, ids) =>
+		guard(`db.${collection}.delete`).pipe(Effect.andThen(ops.delete(collection, ids))),
 	runAutomation: (name, input, options) =>
 		guard(`automations.${name}.run`).pipe(Effect.andThen(ops.runAutomation(name, input, options))),
 	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
@@ -483,14 +494,18 @@ export const inferOp =
 				);
 			}
 			const modelId = yield* Schema.decodeUnknownEffect(ModelId)(input.model).pipe(
-				Effect.mapError(() => refusal('ai.model_invalid', 'api.infer requires a non-empty model id.'))
+				Effect.mapError(() =>
+					refusal('ai.model_invalid', 'api.infer requires a non-empty model id.')
+				)
 			);
 			const imageAssets = yield* inferenceImageAssets(input.images);
 			const jsonSchema = Schema.toJsonSchemaDocument(input.schema).schema;
 			const message = yield* Schema.encodeEffect(Prompt.Message)(
 				Prompt.userMessage({ content: [Prompt.textPart({ text: input.prompt })] })
 			).pipe(
-				Effect.mapError(() => refusal('ai.message_invalid', 'The Effect prompt could not be encoded.'))
+				Effect.mapError(() =>
+					refusal('ai.message_invalid', 'The Effect prompt could not be encoded.')
+				)
 			);
 			const response = yield* ai.generate(
 				effectId,
@@ -504,11 +519,17 @@ export const inferOp =
 				})
 			);
 			if (response.result._tag !== 'Object') {
-				return yield* refusal('ai.response_invalid', 'The AI provider returned the wrong output kind.');
+				return yield* refusal(
+					'ai.response_invalid',
+					'The AI provider returned the wrong output kind.'
+				);
 			}
 			return yield* Schema.decodeUnknownEffect(input.schema)(response.result.value).pipe(
 				Effect.mapError(() =>
-					refusal('ai.response_invalid', 'The AI provider response does not match the authored schema.')
+					refusal(
+						'ai.response_invalid',
+						'The AI provider response does not match the authored schema.'
+					)
 				)
 			);
 		});
@@ -533,12 +554,15 @@ const databaseApi = (
 	allowedCollections: ReadonlySet<string>,
 	collection: (name: string) => Readonly<Record<string, unknown>>
 ): object =>
-	new Proxy({}, {
-		get: (_target, property) =>
-			typeof property === 'string' && allowedCollections.has(property)
-				? collection(property)
-				: undefined
-	});
+	new Proxy(
+		{},
+		{
+			get: (_target, property) =>
+				typeof property === 'string' && allowedCollections.has(property)
+					? collection(property)
+					: undefined
+		}
+	);
 
 export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E> => {
 	const database = databaseApi(ops.allowedCollections, (collection) => {
@@ -547,7 +571,9 @@ export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E
 			? Object.freeze(reads)
 			: Object.freeze({
 					...reads,
-					mutate: (values: Readonly<Record<string, unknown>>) => ops.mutate(collection, values)
+					mutate: (values: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+						ops.mutate(collection, values),
+					delete: (ids: ReadonlyArray<string>) => ops.delete(collection, ids)
 				});
 	});
 
@@ -636,11 +662,22 @@ export const makeBoundAuthoringOps = <RunE = never>(
 					writeEffectIds.next({ phase: 'mutate', collection }),
 					subject,
 					collection,
-					[values],
+					values,
 					false,
 					0
 				)
 				.pipe(Effect.asVoid),
+		delete: (collection, ids) => {
+			if (ids.length === 0) return Effect.void;
+			return collections
+				.delete(
+					writeEffectIds.next({ phase: 'delete.before', collection }),
+					subject,
+					collection,
+					ids
+				)
+				.pipe(Effect.asVoid);
+		},
 		/**
 		 * Runs a declared automation under its own declared subject.
 		 *
@@ -684,8 +721,7 @@ export const mergeRuntimeHandlers = (
 	const merged: Record<string, RuntimeRemoteHandler> = { ...remotes };
 	for (const [name, handler] of Object.entries(tools)) {
 		if (name.length === 0) throw new Error('An authored command name may not be empty');
-		if (merged[name] !== undefined)
-			throw new Error(`Duplicate authored command: ${name}`);
+		if (merged[name] !== undefined) throw new Error(`Duplicate authored command: ${name}`);
 		merged[name] = handler;
 	}
 	return Object.freeze(merged);
@@ -706,9 +742,7 @@ export const RemoteRegistry = Context.Service<RuntimeRemoteRegistry>(
 );
 
 /** Exact authored-command membership and Effect-native execution, co-owned with its narrowed API. */
-export const remoteRegistryLayer = (
-	handlers: Readonly<Record<string, RuntimeRemoteHandler>>
-) =>
+export const remoteRegistryLayer = (handlers: Readonly<Record<string, RuntimeRemoteHandler>>) =>
 	Layer.effect(
 		RemoteRegistry,
 		Effect.gen(function* () {
@@ -733,9 +767,7 @@ export const remoteRegistryLayer = (
 					);
 					const output = yield* runAuthoredHandler(() => handler(input, api)).pipe(
 						Effect.mapError((cause) =>
-							cause instanceof AuthoredRefusal
-								? cause
-								: DispatchError.from('remote_failed', cause)
+							cause instanceof AuthoredRefusal ? cause : DispatchError.from('remote_failed', cause)
 						)
 					);
 					return yield* Schema.decodeUnknownEffect(Schema.Json)(output).pipe(

@@ -78,7 +78,10 @@ type OriginRule = Readonly<{
 export type CommandBinding<E = never> = Readonly<{
 	contract: CommandContract;
 	origins: Partial<Record<InvocationOrigin, OriginRule>>;
-	handle: (context: ExecutionContext, input: unknown) => Effect.Effect<DispatchResponse, E, unknown>;
+	handle: (
+		context: ExecutionContext,
+		input: unknown
+	) => Effect.Effect<DispatchResponse, E, unknown>;
 }>;
 
 type ContractFor<Name extends FixedCommandName> = Extract<
@@ -127,10 +130,7 @@ const system = (authorization: string): OriginRule => ({ principal: 'system', au
 const task = (authorization: string): OriginRule => ({ principal: 'runtime-task', authorization });
 const publicCommand: OriginRule = { principal: 'public', authorization: 'public sign-in boundary' };
 
-const protect = (
-	action: string,
-	resource: string
-): NonNullable<OriginRule['authorize']> =>
+const protect = (action: string, resource: string): NonNullable<OriginRule['authorize']> =>
 	Effect.fn('Bolt.command.authorize')(function* (context) {
 		yield* (yield* AccessControl.Service).authorize(principal(context), action, resource);
 	});
@@ -139,14 +139,17 @@ const authorizeMembership = Effect.fn('Bolt.command.authorizeMembership')(functi
 	context: ExecutionContext
 ) {
 	if (principal(context).admin === true) return;
-	yield* protect('manage', 'identity')(context);
+	yield* protect('manage', 'identity')(context, undefined);
 });
 
 const membershipRefusal = (reason: string) =>
 	new AccessControl.AccessDenied({ action: 'manage', resource: 'identity', reason });
 
 const isNonEmptyRecord = (value: unknown): value is Readonly<Record<string, Schema.Json>> =>
-	value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+	value !== null &&
+	typeof value === 'object' &&
+	!Array.isArray(value) &&
+	Object.keys(value).length > 0;
 
 const optionalQueryJson = (value: unknown): Schema.Json | undefined =>
 	value == null || !isNonEmptyRecord(value) ? undefined : value;
@@ -226,7 +229,11 @@ const anchoredFindMany = (
 			last === undefined || rows.length < limit
 				? null
 				: encodeCollectionCursor(
-						compileOrderTerms((yield* Workspace.Service).definition, query.collection, query.orderBy),
+						compileOrderTerms(
+							(yield* Workspace.Service).definition,
+							query.collection,
+							query.orderBy
+						),
 						last
 					);
 		return json(Schema.decodeUnknownSync(CollectionAnchoredPage)({ rows, nextCursor }));
@@ -300,11 +307,16 @@ const workspaceManifest = Effect.fn('Bolt.command.workspaceManifest')(function* 
 			{ id: SystemPrincipal.SYSTEM_PRINCIPAL_ID, label: 'Colony', kind: 'host', policies: [] },
 			{ id: SEED_PRINCIPAL_ID, label: 'Sample data', kind: 'seed', policies: [] },
 			...definition.envoys.map((envoy) => ({
-				id: envoyPrincipalId(envoy.name), label: envoy.name, kind: 'envoy', policies: [...envoy.policies]
+				id: envoyPrincipalId(envoy.name),
+				label: envoy.name,
+				kind: 'envoy',
+				policies: [...envoy.policies]
 			})),
 			...definition.automations.map((automation) => ({
-				id: automationPrincipalId(automation.name), label: automation.name,
-				kind: 'automation', policies: [...automation.policies]
+				id: automationPrincipalId(automation.name),
+				label: automation.name,
+				kind: 'automation',
+				policies: [...automation.policies]
 			}))
 		],
 		requiredFacilities: [...definition.requiredFacilities]
@@ -325,11 +337,13 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 			message: `Unknown Bolt automation: ${name}`
 		});
 	const runAs = yield* Schema.decodeUnknownEffect(Subject)(input.bolt_run_as).pipe(
-		Effect.mapError(() =>
-			new AccessControl.AccessDenied({
-				action: 'invoke', resource: `automations.${name}`,
-				reason: 'The runtime task carries no valid declared automation subject'
-			})
+		Effect.mapError(
+			() =>
+				new AccessControl.AccessDenied({
+					action: 'invoke',
+					resource: `automations.${name}`,
+					reason: 'The runtime task carries no valid declared automation subject'
+				})
 		)
 	);
 	const collections = yield* Collections.Service;
@@ -346,10 +360,16 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 			files,
 			automations,
 			(nestedName, nestedInput, options) =>
-				collections.runAutomation(context.effectId, nestedName, nestedInput, {}, {
-					...options,
-					...(input.bolt_depth === undefined ? {} : { parentDepth: input.bolt_depth })
-				})
+				collections.runAutomation(
+					context.effectId,
+					nestedName,
+					nestedInput,
+					{},
+					{
+						...options,
+						...(input.bolt_depth === undefined ? {} : { parentDepth: input.bolt_depth })
+					}
+				)
 		),
 		guard
 	);
@@ -362,7 +382,9 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 		)
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
-	const output = yield* runAuthoredHandler(() => automation.handler(api, { args, scope: input.scope ?? {} }));
+	const output = yield* runAuthoredHandler(() =>
+		automation.handler(api, { args, scope: input.scope ?? {} })
+	);
 	const declared = yield* Schema.decodeUnknownEffect(automation.output ?? Schema.Unknown)(output);
 	return yield* Schema.decodeUnknownEffect(Schema.Json)(declared);
 });
@@ -398,23 +420,48 @@ const executeDirectAutomation = Effect.fn('Bolt.command.executeDirectAutomation'
 });
 
 const fixedBindings = [
-	binding('secrets.status', { Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
-		(context) => Effect.gen(function* () {
-			const entries = yield* (yield* Secrets.Service).status(context.effectId);
-			return json(entries.map((entry) => jsonObject({
-				name: entry.name, label: entry.label, secret: entry.secret, configured: entry.configured,
-				description: entry.description, default: entry.default, updatedAt: entry.updatedAt
-			})));
-		})),
-	binding('secrets.write', { Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
-		(context, input) => Effect.gen(function* () {
-			yield* (yield* Secrets.Service).write(context.effectId, input.name, input.value, principal(context).userId);
-			return json({ saved: true, name: input.name });
-		})),
-	binding('apps.visible', { Command: session('visible application policy') },
-		(context) => Effect.map(AccessControl.Service, (access) => json({ apps: access.visibleApps(principal(context)) }))),
-	binding('access.impersonation', { Command: session('impersonation capability') },
-		(context) => Effect.gen(function* () {
+	binding(
+		'secrets.status',
+		{ Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
+		(context) =>
+			Effect.gen(function* () {
+				const entries = yield* (yield* Secrets.Service).status(context.effectId);
+				return json(
+					entries.map((entry) =>
+						jsonObject({
+							name: entry.name,
+							label: entry.label,
+							secret: entry.secret,
+							configured: entry.configured,
+							description: entry.description,
+							default: entry.default,
+							updatedAt: entry.updatedAt
+						})
+					)
+				);
+			})
+	),
+	binding(
+		'secrets.write',
+		{ Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
+		(context, input) =>
+			Effect.gen(function* () {
+				yield* (yield* Secrets.Service).write(
+					context.effectId,
+					input.name,
+					input.value,
+					principal(context).userId
+				);
+				return json({ saved: true, name: input.name });
+			})
+	),
+	binding('apps.visible', { Command: session('visible application policy') }, (context) =>
+		Effect.map(AccessControl.Service, (access) =>
+			json({ apps: access.visibleApps(principal(context)) })
+		)
+	),
+	binding('access.impersonation', { Command: session('impersonation capability') }, (context) =>
+		Effect.gen(function* () {
 			const access = yield* AccessControl.Service;
 			const teams = yield* access.impersonationTeams();
 			return json({
@@ -423,265 +470,660 @@ const fixedBindings = [
 				activeTeamIds: context.impersonatedTeam === undefined ? [] : [context.impersonatedTeam],
 				teams
 			});
-		})),
-	binding('access.impersonateTeam', { Command: session('team impersonation object check') },
-		(context, input) => Effect.gen(function* () {
-			const access = yield* AccessControl.Service;
-			const previewed = yield* access.impersonateTeam(actor(context), input.teamId);
-			return json({ subject: previewed, apps: access.visibleApps(previewed) });
-		})),
-	binding('access.explain', { Command: session('effective policy explanation') },
-		(context, input) => Effect.map(AccessControl.Service, (access) => {
-			const decision = access.explain(principal(context), input.action, input.resource);
-			return json({ allowed: decision.allowed, reason: decision.reason });
-		})),
-	binding('identity.admitFounder', { Command: { ...session('manage identity'), authorize: protect('manage', 'identity') } },
-		(context, input) => Effect.gen(function* () {
-			const userId = yield* (yield* Identity.Service).admit(context.effectId, context.tenantId, input.email, null, ADMIN_STATUS);
-			return json({ admitted: true, userId, admin: true });
-		})),
-	binding('identity.bootstrapFounder', { Command: system('host founder bootstrap') },
-		(context, input) => Effect.gen(function* () {
-			const identity = yield* Identity.Service;
-			const ledger = `${FOUNDER_CLAIM_IDENTIFIER}${input.claimId}`;
-			const spent = yield* identity.readFounderClaim(context.effectId, ledger);
-			if (spent !== undefined) {
-				const [userId, ...rest] = spent.split(' ');
-				if (userId === undefined || userId.length === 0 || rest.join(' ') !== input.email)
-					return yield* new AccessControl.AccessDenied({
-						action: 'manage', resource: 'identity.bootstrapFounder',
-						reason: 'this founder claim has already been spent for another address'
+		})
+	),
+	binding(
+		'access.impersonateTeam',
+		{ Command: session('team impersonation object check') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const access = yield* AccessControl.Service;
+				const previewed = yield* access.impersonateTeam(actor(context), input.teamId);
+				return json({ subject: previewed, apps: access.visibleApps(previewed) });
+			})
+	),
+	binding(
+		'access.explain',
+		{ Command: session('effective policy explanation') },
+		(context, input) =>
+			Effect.map(AccessControl.Service, (access) => {
+				const decision = access.explain(principal(context), input.action, input.resource);
+				return json({ allowed: decision.allowed, reason: decision.reason });
+			})
+	),
+	binding(
+		'identity.admitFounder',
+		{ Command: { ...session('manage identity'), authorize: protect('manage', 'identity') } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const userId = yield* (yield* Identity.Service).admit(
+					context.effectId,
+					context.tenantId,
+					input.email,
+					null,
+					ADMIN_STATUS
+				);
+				return json({ admitted: true, userId, admin: true });
+			})
+	),
+	binding(
+		'identity.bootstrapFounder',
+		{ Command: system('host founder bootstrap') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const identity = yield* Identity.Service;
+				const ledger = `${FOUNDER_CLAIM_IDENTIFIER}${input.claimId}`;
+				const spent = yield* identity.readFounderClaim(context.effectId, ledger);
+				if (spent !== undefined) {
+					const [userId, ...rest] = spent.split(' ');
+					if (userId === undefined || userId.length === 0 || rest.join(' ') !== input.email)
+						return yield* new AccessControl.AccessDenied({
+							action: 'manage',
+							resource: 'identity.bootstrapFounder',
+							reason: 'this founder claim has already been spent for another address'
+						});
+					return json({
+						admitted: true,
+						userId,
+						admin: true,
+						credential: yield* identity.startSession(context.effectId, userId, context.tenantId)
 					});
-				return json({ admitted: true, userId, admin: true,
-					credential: yield* identity.startSession(context.effectId, userId, context.tenantId) });
-			}
-			const userId = yield* identity.admit(context.effectId, context.tenantId, input.email, null, ADMIN_STATUS);
-			const expires = new Date((yield* Clock.currentTimeMillis) + FOUNDER_CLAIM_LEDGER_MILLIS).toISOString();
-			yield* identity.recordFounderClaim(context.effectId, ledger, `${userId} ${input.email}`, expires);
-			return json({ admitted: true, userId, admin: true,
-				credential: yield* identity.startSession(context.effectId, userId, context.tenantId) });
-		})),
-	binding('identity.sendCode', { Command: publicCommand },
-		(context, input) => Effect.gen(function* () {
+				}
+				const userId = yield* identity.admit(
+					context.effectId,
+					context.tenantId,
+					input.email,
+					null,
+					ADMIN_STATUS
+				);
+				const expires = new Date(
+					(yield* Clock.currentTimeMillis) + FOUNDER_CLAIM_LEDGER_MILLIS
+				).toISOString();
+				yield* identity.recordFounderClaim(
+					context.effectId,
+					ledger,
+					`${userId} ${input.email}`,
+					expires
+				);
+				return json({
+					admitted: true,
+					userId,
+					admin: true,
+					credential: yield* identity.startSession(context.effectId, userId, context.tenantId)
+				});
+			})
+	),
+	binding('identity.sendCode', { Command: publicCommand }, (context, input) =>
+		Effect.gen(function* () {
 			yield* (yield* Identity.Service).sendCode(context.effectId, input.email);
 			return json({ sent: true });
-		})),
+		})
+	)
 ];
 
 const remainingBindings = [
-	binding('identity.verifyCode', { Command: publicCommand },
-		(context, input) => Effect.gen(function* () {
-			const credential = yield* (yield* Identity.Service).verifyCode(context.effectId, input.email, input.code, context.tenantId);
-			return json({ credential });
-		})),
-	binding('identity.continueSession', { Command: system('host session continuation') },
-		(context, input) => Effect.gen(function* () {
-			const credential = yield* (yield* Identity.Service).startSessionForEmail(context.effectId, input.email, context.tenantId);
-			return json({ credential });
-		})),
-	binding('identity.workspaceAccess', { Command: session('tenant workspace access') },
-		(context) =>
-			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.workspaceAccess(context.effectId, context.tenantId), json))),
-	binding('identity.invite', { Command: { ...session('manage identity'), authorize: protect('manage', 'identity') } },
-		(context, input) => Effect.gen(function* () {
-			const invitationId = yield* (yield* Identity.Service).invite(context.effectId, context.tenantId, input.email, principal(context).userId);
-			return json({ invitationId });
-		})),
-	binding('identity.assignTeam', { Command: { ...session('manage identity'), authorize: authorizeMembership } },
-		(context, input) => Effect.gen(function* () {
-			const outcome = yield* (yield* Identity.Service).assignTeam(
+	binding('identity.verifyCode', { Command: publicCommand }, (context, input) =>
+		Effect.gen(function* () {
+			const credential = yield* (yield* Identity.Service).verifyCode(
 				context.effectId,
-				context.tenantId,
-				principal(context).userId,
-				input.memberId,
-				input.teamId
+				input.email,
+				input.code,
+				context.tenantId
 			);
-			if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
-			return json({ assigned: true });
-		})),
-	binding('identity.setMemberAdmin', { Command: { ...session('manage identity'), authorize: authorizeMembership } },
-		(context, input) => Effect.gen(function* () {
-			const outcome = yield* (yield* Identity.Service).setMemberAdmin(
+			return json({ credential });
+		})
+	),
+	binding(
+		'identity.continueSession',
+		{ Command: system('host session continuation') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const credential = yield* (yield* Identity.Service).startSessionForEmail(
+					context.effectId,
+					input.email,
+					context.tenantId
+				);
+				return json({ credential });
+			})
+	),
+	binding('identity.workspaceAccess', { Command: session('tenant workspace access') }, (context) =>
+		Effect.flatMap(Identity.Service, (identity) =>
+			Effect.map(identity.workspaceAccess(context.effectId, context.tenantId), json)
+		)
+	),
+	binding(
+		'identity.invite',
+		{ Command: { ...session('manage identity'), authorize: protect('manage', 'identity') } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const invitationId = yield* (yield* Identity.Service).invite(
+					context.effectId,
+					context.tenantId,
+					input.email,
+					principal(context).userId
+				);
+				return json({ invitationId });
+			})
+	),
+	binding(
+		'identity.assignTeam',
+		{ Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const outcome = yield* (yield* Identity.Service).assignTeam(
+					context.effectId,
+					context.tenantId,
+					principal(context).userId,
+					input.memberId,
+					input.teamId
+				);
+				if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+				return json({ assigned: true });
+			})
+	),
+	binding(
+		'identity.setMemberAdmin',
+		{ Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const outcome = yield* (yield* Identity.Service).setMemberAdmin(
+					context.effectId,
+					context.tenantId,
+					principal(context).userId,
+					input.memberId,
+					input.admin
+				);
+				if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+				return json({ updated: true });
+			})
+	),
+	binding(
+		'identity.invitation.inspect',
+		{ Command: system('host invitation inspection') },
+		(context, input) =>
+			Effect.flatMap(Identity.Service, (identity) =>
+				Effect.map(
+					identity.inspectInvitation(context.effectId, context.tenantId, input.invitationId),
+					json
+				)
+			)
+	),
+	binding(
+		'identity.invitation.accept',
+		{ Command: session('invitation object acceptance') },
+		(context, input) =>
+			Effect.flatMap(Identity.Service, (identity) =>
+				Effect.map(
+					identity.acceptInvitation(context.effectId, input.invitationId, principal(context)),
+					json
+				)
+			)
+	),
+	binding('approvals.decide', { Command: session('approval object decision') }, (context, input) =>
+		Effect.flatMap(Approvals.Service, (approvals) =>
+			Effect.map(
+				approvals.decide(
+					context.effectId,
+					principal(context),
+					input.state,
+					input.decision,
+					input.reason
+				),
+				json
+			)
+		)
+	),
+	binding(
+		'approvals.withdraw',
+		{ Command: session('approval object withdrawal') },
+		(context, input) =>
+			Effect.flatMap(Approvals.Service, (approvals) =>
+				Effect.map(approvals.withdraw(context.effectId, principal(context), input.state), json)
+			)
+	),
+	binding(
+		'approvals.capabilities',
+		{ Command: session('approval visibility and capability') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const visible = yield* (yield* Collections.Service).findFirst(
+					context.effectId,
+					principal(context),
+					{
+						collection: 'approval_request',
+						where: { id: { eq: input.requestId } }
+					}
+				);
+				if (visible === undefined || typeof visible !== 'object' || visible === null)
+					return json([]);
+				const status = Reflect.get(visible, 'status');
+				if (typeof status !== 'string') return json([]);
+				const capabilities = yield* (yield* Approvals.Service).capabilities(
+					context.effectId,
+					principal(context),
+					input.requestId
+				);
+				return json([{ id: input.requestId, status, ...capabilities }]);
+			})
+	),
+	binding('approvals.status', { Command: session('approval visibility') }, (context, input) =>
+		Effect.gen(function* () {
+			const visible = yield* (yield* Collections.Service).findFirst(
 				context.effectId,
-				context.tenantId,
-				principal(context).userId,
-				input.memberId,
-				input.admin
+				principal(context),
+				{
+					collection: 'approval_request',
+					where: { id: { eq: input.requestId } }
+				}
 			);
-			if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
-			return json({ updated: true });
-		})),
-	binding('identity.invitation.inspect', { Command: system('host invitation inspection') },
-		(context, input) =>
-			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.inspectInvitation(context.effectId, context.tenantId, input.invitationId), json))),
-	binding('identity.invitation.accept', { Command: session('invitation object acceptance') },
-		(context, input) =>
-			Effect.flatMap(Identity.Service, (identity) => Effect.map(identity.acceptInvitation(context.effectId, input.invitationId, principal(context)), json))),
-	binding('approvals.decide', { Command: session('approval object decision') },
-		(context, input) =>
-			Effect.flatMap(Approvals.Service, (approvals) => Effect.map(approvals.decide(context.effectId, principal(context), input.state, input.decision, input.reason), json))),
-	binding('approvals.withdraw', { Command: session('approval object withdrawal') },
-		(context, input) =>
-			Effect.flatMap(Approvals.Service, (approvals) => Effect.map(approvals.withdraw(context.effectId, principal(context), input.state), json))),
-	binding('approvals.capabilities', { Command: session('approval visibility and capability') },
-		(context, input) => Effect.gen(function* () {
-			const visible = yield* (yield* Collections.Service).findFirst(context.effectId, principal(context), {
-				collection: 'approval_request', where: { id: { eq: input.requestId } }
-			});
-			if (visible === undefined || typeof visible !== 'object' || visible === null) return json([]);
-			const status = Reflect.get(visible, 'status');
-			if (typeof status !== 'string') return json([]);
-			const capabilities = yield* (yield* Approvals.Service).capabilities(context.effectId, principal(context), input.requestId);
-			return json([{ id: input.requestId, status, ...capabilities }]);
-		})),
-	binding('approvals.status', { Command: session('approval visibility') },
-		(context, input) => Effect.gen(function* () {
-			const visible = yield* (yield* Collections.Service).findFirst(context.effectId, principal(context), {
-				collection: 'approval_request', where: { id: { eq: input.requestId } }
-			});
-			return json(visible === undefined ? null : (yield* (yield* Approvals.Service).status(context.effectId, input.requestId)) ?? null);
-		})),
-	binding('host.recover', { Command: system('host recovery') },
-		(context) => Effect.gen(function* () {
+			return json(
+				visible === undefined
+					? null
+					: ((yield* (yield* Approvals.Service).status(context.effectId, input.requestId)) ?? null)
+			);
+		})
+	),
+	binding('host.recover', { Command: system('host recovery') }, (context) =>
+		Effect.gen(function* () {
 			yield* (yield* Automations.Service).recover(EffectId.make(`${context.effectId}:automations`));
 			yield* (yield* TaskQueue.Service).recover(EffectId.make(`${context.effectId}:tasks`));
 			return json({ recovered: true });
-		})),
-	binding('host.schedules.discover', { Command: system('host schedule claim') },
-		(context, input) => Effect.gen(function* () {
-			const discovered = yield* (yield* TaskQueue.Service).discover(context.effectId, input.nowEpochMs, input.leaseForMillis);
-			yield* (yield* Automations.Service).publishProjectedRuns(EffectId.make(`${context.effectId}:publish`), discovered.occurrences.map(({ taskId }) => taskId));
-			return json({ occurrences: discovered.occurrences, rejections: discovered.rejections, nextDueAtEpochMs: discovered.nextDueAtEpochMs ?? null });
-		})),
-	binding('host.schedules.settle', { Command: system('host schedule settlement') },
-		(context, input) => Effect.gen(function* () {
-			const next = yield* (yield* TaskQueue.Service).settle(context.effectId, input.occurrence.taskId, input.occurrence.attempt, input.outcome);
-			yield* (yield* Automations.Service).publishProjectedRuns(EffectId.make(`${context.effectId}:publish`), [input.occurrence.taskId]);
-			return json({ settled: true, nextDueAtEpochMs: next ?? null });
-		})),
-	binding('sync.connect', { Command: session('viewer-scoped live query admission') },
+		})
+	),
+	binding('host.schedules.discover', { Command: system('host schedule claim') }, (context, input) =>
+		Effect.gen(function* () {
+			const discovered = yield* (yield* TaskQueue.Service).discover(
+				context.effectId,
+				input.nowEpochMs,
+				input.leaseForMillis
+			);
+			yield* (yield* Automations.Service).publishProjectedRuns(
+				EffectId.make(`${context.effectId}:publish`),
+				discovered.occurrences.map(({ taskId }) => taskId)
+			);
+			return json({
+				occurrences: discovered.occurrences,
+				rejections: discovered.rejections,
+				nextDueAtEpochMs: discovered.nextDueAtEpochMs ?? null
+			});
+		})
+	),
+	binding(
+		'host.schedules.settle',
+		{ Command: system('host schedule settlement') },
 		(context, input) =>
-			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.connect(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input), json))),
-	binding('sync.extendPrefix', { Command: system('host live-prefix extension') },
+			Effect.gen(function* () {
+				const next = yield* (yield* TaskQueue.Service).settle(
+					context.effectId,
+					input.occurrence.taskId,
+					input.occurrence.attempt,
+					input.outcome
+				);
+				yield* (yield* Automations.Service).publishProjectedRuns(
+					EffectId.make(`${context.effectId}:publish`),
+					[input.occurrence.taskId]
+				);
+				return json({ settled: true, nextDueAtEpochMs: next ?? null });
+			})
+	),
+	binding(
+		'sync.connect',
+		{ Command: session('viewer-scoped live query admission') },
 		(context, input) =>
-			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.extendPrefix(context.effectId, input.state, input.request), json))),
-	binding('sync.advance', { Command: system('host commit delta evaluation') },
+			Effect.flatMap(Sync.Service, (sync) =>
+				Effect.map(
+					sync.connect(
+						context.effectId,
+						actor(context),
+						principal(context),
+						context.impersonatedTeam ?? null,
+						input
+					),
+					json
+				)
+			)
+	),
+	binding(
+		'sync.extendPrefix',
+		{ Command: system('host live-prefix extension') },
 		(context, input) =>
-			Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.advance(context.effectId, input), json))),
-	binding('collections.embed', { Command: system('host embedding checkpoint') },
-		(context) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.embedRecords(context.effectId), json))),
-	binding('tasks.submit', { Command: session('TaskService.submit exact task object') },
+			Effect.flatMap(Sync.Service, (sync) =>
+				Effect.map(sync.extendPrefix(context.effectId, input.state, input.request), json)
+			)
+	),
+	binding('sync.advance', { Command: system('host commit delta evaluation') }, (context, input) =>
+		Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.advance(context.effectId, input), json))
+	),
+	binding('collections.embed', { Command: system('host embedding checkpoint') }, (context) =>
+		Effect.flatMap(Collections.Service, (collections) =>
+			Effect.map(collections.embedRecords(context.effectId), json)
+		)
+	),
+	binding(
+		'tasks.submit',
+		{ Command: session('TaskService.submit exact task object') },
 		(context, input) =>
-			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.submit(context.effectId, principal(context), input), json))),
-	binding('tasks.editMessage', { Command: session('TaskService.editMessage exact task object') },
+			Effect.flatMap(Agents.Service, (agents) =>
+				Effect.map(agents.submit(context.effectId, principal(context), input), json)
+			)
+	),
+	binding(
+		'tasks.editMessage',
+		{ Command: session('TaskService.editMessage exact task object') },
 		(context, input) =>
-			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.editMessage(context.effectId, principal(context), input), json))),
-	binding('tasks.control', { Command: session('TaskService.control exact task object') },
+			Effect.flatMap(Agents.Service, (agents) =>
+				Effect.map(agents.editMessage(context.effectId, principal(context), input), json)
+			)
+	),
+	binding(
+		'tasks.control',
+		{ Command: session('TaskService.control exact task object') },
 		(context, input) =>
-			Effect.flatMap(Agents.Service, (agents) => Effect.map(agents.control(context.effectId, principal(context), input), json))),
-	binding('tasks.execute', { Task: task('Agent Task execution') },
-		(context, input) => Effect.gen(function* () {
+			Effect.flatMap(Agents.Service, (agents) =>
+				Effect.map(agents.control(context.effectId, principal(context), input), json)
+			)
+	),
+	binding('tasks.execute', { Task: task('Agent Task execution') }, (context, input) =>
+		Effect.gen(function* () {
 			const runAs = yield* Schema.decodeUnknownEffect(Subject)(input.bolt_run_as).pipe(
-				Effect.mapError(() =>
-					new AccessControl.AccessDenied({
-						action: 'invoke',
-						resource: 'tasks.execute',
-						reason: 'The runtime task carries no valid declared subject'
-					})
+				Effect.mapError(
+					() =>
+						new AccessControl.AccessDenied({
+							action: 'invoke',
+							resource: 'tasks.execute',
+							reason: 'The runtime task carries no valid declared subject'
+						})
 				)
 			);
 			const result = yield* (yield* Agents.Service).execute(context.effectId, runAs, input.taskId);
 			return json({ taskId: result.taskId, status: result.status });
-		})),
-	binding('workspace.manifest', { Command: session('visible workspace manifest') },
-		(context) => Effect.map(workspaceManifest(context, false), json)),
-	binding('workspace.authoringManifest', { Command: session('administrator authoring manifest') },
-		(context) => Effect.map(workspaceManifest(context, true), json)),
-	binding('collections.history', { Command: session('collection row history policy') },
-		(context, input) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.history(context.effectId, principal(context), input.collection, input.id), json))),
-	binding('collections.mutate', { Command: session('collection action, row, and field policy') },
-		(context, input) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.mutateBrowser(context.effectId, actor(context), principal(context), context.impersonatedTeam ?? null, input), json))),
-	binding('collections.resume', { Command: session('held mutation object'), Task: task('held mutation object') },
-		(context, input) => Effect.gen(function* () { yield* (yield* Collections.Service).resume(context.effectId, input.requestId); return json({ resumed: true, requestId: input.requestId }); })),
-	binding('collections.discard', { Command: session('held mutation object'), Task: task('held mutation object') },
-		(context, input) => Effect.gen(function* () { yield* (yield* Collections.Service).discard(context.effectId, input.requestId); return json({ discarded: true, requestId: input.requestId }); })),
-	binding('collections.import', { Command: session('collection import row and field policy') },
-		(context, input) => Effect.gen(function* () {
-			const subject = principal(context);
-			return json({ imported: yield* (yield* Collections.Service).import(context.effectId, subject, input.records.map((record) => ({ ...record, subject }))) });
-		})),
-	binding('collections.export', { Command: session('collection query policy') },
-		(context, input) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.export(context.effectId, principal(context), collectionQuery(input)), json))),
-	binding('collections.count', { Command: session('collection query policy') },
-		(context, input) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.count(context.effectId, principal(context), collectionQuery(input)), json))),
-	binding('collections.findMany', { Command: session('collection query policy') },
-		(context, input) => anchoredFindMany(context, input)),
-	binding('collections.findFirst', { Command: session('collection query policy') },
+		})
+	),
+	binding('workspace.manifest', { Command: session('visible workspace manifest') }, (context) =>
+		Effect.map(workspaceManifest(context, false), json)
+	),
+	binding(
+		'workspace.authoringManifest',
+		{ Command: session('administrator authoring manifest') },
+		(context) => Effect.map(workspaceManifest(context, true), json)
+	),
+	binding(
+		'collections.history',
+		{ Command: session('collection row history policy') },
 		(context, input) =>
 			Effect.flatMap(Collections.Service, (collections) =>
-				Effect.map(collections.findFirst(context.effectId, principal(context), collectionQuery(input)), (row) =>
-					json(row ?? null)))),
-	binding('collections.findGrouped', { Command: session('collection query policy') },
+				Effect.map(
+					collections.history(context.effectId, principal(context), input.collection, input.id),
+					json
+				)
+			)
+	),
+	binding(
+		'collections.mutate',
+		{ Command: session('collection action, row, and field policy') },
 		(context, input) =>
-			Effect.flatMap(Collections.Service, (collections) => Effect.map(collections.findGrouped(context.effectId, principal(context), groupedQuery(input)), json))),
-	binding('schema.plan', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
-		() => Effect.map(WorkspaceSchema.Service, (schema) => { const plan = schema.plan(); return json({ fingerprint: plan.fingerprint, steps: plan.steps.map(({ id, sql }) => ({ id, sql })) }); })),
-	binding('schema.fingerprint', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
-		() => Effect.map(WorkspaceSchema.Service, (schema) => json({ fingerprint: schema.fingerprint() }))),
-	binding('schema.validate', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
-		() => Effect.gen(function* () { yield* (yield* WorkspaceSchema.Service).validate(); return json({ valid: true }); })),
-	binding('schema.verify', { Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
-		(context) => Effect.gen(function* () { const divergences = yield* (yield* WorkspaceSchema.Service).verify(context.effectId); return json({ verified: divergences.length === 0, divergences }); })),
-	binding('schema.migrate', { Command: { ...session('manage schema'), authorize: protect('manage', 'schema') } },
-		(context) => Effect.gen(function* () { const schema = yield* WorkspaceSchema.Service; yield* schema.migrate(context.effectId); return json({ migrated: true, fingerprint: schema.fingerprint() }); })),
-	binding('automations.start', { Command: session('declared automation admission') },
-		(context, input) => Effect.gen(function* () {
-			const taskId = yield* (yield* Automations.Service).start(context.effectId, input.name, input.input);
-			return json({ taskId, result: (yield* executeDirectAutomation({ ...context, effectId: EffectId.make(`${context.effectId}:execute`) }, input.name, taskId)) ?? null });
-		})),
-	binding('automations.stop', { Command: session('declared automation task object') },
-		(context, input) => Effect.gen(function* () { yield* (yield* Automations.Service).stop(context.effectId, input.name, input.taskId); return json({ stopped: true }); })),
-	binding('envoys.receive', { Command: system('host-authenticated transport delivery') },
+			Effect.flatMap(Collections.Service, (collections) =>
+				Effect.map(
+					collections.mutateBrowser(
+						context.effectId,
+						actor(context),
+						principal(context),
+						context.impersonatedTeam ?? null,
+						input
+					),
+					json
+				)
+			)
+	),
+	binding(
+		'collections.resume',
+		{ Command: session('held mutation object'), Task: task('held mutation object') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.receive(context.effectId, input.envoy, input.delivery), json))),
-	binding('envoys.registration.inspect', { Command: system('host registration claim inspection') },
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).resume(context.effectId, input.requestId);
+				return json({ resumed: true, requestId: input.requestId });
+			})
+	),
+	binding(
+		'collections.discard',
+		{ Command: session('held mutation object'), Task: task('held mutation object') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.inspectRegistration(context.effectId, input.claimId), json))),
-	binding('envoys.registration.redeem', { Command: session('registration claim object redemption') },
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).discard(context.effectId, input.requestId);
+				return json({ discarded: true, requestId: input.requestId });
+			})
+	),
+	binding(
+		'collections.import',
+		{ Command: session('collection import row and field policy') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.redeemRegistration(context.effectId, input.claimId, principal(context)), json))),
-	binding('envoys.drain', { Command: session('envoy conversation object'), Task: task('envoy conversation object') },
+			Effect.gen(function* () {
+				const subject = principal(context);
+				return json({
+					imported: yield* (yield* Collections.Service).import(
+						context.effectId,
+						subject,
+						input.records.map((record) => ({ ...record, subject }))
+					)
+				});
+			})
+	),
+	binding('collections.export', { Command: session('collection query policy') }, (context, input) =>
+		Effect.flatMap(Collections.Service, (collections) =>
+			Effect.map(
+				collections.export(context.effectId, principal(context), collectionQuery(input)),
+				json
+			)
+		)
+	),
+	binding('collections.count', { Command: session('collection query policy') }, (context, input) =>
+		Effect.flatMap(Collections.Service, (collections) =>
+			Effect.map(
+				collections.count(context.effectId, principal(context), collectionQuery(input)),
+				json
+			)
+		)
+	),
+	binding(
+		'collections.findMany',
+		{ Command: session('collection query policy') },
+		(context, input) => anchoredFindMany(context, input)
+	),
+	binding(
+		'collections.findFirst',
+		{ Command: session('collection query policy') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.drain(context.effectId, input.envoy, input.conversationId), json))),
-	binding('envoys.complete', { Command: session('envoy conversation object'), Task: task('envoy conversation object') },
+			Effect.flatMap(Collections.Service, (collections) =>
+				Effect.map(
+					collections.findFirst(context.effectId, principal(context), collectionQuery(input)),
+					(row) => json(row ?? null)
+				)
+			)
+	),
+	binding(
+		'collections.findGrouped',
+		{ Command: session('collection query policy') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.complete(context.effectId, input.envoy, input.conversationId, input.output, input.progressKey ?? null), json))),
-	binding('envoys.status', { Command: session('envoy status visibility') },
+			Effect.flatMap(Collections.Service, (collections) =>
+				Effect.map(
+					collections.findGrouped(context.effectId, principal(context), groupedQuery(input)),
+					json
+				)
+			)
+	),
+	binding(
+		'schema.plan',
+		{ Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
+		() =>
+			Effect.map(WorkspaceSchema.Service, (schema) => {
+				const plan = schema.plan();
+				return json({
+					fingerprint: plan.fingerprint,
+					steps: plan.steps.map(({ id, sql }) => ({ id, sql }))
+				});
+			})
+	),
+	binding(
+		'schema.fingerprint',
+		{ Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
+		() =>
+			Effect.map(WorkspaceSchema.Service, (schema) => json({ fingerprint: schema.fingerprint() }))
+	),
+	binding(
+		'schema.validate',
+		{ Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
+		() =>
+			Effect.gen(function* () {
+				yield* (yield* WorkspaceSchema.Service).validate();
+				return json({ valid: true });
+			})
+	),
+	binding(
+		'schema.verify',
+		{ Command: { ...session('read schema'), authorize: protect('read', 'schema') } },
+		(context) =>
+			Effect.gen(function* () {
+				const divergences = yield* (yield* WorkspaceSchema.Service).verify(context.effectId);
+				return json({ verified: divergences.length === 0, divergences });
+			})
+	),
+	binding(
+		'schema.migrate',
+		{ Command: { ...session('manage schema'), authorize: protect('manage', 'schema') } },
+		(context) =>
+			Effect.gen(function* () {
+				const schema = yield* WorkspaceSchema.Service;
+				yield* schema.migrate(context.effectId);
+				return json({ migrated: true, fingerprint: schema.fingerprint() });
+			})
+	),
+	binding(
+		'automations.start',
+		{ Command: session('declared automation admission') },
 		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) => Effect.map(envoys.status(context.effectId, input.envoy), json))),
-	binding('integrations.pull', { Command: session('integration binding'), Task: task('integration binding') },
+			Effect.gen(function* () {
+				const taskId = yield* (yield* Automations.Service).start(
+					context.effectId,
+					input.name,
+					input.input
+				);
+				return json({
+					taskId,
+					result:
+						(yield* executeDirectAutomation(
+							{ ...context, effectId: EffectId.make(`${context.effectId}:execute`) },
+							input.name,
+							taskId
+						)) ?? null
+				});
+			})
+	),
+	binding(
+		'automations.stop',
+		{ Command: session('declared automation task object') },
 		(context, input) =>
-			Effect.flatMap(Integrations.Service, (integrations) => Effect.map(integrations.pull(context.effectId, input.name, input.cursor, input.binding), json))),
-	binding('integrations.flush', { Command: session('integration outbox'), Task: task('integration outbox') },
+			Effect.gen(function* () {
+				yield* (yield* Automations.Service).stop(context.effectId, input.name, input.taskId);
+				return json({ stopped: true });
+			})
+	),
+	binding(
+		'envoys.receive',
+		{ Command: system('host-authenticated transport delivery') },
 		(context, input) =>
-			Effect.flatMap(Integrations.Service, (integrations) => Effect.map(integrations.flush(context.effectId, input.name, input.input ?? null), json))),
-	binding('notifications.drain', { Command: session('notification object'), Task: task('notification object') },
-		(context, input) => Effect.gen(function* () { yield* (yield* Notifications.Service).drain(context.effectId, input); return json({ delivered: true, id: input.id }); }))
+			Effect.flatMap(Envoys.Service, (envoys) =>
+				Effect.map(envoys.receive(context.effectId, input.envoy, input.delivery), json)
+			)
+	),
+	binding(
+		'envoys.registration.inspect',
+		{ Command: system('host registration claim inspection') },
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) =>
+				Effect.map(envoys.inspectRegistration(context.effectId, input.claimId), json)
+			)
+	),
+	binding(
+		'envoys.registration.redeem',
+		{ Command: session('registration claim object redemption') },
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) =>
+				Effect.map(
+					envoys.redeemRegistration(context.effectId, input.claimId, principal(context)),
+					json
+				)
+			)
+	),
+	binding(
+		'envoys.drain',
+		{ Command: session('envoy conversation object'), Task: task('envoy conversation object') },
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) =>
+				Effect.map(envoys.drain(context.effectId, input.envoy, input.conversationId), json)
+			)
+	),
+	binding(
+		'envoys.complete',
+		{ Command: session('envoy conversation object'), Task: task('envoy conversation object') },
+		(context, input) =>
+			Effect.flatMap(Envoys.Service, (envoys) =>
+				Effect.map(
+					envoys.complete(
+						context.effectId,
+						input.envoy,
+						input.conversationId,
+						input.output,
+						input.progressKey ?? null
+					),
+					json
+				)
+			)
+	),
+	binding('envoys.status', { Command: session('envoy status visibility') }, (context, input) =>
+		Effect.flatMap(Envoys.Service, (envoys) =>
+			Effect.map(envoys.status(context.effectId, input.envoy), json)
+		)
+	),
+	binding(
+		'integrations.pull',
+		{ Command: session('integration binding'), Task: task('integration binding') },
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) =>
+				Effect.map(
+					integrations.pull(context.effectId, input.name, input.cursor, input.binding),
+					json
+				)
+			)
+	),
+	binding(
+		'integrations.flush',
+		{ Command: session('integration outbox'), Task: task('integration outbox') },
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) =>
+				Effect.map(integrations.flush(context.effectId, input.name, input.input ?? null), json)
+			)
+	),
+	binding(
+		'notifications.drain',
+		{ Command: session('notification object'), Task: task('notification object') },
+		(context, input) =>
+			Effect.gen(function* () {
+				yield* (yield* Notifications.Service).drain(context.effectId, input);
+				return json({ delivered: true, id: input.id });
+			})
+	)
 ];
 
 const allBindings = [...fixedBindings, ...remainingBindings];
 const fixedByName = new Map<string, (typeof allBindings)[number]>();
 for (const entry of allBindings) {
-	if (fixedByName.has(entry.contract.name)) throw new Error(`Duplicate command binding: ${entry.contract.name}`);
+	if (fixedByName.has(entry.contract.name))
+		throw new Error(`Duplicate command binding: ${entry.contract.name}`);
 	fixedByName.set(entry.contract.name, entry);
 }
 for (const contract of FixedCommandCatalogue) {
-	if (!fixedByName.has(contract.name)) throw new Error(`Fixed command has no binding: ${contract.name}`);
+	if (!fixedByName.has(contract.name))
+		throw new Error(`Fixed command has no binding: ${contract.name}`);
 }
 
 export const FixedCommandBindings: ReadonlyMap<string, (typeof allBindings)[number]> = fixedByName;
@@ -737,14 +1179,18 @@ export const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')
 			handle: (context: ExecutionContext, raw: unknown) =>
 				Effect.gen(function* () {
 					const input = yield* Schema.decodeUnknownEffect(WorkspaceInvokeContract.input)(raw);
-					return json(yield* remotes.invoke(member, input.input, principal(context), context.effectId));
+					return json(
+						yield* remotes.invoke(member, input.input, principal(context), context.effectId)
+					);
 				})
 		};
 	}
 	if (name.startsWith('automations.')) {
 		const member = name.slice('automations.'.length);
 		const authored = yield* AuthoredRuntimeService;
-		const declared = (yield* Workspace.Service).definition.automations.some(({ name }) => name === member);
+		const declared = (yield* Workspace.Service).definition.automations.some(
+			({ name }) => name === member
+		);
 		const implemented = authored.automations[member] !== undefined;
 		if (declared !== implemented)
 			return yield* new DispatchError({
@@ -774,14 +1220,16 @@ export const resolveCompositeCommand = (plugin: string, command: string) => {
 			Effect.gen(function* () {
 				const input = yield* Schema.decodeUnknownEffect(DataBrowserCommandContract.input)(raw);
 				const limit = input.input?.limit;
-				return json(yield* Effect.provideService(
-					(yield* Collections.Service).findMany(context.effectId, principal(context), {
-						collection: input.collection,
-						...(limit === undefined ? {} : { limit })
-					}),
-					Identity.CurrentSubject,
-					principal(context)
-				));
+				return json(
+					yield* Effect.provideService(
+						(yield* Collections.Service).findMany(context.effectId, principal(context), {
+							collection: input.collection,
+							...(limit === undefined ? {} : { limit })
+						}),
+						Identity.CurrentSubject,
+						principal(context)
+					)
+				);
 			})
 	};
 };

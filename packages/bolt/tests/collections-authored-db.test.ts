@@ -9,8 +9,12 @@ const recordingOps = (calls: Array<string>): AuthoringOps => ({
 	findFirst: () => Effect.succeed(undefined),
 	count: () => Effect.succeed(0),
 	findNearest: () => Effect.succeed([]),
-	mutate: (collection: string, values: Readonly<Record<string, unknown>>) => {
-		calls.push(`mutate:${collection}:${String(values['name'])}`);
+	mutate: (collection: string, values: ReadonlyArray<Readonly<Record<string, unknown>>>) => {
+		calls.push(`mutate:${collection}:${String(values[0]?.['name'])}`);
+		return Effect.void;
+	},
+	delete: (collection: string, ids: ReadonlyArray<string>) => {
+		calls.push(`delete:${collection}:${ids.join(',')}`);
 		return Effect.void;
 	},
 	runAutomation: () => Effect.succeed({ taskId: 'unused' }),
@@ -24,7 +28,9 @@ type AuthoredDb = {
 		Record<
 			string,
 			{
-				readonly mutate: (values: Readonly<Record<string, unknown>>) => Effect.Effect<void>;
+				readonly mutate: (
+					values: ReadonlyArray<Readonly<Record<string, unknown>>>
+				) => Effect.Effect<void>;
 			}
 		>
 	>;
@@ -35,7 +41,7 @@ describe('authored collection operations', () => {
 		const calls: Array<string> = [];
 		const api = makeAuthoringApi(recordingOps(calls)) as AuthoredDb;
 		return Effect.gen(function* () {
-			yield* api.db['payslips']!.mutate({ name: 'August' });
+			yield* api.db['payslips']!.mutate([{ name: 'August' }]);
 			expect(calls).toEqual(['mutate:payslips:August']);
 		});
 	});

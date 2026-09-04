@@ -297,7 +297,7 @@
 				if (onSubmit) return onSubmit(values);
 				const writableValues = pickWritableFormValues(definition.fields, values);
 				return submitCollectionMutation(() =>
-					operations.mutate(recordId ? { id: recordId, ...writableValues } : writableValues)
+					operations.mutate([recordId ? { id: recordId, ...writableValues } : writableValues])
 				).pipe(
 					Effect.tap((submission) =>
 						Effect.sync(() => {
@@ -421,11 +421,7 @@
 						Boolean(recordId && !form.isDirty)}
 				>
 					{#if submissionPending}
-						<Icon
-							icon="lucide:loader-circle"
-							class="size-4 animate-spin"
-							aria-hidden="true"
-						/>
+						<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
 					{/if}
 					{submissionPending
 						? t('form.saving')

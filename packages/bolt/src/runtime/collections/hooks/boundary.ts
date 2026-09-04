@@ -6,10 +6,7 @@ import type {
 	NearestQueryInput,
 	QueryInput
 } from '#lib/runtime/collections/collections.contract.js';
-import {
-	type AuthoringOps,
-	type AuthoringReadOps
-} from '#lib/runtime/collections/authored.js';
+import { type AuthoringOps, type AuthoringReadOps } from '#lib/runtime/collections/authored.js';
 import { nearestQueryInput, queryInput } from '#lib/runtime/collections/query-input.js';
 
 /** The hook shape the collection lifecycle is allowed to inspect. */
@@ -95,7 +92,7 @@ export class HookEffectIds {
  */
 const HOOK_NESTING_LIMIT = 8;
 
-export type HookWriteOps<E = never> = Pick<AuthoringOps<E>, 'mutate'>;
+export type HookWriteOps<E = never> = Pick<AuthoringOps<E>, 'mutate' | 'delete'>;
 
 /**
  * Refuses a hook chain that has stopped going anywhere.
@@ -161,6 +158,14 @@ type AuthoringWritePorts<
 			elevated: boolean,
 			depth: number
 		) => Effect.Effect<unknown, MutateE>;
+		readonly delete: (
+			effectId: EffectIdType,
+			subject: Identity.Subject,
+			collection: string,
+			ids: ReadonlyArray<string>,
+			elevated: boolean,
+			depth: number
+		) => Effect.Effect<unknown, MutateE>;
 		readonly startAutomation: (
 			effectId: EffectIdType,
 			name: string,
@@ -189,8 +194,7 @@ export const buildReadOps = <E>(
 	subject: Identity.Subject
 ): AuthoringReadOps<E> => ({
 	allowedCollections: ports.allowedCollections,
-	findMany: (collection, input) =>
-		ports.findMany(effectId, subject, queryInput(collection, input)),
+	findMany: (collection, input) => ports.findMany(effectId, subject, queryInput(collection, input)),
 	findFirst: (collection, input) =>
 		ports
 			.findMany(effectId, subject, { ...queryInput(collection, input), limit: 1 })
@@ -227,13 +231,23 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 	 * the id readable in a ledger.
 	 */
 	const hookEffectIds = new HookEffectIds(effectId);
-	const hookWrite = (collection: string, values: Readonly<Record<string, unknown>>) => {
+	const hookWrite = (
+		collection: string,
+		values: ReadonlyArray<Readonly<Record<string, unknown>>>
+	) => {
 		const childEffectId = hookEffectIds.next({ phase: 'mutate', collection });
 		return staged?.mutate === undefined
 			? ports
-					.mutate(childEffectId, subject, collection, [values], elevated, depth)
+					.mutate(childEffectId, subject, collection, values, elevated, depth)
 					.pipe(Effect.asVoid)
 			: staged.mutate(collection, values);
+	};
+	const hookDelete = (collection: string, ids: ReadonlyArray<string>) => {
+		if (ids.length === 0) return Effect.void;
+		const childEffectId = hookEffectIds.next({ phase: 'delete.before', collection });
+		return staged?.delete === undefined
+			? ports.delete(childEffectId, subject, collection, ids, elevated, depth).pipe(Effect.asVoid)
+			: staged.delete(collection, ids);
 	};
 	return {
 		...buildReadOps(ports, effectId, subject),
@@ -249,6 +263,7 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 				}
 			),
 		mutate: hookWrite,
+		delete: hookDelete,
 		infer: ports.infer,
 		readFileAsset: ports.readFileAsset
 	};

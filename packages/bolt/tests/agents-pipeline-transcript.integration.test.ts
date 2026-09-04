@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-	AgentId,
-	DirectiveMode,
-	DirectivePriority,
-	TaskId
-} from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import { systemToolSpecs } from '../src/runtime/agents/capability-catalog.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -103,11 +98,17 @@ const runTask = async (
 	return { result, taskId, agents };
 };
 
-const toolNamesFrom = (request: { readonly messages: ReadonlyArray<{ readonly role: string; readonly content: unknown }> }) =>
+const toolNamesFrom = (request: {
+	readonly messages: ReadonlyArray<{ readonly role: string; readonly content: unknown }>;
+}) =>
 	request.messages.flatMap((message) => {
-		if (message.role !== 'tool' || typeof message.content === 'string') return [];
-		return message.content.flatMap((part) =>
-			typeof part === 'object' && part !== null && 'name' in part && part.type === 'tool-result'
+		if (message.role !== 'tool' || !Array.isArray(message.content)) return [];
+		return message.content.flatMap((part: unknown) =>
+			typeof part === 'object' &&
+			part !== null &&
+			'name' in part &&
+			'type' in part &&
+			part.type === 'tool-result'
 				? [String(part.name)]
 				: []
 		);
@@ -296,7 +297,9 @@ describe('scripted agent pipeline transcript', () => {
 	it('Plan mode then Agent: the model loses the pre-checkpoint brief and is given the Active Plan', async () => {
 		const brief = 'UNIQUE_PLAN_BRIEF_MUST_LEAVE_THE_FEED';
 		const { ai, feed, requests } = scriptedTranscript([
-			assistantText('Objective: ship export. Approach: read first. Verify: describe_workspace returns.'),
+			assistantText(
+				'Objective: ship export. Approach: read first. Verify: describe_workspace returns.'
+			),
 			assistantText('Executing against the Active Plan.')
 		]);
 		const { agents, taskId } = await openTask(ai, '07', 'plan', brief);

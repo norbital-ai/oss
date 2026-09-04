@@ -253,13 +253,7 @@ type QueryScalar = string | number | boolean | bigint | Date | null;
 type ScalarQueryOperand<Value> =
 	Exclude<Value, undefined> extends QueryScalar ? Exclude<Value, undefined> | Date : unknown;
 
-export type PredicateSubjectName =
-	| 'id'
-	| 'email'
-	| 'team'
-	| 'teamIds'
-	| 'tenantId'
-	| 'admin';
+export type PredicateSubjectName = 'id' | 'email' | 'team' | 'teamIds' | 'tenantId' | 'admin';
 export type PredicateSubjectOperand<Name extends PredicateSubjectName = PredicateSubjectName> =
 	Readonly<{ readonly $subject: Name }>;
 
@@ -348,14 +342,10 @@ type ReferenceHandleKind<Value> =
 type SchemaReferenceFilter<Value, AllowSubject extends boolean = false> = {
 	readonly eq?:
 		| Exclude<Value, null | undefined>
-		| (AllowSubject extends true
-				? PredicateSubjectOperand<PredicateScalarSubjectName>
-				: never);
+		| (AllowSubject extends true ? PredicateSubjectOperand<PredicateScalarSubjectName> : never);
 	readonly ne?:
 		| Exclude<Value, null | undefined>
-		| (AllowSubject extends true
-				? PredicateSubjectOperand<PredicateScalarSubjectName>
-				: never);
+		| (AllowSubject extends true ? PredicateSubjectOperand<PredicateScalarSubjectName> : never);
 	readonly in?: ReadonlyArray<Exclude<Value, null | undefined>>;
 	readonly notIn?: ReadonlyArray<Exclude<Value, null | undefined>>;
 	readonly kind?: Readonly<{
@@ -377,10 +367,11 @@ type ScalarWhere<
 
 type PredicateDepth = 0 | 1 | 2 | 3 | 4;
 type PreviousDepth = readonly [0, 0, 1, 2, 3];
-type RelationTarget<
-	S extends AnySchema,
-	Relation
-> = Relation extends { readonly target: infer Target extends TableName<S> } ? Target : never;
+type RelationTarget<S extends AnySchema, Relation> = Relation extends {
+	readonly target: infer Target extends TableName<S>;
+}
+	? Target
+	: never;
 type RelationWhere<
 	S extends AnySchema,
 	N extends TableName<S>,
@@ -423,12 +414,14 @@ type SchemaWhereFor<
 		readonly NOT?: SchemaWhereFor<S, N, AllowSubject, Depth>;
 	};
 
-type SchemaWhere<Row extends object, References extends object = Readonly<Record<never, never>>> =
-	ScalarWhere<Row, References> & {
-		readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
-		readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
-		readonly NOT?: SchemaWhere<Row, References>;
-	};
+type SchemaWhere<
+	Row extends object,
+	References extends object = Readonly<Record<never, never>>
+> = ScalarWhere<Row, References> & {
+	readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
+	readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
+	readonly NOT?: SchemaWhere<Row, References>;
+};
 
 /** The closed structured row-filter language available to authored policies. */
 type PolicyWhere<S extends AnySchema, N extends TableName<S>> = SchemaWhereFor<S, N, true>;
@@ -636,9 +629,12 @@ type MutationChildren<S extends AnySchema, N extends MutationTableName<S>> = {
 /**
  * The one declarative write accepted by browser clients and every authored server context.
  *
- * A value without an id creates its root; a value with an id updates it. Included `many`
- * relationships are their complete desired state and reconcile recursively, while omitted
- * relationships remain untouched. This is the collection write shape in every authored context.
+ * A value without an id creates its root; a value with an id updates it. An included `many`
+ * relationship is the parent's complete desired state: a listed id keeps or updates that child, a
+ * missing id creates one, and a stored child left out of a `cascade(...)`-owned relationship is
+ * deleted (an empty array deletes every owned child). Leaving a stored child out of a relationship
+ * the parent does not own is refused. An omitted relationship key is untouched. This is the
+ * collection write shape in every authored context.
  */
 export type CollectionMutationValues<
 	S extends AnySchema,
@@ -812,8 +808,11 @@ export type MutationValuesFor<S extends AnySchema, N extends MutationTableName<S
 
 type AuthoredDatabase<S extends AnySchema> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N> & {
-		/** The same singular declarative record-or-graph mutation the browser client accepts. */
-		readonly mutate: (values: MutationValuesFor<S, N, unknown>) => Effect.Effect<void>;
+		/** Always an array of `input` records. One call is one batch. */
+		readonly mutate: (
+			values: ReadonlyArray<MutationValuesFor<S, N, unknown>>
+		) => Effect.Effect<void>;
+		readonly delete: (ids: ReadonlyArray<string>) => Effect.Effect<void>;
 	};
 } & { readonly approval_request: ApprovalRequestQuery };
 
@@ -925,13 +924,24 @@ type ChildrenOf<S extends AnySchema, N extends TableName<S>, D extends Depth> = 
  * computing for a second and a half before it has one.
  *
  * A child *may* carry `id`, because a nested `many` is the parent's complete desired state: an id
- * names a row the parent already owns, its absence creates one, and an omission removes one.
+ * names a row the parent already owns, its absence creates one, and an omission removes one on a
+ * `cascade(...)`-owned relationship (and is refused on one the parent does not own).
  */
 export type MutateGraph<S extends AnySchema, N extends TableName<S>, D extends Depth = 5> = [
 	D
 ] extends [never]
 	? Partial<MutationInsertFor<S, N>>
 	: Partial<MutationInsertFor<S, N>> & ChildrenOf<S, N, D>;
+
+/**
+ * What `before` returns: the input record expanded with nested `many`s and any columns the hook
+ * derived. Authors do not declare this shape; it is computed from the collection.
+ */
+export type TPayload<
+	S extends AnySchema,
+	N extends TableName<S>,
+	D extends Depth = 5
+> = MutateGraph<S, N, D>;
 
 /**
  * The one place a rule about a written record lives. Creates and updates share one phase and one

@@ -37,6 +37,7 @@ const guardedOperations = (
 		count: () => record('count', 0),
 		findNearest: () => Effect.succeed([]),
 		mutate: () => record('mutate', undefined),
+		delete: () => record('delete', undefined),
 		runAutomation: () => record('runAutomation', { taskId: 'child' }),
 		infer: () => record('infer', {}),
 		readFileAsset: () =>
@@ -72,8 +73,8 @@ describe('automation stoppage facility guard', () => {
 						files,
 						automations
 					);
-					yield* ops.mutate('people', { name: 'First' });
-					yield* ops.mutate('people', { name: 'Second' });
+					yield* ops.mutate('people', [{ name: 'First' }]);
+					yield* ops.mutate('people', [{ name: 'Second' }]);
 				})
 			);
 			expect(await harness.database.query('select name from people order by name')).toEqual([
@@ -101,7 +102,7 @@ describe('automation stoppage facility guard', () => {
 		const guards: Array<string> = [];
 		const ops = guardedOperations(calls, guards);
 		const attempts = [
-			ops.mutate('people', { id: recordId('mutate'), name: 'mutate' }),
+			ops.mutate('people', [{ id: recordId('mutate'), name: 'mutate' }]),
 			ops.infer({ schema: Schema.Struct({}), prompt: 'infer', model: 'test/language' }),
 			ops.readFileAsset({
 				storage_key: 'file',
@@ -129,7 +130,7 @@ describe('automation stoppage facility guard', () => {
 		type TestAuthoringApi = Readonly<{
 			db: Readonly<{
 				people: Readonly<{
-					mutate: (values: Readonly<Record<string, unknown>>) => Effect.Effect<void>;
+					mutate: (values: ReadonlyArray<Readonly<Record<string, unknown>>>) => Effect.Effect<void>;
 				}>;
 			}>;
 		}>;
@@ -195,7 +196,7 @@ describe('automation stoppage facility guard', () => {
 					);
 					const api = makeAuthoringApi(ops) as TestAuthoringApi;
 					return yield* Effect.result(
-						api.db.people.mutate({ id: personId, name: 'must not exist' })
+						api.db.people.mutate([{ id: personId, name: 'must not exist' }])
 					);
 				})
 			);

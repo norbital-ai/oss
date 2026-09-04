@@ -20,6 +20,7 @@ export {
 	CollectionMutationGraph,
 	CollectionMutationPush,
 	mutationGraphDeleteIds,
+	mutationGraphWriteRows,
 	CollectionMutationSettlement,
 	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
@@ -75,12 +76,7 @@ export {
 } from './bundle.js';
 export type { BoltBundle } from './bundle.js';
 
-export {
-	CommandHeaders,
-	type CommandContract,
-	type CommandResponseContract
-} from './host.js';
-
+export { CommandHeaders, type CommandContract, type CommandResponseContract } from './host.js';
 
 export {
 	HOST_RECOVER_COMMAND,

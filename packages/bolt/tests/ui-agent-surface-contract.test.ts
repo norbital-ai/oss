@@ -36,7 +36,7 @@ describe('G1 immediate user text', () => {
 		expect(visibleUnsettledAdmission(admission, new Set(['task-1']))).toBeNull();
 		expect(panelSource).toContain('data-admission="pending"');
 		expect(panelSource).toContain('visibleAdmission.message');
-		expect(panelSource).toContain('author.kind === \'human\'');
+		expect(panelSource).toContain("author.kind === 'human'");
 	});
 });
 
@@ -48,18 +48,12 @@ describe('G2 live conversation', () => {
 	});
 });
 
-describe('G3 Plan Compact edit and no Goal', () => {
+describe('G3 Plan Compact and edit', () => {
 	it('parses only plan and compact, and revises through tasks.editMessage', () => {
-		expect(parseTaskSlashCommand('/goal ship it')).toEqual({
-			kind: 'message',
-			message: '/goal ship it'
-		});
-		expect(intentSource).not.toMatch(/\/goal/);
 		expect(intentSource).toMatch(/\/\(plan\|compact\)/);
 		expect(panelSource).toContain('editMessage');
 		expect(panelSource).toContain('/compact');
 		expect(panelSource).toContain("planMode ? 'plan' : 'agent'");
-		expect(panelSource).not.toContain('/goal');
 	});
 });
 

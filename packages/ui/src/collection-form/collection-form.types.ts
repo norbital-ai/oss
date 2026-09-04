@@ -7,7 +7,7 @@ import type {
 	CollectionRow,
 	SystemCollectionFieldName
 } from '@norbital-ai/std/collection';
-import { Effect, Schema } from 'effect';
+import { type Cause, Effect, Schema } from 'effect';
 import type { StandardSchemaOf } from '#lib/form/standard_schema_form_errors';
 import type { CollectionRecordMetadata } from '#lib/collection-record-metadata';
 import type {
@@ -130,7 +130,8 @@ export interface CollectionFormProps<
 	defaultValues?: Partial<CollectionRow<TCollections[TName]>>;
 	submitLabel?: string;
 	validation?: CollectionFormValidation;
-	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void>;
+	/** Replaces the default write. A failure is shown as the form's submission error, like the default write's. */
+	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void, Cause.UnknownError>;
 	deleteAction?: CollectionFormDeleteAction;
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];

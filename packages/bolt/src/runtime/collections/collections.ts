@@ -32,6 +32,7 @@ import {
 	ModelId,
 	ProviderCallId,
 	mutationGraphDeleteIds,
+	mutationGraphWriteRows,
 	type CollectionMutateRequest,
 	type CollectionMutationSettlement,
 	type SyncChange,
@@ -1711,6 +1712,29 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const authoringWritePorts = (effectId: EffectId) => ({
 				...authoringReadPorts,
 				mutate,
+				delete: (
+					deleteEffectId: EffectId,
+					deleteSubject: Identity.Subject,
+					collection: string,
+					ids: ReadonlyArray<string>,
+					elevated: boolean,
+					depth: number
+				) =>
+					mutate(
+						deleteEffectId,
+						deleteSubject,
+						collection,
+						ids.map((recordId) => ({ id: recordId })),
+						elevated,
+						depth,
+						{
+							roots: ids.map((recordId) => ({
+								collection,
+								id: recordId,
+								action: 'delete' as const
+							}))
+						}
+					),
 				startAutomation,
 				infer: inferOp(effectId, ai),
 				readFileAsset: (
@@ -2337,7 +2361,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					value !== null &&
 					typeof value === 'object' &&
 					!Array.isArray(value)
-			 ) {
+				) {
 					return `$${position}::jsonb`;
 				}
 				return `$${position}`;
@@ -3334,14 +3358,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					// pre-engine validation walk beside it.
 					if (options?.browserMutation !== undefined && payloads.length !== 1) {
 						const batchActions = (options.roots ?? []).map((root) => root.action);
-						const deleteBatch =
+						const admittedBatch =
 							batchActions.length === payloads.length &&
-							batchActions.every((action) => action === 'delete');
-						if (!deleteBatch)
+							batchActions.every(
+								(action) => action === 'delete' || action === 'create' || action === 'update'
+							);
+						if (!admittedBatch)
 							return yield* graphRefusal(
 								collection,
 								'create',
-								'A browser mutation must contain exactly one declarative root.'
+								'A browser mutation batch must name a root action for every record.'
 							);
 					}
 					const roots = payloads.map((payload, index) => {
@@ -4151,11 +4177,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 				const graph = input.graph;
 				const baseVersions = input.baseVersions;
-				const deleteIds =
-					graph.action === 'delete' ? mutationGraphDeleteIds(graph) : ([] as const);
-				const rootId = String(
-					graph.action === 'delete' ? deleteIds[0] : graph.values['id']
-				);
+				const deleteIds = graph.action === 'delete' ? mutationGraphDeleteIds(graph) : ([] as const);
+				const writeRows = graph.action === 'delete' ? [] : mutationGraphWriteRows(graph);
+				const firstWrite = writeRows[0];
+				const rootId = String(graph.action === 'delete' ? deleteIds[0] : firstWrite?.values['id']);
+				const committedAction =
+					graph.action === 'delete'
+						? 'delete'
+						: firstWrite === undefined
+							? 'create'
+							: firstWrite.action;
 				const fenceFor = (
 					outcome: BrowserMutationOutcome,
 					issuedAtEpochMs: number
@@ -4210,7 +4241,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							message,
 							schemaFingerprint: currentSchemaFingerprint,
 							collection: graph.collection,
-							action: graph.action
+							action: committedAction
 						};
 						const fence = fenceFor(outcome, nowEpochMs);
 						const replay = yield* claim(fence);
@@ -4238,13 +4269,23 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const rootBaseVersion = baseVersions.find(
 					(entry) => entry.row.collection === graph.collection && entry.row.recordId === rootId
 				)?.rowVersion;
-				if (graph.action === 'create' && rootBaseVersion !== undefined)
-					quarantineReason = `The create graph carries a base version for its new root ${graph.collection} ${rootId}.`;
+				if (
+					writeRows.some(
+						(row) =>
+							row.action === 'create' &&
+							baseVersions.some(
+								(entry) =>
+									entry.row.collection === graph.collection &&
+									entry.row.recordId === String(row.values['id'] ?? '')
+							)
+					)
+				)
+					quarantineReason = `The create graph carries a base version for a new root on ${graph.collection}.`;
 				const committed: BrowserMutationOutcome = {
 					_tag: 'Committed',
 					collection: graph.collection,
 					id: rootId,
-					action: graph.action,
+					action: committedAction,
 					resolution: 'accepted',
 					fromSchemaFingerprint: input.schemaFingerprint,
 					toSchemaFingerprint: currentSchemaFingerprint
@@ -4346,10 +4387,30 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									browserMutation: fence
 								}
 							)
-						: mutate(mutationEffectId, subject, graph.collection, [graph.values], false, 0, {
-								root: { id: rootId, action: graph.action },
-								browserMutation: fence
-							});
+						: mutate(
+								mutationEffectId,
+								subject,
+								graph.collection,
+								writeRows.map((row) => row.values),
+								false,
+								0,
+								{
+									...(writeRows.length === 1
+										? { root: { id: rootId, action: writeRows[0]!.action } }
+										: {}),
+									roots: writeRows.map((row) => ({
+										collection: graph.collection,
+										id: String(row.values['id']),
+										action: row.action
+									})),
+									...(writeRows.length === 1 &&
+									rootBaseVersion !== undefined &&
+									rootBaseVersion !== null
+										? { expectedRootVersion: rootBaseVersion }
+										: {}),
+									browserMutation: fence
+								}
+							);
 				const written = yield* Effect.result(write);
 				if (Result.isFailure(written)) {
 					const error = unwrapPhase(written.failure);

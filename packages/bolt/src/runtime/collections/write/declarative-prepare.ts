@@ -126,7 +126,7 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 			inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
 			depth: number,
-			staged?: Pick<HookWriteOps<Error>, 'mutate'>
+			staged?: HookWriteOps<Error>
 		) => Effect.Effect<unknown, AuthoredRefusal, Requirements>;
 		readonly runDeletePrepare: (
 			effectId: EffectId,
@@ -135,7 +135,7 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 			existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
 			depth: number,
-			staged?: Pick<HookWriteOps<Error>, 'mutate'>
+			staged?: HookWriteOps<Error>
 		) => Effect.Effect<unknown, AuthoredRefusal, Requirements>;
 		readonly refuseRunawayHooks: (
 			action: string,
@@ -550,25 +550,36 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		};
 		let stagedWriteCalls = 0;
 		const stagedWrites: Array<GraphRootSeed & { readonly action: 'create' | 'update' }> = [];
+		const stagedDeletes: Array<{ readonly collection: string; readonly id: string }> = [];
 		const stageHookWrites: HookWriteOps<Error> = {
-			mutate: (collection: string, values: Readonly<Record<string, unknown>>) =>
-				ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
-					Effect.map(() => {
-						const submittedId = values['id'];
-						const id =
-							typeof submittedId === 'string'
-								? submittedId
-								: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
-						const action = typeof submittedId === 'string' ? 'update' : 'create';
-						stagedWrites.push({
-							collection,
-							payload: { ...values, id },
-							id,
-							action,
-							readExisting: typeof submittedId === 'string'
-						});
-					})
-				)
+			mutate: (collection: string, records: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+				Effect.forEach(records, (values) =>
+					ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
+						Effect.map(() => {
+							const submittedId = values['id'];
+							const id =
+								typeof submittedId === 'string'
+									? submittedId
+									: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
+							const action = typeof submittedId === 'string' ? 'update' : 'create';
+							stagedWrites.push({
+								collection,
+								payload: { ...values, id },
+								id,
+								action,
+								readExisting: typeof submittedId === 'string'
+							});
+						})
+					)
+				).pipe(Effect.asVoid),
+			delete: (collection: string, ids: ReadonlyArray<string>) =>
+				Effect.forEach(ids, (id) =>
+					ports.refuseRunawayHooks('staged delete', collection, ++stagedWriteCalls).pipe(
+						Effect.map(() => {
+							stagedDeletes.push({ collection, id });
+						})
+					)
+				).pipe(Effect.asVoid)
 		};
 		const graphPreparers = makeGraphPreparers<Error | AuthoredRefusal, Requirements>({
 			...ports,
@@ -586,7 +597,15 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					stageHookWrites
 				),
 			runMutatePrepare: (effectId, subject, collection, inputs, module, depth) =>
-				ports.runMutatePrepare(effectId, subject, collection, inputs, module, depth, stageHookWrites),
+				ports.runMutatePrepare(
+					effectId,
+					subject,
+					collection,
+					inputs,
+					module,
+					depth,
+					stageHookWrites
+				),
 			runDeletePrepare: (effectId, subject, collection, existing, module, depth) =>
 				ports.runDeletePrepare(
 					effectId,
@@ -730,7 +749,23 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				rootPrepared
 			);
 		}
-		while (stagedWrites.length > 0) {
+		while (stagedWrites.length > 0 || stagedDeletes.length > 0) {
+			const deleteWave = stagedDeletes.splice(0);
+			for (const staged of deleteWave) {
+				const stored = yield* storedGraphRow(
+					EffectId.make(`${effectId}:graph:staged-delete:${staged.collection}:${staged.id}`),
+					staged.collection,
+					staged.id
+				);
+				if (stored === undefined)
+					return yield* ports.graphRefusal(
+						staged.collection,
+						'delete',
+						`Staged delete of ${staged.collection} ${staged.id} found no stored row.`
+					);
+				yield* graphPreparers.prepareDelete(staged.collection, stored.row, 0, false);
+			}
+			if (stagedWrites.length === 0) continue;
 			const wave = stagedWrites.splice(0);
 			yield* primeRelatedRows(wave);
 			const stagedBatches = new Map<

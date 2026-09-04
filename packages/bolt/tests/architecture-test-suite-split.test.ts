@@ -50,9 +50,15 @@ describe('test suite split', () => {
 	// for no reason, and worse, stops running on the merge path that could have gated it.
 	it('keeps the integration suite to tests that need a database', async () => {
 		const files = await testFiles(testsRoot);
+		// A `*.live.integration.test.ts` file reaches a real provider over the network rather than a
+		// database; `vitest.config.ts` admits it to the integration suite only when the provider key
+		// is present. Off the merge path for the same reason, without booting Postgres.
 		const idle = await Promise.all(
 			files
-				.filter((file) => file.endsWith('.integration.test.ts'))
+				.filter(
+					(file) =>
+						file.endsWith('.integration.test.ts') && !file.endsWith('.live.integration.test.ts')
+				)
 				.map(async (file) => ({ file, boots: bootsADatabase(await readFile(file, 'utf8')) }))
 		);
 		expect(

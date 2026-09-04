@@ -321,7 +321,7 @@ export type CollectionOperations<TCollection extends CollectionType<object, obje
 	): RemoteQuery<number>;
 	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
 	mutate(
-		values: TCollection['mutation']
+		values: ReadonlyArray<TCollection['mutation']>
 	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
 	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
 	delete(

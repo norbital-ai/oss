@@ -6,6 +6,7 @@ import {
 	CollectionMutateRequest,
 	CollectionQueryRequest,
 	mutationGraphDeleteIds,
+	mutationGraphWriteRows,
 	FixedCommandCatalogue,
 	SyncQueryInput,
 	WorkspaceInvokeContract,
@@ -127,6 +128,17 @@ const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => 
 	return record;
 };
 
+const asJsonRecords = (input: unknown): ReadonlyArray<Readonly<Record<string, Schema.Json>>> => {
+	if (!Array.isArray(input))
+		throw new TypeError('mutate takes an array of records matching the collection input schema.');
+	if (input.length === 0) throw new TypeError('mutate requires at least one record.');
+	return input.map((row, index) => {
+		if (row === null || typeof row !== 'object' || Array.isArray(row))
+			throw new TypeError(`mutate[${index}] must be a record.`);
+		return asJsonRecord(row);
+	});
+};
+
 const CollectionCount = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 const CollectionGroupedRows = Schema.Record(
 	Schema.String,
@@ -229,12 +241,13 @@ const collectionMutationBaseVersions = (
 
 	if (graph.action === 'delete') {
 		for (const recordId of mutationGraphDeleteIds(graph)) addKnown(graph.collection, recordId);
+		return [...versions.values()];
 	}
-	else {
-		const rootId = graph.values['id'];
-		if (graph.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
+	for (const row of mutationGraphWriteRows(graph)) {
+		const rootId = row.values['id'];
+		if (row.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
 			addKnown(graph.collection, rootId);
-		walkManyRelations(graph.collection, graph.values);
+		walkManyRelations(graph.collection, row.values);
 	}
 	return [...versions.values()];
 };
@@ -479,7 +492,9 @@ type ProjectContract<Contract extends ClientContract> = Contract extends unknown
 	: never;
 export type SystemClientApi = UnionToIntersection<ProjectContract<ClientContract>>;
 
-const clientResponse = <Contract extends CommandContract>(contract: Contract): OkValue<Contract> => {
+const clientResponse = <Contract extends CommandContract>(
+	contract: Contract
+): OkValue<Contract> => {
 	const declared = contract.responses.find(({ status }) => status === 200);
 	if (declared === undefined)
 		throw new Error(`Client-visible command ${contract.name} declares no 200 response`);
@@ -495,10 +510,7 @@ const fixedContract = <Name extends FixedCommandName>(name: Name): ContractFor<N
 const commandPayload = <S extends Schema.Top>(schema: S, input: unknown): Schema.Json =>
 	Schema.decodeUnknownSync(Schema.Json)(
 		Effect.runSync(
-			decodeUnknownSchema(schema, input) as Effect.Effect<
-				Schema.Schema.Type<S>,
-				Schema.SchemaError
-			>
+			decodeUnknownSchema(schema, input) as Effect.Effect<Schema.Schema.Type<S>, Schema.SchemaError>
 		)
 	);
 
@@ -579,13 +591,14 @@ const ClientDatabase = {
 			count: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
 				countQueryOf(runtime, collection, input, options),
 			/**
-			 * Submits one declarative graph and resolves immediately with the optimistic row. The
-			 * authority settles the write asynchronously through the returned handle; nothing is
-			 * claimed saved before that outcome (durability is this tab's memory).
+			 * Submits one batch — always an array of `input` records — and resolves immediately with
+			 * the optimistic first row. The authority settles the write asynchronously through the
+			 * returned handle; nothing is claimed saved before that outcome (durability is this tab's
+			 * memory).
 			 */
 			mutate: (input: Schema.Json) =>
 				mutation.run(
-					Effect.sync(() => enqueueMutation(runtime, catalog, collection, asJsonRecord(input)))
+					Effect.sync(() => enqueueMutation(runtime, catalog, collection, asJsonRecords(input)))
 				),
 			delete: (ids: readonly string[]) =>
 				mutation.run(Effect.sync(() => enqueueDeletion(runtime, catalog, collection, ids))),
@@ -650,20 +663,43 @@ const submitGraph = (
 	return { durability: 'memory', pending: true, row, idempotencyKey, settlement };
 };
 
+const materializeWriteRow = (
+	collection: string,
+	values: Readonly<Record<string, Schema.Json>>
+): Readonly<{
+	readonly action: 'create' | 'update';
+	readonly values: Readonly<Record<string, Schema.Json>>;
+}> => {
+	const submittedId = values['id'];
+	if (submittedId !== undefined && (typeof submittedId !== 'string' || submittedId.trim() === ''))
+		throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
+	if (typeof submittedId === 'string') return { action: 'update', values };
+	const id = crypto.randomUUID();
+	return { action: 'create', values: { ...values, id } };
+};
+
 const enqueueMutation = (
 	runtime: WorkspaceClientRuntime,
 	catalog: CollectionCatalog,
 	collection: string,
-	values: Readonly<Record<string, Schema.Json>>
+	records: ReadonlyArray<Readonly<Record<string, Schema.Json>>>
 ): MemoryMutationResult => {
-	const submittedId = values['id'];
-	if (submittedId !== undefined && (typeof submittedId !== 'string' || submittedId.trim() === ''))
-		throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	if (typeof submittedId === 'string')
-		return submitGraph(runtime, catalog, { action: 'update', collection, values }, values);
-	const id = crypto.randomUUID();
-	const created = { ...values, id };
-	return submitGraph(runtime, catalog, { action: 'create', collection, values: created }, created);
+	const [first, ...rest] = records.map((values) => materializeWriteRow(collection, values));
+	if (first === undefined)
+		throw new TypeError(`Mutation ${collection} requires at least one record`);
+	if (rest.length === 0)
+		return submitGraph(
+			runtime,
+			catalog,
+			{ action: first.action, collection, values: first.values },
+			first.values
+		);
+	return submitGraph(
+		runtime,
+		catalog,
+		{ action: 'mutate', collection, rows: [first, ...rest] },
+		first.values
+	);
 };
 
 const enqueueDeletion = (

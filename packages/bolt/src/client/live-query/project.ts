@@ -1,6 +1,7 @@
 import {
 	MAX_SYNC_LOADED_KEYS,
 	mutationGraphDeleteIds,
+	mutationGraphWriteRows,
 	type CollectionMutationGraph,
 	type StoredRecord,
 	type SyncPrefixDelta
@@ -15,10 +16,20 @@ const recordIdOf = (row: StoredRecord): string | undefined => {
 	return typeof id === 'string' && id.length > 0 ? id : undefined;
 };
 
-const graphRecordId = (graph: CollectionMutationGraph): string | undefined => {
-	if (graph.action === 'delete') return mutationGraphDeleteIds(graph)[0];
-	const id = graph.values['id'];
-	return typeof id === 'string' && id.length > 0 ? id : undefined;
+const applyWriteRow = (
+	rows: StoredRecord[],
+	indexes: Map<string, number>,
+	values: StoredRecord
+): void => {
+	const recordId = recordIdOf(values);
+	if (recordId === undefined) return;
+	const index = indexes.get(recordId);
+	if (index === undefined) {
+		rows.push({ ...values });
+		indexes.set(recordId, rows.length - 1);
+		return;
+	}
+	rows[index] = { ...rows[index], ...values };
 };
 
 const requireUniqueRecordIds = (rows: ReadonlyArray<StoredRecord>, label: string): string[] => {
@@ -83,9 +94,6 @@ export const project = (
 
 	for (const { graph } of pendingWrites) {
 		if (collection !== undefined && graph.collection !== collection) continue;
-		const recordId = graphRecordId(graph);
-		if (recordId === undefined) continue;
-		const index = indexes.get(recordId);
 
 		switch (graph.action) {
 			case 'delete': {
@@ -105,13 +113,9 @@ export const project = (
 				break;
 			}
 			case 'create':
-			case 'update': {
-				if (index === undefined) {
-					rows.push({ ...graph.values });
-					indexes.set(recordId, rows.length - 1);
-					break;
-				}
-				rows[index] = { ...rows[index], ...graph.values };
+			case 'update':
+			case 'mutate': {
+				for (const row of mutationGraphWriteRows(graph)) applyWriteRow(rows, indexes, row.values);
 				break;
 			}
 			default: {

@@ -184,15 +184,15 @@ describe('typed browser client', () => {
 		});
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: () => { readonly current: unknown };
-			mutate: (values: Schema.Json) => Promise<{ readonly row: unknown }>;
+			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<{ readonly row: unknown }>;
 		};
 		employees.findMany();
 		sync.client.publish(sync.mounted[0]?.key ?? '', [
 			{ id: 'employee-1', name: 'Ada', row_version: 7 }
 		]);
 
-		await employees.mutate({ id: 'employee-1', name: 'Grace' });
-		await employees.mutate({ name: 'Lin' });
+		await employees.mutate([{ id: 'employee-1', name: 'Grace' }]);
+		await employees.mutate([{ name: 'Lin' }]);
 
 		expect(sync.enqueued).toHaveLength(2);
 		expect(sync.enqueued[0]).toMatchObject({
@@ -270,7 +270,7 @@ describe('typed browser client', () => {
 		});
 		const orders = Reflect.get(proxy.db, 'orders') as {
 			findMany: () => unknown;
-			mutate: (values: Schema.Json) => Promise<unknown>;
+			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<unknown>;
 		};
 		const lines = Reflect.get(proxy.db, 'order_lines') as { findMany: () => unknown };
 		orders.findMany();
@@ -282,14 +282,16 @@ describe('typed browser client', () => {
 			{ id: 'line-1', sku: 'OLD', row_version: '9' }
 		]);
 
-		await orders.mutate({
-			id: 'order-1',
-			reference: 'B',
-			lines: [
-				{ id: 'line-1', sku: 'NEW' },
-				{ id: 'line-new', sku: 'NEW-ROW' }
-			]
-		});
+		await orders.mutate([
+			{
+				id: 'order-1',
+				reference: 'B',
+				lines: [
+					{ id: 'line-1', sku: 'NEW' },
+					{ id: 'line-new', sku: 'NEW-ROW' }
+				]
+			}
+		]);
 
 		expect(sync.enqueued[0]?.baseVersions).toEqual([
 			{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 3 },

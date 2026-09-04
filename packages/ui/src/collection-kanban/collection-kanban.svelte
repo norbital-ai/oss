@@ -409,7 +409,7 @@
 			if (id == null)
 				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
 			const mutation = yield* Effect.tryPromise({
-				try: () => operations.mutate({ id: String(id), [groupBy]: toLane }),
+				try: () => operations.mutate([{ id: String(id), [groupBy]: toLane }]),
 				catch: (cause) => toError(cause)
 			});
 			// `await mutate()` means only that this tab accepted the in-memory overlay. A board move is

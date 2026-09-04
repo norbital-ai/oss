@@ -46,19 +46,17 @@ interface RefusedReadbackSchema {
  */
 const NOTE_CREATE_AUTHORIZATION = 'note-quota:notes:create:authorize';
 
-const authorizeUnlessBody = (refusedBody: string) => (context: unknown): boolean => {
-	const record =
-		typeof context === 'object' && context !== null ? Reflect.get(context, 'record') : undefined;
-	return (
-		typeof record === 'object' &&
-		record !== null &&
-		Reflect.get(record, 'body') !== refusedBody
-	);
-};
+const authorizeUnlessBody =
+	(refusedBody: string) =>
+	(context: unknown): boolean => {
+		const record =
+			typeof context === 'object' && context !== null ? Reflect.get(context, 'record') : undefined;
+		return (
+			typeof record === 'object' && record !== null && Reflect.get(record, 'body') !== refusedBody
+		);
+	};
 
-const workspaceWith = (
-	integrations: WorkspaceDefinition['integrations']
-): WorkspaceDefinition =>
+const workspaceWith = (integrations: WorkspaceDefinition['integrations']): WorkspaceDefinition =>
 	workspace({
 		name: 'refused-readback',
 		version: '1.0.0',
@@ -354,7 +352,7 @@ describe('an authored create the predicate refused', () => {
 								// runs this hook too, so an unguarded issue enqueues itself until the host's
 								// nesting bound stops it and the guard under test is never reached.
 								if (input.body === 'inner') return input;
-								yield* api.db.notes.mutate({ body: 'inner' });
+								yield* api.db.notes.mutate([{ body: 'inner' }]);
 								return input;
 							})
 					}

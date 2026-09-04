@@ -608,7 +608,7 @@ describe('declarative relationship reconciliation', () => {
 									description: 'Stages an audit and then refuses the parent.',
 									handler: ({ input, api }) =>
 										Effect.gen(function* () {
-											yield* api.db.mutation_audit.mutate({ body: 'must roll back' });
+											yield* api.db.mutation_audit.mutate([{ body: 'must roll back' }]);
 											return yield* Effect.fail(
 												new AuthoredRefusal({ message: 'parent preparation failed' })
 											);

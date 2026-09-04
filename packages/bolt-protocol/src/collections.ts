@@ -40,6 +40,12 @@ const CollectionMutationDeleteIds = Schema.NonEmptyArray(Schema.NonEmptyString).
 	)
 );
 
+export const CollectionMutationWriteRow = Schema.Struct({
+	action: Schema.Literals(['create', 'update']),
+	values: CollectionWriteValues
+});
+export type CollectionMutationWriteRow = typeof CollectionMutationWriteRow.Type;
+
 export const CollectionMutationGraph = Schema.Union([
 	Schema.Struct({
 		action: Schema.Literal('create'),
@@ -50,6 +56,11 @@ export const CollectionMutationGraph = Schema.Union([
 		action: Schema.Literal('update'),
 		collection: Schema.NonEmptyString,
 		values: CollectionWriteValues
+	}),
+	Schema.Struct({
+		action: Schema.Literal('mutate'),
+		collection: Schema.NonEmptyString,
+		rows: Schema.NonEmptyArray(CollectionMutationWriteRow)
 	}),
 	Schema.Struct({
 		action: Schema.Literal('delete'),
@@ -63,6 +74,27 @@ export type CollectionMutationGraph = typeof CollectionMutationGraph.Type;
 export const mutationGraphDeleteIds = (
 	graph: Extract<CollectionMutationGraph, { readonly action: 'delete' }>
 ): readonly string[] => graph.ids;
+
+const writeRowOf = (
+	graph: Extract<CollectionMutationGraph, { readonly action: 'create' | 'update' }>
+): CollectionMutationWriteRow => ({ action: graph.action, values: graph.values });
+
+/** Per-root create/update rows a write graph carries. Always an array. */
+export const mutationGraphWriteRows = (
+	graph: Exclude<CollectionMutationGraph, { readonly action: 'delete' }>
+): readonly CollectionMutationWriteRow[] => {
+	switch (graph.action) {
+		case 'create':
+		case 'update':
+			return [writeRowOf(graph)];
+		case 'mutate':
+			return graph.rows;
+		default: {
+			const _exhaustive: never = graph;
+			return _exhaustive;
+		}
+	}
+};
 
 export const CollectionMutationPush = Schema.Struct({
 	protocolVersion: Schema.Literal(2),

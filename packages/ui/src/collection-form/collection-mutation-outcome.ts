@@ -6,7 +6,9 @@ import type {
 } from '@norbital-ai/std/collection';
 import { Cause, Effect } from 'effect';
 
-type CollectionMutation = CollectionOperations<CollectionType<object, object>>['mutate'];
+type CollectionWrite =
+	| CollectionOperations<CollectionType<object, object>>['mutate']
+	| CollectionOperations<CollectionType<object, object>>['delete'];
 
 export type CollectionMutationSubmission = Readonly<
 	| {
@@ -86,7 +88,7 @@ const preserving = (cause: unknown): Cause.UnknownError =>
 
 /** Runs a collection mutation through its authoritative terminal settlement. */
 export function submitCollectionMutation(
-	mutation: () => ReturnType<CollectionMutation>
+	mutation: () => ReturnType<CollectionWrite>
 ): Effect.Effect<CollectionMutationSubmission, Cause.UnknownError> {
 	return Effect.tryPromise({ try: () => mutation(), catch: preserving }).pipe(
 		Effect.flatMap((result) =>

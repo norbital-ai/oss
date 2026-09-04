@@ -277,9 +277,7 @@
 		name: organization?.name ?? app,
 		logoUrl: organization?.logoUrl ?? null
 	});
-	const canAccessAutomations = $derived(
-		isAdmin === true && !(impersonation?.isActive ?? false)
-	);
+	const canAccessAutomations = $derived(isAdmin === true && !(impersonation?.isActive ?? false));
 	const systemNavigation = $derived(
 		buildSystemNavigation({
 			plugins,
@@ -331,8 +329,7 @@
 		if (status !== 'ready') return status;
 		if (syncStatus === undefined) return t('bolt.shell.syncUnavailable');
 		if (syncStatus.link === 'closed') return t('bolt.shell.connectionClosed');
-		if (syncStatus.writes.size > 0)
-			return t('bolt.shell.changesAwaitingConfirmation');
+		if (syncStatus.writes.size > 0) return t('bolt.shell.changesAwaitingConfirmation');
 		if (syncStatus.link === 'reconnecting') return t('bolt.shell.reconnecting');
 		return t('bolt.shell.upToDate');
 	});
@@ -374,9 +371,7 @@
 	const declaredEnvoys = $derived(decodedManifest?.envoys ?? []);
 	// The agent's collection catalog is the manifest's policy-filtered collection names.
 	const finderCollections = $derived(
-		(deferredQueriesReady ? decodedManifest?.collections : undefined)?.map(
-			({ name }) => name
-		) ?? []
+		(deferredQueriesReady ? decodedManifest?.collections : undefined)?.map(({ name }) => name) ?? []
 	);
 
 	const NotificationText = Schema.Union([
@@ -413,7 +408,7 @@
 	);
 
 	const markNotificationRead = (id: string): void => {
-		void runtime.client.db.bolt_notifications.mutate({ id, read: true });
+		void runtime.client.db.bolt_notifications.mutate([{ id, read: true }]);
 	};
 
 	onMount(() => {
@@ -678,7 +673,11 @@
 									class="min-h-0"
 								>
 									{#snippet columns({ Column })}
-										<Column name="collection_name" label={t('bolt.shell.collection')} card="title" />
+										<Column
+											name="collection_name"
+											label={t('bolt.shell.collection')}
+											card="title"
+										/>
 										<Column name="action" label={t('bolt.shell.action')} card="badge" />
 										<Column name="record_id" label={t('bolt.shell.record')} card="subtitle" />
 										<Column name="status" label={t('bolt.shell.status')} />
