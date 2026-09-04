@@ -72,7 +72,7 @@ afterEach(async () => {
 const openTask = async (
 	ai: ReturnType<typeof scriptedTranscript>['ai'],
 	name: string,
-	mode: 'agent' | 'plan',
+	mode: 'agent' | 'plan' | 'compact',
 	message: string
 ) => {
 	harness = await makeBoltTestRuntime(workspace, { ai });
@@ -93,7 +93,7 @@ const openTask = async (
 const runTask = async (
 	ai: ReturnType<typeof scriptedTranscript>['ai'],
 	name: string,
-	mode: 'agent' | 'plan',
+	mode: 'agent' | 'plan' | 'compact',
 	message: string
 ) => {
 	const { agents, taskId } = await openTask(ai, name, mode, message);
@@ -159,7 +159,9 @@ describe('scripted agent pipeline transcript', () => {
 	});
 
 	it('kicks in Automatic Compact in agent mode when the projection exceeds 64 KiB', async () => {
-		const { ai, feed } = scriptedTranscript([assistantText('Continuing from the compacted context.')]);
+		const { ai, feed, requests } = scriptedTranscript([
+			assistantText('Continuing from the compacted context.')
+		]);
 		const { result, taskId } = await runTask(ai, '02', 'agent', LARGE_INSTRUCTION);
 		expect(result.status).toBe('done');
 		expect(feed[0]).toMatchObject({
@@ -169,6 +171,9 @@ describe('scripted agent pipeline transcript', () => {
 		});
 		expect(feed[0]?.promptBytes).toBeGreaterThan(AUTO_COMPACT_PROMPT_BYTES);
 		expect(feed[1]).toMatchObject({ automaticCompact: false, planMode: false });
+		expect(JSON.stringify(requests[1]?.messages)).toContain(
+			'Retained: the current user instruction, open decisions, and unresolved work.'
+		);
 		expect(feed).toHaveLength(2);
 		const compact = await harness!.database.query(
 			`select annotation->>'tag' as tag, annotation->>'origin' as origin
@@ -286,5 +291,78 @@ describe('scripted agent pipeline transcript', () => {
 			compactMode: false
 		});
 		expect(JSON.stringify(feed)).not.toContain('Plan mode:');
+	});
+
+	it('Plan mode then Agent: the model loses the pre-checkpoint brief and is given the Active Plan', async () => {
+		const brief = 'UNIQUE_PLAN_BRIEF_MUST_LEAVE_THE_FEED';
+		const { ai, feed, requests } = scriptedTranscript([
+			assistantText('Objective: ship export. Approach: read first. Verify: describe_workspace returns.'),
+			assistantText('Executing against the Active Plan.')
+		]);
+		const { agents, taskId } = await openTask(ai, '07', 'plan', brief);
+		const planned = await harness!.runtime.runPromise(
+			agents.execute(harness!.effectId('execute:07:plan'), adminSubject, taskId)
+		);
+		expect(planned.status).toBe('idle');
+		expect(feed[0]).toMatchObject({ planMode: true, compactMode: false, automaticCompact: false });
+		expect(JSON.stringify(requests[0]?.messages)).toContain(brief);
+
+		await harness!.runtime.runPromise(
+			agents.submit(harness!.effectId('submit:07:agent'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Execute the Active Plan.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		const executed = await harness!.runtime.runPromise(
+			agents.execute(harness!.effectId('execute:07:agent'), adminSubject, taskId)
+		);
+		expect(executed.status).toBe('done');
+		expect(feed[1]).toMatchObject({ planMode: false, automaticCompact: false });
+		const agentFeed = JSON.stringify(requests[1]?.messages);
+		expect(agentFeed).toContain('Active Plan revision');
+		expect(agentFeed).toContain('Objective: ship export.');
+		expect(agentFeed).not.toContain(brief);
+		expect(agentFeed).toContain('Execute the Active Plan.');
+	});
+
+	it('Compact mode then Agent: the model loses the compact instruction and keeps the checkpoint', async () => {
+		const instruction = 'UNIQUE_COMPACT_INSTRUCTION_MUST_LEAVE_THE_FEED';
+		const { ai, feed, requests } = scriptedTranscript([
+			assistantText('Retained: open payroll decisions and the current export work.'),
+			assistantText('Continuing from the compacted checkpoint.')
+		]);
+		const { agents, taskId } = await openTask(ai, '08', 'compact', instruction);
+		const compacted = await harness!.runtime.runPromise(
+			agents.execute(harness!.effectId('execute:08:compact'), adminSubject, taskId)
+		);
+		expect(compacted.status).toBe('idle');
+		expect(feed[0]).toMatchObject({
+			compactMode: true,
+			planMode: false,
+			automaticCompact: false
+		});
+		expect(JSON.stringify(requests[0]?.messages)).toContain(instruction);
+
+		await harness!.runtime.runPromise(
+			agents.submit(harness!.effectId('submit:08:agent'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Continue after Compact.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		const executed = await harness!.runtime.runPromise(
+			agents.execute(harness!.effectId('execute:08:agent'), adminSubject, taskId)
+		);
+		expect(executed.status).toBe('done');
+		expect(feed[1]).toMatchObject({ compactMode: false, automaticCompact: false });
+		const agentFeed = JSON.stringify(requests[1]?.messages);
+		expect(agentFeed).toContain('Retained: open payroll decisions and the current export work.');
+		expect(agentFeed).toContain('Continue after Compact.');
+		expect(agentFeed).not.toContain(instruction);
 	});
 });

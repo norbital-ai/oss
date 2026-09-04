@@ -75,6 +75,29 @@ export const successfulAI = (
 					}
 				};
 			}
+			if (request.output._tag === 'PlanVerdict') {
+				index += 1;
+				return {
+					_tag: 'Success',
+					value: {
+						_tag: 'Generated',
+						result: {
+							_tag: 'PlanVerdict',
+							verdict: {
+								complete: true,
+								summary: 'Every verification criterion is evidenced.',
+								gaps: []
+							}
+						},
+						observation: {
+							callId: request.callId,
+							provider: 'test-provider',
+							model: request.modelId,
+							operation: 'language'
+						}
+					}
+				};
+			}
 			if (request.output._tag !== 'Message') {
 				return {
 					_tag: 'Failure',
