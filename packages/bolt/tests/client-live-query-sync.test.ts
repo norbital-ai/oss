@@ -16,10 +16,8 @@ import {
 	step
 } from '../src/client/sync/machine.js';
 
-const query = (
-	limit = 3,
-	orderBy: Record<string, string> = { created_at: 'desc', id: 'asc' }
-) => ({ kind: 'findMany', collection: 'tasks', limit, orderBy }) as SyncQueryInput;
+const query = (limit = 3, orderBy: Record<string, string> = { created_at: 'desc', id: 'asc' }) =>
+	({ kind: 'findMany', collection: 'tasks', limit, orderBy }) as SyncQueryInput;
 
 const writeId = (value: string): CollectionMutationIdempotencyKey =>
 	value as CollectionMutationIdempotencyKey;
@@ -67,16 +65,16 @@ describe('live query identity and projection', () => {
 			[
 				{
 					graph: {
-						action: 'update',
+						action: 'mutate',
 						collection: 'tasks',
-						values: { id: 'b', title: 'changed' }
+						rows: [{ action: 'update', values: { id: 'b', title: 'changed' } }]
 					}
 				},
 				{
 					graph: {
-						action: 'create',
+						action: 'mutate',
 						collection: 'tasks',
-						values: { id: 'outside', title: 'pending create' }
+						rows: [{ action: 'create', values: { id: 'outside', title: 'pending create' } }]
 					}
 				}
 			],
@@ -154,9 +152,9 @@ describe('Sync v2 prefix Machine', () => {
 			kind: 'writeEnqueued',
 			at: 2,
 			request: mutationRequest(id, {
-				action: 'update',
+				action: 'mutate',
 				collection: 'tasks',
-				values: { id: 'a', title: 'new' }
+				rows: [{ action: 'update', values: { id: 'a', title: 'new' } }]
 			})
 		});
 

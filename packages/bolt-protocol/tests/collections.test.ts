@@ -18,13 +18,18 @@ describe('the declarative mutation request', () => {
 			Schema.is(CollectionMutateRequest)({
 				...common,
 				graph: {
-					action: 'create',
+					action: 'mutate',
 					collection: 'orders',
-					values: {
-						id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42310',
-						reference: 'ORD-1',
-						order_line_order: [{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }]
-					}
+					rows: [
+						{
+							action: 'create',
+							values: {
+								id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42310',
+								reference: 'ORD-1',
+								order_line_order: [{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }]
+							}
+						}
+					]
 				}
 			})
 		).toBe(true);
@@ -35,9 +40,9 @@ describe('the declarative mutation request', () => {
 			Schema.is(CollectionMutateRequest)({
 				...common,
 				graph: {
-					action: 'update',
+					action: 'mutate',
 					collection: 'orders',
-					values: { id: 'order-1', reference: 'ORD-2' }
+					rows: [{ action: 'update', values: { id: 'order-1', reference: 'ORD-2' } }]
 				},
 				baseVersions: [
 					{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 4 },
@@ -63,7 +68,11 @@ describe('the declarative mutation request', () => {
 	it('requires the version, physical partition and schema identity', () => {
 		const create = {
 			...common,
-			graph: { action: 'create', collection: 'orders', values: { id: 'order-1' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { id: 'order-1' } }]
+			}
 		} as const;
 		expect(Schema.is(CollectionMutateRequest)({ ...create, protocolVersion: 1 })).toBe(false);
 		expect(Schema.is(CollectionMutateRequest)({ ...create, partitionKey: '' })).toBe(false);
@@ -124,14 +133,14 @@ describe('the declarative mutation request', () => {
 			Schema.is(CollectionMutateRequest)({
 				...common,
 				idempotencyKey: 'x'.repeat(257),
-				graph: { action: 'create', collection: 'orders', values: {} }
+				graph: { action: 'mutate', collection: 'orders', rows: [{ action: 'create', values: {} }] }
 			})
 		).toBe(false);
 		expect(
 			Schema.is(CollectionMutateRequest)({
 				...common,
 				idempotencyKey: 'mutation\u0000injected',
-				graph: { action: 'create', collection: 'orders', values: {} }
+				graph: { action: 'mutate', collection: 'orders', rows: [{ action: 'create', values: {} }] }
 			})
 		).toBe(false);
 	});

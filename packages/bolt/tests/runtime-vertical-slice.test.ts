@@ -687,9 +687,9 @@ describe('runnable Bolt vertical slice', () => {
 			partitionKey: 'sha256:vertical-slice-partition',
 			schemaFingerprint: 'sha256:vertical-slice-fixture',
 			graph: {
-				action: 'update',
+				action: 'mutate',
 				collection: 'employees',
-				values: { id: employeeRecordId, name: 'Grace' }
+				rows: [{ action: 'update', values: { id: employeeRecordId, name: 'Grace' } }]
 			},
 			baseVersions: [
 				{ row: { collection: 'employees', recordId: employeeRecordId }, rowVersion: 1 }

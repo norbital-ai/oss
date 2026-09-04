@@ -11,24 +11,24 @@ describe('project', () => {
 			[held],
 			[
 				write({
-					action: 'update',
+					action: 'mutate',
 					collection: 'payroll_runs',
-					values: { id: 'run-1', status: 'posted' }
+					rows: [{ action: 'update', values: { id: 'run-1', status: 'posted' } }]
 				}),
 				write({
-					action: 'create',
+					action: 'mutate',
 					collection: 'payroll_runs',
-					values: { id: 'run-2', status: 'draft' }
+					rows: [{ action: 'create', values: { id: 'run-2', status: 'draft' } }]
 				}),
 				write({
-					action: 'update',
+					action: 'mutate',
 					collection: 'payroll_runs',
-					values: { id: 'run-3', status: 'draft' }
+					rows: [{ action: 'update', values: { id: 'run-3', status: 'draft' } }]
 				}),
 				write({
-					action: 'create',
+					action: 'mutate',
 					collection: 'payslips',
-					values: { id: 'slip-1', status: 'draft' }
+					rows: [{ action: 'create', values: { id: 'slip-1', status: 'draft' } }]
 				}),
 				write({
 					action: 'delete',
@@ -36,9 +36,9 @@ describe('project', () => {
 					ids: ['never-held']
 				}),
 				write({
-					action: 'create',
+					action: 'mutate',
 					collection: 'payroll_runs',
-					values: { status: 'no-id' }
+					rows: [{ action: 'create', values: { status: 'no-id' } }]
 				})
 			],
 			'payroll_runs'

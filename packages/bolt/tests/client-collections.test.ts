@@ -200,9 +200,9 @@ describe('typed browser client', () => {
 			partitionKey: 'test-partition',
 			schemaFingerprint: 'sha256:test',
 			graph: {
-				action: 'update',
+				action: 'mutate',
 				collection: 'employees',
-				values: { id: 'employee-1', name: 'Grace' }
+				rows: [{ action: 'update', values: { id: 'employee-1', name: 'Grace' } }]
 			},
 			baseVersions: [
 				{
@@ -215,7 +215,11 @@ describe('typed browser client', () => {
 		expect(sync.enqueued[0]?.idempotencyKey).toBeTypeOf('string');
 		expect(sync.enqueued[1]).toMatchObject({
 			protocolVersion: 2,
-			graph: { action: 'create', collection: 'employees', values: { name: 'Lin' } },
+			graph: {
+				action: 'mutate',
+				collection: 'employees',
+				rows: [{ action: 'create', values: { name: 'Lin' } }]
+			},
 			baseVersions: []
 		});
 	});

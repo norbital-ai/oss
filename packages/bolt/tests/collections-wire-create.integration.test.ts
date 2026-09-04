@@ -16,10 +16,7 @@ import {
 	workspace,
 	type WorkspaceDefinition
 } from '../src/authoring/workspace-schema.js';
-import {
-	emptyAuthoredRuntime,
-	type AuthoredRuntime
-} from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
 import { refuse } from '../src/authoring/refusal.js';
 import { approveBy } from '../src/authoring/approval-flow.js';
@@ -265,18 +262,24 @@ const mutationPush = (
 		readonly partitionKey?: string;
 	}>
 ) => {
-	const action = input.graph['action'];
-	const values = input.graph['values'];
-	const graph =
-		action === 'create' && typeof values === 'object' && values !== null && !Array.isArray(values)
-			? {
-					...input.graph,
-					values: {
-						id: `00000000-0000-4000-8000-${String(input.seed).padStart(12, '0')}`,
-						...values
-					}
-				}
-			: input.graph;
+	// A browser create carries a client-minted id; the seed mints one per create row of the batch.
+	const rows = input.graph['rows'];
+	const graph = Array.isArray(rows)
+		? {
+				...input.graph,
+				rows: rows.map((row: Readonly<Record<string, unknown>>, index) =>
+					row['action'] === 'create'
+						? {
+								...row,
+								values: {
+									id: `00000000-0000-4000-8000-${String(input.seed + index).padStart(12, '0')}`,
+									...(row['values'] as Readonly<Record<string, unknown>>)
+								}
+							}
+						: row
+				)
+			}
+		: input.graph;
 	return {
 		protocolVersion: 2,
 		idempotencyKey: input.idempotencyKey,
@@ -332,9 +335,9 @@ describe('collections.mutate over the wire', () => {
 			idempotencyKey: 'm4-accepted-once',
 			seed: 41,
 			graph: {
-				action: 'create',
+				action: 'mutate',
 				collection: 'orders',
-				values: { reference: 'BROWSER-MUTATION-ONCE' }
+				rows: [{ action: 'create', values: { reference: 'BROWSER-MUTATION-ONCE' } }]
 			}
 		});
 
@@ -349,9 +352,9 @@ describe('collections.mutate over the wire', () => {
 							idempotencyKey: 'm4-accepted-once',
 							seed: 42,
 							graph: {
-								action: 'create',
+								action: 'mutate',
 								collection: 'orders',
-								values: { reference: 'BROWSER-MUTATION-ONCE-CHANGED' }
+								rows: [{ action: 'create', values: { reference: 'BROWSER-MUTATION-ONCE-CHANGED' } }]
 							}
 						})
 					)
@@ -430,7 +433,11 @@ describe('collections.mutate over the wire', () => {
 			idempotencyKey: 'm4-future-issued',
 			seed: 54,
 			issuedAtEpochMs: Date.now() + 6 * 60 * 1_000,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'FUTURE' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { reference: 'FUTURE' } }]
+			}
 		});
 
 		const first = await post(harness, 'collections.mutate', input);
@@ -481,7 +488,11 @@ describe('collections.mutate over the wire', () => {
 		const input = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-unclassified-failure',
 			seed: 55,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'BROKEN' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { reference: 'BROKEN' } }]
+			}
 		});
 
 		const first = await post(harness, 'collections.mutate', input);
@@ -528,9 +539,9 @@ describe('collections.mutate over the wire', () => {
 				idempotencyKey: mutationId,
 				seed: 54,
 				graph: {
-					action: 'create',
+					action: 'mutate',
 					collection: 'orders',
-					values: { reference: 'WRITE-ONLY' }
+					rows: [{ action: 'create', values: { reference: 'WRITE-ONLY' } }]
 				}
 			})
 		);
@@ -560,9 +571,9 @@ describe('collections.mutate over the wire', () => {
 				idempotencyKey: 'm4-partition-bound',
 				seed: 42,
 				graph: {
-					action: 'create',
+					action: 'mutate',
 					collection: 'orders',
-					values: { reference: 'LANDED' }
+					rows: [{ action: 'create', values: { reference: 'LANDED' } }]
 				}
 			})
 		);
@@ -581,9 +592,9 @@ describe('collections.mutate over the wire', () => {
 							seed: 43,
 							partitionKey: 'sha256:unissued-partition',
 							graph: {
-								action: 'create',
+								action: 'mutate',
 								collection: 'orders',
-								values: { reference: 'MUST-NOT-LAND' }
+								rows: [{ action: 'create', values: { reference: 'MUST-NOT-LAND' } }]
 							}
 						})
 					)
@@ -609,7 +620,11 @@ describe('collections.mutate over the wire', () => {
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-switched-actor',
 				seed: 43,
-				graph: { action: 'create', collection: 'orders', values: { reference: 'WRONG-ACTOR' } }
+				graph: {
+					action: 'mutate',
+					collection: 'orders',
+					rows: [{ action: 'create', values: { reference: 'WRONG-ACTOR' } }]
+				}
 			})
 		);
 		expect(firstActor.value).toMatchObject({
@@ -622,7 +637,11 @@ describe('collections.mutate over the wire', () => {
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-switched-actor',
 				seed: 44,
-				graph: { action: 'create', collection: 'orders', values: { reference: 'WRONG-ACTOR' } }
+				graph: {
+					action: 'mutate',
+					collection: 'orders',
+					rows: [{ action: 'create', values: { reference: 'WRONG-ACTOR' } }]
+				}
 			})
 		);
 		const otherActor = await harness.runtime.runPromise(
@@ -671,7 +690,11 @@ describe('collections.mutate over the wire', () => {
 		const rejected = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-rejected',
 			seed: 44,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'REFUSED' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { reference: 'REFUSED' } }]
+			}
 		});
 		const first = await post(harness, 'collections.mutate', rejected);
 		const replay = await post(harness, 'collections.mutate', rejected);
@@ -726,7 +749,11 @@ describe('collections.mutate over the wire', () => {
 		const pending = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-pending-approval',
 			seed: 45,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'REVIEW' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { reference: 'REVIEW' } }]
+			}
 		});
 		const first = await post(harness, 'collections.mutate', pending);
 		const replay = await post(harness, 'collections.mutate', pending);
@@ -787,7 +814,11 @@ describe('collections.mutate over the wire', () => {
 		const unknownInput = mutationPush('schema:unknown-old', {
 			idempotencyKey: 'm4-reject-unknown',
 			seed: 46,
-			graph: { action: 'create', collection: 'orders', values: { reference: 'UNKNOWN' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'create', values: { reference: 'UNKNOWN' } }]
+			}
 		});
 		const unknown = await post(harness, 'collections.mutate', unknownInput);
 		const unknownReplay = await post(harness, 'collections.mutate', unknownInput);
@@ -810,14 +841,22 @@ describe('collections.mutate over the wire', () => {
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-conflict-seed',
 				seed: 48,
-				graph: { action: 'create', collection: 'orders', values: { reference: 'BASE' } }
+				graph: {
+					action: 'mutate',
+					collection: 'orders',
+					rows: [{ action: 'create', values: { reference: 'BASE' } }]
+				}
 			})
 		);
 		const id = String(storedRecordsOf(created.value)?.[0]?.['id']);
 		const stale = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-stale-update',
 			seed: 49,
-			graph: { action: 'update', collection: 'orders', values: { id, reference: 'STALE' } },
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'update', values: { id, reference: 'STALE' } }]
+			},
 			baseVersions: [{ row: { collection: 'orders', recordId: id }, rowVersion: 99 }]
 		});
 		const first = await post(harness, 'collections.mutate', stale);
@@ -843,14 +882,22 @@ describe('collections.mutate over the wire', () => {
 			mutationPush(fingerprint, {
 				idempotencyKey: 'm4-missing-base-seed',
 				seed: 50,
-				graph: { action: 'create', collection: 'orders', values: { reference: 'BASE' } }
+				graph: {
+					action: 'mutate',
+					collection: 'orders',
+					rows: [{ action: 'create', values: { reference: 'BASE' } }]
+				}
 			})
 		);
 		const id = String(storedRecordsOf(created.value)?.[0]?.['id']);
 		const missing = mutationPush(fingerprint, {
 			idempotencyKey: 'm4-missing-base',
 			seed: 51,
-			graph: { action: 'update', collection: 'orders', values: { id, reference: 'UNSAFE' } }
+			graph: {
+				action: 'mutate',
+				collection: 'orders',
+				rows: [{ action: 'update', values: { id, reference: 'UNSAFE' } }]
+			}
 		});
 		const first = await post(harness, 'collections.mutate', missing);
 		const replay = await post(harness, 'collections.mutate', missing);
@@ -875,13 +922,18 @@ describe('collections.mutate over the wire', () => {
 			idempotencyKey: 'm4-client-create-identities',
 			seed: 52,
 			graph: {
-				action: 'create',
+				action: 'mutate',
 				collection: 'orders',
-				values: {
-					id: rootId,
-					reference: 'CLIENT-ID',
-					order_line_order: [{ id: childId, sku: 'CLIENT-CHILD-ID' }]
-				}
+				rows: [
+					{
+						action: 'create',
+						values: {
+							id: rootId,
+							reference: 'CLIENT-ID',
+							order_line_order: [{ id: childId, sku: 'CLIENT-CHILD-ID' }]
+						}
+					}
+				]
 			}
 		});
 		const response = await post(harness, 'collections.mutate', created);
@@ -896,9 +948,9 @@ describe('collections.mutate over the wire', () => {
 				idempotencyKey: 'm4-client-create-collision',
 				seed: 53,
 				graph: {
-					action: 'create',
+					action: 'mutate',
 					collection: 'orders',
-					values: { id: rootId, reference: 'COLLISION' }
+					rows: [{ action: 'create', values: { id: rootId, reference: 'COLLISION' } }]
 				}
 			})
 		);

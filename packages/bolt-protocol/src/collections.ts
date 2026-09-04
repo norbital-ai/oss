@@ -46,17 +46,11 @@ export const CollectionMutationWriteRow = Schema.Struct({
 });
 export type CollectionMutationWriteRow = typeof CollectionMutationWriteRow.Type;
 
+/**
+ * The one write graph a browser pushes: a batch of create/update rows on one collection, or a
+ * batch of deletes. A single record is a batch of one; there is no single-row shape.
+ */
 export const CollectionMutationGraph = Schema.Union([
-	Schema.Struct({
-		action: Schema.Literal('create'),
-		collection: Schema.NonEmptyString,
-		values: CollectionWriteValues
-	}),
-	Schema.Struct({
-		action: Schema.Literal('update'),
-		collection: Schema.NonEmptyString,
-		values: CollectionWriteValues
-	}),
 	Schema.Struct({
 		action: Schema.Literal('mutate'),
 		collection: Schema.NonEmptyString,
@@ -74,27 +68,6 @@ export type CollectionMutationGraph = typeof CollectionMutationGraph.Type;
 export const mutationGraphDeleteIds = (
 	graph: Extract<CollectionMutationGraph, { readonly action: 'delete' }>
 ): readonly string[] => graph.ids;
-
-const writeRowOf = (
-	graph: Extract<CollectionMutationGraph, { readonly action: 'create' | 'update' }>
-): CollectionMutationWriteRow => ({ action: graph.action, values: graph.values });
-
-/** Per-root create/update rows a write graph carries. Always an array. */
-export const mutationGraphWriteRows = (
-	graph: Exclude<CollectionMutationGraph, { readonly action: 'delete' }>
-): readonly CollectionMutationWriteRow[] => {
-	switch (graph.action) {
-		case 'create':
-		case 'update':
-			return [writeRowOf(graph)];
-		case 'mutate':
-			return graph.rows;
-		default: {
-			const _exhaustive: never = graph;
-			return _exhaustive;
-		}
-	}
-};
 
 export const CollectionMutationPush = Schema.Struct({
 	protocolVersion: Schema.Literal(2),

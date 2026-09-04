@@ -1,7 +1,6 @@
 import {
 	MAX_SYNC_LOADED_KEYS,
 	mutationGraphDeleteIds,
-	mutationGraphWriteRows,
 	type CollectionMutationGraph,
 	type StoredRecord,
 	type SyncPrefixDelta
@@ -112,10 +111,8 @@ export const project = (
 				}
 				break;
 			}
-			case 'create':
-			case 'update':
 			case 'mutate': {
-				for (const row of mutationGraphWriteRows(graph)) applyWriteRow(rows, indexes, row.values);
+				for (const row of graph.rows) applyWriteRow(rows, indexes, row.values);
 				break;
 			}
 			default: {

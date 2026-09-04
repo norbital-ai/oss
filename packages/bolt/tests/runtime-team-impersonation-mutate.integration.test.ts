@@ -117,11 +117,20 @@ describe('team impersonation mutate', () => {
 		harness = await makeBoltTestRuntime(impersonationWorkspace, { authored });
 		await seedTeam(harness, 'HQ Payroll HR');
 		await seedTeam(harness, 'HR Manager');
-		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', status: ADMIN_STATUS });
+		await seedSession(harness, {
+			token: 'admin-token',
+			user: 'user-admin-token',
+			status: ADMIN_STATUS
+		});
 
 		const explained = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('access.explain', 'admin-token', { action: 'create', resource: 'leave_requests' }, 'HQ Payroll HR')
+				command(
+					'access.explain',
+					'admin-token',
+					{ action: 'create', resource: 'leave_requests' },
+					'HQ Payroll HR'
+				)
 			)
 		);
 		expect(explained.value).toMatchObject({ allowed: true });
@@ -139,9 +148,14 @@ describe('team impersonation mutate', () => {
 						partitionKey: 'sha256:impersonation-mutate-partition',
 						schemaFingerprint: fingerprint,
 						graph: {
-							action: 'create',
+							action: 'mutate',
 							collection: 'leave_requests',
-							values: { id: rid('leave-1'), employment_id: rid('employment-1'), note: 'Annual' }
+							rows: [
+								{
+									action: 'create',
+									values: { id: rid('leave-1'), employment_id: rid('employment-1'), note: 'Annual' }
+								}
+							]
 						},
 						baseVersions: []
 					},

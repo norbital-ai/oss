@@ -32,7 +32,6 @@ import {
 	ModelId,
 	ProviderCallId,
 	mutationGraphDeleteIds,
-	mutationGraphWriteRows,
 	type CollectionMutateRequest,
 	type CollectionMutationSettlement,
 	type SyncChange,
@@ -4178,7 +4177,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const graph = input.graph;
 				const baseVersions = input.baseVersions;
 				const deleteIds = graph.action === 'delete' ? mutationGraphDeleteIds(graph) : ([] as const);
-				const writeRows = graph.action === 'delete' ? [] : mutationGraphWriteRows(graph);
+				const writeRows = graph.action === 'delete' ? [] : graph.rows;
 				const firstWrite = writeRows[0];
 				const rootId = String(graph.action === 'delete' ? deleteIds[0] : firstWrite?.values['id']);
 				const committedAction =

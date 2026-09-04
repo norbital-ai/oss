@@ -176,7 +176,7 @@ describe('Bolt architecture boundaries', () => {
 		expect(amendedAggregate).toBeLessThanOrEqual(17_900);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
-		// check and the write call each read `mutationGraphWriteRows`; and hooks gained a `delete`
+		// check and the write call each read the graph's rows; and hooks gained a `delete`
 		// write port that routes through the same `mutate` with delete roots. See RFC/toolchain.md §7.5a.
 		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_770);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
@@ -285,7 +285,9 @@ describe('published surface', () => {
 			await Promise.all(
 				files.map(async (relative) => {
 					const source = await readFile(new URL(`../src/${relative}`, import.meta.url), 'utf8');
-					const missingEditor = source.includes('CodeEditor') ? [] : [`${relative}: missing CodeEditor`];
+					const missingEditor = source.includes('CodeEditor')
+						? []
+						: [`${relative}: missing CodeEditor`];
 					const rawPre = /<pre\b/.test(source) ? [`${relative}: raw pre`] : [];
 					return [...missingEditor, ...rawPre];
 				})

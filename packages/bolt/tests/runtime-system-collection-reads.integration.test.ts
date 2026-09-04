@@ -429,7 +429,11 @@ describe('notifications are live system collections scoped to their recipient', 
 			issuedAtEpochMs: Date.now(),
 			partitionKey: MUTATION_PARTITION_KEY,
 			schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT,
-			graph: { action: 'update', collection: 'bolt_notifications', values: { id, ...values } },
+			graph: {
+				action: 'mutate',
+				collection: 'bolt_notifications',
+				rows: [{ action: 'update', values: { id, ...values } }]
+			},
 			baseVersions: [
 				{ row: { collection: 'bolt_notifications', recordId: id }, rowVersion: baseVersion }
 			]

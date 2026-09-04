@@ -6,7 +6,6 @@ import {
 	CollectionMutateRequest,
 	CollectionQueryRequest,
 	mutationGraphDeleteIds,
-	mutationGraphWriteRows,
 	FixedCommandCatalogue,
 	SyncQueryInput,
 	WorkspaceInvokeContract,
@@ -243,7 +242,7 @@ const collectionMutationBaseVersions = (
 		for (const recordId of mutationGraphDeleteIds(graph)) addKnown(graph.collection, recordId);
 		return [...versions.values()];
 	}
-	for (const row of mutationGraphWriteRows(graph)) {
+	for (const row of graph.rows) {
 		const rootId = row.values['id'];
 		if (row.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
 			addKnown(graph.collection, rootId);
@@ -687,13 +686,6 @@ const enqueueMutation = (
 	const [first, ...rest] = records.map((values) => materializeWriteRow(collection, values));
 	if (first === undefined)
 		throw new TypeError(`Mutation ${collection} requires at least one record`);
-	if (rest.length === 0)
-		return submitGraph(
-			runtime,
-			catalog,
-			{ action: first.action, collection, values: first.values },
-			first.values
-		);
 	return submitGraph(
 		runtime,
 		catalog,
