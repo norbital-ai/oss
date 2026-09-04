@@ -51,6 +51,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # test-utilities proves the browser SSE / XHR / fetch sync drivers inside a real Chromium.
+      # Without the browser those tests fail as "Executable doesn't exist", which is a runner
+      # gap rather than a driver verdict; a skip would make the suite green without the proof.
+      - name: Install Playwright Chromium
+        run: pnpm --filter @norbital-ai/test-utilities exec playwright install --with-deps chromium
+
       # Public and private templates have their own repositories and CI; this repository gates the
       # publishable package graph plus the tests that exercise those packages.
       #
