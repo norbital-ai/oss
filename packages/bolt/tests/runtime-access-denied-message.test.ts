@@ -11,6 +11,6 @@ describe('AccessDenied', () => {
 		expect(denied).toBeInstanceOf(Error);
 		expect(denied.reason).toContain('authorization');
 		expect(denied.message).toContain('authorization');
-		expect(denied.message).toBe(denied.reason);
+		expect(denied.message).toBe(`${denied.reason} (create on notes)`);
 	});
 });
