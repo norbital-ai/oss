@@ -294,7 +294,7 @@ const create = (
 				[{ ...values, id: recordId(name) }],
 				false,
 				0,
-				{ root: { id: recordId(name), action: 'create' } }
+				{ roots: [{ id: recordId(name), action: 'create' }] }
 			)
 		)
 	);
@@ -309,7 +309,7 @@ const update = (name: string, run: string, values: Readonly<Record<string, Schem
 				[{ ...values, id: recordId(name) }],
 				false,
 				0,
-				{ root: { id: recordId(name), action: 'update' } }
+				{ roots: [{ id: recordId(name), action: 'update' }] }
 			)
 		)
 	);

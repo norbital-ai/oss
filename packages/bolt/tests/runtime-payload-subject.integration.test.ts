@@ -334,7 +334,7 @@ describe('payload-supplied identity', () => {
 						[{ id, name: 'Ada' }],
 						false,
 						0,
-						{ root: { id, action: 'create' } }
+						{ roots: [{ id, action: 'create' }] }
 					);
 				})
 			)

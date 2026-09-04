@@ -88,10 +88,10 @@ export {
 const { bolt_task: boltTaskTable } = SYSTEM_MODEL_TABLES;
 const encodeSubject = Schema.encodeSync(Identity.Subject);
 
-class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()(
-	'Bolt.TaskRuntime.Error',
-	{ operation: Schema.NonEmptyString, message: Schema.NonEmptyString }
-) {
+class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()('Bolt.TaskRuntime.Error', {
+	operation: Schema.NonEmptyString,
+	message: Schema.NonEmptyString
+}) {
 	readonly category = 'task-runtime' as const;
 	readonly retryable = false;
 }
@@ -254,11 +254,8 @@ const providerCallIdFor = (scope: string): ProviderCallId =>
 
 const MAX_IMAGE_COUNT = 8;
 const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
-export const taskAssetStorageKey = (
-	taskId: TaskId,
-	documentId: string,
-	fileName: string
-): string => taskScopedImageKey(taskId, documentId, fileName);
+export const taskAssetStorageKey = (taskId: TaskId, documentId: string, fileName: string): string =>
+	taskScopedImageKey(taskId, documentId, fileName);
 const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) =>
 	Effect.gen(function* () {
 		const prefix = taskAssetKeyPrefix(taskId);
@@ -968,7 +965,7 @@ export const layer = Layer.effect(
 			action: 'create' | 'update' = 'update'
 		) =>
 			collections.mutate(effectId, subject, 'agent_task', [mutation], true, 0, {
-				root: { id: mutation.id, action }
+				roots: [{ id: mutation.id, action }]
 			});
 
 		const activePlan = Effect.fn('Agents.activePlan')(function* (
@@ -2012,8 +2009,7 @@ export const layer = Layer.effect(
 					yield* settleRun(effectId, subject, run, complete ? 'done' : 'attention', 'verify', {
 						plans: [{ id: plan.id, status: complete ? 'verified' : 'stalled' }]
 					});
-					if (complete)
-						yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
+					if (complete) yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
 					return complete ? 'done' : 'attention';
 				}
 				yield* admit(EffectId.make(`${effectId}:continue:${attempt}`), subject, {

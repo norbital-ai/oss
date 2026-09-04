@@ -503,12 +503,9 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				});
 			}
 			if (parsed.operation === 'delete') {
-				yield* context.collections.delete(
-					context.effectId,
-					context.subject,
-					parsed.collection,
-					[parsed.id]
-				);
+				yield* context.collections.delete(context.effectId, context.subject, parsed.collection, [
+					parsed.id
+				]);
 			} else {
 				yield* context.collections.mutate(
 					context.effectId,
@@ -517,7 +514,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 					[{ ...(parsed.values ?? {}), id: parsed.id }],
 					false,
 					0,
-					{ root: { id: parsed.id, action: parsed.operation } }
+					{ roots: [{ id: parsed.id, action: parsed.operation }] }
 				);
 			}
 			return { collection: parsed.collection, id: parsed.id, operation: parsed.operation };

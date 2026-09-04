@@ -437,16 +437,14 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				remove: (effectId, collection, ids) =>
 					ids.length === 0
 						? Effect.void
-						: collections
-								.delete(effectId, subject, collection, ids)
-								.pipe(
-									Effect.asVoid,
-									Effect.mapError((error) => ({ message: describeCause(error) }))
-								),
+						: collections.delete(effectId, subject, collection, ids).pipe(
+								Effect.asVoid,
+								Effect.mapError((error) => ({ message: describeCause(error) }))
+							),
 				write: (effectId, collection, id, values, mode) =>
 					collections
 						.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
-							root: { id, action: mode }
+							roots: [{ id, action: mode }]
 						})
 						.pipe(
 							Effect.asVoid,

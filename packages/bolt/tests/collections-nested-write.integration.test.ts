@@ -256,12 +256,9 @@ describe('a nested write', () => {
 				);
 				const createBatch = yield* syncCommit.drainChanges;
 				const orderId = String(created.records[0]?.['id']);
-				yield* collections.delete(
-					EffectId.make('nested-capture-delete'),
-					adminSubject,
-					'orders',
-					[orderId]
-				);
+				yield* collections.delete(EffectId.make('nested-capture-delete'), adminSubject, 'orders', [
+					orderId
+				]);
 				const deleteBatch = yield* syncCommit.drainChanges;
 				return { orderId, createBatch, deleteBatch };
 			})
@@ -487,7 +484,7 @@ describe('a nested write', () => {
 					],
 					true,
 					0,
-					{ root: { id: orderId, action: 'create' } }
+					{ roots: [{ id: orderId, action: 'create' }] }
 				);
 			})
 		);
@@ -495,9 +492,9 @@ describe('a nested write', () => {
 		expect(await harness.database.query('select id, reference from orders')).toEqual([
 			{ id: orderId, reference: 'ORD-NESTED' }
 		]);
-		expect(
-			await harness.database.query('select id, order_id, sku from order_lines')
-		).toEqual([{ id: lineId, order_id: orderId, sku: 'nested-1' }]);
+		expect(await harness.database.query('select id, order_id, sku from order_lines')).toEqual([
+			{ id: lineId, order_id: orderId, sku: 'nested-1' }
+		]);
 	}, 60_000);
 
 	it('persists a new nested child id on a server-only update', async () => {
@@ -518,14 +515,14 @@ describe('a nested write', () => {
 					],
 					true,
 					0,
-					{ root: { id: orderId, action: 'update' } }
+					{ roots: [{ id: orderId, action: 'update' }] }
 				);
 			})
 		);
 
-		expect(
-			await harness.database.query('select id, order_id, sku from order_lines')
-		).toEqual([{ id: lineId, order_id: orderId, sku: 'added-1' }]);
+		expect(await harness.database.query('select id, order_id, sku from order_lines')).toEqual([
+			{ id: lineId, order_id: orderId, sku: 'added-1' }
+		]);
 	}, 60_000);
 
 	it('rolls back every claim and the parent when any claimed child hook refuses', async () => {

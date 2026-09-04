@@ -103,7 +103,7 @@ describe('authored policy field masks', () => {
 					[{ id, title: 'Inspect site', controller_note: 'Do not disclose' }],
 					false,
 					0,
-					{ root: { id, action: 'create' } }
+					{ roots: [{ id, action: 'create' }] }
 				);
 			})
 		);
@@ -153,7 +153,7 @@ describe('authored policy field masks', () => {
 					[{ id, title: 'Original', controller_note: 'Private' }],
 					false,
 					0,
-					{ root: { id, action: 'create' } }
+					{ roots: [{ id, action: 'create' }] }
 				);
 			})
 		);
@@ -167,7 +167,7 @@ describe('authored policy field masks', () => {
 					[{ id, title: 'Changed' }],
 					false,
 					0,
-					{ root: { id, action: 'update' } }
+					{ roots: [{ id, action: 'update' }] }
 				);
 			})
 		);
@@ -180,7 +180,7 @@ describe('authored policy field masks', () => {
 					[{ id, title: 'Changed through graph' }],
 					false,
 					0,
-					{ root: { id, action: 'update' } }
+					{ roots: [{ id, action: 'update' }] }
 				);
 			})
 		);
@@ -232,7 +232,7 @@ describe('authored policy field masks', () => {
 					[{ id: forgedId, title: 'Forged', source: 'caller-forged' }],
 					false,
 					0,
-					{ root: { id: forgedId, action: 'create' } }
+					{ roots: [{ id: forgedId, action: 'create' }] }
 				);
 			})
 		);
@@ -257,7 +257,7 @@ describe('authored policy field masks', () => {
 					[{ id: allowedId, title: 'Allowed' }],
 					false,
 					0,
-					{ root: { id: allowedId, action: 'create' } }
+					{ roots: [{ id: allowedId, action: 'create' }] }
 				);
 			})
 		);

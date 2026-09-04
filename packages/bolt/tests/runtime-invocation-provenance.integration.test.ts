@@ -292,7 +292,7 @@ describe('invocation provenance', () => {
 						[{ id, name: 'Ada' }],
 						false,
 						0,
-						{ root: { id, action: 'create' } }
+						{ roots: [{ id, action: 'create' }] }
 					);
 				})
 			)

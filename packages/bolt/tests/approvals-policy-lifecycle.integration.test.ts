@@ -269,7 +269,7 @@ describe('policy and hook lifecycle', () => {
 				[{ id, title: 'Draft' }],
 				false,
 				0,
-				{ root: { id, action: 'create' } }
+				{ roots: [{ id, action: 'create' }] }
 			)
 		);
 		expect(events).toEqual([
@@ -291,7 +291,7 @@ describe('policy and hook lifecycle', () => {
 				[{ id, title: 'Final' }],
 				false,
 				0,
-				{ root: { id, action: 'update' } }
+				{ roots: [{ id, action: 'update' }] }
 			)
 		);
 		expect(events).toEqual([
@@ -341,7 +341,7 @@ describe('policy and hook lifecycle', () => {
 					[{ id, status: 'forged' }],
 					false,
 					0,
-					{ root: { id, action: 'update' } }
+					{ roots: [{ id, action: 'update' }] }
 				)
 			)
 		);
@@ -450,7 +450,7 @@ describe('policy and hook lifecycle', () => {
 						false,
 						0,
 						{
-							root: { id: successorId, action: 'create' }
+							roots: [{ id: successorId, action: 'create' }]
 						}
 					)
 				);

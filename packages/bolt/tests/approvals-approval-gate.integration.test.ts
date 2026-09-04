@@ -113,7 +113,7 @@ describe('approval gate over SQL', () => {
 						[{ id: rid('person-1'), name: 'Ada' }],
 						false,
 						0,
-						{ root: { id: rid('person-1'), action: 'create' } }
+						{ roots: [{ id: rid('person-1'), action: 'create' }] }
 					);
 				})
 			)
@@ -139,7 +139,7 @@ describe('approval gate over SQL', () => {
 						[{ id: rid('person-2'), name: 'Grace' }],
 						false,
 						0,
-						{ root: { id: rid('person-2'), action: 'create' } }
+						{ roots: [{ id: rid('person-2'), action: 'create' }] }
 					);
 				})
 			)
@@ -180,7 +180,7 @@ describe('approval gate over SQL', () => {
 						[{ id: rid('person-decided'), name: 'Margaret' }],
 						false,
 						0,
-						{ root: { id: rid('person-decided'), action: 'create' } }
+						{ roots: [{ id: rid('person-decided'), action: 'create' }] }
 					);
 				})
 			)
@@ -258,7 +258,7 @@ describe('approval gate over SQL', () => {
 						false,
 						0,
 						{
-							root: { id: rid('person-admin-superseded'), action: 'create' }
+							roots: [{ id: rid('person-admin-superseded'), action: 'create' }]
 						}
 					);
 				})
@@ -316,7 +316,7 @@ describe('approval gate over SQL', () => {
 					[{ id: rid('person-3'), name: 'Ada' }],
 					false,
 					0,
-					{ root: { id: rid('person-3'), action: 'create' } }
+					{ roots: [{ id: rid('person-3'), action: 'create' }] }
 				);
 			})
 		);
@@ -343,7 +343,7 @@ describe('approval gate over SQL', () => {
 							[person],
 							false,
 							0,
-							{ root: { id: person.id, action: 'create' } }
+							{ roots: [{ id: person.id, action: 'create' }] }
 						);
 				})
 			)
@@ -368,7 +368,7 @@ describe('approval gate over SQL', () => {
 						[{ id: rid('person-6'), name: 'Ada' }],
 						false,
 						0,
-						{ root: { id: rid('person-6'), action: 'create' } }
+						{ roots: [{ id: rid('person-6'), action: 'create' }] }
 					);
 				})
 			)

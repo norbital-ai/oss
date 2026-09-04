@@ -112,7 +112,7 @@ const mutateRecord = (
 	values: Readonly<Record<string, unknown>>
 ) =>
 	service.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
-		root: { id, action }
+		roots: [{ id, action }]
 	});
 
 const dataFunctions = policyRuntimeFunctionsFor([dataPolicy]);

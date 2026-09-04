@@ -77,7 +77,7 @@ const seed = (harness: BoltTestRuntime) =>
 				[{ id: rid('a'), name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }],
 				false,
 				0,
-				{ root: { id: rid('a'), action: 'create' } }
+				{ roots: [{ id: rid('a'), action: 'create' }] }
 			);
 			yield* collections.mutate(
 				harness.effectId('b'),
@@ -86,7 +86,7 @@ const seed = (harness: BoltTestRuntime) =>
 				[{ id: rid('b'), name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }],
 				false,
 				0,
-				{ root: { id: rid('b'), action: 'create' } }
+				{ roots: [{ id: rid('b'), action: 'create' }] }
 			);
 		})
 	);
@@ -154,7 +154,7 @@ describe('collection search', () => {
 					[{ id: rid('x'), name: 'Ada Lovelace' }],
 					false,
 					0,
-					{ root: { id: rid('x'), action: 'create' } }
+					{ roots: [{ id: rid('x'), action: 'create' }] }
 				);
 			})
 		);

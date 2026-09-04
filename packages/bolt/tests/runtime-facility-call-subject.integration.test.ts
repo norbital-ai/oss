@@ -255,7 +255,7 @@ describe('the subject a facility call carries', () => {
 						[{ id, name: 'Ada' }],
 						false,
 						0,
-						{ root: { id, action: 'create' } }
+						{ roots: [{ id, action: 'create' }] }
 					);
 				})
 			)

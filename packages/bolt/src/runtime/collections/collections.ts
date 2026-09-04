@@ -3305,21 +3305,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return decision.requestId;
 			});
 
+			/**
+			 * One entry per payload, in payload order. A caller that knows a root's identity, action
+			 * or the whole-row version it was read at states it here; anything absent is derived from
+			 * the payload. There is no single-root form — a batch of one is a list of one.
+			 */
 			type MutationOptions = Readonly<{
-				readonly root?: Readonly<{
-					readonly id: string;
-					readonly action: typeof CollectionAction.Type;
-				}>;
 				readonly roots?: ReadonlyArray<
 					Readonly<{
 						readonly collection?: string;
 						readonly id: string;
 						readonly action: typeof CollectionAction.Type;
+						readonly expectedVersion?: number;
 					}>
 				>;
 				readonly browserMutation?: BrowserMutationFence;
 				readonly approval?: GraphApprovalContext;
-				readonly expectedRootVersion?: number;
 			}>;
 
 			const mutate: (
@@ -3342,13 +3343,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				) {
 					yield* refuseRunawayHooksService('mutate', collection, depth);
 					yield* workspace.collection(collection);
-					const explicitRoot = payloads.length === 1 ? options?.root : undefined;
 					const explicitRoots =
 						options?.roots?.length === payloads.length ? options.roots : undefined;
 					if (options?.approval?.approved === true && payloads.length !== 1)
 						return yield* graphRefusal(
 							collection,
-							explicitRoot?.action ?? 'update',
+							explicitRoots?.[0]?.action ?? 'update',
 							'An approved mutation re-entry must contain exactly one stored root.'
 						);
 					// Field grants are enforced once, per node, inside `prepareGraphNode` — `policy.write`
@@ -3373,23 +3373,23 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const submittedId = payload['id'];
 						const rootCollection = explicitRoots?.[index]?.collection ?? collection;
 						const rootAction =
-							explicitRoot?.action ??
 							explicitRoots?.[index]?.action ??
 							(typeof submittedId === 'string' ? 'update' : 'create');
 						const rootId =
-							explicitRoot?.id ??
 							explicitRoots?.[index]?.id ??
 							(typeof submittedId === 'string'
 								? submittedId
 								: deriveRecordId(`${rootCollection}:${effectId}:root:${index}`));
 						const rootEffectId =
 							payloads.length === 1 ? effectId : EffectId.make(`${effectId}:root:${index}`);
+						const expectedVersion = explicitRoots?.[index]?.expectedVersion;
 						return {
 							collection: rootCollection,
 							payload: { ...payload, id: rootId },
 							rootId,
 							rootAction,
-							rootEffectId
+							rootEffectId,
+							...(expectedVersion === undefined ? {} : { expectedVersion })
 						};
 					});
 					const firstRoot = roots[0];
@@ -3550,9 +3550,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 															? {}
 															: { approvalRequestId: options.approval.approvalRequestId }),
 														...(browserMutation === undefined ? {} : { browserMutation }),
-														...(options?.expectedRootVersion === undefined
+														...(root.expectedVersion === undefined
 															? {}
-															: { expectedRootVersion: options.expectedRootVersion }),
+															: { expectedRootVersion: root.expectedVersion }),
 														readSession,
 														primeRoots: groupRoots.map((candidate) => ({
 															collection: candidate.collection,
@@ -4142,7 +4142,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					false,
 					0,
 					{
-						root: { id: stored.id, action: stored.action },
+						roots: [{ id: stored.id, action: stored.action }],
 						approval: {
 							approved: true,
 							clearRootLock: stored.action === 'update',
@@ -4265,9 +4265,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					}
 					coordinates.add(coordinate);
 				}
-				const rootBaseVersion = baseVersions.find(
-					(entry) => entry.row.collection === graph.collection && entry.row.recordId === rootId
-				)?.rowVersion;
+				/** The whole-row version the browser read a root at; a `null` entry is a row it has never seen. */
+				const expectedVersionOf = (id: string): Readonly<{ expectedVersion?: number }> => {
+					const version = baseVersions.find(
+						(entry) => entry.row.collection === graph.collection && entry.row.recordId === id
+					)?.rowVersion;
+					return typeof version === 'number' ? { expectedVersion: version } : {};
+				};
 				if (
 					writeRows.some(
 						(row) =>
@@ -4370,19 +4374,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								false,
 								0,
 								{
-									...(deleteIds.length === 1
-										? { root: { id: deleteIds[0]!, action: 'delete' as const } }
-										: {}),
 									roots: deleteIds.map((id) => ({
 										collection: graph.collection,
 										id,
-										action: 'delete' as const
+										action: 'delete' as const,
+										...expectedVersionOf(id)
 									})),
-									...(deleteIds.length === 1 &&
-									rootBaseVersion !== undefined &&
-									rootBaseVersion !== null
-										? { expectedRootVersion: rootBaseVersion }
-										: {}),
 									browserMutation: fence
 								}
 							)
@@ -4394,19 +4391,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								false,
 								0,
 								{
-									...(writeRows.length === 1
-										? { root: { id: rootId, action: writeRows[0]!.action } }
-										: {}),
 									roots: writeRows.map((row) => ({
 										collection: graph.collection,
 										id: String(row.values['id']),
-										action: row.action
+										action: row.action,
+										...(row.action === 'update' ? expectedVersionOf(String(row.values['id'])) : {})
 									})),
-									...(writeRows.length === 1 &&
-									rootBaseVersion !== undefined &&
-									rootBaseVersion !== null
-										? { expectedRootVersion: rootBaseVersion }
-										: {}),
 									browserMutation: fence
 								}
 							);
@@ -4495,17 +4485,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						false,
 						0,
 						{
+							// A caller's `baseVersion` is the whole-row version it read each named row at.
 							roots: ids.map((recordId) => ({
 								collection,
 								id: recordId,
-								action: 'delete'
+								action: 'delete',
+								...(options?.baseVersion === undefined
+									? {}
+									: { expectedVersion: options.baseVersion })
 							})),
-							...(ids.length === 1 && options?.baseVersion !== undefined
-								? {
-										root: { id: first, action: 'delete' as const },
-										expectedRootVersion: options.baseVersion
-									}
-								: {}),
 							...(options?.browserMutation === undefined
 								? {}
 								: { browserMutation: options.browserMutation })

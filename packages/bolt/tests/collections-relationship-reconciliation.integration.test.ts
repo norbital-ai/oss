@@ -949,7 +949,7 @@ describe('declarative relationship reconciliation', () => {
 					false,
 					0,
 					{
-						root: { id: '00000000-0000-4000-8000-000000000099', action: 'create' }
+						roots: [{ id: '00000000-0000-4000-8000-000000000099', action: 'create' }]
 					}
 				);
 			})
@@ -1039,7 +1039,7 @@ describe('declarative relationship reconciliation', () => {
 						[{ id: childId, amount: 11 }],
 						false,
 						0,
-						{ root: { id: childId, action: 'update' } }
+						{ roots: [{ id: childId, action: 'update' }] }
 					);
 				})
 			)

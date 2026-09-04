@@ -28,7 +28,7 @@ describe('collection history', () => {
 					[{ id: recordId, name: 'Ada', team: 'Research' }],
 					false,
 					0,
-					{ root: { id: recordId, action: 'create' } }
+					{ roots: [{ id: recordId, action: 'create' }] }
 				);
 				yield* collections.mutate(
 					harness!.effectId('history-update'),
@@ -37,7 +37,7 @@ describe('collection history', () => {
 					[{ id: recordId, team: 'Platform' }],
 					false,
 					0,
-					{ root: { id: recordId, action: 'update' } }
+					{ roots: [{ id: recordId, action: 'update' }] }
 				);
 			})
 		);

@@ -79,7 +79,7 @@ describe('collection import mutation rows', () => {
 					[{ id: existingId, body: 'old', source: 'seed' }],
 					false,
 					0,
-					{ root: { id: existingId, action: 'create' } }
+					{ roots: [{ id: existingId, action: 'create' }] }
 				);
 				const imported = yield* collections.import(
 					harness!.effectId(importEffectId),

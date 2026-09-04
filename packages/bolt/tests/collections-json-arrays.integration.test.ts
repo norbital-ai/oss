@@ -196,7 +196,7 @@ describe('JSON columns holding a list', () => {
 				],
 				false,
 				0,
-				{ root: { id: RECORD_ID, action: 'create' } }
+				{ roots: [{ id: RECORD_ID, action: 'create' }] }
 			);
 			const statement = rowStatement(seen, 'insert into "shifts"');
 			expect(statement).toBeDefined();
@@ -224,7 +224,7 @@ describe('JSON columns holding a list', () => {
 				[{ id: RECORD_ID, intervals }],
 				false,
 				0,
-				{ root: { id: RECORD_ID, action: 'update' } }
+				{ roots: [{ id: RECORD_ID, action: 'update' }] }
 			);
 			const statement = rowStatement(seen, 'update "shifts"');
 			expect(statement).toBeDefined();
