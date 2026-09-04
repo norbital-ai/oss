@@ -24,6 +24,7 @@ export const publicPackageDirectories = [
 	'config',
 	'doctor',
 	'std',
+	'test-utilities',
 	'ui'
 ];
 
@@ -48,6 +49,19 @@ export function readPublicPackageEntries(repositoryRoot) {
 				throw new Error(
 					`${manifest.name}@${manifest.version} does not match the workspace release ${releaseVersion}.`
 				);
+			}
+			// A literal first-party version in a published manifest (a peer range cannot say
+			// `workspace:*`) is part of the set too: one left behind makes every consumer install
+			// the previous release beside this one.
+			for (const section of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+				for (const [name, range] of Object.entries(manifest[section] ?? {})) {
+					if (!name.startsWith('@norbital-ai/') || range.startsWith('workspace:')) continue;
+					if (range !== releaseVersion) {
+						throw new Error(
+							`${manifest.name} ${section}.${name} is ${range}; the release is ${releaseVersion}.`
+						);
+					}
+				}
 			}
 			return { name: manifest.name, version: manifest.version };
 		})
