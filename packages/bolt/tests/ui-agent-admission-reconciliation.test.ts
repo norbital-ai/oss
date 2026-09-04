@@ -27,9 +27,14 @@ describe('Task admission reconciliation', () => {
 	});
 
 	it('shows the operator text immediately until a durable human message exists', () => {
-		expect(visibleUnsettledAdmission(unsettled, new Set())).toBe(unsettled);
-		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']))).toBeNull();
-		expect(visibleUnsettledAdmission(null, new Set())).toBeNull();
+		expect(visibleUnsettledAdmission(unsettled, new Set(), true)).toBe(unsettled);
+		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']), true)).toBeNull();
+		expect(visibleUnsettledAdmission(null, new Set(), true)).toBeNull();
+	});
+
+	it('holds the operator text while the Task row is still in flight', () => {
+		expect(visibleUnsettledAdmission(unsettled, new Set(), false)).toBe(unsettled);
+		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']), false)).toBe(unsettled);
 	});
 
 	it('rejects any changed Task identity instead of retrying a different directive', () => {

@@ -6,21 +6,31 @@
 	import { Result } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import type { CompactOrigin } from './context-view.js';
+	import { plainMessageText } from './context-view.js';
 	import type { PanelMessage } from './transcript.js';
 
 	let {
 		message,
+		mode = null,
 		parentAttribution = false,
 		outsideModelView = false,
 		checkpointOrigin = null,
 		onedit
 	}: {
 		message: PanelMessage;
+		mode?: 'agent' | 'plan' | 'compact' | null;
 		parentAttribution?: boolean;
 		outsideModelView?: boolean;
 		checkpointOrigin?: CompactOrigin | null;
 		onedit?: ((message: PanelMessage) => void) | undefined;
 	} = $props();
+
+	/** A persisted run failure renders as an error bubble, not a plain system note. */
+	const failureText = $derived(
+		message.author.kind === 'system' && plainMessageText(message).startsWith('Task failed:')
+			? plainMessageText(message)
+			: null
+	);
 
 	function speaker(entry: PanelMessage): string {
 		switch (entry.author.kind) {
@@ -71,7 +81,11 @@
 </script>
 
 <li
-	class="my-1.5 min-w-0"
+	class="my-1.5 min-w-0 {mode === 'agent'
+		? 'border-l-2 border-l-primary pl-2'
+		: mode === 'plan'
+			? 'border-l-2 border-l-yellow-500/70 pl-2'
+			: ''}"
 	data-role={message.message.role}
 	data-model-view={outsideModelView ? 'outside' : 'inside'}
 >
@@ -103,7 +117,19 @@
 				{/if}
 			</Inline>
 
-			{#if typeof message.message.content === 'string'}
+			{#if failureText !== null}
+			<div
+				class="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm"
+				role="alert"
+			>
+				<Inline gap="sm" align="start">
+					<Icon icon="lucide:circle-alert" class="size-4 shrink-0 text-destructive" />
+					<p class="m-0 min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground">
+						{failureText}
+					</p>
+				</Inline>
+			</div>
+		{:else if typeof message.message.content === 'string'}
 				<div
 					class={message.author.kind === 'human' && !parentAttribution
 						? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'

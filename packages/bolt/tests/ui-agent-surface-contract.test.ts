@@ -31,9 +31,10 @@ describe('G1 immediate user text', () => {
 			priority: 'normal' as const,
 			draft: 'Export payroll'
 		};
-		expect(visibleUnsettledAdmission(admission, new Set())).toEqual(admission);
-		expect(visibleUnsettledAdmission(admission, new Set(['other-task']))).toEqual(admission);
-		expect(visibleUnsettledAdmission(admission, new Set(['task-1']))).toBeNull();
+		expect(visibleUnsettledAdmission(admission, new Set(), true)).toEqual(admission);
+		expect(visibleUnsettledAdmission(admission, new Set(['other-task']), true)).toEqual(admission);
+		expect(visibleUnsettledAdmission(admission, new Set(['task-1']), false)).toEqual(admission);
+		expect(visibleUnsettledAdmission(admission, new Set(['task-1']), true)).toBeNull();
 		expect(panelSource).toContain('data-admission="pending"');
 		expect(panelSource).toContain('visibleAdmission.message');
 		expect(panelSource).toContain("author.kind === 'human'");

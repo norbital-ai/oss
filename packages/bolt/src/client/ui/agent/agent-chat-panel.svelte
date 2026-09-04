@@ -158,6 +158,9 @@
 				})
 	);
 	const runs = $derived(projectAgentRuns(runsQuery?.current ?? []));
+	const modeByRunId: Map<string, 'agent' | 'plan' | 'compact'> = $derived(
+		new Map(runs.map((run) => [run.id, run.mode] as const))
+	);
 	const rootRuns = $derived(runs.filter((run) => run.task_id === activeTaskId));
 	const activeRun = $derived(
 		activeTask === undefined || activeTask.active_run_id === null
@@ -212,7 +215,9 @@
 	const canStop = $derived(taskWorking && !controlPending);
 	const canResume = $derived(
 		!controlPending &&
-			(activeTask?.status === 'stopped' || activeTask?.status === 'attention')
+			(activeTask?.status === 'stopped' ||
+				activeTask?.status === 'attention' ||
+				activeTask?.status === 'failed')
 	);
 	const taskAcceptsSubmission = $derived(
 		activeTask === undefined ||
@@ -607,14 +612,22 @@
 				.map((message) => message.taskId)
 		)
 	);
+	const admissionTaskId = $derived(unsettledAdmission?.taskId);
 	const visibleAdmission = $derived(
-		visibleUnsettledAdmission(unsettledAdmission, tasksWithHumanMessage)
+		visibleUnsettledAdmission(
+			unsettledAdmission,
+			tasksWithHumanMessage,
+			admissionTaskId === undefined || allTasks.some((task) => task.id === admissionTaskId)
+		)
 	);
 </script>
 
 {#snippet childConversation(task: AgentTask)}
 	{@const childMessages = panelMessages.filter((message) => message.taskId === task.id)}
 	{@const childRuns = runs.filter((run) => run.task_id === task.id)}
+	{@const childModeByRunId: Map<string, 'agent' | 'plan' | 'compact'> = new Map(
+		childRuns.map((run) => [run.id, run.mode] as const)
+	)}
 	{@const childPlan = taskPlan(task)}
 	{@const childView = projectAgentContextView({
 		messages: childMessages,
@@ -662,7 +675,11 @@
 
 			<ol class="m-0 list-none p-0" aria-label={`Child Task ${task.agent_id} active conversation`}>
 				{#each childView.focusMessages as message (message.key)}
-					<AgentTranscriptItem {message} parentAttribution={true} />
+					<AgentTranscriptItem
+						{message}
+						mode={message.runId === null ? null : (childModeByRunId.get(message.runId) ?? null)}
+						parentAttribution={true}
+					/>
 				{/each}
 			</ol>
 
@@ -674,6 +691,7 @@
 					{#each childMessages as message (message.key)}
 						<AgentTranscriptItem
 							{message}
+							mode={message.runId === null ? null : (childModeByRunId.get(message.runId) ?? null)}
 							parentAttribution={true}
 							outsideModelView={childView.outsideMessageIds.has(message.id)}
 							checkpointOrigin={message.annotation?.tag === 'compact'
@@ -833,6 +851,7 @@
 						{#each rootMessages as message (message.key)}
 							<AgentTranscriptItem
 								{message}
+								mode={message.runId === null ? null : (modeByRunId.get(message.runId) ?? null)}
 								outsideModelView={contextView.outsideMessageIds.has(message.id)}
 								checkpointOrigin={message.annotation?.tag === 'compact'
 									? compactOrigin(message, rootRuns)
@@ -891,7 +910,7 @@
 			</p>
 		{:else if activeTask?.status === 'failed'}
 			<p class="text-xs text-muted-foreground">
-				This Task failed. Send a message to start a new Task.
+				This Task failed. Retry it, or send a message to start a new Task.
 			</p>
 		{:else if canResume}
 			<p class="text-xs text-muted-foreground">

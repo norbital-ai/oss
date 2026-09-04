@@ -105,6 +105,61 @@ describe('Task resume control', () => {
 		).toEqual([{ status: 'done', epoch: 1, run_status: 'succeeded', run_epoch: 1 }]);
 	});
 
+	it('persists the run failure as a transcript message and resumes from failed', async () => {
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				return {
+					_tag: 'Failure',
+					error: {
+						code: 'provider_down',
+						message: 'PROBE_FAILURE_REASON the model endpoint refused the turn',
+						retryable: false,
+						outcome: 'known'
+					}
+				};
+			}
+		};
+		harness = await makeBoltTestRuntime(undefined, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const taskId = TaskId.make(recordId('task-failed-resume'));
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('submit'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Doomed work.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		await expect(
+			harness.runtime.runPromise(
+				agents.execute(harness.effectId('execute'), adminSubject, taskId)
+			)
+		).rejects.toMatchObject({ message: expect.stringContaining('PROBE_FAILURE_REASON') });
+		expect(
+			await harness.database.query(
+				`select task.status, message.author->>'kind' as author, message.message::text as body
+				 from agent_task task join agent_message message on message.task_id = task.id
+				 where task.id = $1 order by message.sequence`,
+				[taskId]
+			)
+		).toEqual([
+			expect.objectContaining({ status: 'failed', author: 'human' }),
+			{
+				status: 'failed',
+				author: 'system',
+				body: expect.stringContaining('PROBE_FAILURE_REASON')
+			}
+		]);
+		expect(
+			await harness.runtime.runPromise(
+				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
+			)
+		).toEqual({ taskId, status: 'ready' });
+	});
+
 	it('refuses resume for a Task that is not stopped or awaiting attention', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) =>

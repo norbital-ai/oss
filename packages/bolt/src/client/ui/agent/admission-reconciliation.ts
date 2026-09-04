@@ -9,15 +9,19 @@ export type UnsettledTaskAdmission = Readonly<{
 }>;
 
 /**
- * Paints the operator's text immediately. Drop it only when a durable human
- * `agent_message` for that Task is a live findMany fact — the Task row arrives
- * first, and clearing on that fact leaves the composer empty with no transcript.
+ * Paints the operator's text immediately. Drop it only when the Task row AND a durable
+ * human `agent_message` for that Task are both live findMany facts — the row and its
+ * messages arrive over independent live queries, and clearing on the message alone
+ * leaves the composer empty with a blank transcript while the row is still in flight.
  */
 export const visibleUnsettledAdmission = (
 	admission: UnsettledTaskAdmission | null,
-	tasksWithHumanMessage: ReadonlySet<string>
+	tasksWithHumanMessage: ReadonlySet<string>,
+	taskPresent: boolean
 ): UnsettledTaskAdmission | null =>
-	admission !== null && tasksWithHumanMessage.has(admission.taskId) ? null : admission;
+	admission !== null && taskPresent && tasksWithHumanMessage.has(admission.taskId)
+		? null
+		: admission;
 
 /** Reuses a Task ID only for an exact retry of the same canonical submission identity. */
 export const retryableAdmission = (

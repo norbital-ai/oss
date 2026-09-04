@@ -1013,7 +1013,7 @@ export const layer = Layer.effect(
 					existing.agent_id !== input.agentId ||
 					existing.audience !== agent.audience ||
 					existing.status === 'done' ||
-					existing.status === 'failed'
+					(existing.status === 'failed' && !input.resume)
 				) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
@@ -1626,11 +1626,11 @@ export const layer = Layer.effect(
 			const agent = yield* resolveAgent(task.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
 			if (action === 'resume') {
-				if (task.status !== 'stopped' && task.status !== 'attention') {
+				if (task.status !== 'stopped' && task.status !== 'attention' && task.status !== 'failed') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
 						resource: taskId,
-						reason: 'Only a stopped or attention Task may resume'
+						reason: 'Only a stopped, attention or failed Task may resume'
 					});
 				}
 				yield* selectModel(EffectId.make(`${effectId}:model`));
@@ -2310,14 +2310,24 @@ export const layer = Layer.effect(
 				} satisfies TaskExecutionResult;
 			});
 			return yield* runEffect.pipe(
-				Effect.tapError(() =>
-					updateRun(EffectId.make(`${effectId}:failed`), subject, run, {
-						taskStatus: 'failed',
-						runStatus: 'failed',
-						phase: 'model',
-						active: false,
-						directiveState: 'settled'
-					}).pipe(
+				Effect.tapError((cause) =>
+					appendMessage(
+						EffectId.make(`${effectId}:failed-message`),
+						subject,
+						run,
+						{ kind: 'system' },
+						systemMessage(`Task failed: ${describeFailure(cause).message.slice(0, 500)}`)
+					).pipe(
+						Effect.ignore,
+						Effect.andThen(
+							updateRun(EffectId.make(`${effectId}:failed`), subject, run, {
+								taskStatus: 'failed',
+								runStatus: 'failed',
+								phase: 'model',
+								active: false,
+								directiveState: 'settled'
+							})
+						),
 						Effect.andThen(wakeParent(EffectId.make(`${effectId}:failed-parent`), subject, task)),
 						Effect.ignore
 					)
