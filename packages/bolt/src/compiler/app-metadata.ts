@@ -4,6 +4,11 @@ type AppMetadata = Readonly<{
 	readonly icon: string | null;
 	readonly thumbnail: string | null;
 	readonly banner: string | null;
+	/**
+	 * Whether the app takes the whole screen: no sidebar, finder, agent trigger or banner.
+	 * Declared with `<meta name="bolt:kiosk" content="true">`. Absent or anything else is false.
+	 */
+	readonly kiosk: boolean;
 }>;
 
 const HTML_ENTITIES: Readonly<Record<string, string>> = {
@@ -47,7 +52,8 @@ export const extractAppMetadata = (source: string): AppMetadata => ({
 	description: metaContent(source, 'description'),
 	icon: taggedMeta(source, 'icon'),
 	thumbnail: taggedMeta(source, 'thumbnail'),
-	banner: taggedMeta(source, 'banner')
+	banner: taggedMeta(source, 'banner'),
+	kiosk: taggedMeta(source, 'kiosk') === 'true'
 });
 
 type GroupMetadata = Readonly<{

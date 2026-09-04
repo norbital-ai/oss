@@ -204,6 +204,7 @@ export const authoredManifestDeclarations = (
 				description: app.description,
 				banner: app.banner,
 				thumbnail: app.thumbnail,
+				...(app.kiosk === true ? { kiosk: true } : {}),
 				...provenance(text(property(app, 'sourcePath'))),
 				destination: { kind: 'app', name: app.name }
 			})

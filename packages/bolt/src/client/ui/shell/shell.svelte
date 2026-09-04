@@ -120,6 +120,7 @@
 					icon?: string | undefined;
 					description?: string | null | undefined;
 					banner?: string | undefined;
+					kiosk?: boolean | undefined;
 					parent?: string | undefined;
 			  }
 		>;
@@ -244,6 +245,17 @@
 	 * filter, applied where the list is first narrowed, keeps those three answers agreeing.
 	 */
 	const visibleApps = $derived(filterAccessibleApps(normalizedApps, accessibleApps));
+
+	/**
+	 * The mounted page is a kiosk app: render it alone — no sidebar, finder, agent, banner,
+	 * notifications or overview. The declaration is the author's, so any subject landing on the
+	 * URL gets the same chromeless surface; leaving it is a navigation, and there is none offered.
+	 */
+	const activeKioskApp = $derived.by(() => {
+		if (!currentPath.startsWith('/app/')) return false;
+		const name = currentPath.slice('/app/'.length).split(/[?#]/)[0] ?? '';
+		return normalizedApps.some((app) => typeof app !== 'string' && app.name === name && app.kiosk === true);
+	});
 
 	const currentPath = $derived(path ?? (current ? `/app/${current}` : '/'));
 
@@ -512,6 +524,41 @@
 	{statusLabel}
 </output>
 
+<svelte:window
+	use:shortcut={[
+		{
+			ctrl: true,
+			key: 'k',
+			// The shortcut hands the callback a KeyboardEvent; `openAgent` takes an optional composer
+			// seed, so passing it directly would forward the event as the seed.
+			// A kiosk surface offers no agent or finder: the shortcuts stay registered so the
+			// element placement is static, and both callbacks refuse while one is mounted.
+			callback: () => {
+				if (!activeKioskApp) openAgent();
+			},
+			exactMatch: true
+		},
+		{
+			ctrl: true,
+			key: 'forward slash',
+			callback: () => {
+				if (!activeKioskApp) toggleFinder();
+			},
+			exactMatch: true
+		}
+	]}
+/>
+
+{#if activeKioskApp}
+	<!--
+		Kiosk surface: the app alone. No WorkspaceShell (sidebar, finder affordance, agent
+		trigger, account menu), no media header, no finder, no billing banner, no agent sheet,
+		no shell shortcuts. CollectionNavigationSurface stays so record sheets keep working.
+	-->
+	<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+		{@render children?.()}
+	</CollectionNavigationSurface>
+{:else}
 <WorkspaceShell
 	model={navigationModel}
 	{onNavigate}
@@ -737,25 +784,6 @@
 	</Stack>
 </WorkspaceShell>
 
-<svelte:window
-	use:shortcut={[
-		{
-			ctrl: true,
-			key: 'k',
-			// The shortcut hands the callback a KeyboardEvent; `openAgent` takes an optional composer
-			// seed, so passing it directly would forward the event as the seed.
-			callback: () => openAgent(),
-			exactMatch: true
-		},
-		{
-			ctrl: true,
-			key: 'forward slash',
-			callback: toggleFinder,
-			exactMatch: true
-		}
-	]}
-/>
-
 <OmniFinder
 	bind:open={finderOpen}
 	collections={finderCollections}
@@ -805,6 +833,7 @@
 		</Stack>
 	</Sheet.Content>
 </Sheet.Root>
+{/if}
 
 {#if status === 'error'}
 	<p class="sr-only" role="alert">{t('bolt.shell.applicationLoadFailed')}</p>

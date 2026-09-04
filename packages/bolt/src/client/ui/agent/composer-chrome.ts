@@ -7,10 +7,10 @@
 type TaskComposerInput = { readonly message?: string; readonly planMode?: boolean };
 
 export const AGENT_COMPOSER_SHELL_CLASS =
-	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border border-border/70 bg-popover text-popover-foreground shadow-deep';
+	'flex min-w-0 flex-col overflow-hidden rounded-[1.25rem] border-0 bg-transparent text-popover-foreground shadow-none';
 
 export const AGENT_COMPOSER_EDITOR_CLASS =
-	'max-h-40 min-h-14 flex-1 overflow-y-auto resize-none border-0 bg-transparent p-0 text-sm leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent dark:shadow-none';
+	'max-h-40 min-h-14 flex-1 overflow-y-auto resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none';
 
 export const AGENT_COMPOSER_CONTROL_TEXT_CLASS = 'text-xs font-normal';
 

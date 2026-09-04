@@ -46,6 +46,7 @@
 					icon?: string | undefined;
 					description?: string | undefined;
 					banner?: string | undefined;
+					kiosk?: boolean | undefined;
 					parent?: string | undefined;
 			  }
 		>;

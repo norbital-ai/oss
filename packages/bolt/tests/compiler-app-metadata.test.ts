@@ -18,7 +18,8 @@ describe('app metadata', () => {
 			description: 'Employees and employments',
 			icon: null,
 			thumbnail: null,
-			banner: null
+			banner: null,
+			kiosk: false
 		});
 		const bolt = extractAppMetadata(`
 			<title>Desk</title>
@@ -27,6 +28,14 @@ describe('app metadata', () => {
 		`);
 		expect(bolt.icon).toBe('lucide:ticket');
 		expect(bolt.banner).toBe('/assets/banner.svg');
+		expect(bolt.kiosk).toBe(false);
+	});
+
+	it('reads bolt:kiosk only when its content is literally true', () => {
+		const kiosk = extractAppMetadata('<meta name="bolt:kiosk" content="true" />');
+		expect(kiosk.kiosk).toBe(true);
+		const off = extractAppMetadata('<meta name="bolt:kiosk" content="yes" />');
+		expect(off.kiosk).toBe(false);
 	});
 
 	it('decodes HTML entities in authored titles', () => {

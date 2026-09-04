@@ -31,7 +31,7 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
 	 * seam `MutationQuarantined` and `NestingLimitExceeded` already pay: the typed channel is
 	 * correct; the sentence has to survive crossing out of it as `.message`.
 	 */
-	readonly message = this.reason;
+	readonly message = `${this.reason} (${this.action} on ${this.resource})`;
 }
 
 /** The read grant frozen for one invocation. */

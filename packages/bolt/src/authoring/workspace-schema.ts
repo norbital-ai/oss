@@ -1100,6 +1100,8 @@ interface WorkspaceAppDeclaration extends AppDeclaration {
 	readonly description?: string;
 	readonly banner?: string;
 	readonly thumbnail?: string;
+	/** Kiosk apps render alone: no sidebar, finder, agent trigger, banner or notifications. */
+	readonly kiosk?: boolean;
 }
 
 /**
@@ -1267,6 +1269,7 @@ export const app = (declaration: WorkspaceAppDeclaration): WorkspaceAppDeclarati
 		...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
 		...(declaration.description === undefined ? {} : { description: declaration.description }),
 		...(declaration.banner === undefined ? {} : { banner: declaration.banner }),
-		...(declaration.thumbnail === undefined ? {} : { thumbnail: declaration.thumbnail })
+		...(declaration.thumbnail === undefined ? {} : { thumbnail: declaration.thumbnail }),
+		...(declaration.kiosk === undefined ? {} : { kiosk: declaration.kiosk })
 	});
 };

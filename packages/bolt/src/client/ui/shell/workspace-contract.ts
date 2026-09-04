@@ -94,6 +94,8 @@ export type AppMeta = Readonly<{
 	readonly description?: string;
 	readonly banner?: string;
 	readonly thumbnail?: string;
+	/** Kiosk apps render alone: no sidebar, finder, agent trigger, banner or notifications. */
+	readonly kiosk?: boolean;
 }>;
 
 /**

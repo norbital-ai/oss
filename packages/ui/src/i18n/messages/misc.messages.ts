@@ -10,6 +10,14 @@ import { defineMessages } from '@norbital-ai/std/i18n';
  */
 export const miscMessages = defineMessages({
 	en: {
+		'monthPicker.placeholder': 'Pick a month',
+		'monthPicker.rangePlaceholder': 'Pick a period',
+		'monthPicker.previousYear': 'Previous year',
+		'monthPicker.nextYear': 'Next year',
+		'monthPicker.thisYear': 'This year',
+		'monthPicker.lastYear': 'Last year',
+		'monthPicker.lastSixMonths': 'Last 6 months',
+		'monthPicker.lastTwelveMonths': 'Last 12 months',
 		'misc.today': 'Today',
 		'misc.week': 'Week',
 		'misc.month': 'Month',
@@ -187,6 +195,14 @@ export const miscMessages = defineMessages({
 		'misc.stopImpersonating': 'Stop impersonating'
 	},
 	zh: {
+		'monthPicker.placeholder': '选择月份',
+		'monthPicker.rangePlaceholder': '选择期间',
+		'monthPicker.previousYear': '上一年',
+		'monthPicker.nextYear': '下一年',
+		'monthPicker.thisYear': '今年',
+		'monthPicker.lastYear': '去年',
+		'monthPicker.lastSixMonths': '最近 6 个月',
+		'monthPicker.lastTwelveMonths': '最近 12 个月',
 		'misc.today': '今天',
 		'misc.week': '周',
 		'misc.month': '月',

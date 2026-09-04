@@ -408,6 +408,7 @@
 					description: meta?.description,
 					banner: meta?.banner,
 					thumbnail: meta?.thumbnail,
+					...(meta?.kiosk === true ? { kiosk: true as const } : {}),
 					parent: index < 0 ? undefined : name.slice(0, index)
 				};
 			})
