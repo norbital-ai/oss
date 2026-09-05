@@ -138,7 +138,7 @@ const InvocationLayers = {
 			Layer.provide(Layer.mergeAll(database, communication, identityHooks, taskQueue))
 		);
 		const approvals = Approvals.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncCommit))
 		);
 		/**
 		 * Automations, above Collections rather than below it.

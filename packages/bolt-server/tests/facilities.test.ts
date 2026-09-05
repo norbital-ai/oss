@@ -9,6 +9,8 @@ import {
 	FileRequest,
 	HostToolRequest,
 	InvocationId,
+	ModelId,
+	ProviderCallId,
 	ReleaseId,
 	TaskRequest,
 	TransportRequest
@@ -468,6 +470,55 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 			['Success', 'Success', 'Success', 'Success', 'Success', 'Success']
 		);
 		assert.deepStrictEqual(registered, ['notifications.drain']);
+	})
+);
+
+it.effect('preserves agent tool definitions through the standalone AI provider boundary', () =>
+	Effect.gen(function* () {
+		let received: AIRequest | undefined;
+		const ai = makeAiBinding({
+			call: async (_metadata, input) => {
+				received = input;
+				if (input._tag !== 'Generate') throw new Error('Expected generation');
+				return {
+					_tag: 'Generated',
+					result: {
+						_tag: 'Message',
+						message: { role: 'assistant', content: 'Ready.', options: {} }
+					},
+					observation: {
+						callId: input.callId,
+						provider: 'test',
+						model: input.modelId,
+						operation: 'language'
+					}
+				};
+			}
+		});
+		const request = AIRequest.cases.Generate.make({
+			callId: ProviderCallId.make('tool-schema'),
+			modelId: ModelId.make('test/language'),
+			messages: [],
+			maxOutputTokens: 100,
+			output: {
+				_tag: 'Message',
+				tools: [
+					{
+						name: 'read_collection',
+						description: 'Read authorized rows.',
+						inputSchema: {
+							type: 'object',
+							properties: { collection: { type: 'string' } },
+							required: ['collection'],
+							additionalProperties: false
+						}
+					}
+				]
+			}
+		});
+		const result = yield* Effect.tryPromise(() => ai.call(metadata, request, signal));
+		assert.strictEqual(result._tag, 'Success');
+		assert.deepEqual(received, request);
 	})
 );
 

@@ -31,6 +31,7 @@
 		getEntryIcon,
 		getEntryBadge,
 		isMutedEntry,
+		defaultExpandedPaths = [],
 		variant = 'default',
 		class: className
 	}: FileTreeProps = $props();
@@ -109,6 +110,7 @@
 			{getEntryIcon}
 			{getEntryBadge}
 			{isMutedEntry}
+			{defaultExpandedPaths}
 			{variant}
 		/>
 	{/each}

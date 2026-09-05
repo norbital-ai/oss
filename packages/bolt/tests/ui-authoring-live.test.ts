@@ -75,6 +75,17 @@ class FakeAuthoringEventSource {
 }
 
 describe('Studio authoring live fold', () => {
+	it('admits a source invalidation without altering the running job or log state', () => {
+		const state = emptyAuthoringLiveState();
+		const event = Schema.decodeUnknownSync(AuthoringLiveEvent)({
+			kind: 'source',
+			tenantId: 'tenant-a',
+			workspaceKey: 'person-a',
+			commit: 'new-source-commit',
+			at: '2026-09-05T08:30:00.000Z'
+		});
+		expect(applyAuthoringLiveEvent(state, event)).toBe(state);
+	});
 	it('colors captured log lines by level after ANSI is stripped', () => {
 		expect(authoringLogTone('error')).toBe('danger');
 		expect(authoringLogTone('stderr')).toBe('danger');

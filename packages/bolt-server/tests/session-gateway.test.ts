@@ -113,7 +113,7 @@ describe('session gateway', () => {
 		}
 	});
 
-	it('keeps a proxied SSE socket open so a later connect can join', { timeout: 15_000 }, async () => {
+	it('opens SSE before its first heartbeat so a connect can join', { timeout: 15_000 }, async () => {
 		const openIds = new Set<string>();
 		const upstream = await listenUpstream((request, response) => {
 			const url = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -124,7 +124,7 @@ describe('session gateway', () => {
 					'content-type': 'text/event-stream; charset=utf-8',
 					'cache-control': 'no-store'
 				});
-				response.write(': keepalive\n\n');
+				response.flushHeaders();
 				response.once('close', () => {
 					openIds.delete(id);
 				});

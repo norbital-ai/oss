@@ -148,7 +148,9 @@ describe('Bolt architecture boundaries', () => {
 		// enforcement, and explicit connector requirements for portable scraping automations.
 		// These are new authoring contracts; retain their checks rather than hiding them outside
 		// this measured basket. The file-count ceiling and deleted-parser assertion stay in force.
-		expect(total).toBeLessThanOrEqual(8_969);
+		// 8,969 -> 9,008: immutable public documentation and its standard thumbnail are packed
+		// with the browser artifact, with a generated client contract for member access.
+		expect(total).toBeLessThanOrEqual(9_008);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -192,7 +194,10 @@ describe('Bolt architecture boundaries', () => {
 		// 4,770 -> 4,823: target-policy reads of pending proposals and commit-time validation
 		// of hook read sets close the cross-user visibility and concurrent overbooking gaps.
 		// The read-consistency leaf is also counted in the unchanged aggregate ceiling above.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_823);
+		// 4,823 -> 4,847: approval settlement now captures and publishes its actual before/after
+		// projection in the domain-write transaction, keeping live reservations and inboxes current.
+		// The aggregate ceiling remains unchanged.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_847);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
 		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);

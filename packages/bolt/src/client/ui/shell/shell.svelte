@@ -301,8 +301,8 @@
 	});
 	const canAccessAutomations = $derived(isAdmin === true && !(impersonation?.isActive ?? false));
 	/**
-	 * Kiosk leaves under Settings. Every entry carries the enter-kiosk confirm copy: the mounted
-	 * app is chromeless, so the sidebar that offered the click is exactly what the kiosk takes
+	 * Kiosk leaves under the secondary More section. Every entry carries the enter-kiosk confirm
+	 * copy: the mounted app is chromeless, so the sidebar that offered the click is what the kiosk takes
 	 * away — the way out is the URL bar, and the confirm says so before the fact.
 	 */
 	const kioskNavigation = $derived(
@@ -361,10 +361,9 @@
 			teamLabels: []
 		},
 		sections: navigationSections,
-		// Compatibility views for the current command finder; both are derived from `sections` above.
-		system: navigationSections
-			.filter((section) => section.key !== 'applications')
-			.flatMap((section) => section.items),
+		// Compatibility views for the current command finder. System navigation retains the Kiosk
+		// branch even though the sidebar keeps it out of daily applications.
+		system: systemNavigation,
 		applications: applicationNavigation,
 		applicationsHref: '/'
 	} satisfies WorkspaceNavigationModel);

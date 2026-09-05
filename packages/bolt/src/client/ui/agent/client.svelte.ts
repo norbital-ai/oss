@@ -19,6 +19,7 @@ type TaskSubmissionInput = Readonly<{
 	readonly message: Prompt.MessageEncoded;
 	readonly mode: TaskSubmitRequest['mode'];
 	readonly priority?: TaskSubmitRequest['priority'];
+	readonly modelId?: string;
 }>;
 
 type TaskSubmission = Readonly<{
@@ -30,6 +31,7 @@ type TaskRevisionInput = Readonly<{
 	readonly taskId: string;
 	readonly messageId: string;
 	readonly message: Prompt.MessageEncoded;
+	readonly modelId?: string;
 }>;
 
 type TaskRevision = Readonly<{
@@ -78,7 +80,8 @@ type AgentClient = Readonly<{
 	editMessage: (input: TaskRevisionInput) => Effect.Effect<TaskRevision, AgentClientFailure>;
 	control: (
 		taskId: string,
-		action: TaskControlRequest['action']
+		action: TaskControlRequest['action'],
+		modelId?: string
 	) => Effect.Effect<TaskControlResult, AgentClientFailure>;
 }>;
 
@@ -101,7 +104,8 @@ function submitTask(
 			agentId: active.agentId,
 			message: input.message,
 			mode: input.mode,
-			priority: input.priority ?? 'normal'
+			priority: input.priority ?? 'normal',
+			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.tasks
@@ -123,7 +127,8 @@ function editTask(
 		Schema.decodeUnknownEffect(TaskEditMessageRequest)({
 			taskId: input.taskId,
 			messageId: input.messageId,
-			message: input.message
+			message: input.message,
+			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.tasks
@@ -144,11 +149,16 @@ function editTask(
 function controlTask(
 	active: AgentRuntimeConfig,
 	taskId: string,
-	action: TaskControlRequest['action']
+	action: TaskControlRequest['action'],
+	modelId?: string
 ): Effect.Effect<TaskControlResult, AgentClientFailure> {
 	return agentRequest(
 		'tasks.control',
-		Schema.decodeUnknownEffect(TaskControlRequest)({ taskId, action }).pipe(
+		Schema.decodeUnknownEffect(TaskControlRequest)({
+			taskId,
+			action,
+			...(modelId === undefined || action === 'stop' ? {} : { modelId })
+		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.tasks.control(
 					request,
@@ -178,7 +188,7 @@ export function createAgentClient(runtime: AgentRuntimeConfig): AgentClient {
 		},
 		submit: (input) => submitTask(runtime, input),
 		editMessage: (input) => editTask(runtime, input),
-		control: (taskId, action) => controlTask(runtime, taskId, action)
+		control: (taskId, action, modelId) => controlTask(runtime, taskId, action, modelId)
 	};
 }
 

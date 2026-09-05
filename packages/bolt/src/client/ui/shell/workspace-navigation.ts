@@ -20,6 +20,9 @@ type ShellMessageKey =
 	| 'bolt.shell.operations'
 	| 'bolt.shell.administration'
 	| 'bolt.shell.applications'
+	| 'bolt.shell.more'
+	| 'bolt.shell.documentation'
+	| 'bolt.shell.kiosk'
 	| 'bolt.shell.workspaceStudio'
 	| 'bolt.shell.organization'
 	| 'bolt.shell.agents'
@@ -30,7 +33,8 @@ export type HostPlugin = Readonly<{
 	readonly label: string;
 	readonly icon: string | null;
 	readonly entry: string;
-	readonly placement?: 'operations' | 'administration' | 'settings' | 'sidebar' | 'footer';
+	readonly placement?:
+		'operations' | 'resources' | 'administration' | 'settings' | 'sidebar' | 'footer';
 	readonly adminOnly?: boolean;
 }>;
 
@@ -89,12 +93,11 @@ export const hostPluginKeyFromPath = (pathname: string): string | null => {
 
 export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 	{
-		key: 'workspace-studio',
-		label: 'Workspace Studio',
-		icon: 'product:studio',
-		entry: hostPluginSurfaceHref('workspace-studio'),
-		placement: 'administration',
-		adminOnly: true
+		key: 'documentation',
+		label: 'Documentation',
+		icon: 'lucide:book-open',
+		entry: hostPluginSurfaceHref('documentation'),
+		placement: 'resources'
 	},
 	{
 		key: 'organization',
@@ -117,6 +120,14 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		label: 'Environment secrets',
 		icon: 'lucide:key-round',
 		entry: hostPluginSurfaceHref('environment_secrets'),
+		placement: 'settings',
+		adminOnly: true
+	},
+	{
+		key: 'workspace-studio',
+		label: 'Workspace Studio',
+		icon: 'product:studio',
+		entry: hostPluginSurfaceHref('workspace-studio'),
 		placement: 'settings',
 		adminOnly: true
 	}
@@ -306,7 +317,7 @@ export const buildApplicationNavigation = (
 	input: ApplicationNavigationInput
 ): WorkspaceNavigationItem[] => {
 	// Kiosk apps never appear among ordinary applications: they are device surfaces, not daily
-	// tools, and they live in their own section at the bottom of the sidebar (`buildKioskNavigation`).
+	// tools, and they live in one collapsed Kiosk branch (`buildKioskNavigation`).
 	const declared = filterAccessibleApps(
 		input.apps.filter((app) => app.kiosk !== true),
 		input.accessibleAppNames
@@ -331,13 +342,13 @@ export const buildApplicationNavigation = (
 };
 
 /**
- * The kiosk leaves under Settings: device apps, each confirmed before it follows its href.
+ * The kiosk leaves under one secondary branch, each confirmed before it follows its href.
  *
  * A kiosk app is chromeless by declaration — no sidebar, finder or agent once mounted — so it is
  * not a thing a person uses from the LHS bar day to day. Grouping them under their parent app
  * buried them among the tools, and a bottom-level section of their own crowded the bar for a
- * surface most people never open; nesting them as Settings children keeps the bar clean while
- * keeping them findable, and each click is confirmed (the shell attaches the confirm copy)
+ * surface most people never open; nesting them as one collapsed application branch keeps the bar
+ * clean while keeping them findable, and each click is confirmed (the shell attaches the confirm copy)
  * because entering kiosk mode takes the whole window.
  */
 export const buildKioskNavigation = (
@@ -363,23 +374,28 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 	const visible = plugins.filter(
 		(plugin) => plugin.placement !== 'footer' && (input.isAdmin || plugin.adminOnly !== true)
 	);
-	const pluginSection = (plugin: HostPlugin): 'operations' | 'administration' | 'settings' => {
+	const pluginSection = (
+		plugin: HostPlugin
+	): 'operations' | 'resources' | 'administration' | 'settings' => {
 		if (plugin.placement === 'operations') return 'operations';
+		if (plugin.placement === 'resources') return 'resources';
 		if (plugin.placement === 'settings') return 'settings';
 		return 'administration';
 	};
 	const pluginItem = (plugin: HostPlugin): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
 		const labelKey: ShellMessageKey | undefined =
-			plugin.key === 'workspace-studio'
-				? 'bolt.shell.workspaceStudio'
-				: plugin.key === 'organization'
-					? 'bolt.shell.organization'
-					: plugin.key === 'envoys'
-						? 'bolt.shell.agents'
-						: plugin.key === 'environment_secrets'
-							? 'bolt.shell.secrets'
-							: undefined;
+			plugin.key === 'documentation'
+				? 'bolt.shell.documentation'
+				: plugin.key === 'workspace-studio'
+					? 'bolt.shell.workspaceStudio'
+					: plugin.key === 'organization'
+						? 'bolt.shell.organization'
+						: plugin.key === 'envoys'
+							? 'bolt.shell.agents'
+							: plugin.key === 'environment_secrets'
+								? 'bolt.shell.secrets'
+								: undefined;
 		return {
 			key: plugin.key,
 			label: labelKey === undefined ? plugin.label : resolveShellLabel(input.i18n, labelKey),
@@ -390,6 +406,21 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 			section: pluginSection(plugin)
 		};
 	};
+	const kioskChildren = input.kiosk ?? [];
+	const kioskGroup: WorkspaceNavigationItem[] =
+		kioskChildren.length === 0
+			? []
+			: [
+					{
+						key: 'kiosk',
+						label: resolveShellLabel(input.i18n, 'bolt.shell.kiosk'),
+						icon: 'lucide:scan-face',
+						href: kioskChildren[0]?.href ?? WORKSPACE_SETTINGS_PATH,
+						active: kioskChildren.some((item) => item.active),
+						children: kioskChildren,
+						section: 'resources'
+					}
+				];
 	const settingsChildren: WorkspaceNavigationItem[] = [
 		...(input.isAdmin
 			? [
@@ -403,10 +434,7 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 					} satisfies WorkspaceNavigationItem
 				]
 			: []),
-		...visible.filter((plugin) => pluginSection(plugin) === 'settings').map(pluginItem),
-		// Kiosk apps nest under Settings as confirmed leaves, keeping the bar free of a dedicated
-		// device section. Access was already narrowed by the caller's accessible-apps filter.
-		...(input.kiosk ?? [])
+		...visible.filter((plugin) => pluginSection(plugin) === 'settings').map(pluginItem)
 	];
 	const settings: WorkspaceNavigationItem[] =
 		settingsChildren.length === 0
@@ -444,7 +472,8 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 					} satisfies WorkspaceNavigationItem
 				]
 			: []),
-		...visible.filter((plugin) => pluginSection(plugin) !== 'settings').map(pluginItem)
+		...visible.filter((plugin) => pluginSection(plugin) !== 'settings').map(pluginItem),
+		...kioskGroup
 	];
 };
 
@@ -463,20 +492,25 @@ export const buildWorkspaceNavigationSections = (input: {
 	readonly i18n: NavigationLabelResolver;
 }): WorkspaceNavigationSection[] => [
 	...namedSection(
+		'applications',
+		resolveShellLabel(input.i18n, 'bolt.shell.applications'),
+		[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
+		input.applicationsHref
+	),
+	...namedSection(
 		'operations',
 		resolveShellLabel(input.i18n, 'bolt.shell.operations'),
 		input.system.filter((item) => item.section === 'operations')
 	),
 	...namedSection(
+		'resources',
+		resolveShellLabel(input.i18n, 'bolt.shell.more'),
+		input.system.filter((item) => item.section === 'resources')
+	),
+	...namedSection(
 		'administration',
 		resolveShellLabel(input.i18n, 'bolt.shell.administration'),
 		input.system.filter((item) => item.section === 'administration')
-	),
-	...namedSection(
-		'applications',
-		resolveShellLabel(input.i18n, 'bolt.shell.applications'),
-		input.applications,
-		input.applicationsHref
 	)
 ];
 

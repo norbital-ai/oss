@@ -7,7 +7,8 @@ import { custom, defineModel } from '../src/authoring/models-schema.js';
 import { compileWorkspaceAuthoring } from '../src/authoring/model-introspection.js';
 import {
 	compileTenantCapabilities,
-	discoverAuthoredSource
+	discoverAuthoredSource,
+	readWorkspaceDocumentationFiles
 } from '../src/compiler/workspace-build.js';
 
 /**
@@ -26,9 +27,7 @@ const dynamicCustomTypeDoesNotCompile = (name: string): void => {
 	custom(name);
 };
 void dynamicCustomTypeDoesNotCompile;
-const customByRuntimeName = custom as unknown as (
-	name: string
-) => ReturnType<typeof custom>;
+const customByRuntimeName = custom as unknown as (name: string) => ReturnType<typeof custom>;
 
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -46,6 +45,26 @@ const workspaceRoot = async (): Promise<string> => {
 };
 
 describe('Bolt authored source discovery', () => {
+	it('packs only immutable workspace documentation into the browser artifact', async () => {
+		const root = await workspaceRoot();
+		await mkdir(join(root, 'docs', 'assets'), { recursive: true });
+		await mkdir(join(root, 'assets'), { recursive: true });
+		await writeFile(join(root, 'README.md'), '# Desk\n![Desk](assets/thumbnail.svg)');
+		await writeFile(join(root, 'assets', 'thumbnail.svg'), '<svg><title>Desk</title></svg>');
+		await writeFile(join(root, 'assets', 'private.json'), '{"secret":true}');
+		await writeFile(join(root, 'docs', 'guide.md'), '# Guide');
+		await writeFile(join(root, 'docs', 'assets', 'flow.svg'), '<svg></svg>');
+		await writeFile(join(root, 'docs', 'private.json'), '{"secret":true}');
+		await writeFile(join(root, 'src', 'internal.md'), '# Internal');
+
+		await expect(Effect.runPromise(readWorkspaceDocumentationFiles(root))).resolves.toEqual({
+			'README.md': '# Desk\n![Desk](assets/thumbnail.svg)',
+			'assets/thumbnail.svg': '<svg><title>Desk</title></svg>',
+			'docs/assets/flow.svg': '<svg></svg>',
+			'docs/guide.md': '# Guide'
+		});
+	});
+
 	it('discovers every kind by the directory it lives in', async () => {
 		const root = await workspaceRoot();
 		for (const directory of [
@@ -214,9 +233,7 @@ describe('Bolt authored source discovery', () => {
 		expect(compile('risk_score').customTypeReferences).toEqual([
 			{ collection: 'tickets', field: 'risk', name: 'risk_score' }
 		]);
-		expect(() => compile('missing_score')).toThrow(
-			'undeclared datatype "missing_score"'
-		);
+		expect(() => compile('missing_score')).toThrow('undeclared datatype "missing_score"');
 	});
 
 	/**

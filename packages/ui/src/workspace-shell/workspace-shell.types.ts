@@ -33,7 +33,7 @@ export interface WorkspaceNavigationItem {
 	readonly description?: string | null;
 	readonly thumbnail?: string | null;
 	readonly children?: ReadonlyArray<WorkspaceNavigationItem>;
-	readonly section?: 'operations' | 'administration' | 'settings';
+	readonly section?: 'applications' | 'operations' | 'resources' | 'administration' | 'settings';
 	/**
 	 * Ask before following this item. Set by builders for destinations that take over the
 	 * session — a kiosk app renders chromeless, so the only way out is the URL bar — and the
@@ -69,19 +69,21 @@ const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Sch
 			Schema.suspend((): Schema.Codec<WorkspaceNavigationItem> => WorkspaceNavigationItemSchema)
 		)
 	),
-	section: Schema.optional(Schema.Literals(['operations', 'administration', 'settings'])),
+	section: Schema.optional(
+		Schema.Literals(['applications', 'operations', 'resources', 'administration', 'settings'])
+	),
 	confirm: Schema.optional(WorkspaceNavigationConfirmSchema)
 });
 
 export interface WorkspaceNavigationSection {
-	readonly key: 'operations' | 'administration' | 'applications';
+	readonly key: 'applications' | 'operations' | 'resources' | 'administration';
 	readonly label: string;
 	readonly items: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly href?: string;
 }
 
 const WorkspaceNavigationSectionSchema = Schema.Struct({
-	key: Schema.Literals(['operations', 'administration', 'applications']),
+	key: Schema.Literals(['applications', 'operations', 'resources', 'administration']),
 	label: Schema.String,
 	items: Schema.Array(WorkspaceNavigationItemSchema),
 	href: Schema.optional(Schema.String)

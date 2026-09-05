@@ -86,6 +86,7 @@ export type {
 	WorkspaceOperationsHost,
 	WorkspaceSession
 } from './client/session.js';
+export { workspaceSession } from './client/session.js';
 export { createHttpBoltTransport } from './client/ui/agent/browser-transport.js';
 export type { HttpBoltTransportOptions } from './client/ui/agent/browser-transport.js';
 export { AGENT_PATH, WORKSPACE_SETTINGS_PATH } from './client/ui/shell/workspace-navigation.js';

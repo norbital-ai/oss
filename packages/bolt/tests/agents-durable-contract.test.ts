@@ -83,6 +83,7 @@ describe('Effect AI durable contract', () => {
 			'sequence',
 			'message_id',
 			'mode',
+			'model_id',
 			'priority',
 			'state',
 			'claimed_run_id'
@@ -167,7 +168,11 @@ describe('Effect AI durable contract', () => {
 	});
 
 	it('encodes exact integer charge observations without floating totals', () => {
-		const charge = Schema.decodeUnknownSync(ExactCharge)({ currency: 'USD', coefficient: '125', scale: 6 });
+		const charge = Schema.decodeUnknownSync(ExactCharge)({
+			currency: 'USD',
+			coefficient: '125',
+			scale: 6
+		});
 		const usage = Schema.decodeUnknownSync(AgentUsageRow)({
 			id: durableIds.message,
 			call_id: 'provider-call-1',
@@ -191,8 +196,8 @@ describe('Effect AI durable contract', () => {
 	});
 
 	it('declares parent, Task, message, directive, run, and usage routes', () => {
-		const routes = SYSTEM_RELATIONSHIPS.map(({ source, name, target }) =>
-			`${source}.${name}->${target}`
+		const routes = SYSTEM_RELATIONSHIPS.map(
+			({ source, name, target }) => `${source}.${name}->${target}`
 		);
 		expect(routes).toEqual(
 			expect.arrayContaining([

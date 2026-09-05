@@ -6,7 +6,7 @@ import {
 	READ_CONFLICT_MESSAGE,
 	type ReadSnapshot
 } from '#lib/runtime/collections/read-consistency.js';
-import { ApprovalState, EffectId } from '@norbital-ai/bolt-protocol';
+import { ApprovalState, EffectId, type SyncChange } from '@norbital-ai/bolt-protocol';
 import { and, asc, desc, eq, exists, isNull, notExists } from 'drizzle-orm';
 import { compileModelTable } from '#lib/authoring/model-introspection.js';
 import { defineModel } from '#lib/authoring/models-schema.js';
@@ -14,6 +14,7 @@ import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { canonicalJson } from '#lib/canonical-json.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { SyncCommit } from '#lib/runtime/facilities/services.js';
 import {
 	aliased,
 	always,
@@ -23,6 +24,8 @@ import {
 	excluded,
 	executeBuilt,
 	jsonb,
+	increment,
+	rowJson,
 	jsonTextEquals,
 	toStatement
 } from '#lib/runtime/persistence.js';
@@ -433,6 +436,48 @@ export const layer = Layer.effect(
 		const database = yield* Database.Service;
 		const access = yield* AccessControl.Service;
 		const queue = yield* TaskQueue.Service;
+		const syncCommit = yield* SyncCommit.Service;
+		const PublicationRow = Schema.Struct({
+			before: Schema.NullOr(JsonObject),
+			after: JsonObject,
+			requestor_after: Schema.optionalKey(Schema.NullOr(JsonObject))
+		});
+		const publishProjection = Effect.fn('Approvals.publishProjection')(function* (
+			effectId: EffectId,
+			rows: ReadonlyArray<unknown>
+		) {
+			const changes: SyncChange[] = [];
+			for (const row of rows) {
+				const { before, after, requestor_after } = yield* Schema.decodeUnknownEffect(
+					PublicationRow
+				)(row).pipe(
+					Effect.mapError(
+						() =>
+							new Database.FacilityError({
+								operation: 'approval-publication',
+								code: 'invalid-row',
+								message: 'Approval transition did not return its durable routing snapshots.',
+								retryable: false,
+								outcome: 'known'
+							})
+					)
+				);
+				const id = Schema.decodeUnknownSync(Schema.String)(after['id']);
+				changes.push(
+					before === null
+						? { collection: 'approval_request', id, operation: 'insert', after }
+						: { collection: 'approval_request', id, operation: 'update', before, after }
+				);
+				if (requestor_after != null)
+					changes.push({
+						collection: 'requestor',
+						id: Schema.decodeUnknownSync(Schema.String)(requestor_after['id']),
+						operation: 'insert',
+						after: requestor_after
+					});
+			}
+			yield* syncCommit.publish(EffectId.make(`${effectId}:approval-projection`), { changes });
+		});
 		/** Resolves only the concrete configuration embedded when the flow was selected. */
 		const approvalConfigurations = {
 			resolve: (state: ApprovalState) => {
@@ -778,10 +823,14 @@ export const layer = Layer.effect(
 							proposed_values: excluded(approvalRequestTable.proposed_values),
 							closed_at: excluded(approvalRequestTable.closed_at),
 							closed_by: excluded(approvalRequestTable.closed_by),
-							updated_at: dbNow()
+							updated_at: dbNow(),
+							row_version: increment(approvalRequestTable.row_version)
 						}
 					})
-					.returning({ id: approvalRequestTable.id })
+					.returning({
+						id: approvalRequestTable.id,
+						after: aliased(rowJson('approval_request'), 'after')
+					})
 			);
 			const queued =
 				followup === undefined
@@ -824,19 +873,37 @@ export const layer = Layer.effect(
 			if (queued === undefined) {
 				return composer
 					.with(updated, audited, projected)
-					.select({ state: updated.state })
-					.from(updated);
+					.select({
+						state: updated.state,
+						before: aliased(rowJson('approval_request'), 'before'),
+						after: projected.after
+					})
+					.from(updated)
+					.innerJoin(projected, always())
+					.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			}
 			if (notified === undefined) {
 				return composer
 					.with(updated, audited, projected, queued)
-					.select({ state: updated.state })
-					.from(updated);
+					.select({
+						state: updated.state,
+						before: aliased(rowJson('approval_request'), 'before'),
+						after: projected.after
+					})
+					.from(updated)
+					.innerJoin(projected, always())
+					.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			}
 			return composer
 				.with(updated, audited, projected, queued, notified)
-				.select({ state: updated.state })
-				.from(updated);
+				.select({
+					state: updated.state,
+					before: aliased(rowJson('approval_request'), 'before'),
+					after: projected.after
+				})
+				.from(updated)
+				.innerJoin(projected, always())
+				.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 		};
 		const conflict = Effect.fn('Approvals.conflict')(function* (
 			effectId: EffectId,
@@ -916,10 +983,14 @@ export const layer = Layer.effect(
 							proposed_values: excluded(approvalRequestTable.proposed_values),
 							closed_at: excluded(approvalRequestTable.closed_at),
 							closed_by: excluded(approvalRequestTable.closed_by),
-							updated_at: dbNow()
+							updated_at: dbNow(),
+							row_version: increment(approvalRequestTable.row_version)
 						}
 					})
-					.returning({ id: approvalRequestTable.id })
+					.returning({
+						id: approvalRequestTable.id,
+						after: aliased(rowJson('approval_request'), 'after')
+					})
 			);
 			const released =
 				collection === undefined || recordId === undefined
@@ -944,18 +1015,31 @@ export const layer = Layer.effect(
 				released === undefined
 					? composer
 							.with(updatedState, audited, projected)
-							.select({ state: updatedState.state })
+							.select({
+								state: updatedState.state,
+								before: aliased(rowJson('approval_request'), 'before'),
+								after: projected.after
+							})
 							.from(updatedState)
+							.innerJoin(projected, always())
+							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId))
 					: composer
 							.with(updatedState, audited, projected, released)
-							.select({ state: updatedState.state })
-							.from(updatedState);
+							.select({
+								state: updatedState.state,
+								before: aliased(rowJson('approval_request'), 'before'),
+								after: projected.after
+							})
+							.from(updatedState)
+							.innerJoin(projected, always())
+							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			const updated = yield* executeBuilt(effectId, database, transition);
 			if (updated.rows.length === 0)
 				return yield* new ApprovalConflict({
 					requestId,
 					reason: 'approval conflict lost a competing state transition'
 				});
+			yield* publishProjection(effectId, updated.rows);
 			return next;
 		});
 		const persistRequest = Effect.fn('Approvals.persistRequest')(function* (
@@ -1073,10 +1157,14 @@ export const layer = Layer.effect(
 							proposed_values: excluded(approvalRequestTable.proposed_values),
 							closed_at: excluded(approvalRequestTable.closed_at),
 							closed_by: excluded(approvalRequestTable.closed_by),
-							updated_at: dbNow()
+							updated_at: dbNow(),
+							row_version: increment(approvalRequestTable.row_version)
 						}
 					})
-					.returning({ id: approvalRequestTable.id })
+					.returning({
+						id: approvalRequestTable.id,
+						after: aliased(rowJson('approval_request'), 'after')
+					})
 			);
 			const requestorProjected = composer.$with('requestor_projected').as(
 				composer
@@ -1092,18 +1180,37 @@ export const layer = Layer.effect(
 							.innerJoin(projected, always())
 					)
 					.onConflictDoNothing({ target: requestorTable.id })
-					.returning({ id: requestorTable.id })
+					.returning({
+						id: requestorTable.id,
+						requestor_after: aliased(rowJson('requestor'), 'requestor_after')
+					})
 			);
 			const requestQuery =
 				locked === undefined
 					? composer
 							.with(insertedState, audited, projected, requestorProjected)
-							.select({ state: insertedState.state })
+							.select({
+								state: insertedState.state,
+								before: aliased(rowJson('approval_request'), 'before'),
+								after: projected.after,
+								requestor_after: requestorProjected.requestor_after
+							})
 							.from(insertedState)
+							.innerJoin(projected, always())
+							.leftJoin(requestorProjected, always())
+							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId))
 					: composer
 							.with(locked, insertedState, audited, projected, requestorProjected)
-							.select({ state: insertedState.state })
-							.from(insertedState);
+							.select({
+								state: insertedState.state,
+								before: aliased(rowJson('approval_request'), 'before'),
+								after: projected.after,
+								requestor_after: requestorProjected.requestor_after
+							})
+							.from(insertedState)
+							.innerJoin(projected, always())
+							.leftJoin(requestorProjected, always())
+							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			const inserted =
 				readSnapshots.length === 0
 					? yield* executeBuilt(effectId, database, requestQuery)
@@ -1129,6 +1236,7 @@ export const layer = Layer.effect(
 								)
 							);
 			if (inserted.rows.length > 0) {
+				yield* publishProjection(effectId, inserted.rows);
 				return state;
 			}
 			const existing = yield* rawStatus(effectId, requestId);
@@ -1415,6 +1523,7 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval decision lost a competing update'
 					});
+				yield* publishProjection(effectId, updated.rows);
 				if (followup !== undefined)
 					yield* queue.wake(
 						EffectId.make(`${effectId}:approval-followup-wake`),
@@ -1461,6 +1570,7 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval withdrawal lost a competing update'
 					});
+				yield* publishProjection(effectId, updated.rows);
 				return publicState(next);
 			}),
 			conflict,

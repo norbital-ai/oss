@@ -805,6 +805,14 @@ const remainingBindings = [
 		)
 	),
 	binding(
+		'tasks.models',
+		{ Command: session('agent-authorized language model catalogue') },
+		(context, input) =>
+			Effect.flatMap(Agents.Service, (agents) =>
+				Effect.map(agents.models(context.effectId, principal(context), input.agentId), json)
+			)
+	),
+	binding(
 		'tasks.submit',
 		{ Command: session('TaskService.submit exact task object') },
 		(context, input) =>

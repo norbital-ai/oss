@@ -32,6 +32,7 @@
 	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
+	import WorkspaceDocumentationShell from '../studio/workspace-documentation-shell.svelte';
 	import StudioShell from '../studio/studio-shell.svelte';
 	import { provideAgentClient } from '../agent/client.svelte.js';
 	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
@@ -356,8 +357,8 @@
 	/**
 	 * Colony's own admin-only surfaces, hidden for as long as a preview is running.
 	 *
-	 * Narrowly scoped on purpose. A tenant administrator owns these pages, except while a policy
-	 * preview is active. The studio is a host surface rather than a workspace app, so
+	 * Narrowly scoped on purpose. A tenant administrator owns configuration and authoring, except
+	 * while a policy preview is active. Studio is a host surface rather than a workspace app, so
 	 * `accessibleApps` never reaches it and this gate must carry the real administrator status.
 	 */
 	const hostPluginsVisible = $derived(
@@ -418,6 +419,9 @@
 
 	const path = $derived(view.path === '' ? '/' : view.path);
 	const hostPlugin = $derived(hostPluginKeyFromPath(path));
+	const hostPluginAvailableToMembers = $derived(
+		WORKSPACE_HOST_PLUGINS.some((plugin) => plugin.key === hostPlugin && plugin.adminOnly !== true)
+	);
 	const studioInitialSource = $derived(
 		hostPlugin === 'workspace-studio' ? studioSourceFromSearch(view.search) : undefined
 	);
@@ -535,7 +539,7 @@
 	 *
 	 * An administrator can begin a team preview from People, and a person's role can also change
 	 * while their shell is open. In both cases the privileged component must unmount immediately;
-	 * approvals deliberately remain outside this gate because approver teams are allowed there.
+	 * Documentation and approvals deliberately remain outside this gate because members use them.
 	 */
 	$effect(() => {
 		if (hostPluginsVisible) return;
@@ -543,7 +547,8 @@
 			actions.navigate('/', { replace: true });
 			return;
 		}
-		if (hostPlugin !== null) actions.navigate('/', { replace: true });
+		if (hostPlugin !== null && !hostPluginAvailableToMembers)
+			actions.navigate('/', { replace: true });
 	});
 
 	let accessEpoch = $state(0);
@@ -616,6 +621,8 @@
 			loading={memberAccessQuery.loading}
 			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
 		/>
+	{:else if hostPlugin === 'documentation'}
+		<WorkspaceDocumentationShell sourceFiles={workspace.documentationFiles} />
 	{:else if hostPlugin === 'workspace-studio'}
 		<StudioShell
 			client={workspace.frameworkClient}

@@ -5,6 +5,7 @@ export type UnsettledTaskAdmission = Readonly<{
 	message: string;
 	mode: 'agent' | 'plan' | 'compact';
 	priority: 'normal' | 'steer';
+	modelId?: string;
 	draft: string;
 }>;
 
@@ -31,12 +32,14 @@ export const retryableAdmission = (
 		message: string;
 		mode: 'agent' | 'plan' | 'compact';
 		priority: 'normal' | 'steer';
+		modelId?: string;
 	}>
 ): UnsettledTaskAdmission | null =>
 	admission !== null &&
 	admission.agentId === input.agentId &&
 	admission.message === input.message &&
 	admission.mode === input.mode &&
-	admission.priority === input.priority
+	admission.priority === input.priority &&
+	admission.modelId === input.modelId
 		? admission
 		: null;

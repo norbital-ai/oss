@@ -26,6 +26,14 @@ describe('Task admission reconciliation', () => {
 		).toBe(unsettled);
 	});
 
+	it('includes the chosen model in retry identity', () => {
+		const selected = { ...unsettled, modelId: 'openrouter/provider/first' };
+		expect(retryableAdmission(selected, selected)).toBe(selected);
+		expect(
+			retryableAdmission(selected, { ...selected, modelId: 'openrouter/provider/second' })
+		).toBeNull();
+	});
+
 	it('shows the operator text immediately until a durable human message exists', () => {
 		expect(visibleUnsettledAdmission(unsettled, new Set(), true)).toBe(unsettled);
 		expect(visibleUnsettledAdmission(unsettled, new Set(['task-1']), true)).toBeNull();

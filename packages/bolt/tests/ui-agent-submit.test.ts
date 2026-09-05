@@ -48,7 +48,8 @@ describe('G1 Task composer submit', () => {
 							taskId: TASK_ID,
 							message,
 							mode: 'agent',
-							priority: 'normal'
+							priority: 'normal',
+							modelId: 'openrouter/provider/selected'
 						})
 					)
 				),
@@ -77,7 +78,8 @@ describe('G1 Task composer submit', () => {
 			agentId: 'web',
 			message: { role: 'user', content: HEADED_TEXT },
 			mode: 'agent',
-			priority: 'normal'
+			priority: 'normal',
+			modelId: 'openrouter/provider/selected'
 		});
 	});
 

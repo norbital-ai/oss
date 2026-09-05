@@ -144,6 +144,24 @@ describe('scripted agent pipeline transcript', () => {
 		expect(feed.every((step) => step.planMode === false)).toBe(true);
 		expect(feed).toHaveLength(2);
 		expect(requests).toHaveLength(2);
+		const output = requests[0]?.output;
+		if (output?._tag !== 'Message') throw new Error('Expected tool-capable generation');
+		expect(output.tools?.map(({ name }) => name).toSorted()).toEqual(
+			[...SYSTEM_TOOLS, 'subagent'].toSorted()
+		);
+		expect(output.tools?.every(({ inputSchema }) => inputSchema['type'] === 'object')).toBe(true);
+		expect(
+			output.tools?.every(
+				({ inputSchema }) =>
+					!['oneOf', 'anyOf', 'allOf', 'enum', 'const', 'not'].some((key) => key in inputSchema)
+			)
+		).toBe(true);
+		expect(
+			output.tools?.find(({ name }) => name === 'write_collection')?.inputSchema
+		).toMatchObject({
+			required: ['collection', 'operation', 'id'],
+			properties: { values: { type: 'object' } }
+		});
 		const persisted = await harness!.database.query(
 			`select author->>'kind' as author_kind, message->>'role' as role
 			 from agent_message where task_id = $1 order by sequence`,

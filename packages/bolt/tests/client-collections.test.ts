@@ -120,6 +120,43 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceCli
 });
 
 describe('typed browser client', () => {
+	it('keeps pending candidate reads live and separate from committed records', async () => {
+		const sync = fakeSyncClient();
+		const commands: string[] = [];
+		const bolt = createBoltClient(scope, {
+			command: async (name) => {
+				commands.push(name);
+				return [];
+			}
+		});
+		const proxy = createWorkspaceApiProxy(
+			runtimeOf(bolt, sync.client),
+			{},
+			{ allowedCollections: ['leave_requests'] }
+		);
+		const query = proxy.pending.findMany('leave_requests', {
+			where: { employment_id: { eq: 'employee' } },
+			limit: 2000
+		});
+		const mounted = sync.mounted[0];
+		if (mounted === undefined) throw new Error('Pending query was not mounted');
+		expect(mounted.input).toEqual({
+			kind: 'findMany',
+			collection: 'leave_requests',
+			pendingOnly: true,
+			where: { employment_id: { eq: 'employee' } },
+			limit: 2000
+		});
+		sync.client.publish(mounted.key, []);
+		expect(await query).toEqual([]);
+		const proposed = { id: 'leave', employment_id: 'employee', approval_id: 'approval' };
+		sync.client.publish(mounted.key, [proposed]);
+		expect(query.current).toEqual([proposed]);
+		sync.client.publish(mounted.key, []);
+		expect(query.current).toEqual([]);
+		expect(commands).toEqual([]);
+		expect(() => proxy.pending.findMany('bolt_approvals')).toThrow('private to the Bolt runtime');
+	});
 	it('sends compact approval decisions without echoing the review snapshot', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const bolt = createBoltClient(scope, {

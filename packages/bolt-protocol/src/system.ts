@@ -14,6 +14,8 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	MessageId,
+	ModelCatalogEntry,
+	ModelId,
 	TaskId,
 	TaskStatus
 } from './facilities.js';
@@ -31,12 +33,20 @@ export const TaskSubmitRequest = Schema.Struct({
 	agentId: AgentId,
 	message: Schema.toEncoded(Prompt.Message),
 	mode: DirectiveMode,
-	priority: DirectivePriority
+	priority: DirectivePriority,
+	modelId: Schema.optionalKey(ModelId)
 });
 export interface TaskSubmitRequest extends Schema.Schema.Type<typeof TaskSubmitRequest> {}
 
 export const TaskSubmitResult = Schema.Struct({ directiveId: DirectiveId });
 export interface TaskSubmitResult extends Schema.Schema.Type<typeof TaskSubmitResult> {}
+
+/** Host-configured language models available to an authorized agent caller. */
+export const TaskModelCatalog = Schema.Struct({
+	languageModels: Schema.Array(ModelCatalogEntry),
+	defaultLanguageModelId: ModelId
+});
+export interface TaskModelCatalog extends Schema.Schema.Type<typeof TaskModelCatalog> {}
 
 /**
  * The only public revision contract. A revision supersedes exactly one of the subject's own durable
@@ -46,7 +56,8 @@ export interface TaskSubmitResult extends Schema.Schema.Type<typeof TaskSubmitRe
 export const TaskEditMessageRequest = Schema.Struct({
 	taskId: TaskId,
 	messageId: MessageId,
-	message: Schema.toEncoded(Prompt.Message)
+	message: Schema.toEncoded(Prompt.Message),
+	modelId: Schema.optionalKey(ModelId)
 });
 export interface TaskEditMessageRequest extends Schema.Schema.Type<typeof TaskEditMessageRequest> {}
 
@@ -59,7 +70,8 @@ export interface TaskEditMessageResult extends Schema.Schema.Type<typeof TaskEdi
 
 export const TaskControlRequest = Schema.Struct({
 	taskId: TaskId,
-	action: Schema.Literals(['stop', 'resume'])
+	action: Schema.Literals(['stop', 'resume']),
+	modelId: Schema.optionalKey(ModelId)
 });
 export interface TaskControlRequest extends Schema.Schema.Type<typeof TaskControlRequest> {}
 
@@ -416,6 +428,13 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.NullOr(ApprovalState))]
 	}),
 	commandContract({ name: 'collections.embed', input: EmptyInput, responses: [ok(Schema.Json)] }),
+	commandContract({
+		name: 'tasks.models',
+		input: Schema.Struct({ agentId: AgentId }),
+		responses: [ok(TaskModelCatalog)],
+		clientPath: ['tasks', 'models'],
+		clientMode: 'query'
+	}),
 	commandContract({
 		name: 'tasks.submit',
 		input: TaskSubmitRequest,

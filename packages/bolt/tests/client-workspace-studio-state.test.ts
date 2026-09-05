@@ -34,6 +34,11 @@ import {
 	buildWorkspaceNavigationSections,
 	manifestDestinationHref
 } from '../src/client/ui/shell/workspace-navigation.js';
+import {
+	documentationNavigationFromHref,
+	resolveWorkspaceDocumentationHref,
+	workspaceDocumentationPages
+} from '../src/client/ui/studio/workspace-documentation.js';
 
 const request = (overrides: Partial<MergeRequest> = {}): MergeRequest => ({
 	id: 'review-1',
@@ -99,7 +104,15 @@ describe('Workspace Studio collaboration presentation', () => {
 	it('names the next human owner from the existing merge-request state', () => {
 		expect(reviewNextOwner('ready')).toBe('reviewer');
 		expect(reviewNextOwner('draft')).toBe('author');
-		expect(reviewNextOwner('ready', 'current', { kind: 'changes_requested', commit: 'x', by: 'r', at: 't', reason: 'n' })).toBe('author');
+		expect(
+			reviewNextOwner('ready', 'current', {
+				kind: 'changes_requested',
+				commit: 'x',
+				by: 'r',
+				at: 't',
+				reason: 'n'
+			})
+		).toBe('author');
 		expect(reviewNextOwner('merged')).toBe('complete');
 		expect(reviewNextOwner('ready', 'live_advanced')).toBe('author');
 	});
@@ -111,6 +124,93 @@ describe('Workspace Studio collaboration presentation', () => {
 		expect(reviewRelativeTime('invalid', 0)).toEqual({
 			messageKey: 'bolt.studio.timeUnavailable'
 		});
+	});
+});
+
+describe('Workspace Studio documentation', () => {
+	const files = {
+		'README.md': '# Payroll\n\nSee [leave](docs/leave.md).',
+		'README.zh.md': '# 薪资',
+		'docs/leave.md': '# Leave policy',
+		'docs/leave.zh.md': '# 休假政策',
+		'docs/rfcs/README.md': '# RFCs',
+		'assets/thumbnail.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+		'src/+agents.md': '# Agent context',
+		'src/app.ts': 'export const app = true;'
+	};
+
+	it('builds a localized documentation tree from the root README and docs directory', () => {
+		expect(workspaceDocumentationPages(files, 'en')).toEqual([
+			{ path: 'README.md', title: 'Payroll' },
+			{ path: 'docs/leave.md', title: 'Leave policy' },
+			{ path: 'docs/rfcs/README.md', title: 'RFCs' }
+		]);
+		expect(workspaceDocumentationPages(files, 'zh')).toEqual([
+			{ path: 'README.zh.md', title: '薪资' },
+			{ path: 'docs/leave.zh.md', title: '休假政策' },
+			{ path: 'docs/rfcs/README.md', title: 'RFCs' }
+		]);
+	});
+
+	it('routes relative pages, source files, anchors, and authored SVG images', () => {
+		const pages = workspaceDocumentationPages(files, 'en');
+		const pageHref = resolveWorkspaceDocumentationHref({
+			currentPath: 'README.md',
+			href: 'docs/leave.md#requesting-leave',
+			kind: 'link',
+			files,
+			pages
+		});
+		expect(documentationNavigationFromHref(pageHref ?? '')).toEqual({
+			kind: 'document',
+			path: 'docs/leave.md',
+			heading: 'requesting-leave'
+		});
+
+		const sourceHref = resolveWorkspaceDocumentationHref({
+			currentPath: 'README.md',
+			href: 'src/app.ts',
+			kind: 'link',
+			files,
+			pages
+		});
+		expect(documentationNavigationFromHref(sourceHref ?? '')).toEqual({
+			kind: 'source',
+			path: 'src/app.ts'
+		});
+		expect(
+			resolveWorkspaceDocumentationHref({
+				currentPath: 'docs/leave.md',
+				href: '#approval',
+				kind: 'link',
+				files,
+				pages
+			})
+		).toBe('#approval');
+		expect(
+			resolveWorkspaceDocumentationHref({
+				currentPath: 'README.md',
+				href: 'assets/thumbnail.svg',
+				kind: 'image',
+				files,
+				pages
+			})
+		).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
+	});
+
+	it('refuses unsafe and missing relative destinations', () => {
+		const pages = workspaceDocumentationPages(files, 'en');
+		for (const href of ['javascript:alert(1)', '../../secret.md', 'docs/missing.md']) {
+			expect(
+				resolveWorkspaceDocumentationHref({
+					currentPath: 'README.md',
+					href,
+					kind: 'link',
+					files,
+					pages
+				})
+			).toBeNull();
+		}
 	});
 });
 
@@ -304,6 +404,10 @@ describe('Workspace Studio manifest handoff', () => {
 
 describe('workspace navigation sections', () => {
 	it('gives workbench diagnosis only; Changes and Live own the bundle furniture', () => {
+		expect(studioTabOwns('documentation', 'manifest')).toBe(false);
+		expect(studioTabOwns('documentation', 'logs')).toBe(false);
+		expect(studioTabOwns('documentation', 'lifecycle')).toBe(false);
+		expect(studioTabOwns('documentation', 'diagnosis')).toBe(false);
 		expect(studioTabOwns('workbench', 'manifest')).toBe(false);
 		expect(studioTabOwns('workbench', 'logs')).toBe(false);
 		expect(studioTabOwns('workbench', 'lifecycle')).toBe(false);
@@ -364,7 +468,9 @@ describe('workspace navigation sections', () => {
 		expect(sourceTreeEntryBadge({ type: 'directory', path: 'src' }, drafts, sourceFiles)).toEqual({
 			label: '·'
 		});
-		expect(sourceTreeEntryBadge({ type: 'file', path: 'src/app.ts' }, drafts, sourceFiles)).toMatchObject({
+		expect(
+			sourceTreeEntryBadge({ type: 'file', path: 'src/app.ts' }, drafts, sourceFiles)
+		).toMatchObject({
 			label: 'M'
 		});
 	});
@@ -383,7 +489,9 @@ describe('workspace navigation sections', () => {
 				draftCount: 0
 			})
 		).toBe('errors');
-		expect(workbenchDiagnosisState({ diagnosis: request().diagnosis, draftCount: 0 })).toBe('clean');
+		expect(workbenchDiagnosisState({ diagnosis: request().diagnosis, draftCount: 0 })).toBe(
+			'clean'
+		);
 		expect(boundTriple(request())).toEqual({
 			commit: 'candidate-commit',
 			bundle: 'artifact-2',

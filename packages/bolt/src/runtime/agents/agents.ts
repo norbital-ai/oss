@@ -4,6 +4,7 @@ import { EffectId, ReleaseId } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
 import {
 	AgentId,
+	HostToolCatalog,
 	DirectiveId,
 	DirectiveMode,
 	DirectivePriority,
@@ -38,7 +39,8 @@ import {
 	type TaskEditMessageRequest,
 	type TaskEditMessageResult,
 	type TaskSubmitRequest,
-	type TaskSubmitResult
+	type TaskSubmitResult,
+	type TaskModelCatalog
 } from '@norbital-ai/bolt-protocol/system';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
@@ -445,6 +447,7 @@ const generateMessage = Effect.fn('Agents.generateMessage')(function* (
 		messages: ReadonlyArray<Prompt.MessageEncoded>;
 		maxOutputTokens: number;
 		imageAssets?: ReadonlyArray<ImageAsset>;
+		tools?: ReadonlyArray<ToolDeclaration>;
 	}
 ) {
 	const response = yield* ai.generate(effectId, {
@@ -453,7 +456,18 @@ const generateMessage = Effect.fn('Agents.generateMessage')(function* (
 		modelId: input.modelId,
 		messages: [...input.messages],
 		maxOutputTokens: input.maxOutputTokens,
-		output: { _tag: 'Message' },
+		output: {
+			_tag: 'Message',
+			...(input.tools === undefined || input.tools.length === 0
+				? {}
+				: {
+						tools: input.tools.map(({ name, description, inputSchema }) => ({
+							name,
+							description,
+							inputSchema: inputSchema ?? EmptyToolInput
+						}))
+					})
+		},
 		...(input.imageAssets === undefined ? {} : { imageAssets: [...input.imageAssets] })
 	});
 	if (
@@ -567,6 +581,14 @@ type TaskExecutionResult = Readonly<{
 }>;
 
 export type Interface = Readonly<{
+	readonly models: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		agentId: AgentId
+	) => Effect.Effect<
+		TaskModelCatalog,
+		AccessControl.AccessDenied | Workspace.WorkspaceLookupError | Database.FacilityError
+	>;
 	readonly submit: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -824,16 +846,35 @@ export const layer = Layer.effect(
 				)
 				.map(({ name }) => name);
 
-		const allowedTools = (
+		const allowedTools = Effect.fn('Agents.allowedTools')(function* (
+			effectId: EffectId,
 			subject: Identity.Subject,
 			agent: ResolvedAgent
-		): ReadonlyArray<ToolDeclaration> => {
+		) {
 			const granted = access.capabilities(subject);
 			const authored = workspace.definition.tools.filter((tool) =>
 				tool.mcp === undefined ? granted.tools.has(tool.name) : granted.mcp.has(tool.mcp.server)
 			);
 			const authoredNames = new Set(authored.map(({ name }) => name));
-			return [
+			const host =
+				agent.id !== WEB_AGENT_NAME || subject.system === true || subject.policies.length > 0
+					? []
+					: yield* hostTools.execute(effectId, { tool: 'capability_catalog', input: {} }).pipe(
+							Effect.provideService(Identity.CurrentSubject, subject),
+							Effect.flatMap(({ output }) => Schema.decodeUnknownEffect(HostToolCatalog)(output)),
+							Effect.map(({ tools }) => tools),
+							Effect.catch((error) =>
+								error instanceof Database.FacilityError && error.code === 'facility_unavailable'
+									? Effect.succeed([])
+									: Effect.fail(
+											new TaskRuntimeError({
+												operation: 'host-capabilities',
+												message: getErrorMessage(error)
+											})
+										)
+							)
+						);
+			const tools: ReadonlyArray<ToolDeclaration & { readonly hostReadOnly?: boolean }> = [
 				...systemToolSpecs.filter(
 					(tool) =>
 						!authoredNames.has(tool.name) &&
@@ -842,9 +883,22 @@ export const layer = Layer.effect(
 				...(agent.delegation === 'enabled' && !authoredNames.has(subagentToolSpec.name)
 					? [subagentToolSpec]
 					: []),
+				...host
+					.filter(
+						({ name }) =>
+							!authoredNames.has(name) &&
+							!systemToolSpecs.some((tool) => tool.name === name) &&
+							name !== subagentToolSpec.name
+					)
+					.map(({ readOnly, ...tool }) => ({
+						...tool,
+						command: `host:${tool.name}`,
+						hostReadOnly: readOnly
+					})),
 				...authored
 			];
-		};
+			return tools;
+		});
 
 		const capabilitySnapshot = (
 			subject: Identity.Subject,
@@ -854,7 +908,7 @@ export const layer = Layer.effect(
 			const capabilities = [
 				...tools.map((tool) => ({
 					id: CapabilityId.make(
-						`${tool.mcp === undefined ? (systemToolSpecs.some(({ name }) => name === tool.name) || tool.name === subagentToolSpec.name ? 'system' : 'tenant') : 'tenant'}/${tool.name}`
+						`${tool.command.startsWith('host:') ? 'host' : tool.mcp === undefined ? (systemToolSpecs.some(({ name }) => name === tool.name) || tool.name === subagentToolSpec.name ? 'system' : 'tenant') : 'tenant'}/${tool.name}`
 					),
 					kind: tool.mcp === undefined ? ('tool' as const) : ('mcp' as const),
 					digest: semanticHash(tool)
@@ -876,13 +930,32 @@ export const layer = Layer.effect(
 			};
 		};
 
-		const selectModel = Effect.fn('Agents.selectModel')(function* (effectId: EffectId) {
+		const models = Effect.fn('Agents.models')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			agentId: AgentId
+		) {
+			const agent = yield* resolveAgent(agentId);
+			yield* access.authorize(subject, 'agent', agent.id);
+			const { languageModels, defaultLanguageModelId } = yield* ai.catalog(effectId, {
+				_tag: 'Catalog'
+			});
+			return { languageModels, defaultLanguageModelId };
+		});
+
+		const selectModel = Effect.fn('Agents.selectModel')(function* (
+			effectId: EffectId,
+			requested?: ModelId
+		) {
 			const response = yield* ai.catalog(effectId, { _tag: 'Catalog' });
 			const selected = response.languageModels.find(
-				({ id }) => id === response.defaultLanguageModelId
+				({ id }) => id === (requested ?? response.defaultLanguageModelId)
 			);
 			if (selected === undefined) {
-				return yield* new AgentModelUnavailable({ model: 'catalog', reason: 'invalid-catalog' });
+				return yield* new AgentModelUnavailable({
+					model: requested ?? 'catalog',
+					reason: requested === undefined ? 'invalid-catalog' : 'not-found'
+				});
 			}
 			return selected.id;
 		});
@@ -1007,6 +1080,7 @@ export const layer = Layer.effect(
 			supersedesId?: MessageId;
 			parent?: AgentTask;
 			resume?: boolean;
+			modelId?: ModelId;
 		}>;
 
 		const admit = Effect.fn('Agents.admit')(function* (
@@ -1049,7 +1123,8 @@ export const layer = Layer.effect(
 				runId: input.runId,
 				supersedesId: input.supersedesId,
 				mode: input.mode,
-				priority: input.priority
+				priority: input.priority,
+				...(input.modelId === undefined ? {} : { modelId: input.modelId })
 			});
 			const duplicate = messages.find(({ semantic_hash }) => semantic_hash === fingerprint);
 			if (duplicate !== undefined) {
@@ -1065,6 +1140,8 @@ export const layer = Layer.effect(
 					return { directiveId: decoded.id };
 				}
 			}
+			if (input.modelId !== undefined)
+				yield* selectModel(EffectId.make(`${effectId}:model`), input.modelId);
 			const messageId = messageIdFor(`${input.taskId}:${fingerprint}`);
 			const directiveId = directiveIdFor(`${input.taskId}:${fingerprint}`);
 			const nextSequence = lastSequence(messages) + 1;
@@ -1097,6 +1174,7 @@ export const layer = Layer.effect(
 				message_id: messageId,
 				mode: input.mode,
 				priority: input.priority,
+				...(input.modelId === undefined ? {} : { model_id: input.modelId }),
 				state: 'queued'
 			};
 			if (existing === undefined) {
@@ -1157,7 +1235,8 @@ export const layer = Layer.effect(
 				message: request.message,
 				author: { kind: 'human', id: subject.userId },
 				mode: request.mode,
-				priority: request.priority
+				priority: request.priority,
+				...(request.modelId === undefined ? {} : { modelId: request.modelId })
 			});
 		});
 
@@ -1209,7 +1288,8 @@ export const layer = Layer.effect(
 				author: { kind: 'human', id: subject.userId },
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal'),
-				supersedesId: request.messageId
+				supersedesId: request.messageId,
+				...(request.modelId === undefined ? {} : { modelId: request.modelId })
 			});
 			const revision = yield* collections.findFirst(
 				EffectId.make(`${effectId}:revision`),
@@ -1292,7 +1372,8 @@ export const layer = Layer.effect(
 				Schema.Struct({
 					id: DirectiveId,
 					sequence: Schema.Number.check(Schema.isInt()),
-					mode: DirectiveMode
+					mode: DirectiveMode,
+					model_id: Schema.optionalKey(Schema.NullOr(ModelId))
 				}),
 				rows
 			);
@@ -1300,8 +1381,17 @@ export const layer = Layer.effect(
 			if (directive === undefined) return undefined;
 			const agent = yield* resolveAgent(task.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
-			const modelId = yield* selectModel(EffectId.make(`${effectId}:model`));
-			const tools = allowedTools(subject, agent);
+			const modelId = yield* selectModel(
+				EffectId.make(`${effectId}:model`),
+				directive.model_id ?? undefined
+			).pipe(
+				Effect.tapError(() => mutateTask(effectId, subject, { id: task.id, status: 'attention' }))
+			);
+			const tools = yield* allowedTools(
+				EffectId.make(`${effectId}:host-capabilities`),
+				subject,
+				agent
+			);
 			const epoch = task.epoch + 1;
 			const runId = runIdFor(`${task.id}:${directive.id}:${epoch}`);
 			const messages = yield* messageRows(effectId, subject, task.id);
@@ -1644,7 +1734,8 @@ export const layer = Layer.effect(
 			effectId: EffectId,
 			subject: Identity.Subject,
 			taskId: TaskId,
-			action: 'stop' | 'resume'
+			action: 'stop' | 'resume',
+			modelId?: ModelId
 		) {
 			const task = yield* requireOwnedTask(effectId, subject, taskId);
 			const agent = yield* resolveAgent(task.agent_id);
@@ -1657,7 +1748,22 @@ export const layer = Layer.effect(
 						reason: 'Only a stopped, attention or failed Task may resume'
 					});
 				}
-				yield* selectModel(EffectId.make(`${effectId}:model`));
+				const previous = yield* collections.findFirst(
+					EffectId.make(`${effectId}:previous-model`),
+					subject,
+					{
+						collection: 'agent_inbox',
+						where: { task_id: { eq: taskId } },
+						orderBy: { sequence: 'desc' }
+					}
+				);
+				const prior = yield* Schema.decodeUnknownEffect(
+					Schema.Struct({ model_id: Schema.optionalKey(Schema.NullOr(ModelId)) })
+				)(previous ?? {});
+				const selected = yield* selectModel(
+					EffectId.make(`${effectId}:model`),
+					modelId ?? prior.model_id ?? undefined
+				);
 				const result = yield* admit(effectId, subject, {
 					taskId,
 					agentId: task.agent_id,
@@ -1665,7 +1771,8 @@ export const layer = Layer.effect(
 					author: { kind: 'system' },
 					mode: DirectiveMode.make('agent'),
 					priority: DirectivePriority.make('normal'),
-					resume: true
+					resume: true,
+					modelId: selected
 				});
 				return {
 					taskId,
@@ -1797,7 +1904,8 @@ export const layer = Layer.effect(
 								author: { kind: 'parent-agent', id: task.id },
 								mode: DirectiveMode.make('agent'),
 								priority: DirectivePriority.make('normal'),
-								parent: task
+								parent: task,
+								modelId: run.model_id
 							});
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
 								taskId: childId,
@@ -1814,7 +1922,8 @@ export const layer = Layer.effect(
 								message: parentAgentInput(task.id, message),
 								author: { kind: 'parent-agent', id: task.id },
 								mode: DirectiveMode.make('agent'),
-								priority: DirectivePriority.make(priority)
+								priority: DirectivePriority.make(priority),
+								modelId: run.model_id
 							});
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
 								taskId: target.id,
@@ -2080,7 +2189,8 @@ export const layer = Layer.effect(
 					mode: 'agent',
 					priority: 'normal',
 					annotation,
-					runId: run.id
+					runId: run.id,
+					modelId: run.model_id
 				});
 				yield* settleRun(effectId, subject, run, 'ready', 'verify');
 				return 'idle';
@@ -2103,20 +2213,26 @@ export const layer = Layer.effect(
 				return { taskId, status: 'waiting' } satisfies TaskExecutionResult;
 			}
 			const agent = yield* resolveAgent(task.agent_id);
-			const allTools = allowedTools(subject, agent);
+			const allTools = yield* allowedTools(
+				EffectId.make(`${effectId}:host-capabilities`),
+				subject,
+				agent
+			);
 			const toolsForMode =
 				run.mode === 'compact'
 					? []
 					: run.mode === 'plan'
-						? allTools.filter((tool) =>
-								[
-									'describe_workspace',
-									'list_skills',
-									'read_skill',
-									'search_task_history',
-									'use_image',
-									'read_collection'
-								].includes(tool.name)
+						? allTools.filter(
+								(tool) =>
+									tool.hostReadOnly === true ||
+									[
+										'describe_workspace',
+										'list_skills',
+										'read_skill',
+										'search_task_history',
+										'use_image',
+										'read_collection'
+									].includes(tool.name)
 							)
 						: allTools;
 			yield* tasks.execute(EffectId.make(`${effectId}:active`), { _tag: 'Active', taskId });
@@ -2263,6 +2379,7 @@ export const layer = Layer.effect(
 								modelId: run.model_id,
 								messages: projected,
 								maxOutputTokens: 2_048,
+								tools: toolsForMode,
 								...(assets.length === 0 ? {} : { imageAssets: assets })
 							}
 						);
@@ -2406,7 +2523,13 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			request: TaskControlRequest
 		) {
-			const result = yield* controlTask(effectId, subject, request.taskId, request.action);
+			const result = yield* controlTask(
+				effectId,
+				subject,
+				request.taskId,
+				request.action,
+				request.modelId
+			);
 			return {
 				taskId: request.taskId,
 				status: yield* Schema.decodeUnknownEffect(TaskStatus)(result.status)
@@ -2414,6 +2537,7 @@ export const layer = Layer.effect(
 		});
 
 		return Service.of({
+			models,
 			submit,
 			editMessage,
 			control,

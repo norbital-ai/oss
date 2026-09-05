@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
-	import { ImageAsset } from '@norbital-ai/bolt-protocol/facilities';
+	import { AgentId, ImageAsset } from '@norbital-ai/bolt-protocol/facilities';
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Combobox } from '@norbital-ai/ui/combobox';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
+	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -17,11 +20,7 @@
 	import { runComposerCommand } from './composer-send.js';
 	import TaskSelector from './conversation-selector.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
-	import {
-		buildTaskSelector,
-		projectAgentTasks,
-		type AgentTask
-	} from './conversation-selector.js';
+	import { buildTaskSelector, projectAgentTasks, type AgentTask } from './conversation-selector.js';
 	import {
 		compactOrigin,
 		editableUserMessageText,
@@ -40,16 +39,8 @@
 		type AgentPlanRow,
 		type TodoResult
 	} from './transcript.js';
-	import {
-		agentOrbBusyStatusKey,
-		agentOrbState,
-		agentOrbStatusKey
-	} from './agent-orb-state.js';
-	import {
-		AGENT_COMPOSER_EDITOR_CLASS,
-		AGENT_COMPOSER_FOCUS_EVENT,
-		AGENT_COMPOSER_SHELL_CLASS
-	} from './composer-chrome.js';
+	import { agentOrbBusyStatusKey, agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
+	import { AGENT_COMPOSER_FOCUS_EVENT } from './composer-chrome.js';
 	import { isAgentModeShortcut, parseTaskSlashCommand } from './intent.js';
 	import {
 		retryableAdmission,
@@ -71,6 +62,10 @@
 
 	let draft = $state('');
 	let planMode = $state(false);
+	let selectedModelId = $state<string | undefined>(undefined);
+	const modelQuery = $derived(
+		runtime.client.system.tasks.models({ agentId: AgentId.make(runtime.agentId) })
+	);
 	let selectedTaskId = $state<string | undefined>(undefined);
 	let composingNew = $state(false);
 	let pending = $state(false);
@@ -87,14 +82,10 @@
 	);
 	const allTasks = $derived(projectAgentTasks(taskQuery.current ?? []));
 	const rootTasks = $derived(
-		allTasks.filter(
-			(task) => task.parent_id === null && task.agent_id === runtime.agentId
-		)
+		allTasks.filter((task) => task.parent_id === null && task.agent_id === runtime.agentId)
 	);
 	const defaultTask = $derived(rootTasks[0]);
-	const activeTaskId = $derived(
-		composingNew ? undefined : (selectedTaskId ?? defaultTask?.id)
-	);
+	const activeTaskId = $derived(composingNew ? undefined : (selectedTaskId ?? defaultTask?.id));
 	const activeTask = $derived(allTasks.find((task) => task.id === activeTaskId));
 
 	function treeTaskIds(
@@ -127,9 +118,7 @@
 				})
 	);
 	const panelMessages = $derived(projectAgentMessages(messagesQuery?.current ?? []));
-	const rootMessages = $derived(
-		panelMessages.filter((message) => message.taskId === activeTaskId)
-	);
+	const rootMessages = $derived(panelMessages.filter((message) => message.taskId === activeTaskId));
 
 	const plansQuery = $derived(
 		activeTaskIds.length === 0
@@ -161,6 +150,18 @@
 		new Map(runs.map((run) => [run.id, run.mode] as const))
 	);
 	const rootRuns = $derived(runs.filter((run) => run.task_id === activeTaskId));
+	const modelId = $derived(
+		selectedModelId ?? rootRuns[0]?.model_id ?? modelQuery.current?.defaultLanguageModelId
+	);
+	const modelOptions = $derived(
+		(modelQuery.current?.languageModels ?? []).map(({ id }) => ({
+			value: id,
+			label: id.replace(/^openrouter\//, '')
+		}))
+	);
+	const modelAvailable = $derived(
+		modelId !== undefined && modelOptions.some(({ value }) => value === modelId)
+	);
 	const activeRun = $derived(
 		activeTask === undefined || activeTask.active_run_id === null
 			? undefined
@@ -175,8 +176,8 @@
 	);
 	const contextProjectionIncomplete = $derived(
 		(messagesQuery?.current?.length ?? 0) >= 2_000 ||
-		(plansQuery?.current?.length ?? 0) >= 500 ||
-		(runsQuery?.current?.length ?? 0) >= 1_000
+			(plansQuery?.current?.length ?? 0) >= 500 ||
+			(runsQuery?.current?.length ?? 0) >= 1_000
 	);
 	const runIds = $derived(rootRuns.map((run) => run.id));
 	const usageQuery = $derived(
@@ -220,10 +221,10 @@
 	);
 	const taskAcceptsSubmission = $derived(
 		activeTask === undefined ||
-		activeTask.status === 'ready' ||
-		activeTask.status === 'running' ||
-		activeTask.status === 'waiting' ||
-		activeTask.status === 'failed'
+			activeTask.status === 'ready' ||
+			activeTask.status === 'running' ||
+			activeTask.status === 'waiting' ||
+			activeTask.status === 'failed'
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
@@ -243,6 +244,7 @@
 		!pending &&
 			!controlPending &&
 			taskAcceptsSubmission &&
+			modelAvailable &&
 			draftSendable(parsedDraft)
 	);
 
@@ -347,6 +349,7 @@
 
 	function selectTask(taskId: string): void {
 		selectedTaskId = taskId;
+		selectedModelId = undefined;
 		composingNew = false;
 		unsettledAdmission = null;
 		sendFailure = null;
@@ -399,9 +402,7 @@
 									ImageAsset.make({
 										key,
 										name: image.file.name,
-										mimeType: image.file.type.startsWith('image/')
-											? image.file.type
-											: 'image/jpeg',
+										mimeType: image.file.type.startsWith('image/') ? image.file.type : 'image/jpeg',
 										size: image.file.size
 									})
 								)
@@ -437,10 +438,12 @@
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
 			const revision = revisedMessage;
+			const revisionModelId = modelId;
 			if (
 				(message.length === 0 && pendingImages.length === 0) ||
 				revision === null ||
-				activeTaskId === undefined
+				activeTaskId === undefined ||
+				revisionModelId === undefined
 			) {
 				return Effect.void;
 			}
@@ -454,7 +457,8 @@
 								agentClient.editMessage({
 									taskId: activeTaskId,
 									messageId: revision.id,
-									message: encoded
+									message: encoded,
+									modelId: revisionModelId
 								})
 							)
 						)
@@ -482,19 +486,20 @@
 			if (composer !== null && composer.value !== draft) draft = composer.value;
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
-			if (message.length === 0 && pendingImages.length === 0) return Effect.void;
+			const submittedModelId = modelId;
+			if ((message.length === 0 && pendingImages.length === 0) || submittedModelId === undefined)
+				return Effect.void;
 			const mode = parsed.kind === 'submission' ? parsed.mode : planMode ? 'plan' : 'agent';
 			const retry = retryableAdmission(visibleAdmission, {
 				agentId: runtime.agentId,
 				message,
 				mode,
-				priority
+				priority,
+				modelId: submittedModelId
 			});
 			const taskId =
 				retry?.taskId ??
-				(composingNew ||
-				activeTask?.status === 'done' ||
-				activeTask?.status === 'failed'
+				(composingNew || activeTask?.status === 'done' || activeTask?.status === 'failed'
 					? undefined
 					: activeTask?.id) ??
 				globalThis.crypto.randomUUID();
@@ -504,6 +509,7 @@
 				message,
 				mode,
 				priority,
+				modelId: submittedModelId,
 				draft
 			};
 			unsettledAdmission = admission;
@@ -518,7 +524,8 @@
 									taskId,
 									message: encoded,
 									mode,
-									priority
+									priority,
+									modelId: submittedModelId
 								})
 							)
 						)
@@ -548,7 +555,7 @@
 		controlPending = true;
 		sendFailure = null;
 		Effect.runFork(
-			agentClient.control(activeTaskId, action).pipe(
+			agentClient.control(activeTaskId, action, modelId).pipe(
 				Effect.tapError((error) =>
 					Effect.sync(() => {
 						sendFailure = error.message;
@@ -563,7 +570,14 @@
 	function attemptSend(priority: 'normal' | 'steer' = 'normal'): void {
 		if (composer !== null && composer.value !== draft) draft = composer.value;
 		const parsed = parseTaskSlashCommand(draft);
-		if (pending || controlPending || !taskAcceptsSubmission || !draftSendable(parsed)) return;
+		if (
+			pending ||
+			controlPending ||
+			!taskAcceptsSubmission ||
+			!modelAvailable ||
+			!draftSendable(parsed)
+		)
+			return;
 		if (revisedMessage !== null) {
 			Effect.runFork(editRevision());
 			return;
@@ -651,7 +665,9 @@
 		class="rounded-xl border border-border/70 bg-muted/15 px-3 py-2"
 		open={task.status === 'running' || task.status === 'waiting'}
 	>
-		<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+		<summary
+			class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+		>
 			<Inline align="center" gap="sm">
 				<Icon icon="lucide:bot" class="size-4 shrink-0" />
 				<div class="min-w-0 flex-1">
@@ -680,7 +696,9 @@
 			{#if childView.checkpoint !== null}
 				<div class="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
 					<p class="m-0 text-tiny font-semibold">{compactTitle(childView.checkpointOrigin)}</p>
-					<p class="mt-1 mb-0 line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+					<p
+						class="mt-1 mb-0 line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground"
+					>
 						{plainMessageText(childView.checkpoint)}
 					</p>
 				</div>
@@ -725,11 +743,7 @@
 <Stack gap="none" fill class="min-h-0 bg-card">
 	{#if headerOrb}
 		<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-4 py-3">
-			<NorbitalThinkingOrb
-				state={orbState}
-				size={18}
-				label={t(agentOrbStatusKey(orbState))}
-			/>
+			<NorbitalThinkingOrb state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
 			<span class="text-sm font-semibold">Agent</span>
 		</Inline>
 	{/if}
@@ -756,7 +770,9 @@
 		<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
 			{#if activeTask === undefined && visibleAdmission === null}
 				<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
-					<p class="max-w-sm">Start a Task. Agent and Plan submissions share one durable transcript.</p>
+					<p class="max-w-sm">
+						Start a Task. Agent and Plan submissions share one durable transcript.
+					</p>
 				</div>
 			{:else if activeTask === undefined && visibleAdmission !== null}
 				<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
@@ -774,22 +790,30 @@
 			{:else}
 				<Stack gap="md">
 					{#if contextProjectionIncomplete}
-						<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs" role="status">
-							The loaded query reached its safety limit. Older durable rows may not be visible; the active model-view boundary cannot be certified until older rows are paged.
+						<div
+							class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs"
+							role="status"
+						>
+							The loaded query reached its safety limit. Older durable rows may not be visible; the
+							active model-view boundary cannot be certified until older rows are paged.
 						</div>
 					{/if}
 					{#if activePlan !== undefined}
 						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2" open>
-							<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+							<summary
+								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
 								<Inline align="center" gap="sm">
 									<Icon icon="lucide:notebook-tabs" class="size-4 text-primary" />
 									<div class="min-w-0 flex-1">
 										<p class="m-0 truncate text-xs font-semibold">Plan r{activePlan.revision}</p>
 										<p class="m-0 truncate text-tiny text-muted-foreground">
-											{activePlan.body.split('\n').find((line) => line.trim().length > 0) ?? 'Empty Plan'}
+											{activePlan.body.split('\n').find((line) => line.trim().length > 0) ??
+												'Empty Plan'}
 										</p>
 									</div>
-									<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span>
+									<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span
+									>
 								</Inline>
 							</summary>
 							<Stack gap="sm" class="border-t border-border/60 pt-2">
@@ -802,7 +826,9 @@
 									{#if canStop}
 										<Button size="sm" variant="ghost" onclick={() => control('stop')}>Stop</Button>
 									{:else if canResume}
-										<Button size="sm" variant="ghost" onclick={() => control('resume')}>Resume</Button>
+										<Button size="sm" variant="ghost" onclick={() => control('resume')}
+											>Resume</Button
+										>
 									{/if}
 								</Inline>
 							</Stack>
@@ -810,13 +836,19 @@
 					{/if}
 
 					{#if contextView.checkpoint !== null}
-						<section class="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2" aria-label={compactTitle(contextView.checkpointOrigin)}>
+						<section
+							class="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2"
+							aria-label={compactTitle(contextView.checkpointOrigin)}
+						>
 							<Inline align="center" gap="sm">
 								<Icon icon="lucide:scan-text" class="size-4 shrink-0 text-primary" />
 								<div class="min-w-0 flex-1">
-									<p class="m-0 text-xs font-semibold">{compactTitle(contextView.checkpointOrigin)}</p>
+									<p class="m-0 text-xs font-semibold">
+										{compactTitle(contextView.checkpointOrigin)}
+									</p>
 									<p class="m-0 text-tiny text-muted-foreground">
-										The agent sees this checkpoint and newer in-view messages. Full history remains saved.
+										The agent sees this checkpoint and newer in-view messages. Full history remains
+										saved.
 									</p>
 								</div>
 							</Inline>
@@ -828,34 +860,50 @@
 
 					{#if todo !== null && todo.items.length > 0}
 						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
-							<summary class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+							<summary
+								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
 								<Inline align="center" gap="sm">
 									<span
 										class="grid size-6 place-items-center rounded-full text-micro font-semibold"
 										style={`background: conic-gradient(var(--primary) ${(todo.items.filter((item) => item.status === 'done').length / todo.items.length) * 100}%, var(--muted) 0)`}
 									>
-										<span class="grid size-4 place-items-center rounded-full bg-card">{todoPosition(todo)}</span>
+										<span class="grid size-4 place-items-center rounded-full bg-card"
+											>{todoPosition(todo)}</span
+										>
 									</span>
-									<span class="text-xs font-medium">Step {todoPosition(todo)} / {todo.items.length}</span>
+									<span class="text-xs font-medium"
+										>Step {todoPosition(todo)} / {todo.items.length}</span
+									>
 								</Inline>
 							</summary>
 							<Scroll name="Task progress" class="max-h-64">
-							<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
-								{#each todo.items as item (item.id)}
-									<li class="min-w-0 text-xs">
-										<Inline align="start" gap="sm">
-										{#if item.status === 'done'}
-											<Icon icon="lucide:circle-check" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-										{:else if item.status === 'doing'}
-											<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
-										{:else}
-											<Icon icon="lucide:circle" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-										{/if}
-										<span class="min-w-0 {item.status === 'done' ? 'text-muted-foreground line-through' : ''}">{item.text}</span>
-										</Inline>
-									</li>
-								{/each}
-							</Stack>
+								<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
+									{#each todo.items as item (item.id)}
+										<li class="min-w-0 text-xs">
+											<Inline align="start" gap="sm">
+												{#if item.status === 'done'}
+													<Icon
+														icon="lucide:circle-check"
+														class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+													/>
+												{:else if item.status === 'doing'}
+													<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
+												{:else}
+													<Icon
+														icon="lucide:circle"
+														class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+													/>
+												{/if}
+												<span
+													class="min-w-0 {item.status === 'done'
+														? 'text-muted-foreground line-through'
+														: ''}">{item.text}</span
+												>
+											</Inline>
+										</li>
+									{/each}
+								</Stack>
 							</Scroll>
 						</details>
 					{/if}
@@ -896,7 +944,10 @@
 		</Stack>
 	</Scroll>
 
-	<Stack gap="sm" class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+	<Stack
+		gap="sm"
+		class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+	>
 		{#if revisedMessage !== null}
 			<Inline
 				align="center"
@@ -905,8 +956,8 @@
 			>
 				<Icon icon="lucide:message-square-pen" class="size-3.5 shrink-0 text-primary" />
 				<p class="m-0 min-w-0 flex-1 text-tiny text-muted-foreground">
-					Revising message {revisedMessage.sequence + 1}. The original remains in the durable transcript;
-					this appends a revision that supersedes it.
+					Revising message {revisedMessage.sequence + 1}. The original remains in the durable
+					transcript; this appends a revision that supersedes it.
 				</p>
 				<button
 					type="button"
@@ -930,6 +981,11 @@
 				Resume this Task before submitting another message.
 			</p>
 		{/if}
+		{#if modelQuery.error !== undefined}
+			<p class="text-xs text-destructive" role="alert">{getErrorMessage(modelQuery.error)}</p>
+		{:else if modelQuery.current !== undefined && !modelAvailable}
+			<p class="text-xs text-destructive" role="alert">{t('bolt.agent.modelUnavailable')}</p>
+		{/if}
 		{#if sendFailure !== null}
 			<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
 		{/if}
@@ -940,25 +996,27 @@
 					: 'Plan saves an objective and verification contract. Future Agent turns focus on the latest Plan; no new Task is needed.'}
 			</p>
 		{/if}
-		<form
-			class="{AGENT_COMPOSER_SHELL_CLASS}"
+		<Stack
+			as="form"
+			gap="none"
+			class="rounded-[1.25rem] border-0 bg-transparent text-popover-foreground shadow-none"
 			onsubmit={(event) => {
 				event.preventDefault();
 				attemptSend('normal');
 			}}
 		>
 			<label class="sr-only" for="agent-task-composer">Message</label>
-			<textarea
+			<Textarea
 				id="agent-task-composer"
-				bind:this={composer}
+				bind:ref={composer}
 				bind:value={draft}
 				onkeydown={onComposerKeydown}
 				onpaste={onComposerPaste}
 				rows={3}
 				placeholder="Ask anything, or type /plan or /compact"
-				class="{AGENT_COMPOSER_EDITOR_CLASS}"
+				class="field-sizing-fixed max-h-40 min-h-14 flex-1 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
 				disabled={pending || controlPending || !taskAcceptsSubmission}
-			></textarea>
+			/>
 			{#if pendingImages.length > 0}
 				<Inline gap="xs" class="px-2.5">
 					{#each pendingImages as image (image.id)}
@@ -969,16 +1027,29 @@
 							aria-label={`Remove ${image.file.name}`}
 							onclick={() => removePendingImage(image.id)}
 						>
-							<img
-								src={image.previewUrl}
-								alt={image.file.name}
-								class="size-full object-cover"
-							/>
+							<img src={image.previewUrl} alt={image.file.name} class="size-full object-cover" />
 						</button>
 					{/each}
 				</Inline>
 			{/if}
 			<Inline align="center" gap="xs" class="px-2.5 pb-2">
+				<Combobox
+					options={modelOptions}
+					value={modelId ?? null}
+					ariaLabel={t('bolt.agent.model')}
+					searchPlaceholder={t('bolt.agent.searchModels')}
+					emptyPlaceholder={modelQuery.loading
+						? t('bolt.agent.loadingModels')
+						: t('bolt.agent.selectModel')}
+					searchable
+					allowClear={false}
+					disabled={pending || controlPending || modelQuery.loading}
+					onValueChange={(value) => {
+						if (typeof value === 'string') selectedModelId = value;
+					}}
+					class="min-w-0 max-w-[40%]"
+					triggerClass="h-7 border-0 bg-transparent px-1.5 text-xs font-normal shadow-none hover:bg-muted"
+				/>
 				<input
 					bind:this={imagePicker}
 					type="file"
@@ -1002,11 +1073,15 @@
 					aria-keyshortcuts="Tab"
 					disabled={pending || controlPending || !taskAcceptsSubmission}
 					onclick={() => (planMode = !planMode)}
-					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}"
+					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode
+						? 'bg-primary/10 text-primary'
+						: 'text-muted-foreground hover:bg-muted'}"
 				>
 					{planMode ? 'Plan' : 'Agent'}
 				</button>
-				<kbd class="rounded border border-border/70 bg-muted/60 px-1 py-0.5 font-mono text-micro">Tab</kbd>
+				<kbd class="rounded border border-border/70 bg-muted/60 px-1 py-0.5 font-mono text-micro"
+					>Tab</kbd
+				>
 				{#if costLabel !== ''}<span class="text-tiny text-muted-foreground">{costLabel}</span>{/if}
 				<span class="flex-1"></span>
 				{#if taskWorking}
@@ -1038,7 +1113,7 @@
 						variant="ghost"
 						size="icon"
 						class="size-8 rounded-full"
-						disabled={controlPending}
+						disabled={controlPending || !modelAvailable}
 						aria-label="Resume Task"
 						onclick={() => control('resume')}
 					>
@@ -1059,6 +1134,6 @@
 					{/if}
 				</Button>
 			</Inline>
-		</form>
+		</Stack>
 	</Stack>
 </Stack>

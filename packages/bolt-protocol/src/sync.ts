@@ -49,7 +49,11 @@ export const syncScopedApplyFrameByteLength = syncApplyFrameByteLength;
 const { after: _after, ...LiveCollectionQueryRequestFields } = CollectionQueryRequestFields;
 
 export const SyncQueryInput = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('findMany'), ...LiveCollectionQueryRequestFields }),
+	Schema.Struct({
+		kind: Schema.Literal('findMany'),
+		...LiveCollectionQueryRequestFields,
+		pendingOnly: Schema.optionalKey(Schema.Boolean)
+	}),
 	Schema.Struct({ kind: Schema.Literal('findFirst'), ...LiveCollectionQueryRequestFields })
 ]).annotate({ identifier: 'BoltSyncQueryInput' });
 export type SyncQueryInput = typeof SyncQueryInput.Type;

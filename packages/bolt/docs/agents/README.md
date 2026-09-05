@@ -49,18 +49,28 @@ complete committed message.
 The fixed command catalogue exposes:
 
 ```ts
+tasks.models({ agentId }); // configured language models and default
+
 tasks.submit({
 	taskId,
 	agentId,
 	message,
 	mode: 'agent' | 'plan' | 'compact',
-	priority: 'normal' | 'steer'
+	priority: 'normal' | 'steer',
+	modelId // optional registered model ID
 });
 
-tasks.editMessage({ taskId, messageId, message });
+tasks.editMessage({ taskId, messageId, message, modelId });
 
-tasks.control({ taskId, action: 'stop' | 'resume' });
+tasks.control({ taskId, action: 'stop' | 'resume', modelId }); // model applies to resume
 ```
+
+The composer lists the host-configured language models. Selection is validated before admission,
+saved on the directive, and copied into the immutable run. Changing a queued turn's choice never
+changes an active run. A removed model fails explicitly; it never falls back to another model.
+Resume can select a recovery model, otherwise it retains the last directive's choice. Child Tasks
+and automatic Plan continuation inherit the current run's model. Older clients that omit a model
+use the host default when their directive is claimed.
 
 `tasks.editMessage` appends a revision of one of the subject's own user messages and queues the
 Agent directive that continues from it. The original row is not edited or deleted; the new row
@@ -92,7 +102,7 @@ These ordinary Bolt system collections are the complete logical agent store:
 | `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence                                                    |
 | `agent_run`     | One claimed directive, mode, phase, input boundary, model, immutable capability snapshot, status, and matching epoch                                     |
 | `agent_message` | One complete encoded Effect `Prompt.Message`, ordered by Task sequence, with author, semantic hash, optional run, and Compact or Plan-verdict annotation |
-| `agent_inbox`   | The Task's only queue: ordered message directives with mode, priority, claim state, and claimed run                                                      |
+| `agent_inbox`   | The Task's only queue: ordered message directives with mode, selected model, priority, claim state, and claimed run                                      |
 | `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                           |
 | `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                              |
 
@@ -192,13 +202,30 @@ from its caller use `parent-agent` attribution.
 ## Capabilities and tools
 
 Each run stores an immutable snapshot of qualified Tool, Skill, and MCP capability IDs and content
-digests. Capabilities come from system, host, tenant, and personal tiers, are filtered by the current
+digests. Implemented capabilities come from system, host, and tenant tiers, are filtered by the current
 subject and mode, and are compiled into Effect `Tool` and `Toolkit` handlers. A capability body or
 credential is never copied into the run snapshot.
 
 Platform collection tools use the same policy engine and approval behavior as UI mutations.
-Authored tools, MCP tools, sandbox operations, and host tools appear only when the effective policy
-and run mode allow them. A missing grant is a typed tool failure, never implicit access.
+Authored tools and MCP tools require an effective policy grant. For the web agent acting for a
+person, the optional host facility answers `capability_catalog` with tool names, descriptions,
+JSON input schemas and `readOnly` flags. An unbound host contributes no tools. A malformed bound
+catalogue is an error. Plan receives only read-only host tools; Compact receives none. Machine and
+envoy identities do not acquire personal workspace authoring through this catalogue.
+
+Every Message generation sends the allowed tools in `output.tools`. Providers must forward these
+schemas to their model API and return complete Effect tool-call messages without executing them.
+Bolt executes each call through the same authorization boundary and appends its durable result
+before the next generation. Tests must inspect the provider request as well as scripted results.
+
+Colony supplies `workspace_files`, `workspace_read`, `workspace_edit` and `workspace_apply` against the same private
+source store used by Studio. The trusted tenant/environment/person selects the draft; model input
+cannot select another owner. Apply requires the commit observed while reading, accepts at most 32
+text files / 1 MiB, and atomically refuses stale commits or excluded paths. Edit accepts at most 32
+precise replacements / 1 MiB of replacement input; each search must match exactly once. It preserves
+the rest of a large file and rejects the whole batch if any edit is ambiguous or stale. Edits remain drafts for
+Studio diagnosis, preview and review. They do not publish or alter Live. Standalone hosts may supply
+their own source capability implementation through the same protocol.
 
 ---
 

@@ -87,6 +87,14 @@ requests until the mutation transaction stamps `approval_request.applied_at`, an
 withdrawn and applied requests. Merge candidates by record ID and exclude the hook's `recordId`
 when validating that same request again during approval replay.
 
+Browser views use `client.pending.findMany(collectionName, { where, limit })` for the same
+policy-scoped candidates as a live query. It accepts a fixed scope of at most 2,000 proposals,
+ordered by target record ID; narrow the scope instead of paging a reservation total. Generated
+domain fields may be absent until approval applies the mutation. Approval transitions publish
+their committed projection changes, and this read observes those changes without granting inbox
+access. Ordinary command invocations remain one-shot; a derived calculation can depend on the
+live candidate rows and committed row versions before invoking its read handler again.
+
 Decision and withdrawal commands send only `{ state: { requestId }, ... }`. The server loads the
 durable state and checks authority; the client never needs to upload the review snapshot again.
 

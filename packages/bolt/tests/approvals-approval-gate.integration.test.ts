@@ -374,11 +374,14 @@ describe('approval gate over SQL', () => {
 			)
 		);
 
-		// A held create never reaches COMMIT, so it has neither a domain row nor a SyncChange.
+		// The committed approval metadata is live; the proposed domain row remains absent.
 		const changes = await runtime.runPromise(
 			Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges)
 		);
 		expect(await rowCount(harness, 'people')).toBe(0);
-		expect(changes).toEqual([]);
+		expect(changes.map((change) => change.collection).toSorted()).toEqual([
+			'approval_request',
+			'requestor'
+		]);
 	});
 });

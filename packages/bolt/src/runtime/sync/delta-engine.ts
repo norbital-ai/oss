@@ -1,4 +1,5 @@
 import { Effect, Result, Schema } from 'effect';
+import { sha256Text } from '@norbital-ai/std/reckon/hash';
 import {
 	DEFAULT_SYNC_LOADED_KEYS,
 	EffectId,
@@ -49,6 +50,7 @@ export class SyncPrefixResolutionError extends Schema.TaggedError<SyncPrefixReso
 type SyncLivePlan = Readonly<{
 	readonly subject: Subject;
 	readonly effectivePlan: EffectiveQueryPlan;
+	readonly pendingOnly?: boolean;
 }>;
 type ResolvedPrefix = Readonly<{
 	readonly plan: SyncLivePlan;
@@ -105,6 +107,26 @@ export const describeSyncQuery: (
 > = Effect.fn('Sync.describeQuery')(function* (subject: Subject, input: SyncQueryInput) {
 	const workspace = yield* Workspace.Service;
 	const access = yield* AccessControl.Service;
+	const pendingOnly = input.kind === 'findMany' && input.pendingOnly === true;
+	if (
+		pendingOnly &&
+		(input.with !== undefined ||
+			input.search !== undefined ||
+			input.columns !== undefined ||
+			input.orderBy !== undefined ||
+			input.userFilter !== undefined)
+	)
+		return yield* Effect.fail(
+			reset('inconsistent-prefix', 'Live pending reads accept only where and limit.')
+		);
+	if (
+		pendingOnly &&
+		input.limit !== undefined &&
+		(!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 2000)
+	)
+		return yield* Effect.fail(
+			reset('prefix-limit', 'Live pending reads are bounded to 2000 proposals.')
+		);
 	const compiled = AccessControl.compileEffectiveQueryPlan({
 		definition: workspace.definition,
 		rootCollection: input.collection,
@@ -116,6 +138,7 @@ export const describeSyncQuery: (
 		...(input.limit === undefined ? {} : { limit: input.limit }),
 		...(input.search === undefined ? {} : { search: input.search }),
 		kind: input.kind,
+		...(pendingOnly ? { orderBy: { id: 'asc' } } : {}),
 		subject,
 		policyFor: (collection) => access.invocation().predicate(subject, 'read', collection)
 	});
@@ -127,7 +150,17 @@ export const describeSyncQuery: (
 				compiled.success.oneShotReason ?? 'The query is not admitted as a live contiguous prefix.'
 			)
 		);
-	return { subject, effectivePlan: compiled.success } satisfies SyncLivePlan;
+	return {
+		subject,
+		...(pendingOnly ? { pendingOnly: true } : {}),
+		effectivePlan: pendingOnly
+			? {
+					...compiled.success,
+					fingerprint: `sha256:${sha256Text(`${compiled.success.fingerprint}:pending`)}`,
+					dependencies: [...new Set([...compiled.success.dependencies, 'approval_request'])]
+				}
+			: compiled.success
+	} satisfies SyncLivePlan;
 });
 
 const queryInput = (
@@ -139,6 +172,13 @@ const queryInput = (
 	}>
 ): Collections.QueryInput => {
 	const execution = narrowEffectiveQuery(plan.effectivePlan, narrowing);
+	if (plan.pendingOnly)
+		return {
+			collection: execution.collection,
+			pendingOnly: true,
+			where: execution.where,
+			limit: execution.limit
+		};
 	return {
 		collection: execution.collection,
 		limit: execution.limit,
@@ -684,6 +724,38 @@ export const advanceActivePrefix: (
 		if (state.version >= Number.MAX_SAFE_INTEGER)
 			return yield* Effect.fail(reset('stale-version', 'The live prefix version is exhausted.'));
 
+		if (plan.pendingOnly) {
+			const rows = yield* findMany(EffectId.make(`${effectId}:pending`), new SyncPlanWork(), plan, {
+				limit: targetLimit
+			});
+			const keys = rows.map((row) => prefixKeyOf(row, plan.effectivePlan));
+			const bodies = bodyMap(rows);
+			if (state.prefixKeys.length === 0 && keys.length === 0) return undefined;
+			const retainedBytes = retainedPrefixBytes(rows);
+			if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
+				return yield* Effect.fail(
+					reset('prefix-bytes', 'The pending prefix exceeds its encoded byte ceiling.')
+				);
+			return {
+				subId: state.subId,
+				fromVersion: state.version,
+				toVersion: state.version + 1,
+				prefixKeys: keys,
+				prefixBytes: retainedBytes,
+				deltas: [...new Set(state.viewerPrefixes)].map((loadedPrefix) => ({
+					loadedPrefix,
+					delta: derivePrefixDelta(
+						state.prefixKeys.slice(0, loadedPrefix),
+						keys.slice(0, loadedPrefix),
+						new Set(bodies.keys()),
+						bodies
+					)
+				})),
+				authorityFingerprint: plan.effectivePlan.authority.fingerprint,
+				dependencies: plan.effectivePlan.dependencies
+			} satisfies SyncAdvanceUpdate;
+		}
+
 		const compacted: ChangeBatch = { changes: [...compactSyncChanges(batch.changes)] };
 		const work = new SyncPlanWork();
 		const affectedRootIds = yield* resolveAffectedRootIds(
@@ -807,6 +879,13 @@ export const extendActivePrefix: (
 			reset('prefix-limit', 'The requested prefix exceeds plan admission.')
 		);
 
+	if (plan.pendingOnly)
+		return yield* Effect.fail(
+			reset(
+				'prefix-limit',
+				'Pending reads use a fixed bounded scope; narrow or replace the query to change it.'
+			)
+		);
 	const work = new SyncPlanWork();
 	const oldLength = state.prefixKeys.length;
 	const extensionRows =

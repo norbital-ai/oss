@@ -170,6 +170,10 @@ export const jsonTextEquals = (column: SQLWrapper, key: string, value: string): 
 export const jsonb = (value: Schema.Json): SQL<Schema.Json> =>
 	expression([sql.param(JSON.stringify(value)), fixed('::jsonb')]);
 
+/** Captures every physical column of a named row, including routing fields and server defaults. */
+export const rowJson = (alias: string): SQL<Schema.Json> =>
+	expression([fixed('to_jsonb('), sql.identifier(alias), fixed(')')]);
+
 /** Brands custom SQL at construction so it can never enter the single-query execution path. */
 export const transactionSql = (
 	statement: string,

@@ -4,6 +4,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { SLIDING_INDICATOR_EXPAND_TRANSITION_CLASS } from '#lib/sliding-indicator';
 	import { getDefaultFileTreeEntryIcon } from '#lib/file-tree/file-tree-icons';
+	import { onMount } from 'svelte';
 	import FileTreeNode from './file-tree-node.svelte';
 	import FileTreeNodeRow from './file-tree-node-row.svelte';
 	import type { FileTreeEntry, FileTreeProps } from '#lib/file-tree/file-tree.types';
@@ -25,6 +26,7 @@
 		getEntryIcon = getDefaultFileTreeEntryIcon,
 		getEntryBadge,
 		isMutedEntry,
+		defaultExpandedPaths = [],
 		variant = 'default',
 		depth = 0
 	}: Props = $props();
@@ -90,6 +92,12 @@
 		event.stopPropagation();
 		onDelete?.(entry.path, entry);
 	}
+
+	onMount(() => {
+		if (!defaultExpandedPaths.includes(entry.path)) return;
+		open = true;
+		Effect.runFork(loadChildren());
+	});
 </script>
 
 <FileTreeNodeRow
@@ -132,6 +140,7 @@
 						{getEntryIcon}
 						{getEntryBadge}
 						{isMutedEntry}
+						{defaultExpandedPaths}
 						{variant}
 						depth={depth + 1}
 					/>

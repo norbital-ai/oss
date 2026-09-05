@@ -821,9 +821,22 @@ describe('declarative relationship reconciliation', () => {
 					state,
 					'approve'
 				);
+				const sync = yield* SyncCommit.Service;
+				yield* sync.drainChanges;
 				yield* (yield* Collections.Service).resume(
 					EffectId.make('normalized-reservation-resume'),
 					pending.requestId
+				);
+				expect(yield* sync.drainChanges).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							collection: 'approval_request',
+							id: pending.requestId,
+							operation: 'update',
+							before: expect.objectContaining({ applied_at: null, row_version: 2 }),
+							after: expect.objectContaining({ applied_at: expect.any(String), row_version: 3 })
+						})
+					])
 				);
 			})
 		);

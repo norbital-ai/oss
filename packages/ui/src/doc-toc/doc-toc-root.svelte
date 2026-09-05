@@ -23,6 +23,7 @@
 		asideWidthClass,
 		asideClass,
 		popoverClass,
+		observerRoot = null,
 		onSync
 	}: {
 		children: Snippet;
@@ -36,6 +37,8 @@
 		asideWidthClass?: string;
 		asideClass?: string;
 		popoverClass?: string;
+		/** Scrollport containing the article; defaults to the browser document. */
+		observerRoot?: Element | null;
 		onSync?: () => void | Effect.Effect<void>;
 	} = $props();
 
@@ -64,6 +67,7 @@
 
 	onMount(() => {
 		tocState.observer.watch({
+			root: observerRoot,
 			rootMargin: buildDocTocRootMargin(),
 			threshold: [0, 1]
 		});

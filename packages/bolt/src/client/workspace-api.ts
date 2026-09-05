@@ -899,6 +899,19 @@ const WorkspaceApis = {
 					return pageQueryOf(runtime, collection, asJsonRecord(input));
 				}
 			},
+			pending: {
+				findMany: (collection: string, input: Schema.Json = {}) => {
+					assertCollectionAllowed(collection);
+					const mounted = runtime.sync.mount(
+						syncInputOf({ ...asJsonRecord(input), kind: 'findMany', collection, pendingOnly: true })
+					);
+					return createMachineQuery(
+						runtime.sync,
+						mounted,
+						(state) => queryAt(state, mounted.key)?.prefix?.rows
+					);
+				}
+			},
 			history: {
 				findMany: (collection: string, recordId: string) => {
 					assertCollectionAllowed(collection);

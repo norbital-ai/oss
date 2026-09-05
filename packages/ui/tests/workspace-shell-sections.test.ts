@@ -14,8 +14,8 @@ test('the workspace sidebar renders the ordered semantic section model', () => {
 	assert.doesNotMatch(sidebar, /label=\{t\('misc\.platform'\)\}/u);
 });
 
-test('the section contract fixes the three job-oriented groups', () => {
+test('the section contract fixes the four job-oriented groups', () => {
 	const types = source('workspace-shell.types.ts');
-	assert.match(types, /'operations' \| 'administration' \| 'applications'/u);
+	assert.match(types, /'applications' \| 'operations' \| 'resources' \| 'administration'/u);
 	assert.match(types, /sections: Schema\.Array\(WorkspaceNavigationSectionSchema\)/u);
 });

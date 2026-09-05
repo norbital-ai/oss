@@ -58,6 +58,69 @@ const prefixEntry = (key: string, count: number, loadedPrefix = count): SyncSubE
 };
 
 describe('clean-cut live query v2 protocol', () => {
+	it('routes pending proposals to matching scopes and retains conservative partial-update fanout', () => {
+		const registry = new SyncRegistry<SyncRegistryConnection>({ hash });
+		for (let index = 0; index < 1000; index += 1) {
+			registry.attach(connection(`employee-${index}`), [
+				{
+					...prefixEntry(`pending-${index}`, 0, 100),
+					input: {
+						kind: 'findMany',
+						collection: 'leave_requests',
+						pendingOnly: true,
+						where: { employment_id: { eq: `employee-${index}` } },
+						limit: 100
+					},
+					planKey: `pending-employee-${index}`,
+					dependencies: ['leave_requests', 'approval_request'],
+					routing: [{ field: 'employment_id', values: [`employee-${index}`] }]
+				}
+			]);
+		}
+		const after = {
+			collection_name: 'leave_requests',
+			record_id: 'leave',
+			proposed_values: { employment_id: 'employee-3' }
+		};
+		expect(
+			registry.affectedStates([
+				{ collection: 'approval_request', id: 'approval', operation: 'insert', after }
+			])
+		).toHaveLength(1);
+		expect(
+			registry.affectedStates([
+				{
+					collection: 'approval_request',
+					id: 'approval',
+					operation: 'update',
+					before: after,
+					after: { ...after, proposed_values: { employment_id: 'employee-4' } }
+				}
+			])
+		).toHaveLength(2);
+		expect(
+			registry.affectedStates([
+				{
+					collection: 'approval_request',
+					id: 'approval',
+					operation: 'insert',
+					after: { ...after, collection_name: 'claims' }
+				}
+			])
+		).toEqual([]);
+		expect(
+			registry.affectedStates([
+				{
+					collection: 'approval_request',
+					id: 'approval',
+					operation: 'update',
+					before: after,
+					after: { ...after, proposed_values: { days: 2 } }
+				}
+			])
+		).toHaveLength(1000);
+	});
+
 	it('does not export any cursor, digest, held-state, patch, or fallback contract', () => {
 		for (const symbol of [
 			'SyncAnswer',
@@ -246,9 +309,21 @@ describe('clean-cut live query v2 protocol', () => {
 		const registry = new SyncRegistry<SyncRegistryConnection>({ hash });
 		const viewer = connection('growing');
 		registry.attach(viewer, [prefixEntry('growing', 0, 1)]);
-		expect(registry.extendPrefix(viewer, {
-			queryKey: 'growing', version: 7, fromPrefix: 0, toPrefix: 0, rows: [], prefixKeys: [], retainedBytes: 0
-		}, 3)).toMatchObject({ accepted: true, loadedPrefix: 0 });
+		expect(
+			registry.extendPrefix(
+				viewer,
+				{
+					queryKey: 'growing',
+					version: 7,
+					fromPrefix: 0,
+					toPrefix: 0,
+					rows: [],
+					prefixKeys: [],
+					retainedBytes: 0
+				},
+				3
+			)
+		).toMatchObject({ accepted: true, loadedPrefix: 0 });
 		const subId = registry.prefixViewer(viewer, 'growing')?.subId;
 		if (subId === undefined) throw new Error('fixture plan was not registered');
 		const update = (version: number, count: number) => ({

@@ -222,7 +222,7 @@ describe('a batched write that fails', () => {
 		expect(await harness.database.query('select id from notes')).toEqual([]);
 	}, 60_000);
 
-	it('emits no batch while a mutation is pending approval', async () => {
+	it('publishes approval metadata while holding the domain mutation for review', async () => {
 		harness = await makeBoltTestRuntime(pendingDefinition, { authored: pendingAuthored });
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
@@ -240,7 +240,22 @@ describe('a batched write that fails', () => {
 		expect(result.outcome._tag).toBe('Failure');
 		if (result.outcome._tag === 'Failure')
 			expect(result.outcome.failure).toBeInstanceOf(Collections.PendingApproval);
-		expect(result.changes).toEqual([]);
+		expect(result.changes.map((change) => change.collection).toSorted()).toEqual([
+			'approval_request',
+			'requestor'
+		]);
+		expect(result.changes).toContainEqual(
+			expect.objectContaining({
+				collection: 'approval_request',
+				operation: 'insert',
+				after: expect.objectContaining({
+					collection_name: 'notes',
+					status: 'ONGOING',
+					applied_at: null,
+					proposed_values: expect.objectContaining({ body: 'Held for review' })
+				})
+			})
+		);
 		expect(await harness.database.query('select id from notes')).toEqual([]);
 	}, 60_000);
 

@@ -51,6 +51,8 @@ export type WorkspaceOperationsHost = Readonly<{
 	 */
 	readonly read: (options?: {
 		readonly billing?: boolean;
+		/** Read only the organization profile; avoids opening the operator workbench. */
+		readonly profileOnly?: boolean;
 	}) => ReturnType<typeof Effect.runPromise<unknown, never>>;
 	readonly run: (
 		input: unknown,

@@ -112,6 +112,8 @@ export type CompiledWorkspace = Readonly<{
 	readonly appLoaders: Readonly<Record<string, () => Promise<Component>>>; // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	readonly appGroups: Readonly<Record<string, AppGroup>>;
 	readonly appMeta: Readonly<Record<string, AppMeta>>;
+	/** Immutable README and docs assets packed with this release. */
+	readonly documentationFiles: Readonly<Record<string, string>>;
 	readonly representationLoaders: Readonly<
 		Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	>;

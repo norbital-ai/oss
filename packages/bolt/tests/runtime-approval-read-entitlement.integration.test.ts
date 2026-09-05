@@ -13,6 +13,8 @@ import { subject } from '../src/authoring/contracts-schema.js';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { SyncCommit } from '../src/runtime/facilities/services.js';
+import { resolveInitialPrefix, advanceActivePrefix } from '../src/runtime/sync/delta-engine.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
@@ -180,6 +182,97 @@ const raise = (runtime: BoltTestRuntime) =>
 	);
 
 describe('an approver may read what they were asked to approve', () => {
+	it('publishes held creates and decisions with their actual approval routing snapshots', async () => {
+		harness = await makeBoltTestRuntime(reviewWorkspace);
+		await place(harness);
+		const drain = () =>
+			harness!.runtime.runPromise(Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges));
+		const input = { kind: 'findMany' as const, collection: 'jobs', pendingOnly: true, limit: 100 };
+		const initial = await harness.runtime.runPromise(
+			resolveInitialPrefix(APPROVAL_EFFECT_ID, raiserSubject, input)
+		);
+		expect(initial.rows).toEqual([]);
+		expect(initial.plan.effectivePlan.dependencies).toContain('approval_request');
+		const subscription = {
+			subId: 'pending-jobs',
+			input,
+			planKey: initial.plan.effectivePlan.fingerprint,
+			version: 0,
+			prefixKeys: initial.keys,
+			prefixBytes: initial.retainedBytes,
+			viewerPrefixes: [100],
+			credential: 'raiser-token',
+			authorityFingerprint: initial.plan.effectivePlan.authority.fingerprint
+		};
+		await raise(harness);
+		const created = await drain();
+		expect(created).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					collection: 'approval_request',
+					id: REQUEST_ID,
+					operation: 'insert',
+					after: expect.objectContaining({
+						collection_name: 'jobs',
+						record_id: JOB_ID,
+						status: 'ONGOING',
+						applied_at: null
+					})
+				}),
+				expect.objectContaining({
+					collection: 'requestor',
+					operation: 'insert',
+					after: expect.objectContaining({
+						approval_request_id: REQUEST_ID,
+						user_id: raiserSubject.userId
+					})
+				})
+			])
+		);
+		const held = await harness.runtime.runPromise(
+			advanceActivePrefix(APPROVAL_EFFECT_ID, raiserSubject, subscription, { changes: created })
+		);
+		expect(held?.deltas[0]?.delta.put).toEqual([
+			expect.objectContaining({
+				id: JOB_ID,
+				row: expect.objectContaining({ approval_id: REQUEST_ID, title: 'Extra scaffolding' })
+			})
+		]);
+		if (held === undefined) throw new Error('Held approval did not update its live query');
+		await raise(harness);
+		expect(await drain()).toEqual([]);
+		await harness.runtime.runPromise(
+			Effect.flatMap(Approvals.Service, (approvals) =>
+				approvals.withdraw(EffectId.make('withdraw-live-approval'), raiserSubject, {
+					requestId: REQUEST_ID
+				})
+			)
+		);
+		const changes = await drain();
+		expect(changes).toEqual([
+			expect.objectContaining({
+				collection: 'approval_request',
+				id: REQUEST_ID,
+				operation: 'update',
+				before: expect.objectContaining({ status: 'ONGOING', row_version: 1 }),
+				after: expect.objectContaining({ status: 'WITHDRAWN', row_version: 2 })
+			})
+		]);
+		const removed = await harness.runtime.runPromise(
+			advanceActivePrefix(
+				APPROVAL_EFFECT_ID,
+				raiserSubject,
+				{
+					...subscription,
+					version: held.toVersion,
+					prefixKeys: held.prefixKeys,
+					prefixBytes: held.prefixBytes
+				},
+				{ changes }
+			)
+		);
+		expect(removed?.deltas[0]?.delta).toEqual({ removeIds: [JOB_ID], put: [] });
+	});
 	it('exposes pending candidate data to its owner without granting approval inbox access', async () => {
 		harness = await makeBoltTestRuntime(reviewWorkspace);
 		await place(harness);
@@ -224,6 +317,14 @@ describe('an approver may read what they were asked to approve', () => {
 			);
 		expect(await read(owner, false)).toEqual([]);
 		expect(await read(owner, false, 'approval_request')).toEqual([]);
+		const live = await harness.runtime.runPromise(
+			resolveInitialPrefix(APPROVAL_EFFECT_ID, owner, {
+				kind: 'findMany',
+				collection: 'jobs',
+				pendingOnly: true
+			})
+		);
+		expect(live.rows).toEqual([expect.objectContaining({ id: JOB_ID, owner_id: owner.userId })]);
 		expect(await read(owner, true)).toEqual([
 			expect.objectContaining({
 				id: JOB_ID,

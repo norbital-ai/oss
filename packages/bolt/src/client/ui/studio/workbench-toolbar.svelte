@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import {
@@ -85,25 +86,42 @@
 			.join(', ');
 		return people === '' ? `${title} · ${stageLabel}` : `${title} · ${stageLabel} · ${people}`;
 	};
+	const switcherOptions = $derived([
+		{
+			value: 'live',
+			label: `${t('bolt.studio.localBase')} · ${t('bolt.studio.localBaseOnLive')}`
+		},
+		...switcherRequests.map((request) => ({
+			value: request.id,
+			label: requestOptionLabel(request)
+		}))
+	]);
 </script>
 
 <Inline shrink={false} class="h-10 border-b border-border/60 sm:h-9">
 	<Scroll name={t('bolt.studio.workbench')} axis="x" layout="inline" gap="xs" grow class="min-w-0">
-		<label class="sr-only" for="studio-mr-switcher">{t('bolt.studio.switcherAria')}</label>
-		<select
-			id="studio-mr-switcher"
+		<div
 			data-testid="studio-mr-switcher"
-			class="h-7 max-w-64 shrink-0 rounded-sm border border-border/60 bg-background px-1.5 text-xs text-foreground"
-			value={tracking}
-			onchange={(event) => onswitch?.(event.currentTarget.value)}
+			class="w-64 max-w-[min(16rem,80vw)] shrink-0"
 		>
-			<option value="live">
-				{t('bolt.studio.localBase')} · {t('bolt.studio.localBaseOnLive')}
-			</option>
-			{#each switcherRequests as request (request.id)}
-				<option value={request.id}>{requestOptionLabel(request)}</option>
-			{/each}
-		</select>
+			<Combobox
+				options={switcherOptions}
+				value={tracking}
+				ariaLabel={t('bolt.studio.switcherAria')}
+				searchPlaceholder={t('bolt.studio.switcherAria')}
+				emptyPlaceholder={t('bolt.studio.switcherAria')}
+				allowClear={false}
+				preserveOptionOrder={true}
+				scrollToSelection={true}
+				sameWidth={true}
+				align="start"
+				class="w-full"
+				triggerClass="h-7 rounded-sm border-border/60 px-1.5 text-xs"
+				onValueChange={(next) => {
+					if (typeof next === 'string') onswitch?.(next);
+				}}
+			/>
+		</div>
 		<span class="shrink-0 text-micro text-muted-foreground" data-testid="studio-diff-baseline">
 			{t(baselineKey)}
 		</span>

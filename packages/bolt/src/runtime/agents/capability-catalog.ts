@@ -25,7 +25,7 @@ import {
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
 import type { ConnectorInterface, HostToolsInterface } from '#lib/runtime/facilities/services.js';
-import type * as Identity from '#lib/runtime/identity/identity.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import {
@@ -214,7 +214,16 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'write_collection',
 		description: 'Create, update, or delete an authorized collection record.',
-		command: 'platform:write_collection'
+		command: 'platform:write_collection',
+		inputSchema: objectInput(
+			{
+				collection: { type: 'string', minLength: 1 },
+				operation: { type: 'string', enum: ['create', 'update', 'delete'] },
+				id: { type: 'string', minLength: 1 },
+				values: { type: 'object', additionalProperties: true }
+			},
+			['collection', 'operation', 'id']
+		)
 	}
 ];
 
@@ -532,10 +541,13 @@ export const executeHostTool = Effect.fn('CapabilityCatalog.executeHostTool')(fu
 	input: Schema.Json,
 	context: ToolExecutionContext
 ) {
-	return (yield* context.hostTools.execute(EffectId.make(`${context.effectId}:host:${name}`), {
+	const call = context.hostTools.execute(EffectId.make(`${context.effectId}:host:${name}`), {
 		tool: name,
 		input
-	})).output;
+	});
+	return (yield* context.subject.system !== true && context.subject.policies.length === 0
+		? call.pipe(Effect.provideService(Identity.CurrentSubject, context.subject))
+		: call).output;
 });
 
 export const subagentToolSpec: ToolDeclaration = {
@@ -543,38 +555,23 @@ export const subagentToolSpec: ToolDeclaration = {
 	description:
 		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, steer, stop, and resume.',
 	command: 'platform:subagent',
-	inputSchema: {
-		oneOf: [
-			objectInput(
-				{
-					action: { const: 'spawn' },
-					agentId: { type: 'string', minLength: 1 },
-					instruction: { type: 'string', minLength: 1 }
-				},
-				['action', 'agentId', 'instruction']
-			),
-			objectInput({ action: { const: 'read' }, taskId: { type: 'string', format: 'uuid' } }, [
-				'action',
-				'taskId'
-			]),
-			...(['message', 'steer'] as const).map((action) =>
-				objectInput(
-					{
-						action: { const: action },
-						taskId: { type: 'string', format: 'uuid' },
-						message: { type: 'string', minLength: 1 }
-					},
-					['action', 'taskId', 'message']
-				)
-			),
-			...(['await', 'stop', 'resume'] as const).map((action) =>
-				objectInput({ action: { const: action }, taskId: { type: 'string', format: 'uuid' } }, [
-					'action',
-					'taskId'
-				])
-			)
-		]
-	}
+	inputSchema: objectInput(
+		{
+			action: {
+				type: 'string',
+				enum: ['spawn', 'read', 'message', 'await', 'steer', 'stop', 'resume']
+			},
+			agentId: { type: 'string', minLength: 1, description: 'Required for spawn.' },
+			instruction: { type: 'string', minLength: 1, description: 'Required for spawn.' },
+			taskId: {
+				type: 'string',
+				format: 'uuid',
+				description: 'Required for every action except spawn.'
+			},
+			message: { type: 'string', minLength: 1, description: 'Required for message and steer.' }
+		},
+		['action']
+	)
 };
 
 const SubagentAction = Schema.Union([

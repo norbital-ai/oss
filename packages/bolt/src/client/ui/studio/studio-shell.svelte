@@ -4,6 +4,8 @@
 	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
 	import DiagnosisPane from './diagnosis-pane.svelte';
+	import DocumentationPane from './documentation-pane.svelte';
+	import DocumentationTree from './documentation-tree.svelte';
 	import LivePane from './live-pane.svelte';
 	import LiveSidebar from './live-sidebar.svelte';
 	import ReviewPane from './review-pane.svelte';
@@ -51,6 +53,10 @@
 		openAuthoringLiveStream,
 		type AuthoringLiveState
 	} from '#lib/client/ui/studio/authoring-live.js';
+	import {
+		selectedWorkspaceDocumentationPath,
+		workspaceDocumentationPages
+	} from './workspace-documentation.js';
 
 	let {
 		client,
@@ -61,18 +67,21 @@
 		onnavigate?: ((href: string) => void) | undefined;
 		initialSource?: string | undefined;
 	} = $props();
-	const { t } = useI18n();
+	const i18n = useI18n();
+	const { t } = i18n;
 	const queryMessage = (error: unknown): string | undefined =>
 		error === undefined ? undefined : getErrorMessage(error);
 
 	let snapshot = $state<HostSnapshot | undefined>();
 	let view = $state<{
 		rootTab: StudioRootTab;
+		documentation: string;
 		changes: ChangesView;
 		file: string;
 		manifestSection: string;
 	}>({
-		rootTab: 'workbench',
+		rootTab: 'documentation',
+		documentation: '',
 		changes: 'manifest',
 		file: '',
 		manifestSection: 'collections'
@@ -99,16 +108,22 @@
 	let navigatorSheetOpen = $state(false);
 
 	const session = workspaceSession();
-	const rootTabs = $derived(
-		[
-			{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
-			{ name: 'changes', label: t('bolt.studio.changes'), content: '' },
-			{ name: 'live', label: t('bolt.studio.live'), content: '' }
-		] satisfies TabConfig[]
-	);
+	const rootTabs = $derived([
+		{ name: 'documentation', label: t('bolt.studio.documentation'), content: '' },
+		{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
+		{ name: 'changes', label: t('bolt.studio.changes'), content: '' },
+		{ name: 'live', label: t('bolt.studio.live'), content: '' }
+	] satisfies TabConfig[]);
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
 	const files = $derived(Object.keys(sourceFiles).sort());
+	const documentationPages = $derived(workspaceDocumentationPages(sourceFiles, i18n.locale));
+	const documentationPath = $derived(
+		selectedWorkspaceDocumentationPath(documentationPages, view.documentation)
+	);
+	const documentationContent = $derived(
+		documentationPath === '' ? '' : sourceDraftValue(sourceDrafts, sourceFiles, documentationPath)
+	);
 	const fileSizes = $derived(
 		Object.fromEntries(
 			Object.entries(sourceFiles).map(([path, contents]) => [path, contents.length])
@@ -122,6 +137,7 @@
 			hasRelease: currentRelease !== undefined
 		})
 	);
+	const isDocumentation = $derived(view.rootTab === 'documentation');
 	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isChanges = $derived(view.rootTab === 'changes');
 	const isLive = $derived(view.rootTab === 'live');
@@ -179,6 +195,7 @@
 		return status;
 	});
 	const navigatorDescriptionKey = $derived.by(() => {
+		if (isDocumentation) return 'bolt.studio.navigatorDocumentationDescription' as const;
 		if (isWorkbench) return 'bolt.studio.navigatorWorkbenchDescription' as const;
 		if (isChanges) return 'bolt.studio.navigatorChangesDescription' as const;
 		return 'bolt.studio.navigatorLiveDescription' as const;
@@ -190,6 +207,11 @@
 		view.rootTab = 'workbench';
 		view.file = path;
 		editor = { path, value: sourceDraftValue(sourceDrafts, sourceFiles, path) };
+	};
+
+	const openDocumentation = (path: string): void => {
+		view.rootTab = 'documentation';
+		view.documentation = path;
 	};
 
 	const updateEditor = (value: string): void => {
@@ -204,13 +226,23 @@
 	};
 
 	const actions = {
-		readHostState: (): Effect.Effect<void> =>
+		readHostState: (sourceChange = false): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				const raw = yield* Effect.tryPromise({
 					try: () => session.operations.read(),
 					catch: toError
 				});
-				snapshot = yield* Schema.decodeUnknownEffect(HostSnapshotSchema)(raw);
+				const next = yield* Schema.decodeUnknownEffect(HostSnapshotSchema)(raw);
+				if (sourceChange && Object.keys(sourceDrafts).length > 0) {
+					host.status = t('bolt.studio.sourceChangedWithDrafts');
+					return;
+				}
+				snapshot = next;
+				if (sourceChange && editor.path !== '')
+					editor = {
+						...editor,
+						value: sourceDraftValue(sourceDrafts, next.source.files, editor.path)
+					};
 				host.status = 'Ready';
 				if (!openedInitialSource && initialSource !== undefined && initialSource.trim() !== '') {
 					openedInitialSource = true;
@@ -275,9 +307,8 @@
 				t('bolt.studio.action.rejectedReview')
 			),
 		commentReview: (requestId: string, body: string) =>
-			actions.operation(
-				{ action: 'merge_request', operation: 'comment', requestId, body },
-				() => t('bolt.studio.action.commented')
+			actions.operation({ action: 'merge_request', operation: 'comment', requestId, body }, () =>
+				t('bolt.studio.action.commented')
 			),
 		rollback: (releaseId?: string) =>
 			actions.operation(
@@ -301,9 +332,8 @@
 		updateWorkbench: () => {
 			const requestId = tracking === 'live' ? undefined : tracking;
 			if (requestId !== undefined && newCommits > 0) {
-				return actions.operation(
-					{ action: 'merge_request', operation: 'update', requestId },
-					() => t('bolt.studio.action.updated')
+				return actions.operation({ action: 'merge_request', operation: 'update', requestId }, () =>
+					t('bolt.studio.action.updated')
 				);
 			}
 			return actions.operation(
@@ -387,13 +417,27 @@
 			tenantId: session.tenantId,
 			onEvent: (event) => {
 				live = applyAuthoringLiveEvent(live, event);
+				if (
+					event.kind === 'source' &&
+					event.workspaceKey === snapshot?.source.workspaceKey &&
+					event.commit !== snapshot.source.commit
+				) {
+					Effect.runFork(actions.readHostState(true));
+				}
 			}
 		});
 	});
 </script>
 
 {#snippet navigator()}
-	{#if isWorkbench}
+	{#if isDocumentation}
+		<DocumentationTree
+			pages={documentationPages}
+			{sourceFiles}
+			selectedPath={documentationPath}
+			onselect={openDocumentation}
+		/>
+	{:else if isWorkbench}
 		<SourceTree
 			{files}
 			{fileSizes}
@@ -463,7 +507,7 @@
 			</Cluster>
 		</Stack>
 
-		<Stack gap="none" shrink={false} class="{INSET_X_CLASS}">
+		<Stack gap="none" shrink={false} class="min-w-0 {INSET_X_CLASS}">
 			<span class="sr-only" aria-live="polite" aria-atomic="true">{hostStatusAnnouncement}</span>
 			{#if isWorkbench}
 				<WorkbenchToolbar
@@ -508,7 +552,7 @@
 		</Stack>
 	{/snippet}
 
-	<Inline align="stretch" gap="none" fill class="{INSET_X_CLASS}">
+	<Inline align="stretch" gap="none" fill class="min-w-0 {INSET_X_CLASS}">
 		<aside
 			class="hidden w-72 shrink-0 border-r border-border/60 bg-card font-sans md:block"
 			aria-label={t('bolt.studio.sidebar')}
@@ -525,7 +569,16 @@
 			class="relative min-w-0 bg-background font-sans"
 			data-testid="studio-viewport"
 		>
-			{#if isChanges}
+			{#if isDocumentation}
+				<DocumentationPane
+					selectedPath={documentationPath}
+					content={documentationContent}
+					pages={documentationPages}
+					{sourceFiles}
+					onselect={openDocumentation}
+					onopenSource={openSource}
+				/>
+			{:else if isChanges}
 				<ReviewPane
 					releaseRequests={snapshot?.mergeRequests ?? []}
 					{selectedRequestId}
@@ -570,7 +623,7 @@
 					{releases}
 					selectedReleaseId={activeReleaseId}
 					busy={host.busy}
-					canRestore={canRestore}
+					{canRestore}
 					manifest={workspace.manifest}
 					loading={!browserReady || (manifestQuery?.loading ?? false)}
 					{sections}

@@ -424,6 +424,7 @@ const agentInboxModel = defineModel(
 		sequence: integer().notNull(),
 		message_id: uuid().notNull(),
 		mode: text().notNull(),
+		model_id: text(),
 		priority: text().notNull(),
 		state: text().notNull(),
 		claimed_run_id: uuid()

@@ -128,5 +128,6 @@ describe('workspace application entry', () => {
 		expect(entry.code.indexOf('await loadApplicationStylesheet()')).toBeLessThan(
 			entry.code.indexOf('return mountBoltWorkspace')
 		);
+		expect(source).toContain('documentationFiles: workspace.documentationFiles');
 	});
 });

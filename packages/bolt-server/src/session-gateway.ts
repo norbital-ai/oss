@@ -410,6 +410,8 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 					if (!hopByHop.has(name)) responseHeaders[name] = value;
 				}
 				response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+				// An idle SSE stream opens on headers; registration must not wait for its heartbeat.
+				response.flushHeaders();
 				upstreamResponse.pipe(response);
 			}
 		);

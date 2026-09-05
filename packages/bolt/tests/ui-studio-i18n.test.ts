@@ -9,6 +9,7 @@ const scopedKeys = (catalog: Readonly<Record<string, string>>): string[] =>
 		.filter(
 			(key) =>
 				key.startsWith('bolt.studio.') ||
+				key.startsWith('bolt.documentation.') ||
 				key.startsWith('bolt.automations.') ||
 				key.startsWith('bolt.shell.')
 		)
@@ -21,7 +22,7 @@ const SURFACE_ROOTS = [
 	new URL('../src/client/ui/shell/workspace.svelte', import.meta.url).pathname
 ];
 
-const MESSAGE_KEY = /['`](bolt\.(?:studio|automations|shell)\.[A-Za-z0-9.]+)['`]/g;
+const MESSAGE_KEY = /['`](bolt\.(?:studio|documentation|automations|shell)\.[A-Za-z0-9.]+)['`]/g;
 
 const collectFiles = async (root: string): Promise<string[]> => {
 	const info = await stat(root);
@@ -56,7 +57,7 @@ const extractUsedKeys = (source: string): string[] => {
 };
 
 describe('Workspace Studio and system-surface localization', () => {
-	it('keeps every Studio, Automation, and shell key present in both catalogs', () => {
+	it('keeps every Documentation, Studio, Automation, and shell key present in both catalogs', () => {
 		expect(scopedKeys(catalogs.zh)).toEqual(scopedKeys(catalogs.en));
 	});
 
@@ -71,7 +72,9 @@ describe('Workspace Studio and system-surface localization', () => {
 
 	it('fails when a Studio or system t() key is missing from English or Chinese', async () => {
 		const files = (await Promise.all(SURFACE_ROOTS.map(collectFiles))).flat();
-		const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, 'utf8')] as const));
+		const sources = await Promise.all(
+			files.map(async (file) => [file, await readFile(file, 'utf8')] as const)
+		);
 		const used = new Set<string>();
 		for (const [, source] of sources) {
 			for (const key of extractUsedKeys(source)) used.add(key);

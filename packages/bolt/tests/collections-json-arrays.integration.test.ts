@@ -148,7 +148,7 @@ const testLayer = (
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvals = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncCommit))
 	);
 	return Collections.layer.pipe(
 		Layer.provide(

@@ -4,8 +4,10 @@ import {
 	APPROVALS_PATH,
 	buildApplicationNavigation,
 	buildSystemNavigation,
+	buildWorkspaceNavigationSections,
 	studioSourceFromSearch,
 	studioSourceHref,
+	WORKSPACE_HOST_PLUGINS,
 	WORKSPACE_SETTINGS_PATH
 } from '../src/client/ui/shell/workspace-navigation.js';
 
@@ -17,6 +19,9 @@ const shellLabels: Readonly<Record<string, string>> = {
 	'bolt.shell.operations': 'Operations',
 	'bolt.shell.administration': 'Administration',
 	'bolt.shell.applications': 'Applications',
+	'bolt.shell.more': 'More',
+	'bolt.shell.documentation': 'Documentation',
+	'bolt.shell.kiosk': 'Kiosk',
 	'bolt.shell.workspaceStudio': 'Workspace Studio',
 	'bolt.shell.organization': 'Organization',
 	'bolt.shell.agents': 'Agents',
@@ -49,14 +54,6 @@ describe('workspace navigation', () => {
 			i18n: shellI18n,
 			plugins: [
 				{
-					key: 'workspace-studio',
-					label: 'Workspace Studio',
-					icon: 'product:studio',
-					entry: '/__host/workspace-studio',
-					placement: 'sidebar',
-					adminOnly: true
-				},
-				{
 					key: 'organization',
 					label: 'Organization',
 					icon: 'lucide:building-2',
@@ -71,6 +68,14 @@ describe('workspace navigation', () => {
 					entry: '/__host/agent',
 					placement: 'settings',
 					adminOnly: true
+				},
+				{
+					key: 'workspace-studio',
+					label: 'Workspace Studio',
+					icon: 'product:studio',
+					entry: '/__host/workspace-studio',
+					placement: 'settings',
+					adminOnly: true
 				}
 			]
 		});
@@ -78,7 +83,8 @@ describe('workspace navigation', () => {
 		expect(system[0]?.children?.map((child) => child.label)).toEqual([
 			'People',
 			'Organization',
-			'Agents'
+			'Agents',
+			'Workspace Studio'
 		]);
 		expect(system[0]?.children?.[0]?.href).toBe(WORKSPACE_SETTINGS_PATH);
 		// The tenant's own People entry is inbuilt and wears no badge; every host-provided plugin
@@ -87,11 +93,10 @@ describe('workspace navigation', () => {
 		expect(system[0]?.children?.slice(1).every((child) => child.badge === 'product:colony')).toBe(
 			true
 		);
-		const studio = system.find((item) => item.key === 'workspace-studio');
+		const studio = system[0]?.children?.find((item) => item.key === 'workspace-studio');
 		expect(studio?.label).toBe('Workspace Studio');
 		expect(studio?.badge).toBe('product:colony');
-		expect(system[0]?.children?.some((child) => child.key === 'workspace-studio')).toBe(false);
-		expect(system.some((item) => item.key === 'workspace-studio')).toBe(true);
+		expect(system.some((item) => item.key === 'workspace-studio')).toBe(false);
 		expect(system.find((item) => item.key === 'approvals')).toMatchObject({
 			label: 'Approvals',
 			href: APPROVALS_PATH
@@ -112,6 +117,92 @@ describe('workspace navigation', () => {
 			'hr_controller/leave',
 			'hr_controller/people'
 		]);
+	});
+
+	it('keeps kiosk apps in the secondary More section', () => {
+		const kiosk = {
+			key: 'hr_controller/kiosk',
+			label: 'Attendance Kiosk',
+			icon: 'lucide:scan-face',
+			href: '/app/hr_controller/kiosk',
+			active: true
+		};
+		const system = buildSystemNavigation({
+			isAdmin: true,
+			kiosk: [kiosk],
+			currentPath: kiosk.href,
+			i18n: shellI18n
+		});
+		const settings = system.find((item) => item.key === 'settings');
+		const kioskGroup = system.find((item) => item.key === 'kiosk');
+
+		expect(kioskGroup).toMatchObject({
+			label: 'Kiosk',
+			href: kiosk.href,
+			active: true,
+			children: [kiosk],
+			section: 'resources'
+		});
+		expect(settings?.children?.some((item) => item.key === 'kiosk')).toBe(false);
+	});
+
+	it('shows workspace documentation to members and keeps authoring surfaces administrative', () => {
+		const system = buildSystemNavigation({
+			isAdmin: false,
+			plugins: WORKSPACE_HOST_PLUGINS,
+			currentPath: '/__host/documentation',
+			i18n: shellI18n
+		});
+
+		expect(system.find((item) => item.key === 'documentation')).toMatchObject({
+			label: 'Documentation',
+			active: true,
+			section: 'resources'
+		});
+		expect(system.some((item) => item.key === 'settings')).toBe(false);
+		expect(system.some((item) => item.key === 'workspace-studio')).toBe(false);
+	});
+
+	it('orders daily applications before operations and puts infrequent routes last', () => {
+		const system = buildSystemNavigation({
+			isAdmin: true,
+			plugins: WORKSPACE_HOST_PLUGINS,
+			kiosk: [
+				{
+					key: 'attendance-kiosk',
+					label: 'Attendance Kiosk',
+					icon: 'lucide:scan-face',
+					href: '/app/attendance-kiosk',
+					active: false
+				}
+			],
+			currentPath: '/',
+			i18n: shellI18n
+		});
+		const sections = buildWorkspaceNavigationSections({
+			system,
+			applications: [
+				{
+					key: 'employee-self-service',
+					label: 'Employee Self-Service',
+					icon: 'lucide:user-round',
+					href: '/app/employee-self-service',
+					active: false
+				}
+			],
+			i18n: shellI18n
+		});
+
+		expect(sections.map((section) => section.key)).toEqual([
+			'applications',
+			'operations',
+			'resources',
+			'administration'
+		]);
+		expect(sections.find((section) => section.key === 'resources')?.label).toBe('More');
+		expect(
+			sections.find((section) => section.key === 'resources')?.items.map(({ key }) => key)
+		).toEqual(['documentation', 'kiosk']);
 	});
 
 	it('translates tenant app titles when the catalog has the key', () => {
@@ -148,7 +239,11 @@ describe('workspace navigation', () => {
 		expect(system[0]?.children?.[0]?.label).toBe('人员');
 		expect(system.find((item) => item.key === 'approvals')?.label).toBe('审批');
 		expect(seen).toContain('bolt.shell.approvals');
-		expect(system.flatMap((item) => [item, ...(item.children ?? [])]).every((item) => !item.label.startsWith('bolt.'))).toBe(true);
+		expect(
+			system
+				.flatMap((item) => [item, ...(item.children ?? [])])
+				.every((item) => !item.label.startsWith('bolt.'))
+		).toBe(true);
 	});
 
 	it('resolves nested app titles from the leaf catalog key', () => {

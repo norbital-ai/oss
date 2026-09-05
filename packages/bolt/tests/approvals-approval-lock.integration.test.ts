@@ -274,7 +274,21 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 							}
 						]);
 					}
-					return { rows: [{ state }], affectedRows: 1 } satisfies DatabaseResponse;
+					return {
+						rows: [
+							{
+								state,
+								before: null,
+								after: { id: requestId, status: 'ONGOING' },
+								requestor_after: {
+									id: requestorId,
+									user_id: requestorId,
+									approval_request_id: requestId
+								}
+							}
+						],
+						affectedRows: 1
+					} satisfies DatabaseResponse;
 				}
 				if (
 					unquotedSql.trimStart().startsWith('select') &&
@@ -395,7 +409,16 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 							}
 						]);
 					}
-					return { rows: [{ state: next }], affectedRows: 1 } satisfies DatabaseResponse;
+					return {
+						rows: [
+							{
+								state: next,
+								before: { id: requestId, status: 'ONGOING' },
+								after: { id: requestId, status: String(nextState['_tag']) }
+							}
+						],
+						affectedRows: 1
+					} satisfies DatabaseResponse;
 				}
 				if (sql.includes('insert into bolt_audit')) {
 					const events = yield* Ref.get(audit);
@@ -648,7 +671,7 @@ const testLayer = (recorded: Array<string> = []) => {
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncCommit))
 	);
 	const authoredLayer = Layer.succeed(AuthoredRuntimeService, {
 		...emptyAuthoredRuntime,

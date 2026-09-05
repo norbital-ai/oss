@@ -2224,7 +2224,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									AccessControl.predicateExpression(visibility, { qualifier: ROOT_ALIAS })
 								)
 							)
-							.orderBy(sql`pending.created_at`, sql`pending.id`)
+							.orderBy(sql`${candidate}.id`)
 							.limit(Math.max(1, Math.min(2000, input.limit ?? 100)))
 					);
 					return result.rows.map((value) =>
@@ -3174,13 +3174,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					statements.push(assertionStatement(expectation));
 				}
 				statements.push(...historyPrunes);
-				if (approvalRequestId !== undefined)
-					statements.push(
-						transactionSql(
-							'update approval_request set applied_at = CURRENT_TIMESTAMP where id = $1',
-							[approvalRequestId]
-						)
-					);
 				if (statementPlan.claimLedger && browserMutation !== undefined)
 					statements.push(
 						approvalRequestId === undefined || approvalRoot === undefined
@@ -3194,7 +3187,25 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									browserMutation.outcome
 								)
 					);
-				statements.push(captureStatement);
+				if (approvalRequestId === undefined) statements.push(captureStatement);
+				else {
+					const approvalParameter = `$${captureStatement.parameters.length + 1}`;
+					// The final statement captures settlement alongside domain writes. Its table read sees
+					// the pre-update snapshot; RETURNING exposes the durable after row for sync routing.
+					statements.push(
+						transactionSql(
+							`with mutation_capture as (${captureStatement.sql}), settled as (
+							update approval_request set applied_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+							row_version = row_version + 1 where id = ${approvalParameter} and applied_at is null
+							returning id, to_jsonb(approval_request) as record
+						) select * from mutation_capture union all
+						select -1, 'approval_request', settled.id::text,
+						jsonb_build_object('before', to_jsonb(previous), 'after', settled.record)
+						from settled join approval_request as previous on previous.id = settled.id`,
+							[...captureStatement.parameters, approvalRequestId]
+						)
+					);
+				}
 				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements }).pipe(
 					Effect.catch((error): Effect.Effect<never, Database.FacilityError | AuthoredRefusal> => {
 						if (error.message.includes(READ_CONFLICT_MESSAGE))
@@ -3210,11 +3221,27 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				);
 				const records = new Map<string, Readonly<Record<string, unknown>>>();
 				const capturedRows = new Map<string, Readonly<Record<string, Schema.Json>>>();
+				const approvalChanges: SyncChange[] = [];
 				for (const row of result.rows) {
 					if (!isJsonObject(row)) continue;
 					const ordinal = row['__bolt_graph_ordinal'];
 					const record = row['__bolt_graph_record'];
 					if (!isNumber(ordinal) || !isJsonObject(record)) continue;
+					if (
+						ordinal === -1 &&
+						approvalRequestId !== undefined &&
+						isJsonObject(record['before']) &&
+						isJsonObject(record['after'])
+					) {
+						approvalChanges.push({
+							collection: 'approval_request',
+							id: approvalRequestId,
+							operation: 'update',
+							before: record['before'],
+							after: record['after']
+						});
+						continue;
+					}
 					const operation = capturedOperations[ordinal];
 					if (operation === undefined) continue;
 					const key = `${operation.collection}\u0000${operation.id}`;
@@ -3238,8 +3265,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						return operation.previous;
 					}
 				};
-				const changes = compactSyncChanges(
-					operations.flatMap((operation): ReadonlyArray<SyncChange> => {
+				const changes = compactSyncChanges([
+					...approvalChanges,
+					...operations.flatMap((operation): ReadonlyArray<SyncChange> => {
 						if (!writeOperationChangesRow(operation)) return [];
 						const fields = captureFields.get(operation.collection) ?? new Set<string>();
 						const key = `${operation.collection}\u0000${operation.id}`;
@@ -3280,7 +3308,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									}
 								];
 					})
-				);
+				]);
 				return { operations, records, batch: { changes } } satisfies AppliedDeclarativeGraph;
 			});
 

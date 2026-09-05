@@ -153,6 +153,7 @@ export {
 export {
 	AgentId,
 	AIGenerationOutput,
+	AIToolDefinition,
 	AIGenerationResult,
 	AIRequest,
 	AIResponse,
@@ -168,6 +169,7 @@ export {
 	FileResponse,
 	HostToolRequest,
 	HostToolResponse,
+	HostToolCatalog,
 	IdentityHookRequest,
 	IdentityHookResponse,
 	TaskRequest,
@@ -221,6 +223,7 @@ export {
 	TaskEditMessageResult,
 	TaskExecuteRequest,
 	TaskExecuteResult,
+	TaskModelCatalog,
 	TaskSubmitRequest,
 	TaskSubmitResult,
 	WorkspaceAccess,

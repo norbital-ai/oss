@@ -1,13 +1,7 @@
 import { Option, Schema } from 'effect';
 
 /** Long-running Studio jobs that must push status; they must never be polled. */
-const AuthoringLiveJob = Schema.Literals([
-	'diagnose',
-	'preview',
-	'publish',
-	'merge',
-	'deploy'
-]);
+const AuthoringLiveJob = Schema.Literals(['diagnose', 'preview', 'publish', 'merge', 'deploy']);
 type AuthoringLiveJob = typeof AuthoringLiveJob.Type;
 
 const AuthoringLivePhase = Schema.Literals([
@@ -26,6 +20,13 @@ export const AUTHORING_LOG_LINE_MAX_CHARS = 800;
 export const AUTHORING_LOG_RING = 256;
 
 export const AuthoringLiveEvent = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('source'),
+		tenantId: Schema.NonEmptyString,
+		workspaceKey: Schema.NonEmptyString,
+		commit: Schema.NonEmptyString,
+		at: Schema.NonEmptyString
+	}),
 	Schema.Struct({
 		kind: Schema.Literal('phase'),
 		tenantId: Schema.NonEmptyString,
@@ -117,9 +118,7 @@ export const emptyAuthoringLiveState = (): AuthoringLiveState => ({
 });
 
 export const clipAuthoringLogLine = (line: string): string =>
-	line.length <= AUTHORING_LOG_LINE_MAX_CHARS
-		? line
-		: line.slice(0, AUTHORING_LOG_LINE_MAX_CHARS);
+	line.length <= AUTHORING_LOG_LINE_MAX_CHARS ? line : line.slice(0, AUTHORING_LOG_LINE_MAX_CHARS);
 
 /**
  * Fold one pushed frame into Studio chrome. Snapshot `read()` is the initial document only;
@@ -130,6 +129,8 @@ export const applyAuthoringLiveEvent = (
 	event: AuthoringLiveEvent
 ): AuthoringLiveState => {
 	switch (event.kind) {
+		case 'source':
+			return state;
 		case 'phase':
 			return {
 				...state,
@@ -149,9 +150,7 @@ export const applyAuthoringLiveEvent = (
 			return {
 				...state,
 				logs:
-					next.length <= AUTHORING_LOG_RING
-						? next
-						: next.slice(next.length - AUTHORING_LOG_RING)
+					next.length <= AUTHORING_LOG_RING ? next : next.slice(next.length - AUTHORING_LOG_RING)
 			};
 		}
 		case 'memory':
@@ -215,9 +214,7 @@ export const diagnosisFindingTone = (
 };
 
 /** Level color for captured build/deploy/guest lines. ANSI is stripped at the host; this is the UI tone. */
-export const authoringLogTone = (
-	level: string
-): 'danger' | 'warning' | 'info' | 'default' => {
+export const authoringLogTone = (level: string): 'danger' | 'warning' | 'info' | 'default' => {
 	switch (level) {
 		case 'error':
 		case 'stderr':
@@ -236,9 +233,7 @@ export const authoringLogTone = (
 export const authoringJobBusy = (state: AuthoringLiveState): boolean =>
 	state.job !== null && state.job.phase !== 'complete';
 
-export const authoringLiveJobMessageKey = (
-	job: AuthoringLiveJob
-) => {
+export const authoringLiveJobMessageKey = (job: AuthoringLiveJob) => {
 	switch (job) {
 		case 'diagnose':
 			return 'bolt.studio.live.job.diagnose';
@@ -257,9 +252,7 @@ export const authoringLiveJobMessageKey = (
 	}
 };
 
-export const authoringLivePhaseMessageKey = (
-	phase: AuthoringLivePhase
-) => {
+export const authoringLivePhaseMessageKey = (phase: AuthoringLivePhase) => {
 	switch (phase) {
 		case 'prepare':
 			return 'bolt.studio.phase.prepare';

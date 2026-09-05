@@ -143,8 +143,14 @@ export const PlanVerdict = Schema.Struct({
 export interface PlanVerdict extends Schema.Schema.Type<typeof PlanVerdict> {}
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+export const AIToolDefinition = Schema.Struct({
+	name: Schema.NonEmptyString,
+	description: Schema.NonEmptyString,
+	inputSchema: JsonObject
+});
+export interface AIToolDefinition extends Schema.Schema.Type<typeof AIToolDefinition> {}
 export const AIGenerationOutput = Schema.TaggedUnion({
-	Message: {},
+	Message: { tools: Schema.optionalKey(Schema.Array(AIToolDefinition)) },
 	PlanVerdict: {},
 	Object: {
 		objectName: Schema.NonEmptyString,
@@ -287,6 +293,19 @@ export const HostToolRequest = Schema.Struct({ tool: Schema.NonEmptyString, inpu
 export interface HostToolRequest extends Schema.Schema.Type<typeof HostToolRequest> {}
 export const HostToolResponse = Schema.Struct({ output: Schema.Json });
 export interface HostToolResponse extends Schema.Schema.Type<typeof HostToolResponse> {}
+
+/** Optional host capabilities, discovered through `capability_catalog` for the authenticated person. */
+export const HostToolCatalog = Schema.Struct({
+	tools: Schema.Array(
+		Schema.Struct({
+			name: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]*$/)),
+			description: Schema.NonEmptyString,
+			inputSchema: Schema.JsonObject,
+			readOnly: Schema.Boolean
+		})
+	).check(Schema.isMaxLength(64))
+});
+export interface HostToolCatalog extends Schema.Schema.Type<typeof HostToolCatalog> {}
 
 /**
  * Identity lifecycle the host may project, never originate.

@@ -534,6 +534,7 @@ class WorkspaceCompiler {
 		apps: ReadonlyArray<string>,
 		groups: ReadonlyArray<RenderedAppGroup>,
 		appMeta: Readonly<Record<string, RenderedAppMetadata>>,
+		documentationFiles: Readonly<Record<string, string>>,
 		policies: ReadonlyArray<string>,
 		root: string,
 		representations: ReadonlyArray<string>,
@@ -572,7 +573,7 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nexport { client } from './framework-client.js';\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nexport { client } from './framework-client.js';\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const documentationFiles = ${JSON.stringify(documentationFiles)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
 	};
 
 	static readonly renderFrameworkClientRuntime = (schemaFingerprint: string): string =>
@@ -801,6 +802,43 @@ export const buildAssetIndex = (
 	});
 };
 
+/** README and docs assets published with the immutable browser artifact. */
+export const readWorkspaceDocumentationFiles = (root: string) =>
+	Effect.gen(function* () {
+		const candidates = [
+			join(root, 'README.md'),
+			join(root, 'README.en.md'),
+			join(root, 'README.zh.md'),
+			join(root, 'assets', 'thumbnail.svg'),
+			...(yield* WorkspaceCompiler.filesUnder(join(root, 'docs'))).filter((path) => {
+				const lower = path.toLowerCase();
+				return lower.endsWith('.md') || lower.endsWith('.svg');
+			})
+		];
+		const files: string[] = [];
+		for (const path of candidates) {
+			const status = yield* Effect.tryPromise({ try: () => lstat(path), catch: toError }).pipe(
+				Effect.catch((cause) =>
+					Reflect.get(cause, 'code') === 'ENOENT' ? Effect.succeed(undefined) : Effect.fail(cause)
+				)
+			);
+			if (status?.isFile() && !status.isSymbolicLink()) files.push(path);
+		}
+		return Object.fromEntries(
+			yield* Effect.all(
+				files
+					.toSorted()
+					.map((path) =>
+						Effect.map(
+							Effect.tryPromise({ try: () => readFile(path, 'utf8'), catch: toError }),
+							(contents) => [WorkspaceCompiler.posix(relative(root, path)), contents] as const
+						)
+					),
+				{ concurrency: 'unbounded' }
+			)
+		);
+	});
+
 export const renderAuthoringTypes = (input: RenderAuthoringTypesInput): string => {
 	const union = WorkspaceCompiler.quotedUnion;
 	const teams =
@@ -856,7 +894,7 @@ export const renderClientDeclaration = (
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-	return `import type { CollectionRegistryFor, InvokeClientApi, PublicPlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype AutomationRegistry = {\n${entries(automations)}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema>;\ntype PlatformCollections = CollectionRegistryFor<PublicPlatformSchema>;\ntype Collections = TenantCollections & PlatformCollections;\ntype BaseClient = CollectionClient<Collections>;\ntype PublicCollectionName = keyof Collections & string;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: Omit<CollectionClient<PlatformCollections>['db'][N], 'mutate' | 'pending'> };\ntype PublicRecords = { readonly findMany: (collectionName: PublicCollectionName, query?: Parameters<BaseClient['records']['findMany']>[1]) => ReturnType<BaseClient['records']['findMany']> };\ntype PublicHistory = { readonly findMany: (collectionName: PublicCollectionName, recordId: string, limit?: number) => ReturnType<NonNullable<BaseClient['history']>['findMany']> };\ntype Invoke = {\n${entries(functions)}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<BaseClient, 'db' | 'records' | 'history'> & { readonly db: TenantDatabase & PlatformDatabase; readonly records: PublicRecords; readonly history?: PublicHistory; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke> };\nexport declare const client: Client;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRenderer>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string; readonly kiosk?: boolean }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
+	return `import type { CollectionRegistryFor, InvokeClientApi, PublicPlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { RemoteQuery } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype AutomationRegistry = {\n${entries(automations)}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema>;\ntype PlatformCollections = CollectionRegistryFor<PublicPlatformSchema>;\ntype Collections = TenantCollections & PlatformCollections;\ntype BaseClient = CollectionClient<Collections>;\ntype PublicCollectionName = keyof Collections & string;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: Omit<CollectionClient<PlatformCollections>['db'][N], 'mutate' | 'pending'> };\ntype PublicRecords = { readonly findMany: (collectionName: PublicCollectionName, query?: Parameters<BaseClient['records']['findMany']>[1]) => ReturnType<BaseClient['records']['findMany']> };\ntype PublicHistory = { readonly findMany: (collectionName: PublicCollectionName, recordId: string, limit?: number) => ReturnType<NonNullable<BaseClient['history']>['findMany']> };\ntype Invoke = {\n${entries(functions)}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<BaseClient, 'db' | 'records' | 'history'> & { readonly db: TenantDatabase & PlatformDatabase; readonly records: PublicRecords; readonly history?: PublicHistory; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke>; readonly pending: { readonly findMany: (collectionName: PublicCollectionName, query?: Pick<NonNullable<Parameters<BaseClient['records']['findMany']>[1]>, 'where' | 'limit'>) => RemoteQuery<ReadonlyArray<Readonly<Record<string, unknown>>>> } };\nexport declare const client: Client;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRenderer>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string; readonly kiosk?: boolean }>>;\nexport declare const documentationFiles: Readonly<Record<string, string>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 };
 
 const renderArtifactImports = (imports: ReadonlyArray<string>): string =>
@@ -1785,6 +1823,7 @@ const WorkspaceSynchronization = {
 			const metadata = yield* compiler.readPackageMetadata(root);
 			const compilerMetadata = yield* compiler.readPackageMetadata(boltPackageRoot);
 			const i18nMessages = yield* compiler.readI18nMessages(root);
+			const documentationFiles = yield* readWorkspaceDocumentationFiles(root);
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
 			const collectionCatalog = compiledAuthoring.collections.map((entry) =>
@@ -1916,6 +1955,7 @@ const WorkspaceSynchronization = {
 							appFiles,
 							groupEntries,
 							appMeta,
+							documentationFiles,
 							policies,
 							root,
 							representationFiles,

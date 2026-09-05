@@ -40,6 +40,8 @@ export type FileTreeProps<E = Error> = {
 	/** Optional trailing status badge (e.g. U/M/D). Also tints the filename when `class` is set. */
 	getEntryBadge?: (entry: FileTreeEntry) => FileTreeEntryBadge | null;
 	isMutedEntry?: (entry: FileTreeEntry) => boolean;
+	/** Directory paths expanded when their nodes first mount. */
+	defaultExpandedPaths?: readonly string[];
 	variant?: 'default' | 'dark';
 	class?: string;
 };

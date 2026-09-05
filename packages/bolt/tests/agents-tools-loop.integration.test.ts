@@ -61,9 +61,7 @@ const generated = (
 	};
 };
 
-const lastToolResult = (
-	request: Extract<AIRequest, { readonly _tag: 'Generate' }>
-): unknown => {
+const lastToolResult = (request: Extract<AIRequest, { readonly _tag: 'Generate' }>): unknown => {
 	for (const message of request.messages.toReversed()) {
 		if (message.role !== 'tool' || typeof message.content === 'string') continue;
 		const result = message.content.findLast((part) => part.type === 'tool-result');
@@ -176,6 +174,8 @@ describe('canonical Effect Prompt tool loop', () => {
 		const calls: Array<HostToolRequest> = [];
 		const hostTools: FacilityBinding<HostToolRequest, HostToolResponse> = {
 			call: async (_metadata, request) => {
+				if (request.tool === 'capability_catalog')
+					return { _tag: 'Success', value: { output: { tools: [] } } };
 				calls.push(request);
 				return { _tag: 'Success', value: { output: { entries: ['src'] } } };
 			}

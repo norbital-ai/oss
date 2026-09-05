@@ -230,7 +230,7 @@ type ReleaseEvidence = HostSnapshot['releases'][number];
 
 type MergeRequestState = MergeRequest['state'];
 
-const STUDIO_ROOT_TABS = ['workbench', 'changes', 'live'] as const;
+const STUDIO_ROOT_TABS = ['documentation', 'workbench', 'changes', 'live'] as const;
 export type StudioRootTab = (typeof STUDIO_ROOT_TABS)[number];
 
 const CHANGES_VIEWS = ['manifest', 'files', 'data', 'conversation', 'logs'] as const;
@@ -240,6 +240,7 @@ type StudioOwnedSurface = 'manifest' | 'logs' | 'lifecycle' | 'diagnosis';
 
 export const isStudioRootTab = (value: string): value is StudioRootTab => {
 	switch (value) {
+		case 'documentation':
 		case 'workbench':
 		case 'changes':
 		case 'live':
@@ -264,6 +265,8 @@ export const isChangesView = (value: string): value is ChangesView => {
 
 export const studioTabOwns = (tab: StudioRootTab, surface: StudioOwnedSurface): boolean => {
 	switch (tab) {
+		case 'documentation':
+			return false;
 		case 'workbench':
 			return surface === 'diagnosis';
 		case 'changes':
@@ -278,8 +281,7 @@ export const studioTabOwns = (tab: StudioRootTab, surface: StudioOwnedSurface): 
 };
 
 export type WorkbenchDiffBaselineKey =
-	| 'bolt.studio.diff.againstMrHead'
-	| 'bolt.studio.diff.againstLive';
+	'bolt.studio.diff.againstMrHead' | 'bolt.studio.diff.againstLive';
 
 export const workbenchDiffBaselineKey = (
 	tracking: HostSnapshot['tracking'] | undefined
@@ -327,9 +329,7 @@ export const lifecycleRailMessageKey = (
 	}
 };
 
-export const lifecycleRailCurrent = (
-	state: MergeRequestState
-): LifecycleRailStage | 'closed' => {
+export const lifecycleRailCurrent = (state: MergeRequestState): LifecycleRailStage | 'closed' => {
 	switch (state) {
 		case 'draft':
 			return 'draft';
@@ -371,8 +371,7 @@ export const boundTriple = (
 export const canWorkOnMergeRequest = (
 	request: MergeRequest,
 	tracking: HostSnapshot['tracking'] | undefined
-): boolean =>
-	(request.state === 'draft' || request.state === 'ready') && request.id !== tracking;
+): boolean => (request.state === 'draft' || request.state === 'ready') && request.id !== tracking;
 
 export const mergeRequestEvidence = (
 	request: MergeRequest | undefined
@@ -472,9 +471,7 @@ export const sourceTreeEntryBadge = (
 	sourceFiles: Readonly<Record<string, string>>
 ): Readonly<{ readonly label: string; readonly class?: string }> | null => {
 	if (entry.type === 'directory') {
-		return sourceTreeHasDirtyDescendant(entry.path, drafts, sourceFiles)
-			? { label: '·' }
-			: null;
+		return sourceTreeHasDirtyDescendant(entry.path, drafts, sourceFiles) ? { label: '·' } : null;
 	}
 	const mark = sourceFileMark(entry.path, drafts, sourceFiles);
 	if (mark === undefined) return null;
@@ -526,13 +523,16 @@ export const diagnosisFindingsByFile = (
 };
 
 export const schemaPlanSentence = (sql: string): string => {
-	const first = sql.split('\n').find((line) => line.trim() !== '')?.trim() ?? sql;
+	const first =
+		sql
+			.split('\n')
+			.find((line) => line.trim() !== '')
+			?.trim() ?? sql;
 	return first.endsWith(';') ? first.slice(0, -1) : first;
 };
 
-export const policyActionVerbs = (
-	grants: ReadonlyArray<{ readonly action: string }>
-): string => [...new Set(grants.map((grant) => grant.action))].join(' · ');
+export const policyActionVerbs = (grants: ReadonlyArray<{ readonly action: string }>): string =>
+	[...new Set(grants.map((grant) => grant.action))].join(' · ');
 
 type ReviewFreshness = 'current' | 'live_advanced' | 'terminal';
 type ReviewNextOwner = 'author' | 'reviewer' | 'complete';

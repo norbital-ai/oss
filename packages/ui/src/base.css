@@ -561,6 +561,37 @@
 		@apply my-4;
 	}
 
+	/* ---- Documentation scale ---- */
+	.tiptap-documentation h1,
+	.tiptap-documentation h2,
+	.tiptap-documentation h3,
+	.tiptap-documentation h4,
+	.tiptap-documentation h5,
+	.tiptap-documentation h6 {
+		@apply border-0 pb-0;
+	}
+	.tiptap-documentation h1 {
+		@apply text-section mt-0 mb-3;
+	}
+	.tiptap-documentation h2 {
+		@apply text-subhead mt-8 mb-2;
+	}
+	.tiptap-documentation h3 {
+		@apply text-heading mt-6 mb-2;
+	}
+	.tiptap-documentation h4,
+	.tiptap-documentation h5,
+	.tiptap-documentation h6 {
+		@apply mt-5 mb-2 text-base;
+	}
+	.tiptap-documentation p {
+		@apply mt-0 mb-5;
+	}
+	.tiptap-documentation ul,
+	.tiptap-documentation ol {
+		@apply mt-0 mb-5;
+	}
+
 	/* ---- Reading scale ---- */
 	/*
 		The rules above are document-editor typography: an `h1` at `text-4xl lg:text-5xl` under a
@@ -610,7 +641,7 @@
 	}
 
 	.tiptap blockquote {
-		@apply my-4 border-l-4 border-border pl-4 text-muted-foreground;
+		@apply my-4 border-l-2 border-border pl-4 text-muted-foreground;
 	}
 	.tiptap blockquote > :first-child {
 		@apply mt-0;
@@ -663,6 +694,11 @@
 	/* ---- Inline Elements ---- */
 	.tiptap a {
 		@apply font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80;
+	}
+	.tiptap :where(h1, h2, h3, h4, h5, h6) > a {
+		color: inherit;
+		font: inherit;
+		text-decoration: none;
 	}
 
 	.tiptap img {

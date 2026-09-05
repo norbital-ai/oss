@@ -188,6 +188,7 @@ const validPrefixState = (entry: {
 	entry.prefixBytes <= MAX_SYNC_RETAINED_PREFIX_BYTES;
 
 const isString = Schema.is(Schema.String);
+const isJsonRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 const validDelta = (delta: SyncPrefixDelta, retainedPrefix: number): boolean => {
 	const removeIds = new Set(delta.removeIds);
@@ -391,8 +392,29 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 			for (const subId of this.#byCollection.get(change.collection) ?? []) {
 				const state = this.#plans.get(subId);
 				if (state === undefined) continue;
+				const pendingProjection =
+					state.input.kind === 'findMany' &&
+					state.input.pendingOnly === true &&
+					change.collection === 'approval_request';
+				// Pending reads route through the proposed target row. A partial update with missing
+				// route fields remains conservative; unrelated complete creates need no database read.
+				const candidateRoutes: ReadonlyArray<Readonly<Record<string, Schema.Json>>> =
+					pendingProjection
+						? routes
+								.filter(
+									(route) =>
+										!isString(route['collection_name']) ||
+										route['collection_name'] === state.input.collection
+								)
+								.map((route) => ({
+									...(isJsonRecord(route['proposed_values']) ? route['proposed_values'] : {}),
+									...(isString(route['record_id']) ? { id: route['record_id'] } : {}),
+									approval_id: change.id
+								}))
+						: routes;
+				if (pendingProjection && candidateRoutes.length === 0) continue;
 				if (
-					state.input.collection !== change.collection ||
+					(!pendingProjection && state.input.collection !== change.collection) ||
 					state.keys.some(({ id }) => id === change.id) ||
 					state.routing.length === 0 ||
 					routes.length === 0
@@ -400,7 +422,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 					affected.add(subId);
 					continue;
 				}
-				const couldMatch = routes.some((route) =>
+				const couldMatch = candidateRoutes.some((route) =>
 					state.routing.every(
 						(constraint) =>
 							!Object.hasOwn(route, constraint.field) ||
