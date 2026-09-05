@@ -34,6 +34,12 @@ describe('system automation presentation', () => {
 	});
 
 	it('presents terminal outcomes distinctly', () => {
+		expect(presentAutomationStatus('stopped')).toEqual({
+			status: 'stopped',
+			messageKey: 'bolt.automations.status.stopped',
+			canStop: false,
+			canResume: false
+		});
 		expect(presentAutomationStatus('done')).toEqual({
 			status: 'done',
 			messageKey: 'bolt.automations.status.completed',

@@ -14,7 +14,10 @@ import {
 	collectionTableRowMatchesSearch,
 	collectionTableRowMatchesWhere
 } from '@norbital-ai/ui/collection-table';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
+
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
 
 /**
  * A settled query: the rows are already in hand, so there is no loading state to model.
@@ -45,7 +48,7 @@ const matchingRows = (
 				collectionTableRowMatchesWhere(row, query?.where) &&
 				// Lexical search re-filters locally; a semantic filter is the server's decision (the
 				// rows arrived already ranked against the corpus), so it constrains nothing here.
-				(typeof query?.search !== 'string' ||
+				(!isString(query?.search) ||
 					collectionTableRowMatchesSearch(row, query.search)) &&
 				collectionTableRowMatchesFilters(row, filters)
 		)
@@ -54,7 +57,7 @@ const matchingRows = (
 				const leftValue: unknown = Reflect.get(left, field);
 				const rightValue: unknown = Reflect.get(right, field);
 				const result =
-					typeof leftValue === 'number' && typeof rightValue === 'number'
+					isNumber(leftValue) && isNumber(rightValue)
 						? leftValue - rightValue
 						: String(leftValue ?? '').localeCompare(String(rightValue ?? ''));
 				if (result !== 0) return direction === 'desc' ? -result : result;

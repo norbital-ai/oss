@@ -37,6 +37,20 @@ const { resolveRecordLabel } = await import('../src/collection/record-label.ts')
 const TWO_FIELD_LABEL = `scope.record.employee_name + ' · ' + scope.record.work_date`;
 
 describe('record labels', () => {
+	it('resolves authored column names for every record and relationship renderer', () => {
+		assert.equal(
+			resolveRecordLabel('name', { name: 'Public Fixture Silicon Works' }),
+			'Public Fixture Silicon Works'
+		);
+		assert.equal(resolveRecordLabel('quantity', { quantity: 0 }), '0');
+		assert.equal(
+			resolveRecordLabel("name + ' · ' + version", { name: 'Supplier category', version: 2 }),
+			'Supplier category · 2'
+		);
+		assert.equal(resolveRecordLabel('name', { name: null }), null);
+		assert.equal(resolveRecordLabel('missing', { name: 'Supplier' }), null);
+		assert.equal(resolveRecordLabel('id', { id: 'a1000001-0000-4000-8000-000000000001' }), null);
+	});
 	it('renders a date term instead of throwing the whole label away', () => {
 		const label = resolveRecordLabel(TWO_FIELD_LABEL, {
 			employee_name: 'Ada Lovelace',

@@ -174,12 +174,15 @@ function normalizeOptions(options: AssembleOptions): NormalizedOptions {
 	};
 }
 
+const isRecordValue = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isNumber = Schema.is(Schema.Number);
+
 function numericFields(value: unknown): Record<string, number | null> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+	if (!isRecordValue(value)) return {};
 	return Object.fromEntries(
 		Object.entries(value).map(([key, entry]) => [
 			key,
-			entry === null ? null : typeof entry === 'number' ? entry : Number.NaN
+			entry === null ? null : isNumber(entry) ? entry : Number.NaN
 		])
 	);
 }

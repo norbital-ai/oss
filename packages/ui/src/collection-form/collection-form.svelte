@@ -13,7 +13,7 @@
 	} from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
-	import { FormState, maybeAsync, type FormSchema } from '#lib/form';
+	import { FormState, type FormSchema } from '#lib/form';
 	import { useI18n } from '#lib/i18n';
 	import { Cluster, Cover, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
@@ -40,10 +40,10 @@
 		CollectionFormComposition,
 		CollectionFormName,
 		CollectionFormProps,
-		CollectionFormValidation,
+		CollectionFormSemantic,
 		CollectionFormValidationIssue
 	} from '#lib/collection-form/collection-form.types';
-	import { Cause, Effect } from 'effect';
+	import { Cause, Effect, Schema } from 'effect';
 	import { toast } from 'svelte-sonner';
 	import {
 		getCollectionClientForSurface,
@@ -53,6 +53,11 @@
 		submitCollectionMutation,
 		type CollectionMutationSubmission
 	} from './collection-mutation-outcome';
+
+	const isString = Schema.is(Schema.String);
+	const isNumber = Schema.is(Schema.Number);
+	const isBoolean = Schema.is(Schema.Boolean);
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 	function validateFieldValue(
 		field: CollectionField,
@@ -70,17 +75,17 @@
 		const issues: CollectionFormValidationIssue[] = [];
 		if (field.values) {
 			const selected = Array.isArray(value) ? value : [value];
-			if (selected.some((entry) => typeof entry !== 'string' || !field.values?.includes(entry))) {
+			if (selected.some((entry) => !isString(entry) || !field.values?.includes(entry))) {
 				issues.push({ message: t('form.invalidOption'), path: [fieldName] });
 			}
 		}
 		if (
 			['integer', 'number', 'numeric'].includes(field.kind) &&
-			(typeof value !== 'number' || !Number.isFinite(value))
+			(!isNumber(value) || !Number.isFinite(value))
 		) {
 			issues.push({ message: t('form.invalidNumber'), path: [fieldName] });
 		}
-		if (field.kind === 'boolean' && typeof value !== 'boolean') {
+		if (field.kind === 'boolean' && !isBoolean(value)) {
 			issues.push({ message: t('form.invalidBoolean'), path: [fieldName] });
 		}
 		return issues;
@@ -107,72 +112,17 @@
 		return issues;
 	}
 
-	function standardIssuePath(path: readonly unknown[] | undefined): readonly string[] | undefined {
-		return path?.map((segment) => {
-			const key =
-				typeof segment === 'object' && segment !== null ? Reflect.get(segment, 'key') : segment;
-			return String(key);
-		});
-	}
-
-	/**
-	 * Schema validation is an async boundary (a `~standard` validator), so its failure is modelled
-	 * in the Effect error channel and folded into the issue list, never thrown.
-	 */
-	const applySchemaValidation = (
-		candidate: Record<string, unknown>,
-		validation: CollectionFormValidation | undefined,
-		issues: CollectionFormValidationIssue[]
-	): Effect.Effect<Record<string, unknown>> => {
-		if (!validation?.schema) return Effect.succeed(candidate);
-		return maybeAsync(() => validation.schema!['~standard'].validate(candidate)).pipe(
-			Effect.catch((cause) =>
-				Effect.sync(() => {
-					issues.push({
-						message: getErrorMessage(cause),
-						path: []
-					});
-					return candidate;
-				})
-			),
-			Effect.map((result) => {
-				// boundary-cast — standard-schema answers either a discriminable issue list or a
-				// validated value; the catch above folds a thrown validation into the same answer as
-				// the untouched candidate, so the map re-reads every runtime answer as that shape.
-				const answer = result as RuntimeValidationResult;
-				if ('issues' in answer) {
-					issues.push(
-						...answer.issues.map((issue) => ({
-							message: issue.message,
-							path: standardIssuePath(issue.path)
-						}))
-					);
-					return candidate;
-				}
-				if (
-					answer.value == null ||
-					typeof answer.value !== 'object' ||
-					Array.isArray(answer.value)
-				) {
-					issues.push({ message: t('form.valuesMustBeObject'), path: [] });
-					return candidate;
-				}
-				return Object.fromEntries(Object.entries(answer.value));
-			})
-		);
-	};
-
 	/**
 	 * Cross-field validation may perform asynchronous domain checks; its failure is a modelled
 	 * issue with the same continuation the caller expects.
 	 */
 	const applySemanticValidation = (
 		candidate: Readonly<Record<string, unknown>>,
-		validation: CollectionFormValidation | undefined,
+		semantic: CollectionFormSemantic | undefined,
 		issues: CollectionFormValidationIssue[]
 	): Effect.Effect<void> => {
-		if (issues.length > 0 || !validation?.semantic) return Effect.void;
-		return validation.semantic(candidate).pipe(
+		if (issues.length > 0 || !semantic) return Effect.void;
+		return semantic(candidate).pipe(
 			Effect.catch((cause) =>
 				Effect.sync(() => {
 					issues.push({
@@ -192,8 +142,11 @@
 		collection,
 		defaultValues,
 		submitLabel,
-		validation,
-		onSubmit,
+		semantic,
+		success_message,
+		failure_message,
+		sendMode = 'manual',
+		sendDebounceMs = 300,
 		deleteAction,
 		recordMetadata = [],
 		disabled = false,
@@ -246,7 +199,15 @@
 	const operations = $derived(client.db[collection]);
 	const registeredFields = new Map<string, number>();
 	const hiddenFields = new Set<string>();
-	const mutationFieldNames = $derived(collectionFormMutationFieldNames(definition.fields));
+	/**
+	 * The collection's writable columns: the declared `input`'s set when the workspace declares
+	 * one, the catalog's mutable fields otherwise. Registration, the mutation mask and unknown-key
+	 * rejection all narrow to this one set, so a form cannot write a column the collection's
+	 * write contract does not accept — the same contract the server's decode enforces.
+	 */
+	const mutationFieldNames = $derived(
+		definition.inputColumns ?? collectionFormMutationFieldNames(definition.fields)
+	);
 	let historyRequested = $state(false);
 	const historyQuery = $derived.by(() => {
 		const currentRecordId = optionalCollectionRecordId(defaultValues);
@@ -255,25 +216,24 @@
 	});
 	let deleting = $state(false);
 
-	const validateCandidate = (data: unknown): Effect.Effect<RuntimeValidationResult> =>
-		Effect.gen(function* () {
-			if (data == null || typeof data !== 'object' || Array.isArray(data)) {
-				return { issues: [{ message: t('form.formMustBeObject'), path: [] }] };
-			}
+	const validateCandidate = (data: unknown): Effect.Effect<RuntimeValidationResult> => {
+		if (data == null || !isRecord(data)) {
+			return Effect.succeed({ issues: [{ message: t('form.formMustBeObject'), path: [] }] });
+		}
 
-			let candidate = Object.fromEntries(Object.entries(data));
-			// Hidden declarations prove composition completeness but mount no operator control. They
-			// therefore leave value derivation to the caller or collection hook and do not run the
-			// interactive required-value check that belongs to a visible input.
-			const visibleMutationFields = new Set(
-				mutationFieldNames.filter((fieldName) => !hiddenFields.has(fieldName))
-			);
-			const issues = validateRegisteredFields(fieldByName, visibleMutationFields, candidate);
-			candidate = yield* applySchemaValidation(candidate, validation, issues);
-			yield* applySemanticValidation(candidate, validation, issues);
-
-			return issues.length > 0 ? { issues } : { value: candidate };
-		});
+		const candidate = Object.fromEntries(Object.entries(data));
+		// Hidden declarations prove composition completeness but mount no operator control. They
+		// therefore leave value derivation to the caller or collection hook and do not run the
+		// interactive required-value check that belongs to a visible input.
+		const visibleMutationFields = new Set(
+			mutationFieldNames.filter((fieldName) => !hiddenFields.has(fieldName))
+		);
+		const issues = validateRegisteredFields(fieldByName, visibleMutationFields, candidate);
+		// TODO(codec): structural codec validation plugs in here; field-level + semantic run today.
+		return applySemanticValidation(candidate, semantic, issues).pipe(
+			Effect.map(() => (issues.length > 0 ? { issues } : { value: candidate }))
+		);
+	};
 	// The `~standard` adapter is the Standard Schema contract of `FormState`; the effect is the
 	// validation body, adapted once at this framework boundary.
 	const runtimeSchema = {
@@ -282,7 +242,7 @@
 		}
 	} satisfies FormSchema;
 	// svelte-ignore state_referenced_locally -- a mounted form owns one record baseline; record changes remount its representation.
-	const form: FormState<typeof runtimeSchema, CollectionMutationSubmission | void> = new FormState({
+	const form: FormState<typeof runtimeSchema, CollectionMutationSubmission> = new FormState({
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
@@ -292,10 +252,13 @@
 		translate: t,
 		remoteFn:
 			() =>
-			(data): Effect.Effect<CollectionMutationSubmission | void, Cause.UnknownError> => {
+			(data): Effect.Effect<CollectionMutationSubmission, Cause.UnknownError> => {
 				const values = Object.fromEntries(Object.entries(data));
-				if (onSubmit) return onSubmit(values);
-				const writableValues = pickWritableFormValues(definition.fields, values);
+				const writableValues = pickWritableFormValues(
+					mutationFieldNames,
+					values,
+					definition.relationships ?? []
+				);
 				return submitCollectionMutation(() =>
 					operations.mutate([recordId ? { id: recordId, ...writableValues } : writableValues])
 				).pipe(
@@ -312,6 +275,7 @@
 				toast.success(t('form.submittedForApproval'));
 				return;
 			}
+			if (success_message) toast.success(success_message);
 			return onAfterSubmit?.();
 		}
 	});
@@ -359,17 +323,57 @@
 
 	function submit(event: SubmitEvent): void {
 		event.preventDefault();
-		assertCollectionFormFieldRegistration(String(collection), definition.fields, registeredFields);
+		assertCollectionFormFieldRegistration(String(collection), mutationFieldNames, registeredFields);
 		Effect.runFork(
 			form
 				.submit()
 				.pipe(
-					Effect.catch((cause) =>
-						Effect.logError(`[CollectionForm:${String(collection)}] submission failed`, cause)
-					)
+					Effect.catch((cause) => {
+						if (failure_message) toast.error(failure_message);
+						return Effect.logError(
+							`[CollectionForm:${String(collection)}] submission failed`,
+							cause
+						);
+					})
 				)
 		);
 	}
+
+	let autoSendTimer: ReturnType<typeof setTimeout> | undefined = $state(undefined);
+
+	function scheduleAutoSend(): void {
+		if (sendMode !== 'auto') return;
+		clearTimeout(autoSendTimer);
+		autoSendTimer = setTimeout(() => {
+			if (sendMode !== 'auto') return;
+			if (loading || disabled || updateRestriction != null) return;
+			if (!form.isDirty || form.isSubmitting || submissionPending) return;
+			Effect.runFork(
+				Effect.gen(function* () {
+					const snapshot = $state.snapshot(form.getData());
+					const outcome = yield* validateCandidate(snapshot);
+					if ('issues' in outcome) return;
+					yield* form.submit({ silent: true }).pipe(
+						Effect.catch((cause) => {
+							if (failure_message) toast.error(failure_message);
+							return Effect.logError(
+								`[CollectionForm:${String(collection)}] auto submission failed`,
+								cause
+							);
+						})
+					);
+				}).pipe(
+					Effect.catch((cause) =>
+						Effect.logError(`[CollectionForm:${String(collection)}] auto validation failed`, cause)
+					)
+				)
+			);
+		}, sendDebounceMs);
+	}
+
+	form.setHook('onDataChange', () => {
+		scheduleAutoSend();
+	});
 
 	function clear(): void {
 		form.reset();
@@ -392,9 +396,12 @@
 
 	$effect(() => {
 		if (loading) return;
-		assertCollectionFormFieldRegistration(String(collection), definition.fields, registeredFields);
+		assertCollectionFormFieldRegistration(String(collection), mutationFieldNames, registeredFields);
 	});
-	onDestroy(() => form.destroy());
+	onDestroy(() => {
+		clearTimeout(autoSendTimer);
+		form.destroy();
+	});
 </script>
 
 {#snippet formFooter()}
@@ -467,7 +474,7 @@
 	class={className}
 	aria-busy={loading || submissionPending}
 	onsubmit={submit}
-	bottom={formFooter}
+	bottom={sendMode === 'manual' ? formFooter : undefined}
 >
 	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />
 	<Scroll name={t('form.fieldsRegion', { name: String(collection) })}>

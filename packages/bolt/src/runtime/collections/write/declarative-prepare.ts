@@ -26,6 +26,11 @@ import type {
 } from './graph-read.js';
 import { relatedRowsKey, storedGraphRowKey } from './graph-read.js';
 
+const isString = Schema.is(Schema.String);
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+const isNumber = Schema.is(Schema.Number);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
 export type RelationshipSnapshot = Readonly<{
 	readonly edge: WritableManyRelation;
 	readonly parentId: string;
@@ -162,6 +167,7 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 				action: 'create' | 'update' | 'delete';
 				approval?: Schema.Json;
 				review: DeclarativeReview;
+				preparedValues: Readonly<Record<string, Schema.Json>>;
 				coordinates: ReadonlyArray<Readonly<{ collection: string; id: string }>>;
 			}>
 		) => Effect.Effect<never, Error, Requirements>;
@@ -197,7 +203,7 @@ const MUTATION_RECORD_ID =
  * update at all, and the version range is the whole of it.
  */
 export const isClientMintedRecordId = (value: unknown): value is string =>
-	typeof value === 'string' && MUTATION_RECORD_ID.test(value);
+	isString(value) && MUTATION_RECORD_ID.test(value);
 
 /**
  * Validates the caller-authored graph once, before PREPARE reads or authored hooks run.
@@ -234,10 +240,7 @@ const validateSubmittedGraph = <Error, ReadError, Requirements>(
 				);
 
 			const submittedId = node.payload['id'];
-			if (
-				submittedId !== undefined &&
-				(typeof submittedId !== 'string' || submittedId.length === 0)
-			)
+			if (submittedId !== undefined && !isNonEmptyString(submittedId))
 				return yield* ports.graphRefusal(
 					node.collection,
 					node.action,
@@ -245,8 +248,8 @@ const validateSubmittedGraph = <Error, ReadError, Requirements>(
 				);
 			if (
 				clientGraph &&
-				((typeof submittedId === 'string' && !isClientMintedRecordId(submittedId)) ||
-					(node.depth === 0 && typeof submittedId !== 'string'))
+				((isString(submittedId) && !isClientMintedRecordId(submittedId)) ||
+					(node.depth === 0 && !isString(submittedId)))
 			)
 				return yield* ports.graphRefusal(
 					node.collection,
@@ -274,7 +277,7 @@ const validateSubmittedGraph = <Error, ReadError, Requirements>(
 					pending.push({
 						collection: included.edge.childCollection,
 						payload,
-						action: typeof payload['id'] === 'string' ? 'update' : 'create',
+						action: isString(payload['id']) ? 'update' : 'create',
 						depth: node.depth + 1
 					});
 		}
@@ -309,7 +312,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			for (const [index, row] of value.rows.entries()) {
 				const id = row['id'];
 				const raw = value.raw[index];
-				if (typeof id !== 'string' || raw === undefined) continue;
+				if (!isString(id) || raw === undefined) continue;
 				storedGraphRowsCache.set(storedGraphRowKey(request.edge.childCollection, id), {
 					row,
 					snapshot: JSON.stringify(raw)
@@ -374,9 +377,9 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 						if (edge === undefined || !Array.isArray(value)) continue;
 						const desiredIds = new Set(
 							value.flatMap((child) => {
-								if (child === null || typeof child !== 'object' || Array.isArray(child)) return [];
+								if (!isRecord(child)) return [];
 								const childId = Reflect.get(child, 'id');
-								return typeof childId === 'string' && childId.length > 0 ? [childId] : [];
+								return isNonEmptyString(childId) ? [childId] : [];
 							})
 						);
 						if (action === 'update') {
@@ -384,10 +387,10 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 							if (!initial.has(key)) initial.set(key, { edge, parentId: id, desiredIds });
 						}
 						for (const child of value) {
-							if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+							if (!isRecord(child)) continue;
 							const childPayload = child as Readonly<Record<string, unknown>>;
 							const childId = childPayload['id'];
-							if (typeof childId !== 'string' || childId.length === 0) continue;
+							if (!isNonEmptyString(childId)) continue;
 							const browserExisting = options.browserMutation?.baseVersions.some(
 								(entry) =>
 									entry.row.collection === edge.childCollection && entry.row.recordId === childId
@@ -403,7 +406,14 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 						}
 					}
 				};
-				const seeds = requestedSeeds ?? options.primeRoots;
+				const seeds = requestedSeeds ?? [
+					{
+						collection: rootCollection,
+						payload: rootPayload,
+						id: options.rootId,
+						action: options.rootAction
+					}
+				];
 				for (const seed of seeds)
 					collect(seed.collection, seed.payload, seed.id, seed.action, seed.readExisting);
 				const initialRead = yield* ports.queuedGraphWaveRead(
@@ -452,7 +462,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 						const children = loaded.get(relatedRowsKey(request.edge, request.parentId))?.rows ?? [];
 						for (const row of children) {
 							const childId = row['id'];
-							if (typeof childId !== 'string' || request.desiredIds.has(childId)) continue;
+							if (!isString(childId) || request.desiredIds.has(childId)) continue;
 							for (const edge of cascadeEdgesFrom(request.edge.childCollection)) {
 								const key = relatedRowsKey(edge, childId);
 								if (!visited.has(key) && !next.has(key))
@@ -524,8 +534,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					collection,
 					id
 				))?.row['approval_id'];
-				const locked =
-					typeof lockedValue === 'string' && lockedValue.length > 0 ? lockedValue : undefined;
+				const locked = isNonEmptyString(lockedValue) ? lockedValue : undefined;
 				if (locked !== undefined && locked !== options.approvalRequestId)
 					return yield* Effect.fail(
 						ports.approvalConflict(
@@ -542,8 +551,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			const expected = options.expectedRootVersion;
 			if (expected === undefined) return Effect.void;
 			const stored = row?.['row_version'];
-			const current =
-				typeof stored === 'number' && Number.isInteger(stored) && stored >= 1 ? stored : null;
+			const current = isNumber(stored) && Number.isInteger(stored) && stored >= 1 ? stored : null;
 			return current === expected
 				? Effect.void
 				: Effect.fail(ports.versionConflict(collection, id, expected, current));
@@ -557,17 +565,16 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
 						Effect.map(() => {
 							const submittedId = values['id'];
-							const id =
-								typeof submittedId === 'string'
-									? submittedId
-									: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
-							const action = typeof submittedId === 'string' ? 'update' : 'create';
+							const id = isString(submittedId)
+								? submittedId
+								: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
+							const action = isString(submittedId) ? 'update' : 'create';
 							stagedWrites.push({
 								collection,
 								payload: { ...values, id },
 								id,
 								action,
-								readExisting: typeof submittedId === 'string'
+								readExisting: isString(submittedId)
 							});
 						})
 					)
@@ -585,7 +592,17 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			...ports,
 			buildApi: (effectId, subject, elevated, depth) =>
 				ports.buildApi(effectId, subject, elevated, depth, stageHookWrites),
-			runMutateBefore: (effectId, subject, input, existing, module, depth, prepared) =>
+			runMutateBefore: (
+				effectId,
+				subject,
+				input,
+				existing,
+				module,
+				depth,
+				prepared,
+				_staged,
+				relationships
+			) =>
 				ports.runMutateBefore(
 					effectId,
 					subject,
@@ -594,7 +611,8 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					module,
 					depth,
 					prepared,
-					stageHookWrites
+					stageHookWrites,
+					relationships
 				),
 			runMutatePrepare: (effectId, subject, collection, inputs, module, depth) =>
 				ports.runMutatePrepare(
@@ -654,7 +672,18 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			| undefined;
 		if (options.rootAction !== 'delete') {
 			const rootModule = ports.authoredHooks[rootCollection];
-			const preparationSeeds = options.primeRoots;
+			const preparationOwner = options.primeRoots.find((seed) => seed.action !== 'delete');
+			const preparationSeeds =
+				preparationOwner?.id === options.rootId
+					? options.primeRoots
+					: [
+							{
+								collection: rootCollection,
+								payload: rootPayload,
+								id: options.rootId,
+								action: options.rootAction
+							}
+						];
 			const decodedRoots = yield* Effect.forEach(
 				preparationSeeds.filter(
 					(seed): seed is typeof seed & { readonly action: 'create' | 'update' } =>
@@ -684,7 +713,6 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			const rootInputs = decodedRoots.map(({ seed, decoded }) =>
 				seed.action === 'update' ? { ...decoded, id: seed.id } : decoded
 			);
-			const preparationOwner = preparationSeeds.find((seed) => seed.action !== 'delete');
 			rootPrepared = yield* settleRootWave(
 				rootPreparation,
 				preparationOwner?.id === options.rootId,
@@ -888,6 +916,10 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					action: firstApproval.action,
 					...(firstApproval.approval === undefined ? {} : { approval: firstApproval.approval }),
 					review,
+					preparedValues:
+						operations.find(
+							(operation) => operation.collection === rootCollection && operation.id === rootId
+						)?.values ?? {},
 					coordinates: operations
 						.map((operation) => ({ collection: operation.collection, id: operation.id }))
 						.toSorted((left, right) =>

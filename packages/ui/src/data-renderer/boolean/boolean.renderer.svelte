@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { Button } from '#lib/button';
 	import { Checkbox } from '#lib/checkbox';
 	import { Combobox } from '#lib/combobox';
@@ -9,6 +10,8 @@
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	const { t } = useI18n<UiKeys>();
+
+	const isBoolean = Schema.is(Schema.Boolean);
 
 	let {
 		field,
@@ -24,9 +27,7 @@
 		{ value: 'true', label: t('dataRenderer.true') },
 		{ value: 'false', label: t('dataRenderer.false') }
 	];
-	const values = $derived(
-		Array.isArray(value) ? value.filter((item): item is boolean => typeof item === 'boolean') : []
-	);
+	const values = $derived(Array.isArray(value) ? value.filter(isBoolean) : []);
 
 	function updateArrayItem(index: number, checked: boolean): void {
 		const next = [...values];

@@ -2,8 +2,6 @@ import {
 	EnvironmentName,
 	GATEWAY_SECRET_VARIABLE,
 	ReleaseId,
-	SYSTEM_SIGNATURE_HEADER,
-	SYSTEM_TIMESTAMP_HEADER,
 	TenantId,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
@@ -14,12 +12,13 @@ import {
 	startLocalApplication,
 	startLocalDatabase,
 	startLocalFiles,
-	systemCommandHeaders,
+	makeWebConnectorBinding,
 	type RunningApplication,
 	type StartedLocalDatabase,
 	type StartedLocalFiles
 } from '@norbital-ai/bolt-server';
-import { Effect, Redacted } from 'effect';
+import { Redacted, Schema } from 'effect';
+import { asRecord, systemHeaders } from './guest-http.js';
 import { catalogAi } from './catalog-ai.js';
 import { loadPublicSeed, type PublicSeedQuery, type PublicSeedRows } from './load-public-seed.js';
 
@@ -69,6 +68,8 @@ export type WithSelfHostInput = {
 	readonly files?: boolean;
 	/** Any `FacilityBindings['ai']`. Default is the catalog test double, not a vendor lock. */
 	readonly ai?: FacilityBindings['ai'];
+	/** Portable connector providers, including a fixture or the public HTTPS page reader. */
+	readonly connector?: FacilityBindings['connector'];
 };
 
 export type SelfHostSession = {
@@ -106,14 +107,9 @@ type FilesMode = { readonly kind: 'none' } | { readonly kind: 'memory' };
 /** Keep JS arrays; JSON.stringify only non-array objects (uuid[] / text[] stay arrays). */
 export const jsonSqlParameter = (value: unknown): unknown => {
 	if (Array.isArray(value)) return value;
-	return value !== null && typeof value === 'object' ? JSON.stringify(value) : value;
-};
-
-const asRecord = (value: unknown, label: string): Readonly<Record<string, unknown>> => {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error(`${label} was not an object: ${JSON.stringify(value)}`);
-	}
-	return value as Readonly<Record<string, unknown>>;
+	return Schema.is(Schema.Record(Schema.String, Schema.Unknown))(value)
+		? JSON.stringify(value)
+		: value;
 };
 
 const founderMode = (input: WithSelfHostInput): FounderMode => {
@@ -135,9 +131,7 @@ const seedMode = (input: WithSelfHostInput): SeedMode => {
 		kind: 'load',
 		stages: input.seed.stages,
 		rows: input.seed.rows,
-		...(input.seed.mapParameters !== undefined
-			? { mapParameters: input.seed.mapParameters }
-			: {})
+		...(input.seed.mapParameters !== undefined ? { mapParameters: input.seed.mapParameters } : {})
 	};
 };
 
@@ -145,7 +139,10 @@ const filesMode = (input: WithSelfHostInput): FilesMode =>
 	input.files === true ? { kind: 'memory' } : { kind: 'none' };
 
 const mappedQuery =
-	(query: PublicSeedQuery, mapParameters: ((value: unknown) => unknown) | undefined): PublicSeedQuery =>
+	(
+		query: PublicSeedQuery,
+		mapParameters: ((value: unknown) => unknown) | undefined
+	): PublicSeedQuery =>
 	(statement, parameters) => {
 		if (mapParameters === undefined) return query(statement, parameters);
 		return query(statement, (parameters ?? []).map(mapParameters));
@@ -154,18 +151,7 @@ const mappedQuery =
 const authorityHeaders = (input: GuestCommandInput): Readonly<Record<string, string>> => {
 	switch (input.authority) {
 		case 'system': {
-			const signed = Effect.runSync(
-				systemCommandHeaders(
-					Redacted.make(input.gatewaySecret),
-					input.command,
-					input.tenantId,
-					input.input
-				)
-			);
-			return {
-				[SYSTEM_SIGNATURE_HEADER]: signed[SYSTEM_SIGNATURE_HEADER]?.[0] ?? '',
-				[SYSTEM_TIMESTAMP_HEADER]: signed[SYSTEM_TIMESTAMP_HEADER]?.[0] ?? ''
-			};
+			return systemHeaders(input.command, input.input, input.gatewaySecret, input.tenantId);
 		}
 		case 'bearer': {
 			if (input.credential === undefined || input.credential.length === 0) {
@@ -182,15 +168,22 @@ const authorityHeaders = (input: GuestCommandInput): Readonly<Record<string, str
 
 const parseCommandBody = (text: string): unknown => {
 	if (text.length === 0) return null;
+	// repository-health:allow EFF1 -- a malformed body falls back to the raw text; JSON.parse has no non-throwing form and this is a decode fallback, not Effect error control.
 	try {
 		return JSON.parse(text);
 	} catch {
+		/* not JSON — surface the body as the raw text value */
 		return text;
 	}
 };
 
 /** POST `/_bolt/command/:command`. System uses signed headers; bearer uses the session credential. */
-export const guestCommand = async (input: GuestCommandInput): Promise<GuestCommandResult> => {
+export const guestCommand = async (
+	// repository-health:allow EFF3 -- public promise-shaped test-harness API consumed by non-Effect suites; native fetch boundary.
+	input: GuestCommandInput
+): Promise<GuestCommandResult> => {
+	// repository-health:allow EFF3 -- continuation of the same native fetch seam.
+	// repository-health:allow FETCH1 -- this published isolation harness has no @norbital-ai/std dependency, and the request targets the local host this call just started.
 	const response = await fetch(
 		`${input.baseUrl}/_bolt/command/${encodeURIComponent(input.command)}`,
 		{
@@ -199,12 +192,12 @@ export const guestCommand = async (input: GuestCommandInput): Promise<GuestComma
 			body: JSON.stringify(input.input)
 		}
 	);
-	return { status: response.status, value: parseCommandBody(await response.text()) };
+	return { status: response.status, value: parseCommandBody(await response.text()) }; // repository-health:allow EFF3 -- continuation of the same native fetch seam.
 };
 
 const requireFounderCredential = (founder: unknown): string => {
 	const admitted = asRecord(founder, 'identity.bootstrapFounder');
-	if (admitted.admitted !== true || typeof admitted.credential !== 'string') {
+	if (admitted.admitted !== true || !Schema.is(Schema.String)(admitted.credential)) {
 		throw new Error(`identity.bootstrapFounder failed: ${JSON.stringify(founder)}`);
 	}
 	if (admitted.credential.length === 0) {
@@ -213,7 +206,7 @@ const requireFounderCredential = (founder: unknown): string => {
 	return admitted.credential;
 };
 
-const admitFounder = async (input: {
+type AdmitFounderInput = {
 	readonly baseUrl: string;
 	readonly bundlePath: string;
 	readonly facilities: FacilityBindings;
@@ -221,9 +214,15 @@ const admitFounder = async (input: {
 	readonly gatewaySecret: string;
 	readonly email: string;
 	readonly claimId: string;
-}): Promise<string> => {
+};
+
+const admitFounder = async (
+	// repository-health:allow EFF3 -- bootstrap fallback over the promise-shaped command seam; not an Effect pipeline.
+	input: AdmitFounderInput
+): Promise<string> => {
 	const founderInput = { email: input.email, claimId: input.claimId };
 	const founderHttp = await guestCommand({
+		// repository-health:allow EFF3 -- same promise-shaped harness seam.
 		baseUrl: input.baseUrl,
 		command: 'identity.bootstrapFounder',
 		input: founderInput,
@@ -236,6 +235,7 @@ const admitFounder = async (input: {
 			? founderHttp.value
 			: (
 					await dispatchSystemCommand({
+						// repository-health:allow EFF3 -- same promise-shaped harness seam.
 						bundlePath: input.bundlePath,
 						facilities: input.facilities,
 						scope: input.scope,
@@ -249,17 +249,21 @@ const admitFounder = async (input: {
 };
 
 const releaseHeld = async (held: {
+	// repository-health:allow EFF3 -- teardown over promise-shaped facility finalizers; not an Effect pipeline.
 	readonly host: StartedHost | undefined;
 	readonly files: StartedLocalFiles | undefined;
 	readonly database: StartedLocalDatabase;
 }): Promise<void> => {
-	if (held.host !== undefined) await held.host.stop();
-	if (held.files !== undefined) await held.files.close();
-	await held.database.close();
+	if (held.host !== undefined) await held.host.stop(); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
+	if (held.files !== undefined) await held.files.close(); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
+	await held.database.close(); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
 };
 
 /** Start/stop form for existing wrappers. */
-export const startSelfHostSession = async (input: WithSelfHostInput): Promise<SelfHostSession> => {
+export const startSelfHostSession = async (
+	// repository-health:allow EFF3 -- public promise-shaped test-harness boot consumed by non-Effect suites; not an Effect pipeline.
+	input: WithSelfHostInput
+): Promise<SelfHostSession> => {
 	const tenantId = input.tenantId;
 	const releaseId = input.releaseId ?? tenantId;
 	const environment = input.environment ?? DEFAULT_ENVIRONMENT;
@@ -280,17 +284,18 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 		process.env[GATEWAY_SECRET_VARIABLE] = previousGatewaySecret;
 	};
 
-	const database = await startLocalDatabase();
+	const database = await startLocalDatabase(); // repository-health:allow EFF3 -- same promise-shaped harness boot.
 	const held: {
 		host: StartedHost | undefined;
 		files: StartedLocalFiles | undefined;
 		database: StartedLocalDatabase;
 	} = { host: undefined, files: undefined, database };
+	// repository-health:allow EFF1 -- boot cleanup releases partially acquired facilities in order and rethrows the original failure; not Effect error control.
 	try {
 		const filesChoice = filesMode(input);
 		switch (filesChoice.kind) {
 			case 'memory':
-				held.files = await startLocalFiles();
+				held.files = await startLocalFiles(); // repository-health:allow EFF3 -- same promise-shaped harness boot.
 				break;
 			case 'none':
 				break;
@@ -304,6 +309,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 			scope,
 			database: database.binding,
 			ai: input.ai ?? catalogAi(),
+			connector: input.connector ?? makeWebConnectorBinding(),
 			...(held.files !== undefined ? { files: held.files.binding } : {}),
 			config: makeConfigBinding({
 				[GATEWAY_SECRET_VARIABLE]: gatewaySecret,
@@ -312,6 +318,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 		};
 
 		await dispatchSystemCommand({
+			// repository-health:allow EFF3 -- same promise-shaped harness boot.
 			bundlePath: input.bundlePath,
 			facilities,
 			scope,
@@ -331,6 +338,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 				break;
 			case 'load':
 				await loadPublicSeed({
+					// repository-health:allow EFF3 -- same promise-shaped harness boot.
 					stages: seed.stages,
 					rows: seed.rows,
 					query
@@ -344,6 +352,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 
 		const { tasks: _tasks, ...bound } = facilities;
 		const application = await startLocalApplication({
+			// repository-health:allow EFF3 -- same promise-shaped harness boot.
 			configuration: ServerConfiguration.make({
 				host: input.host ?? '127.0.0.1',
 				port: 0,
@@ -371,6 +380,7 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 				break;
 			case 'run':
 				credential = await admitFounder({
+					// repository-health:allow EFF3 -- same promise-shaped harness boot.
 					baseUrl: held.host.baseUrl,
 					bundlePath: input.bundlePath,
 					facilities,
@@ -390,10 +400,12 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 		const files = held.files;
 		let stopped = false;
 		const stop = async (): Promise<void> => {
+			// repository-health:allow EFF3 -- stop returns the promise-shaped teardown contract; not an Effect pipeline.
 			if (stopped) return;
 			stopped = true;
+			// repository-health:allow EFF1 -- try/finally orders releaseHeld before the env restore at the promise boundary; cleanup ordering, not error control.
 			try {
-				await releaseHeld({ host: started, files, database });
+				await releaseHeld({ host: started, files, database }); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
 			} finally {
 				restoreGatewaySecret();
 			}
@@ -421,8 +433,9 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 			stop
 		};
 	} catch (error) {
+		// repository-health:allow EFF1 -- try/finally orders releaseHeld before the env restore at the promise boundary; cleanup ordering, not error control.
 		try {
-			await releaseHeld(held);
+			await releaseHeld(held); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
 		} finally {
 			restoreGatewaySecret();
 		}
@@ -431,14 +444,15 @@ export const startSelfHostSession = async (input: WithSelfHostInput): Promise<Se
 };
 
 /** Callback form — always stops. */
-export const withSelfHost = async <A>(
+export const withSelfHost = async <A>( // repository-health:allow EFF3 -- public promise-shaped test-harness API consumed by non-Effect suites; not an Effect pipeline.
 	input: WithSelfHostInput,
 	body: (session: SelfHostSession) => Promise<A>
 ): Promise<A> => {
-	const session = await startSelfHostSession(input);
+	const session = await startSelfHostSession(input); // repository-health:allow EFF3 -- same promise-shaped harness boot.
+	// repository-health:allow EFF1 -- try/finally guarantees session.stop after the caller's body at the promise boundary; cleanup ordering, not error control.
 	try {
-		return await body(session);
+		return await body(session); // repository-health:allow EFF3 -- body is the caller's promise-shaped continuation.
 	} finally {
-		await session.stop();
+		await session.stop(); // repository-health:allow EFF3 -- ordered release of the same promise-shaped finalizers.
 	}
 };

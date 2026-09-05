@@ -7,6 +7,8 @@ const CLOCK_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 import { Schema } from 'effect';
 
+const isString = Schema.is(Schema.String);
+
 /**
  * An inclusive date range over UTC calendar days, as it travels between client and server.
  *
@@ -76,7 +78,7 @@ export function formatDateRangeLocal(
 
 /** UTC calendar day `YYYY-MM-DD` from a stored instant or calendar string. */
 export function formatDateISO(value: string | Date): string {
-	if (typeof value === 'string' && isCalendarDate(value)) return value;
-	const date = typeof value === 'string' ? parseUtcInstant(value) : value;
+	if (isString(value) && isCalendarDate(value)) return value;
+	const date = isString(value) ? parseUtcInstant(value) : value;
 	return date.toISOString().slice(0, 10);
 }

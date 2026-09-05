@@ -15,7 +15,12 @@ import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import { Communication, Files } from '#lib/runtime/facilities/services.js';
+import {
+	Communication,
+	Files,
+	type CommunicationInterface,
+	type FilesInterface
+} from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
@@ -58,6 +63,10 @@ interface EnvoyStatus extends Schema.Schema.Type<typeof EnvoyStatus> {}
 const MAX_INBOUND_ATTACHMENTS = 8;
 const MAX_INBOUND_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_INBOUND_ATTACHMENT_BASE64_LENGTH = Math.ceil(MAX_INBOUND_ATTACHMENT_BYTES / 3) * 4;
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
 const InboundAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,
 	attachmentId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
@@ -248,7 +257,21 @@ export type Interface = Readonly<{
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Envoys');
 
-export const layerWith = (randomId: () => string = () => globalThis.crypto.randomUUID()) =>
+type LayerServices =
+	| Workspace.Interface
+	| Agents.Interface
+	| Identity.Interface
+	| CommunicationInterface
+	| FilesInterface
+	| Database.Interface
+	| TaskQueue.Interface
+	| RateLimits.Interface
+	| AccessControl.Interface
+	| TenantScope.Interface;
+
+export const layerWith = (
+	randomId: () => string = () => globalThis.crypto.randomUUID()
+): Layer.Layer<Interface, never, LayerServices> =>
 	Layer.effect(
 		Service,
 		Effect.gen(function* () {
@@ -600,12 +623,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * else is stringified — the host reads the same field either way, because the payload is now
 			 * a declared shape, not a shape somebody guesses at.
 			 */
-			const textOf = (value: Schema.Json): string =>
-				value !== null &&
-				typeof value === 'object' &&
-				typeof Reflect.get(value, 'text') === 'string'
-					? (Reflect.get(value, 'text') as string)
-					: String(value ?? '');
+			const textOf = (value: Schema.Json): string => {
+				if (!isObjectLike(value)) return String(value ?? '');
+				const text = Reflect.get(value, 'text');
+				return isString(text) ? text : String(value ?? '');
+			};
 
 			/**
 			 * Delivers one outbound message and reports what it became on the wire.
@@ -646,21 +668,20 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 				}
 				const receipt: unknown = response.value.receipt;
-				const id =
-					receipt !== null && typeof receipt === 'object' ? Reflect.get(receipt, 'id') : undefined;
+				const id = isObjectLike(receipt) ? Reflect.get(receipt, 'id') : undefined;
 				return {
 					delivered: true as const,
 					key:
 						updateOf !== undefined && updateOf !== null
 							? updateOf
-							: typeof id === 'string' && id !== ''
+							: isString(id) && id !== ''
 								? id
 								: null
 				};
 			});
 
 			const assistantText = (message: Prompt.MessageEncoded): string =>
-				typeof message.content === 'string'
+				isString(message.content)
 					? message.content
 					: message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
 

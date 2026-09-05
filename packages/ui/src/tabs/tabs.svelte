@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Predicate, Schema } from 'effect';
 	import { IconWrapper } from '#lib/icon-wrapper';
 	import { Cluster, Inline, INSET_MX_CLASS } from '#lib/layout';
 	import { cn } from '#lib/utils';
@@ -28,6 +29,8 @@
 		listSuffix
 	}: TabsProps = $props();
 
+	const isString = Schema.is(Schema.String);
+
 	type ResolvedTabMeta = {
 		value: string;
 		label?: string | undefined;
@@ -40,18 +43,17 @@
 	};
 
 	function isSnippet(candidate: unknown): candidate is Snippet {
-		return typeof candidate === 'function';
+		return Predicate.isFunction(candidate);
 	}
 
 	function resolveTabMeta(tab: TabConfig, index: number): ResolvedTabMeta {
 		const name = tab.name;
 		const nameIsSnippet = isSnippet(name);
 		const labelIsSnippet = tab.label !== undefined && isSnippet(tab.label);
-		const labelText =
-			typeof tab.label === 'string' ? tab.label : typeof name === 'string' ? name : undefined;
+		const labelText = isString(tab.label) ? tab.label : isString(name) ? name : undefined;
 
 		return {
-			value: nameIsSnippet ? `tab-${index}` : typeof name === 'string' ? name : `tab-${index}`,
+			value: nameIsSnippet ? `tab-${index}` : isString(name) ? name : `tab-${index}`,
 			label: nameIsSnippet || labelIsSnippet ? undefined : labelText,
 			labelSnippet: nameIsSnippet ? name : labelIsSnippet ? (tab.label as Snippet) : undefined,
 			icon: tab.icon,

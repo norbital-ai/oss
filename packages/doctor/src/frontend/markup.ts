@@ -87,6 +87,47 @@ function parseClassTokens(parent: Node, original: string, start: number, value: 
 	}
 }
 
+function parseDirective(element: Node, original: string, name: string, at: number, end: number): void {
+	const directive = attach(
+		element,
+		createNode('svelte:Directive', 'svelte', original, { start: at, end }),
+		'directives'
+	);
+	if (!name.startsWith('class:')) return;
+	const token = name.slice(6);
+	const tokenAt = at + name.indexOf(token);
+	attach(
+		directive,
+		createNode('svelte:ClassToken', 'svelte', original, {
+			start: tokenAt,
+			end: tokenAt + token.length
+		}),
+		'tokens'
+	);
+}
+
+function parseStyleProperties(
+	attribute: Node,
+	original: string,
+	at: number,
+	quoted: string
+): void {
+	for (const declaration of quoted.split(';')) {
+		const trimmed = declaration.trim();
+		if (trimmed === '') continue;
+		const declAt = original.indexOf(trimmed, at);
+		if (declAt >= 0)
+			attach(
+				attribute,
+				createNode('svelte:StyleProperty', 'svelte', original, {
+					start: declAt,
+					end: declAt + trimmed.length
+				}),
+				'style'
+			);
+	}
+}
+
 function parseAttributes(element: Node, original: string, start: number, raw: string): void {
 	ATTR.lastIndex = 0;
 	for (let match = ATTR.exec(raw); match !== null; match = ATTR.exec(raw)) {
@@ -96,23 +137,7 @@ function parseAttributes(element: Node, original: string, start: number, raw: st
 		const quoted = match[2] ?? match[3];
 		const interp = match[4];
 		if (name.startsWith('class:') || name.includes(':')) {
-			const directive = attach(
-				element,
-				createNode('svelte:Directive', 'svelte', original, { start: at, end }),
-				'directives'
-			);
-			if (name.startsWith('class:')) {
-				const token = name.slice(6);
-				const tokenAt = at + name.indexOf(token);
-				attach(
-					directive,
-					createNode('svelte:ClassToken', 'svelte', original, {
-						start: tokenAt,
-						end: tokenAt + token.length
-					}),
-					'tokens'
-				);
-			}
+			parseDirective(element, original, name, at, end);
 			continue;
 		}
 		const attribute = attach(
@@ -128,20 +153,7 @@ function parseAttributes(element: Node, original: string, start: number, raw: st
 			parseClassTokens(attribute, original, valueAt >= 0 ? valueAt : at, quoted);
 		}
 		if (name === 'style' && quoted !== undefined) {
-			for (const declaration of quoted.split(';')) {
-				const trimmed = declaration.trim();
-				if (trimmed === '') continue;
-				const declAt = original.indexOf(trimmed, at);
-				if (declAt >= 0)
-					attach(
-						attribute,
-						createNode('svelte:StyleProperty', 'svelte', original, {
-							start: declAt,
-							end: declAt + trimmed.length
-						}),
-						'style'
-					);
-			}
+			parseStyleProperties(attribute, original, at, quoted);
 		}
 		if (interp !== undefined) {
 			const interpAt = original.indexOf(`{${interp}`, at);
@@ -352,7 +364,7 @@ function projectScript(
 	return root;
 }
 
-export function projectMarkup(original: string, file: string): Node {
+function projectMarkup(original: string, file: string): Node {
 	const root = createNode('svelte:Component', 'svelte', original, { start: 0, end: original.length });
 	const skipped: Array<{ start: number; end: number }> = [];
 	REGION.lastIndex = 0;
@@ -377,6 +389,63 @@ export function projectMarkup(original: string, file: string): Node {
 		attach(root, createNode('trivia:HtmlComment', 'trivia', original, { start, end }), 'trivia');
 	}
 	const stack: Array<Node> = [root];
+	const closeTagAt = (cursor: number): number | undefined => {
+		if (!original.startsWith('</', cursor)) return undefined;
+		const close = CLOSE.exec(original.slice(cursor));
+		if (close === null) return undefined;
+		if (stack.length > 1) stack.pop();
+		return cursor + close[0].length;
+	};
+	const openElementAt = (cursor: number): number | undefined => {
+		const tag = TAG_NAME.exec(original.slice(cursor));
+		if (tag === null) return undefined;
+		const name = tag[1] ?? '';
+		const nameEnd = cursor + tag[0].length;
+		const closeAt = tagClose(original, nameEnd);
+		if (closeAt < 0) return undefined;
+		const raw = original.slice(nameEnd, closeAt);
+		const selfClosing = raw.endsWith('/');
+		const attrs = selfClosing ? raw.slice(0, -1) : raw;
+		const element = attach(
+			stack[stack.length - 1]!,
+			createNode('svelte:Element', 'svelte', original, { start: cursor, end: closeAt + 1 }),
+			'children'
+		);
+		attach(
+			element,
+			createNode('svelte:Name', 'svelte', original, {
+				start: cursor + 1,
+				end: cursor + 1 + name.length
+			}),
+			'tagName'
+		);
+		parseAttributes(element, original, nameEnd, attrs);
+		if (!selfClosing) stack.push(element);
+		return closeAt + 1;
+	};
+	const interpolationAt = (cursor: number): number | undefined => {
+		if (original[cursor] !== '{') return undefined;
+		BLOCK.lastIndex = cursor;
+		INTERPOLATION.lastIndex = cursor;
+		const block = BLOCK.exec(original);
+		const interp = INTERPOLATION.exec(original);
+		const next =
+			block !== null && block.index === cursor
+				? block
+				: interp !== null && interp.index === cursor
+					? interp
+					: null;
+		if (next === null) return undefined;
+		attach(
+			stack[stack.length - 1]!,
+			createNode(next === block ? 'svelte:Block' : 'svelte:Interpolation', 'svelte', original, {
+				start: cursor,
+				end: cursor + next[0].length
+			}),
+			next === block ? 'blocks' : 'text'
+		);
+		return cursor + next[0].length;
+	};
 	let cursor = 0;
 	while (cursor < original.length) {
 		if (covered(skipped, cursor)) {
@@ -384,68 +453,20 @@ export function projectMarkup(original: string, file: string): Node {
 			cursor = span?.end ?? cursor + 1;
 			continue;
 		}
-		if (original.startsWith('</', cursor)) {
-			const close = CLOSE.exec(original.slice(cursor));
-			if (close) {
-				cursor += close[0].length;
-				if (stack.length > 1) stack.pop();
-				continue;
-			}
+		const closed = closeTagAt(cursor);
+		if (closed !== undefined) {
+			cursor = closed;
+			continue;
 		}
-		const tag = TAG_NAME.exec(original.slice(cursor));
-		if (tag !== null) {
-			const name = tag[1] ?? '';
-			const nameEnd = cursor + tag[0].length;
-			const closeAt = tagClose(original, nameEnd);
-			if (closeAt >= 0) {
-				const start = cursor;
-				const end = closeAt + 1;
-				const raw = original.slice(nameEnd, closeAt);
-				const selfClosing = raw.endsWith('/');
-				const attrs = selfClosing ? raw.slice(0, -1) : raw;
-				const element = attach(
-					stack[stack.length - 1]!,
-					createNode('svelte:Element', 'svelte', original, { start, end }),
-					'children'
-				);
-				attach(
-					element,
-					createNode('svelte:Name', 'svelte', original, {
-						start: start + 1,
-						end: start + 1 + name.length
-					}),
-					'tagName'
-				);
-				parseAttributes(element, original, nameEnd, attrs);
-				if (!selfClosing) stack.push(element);
-				cursor = end;
-				continue;
-			}
+		const opened = openElementAt(cursor);
+		if (opened !== undefined) {
+			cursor = opened;
+			continue;
 		}
-		if (original[cursor] === '{') {
-			BLOCK.lastIndex = cursor;
-			INTERPOLATION.lastIndex = cursor;
-			const block = BLOCK.exec(original);
-			const interp = INTERPOLATION.exec(original);
-			const next =
-				block !== null && block.index === cursor
-					? block
-					: interp !== null && interp.index === cursor
-						? interp
-						: null;
-			if (next !== null) {
-				const kind = next === block ? 'svelte:Block' : 'svelte:Interpolation';
-				attach(
-					stack[stack.length - 1]!,
-					createNode(kind, 'svelte', original, {
-						start: cursor,
-						end: cursor + next[0].length
-					}),
-					next === block ? 'blocks' : 'text'
-				);
-				cursor += next[0].length;
-				continue;
-			}
+		const brace = interpolationAt(cursor);
+		if (brace !== undefined) {
+			cursor = brace;
+			continue;
 		}
 		cursor += 1;
 	}

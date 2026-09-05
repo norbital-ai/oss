@@ -140,7 +140,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			return isNaN(num) ? undefined : num;
 		},
 		display: String,
-		validate: (val) => typeof val === 'number' && Number.isFinite(val)
+		validate: (val) => Number.isFinite(val)
 	},
 
 	email: {

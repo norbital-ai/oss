@@ -11,9 +11,9 @@ rule:
         - pattern: Promise.race($X)
         - pattern: Promise.any($X)
         - pattern: new Promise($FN)
-    - importsFrom: effect
+    - fact: { name: usesImportedRuntime, from: effect, symbol: Effect }
 examples:
   bad:
-    - "import { Effect } from 'effect';\nexport const f = () => Promise.all([a, b]);"
+    - "import { Effect } from 'effect';\nconst owned = Effect.succeed(1);\nexport const f = () => Promise.all([a, b]);"
   good:
-    - "import { Effect } from 'effect';\nexport const f = () => Effect.all([a, b]);"
+    - "import { Effect } from 'effect';\nconst owned = Effect.succeed(1);\nexport const f = () => Effect.all([a, b]);"

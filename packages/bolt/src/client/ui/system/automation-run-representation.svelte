@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import {
 		presentAutomationStatus,
@@ -12,19 +12,22 @@
 
 	let { record }: { record: Record<string, unknown> | null; close: () => void } = $props();
 	const { t } = useI18n();
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+	const isNumber = Schema.is(Schema.Number);
+	const isString = Schema.is(Schema.String);
 	const text = (name: string): string | undefined => {
 		const value = record?.[name];
-		return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+		return isString(value) && value.trim() !== '' ? value : undefined;
 	};
 	const progress = $derived.by(() => {
 		const value = record?.['progress'];
-		if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+		if (!isRecord(value)) return undefined;
 		const fraction = Reflect.get(value, 'progress');
 		const message = Reflect.get(value, 'text');
-		if (typeof fraction !== 'number' || !Number.isFinite(fraction)) return undefined;
+		if (!isNumber(fraction) || !Number.isFinite(fraction)) return undefined;
 		return {
 			percent: Math.round(Math.min(1, Math.max(0, fraction)) * 100),
-			message: typeof message === 'string' && message.trim() !== '' ? message : undefined
+			message: isString(message) && message.trim() !== '' ? message : undefined
 		};
 	});
 	const status = $derived(text('status') ?? 'unknown');
@@ -38,7 +41,7 @@
 	const printableResult = $derived(
 		result == null
 			? undefined
-			: typeof result === 'string'
+			: isString(result)
 				? result
 				: JSON.stringify(result, null, 2)
 	);
@@ -60,20 +63,21 @@
 		<div
 			class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500"
 		>
-			<Icon icon="lucide:refresh-cw" class={cn('size-5', status === 'running' && 'animate-spin')} />
+			<Icon icon="lucide:refresh-cw" class="size-5 {status === 'running' ? 'animate-spin' : ''}" />
 		</div>
 		<Stack gap="xs" class="min-w-0">
 			<p class="truncate text-base font-semibold text-foreground">
 				{text('name') ?? t('bolt.automations.run')}
 			</p>
 			<span
-				class={cn(
-					'w-fit rounded-full px-2 py-0.5 text-xs font-semibold capitalize',
-					status === 'done' && 'bg-success/10 text-success',
-					status === 'running' && 'bg-brand/10 text-brand',
-					status === 'failed' && 'bg-destructive/10 text-destructive',
-					!['done', 'running', 'failed'].includes(status) && 'bg-muted text-muted-foreground'
-				)}
+				class="w-fit rounded-full px-2 py-0.5 text-xs font-semibold capitalize {status ===
+				'done'
+					? 'bg-success/10 text-success'
+					: status === 'running'
+						? 'bg-brand/10 text-brand'
+						: status === 'failed'
+							? 'bg-destructive/10 text-destructive'
+							: 'bg-muted text-muted-foreground'}"
 			>
 				{statusLabel}
 			</span>

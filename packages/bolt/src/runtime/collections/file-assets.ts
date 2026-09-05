@@ -1,7 +1,9 @@
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type { FilesInterface } from '#lib/runtime/facilities/services.js';
+
+const isString = Schema.is(Schema.String);
 
 export type FileAsset = Readonly<{
 	readonly id: string;
@@ -23,7 +25,7 @@ export const readFileAsset = Effect.fn('Collections.readAsset')(function* (
 	files: FilesInterface,
 	file: FileAssetReference
 ) {
-	const storageKey = typeof file?.storage_key === 'string' ? file.storage_key : undefined;
+	const storageKey = isString(file?.storage_key) ? file?.storage_key : undefined;
 	if (storageKey === undefined) {
 		return yield* new Database.FacilityError({
 			operation: 'files.read',
@@ -37,8 +39,8 @@ export const readFileAsset = Effect.fn('Collections.readAsset')(function* (
 	const bytes = response.bytes ?? new Uint8Array();
 	return {
 		id: storageKey,
-		name: typeof file.file_name === 'string' ? file.file_name : storageKey,
-		mimeType: typeof file.mime_type === 'string' ? file.mime_type : null,
+		name: isString(file.file_name) ? file.file_name : storageKey,
+		mimeType: isString(file.mime_type) ? file.mime_type : null,
 		size: bytes.byteLength,
 		bytes
 	} satisfies FileAsset;

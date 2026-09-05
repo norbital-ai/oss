@@ -101,12 +101,14 @@ const conjunction = (clauses: ReadonlyArray<SQL | undefined>): SQL => {
 	return sql`(${sql.join(present, sql` and `)})`;
 };
 
+const isString = Schema.is(Schema.String);
+
 const normalizeSearch = (
 	input: SearchInput,
 	context: SearchContext
 ): Result.Result<NormalizedSearch, SearchCompileError> => {
 	if (input === undefined || input === null) return Result.succeed({ mode: 'none' });
-	if ((input.mode !== 'lexical' && input.mode !== 'semantic') || typeof input.term !== 'string') {
+	if ((input.mode !== 'lexical' && input.mode !== 'semantic') || !isString(input.term)) {
 		return failure(context, 'search', "Search requires { mode: 'lexical' | 'semantic', term }.");
 	}
 	const term = input.term.trim();

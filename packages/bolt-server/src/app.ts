@@ -17,12 +17,7 @@ import {
 } from './schedules.js';
 import { makeTimekeeper } from './timekeeper.js';
 import { waitUntilReady } from './ready.js';
-import {
-	startServer,
-	type RunningServer,
-	UuidGeneration,
-	uuidGenerationLayer
-} from './server.js';
+import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
 /** Reports a lifecycle phase that prevented the self-host application from becoming usable. */
 export class ApplicationStartError extends Schema.TaggedError<ApplicationStartError>()(
@@ -54,19 +49,19 @@ export interface RunningLocalApplication extends RunningApplication {
  * `startApplication` plus `/readyz`. The caller still forms `FacilityBindings` — this does not
  * invent database, AI, or files.
  */
-export const startLocalApplication = async (
+export const startLocalApplication = (
 	options: ApplicationOptions
-): Promise<RunningLocalApplication> => {
-	const application = await startApplication(options);
-	const baseUrl = `http://${application.address.host}:${application.address.port}`;
-	try {
-		await waitUntilReady(baseUrl);
-	} catch (error) {
-		await application.stop();
-		throw error;
-	}
-	return { ...application, baseUrl };
-};
+): Promise<RunningLocalApplication> =>
+	Effect.gen(function* () {
+		const application = yield* Effect.tryPromise(() => startApplication(options));
+		const baseUrl = `http://${application.address.host}:${application.address.port}`;
+		return yield* Effect.tryPromise(() => waitUntilReady(baseUrl)).pipe(
+			Effect.map(() => ({ ...application, baseUrl })),
+			Effect.catch((cause) =>
+				Effect.tryPromise(() => application.stop()).pipe(Effect.andThen(() => Effect.fail(cause)))
+			)
+		);
+	}).pipe(Effect.runPromise);
 
 /** Installs one-shot Node process shutdown hooks and returns a hook disposer. */
 export const installProcessShutdown = (application: RunningApplication): (() => void) => {
@@ -140,9 +135,7 @@ export const startApplication = async (
 					: new ApplicationStartError({
 							operation: 'BoltServer.Application.tick',
 							message:
-								cause instanceof ScheduleTickError
-									? cause.message
-									: 'Bolt scheduler tick failed',
+								cause instanceof ScheduleTickError ? cause.message : 'Bolt scheduler tick failed',
 							cause
 						})
 			)
@@ -157,9 +150,7 @@ export const startApplication = async (
 	 * supplied is replaced, deliberately — a host that let one be injected would be letting somebody
 	 * else own its clock.
 	 */
-	let runScheduledTick = <A, E>(
-		_effect: Effect.Effect<A, E, BundleLoader>
-	): Promise<A> =>
+	let runScheduledTick = <A, E>(_effect: Effect.Effect<A, E, BundleLoader>): Promise<A> =>
 		Promise.reject(
 			new ApplicationStartError({
 				operation: 'BoltServer.Application.tick',
@@ -171,11 +162,7 @@ export const startApplication = async (
 		run: (effect) => runScheduledTick(effect),
 		onFailure: (cause) => {
 			// The timekeeper backs off; this boundary keeps an unwatched failure visible.
-			Effect.runFork(
-				Effect.logError(
-					`timekeeper.tick: ${getErrorMessage(cause)}`
-				)
-			);
+			Effect.runFork(Effect.logError(`timekeeper.tick: ${getErrorMessage(cause)}`));
 		}
 	});
 	const bound: FacilityBindings = {
@@ -244,8 +231,10 @@ export const startApplication = async (
 		});
 		return server;
 	});
-	const server = await runtime.runPromise(
-		startup.pipe(
+	// Finalization must run outside the runtime it disposes, or it interrupts the failure itself.
+	const server = await Effect.runPromise(
+		// repository-health:allow SANDWICH1 -- Startup uses its managed runtime, but cleanup must survive disposal of that runtime and report its failure outside it.
+		Effect.tryPromise({ try: () => runtime.runPromise(startup), catch: toError }).pipe(
 			Effect.catch((cause) =>
 				finalizeFacilities.pipe(
 					Effect.catch(() => Effect.void),

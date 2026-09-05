@@ -69,6 +69,8 @@ const CollectionRecordSystemMetadataCopySchema = Schema.Struct({
 export type CollectionRecordSystemMetadataCopy =
 	typeof CollectionRecordSystemMetadataCopySchema.Type;
 
+const isString = Schema.is(Schema.String);
+
 /**
  * Projects protected Bolt state and authored metadata into the one contract collection UIs consume.
  * Authored metadata never accepts a `source`, so an application cannot impersonate system state.
@@ -81,7 +83,7 @@ export function resolveCollectionRecordMetadata(
 	const resolved: ResolvedCollectionRecordMetadata[] = [];
 
 	const approvalId = record == null ? undefined : Reflect.get(record, 'approval_id');
-	if (typeof approvalId === 'string' && approvalId.length > 0) {
+	if (isString(approvalId) && approvalId.length > 0) {
 		resolved.push({
 			kind: 'restriction',
 			source: 'system',

@@ -41,10 +41,13 @@ export function listFiles(
 	root: string,
 	extensions: readonly string[] = SOURCE_EXTENSIONS
 ): readonly string[] {
+	// repository-health:allow IO1 -- source-tree scanner with a deliberately synchronous public API; it runs in test/analysis tooling, not request runtime.
 	return readdirSync(root).flatMap((entry) => {
 		const path = join(root, entry);
+		if (SKIP_DIRECTORIES.has(entry)) return [];
+		// repository-health:allow IO1 -- same synchronous scanner contract; a per-step directory-vs-file probe.
 		if (statSync(path).isDirectory()) {
-			return SKIP_DIRECTORIES.has(entry) ? [] : listFiles(path, extensions);
+			return listFiles(path, extensions);
 		}
 		return endsWithExtension(path, extensions) ? [path] : [];
 	});
@@ -100,8 +103,9 @@ export function walkImportSpecifiers(
 	root: string,
 	extensions: readonly string[] = SOURCE_EXTENSIONS
 ): readonly ImportRecord[] {
+	// repository-health:allow IO1 -- same synchronous scanner contract; the source reads back the walkers' public sync API.
 	return listFiles(root, extensions).flatMap((file) =>
-		specifiersInSource(file, readFileSync(file, 'utf8')).map((specifier) => ({ file, specifier }))
+		specifiersInSource(file, readFileSync(file, 'utf8')).map((specifier) => ({ file, specifier })) // repository-health:allow IO1 -- same synchronous scanner contract.
 	);
 }
 

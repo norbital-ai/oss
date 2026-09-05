@@ -7,7 +7,8 @@ import {
 	decodeBoltBundleModule,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
-import { Effect, Redacted } from 'effect';
+import { Clock, Effect, Redacted, Schema } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 import { systemCommandHeaders } from './system-headers.js';
 
 export type DispatchSystemCommandInput = {
@@ -25,8 +26,11 @@ export type DispatchSystemCommandResult = {
 	readonly value: unknown;
 };
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isNumber = Schema.is(Schema.Number);
+
 const commandValue = (result: unknown, command: string): DispatchSystemCommandResult => {
-	if (typeof result !== 'object' || result === null) {
+	if (!isRecord(result)) {
 		throw new Error(`${command} returned a non-object: ${String(result)}`);
 	}
 	const tagged = result as {
@@ -41,40 +45,44 @@ const commandValue = (result: unknown, command: string): DispatchSystemCommandRe
 		throw new Error(`${command} failed: ${JSON.stringify(result)}`);
 	}
 	const status = tagged.response?.status;
-	if (typeof status !== 'number' || status < 200 || status >= 300) {
+	if (!isNumber(status) || status < 200 || status >= 300) {
 		throw new Error(`${command}: runtime returned ${String(status)}`);
 	}
 	return { status, value: tagged.response?.value ?? null };
 };
 
 /** Signed guest command against a loaded bundle (migrate / founder before listen). */
-export const dispatchSystemCommand = async (
+export const dispatchSystemCommand = (
 	input: DispatchSystemCommandInput
-): Promise<DispatchSystemCommandResult> => {
-	const bundle = await Effect.runPromise(
-		decodeBoltBundleModule(await import(pathToFileURL(input.bundlePath).href))
-	);
-	const headers = await Effect.runPromise(
-		systemCommandHeaders(
+): Promise<DispatchSystemCommandResult> =>
+	Effect.gen(function* () {
+		const bundle = yield* decodeBoltBundleModule(
+			yield* Effect.tryPromise(() => import(pathToFileURL(input.bundlePath).href))
+		);
+		const headers = yield* systemCommandHeaders(
 			Redacted.make(input.gatewaySecret),
 			input.command,
 			String(input.scope.tenantId),
 			input.input
-		)
-	);
-	const timestamp = Number(headers[SYSTEM_TIMESTAMP_HEADER]?.[0] ?? Date.now());
-	const result = await bundle.dispatch(
-		Invocation.cases.Command.make({
-			protocolVersion: PROTOCOL_VERSION,
-			id: InvocationId.make(input.invocationId ?? `${input.command}:${crypto.randomUUID()}`),
-			scope: input.scope,
-			deadlineEpochMs: timestamp + 30_000,
-			command: input.command,
-			input: input.input as never,
-			headers
-		}),
-		input.facilities,
-		AbortSignal.timeout(30_000)
-	);
-	return commandValue(result, input.command);
-};
+		);
+		// Fallback only when the signed timestamp header is absent; the signed path already
+		// sources the clock inside `systemCommandHeaders`.
+		const now = yield* Clock.currentTimeMillis;
+		const result = yield* Effect.tryPromise(() =>
+			bundle.dispatch(
+				Invocation.cases.Command.make({
+					protocolVersion: PROTOCOL_VERSION,
+					// repository-health:allow EFF5 -- a pre-boot dispatch needs a fresh opaque invocation identity; no Effect service provides randomness and the id is transport metadata, never a decision input.
+					id: InvocationId.make(input.invocationId ?? `${input.command}:${crypto.randomUUID()}`),
+					scope: input.scope,
+					deadlineEpochMs: decodeNumber(headers[SYSTEM_TIMESTAMP_HEADER]?.[0] ?? now) + 30_000,
+					command: input.command,
+					input: input.input as never,
+					headers
+				}),
+				input.facilities,
+				AbortSignal.timeout(30_000)
+			)
+		);
+		return yield* Effect.try(() => commandValue(result, input.command));
+	}).pipe(Effect.runPromise);

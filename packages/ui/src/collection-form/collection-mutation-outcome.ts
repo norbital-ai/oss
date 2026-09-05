@@ -4,6 +4,7 @@ import type {
 	CollectionOperations,
 	CollectionType
 } from '@norbital-ai/std/collection';
+import { getErrorMessage } from '@norbital-ai/std';
 import { Cause, Effect } from 'effect';
 
 type CollectionWrite =
@@ -84,7 +85,7 @@ const submissionFromSettlement = (
  * the half a person reads in the form.
  */
 const preserving = (cause: unknown): Cause.UnknownError =>
-	new Cause.UnknownError(cause, cause instanceof Error ? cause.message : String(cause));
+	new Cause.UnknownError(cause, getErrorMessage(cause));
 
 /** Runs a collection mutation through its authoritative terminal settlement. */
 export function submitCollectionMutation(

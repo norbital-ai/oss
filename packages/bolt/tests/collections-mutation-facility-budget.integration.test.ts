@@ -366,12 +366,11 @@ describe('the facility-call budget of a batched write', () => {
 		// three logical waves. Each remains one query when the batch grows from one root to fifty.
 		expect(one).toHaveLength(3);
 		expect(fifty).toHaveLength(3);
-		expect(fifty.map((statement) => statement.match(/ union all /g)?.length ?? 0)).toEqual([
-			49, 49, 49
-		]);
-		expect(fifty[0]).toContain('from "notes" as record');
-		expect(fifty[1]).toContain('from "note_entries" as child');
-		expect(fifty[2]).toContain('from "write_audit" as record');
+		expect(one.map((statement) => statement.match(/\$\d+/g)?.length)).toEqual([2, 2, 2]);
+		expect(fifty.map((statement) => statement.match(/\$\d+/g)?.length)).toEqual([100, 100, 100]);
+		expect(fifty[0]).toContain('join "notes" as record');
+		expect(fifty[1]).toContain('join "note_entries" as child');
+		expect(fifty[2]).toContain('join "write_audit" as record');
 		expect(
 			fifty.some(
 				(statement) =>

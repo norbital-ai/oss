@@ -58,12 +58,10 @@
 		releases.find((release) => release.releaseId === selectedReleaseId) ?? releases[0]
 	);
 	let liveView = $state<'manifest' | 'logs'>('manifest');
-	const liveTabs = $derived(
-		[
-			{ name: 'manifest', label: t('bolt.studio.manifest'), content: '' },
-			{ name: 'logs', label: t('bolt.studio.changes.logs'), content: '' }
-		] satisfies TabConfig[]
-	);
+	const liveTabs = $derived([
+		{ name: 'manifest', label: t('bolt.studio.manifest'), content: '' },
+		{ name: 'logs', label: t('bolt.studio.changes.logs'), content: '' }
+	] satisfies TabConfig[]);
 </script>
 
 {#if selected === undefined}
@@ -114,7 +112,7 @@
 				}}
 				showContent={false}
 				animate={false}
-				variant="underline"
+				variant="chip"
 				listClass="mx-0"
 				config={liveTabs}
 			/>

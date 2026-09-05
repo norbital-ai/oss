@@ -251,6 +251,7 @@ type ShellApp = AppDeclaration & {
 	readonly banner?: string | undefined;
 	readonly parent?: string | undefined;
 	readonly defaultChild?: string | undefined;
+	readonly kiosk?: boolean | undefined;
 };
 
 type ApplicationNavigationInput = Readonly<{
@@ -264,6 +265,7 @@ type SystemNavigationInput = Readonly<{
 	readonly plugins?: ReadonlyArray<HostPlugin>;
 	readonly isAdmin: boolean;
 	readonly canAccessAutomations?: boolean;
+	readonly kiosk?: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly currentPath: string;
 	readonly i18n: NavigationLabelResolver;
 }>;
@@ -303,7 +305,12 @@ const toApplicationItem = (
 export const buildApplicationNavigation = (
 	input: ApplicationNavigationInput
 ): WorkspaceNavigationItem[] => {
-	const declared = filterAccessibleApps(input.apps, input.accessibleAppNames);
+	// Kiosk apps never appear among ordinary applications: they are device surfaces, not daily
+	// tools, and they live in their own section at the bottom of the sidebar (`buildKioskNavigation`).
+	const declared = filterAccessibleApps(
+		input.apps.filter((app) => app.kiosk !== true),
+		input.accessibleAppNames
+	);
 	const names = new Set(declared.map((app) => app.name));
 	const childrenOf = new Map<string, ShellApp[]>();
 	for (const app of declared) {
@@ -321,6 +328,34 @@ export const buildApplicationNavigation = (
 				childrenOf
 			})
 		);
+};
+
+/**
+ * The kiosk leaves under Settings: device apps, each confirmed before it follows its href.
+ *
+ * A kiosk app is chromeless by declaration — no sidebar, finder or agent once mounted — so it is
+ * not a thing a person uses from the LHS bar day to day. Grouping them under their parent app
+ * buried them among the tools, and a bottom-level section of their own crowded the bar for a
+ * surface most people never open; nesting them as Settings children keeps the bar clean while
+ * keeping them findable, and each click is confirmed (the shell attaches the confirm copy)
+ * because entering kiosk mode takes the whole window.
+ */
+export const buildKioskNavigation = (
+	input: ApplicationNavigationInput
+): WorkspaceNavigationItem[] => {
+	const declared = filterAccessibleApps(
+		input.apps.filter((app) => app.kiosk === true),
+		input.accessibleAppNames
+	);
+	return declared.map((app) => ({
+		key: app.name,
+		label: resolveNavigationLabel(input.i18n, app.name, app.label || humanize(app.name)),
+		icon: app.icon ?? 'lucide:scan-face',
+		href: applicationHref(app.name),
+		active: isUnder(input.currentPath, applicationHref(app.name)),
+		featureColor: 'customApps',
+		...(app.description == null ? {} : { description: app.description })
+	}));
 };
 
 export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNavigationItem[] => {
@@ -368,7 +403,10 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 					} satisfies WorkspaceNavigationItem
 				]
 			: []),
-		...visible.filter((plugin) => pluginSection(plugin) === 'settings').map(pluginItem)
+		...visible.filter((plugin) => pluginSection(plugin) === 'settings').map(pluginItem),
+		// Kiosk apps nest under Settings as confirmed leaves, keeping the bar free of a dedicated
+		// device section. Access was already narrowed by the caller's accessible-apps filter.
+		...(input.kiosk ?? [])
 	];
 	const settings: WorkspaceNavigationItem[] =
 		settingsChildren.length === 0

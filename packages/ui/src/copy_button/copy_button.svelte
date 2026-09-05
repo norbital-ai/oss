@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import Button, { type ButtonProps } from '../button/button.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { onDestroy } from 'svelte';
@@ -19,6 +20,15 @@
 	let copied = $state(false);
 	let timeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
 
+	// Bare `typeof data === 'object'` — keeps null, arrays, and any non-array object on the JSON path.
+	const isObjectLike = Schema.is(
+		Schema.Union([
+			Schema.Record(Schema.String, Schema.Unknown),
+			Schema.Array(Schema.Unknown),
+			Schema.Null
+		])
+	);
+
 	onDestroy(() => {
 		if (timeoutId) clearTimeout(timeoutId);
 	});
@@ -26,7 +36,7 @@
 	function handleCopy(e: MouseEvent) {
 		e.stopPropagation();
 
-		const textToCopy = typeof data === 'object' ? JSON.stringify(data) : String(data);
+		const textToCopy = isObjectLike(data) ? JSON.stringify(data) : String(data);
 		navigator.clipboard.writeText(textToCopy);
 
 		copied = true;

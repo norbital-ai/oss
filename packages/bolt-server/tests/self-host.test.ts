@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { request as httpRequest } from 'node:http';
 import WebSocket from 'ws';
 import { ServerConfiguration } from '../src/config.js';
-import { startApplication } from '../src/app.js';
+import { ApplicationStartError, startApplication } from '../src/app.js';
 import { HealthSnapshot } from '../src/health.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/fixture-bundle.mjs', import.meta.url));
@@ -26,6 +26,27 @@ const configuration = ServerConfiguration.make({
 });
 
 const facilities = { scope: configuration.scope };
+
+it('preserves the startup failure while disposing facilities once', async () => {
+	let finalized = 0;
+	try {
+		await startApplication({
+			configuration: ServerConfiguration.make({
+				...configuration,
+				bundlePath: `${fixturePath}.missing`
+			}),
+			facilities,
+			finalizeFacilities: async () => {
+				finalized += 1;
+			}
+		});
+		assert.fail('A missing artifact must refuse startup.');
+	} catch (error) {
+		assert.instanceOf(error, ApplicationStartError);
+		assert.notMatch(String(error), /All fibers interrupted/);
+	}
+	assert.strictEqual(finalized, 1);
+});
 
 // The case that required an explicitly durable engine in production is deleted with the option it
 // checked. There is no host-side engine to configure: `bolt-server` owns a timer, and everything
@@ -50,6 +71,11 @@ it.effect('runs one exact artifact through static, health and request paths', ()
 				 */
 				const asset = yield* Effect.tryPromise(() => fetch(`${base}/index.html`));
 				assert.strictEqual(yield* Effect.tryPromise(() => asset.text()), 'bolt fixture');
+				const publicAsset = yield* Effect.tryPromise(() =>
+					fetch(`${base}/__bolt/static/index.html`)
+				);
+				assert.strictEqual(yield* Effect.tryPromise(() => publicAsset.text()), 'bolt fixture');
+				assert.strictEqual(publicAsset.headers.get('etag'), asset.headers.get('etag'));
 				// The bytes come from `assets/<sha256>` beside the bundle, and the digest that names that
 				// file is the validator the response carries — one fact, not two that can disagree.
 				assert.strictEqual(
@@ -78,6 +104,7 @@ it.effect('runs one exact artifact through static, health and request paths', ()
 				 */
 				for (const path of [
 					'/node_modules/pdq-wasm/wasm/pdq.wasm',
+					'/__bolt/static/node_modules/pdq-wasm/wasm/pdq.wasm',
 					'/d3b313ed56aa21fe4420bf0439db6e687affdbc22a3a4ef85f626d3f10c43012',
 					'/assets/d3b313ed56aa21fe4420bf0439db6e687affdbc22a3a4ef85f626d3f10c43012'
 				]) {

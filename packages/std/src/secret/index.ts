@@ -372,6 +372,7 @@ const open = (key: Uint8Array, binding: string, stored: string): Effect.Effect<O
 				catch: toError
 			})
 		),
+		// repository-health:allow SWALLOW2 -- the null is a transient sentinel mapped two lines below into the explicit Rejected outcome; a decrypt failure is a tampered or mis-keyed envelope, which is exactly the rejection this API reports, so no failure is erased.
 		Effect.catch(() => Effect.succeed(null)),
 		Effect.map((outcome) =>
 			outcome === null

@@ -28,9 +28,12 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 import { readManifest } from './lib/package-release.mjs';
+
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
 
 const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {
@@ -104,7 +107,7 @@ const buildResult = Effect.runSync(
 if (buildResult._tag === 'Failure') {
 	const cause = buildResult.failure;
 	rmSync(staging, { recursive: true, force: true });
-	process.exit(typeof cause?.status === 'number' ? cause.status : 1);
+	process.exit(isNumber(cause?.status) ? cause.status : 1);
 }
 
 if (!existsSync(staging)) {
@@ -139,10 +142,9 @@ if (declarationResult._tag === 'Failure') {
 // Packagers create files with ordinary 0644 modes even when the source carried a shebang. npm 11
 // rejects such a target as an invalid `bin` entry and silently removes the command from the
 // published manifest. Restore executable mode from package.json while the output is still staged.
-const binTargets =
-	typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin ?? {});
+const binTargets = isString(manifest.bin) ? [manifest.bin] : Object.values(manifest.bin ?? {});
 for (const target of binTargets) {
-	if (typeof target !== 'string') continue;
+	if (!isString(target)) continue;
 	const relativeTarget = path.relative('build', target.replace(/^\.\//, ''));
 	if (relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) continue;
 	const stagedTarget = path.join(staging, relativeTarget);

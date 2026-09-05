@@ -25,12 +25,14 @@
 	import { watch } from 'runed';
 	import { tick, type Snippet } from 'svelte';
 	import { Spinner } from '#lib/spinner';
-	import { Effect, Number as Number_ } from 'effect';
+	import { Effect, Number as Number_, Schema } from 'effect';
 	import MultiStepSelectionSidebar from './multi-step-selection-sidebar.svelte';
 	import MultiStepHeader from './multi-step-header.svelte';
 	import MultiStepValueLabel from './multi-step-value-label.svelte';
 
 	const { t } = useI18n<UiKeys>();
+
+	const isString = Schema.is(Schema.String);
 
 	type TOutputValue<M extends boolean> = M extends true ? TValueMap[] : TValueMap;
 
@@ -223,7 +225,7 @@
 
 		const search = searchValue.toLowerCase().trim();
 		return stepOptions.filter((option) => {
-			const label = (typeof option.label === 'string' ? option.label : '').toLowerCase();
+			const label = (isString(option.label) ? option.label : '').toLowerCase();
 			return label.includes(search);
 		});
 	});
@@ -248,7 +250,7 @@
 
 		return filteredOptions.map((option, index) => ({
 			value: String(index),
-			label: typeof option.label === 'string' ? option.label : String(option.value),
+			label: isString(option.label) ? option.label : String(option.value),
 			_type: 'option' as const,
 			_option: option,
 			_index: index

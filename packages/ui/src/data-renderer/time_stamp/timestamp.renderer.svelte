@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Schema } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
@@ -17,10 +18,11 @@
 	}: DataRendererProps = $props();
 
 	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
+	const isString = Schema.is(Schema.String);
 
 	function instantString(item: unknown): string | null {
 		if (item instanceof Date && !Number.isNaN(item.getTime())) return item.toISOString();
-		return typeof item === 'string' && item ? item : null;
+		return isString(item) && item ? item : null;
 	}
 
 	const dateTimeValue = $derived.by((): string | string[] | null => {

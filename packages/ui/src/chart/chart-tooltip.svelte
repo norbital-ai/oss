@@ -62,7 +62,7 @@
 		const itemConfig = getPayloadConfigFromPayload(chart.config, item, key);
 
 		const value =
-			!labelKey && typeof label === 'string'
+			!labelKey && label !== undefined
 				? (chart.config[label as keyof typeof chart.config]?.label ?? label)
 				: (itemConfig?.label ?? item.label);
 

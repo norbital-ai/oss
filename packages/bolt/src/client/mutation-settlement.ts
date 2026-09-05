@@ -1,34 +1,32 @@
+import { Option, Schema } from 'effect';
 import type { CollectionMutationIdempotencyKey, SyncOutcome } from '@norbital-ai/bolt-protocol';
 import type { MutationSettlement } from './contracts.js';
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	value !== null && typeof value === 'object' && !Array.isArray(value);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+
+/**
+ * The pending-approval shape the accepted outcome carries; mirrors
+ * `SyncWriteStatus`'s nested approval struct, which the protocol does not export on its own.
+ */
+const PendingApproval = Schema.Struct({
+	requestId: Schema.NonEmptyString,
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	action: Schema.Literals(['create', 'update', 'delete'])
+});
 
 const pendingApprovalOf = (
 	value: unknown
 ): Extract<SyncOutcome['status'], { resolution: 'accepted' }>['pendingApproval'] => {
-	if (!isRecord(value)) return undefined;
-	const requestId = value.requestId;
-	const collection = value.collection;
-	const id = value.id;
-	const action = value.action;
-	if (
-		typeof requestId !== 'string' ||
-		requestId.length === 0 ||
-		typeof collection !== 'string' ||
-		collection.length === 0 ||
-		typeof id !== 'string' ||
-		id.length === 0 ||
-		(action !== 'create' && action !== 'update' && action !== 'delete')
-	) {
-		return undefined;
-	}
-	return { requestId, collection, id, action };
+	const decoded = Schema.decodeUnknownOption(PendingApproval)(value);
+	return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const fingerprintOf = (value: Record<string, unknown>, fallback: string): string => {
 	const fingerprint = value.schemaFingerprint;
-	return typeof fingerprint === 'string' && fingerprint.length > 0 ? fingerprint : fallback;
+	return isNonEmptyString(fingerprint) ? fingerprint : fallback;
 };
 
 /** Projects the `collections.mutate` command body onto the stream outcome the Machine already speaks. */
@@ -55,7 +53,7 @@ export const syncOutcomeFromMutateCommand = (
 		case 'rebased': {
 			const fromSchemaFingerprint = value.fromSchemaFingerprint;
 			const toSchemaFingerprint = value.toSchemaFingerprint;
-			if (typeof fromSchemaFingerprint !== 'string' || typeof toSchemaFingerprint !== 'string') {
+			if (!isString(fromSchemaFingerprint) || !isString(toSchemaFingerprint)) {
 				return null;
 			}
 			return {
@@ -68,8 +66,7 @@ export const syncOutcomeFromMutateCommand = (
 			const message = value.message;
 			if (
 				(code !== 'refused' && code !== 'forbidden' && code !== 'conflict') ||
-				typeof message !== 'string' ||
-				message.length === 0
+				!isNonEmptyString(message)
 			) {
 				return null;
 			}
@@ -77,7 +74,7 @@ export const syncOutcomeFromMutateCommand = (
 		}
 		case 'quarantined': {
 			const reason = value.reason;
-			if (typeof reason !== 'string' || reason.length === 0) return null;
+			if (!isNonEmptyString(reason)) return null;
 			return { id, status: { resolution: 'quarantined', schemaFingerprint, reason } };
 		}
 		default:

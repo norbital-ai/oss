@@ -2,6 +2,7 @@ import { Clock, Effect, Result, Schema } from 'effect';
 import {
 	EffectId,
 	PluginTrustedContext,
+	type CommandContract,
 	type DispatchResponse,
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
@@ -25,6 +26,8 @@ export { DispatchError } from '#lib/runtime/workspace.js';
 export { collectionQuery } from './commands.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
 const MintedIdentityFields = [
 	'subject',
 	'actor',
@@ -62,10 +65,10 @@ const impersonatedTeamFromHeaders = (
 };
 
 const rateLimitAddress = (payload: unknown): string | undefined => {
-	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+	if (!isObject(payload)) return undefined;
 	const address = Reflect.get(payload, 'address');
 	const email = Reflect.get(payload, 'email');
-	const value = typeof address === 'string' ? address : typeof email === 'string' ? email : undefined;
+	const value = isString(address) ? address : isString(email) ? email : undefined;
 	return value === undefined || value.trim() === '' ? undefined : value;
 };
 
@@ -81,7 +84,7 @@ const mintedClaim = (input: unknown): string | undefined => {
 
 const pluginReadResource = (input: unknown, fallback: string): string => {
 	const collection = jsonObjectOf(input)?.['collection'];
-	return typeof collection === 'string' && collection.length > 0 ? collection : fallback;
+	return isString(collection) && collection.length > 0 ? collection : fallback;
 };
 
 const mintedClaimDenied = (tag: 'Plugin' | 'Task', resource: string, claimed: string) =>
@@ -99,10 +102,8 @@ const stripMintedIdentityFields = (input: unknown): unknown => {
 	return stripped;
 };
 
-const commandBudgetKey = (contract: { readonly name: string }): string =>
-	'budgetKey' in contract && typeof contract.budgetKey === 'string'
-		? contract.budgetKey
-		: contract.name;
+const commandBudgetKey = (contract: CommandContract): string =>
+	contract.budgetKey ?? contract.name;
 
 const invalidInput = () =>
 	new DispatchError({

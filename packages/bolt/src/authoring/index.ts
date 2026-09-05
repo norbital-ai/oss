@@ -11,6 +11,7 @@ export type {
 export { defineAgentTool } from './agent-tools.js';
 
 export { approveBy, noApproval } from './approval-flow.js';
+export { captureApproval } from './approval-outcome.js';
 export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './approval-flow.js';
 
 export type {
@@ -42,10 +43,7 @@ export type {
 } from './contracts-schema.js';
 export { subject } from './contracts-schema.js';
 
-export type {
-	EnvironmentReference,
-	PersonalSecretReference
-} from './workspace-schema.js';
+export type { EnvironmentReference, PersonalSecretReference } from './workspace-schema.js';
 
 export { schema, schemaFor } from './schema.js';
 export type { SchemaShape, SchemaShapeConfig, SchemaShapeRow } from './schema.js';

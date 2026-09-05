@@ -13,8 +13,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
+import { Schema } from 'effect';
 import { jsonRecord, readJsonObject, recordField } from '../manifest.js';
 import { SOURCE_EXTENSIONS } from './inventory.js';
+
+const isString = Schema.is(Schema.String);
+const isStringOrUnknownArray = Schema.is(
+	Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])
+);
 
 /** The nearest ancestor directory with a `package.json`, identified for reports. */
 export type PackageOwner = Readonly<{
@@ -36,7 +42,7 @@ export type Resolution = Readonly<{ targets: ReadonlyArray<string>; internal: bo
 
 /** Flatten conditional exports/imports; the graph conservatively includes every source target. */
 export function stringTargets(value: unknown): Array<string> {
-	if (typeof value === 'string') return [value];
+	if (isString(value)) return [value];
 	if (Array.isArray(value)) return value.flatMap(stringTargets);
 	const boxed = jsonRecord(value);
 	if (boxed !== undefined) return Object.values(boxed).flatMap(stringTargets);
@@ -93,14 +99,14 @@ export function moduleMappings(owner: PackageOwner): Array<AliasMapping> {
 			// Either configured root may be absent; a non-string value is treated as unset rather
 			// than coerced, matching how the engine would have crashed only on real use.
 			const configuredBase: unknown = parsed.options.baseUrl ?? parsed.options.pathsBasePath;
-			const base = typeof configuredBase === 'string' ? configuredBase : dirname(config);
+			const base = isString(configuredBase) ? configuredBase : dirname(config);
 			const rawPaths: unknown = parsed.options.paths;
 			const pathMap = jsonRecord(rawPaths) ?? {};
 			for (const [pattern, targets] of Object.entries(pathMap)) {
 				aliases.push({
 					pattern,
 					targets: [...(Array.isArray(targets) ? targets : [])]
-						.filter((target): target is string => typeof target === 'string')
+						.filter(isString)
 						.map((target) => resolve(base, target)),
 					order: order++
 				});
@@ -134,7 +140,7 @@ export function exportedStems(owner: PackageOwner, subpath: string): Array<strin
 	const noDotKeys =
 		jsonRecord(declared) !== undefined && !Object.keys(jsonRecord(declared) ?? {}).some((key) => key.startsWith('.'));
 	const entries: Array<[string, unknown]> =
-		typeof declared === 'string' || Array.isArray(declared)
+		isStringOrUnknownArray(declared)
 			? [['.', declared]]
 			: noDotKeys
 				? [['.', declared]]
@@ -184,7 +190,7 @@ export function packageFor(
 			try {
 				const parsed: unknown = JSON.parse(readFileSync(manifest, 'utf8'));
 				const declaredName = jsonRecord(parsed)?.['name'] ?? undefined;
-				if (declaredName != null) name = typeof declaredName === 'string' ? declaredName : String(declaredName);
+				if (declaredName != null) name = isString(declaredName) ? declaredName : String(declaredName);
 			} catch {
 				/* ownership survives invalid metadata */
 			}

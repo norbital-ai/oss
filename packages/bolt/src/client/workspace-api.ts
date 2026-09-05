@@ -1,6 +1,5 @@
 import { Effect, Result, Schema } from 'effect';
 import {
-	ApprovalState,
 	CollectionGroupedQueryRequest,
 	CollectionMutationIdempotencyKey,
 	CollectionMutateRequest,
@@ -61,9 +60,16 @@ export type CollectionCatalogEntry = Readonly<{
 	readonly recordLabel?: string;
 	readonly fields: ReadonlyArray<CollectionCatalogField>;
 	readonly relationships?: ReadonlyArray<CollectionCatalogRelation>;
+	/** The declared `input`'s columns; absent, the whole collection is writable. */
+	readonly inputColumns?: readonly string[];
 }>;
 
 export type CollectionCatalog = Readonly<Record<string, CollectionCatalogEntry>>;
+
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
 
 export type WorkspaceApiVisibility = Readonly<{
 	/** Exact generic collection names published through this proxy. Omission means framework-internal. */
@@ -119,7 +125,7 @@ const mergeWhere = (
  * sees the value.
  */
 const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => {
-	if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
+	if (!isRecord(input)) return {};
 	const record: Record<string, Schema.Json> = {};
 	for (const [key, value] of Object.entries(input)) {
 		if (value !== undefined) record[key] = value as Schema.Json;
@@ -132,8 +138,7 @@ const asJsonRecords = (input: unknown): ReadonlyArray<Readonly<Record<string, Sc
 		throw new TypeError('mutate takes an array of records matching the collection input schema.');
 	if (input.length === 0) throw new TypeError('mutate requires at least one record.');
 	return input.map((row, index) => {
-		if (row === null || typeof row !== 'object' || Array.isArray(row))
-			throw new TypeError(`mutate[${index}] must be a record.`);
+		if (!isRecord(row)) throw new TypeError(`mutate[${index}] must be a record.`);
 		return asJsonRecord(row);
 	});
 };
@@ -177,9 +182,8 @@ const pendingGraphs = (
 
 const rowVersionOf = (row: StoredRecord): number | undefined => {
 	const value = row['row_version'];
-	if (typeof value === 'number')
-		return Number.isSafeInteger(value) && value >= 1 ? value : undefined;
-	if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return undefined;
+	if (isNumber(value)) return Number.isSafeInteger(value) && value >= 1 ? value : undefined;
+	if (!isString(value) || !/^[1-9]\d*$/.test(value)) return undefined;
 	const parsed = decodeNumber(value);
 	return Number.isSafeInteger(parsed) ? parsed : undefined;
 };
@@ -191,16 +195,28 @@ const prefixRows = (query: QueryState): ReadonlyArray<StoredRecord> => query.pre
  * Multiple live views may render the same row; choosing the greatest observed version avoids
  * manufacturing a conflict from a retained older page while the server still remains final.
  */
-const authoritativeVersions = (state: ClientState): ReadonlyMap<string, number> => {
+const authoritativeVersions = (
+	state: ClientState,
+	catalog: CollectionCatalog
+): ReadonlyMap<string, number> => {
 	const versions = new Map<string, number>();
-	for (const query of state.queries.values()) {
-		for (const row of prefixRows(query)) {
+	const visit = (collection: string, rows: ReadonlyArray<StoredRecord>): void => {
+		for (const row of rows) {
 			const id = row['id'];
 			const version = rowVersionOf(row);
-			if (typeof id !== 'string' || id.length === 0 || version === undefined) continue;
-			const key = `${query.input.collection}\u0000${id}`;
-			versions.set(key, Math.max(versions.get(key) ?? 0, version));
+			if (isNonEmptyString(id) && version !== undefined) {
+				const key = `${collection}\u0000${id}`;
+				versions.set(key, Math.max(versions.get(key) ?? 0, version));
+			}
+			for (const relation of catalog[collection]?.relationships ?? []) {
+				const related = row[relation.name];
+				const children = Array.isArray(related) ? related : [related];
+				visit(relation.target, children.filter(isRecord).map(asJsonRecord));
+			}
 		}
+	};
+	for (const query of state.queries.values()) {
+		visit(query.input.collection, prefixRows(query));
 	}
 	return versions;
 };
@@ -211,7 +227,7 @@ const collectionMutationBaseVersions = (
 	graph: CollectionMutationGraph,
 	catalog: CollectionCatalog
 ): ReadonlyArray<CollectionMutationBaseVersion> => {
-	const authoritative = authoritativeVersions(state);
+	const authoritative = authoritativeVersions(state, catalog);
 	const versions = new Map<string, CollectionMutationBaseVersion>();
 	const addKnown = (collection: string, recordId: string): void => {
 		const key = `${collection}\u0000${recordId}`;
@@ -228,10 +244,10 @@ const collectionMutationBaseVersions = (
 			const children = values[relation.name];
 			if (!Array.isArray(children)) continue;
 			for (const child of children) {
-				if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+				if (!isRecord(child)) continue;
 				const childValues = child as Readonly<Record<string, Schema.Json>>;
 				const childId = childValues['id'];
-				if (typeof childId !== 'string' || childId.length === 0) continue;
+				if (!isNonEmptyString(childId)) continue;
 				addKnown(relation.target, childId);
 				walkManyRelations(relation.target, childValues);
 			}
@@ -244,8 +260,7 @@ const collectionMutationBaseVersions = (
 	}
 	for (const row of graph.rows) {
 		const rootId = row.values['id'];
-		if (row.action === 'update' && typeof rootId === 'string' && rootId.length > 0)
-			addKnown(graph.collection, rootId);
+		if (row.action === 'update' && isNonEmptyString(rootId)) addKnown(graph.collection, rootId);
 		walkManyRelations(graph.collection, row.values);
 	}
 	return [...versions.values()];
@@ -264,6 +279,33 @@ const liveQueryOf = <Value>(
 	return createMachineQuery(runtime.sync, mounted, (state) => read(state, mounted.key));
 };
 
+/** Identity and version are protocol metadata, including on projected relationship rows. */
+const withMutationVersions = (
+	input: Readonly<Record<string, Schema.Json>>
+): Readonly<Record<string, Schema.Json>> => {
+	const result = { ...input };
+	if (isRecord(input['columns'])) {
+		const columns = { ...asJsonRecord(input['columns']) };
+		if (Object.values(columns).some((value) => value === true)) {
+			columns['id'] = true;
+			columns['row_version'] = true;
+		} else {
+			delete columns['id'];
+			delete columns['row_version'];
+		}
+		result['columns'] = columns;
+	}
+	if (isRecord(input['with'])) {
+		result['with'] = Object.fromEntries(
+			Object.entries(asJsonRecord(input['with'])).map(([name, relation]) => [
+				name,
+				isRecord(relation) ? withMutationVersions(asJsonRecord(relation)) : relation
+			])
+		);
+	}
+	return result;
+};
+
 const pageQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
@@ -272,7 +314,7 @@ const pageQueryOf = (
 ): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
 	const requestFields: Readonly<Record<string, Schema.Json>> = {
 		collection,
-		...mergeWhere(asJsonRecord(input), options)
+		...withMutationVersions(mergeWhere(asJsonRecord(input), options))
 	};
 	const mode = collectionReadMode(requestFields['after']);
 	switch (mode.kind) {
@@ -348,7 +390,7 @@ const firstQueryOf = (
 ): RemoteQuery<Schema.Json | undefined> => {
 	const requestFields: Readonly<Record<string, Schema.Json>> = {
 		collection,
-		...asJsonRecord(input)
+		...withMutationVersions(asJsonRecord(input))
 	};
 	const mode = collectionReadMode(requestFields['after']);
 	switch (mode.kind) {
@@ -545,7 +587,7 @@ const createSystemClient = (runtime: WorkspaceClientRuntime): SystemClientApi =>
 		let parent = root;
 		for (const segment of contract.clientPath.slice(0, -1)) {
 			const current = parent[segment];
-			if (current !== undefined && (typeof current !== 'object' || current === null))
+			if (current !== undefined && !isRecord(current))
 				throw new Error(`Client command path collides at ${segment}`);
 			if (current === undefined) parent[segment] = {};
 			parent = parent[segment] as Record<string, unknown>;
@@ -617,7 +659,7 @@ const ClientDatabase = {
 			{},
 			{
 				get: (_target, property) => {
-					if (typeof property !== 'string') return undefined;
+					if (!isString(property)) return undefined;
 					if (allowedCollections !== undefined && !allowedCollections.has(property))
 						return undefined;
 					const existing = collections.get(property);
@@ -670,9 +712,9 @@ const materializeWriteRow = (
 	readonly values: Readonly<Record<string, Schema.Json>>;
 }> => {
 	const submittedId = values['id'];
-	if (submittedId !== undefined && (typeof submittedId !== 'string' || submittedId.trim() === ''))
+	if (submittedId !== undefined && (!isString(submittedId) || submittedId.trim() === ''))
 		throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	if (typeof submittedId === 'string') return { action: 'update', values };
+	if (isString(submittedId)) return { action: 'update', values };
 	const id = crypto.randomUUID();
 	return { action: 'create', values: { ...values, id } };
 };
@@ -720,17 +762,14 @@ const enqueueDeletion = (
 
 const AutomationRunRow = Schema.Struct({
 	task_id: Schema.NonEmptyString,
-	status: Schema.Literals(['pending', 'running', 'done', 'failed']),
-	attempts: Schema.Number,
-	max_attempts: Schema.Number,
+	status: Schema.Literals(['pending', 'running', 'done', 'failed', 'stopped']),
 	error: Schema.NullOr(Schema.String),
 	result: Schema.NullOr(Schema.Json),
 	progress: Schema.NullOr(
 		Schema.Struct({ progress: Schema.Number, text: Schema.NullOr(Schema.String) })
 	),
 	progress_sequence: Schema.Number,
-	progress_updated_at: Schema.NullOr(Schema.String),
-	next_run_at: Schema.NullOr(Schema.String)
+	progress_updated_at: Schema.NullOr(Schema.String)
 });
 type AutomationRunRow = Schema.Schema.Type<typeof AutomationRunRow>;
 const projectAutomationRun = (row: AutomationRunRow | null): AutomationTaskSnapshot | null =>
@@ -738,14 +777,11 @@ const projectAutomationRun = (row: AutomationRunRow | null): AutomationTaskSnaps
 		? null
 		: {
 				status: row.status,
-				attempts: row.attempts,
-				maxAttempts: row.max_attempts,
 				error: row.error,
 				result: row.result,
 				progress: row.progress,
 				progressSequence: row.progress_sequence,
-				progressUpdatedAt: row.progress_updated_at,
-				nextRunAt: row.next_run_at
+				progressUpdatedAt: row.progress_updated_at
 			};
 
 /** One run's live snapshot, decoded from the same Machine-held answer as any collection read. */
@@ -778,7 +814,7 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 		{},
 		{
 			get: (_target, property) => {
-				if (typeof property !== 'string') return undefined;
+				if (!isString(property)) return undefined;
 				const existing = surfaces.get(property);
 				if (existing !== undefined) return existing;
 				const state = new AutomationExecutionState(
@@ -835,7 +871,7 @@ const WorkspaceApis = {
 				{},
 				{
 					get: (_target, property) =>
-						typeof property === 'string'
+						isString(property)
 							? (input: Schema.Json) =>
 									commandQueryOf(
 										runtime,
@@ -851,7 +887,7 @@ const WorkspaceApis = {
 				{},
 				{
 					get: (_target, property) => {
-						if (typeof property !== 'string') return undefined;
+						if (!isString(property)) return undefined;
 						if (!collectionAllowed(property)) return undefined;
 						return catalog[property] ?? { name: property, fields: [], relationships: [] };
 					}
@@ -881,41 +917,28 @@ const WorkspaceApis = {
 					readonly approvalRequestId: string;
 					readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
 					readonly comments?: string;
-				}) =>
-					Effect.runPromise(
-						Effect.gen(function* () {
-							const state = yield* commandEffectOf(runtime, 'approvals.status', {
-								requestId: input.approvalRequestId
-							});
-							const decision =
-								input.action === 'SUPERSEDED'
-									? 'supersede'
-									: input.action === 'APPROVED'
-										? 'approve'
-										: input.action === 'REQUEST_FOR_CHANGE'
-											? 'request_changes'
-											: 'reject';
-							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
-							if (Result.isFailure(decodedState)) return;
-							yield* commandEffectOf(runtime, 'approvals.decide', {
-								state: decodedState.success,
-								decision,
-								...(input.comments === undefined ? {} : { reason: input.comments })
-							});
-						})
-					),
+				}) => {
+					const decision =
+						input.action === 'SUPERSEDED'
+							? 'supersede'
+							: input.action === 'APPROVED'
+								? 'approve'
+								: input.action === 'REQUEST_FOR_CHANGE'
+									? 'request_changes'
+									: 'reject';
+					return Effect.runPromise(
+						commandEffectOf(runtime, 'approvals.decide', {
+							state: { requestId: input.approvalRequestId },
+							decision,
+							...(input.comments === undefined ? {} : { reason: input.comments })
+						}).pipe(Effect.asVoid)
+					);
+				},
 				withdraw: (approvalRequestId: string) =>
 					Effect.runPromise(
-						Effect.gen(function* () {
-							const state = yield* commandEffectOf(runtime, 'approvals.status', {
-								requestId: approvalRequestId
-							});
-							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
-							if (Result.isFailure(decodedState)) return;
-							yield* commandEffectOf(runtime, 'approvals.withdraw', {
-								state: decodedState.success
-							});
-						})
+						commandEffectOf(runtime, 'approvals.withdraw', {
+							state: { requestId: approvalRequestId }
+						}).pipe(Effect.asVoid)
 					)
 			}
 		};

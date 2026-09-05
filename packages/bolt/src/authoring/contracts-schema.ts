@@ -2,6 +2,7 @@
 // contract and its workspace declaration; they already link by type-only imports in both directions.
 import { Effect, Schema } from 'effect';
 import type { SystemRowColumns } from './system-row-model.js';
+import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
 import type {
 	AnyModelFieldBuilder,
 	FileRef,
@@ -689,6 +690,12 @@ export interface SchemaNearestConfig<
 }
 
 interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
+	/** Held creates/updates, under this collection's read policy. No approval inbox metadata is exposed. */
+	findPending(
+		config?: Pick<SchemaQueryConfig<S, N>, 'where' | 'limit'>
+	): Effect.Effect<
+		Array<Partial<SchemaRow<S, N>> & { readonly id: string; readonly approval_id: string }>
+	>;
 	findMany(): Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
 	findMany<const Config extends SchemaQueryConfig<S, N>>(
 		config: ExactQueryInput<S, N, Config>
@@ -714,12 +721,9 @@ interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 			ExactWhereMember<Config> & { readonly column: Col }
 	): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<{ readonly distance: number }>>>;
 }
-interface ApprovalRequestRow extends SystemRow {
-	readonly collection_name: string;
-	readonly status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
-	readonly closed_at: Date | null;
-	readonly locked_record_refs: unknown;
-}
+type ApprovalRequestRow = SelectForColumns<
+	typeof SYSTEM_COLLECTION_MODELS.approval_request.columns
+>;
 type ApprovalRequestManyConfig = Readonly<{
 	readonly where?: SchemaWhere<ApprovalRequestRow>;
 	readonly columns?: Partial<Readonly<Record<keyof ApprovalRequestRow, boolean>>>;
@@ -784,6 +788,19 @@ type DeclaredInput<Inputs, N extends PropertyKey> =
 		: never;
 
 /**
+ * The workspace's declared write shapes, read off the generated augmentation.
+ *
+ * `generated/inputs.ts` augments `WorkspaceAuthoringTypes` with one `typeof import` per hooks
+ * module; unsynced workspaces and Bolt's own sources have no augmentation and fall back to
+ * `unknown`, which every consumer reads as "the whole collection is writable".
+ */
+export type WorkspaceInputsOf<S extends AnySchema> = WorkspaceAuthoringTypes extends {
+	readonly inputs: infer Inputs;
+}
+	? Inputs
+	: unknown;
+
+/**
  * What `db.<collection>.mutate` accepts.
  *
  * The two arms are `MutationRecord`'s, with the hook's declared `input` standing in for the
@@ -806,18 +823,18 @@ export type MutationValuesFor<S extends AnySchema, N extends MutationTableName<S
 	? CollectionMutationValues<S, N>
 	: DeclaredMutationValues<S, N, DeclaredInput<Inputs, N>>;
 
-type AuthoredDatabase<S extends AnySchema> = {
+type AuthoredDatabase<S extends AnySchema, Inputs = WorkspaceInputsOf<S>> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N> & {
 		/** Always an array of `input` records. One call is one batch. */
 		readonly mutate: (
-			values: ReadonlyArray<MutationValuesFor<S, N, unknown>>
+			values: ReadonlyArray<MutationValuesFor<S, N, Inputs>>
 		) => Effect.Effect<void>;
 		readonly delete: (ids: ReadonlyArray<string>) => Effect.Effect<void>;
 	};
 } & { readonly approval_request: ApprovalRequestQuery };
 
-export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
-	readonly db: AuthoredDatabase<S>;
+export type Api<S extends AnySchema = DefaultWorkspaceSchema, Inputs = WorkspaceInputsOf<S>> = {
+	readonly db: AuthoredDatabase<S, Inputs>;
 	/**
 	 * Manually run a declared automation from code, in the background, with retry.
 	 *
@@ -934,16 +951,6 @@ export type MutateGraph<S extends AnySchema, N extends TableName<S>, D extends D
 	: Partial<MutationInsertFor<S, N>> & ChildrenOf<S, N, D>;
 
 /**
- * What `before` returns: the input record expanded with nested `many`s and any columns the hook
- * derived. Authors do not declare this shape; it is computed from the collection.
- */
-export type TPayload<
-	S extends AnySchema,
-	N extends TableName<S>,
-	D extends Depth = 5
-> = MutateGraph<S, N, D>;
-
-/**
  * The one place a rule about a written record lives. Creates and updates share one phase and one
  * shape: both carry a typed graph, both can be preceded by `prepare`, so a recalculation can batch
  * its reads.
@@ -952,18 +959,34 @@ export type TPayload<
  * update, which is the same fact the runtime decides the operation from — the presence of an id —
  * rather than a second flag that could disagree with it.
  */
+/**
+ * Hook contexts deliberately stay on the full model arms, not the narrowed input.
+ *
+ * The narrowed shape is read out of the hooks module itself (`typeof import().default`), so
+ * letting a hook context name it would make the default export's inference depend on the map
+ * the export feeds — a cycle tsc reports at every narrowed collection. Client and server
+ * `mutate` still narrow (their types never flow back into the module), and the runtime still
+ * decodes hook inputs to the declared shape, so a hook reading past it fails loud at runtime
+ * rather than silently.
+ */
 type MutateBeforePhaseContext<S extends AnySchema, N extends TableName<S>, Prepared> =
 	| Readonly<{
 			readonly input: MutateCreateInput<S, N>;
 			readonly existing: undefined;
+			/** Server-assigned identity, available before a create or approved replay is stored. */
+			readonly recordId: string;
+			/** Caller-supplied relationship names, before hooks derive any children. */
+			readonly relationships: ReadonlyArray<MutationManyRelation<S, N>>;
 			readonly prepared: Prepared;
-			readonly api: Api<S>;
+			readonly api: Api<S, unknown>;
 	  }>
 	| Readonly<{
 			readonly input: MutateUpdateInput<S, N>;
 			readonly existing: SchemaRow<S, N>;
+			readonly recordId: string;
+			readonly relationships: ReadonlyArray<MutationManyRelation<S, N>>;
 			readonly prepared: Prepared;
-			readonly api: Api<S>;
+			readonly api: Api<S, unknown>;
 	  }>;
 
 type MutateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (
@@ -1017,7 +1040,7 @@ type MutateAfter<S extends AnySchema, N extends TableName<S>> = (
  */
 type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly inputs: ReadonlyArray<MutateInput<S, N>>;
-	readonly api: Api<S>;
+	readonly api: Api<S, unknown>;
 }) => Effect.Effect<Prepared, AuthoredRefusal, never> | Prepared;
 
 type DeletePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
@@ -1050,10 +1073,12 @@ type DeletePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  * complete desired state — and every difference between the two arms was drift the split permitted
  * rather than a distinction the write surface has.
  *
- * **`input` is not here.** It is `export const input` in the same `+hooks.ts`, a binding of its own,
- * because it types `api.db.<collection>.mutate` and `client.db.<collection>.mutate` — and a
- * property of this type could not, since resolving it would mean asking what the default export is
- * while the default export is being checked against this type.
+ * **`input` lives here, beside `mutate` and `delete`.** It is the collection's declared
+ * write shape — the columns a caller may send — and it types `api.db.<collection>.mutate`,
+ * `client.db.<collection>.mutate`, and every hook context from the one declaration. The generated
+ * `WorkspaceInputs` map reads it out with `typeof import`, so resolving it never means asking
+ * what the default export is while the default export is being checked: the map reads the
+ * checked module, not the checking type.
  *
  * The nesting is the documentation. A batch-wide preparation step and a per-record decision cannot
  * be mistaken for interchangeable rule sites: the declaration states which runs when and keeps each
@@ -1136,6 +1161,14 @@ export type MutateEditContext<H> = Extract<
 >;
 
 export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepared = void> = {
+	/**
+	 * The columns a caller may send. Absent, the NormalizedInputSchema is the whole writable
+	 * collection. Present, create requires every named column, update takes a patch of them, and
+	 * unnamed columns are a type error at the call site and stripped at runtime. Typed loose
+	 * here on purpose: the precise shape is read back out with `typeof import`, and naming it
+	 * here would cycle the module through its own check.
+	 */
+	readonly input?: Schema.Codec<unknown, unknown>;
 	readonly mutate?: {
 		readonly prepare?: MutatePrepare<S, N, Prepared>;
 		readonly perRecord?: {

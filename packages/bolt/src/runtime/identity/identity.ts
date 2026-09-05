@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { decodeNumber } from '@norbital-ai/std/json';
 import { and, asc, count, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
@@ -1676,7 +1677,7 @@ export const layerWith = (
 										and(eq(usersTable.tenantId, tenantId), eq(usersTable.status, ADMIN_STATUS))
 									)
 							);
-							const adminCount = Number(
+							const adminCount = decodeNumber(
 								(counted.rows[0] as { count?: number | string } | undefined)?.count ?? 0
 							);
 							if (adminCount <= 1) {

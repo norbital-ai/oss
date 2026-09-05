@@ -1,7 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import type { LiveReleaseRow } from '#lib/client/ui/studio/studio-state.js';
@@ -26,7 +25,7 @@
 	<Stack gap="xs" shrink={false} class="border-b border-border/60 px-2 py-1.5">
 		<Inline gap="xs">
 			<Icon icon="lucide:history" class="size-3.5 text-muted-foreground" />
-			<span class={cn('text-foreground', WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS)}>
+			<span class="text-foreground {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
 				{t('bolt.studio.live')}
 			</span>
 		</Inline>
@@ -39,10 +38,7 @@
 				<button
 					type="button"
 					data-testid="studio-live-release-option"
-					class={cn(
-						'w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70',
-						release.releaseId === selected?.releaseId && 'bg-primary/5'
-					)}
+					class="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70 {release.releaseId === selected?.releaseId ? 'bg-primary/5' : ''}"
 					onclick={() => onselect?.(release.releaseId)}
 				>
 					<span class="block truncate font-mono text-xs font-medium text-foreground">

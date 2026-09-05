@@ -1,3 +1,5 @@
+export { makeWebConnectorBinding } from './facilities/web.js';
+
 export {
 	ApplicationStartError,
 	installProcessShutdown,
@@ -85,11 +87,7 @@ export {
 	runScheduleTick,
 	type ScheduleTickOptions
 } from './schedules.js';
-export {
-	makeTimekeeper,
-	type Timekeeper,
-	type TimekeeperOptions
-} from './timekeeper.js';
+export { makeTimekeeper, type Timekeeper, type TimekeeperOptions } from './timekeeper.js';
 export {
 	makeMemoryTransport,
 	makeTransportBinding,

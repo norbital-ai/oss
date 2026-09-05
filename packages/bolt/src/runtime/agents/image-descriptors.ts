@@ -36,6 +36,7 @@ const DescriptorPayload = Schema.Struct({
 });
 
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
+const isString = Schema.is(Schema.String);
 
 /** Encodes one ImageAsset as a file-part data string. Never base64 or a data URL. */
 function encodeImageDescriptorData(asset: ImageAsset): string {
@@ -50,7 +51,7 @@ function encodeImageDescriptorData(asset: ImageAsset): string {
 
 /** Reads one descriptor from a file-part data value. Bytes and data URLs are refused. */
 function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
-	if (typeof data !== 'string' || !data.startsWith(IMAGE_DESCRIPTOR_SCHEME)) return undefined;
+	if (!isString(data) || !data.startsWith(IMAGE_DESCRIPTOR_SCHEME)) return undefined;
 	const raw = data.slice(IMAGE_DESCRIPTOR_SCHEME.length);
 	const parsed = Option.getOrUndefined(
 		Schema.decodeUnknownOption(Schema.fromJsonString(DescriptorPayload))(raw)
@@ -60,7 +61,7 @@ function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
 
 /** Collects descriptor-sized assets from one canonical Effect message. */
 export function imageAssetsFromMessage(message: Prompt.MessageEncoded): ImageAsset[] {
-	if (typeof message.content === 'string') return [];
+	if (isString(message.content)) return [];
 	return message.content.flatMap((part) => {
 		if (part.type !== 'file') return [];
 		const asset = decodeImageDescriptorData(part.data);
@@ -74,7 +75,7 @@ export function imageAssetsFromMessage(message: Prompt.MessageEncoded): ImageAss
  * Colony refuses binary file parts on generate; descriptors travel as `imageAssets` instead.
  */
 export function stripImageFileParts(message: Prompt.MessageEncoded): Prompt.MessageEncoded {
-	if (typeof message.content === 'string') return message;
+	if (isString(message.content)) return message;
 	const content = message.content.filter((part) => part.type !== 'file');
 	if (content.length === message.content.length) return message;
 	switch (message.role) {
@@ -147,7 +148,7 @@ export function guestImageCommandHasNoBytes(payload: unknown): boolean {
 
 /** Refuses a user message whose file parts are not descriptors. */
 export function assertGuestImageDescriptorsOnly(message: Prompt.MessageEncoded): void {
-	if (typeof message.content === 'string') return;
+	if (isString(message.content)) return;
 	for (const part of message.content) {
 		if (part.type !== 'file') continue;
 		if (decodeImageDescriptorData(part.data) === undefined) {

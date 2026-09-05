@@ -259,7 +259,7 @@ export const SyncExtendPrefixResponse = Schema.Struct({
 	queryKey: SyncQueryKey,
 	version: SyncQueryVersion,
 	fromPrefix: SyncPrefixLengthValue,
-	toPrefix: SyncPositivePrefixLengthValue,
+	toPrefix: SyncPrefixLengthValue,
 	rows: Schema.Array(StoredRecord),
 	retainedBytes: SyncRetainedPrefixBytesValue
 }).annotate({ identifier: 'BoltSyncExtendPrefixResponse' });
@@ -331,6 +331,7 @@ export const SyncSubEntry = Schema.Struct({
 	planKey: Schema.NonEmptyString,
 	version: SyncQueryVersion,
 	prefixKeys: Schema.Array(SyncPrefixKey),
+	/** Admitted live window; actual rows may be fewer and can grow after later commits. */
 	loadedPrefix: SyncPrefixLengthValue,
 	prefixBytes: SyncRetainedPrefixBytesValue,
 	impersonatedTeam: Schema.optionalKey(Schema.NonEmptyString),

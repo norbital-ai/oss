@@ -1,4 +1,4 @@
-import { Config, Effect, Option, Redacted, Schema } from 'effect';
+import { Config, Effect, Option, Predicate, Redacted, Schema } from 'effect';
 import {
 	EnvironmentName,
 	FacilityCall,
@@ -156,12 +156,12 @@ export const makeWireBinding = <
 						failure(
 							makeWireError(
 								options.failed.code,
-								typeof options.failed.message === 'function'
+								Predicate.isFunction(options.failed.message)
 									? options.failed.message(cause)
 									: options.failed.message,
 								{
 									retryable:
-										(typeof options.failed.retryable === 'function'
+										(Predicate.isFunction(options.failed.retryable)
 											? options.failed.retryable(cause)
 											: options.failed.retryable) ?? !signal.aborted,
 									outcome: signal.aborted ? 'unknown' : 'known'

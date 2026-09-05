@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import ts from 'typescript';
+import { Option, Schema } from 'effect';
 import { ignoredFile } from './ignore.js';
 
 export const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -295,10 +296,14 @@ export function scannerExcluded(root: string, file: string): boolean {
 	);
 }
 
+const ExternalErrorShape = Schema.Union([
+	Schema.Struct({ code: Schema.Unknown }),
+	Schema.Struct({ status: Schema.Unknown })
+]);
+
 function externalErrorCode(error: unknown): { code?: unknown; status?: unknown } {
-	if (typeof error === 'object' && error !== null && ('code' in error || 'status' in error))
-		return error as { code?: unknown; status?: unknown };
-	return {};
+	const decoded = Schema.decodeUnknownOption(ExternalErrorShape)(error);
+	return Option.isSome(decoded) ? decoded.value : {};
 }
 
 /** Recompute the scanner input inventory exactly, including manifests and compiler configuration. */

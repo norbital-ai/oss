@@ -107,6 +107,9 @@ describe('Task stop and run-fence boundaries', () => {
 			)
 		).toEqual([{ task_status: 'stopped', run_status: 'stopped' }]);
 		expect(
+			await harness.database.query('select state from agent_inbox where task_id = $1', [taskId])
+		).toEqual([{ state: 'cancelled' }]);
+		expect(
 			await harness.database.query(
 				`select count(*)::int as count from agent_message
 				 where task_id = $1 and author->>'kind' = 'agent'`,

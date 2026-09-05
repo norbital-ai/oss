@@ -16,6 +16,7 @@ export interface CollectionAppliedFilterCondition {
 
 const whereNodeSchema = Schema.Record(Schema.String, Schema.Unknown);
 const decodeWhereNode = Schema.decodeUnknownResult(whereNodeSchema);
+const isWhereNode = Schema.is(whereNodeSchema);
 
 function linkedLabel(field: CollectionField): string {
 	return (field.label ?? humanize(field.name)).replace(/\s+id$/i, '').trim();
@@ -95,7 +96,7 @@ export function collectionAppliedFilterConditions(
 					: [...path, linkedLabel(field)].join(' · ');
 			const lookupTarget = field.relation?.target ?? (name === 'id' ? current.name : undefined);
 			let operators: Array<[string, unknown]> = [];
-			if (typeof condition === 'object' && condition != null && !Array.isArray(condition)) {
+			if (isWhereNode(condition)) {
 				for (const [operator, operand] of Object.entries(condition)) {
 					operators.push([operator, operand]);
 				}

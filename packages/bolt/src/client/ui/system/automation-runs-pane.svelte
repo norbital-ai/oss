@@ -9,7 +9,6 @@
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import { Bound, Cover, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import AutomationProgressRenderer from './automation-progress.renderer.svelte';
 	import {
@@ -146,12 +145,9 @@
 			{#if automation !== undefined}
 				<Inline align="start" gap="sm">
 					<div
-						class={cn(
-							'flex size-7 shrink-0 items-center justify-center rounded-md border',
-							styles.iconWrapperClass
-						)}
+						class="flex size-7 shrink-0 items-center justify-center rounded-md border {styles.iconWrapperClass}"
 					>
-						<ProductIcon name="automations" class={cn('size-4', styles.iconClass)} />
+						<ProductIcon name="automations" class="size-4 {styles.iconClass}" />
 					</div>
 					<Stack gap="xs" grow class="min-w-0">
 						<p class="font-mono text-xs font-semibold text-foreground">{automation.name}</p>

@@ -34,7 +34,25 @@ export interface WorkspaceNavigationItem {
 	readonly thumbnail?: string | null;
 	readonly children?: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly section?: 'operations' | 'administration' | 'settings';
+	/**
+	 * Ask before following this item. Set by builders for destinations that take over the
+	 * session — a kiosk app renders chromeless, so the only way out is the URL bar — and the
+	 * copy is the builder's, because only it knows what the destination does.
+	 */
+	readonly confirm?: {
+		readonly title: string;
+		readonly description: string;
+		readonly confirmLabel: string;
+		readonly cancelLabel: string;
+	};
 }
+
+const WorkspaceNavigationConfirmSchema = Schema.Struct({
+	title: Schema.String,
+	description: Schema.String,
+	confirmLabel: Schema.String,
+	cancelLabel: Schema.String
+});
 
 const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Schema.Struct({
 	key: Schema.String,
@@ -51,7 +69,8 @@ const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Sch
 			Schema.suspend((): Schema.Codec<WorkspaceNavigationItem> => WorkspaceNavigationItemSchema)
 		)
 	),
-	section: Schema.optional(Schema.Literals(['operations', 'administration', 'settings']))
+	section: Schema.optional(Schema.Literals(['operations', 'administration', 'settings'])),
+	confirm: Schema.optional(WorkspaceNavigationConfirmSchema)
 });
 
 export interface WorkspaceNavigationSection {

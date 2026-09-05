@@ -42,7 +42,7 @@
 
 <style>
 	.bolt-header-actions {
-		display: flex;
+		display: flex; /* repository-health:allow UI24 -- this teleported toolbar swaps gap and wrap in a 40rem media query and a compact variant; the primitives express neither a media query nor these off-scale gaps (0.75rem/0.375rem) */
 		align-items: center;
 		justify-content: flex-end;
 		gap: 0.75rem;

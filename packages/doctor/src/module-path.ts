@@ -6,10 +6,14 @@
  * These are host facts, not pack rules. YAML states the claim with `selfModule` / `aliasCovered`
  * / `importsFrom`; this module answers them.
  */
+// repository-health:allow STATE2 -- immutable parsed alias lists cached per tsconfig key; tsconfig files do not change during one doctor run and re-reading them per lookup would dominate scan cost.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
+import { Schema } from 'effect';
 import { readJsonObject, recordField, stringField } from './manifest.js';
+
+const isString = Schema.is(Schema.String);
 
 const aliasCache = new Map<string, ReadonlyArray<Readonly<{ prefix: string; target: string }>>>();
 
@@ -28,7 +32,7 @@ function tsconfigAliases(root: string, directory: string, name: string, record: 
 	const base = join(directory, stringField(compilerOptions, 'baseUrl') ?? '.');
 	for (const [prefix, targets] of Object.entries(recordField(compilerOptions, 'paths')))
 		for (const target of Array.isArray(targets) ? targets : [])
-			if (typeof target === 'string') record(prefix, target, base);
+			if (isString(target)) record(prefix, target, base);
 }
 
 function manifestAliases(root: string, directory: string, record: RecordAlias): void {
@@ -37,7 +41,7 @@ function manifestAliases(root: string, directory: string, record: RecordAlias): 
 	const parsed = readJsonObject(readFileSync(file, 'utf8'));
 	if (parsed === undefined) return;
 	for (const [prefix, target] of Object.entries(recordField(parsed, 'imports')))
-		if (typeof target === 'string') record(prefix, target, directory);
+		if (isString(target)) record(prefix, target, directory);
 }
 
 function aliasesFor(

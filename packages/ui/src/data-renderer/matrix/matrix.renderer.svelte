@@ -35,8 +35,13 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { decodeNumber } from '@norbital-ai/std/json';
+	import { Schema } from 'effect';
 	import { watch } from 'runed';
 	type TableRow = Record<string, unknown> & { __matrixRowId: string };
+
+	const isNumber = Schema.is(Schema.Number);
+	const isBoolean = Schema.is(Schema.Boolean);
+	const isString = Schema.is(Schema.String);
 
 	const { t } = useI18n<UiKeys>();
 
@@ -66,7 +71,7 @@
 
 	function resolveRowId(row: TRow, index: number): string {
 		if (getRowId) return getRowId(row, index);
-		if (typeof row.id === 'string') return row.id;
+		if (row.id !== undefined) return row.id;
 		return `row-${index}`;
 	}
 
@@ -132,8 +137,8 @@
 		if (left == null && right == null) return 0;
 		if (left == null) return 1;
 		if (right == null) return -1;
-		if (typeof left === 'number' && typeof right === 'number') return left - right;
-		if (typeof left === 'boolean' && typeof right === 'boolean') {
+		if (isNumber(left) && isNumber(right)) return left - right;
+		if (isBoolean(left) && isBoolean(right)) {
 			return decodeNumber(left ? 1 : 0) - decodeNumber(right ? 1 : 0);
 		}
 		return String(left).localeCompare(String(right));

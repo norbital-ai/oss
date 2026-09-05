@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Number as Number_ } from 'effect';
+	import { Number as Number_, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -25,10 +25,10 @@
 		class: className
 	}: Props = $props();
 
-	const values = $derived(
-		Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : []
-	);
-	const scalarValue = $derived(typeof value === 'number' ? value : null);
+	const isNumber = Schema.is(Schema.Number);
+
+	const values = $derived(Array.isArray(value) ? value.filter(isNumber) : []);
+	const scalarValue = $derived(isNumber(value) ? value : null);
 
 	function normalized(next: number): number {
 		return Number_.clamp({ minimum: 0, maximum: max })(next);

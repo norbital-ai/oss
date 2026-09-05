@@ -4,7 +4,11 @@ import type { Plugin, PluginOption } from 'vite';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { Effect, Result, Schema } from 'effect';
-import { auditAuthoredSystemColumns } from '../quality/audit.js';
+import {
+	auditAuthoredClientWrappers,
+	auditAuthoredSystemColumns,
+	auditHooklessMutations
+} from '../quality/audit.js';
 import { SERVER_ASSET_DECLARATION_FILE_NAME, WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
 export { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
@@ -94,6 +98,14 @@ const VitePlugins = {
 			// `vite-plugin-svelte` has already turned it into — a component prop stops being a syntactic
 			// position the moment the component is compiled.
 			enforce: 'pre',
+			buildStart() {
+				for (const finding of auditHooklessMutations(workspaceRoot))
+					this.warn({
+						code: 'BOLT_HOOK_REVIEW',
+						message: `${finding.file}:${finding.line}: ${finding.collection} permits mutations without ${finding.expectedHooks}. Review whether its writes require domain validation.`,
+						id: join(workspaceRoot, finding.file)
+					});
+			},
 			/**
 			 * The system-column rule, as an authoring error rather than a lint anyone can skip.
 			 *
@@ -103,8 +115,24 @@ const VitePlugins = {
 			 */
 			transform: (code, id) => {
 				const file = id.split('?')[0] ?? id;
-				if (!file.endsWith('.svelte') || /\/(?:node_modules|\.yalc|\.norbital)\//.test(file))
-					return null;
+				if (/\/(?:node_modules|\.yalc|\.norbital)\//.test(file)) return null;
+				if (
+					file.startsWith(`${resolve(workspaceRoot, 'src')}${sep}`) &&
+					/\.(?:svelte|ts)$/.test(file)
+				) {
+					const wrappers = auditAuthoredClientWrappers({ [file]: code });
+					if (wrappers.length > 0)
+						throw new Error(
+							[
+								'Authored client writes must use CollectionForm or an inline command handler.',
+								...wrappers.map(
+									({ line, functionName, call }) =>
+										`  ${file}:${line} — ${functionName} wraps ${call}`
+								)
+							].join('\n')
+						);
+				}
+				if (!file.endsWith('.svelte')) return null;
 				const findings = auditAuthoredSystemColumns({ [file]: code });
 				if (findings.length === 0) return null;
 				throw new Error(

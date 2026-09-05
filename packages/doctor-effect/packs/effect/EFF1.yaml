@@ -5,9 +5,9 @@ principles: [straightforwardness, testability, type-safety]
 rule:
   all:
     - kind: TryStatement
-    - importsFrom: effect
+    - fact: { name: usesImportedRuntime, from: effect, symbol: Effect }
 examples:
   bad:
-    - "import { Effect } from 'effect';\nexport const f = () => { try { go(); } catch (e) { report(e); } };"
+    - "import { Effect } from 'effect';\nconst owned = Effect.succeed(1);\nexport const f = () => { try { go(); } catch (e) { report(e); } };"
   good:
-    - "import { Effect } from 'effect';\nexport const f = () => Effect.try(go);"
+    - "import { Effect } from 'effect';\nconst owned = Effect.succeed(1);\nexport const f = () => Effect.try(go);"

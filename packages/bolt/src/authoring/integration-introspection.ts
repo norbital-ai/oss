@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- integration-introspection imports the workspace-schema
 // declarations it splits, so the pair is linked, not parallel.
 import type { ManifestIntegration, ManifestIntegrationBinding } from '@norbital-ai/bolt-protocol';
-import { Option, Schema } from 'effect';
+import { Option, Predicate, Schema } from 'effect';
 import type {
 	PullCursorSpec,
 	PullPagesSpec,
@@ -128,14 +128,18 @@ const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
 	Option.getOrElse(Schema.decodeUnknownOption(JsonObject)(value), () => undefined);
 
-const text = (value: unknown): string | undefined =>
-	typeof value === 'string' ? value : undefined;
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isRecord = Schema.is(JsonObject);
+const isStringArray = Schema.is(Schema.Array(Schema.String));
+
+const text = (value: unknown): string | undefined => (isString(value) ? value : undefined);
 
 const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefined => {
 	const source = record(value);
 	if (source === undefined) return undefined;
 	const entries = Object.entries(source).flatMap(([key, entry]) =>
-		typeof entry === 'string' ? [[key, entry] as const] : []
+		isString(entry) ? [[key, entry] as const] : []
 	);
 	return entries.length === 0 ? undefined : Object.fromEntries(entries);
 };
@@ -149,15 +153,13 @@ const stringRecord = (value: unknown): Readonly<Record<string, string>> | undefi
  */
 /** A `{ path: [...] }` location, when the authored value is one. Shared by `records` and every next-cursor. */
 const stringPath = (value: unknown): { readonly path: ReadonlyArray<string> } | undefined =>
-	Array.isArray(value) && value.length > 0 && value.every((step) => typeof step === 'string')
-		? { path: [...value] }
-		: undefined;
+	isStringArray(value) && value.length > 0 ? { path: [...value] } : undefined;
 
 /** The `maxOf` resumption value of a next-location, when the binding declared one. */
 const maxOfOf = (next: unknown): string | undefined => {
-	if (typeof next !== 'object' || next === null) return undefined;
+	if (!isRecord(next)) return undefined;
 	const value = Reflect.get(next, 'maxOf');
-	return typeof value === 'string' ? value : undefined;
+	return isString(value) ? value : undefined;
 };
 
 /** Where a next-cursor is read from, in the four shapes the runtime knows how to read. */
@@ -194,7 +196,7 @@ const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
 	const source = record(value);
 	const style = source === undefined ? undefined : text(source['style']);
 	if (source === undefined || style === undefined) return undefined;
-	const max = typeof source['max'] === 'number' ? { max: source['max'] } : {};
+	const max = isNumber(source['max']) ? { max: source['max'] } : {};
 	if (style === 'page') {
 		return {
 			style: 'page',
@@ -202,8 +204,8 @@ const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
 			...(text(source['sizeQuery']) === undefined
 				? {}
 				: { sizeQuery: String(source['sizeQuery']) }),
-			...(typeof source['size'] === 'number' ? { size: source['size'] } : {}),
-			...(typeof source['firstPage'] === 'number' ? { firstPage: source['firstPage'] } : {}),
+			...(isNumber(source['size']) ? { size: source['size'] } : {}),
+			...(isNumber(source['firstPage']) ? { firstPage: source['firstPage'] } : {}),
 			...max
 		};
 	}
@@ -212,7 +214,7 @@ const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
 			style: 'offset',
 			offsetQuery: String(source['offsetQuery'] ?? 'offset'),
 			limitQuery: String(source['limitQuery'] ?? 'limit'),
-			size: typeof source['size'] === 'number' ? source['size'] : 100,
+			size: isNumber(source['size']) ? source['size'] : 100,
 			...max
 		};
 	}
@@ -244,13 +246,12 @@ const recordsSpec = (value: unknown): PullRecordsSpec | undefined => {
 
 const retrySpec = (value: unknown): PullRetrySpec | undefined => {
 	const source = record(value);
-	if (source === undefined || typeof source['attempts'] !== 'number') return undefined;
+	const attempts = source?.['attempts'];
+	if (source === undefined || !isNumber(attempts)) return undefined;
 	return {
-		attempts: source['attempts'],
-		...(typeof source['initialDelayMs'] === 'number'
-			? { initialDelayMs: source['initialDelayMs'] }
-			: {}),
-		...(typeof source['maxDelayMs'] === 'number' ? { maxDelayMs: source['maxDelayMs'] } : {})
+		attempts,
+		...(isNumber(source['initialDelayMs']) ? { initialDelayMs: source['initialDelayMs'] } : {}),
+		...(isNumber(source['maxDelayMs']) ? { maxDelayMs: source['maxDelayMs'] } : {})
 	};
 };
 
@@ -368,8 +369,8 @@ const signatureSpec = (binding: string, value: unknown): WebhookSignatureSpec =>
 		...(text(source?.['signedPayload']) === undefined
 			? {}
 			: { signedPayload: String(source?.['signedPayload']) }),
-		...(typeof source?.['toleranceSeconds'] === 'number'
-			? { toleranceSeconds: source['toleranceSeconds'] }
+		...(isNumber(source?.['toleranceSeconds'])
+			? { toleranceSeconds: source?.['toleranceSeconds'] }
 			: {})
 	};
 };
@@ -390,7 +391,7 @@ const authoredHalf = (
 	const column = identity === undefined ? undefined : text(identity['column']);
 	const value = identity?.['value'];
 	const input = binding.input;
-	if (column === undefined || typeof value !== 'function') {
+	if (column === undefined || !Predicate.isFunction(value)) {
 		throw new TypeError(
 			`Integration ${integrationName}.${bindingName} declares no identity { column, value }; without one a second delivery cannot recognise the rows the first one wrote.`
 		);
@@ -402,14 +403,14 @@ const authoredHalf = (
 	}
 	const map = binding.map;
 	const resolve = binding.resolve;
-	if (resolve !== undefined && typeof resolve !== 'function') {
+	if (resolve !== undefined && !Predicate.isFunction(resolve)) {
 		throw new TypeError(
 			`Integration ${integrationName}.${bindingName} declares a resolve that is not a function.`
 		);
 	}
 	// A resolve with nothing to hand its answer to is a query per batch that changes no row, and the
 	// author almost certainly meant to write the `map` that reads it. Refused here rather than run.
-	if (resolve !== undefined && typeof map !== 'function') {
+	if (resolve !== undefined && !Predicate.isFunction(map)) {
 		throw new TypeError(
 			`Integration ${integrationName}.${bindingName} declares a resolve but no map; nothing would ever read what it looked up.`
 		);
@@ -419,20 +420,20 @@ const authoredHalf = (
 		identityColumn: column,
 		identityValue: (candidate: unknown) => {
 			const key: unknown = Reflect.apply(value, undefined, [candidate]);
-			if (typeof key !== 'string' || key.trim() === '') {
+			if (!isString(key) || key.trim() === '') {
 				throw new TypeError(
 					`Integration ${integrationName}.${bindingName} read an empty external identity from a record; an empty key would make every record the same record.`
 				);
 			}
 			return key;
 		},
-		...(typeof resolve === 'function'
+		...(Predicate.isFunction(resolve)
 			? {
 					resolve: (records: ReadonlyArray<unknown>, api: unknown): unknown =>
 						Reflect.apply(resolve, undefined, [{ records, api }])
 				}
 			: {}),
-		...(typeof map === 'function'
+		...(Predicate.isFunction(map)
 			? {
 					map: (candidate: unknown, resolved: unknown): Readonly<Record<string, unknown>> => {
 						const produced: unknown = Reflect.apply(map, undefined, [candidate, resolved]);
@@ -541,7 +542,7 @@ const sendTrigger = (
 	readonly events: ReadonlyArray<IntegrationSendEvent>;
 	readonly matches: (event: IntegrationSendEventContext) => boolean;
 } => {
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		const named = SEND_EVENTS.find((event) => event === value);
 		if (named === undefined) {
 			throw new TypeError(
@@ -563,7 +564,7 @@ const sendTrigger = (
 	for (const event of SEND_EVENTS) {
 		const candidate = source[event];
 		if (candidate === undefined) continue;
-		if (typeof candidate !== 'function') {
+		if (!Predicate.isFunction(candidate)) {
 			throw new TypeError(
 				`Integration ${binding} declares a ${event} trigger that is not a function.`
 			);
@@ -614,7 +615,7 @@ const sendDeclaration = (
 	const retry = retrySpec(request['retry']);
 	const idempotencyHeader = text(request['idempotencyHeader']);
 	const body = binding.body;
-	if (body !== undefined && typeof body !== 'function') {
+	if (body !== undefined && !Predicate.isFunction(body)) {
 		throw new TypeError(`Integration ${named} declares a body that is not a function.`);
 	}
 	return {
@@ -661,7 +662,7 @@ export const describeIntegrations = (
 			const name = `${collection}.${integrationName}`;
 			if (
 				!Array.isArray(declaration.policies) ||
-				declaration.policies.some((policy) => typeof policy !== 'string' || policy.trim() === '')
+				declaration.policies.some((policy) => !isString(policy) || policy.trim() === '')
 			) {
 				throw new TypeError(
 					`Integration ${name} requires an explicit policies array. Use [] when it needs no data access.`

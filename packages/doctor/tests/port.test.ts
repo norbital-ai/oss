@@ -245,6 +245,11 @@ const CASES: ReadonlyArray<Case> = [
 		good: 'export const record = (v) => Schema.decodeUnknownOption(JsonObject)(v);'
 	},
 	{
+		rule: 'GUARD2',
+		bad: "export const pick = (style) => typeof style === 'string' ? style : style.context;",
+		good: "export const pick = (style) => (Schema.is(Schema.String)(style) ? style : style.context);"
+	},
+	{
 		rule: 'REFLECT1',
 		bad: "export const name = Reflect.get(Object(manifest), 'name');",
 		good: "export const name = decoded.name;"
@@ -318,6 +323,26 @@ const CASES: ReadonlyArray<Case> = [
 		rule: 'COERCE1',
 		bad: 'export const qty = (input) => Number(input.quantity);',
 		good: 'export const qty = (input) => decodeNumber(input.quantity);'
+	},
+	{
+		rule: 'SWALLOW2',
+		bad: 'export const read = (path) => readFileEffect(path).pipe(Effect.catch(() => Effect.succeed([])));',
+		good: 'export const read = (path) => readFileEffect(path).pipe(Effect.catch((cause) => Effect.fail(cause)));'
+	},
+	{
+		rule: 'ERR1',
+		bad: 'export const fail = (cause) => new Error(String(cause));',
+		good: "export const fail = (cause) => new Error('request failed', { cause });"
+	},
+	{
+		rule: 'ERR2',
+		bad: "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed')));",
+		good: "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed', { cause })));"
+	},
+	{
+		rule: 'STATE3',
+		bad: 'let registered;\nfunction register(shape) { registered = shape; return registered; }',
+		good: 'export function create(shape) { let registered; registered = shape; return registered; }'
 	}
 
 	// --- platform ---------------------------------------------------------------------------

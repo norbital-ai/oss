@@ -760,6 +760,84 @@ describe('declarative relationship reconciliation', () => {
 		]);
 	}, 60_000);
 
+	it('projects server-normalized values for pending reservations and supplies a stable hook record identity', async () => {
+		const identities: string[] = [];
+		harness = await makeBoltTestRuntime(approvalDefinition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Normalizes the budget name before it is reviewed.',
+									handler: ({ input, recordId }) => {
+										identities.push(recordId);
+										return input.name === undefined
+											? input
+											: { ...input, name: input.name.trim().toUpperCase() };
+									}
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		const pending = await harness.runtime.runPromise(
+			Effect.flip(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).mutate(
+						EffectId.make('normalized-reservation'),
+						policySubject,
+						'budgets',
+						[{ name: '  reserved  ' }]
+					);
+				})
+			)
+		);
+		expect(pending).toBeInstanceOf(Collections.PendingApproval);
+		if (!(pending instanceof Collections.PendingApproval)) return;
+		const [proposal] = await harness.database.query(
+			'select record_id, proposed_values, applied_at from approval_request'
+		);
+		expect(proposal).toMatchObject({
+			record_id: identities[0],
+			proposed_values: { name: 'RESERVED' },
+			applied_at: null
+		});
+		expect(await harness.database.query('select id from budgets')).toEqual([]);
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const approvals = yield* Approvals.Service;
+				const state = yield* approvals.status(
+					EffectId.make('normalized-reservation-status'),
+					pending.requestId
+				);
+				if (!state) throw new Error('Missing reservation approval.');
+				yield* approvals.decide(
+					EffectId.make('normalized-reservation-decide'),
+					reviewerSubject,
+					state,
+					'approve'
+				);
+				yield* (yield* Collections.Service).resume(
+					EffectId.make('normalized-reservation-resume'),
+					pending.requestId
+				);
+			})
+		);
+		expect(new Set(identities).size).toBe(1);
+		expect(
+			await harness.database.query(
+				'select count(*)::int as n from approval_request where applied_at is not null'
+			)
+		).toEqual([{ n: 1 }]);
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'RESERVED' }
+		]);
+	}, 60_000);
+
 	it('exposes the proposed graph to a generic approver and lets that approver decide it', async () => {
 		harness = await makeBoltTestRuntime(approvalDefinition);
 		const reviewerTeamId = '00000000-0000-4000-8000-000000000778';

@@ -10,7 +10,7 @@ rule:
         - pattern: performance.now()
         - pattern: crypto.randomUUID()
         - pattern: new Date()
-    - importsFrom: effect
+    - fact: { name: usesImportedRuntime, from: effect, symbol: Effect }
     - inside:
         any:
           - pattern: Effect.gen($FN)

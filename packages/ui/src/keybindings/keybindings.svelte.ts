@@ -410,6 +410,7 @@ export type Key =
 export type ShortcutModifier = '⌘' | 'Ctrl';
 
 export function detectShortcutModifier(): ShortcutModifier {
+	// repository-health:allow GUARD2 -- SSR seam: `navigator` does not exist outside a browser document.
 	if (typeof navigator === 'undefined') return 'Ctrl';
 	return /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 }

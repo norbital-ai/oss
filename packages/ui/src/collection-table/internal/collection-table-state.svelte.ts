@@ -25,6 +25,10 @@ const decodeSortEntry = Schema.decodeUnknownResult(tableSortEntrySchema);
 
 export const COLLECTION_TABLE_SELECTION_COLUMN_ID = '__selection' as const;
 
+const isBoolean = Schema.is(Schema.Boolean);
+const isNumber = Schema.is(Schema.Number);
+const isString = Schema.is(Schema.String);
+
 type TableState<T> = PersistedState<T> | MemoryState<T>;
 
 class MemoryState<T> {
@@ -429,7 +433,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		{
 			const next: Record<string, boolean> = {};
 			for (const [id, value] of Object.entries(this.columnVisibility.current)) {
-				if (columnIds.has(id) && typeof value === 'boolean') next[id] = value;
+				if (columnIds.has(id) && isBoolean(value)) next[id] = value;
 			}
 			if (!this.shallowEqualObject(this.columnVisibility.current, next)) {
 				this.columnVisibility.current = next;
@@ -439,7 +443,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		{
 			const next: Record<string, number> = {};
 			for (const [id, value] of Object.entries(this.columnSizing.current)) {
-				if (columnIds.has(id) && typeof value === 'number') next[id] = value;
+				if (columnIds.has(id) && isNumber(value)) next[id] = value;
 			}
 			if (!this.shallowEqualObject(this.columnSizing.current, next)) {
 				this.columnSizing.current = next;
@@ -490,11 +494,11 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		{
 			const next: Record<string, string> = {};
 			for (const [id, value] of Object.entries(this.columnDisplay.current)) {
-				if (columnIds.has(id) && typeof value === 'string') next[id] = value;
+				if (columnIds.has(id) && isString(value)) next[id] = value;
 			}
 			const augmented: Record<string, string> = { ...next };
 			for (const c of this.columns) {
-				if (typeof c.currentDisplay !== 'string') continue;
+				if (c.currentDisplay === undefined) continue;
 				augmented[c.id] ??= c.currentDisplay;
 			}
 			if (!this.shallowEqualObject(this.columnDisplay.current, augmented)) {
@@ -712,7 +716,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 					const min = layout.instance.minWidth ?? 40;
 					const max = layout.instance.maxWidth;
 					let next = Math.max(initialWidth + deltaX, min);
-					if (typeof max === 'number') next = Math.min(next, max);
+					if (max !== undefined) next = Math.min(next, max);
 					onColumnResize({ columnId: colId, newSize: next });
 				};
 				const end = () => {

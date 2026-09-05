@@ -7,8 +7,10 @@
 	import SyncStatus from './sync-status.svelte';
 	import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 	import type { HostPlugin } from '#lib/client/ui/shell/workspace-navigation.js';
-	import type { Effect } from 'effect';
+	import { type Effect, Schema } from 'effect';
 	import type { ClientState } from '#lib/client/sync/machine.js';
+
+	const isString = Schema.is(Schema.String);
 
 	let {
 		title = 'Bolt',
@@ -121,25 +123,23 @@
 	const activeApp = $derived.by(() => {
 		if (!currentPath.startsWith('/app/')) return undefined;
 		const name = currentPath.slice('/app/'.length);
-		return apps.find((entry) => (typeof entry === 'string' ? entry : entry.name) === name);
+		return apps.find((entry) => (isString(entry) ? entry : entry.name) === name);
 	});
 	const activeAppTitle = $derived(
 		activeApp === undefined
 			? title
-			: typeof activeApp === 'string'
+			: isString(activeApp)
 				? activeApp
 				: activeApp.label || activeApp.name
 	);
 	const activeAppDescription = $derived(
-		activeApp !== undefined && typeof activeApp !== 'string'
-			? (activeApp.description ?? null)
-			: null
+		activeApp !== undefined && !isString(activeApp) ? (activeApp.description ?? null) : null
 	);
 	const activeAppIcon = $derived(
-		activeApp !== undefined && typeof activeApp !== 'string' ? activeApp.icon : undefined
+		activeApp !== undefined && !isString(activeApp) ? activeApp.icon : undefined
 	);
 	const activeAppBanner = $derived(
-		activeApp !== undefined && typeof activeApp !== 'string' ? (activeApp.banner ?? null) : null
+		activeApp !== undefined && !isString(activeApp) ? (activeApp.banner ?? null) : null
 	);
 </script>
 

@@ -10,6 +10,7 @@
  * ignored, `!` to re-include. Paths are repository-relative with POSIX separators. An
  * `inherit:` line borrows the exclusion globs of another ignore file in the same repository.
  */
+// repository-health:allow STATE2 -- parsed ignore rules cached per repository root for the scan's lifetime; clearIgnoreCache exists for the long-lived-process case and re-reading .doctorignore per file would dominate scan cost.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 

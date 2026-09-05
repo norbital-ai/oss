@@ -1,3 +1,4 @@
+import { webReader } from '#lib/runtime/automations/web.js';
 import { Clock, Effect, Number as ENumber, Option, Result, Schema } from 'effect';
 import {
 	CollectionAnchoredPage,
@@ -32,7 +33,7 @@ import {
 	makeBoundAuthoringOps,
 	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
-import { AI, Files } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, Files } from '#lib/runtime/facilities/services.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -145,11 +146,11 @@ const authorizeMembership = Effect.fn('Bolt.command.authorizeMembership')(functi
 const membershipRefusal = (reason: string) =>
 	new AccessControl.AccessDenied({ action: 'manage', resource: 'identity', reason });
 
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+
 const isNonEmptyRecord = (value: unknown): value is Readonly<Record<string, Schema.Json>> =>
-	value !== null &&
-	typeof value === 'object' &&
-	!Array.isArray(value) &&
-	Object.keys(value).length > 0;
+	isObject(value) && Object.keys(value).length > 0;
 
 const optionalQueryJson = (value: unknown): Schema.Json | undefined =>
 	value == null || !isNonEmptyRecord(value) ? undefined : value;
@@ -373,13 +374,18 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 		),
 		guard
 	);
-	const api = makeAutomationApi(makeAuthoringApi(ops), (value) =>
-		guard('progress').pipe(
-			Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
-			Effect.flatMap((progression) =>
-				automations.progress(context.effectId, input.bolt_task_id, progression)
-			)
-		)
+	const connector = yield* Connector.Service;
+	const readUrl = webReader(context.effectId, connector);
+	const api = makeAutomationApi(
+		makeAuthoringApi(ops),
+		(value) =>
+			guard('progress').pipe(
+				Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
+				Effect.flatMap((progression) =>
+					automations.progress(context.effectId, input.bolt_task_id, progression)
+				)
+			),
+		(url) => guard('web.read').pipe(Effect.andThen(readUrl(url)))
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
 	const output = yield* runAuthoredHandler(() =>
@@ -694,10 +700,9 @@ const remainingBindings = [
 						where: { id: { eq: input.requestId } }
 					}
 				);
-				if (visible === undefined || typeof visible !== 'object' || visible === null)
-					return json([]);
+				if (visible === undefined) return json([]);
 				const status = Reflect.get(visible, 'status');
-				if (typeof status !== 'string') return json([]);
+				if (!isString(status)) return json([]);
 				const capabilities = yield* (yield* Approvals.Service).capabilities(
 					context.effectId,
 					principal(context),
@@ -1114,7 +1119,10 @@ const remainingBindings = [
 	)
 ];
 
-const allBindings = [...fixedBindings, ...remainingBindings];
+const allBindings: ReadonlyArray<CommandBinding<unknown>> = [
+	...fixedBindings,
+	...remainingBindings
+];
 const fixedByName = new Map<string, (typeof allBindings)[number]>();
 for (const entry of allBindings) {
 	if (fixedByName.has(entry.contract.name))

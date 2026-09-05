@@ -1,3 +1,4 @@
+import { Schema } from 'effect';
 import {
 	MAX_SYNC_LOADED_KEYS,
 	mutationGraphDeleteIds,
@@ -10,9 +11,11 @@ export type PendingProjectionWrite = Readonly<{
 	readonly graph: CollectionMutationGraph;
 }>;
 
+const isString = Schema.is(Schema.String);
+
 const recordIdOf = (row: StoredRecord): string | undefined => {
 	const id = row['id'];
-	return typeof id === 'string' && id.length > 0 ? id : undefined;
+	return isString(id) && id.length > 0 ? id : undefined;
 };
 
 const applyWriteRow = (

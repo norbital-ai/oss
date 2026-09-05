@@ -35,6 +35,12 @@ export type BindingReport = Readonly<{
 
 const MAX_PAGES_DEFAULT = 50;
 const REJECTIONS_REPORTED = 20;
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
 
 /** The read side of a response, narrowed to what the paging and cursor rules actually consult. */
 type Fetched = Readonly<{
@@ -72,7 +78,7 @@ export type PullDependencies = AbsorbDependencies &
 export const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
 	let cursor: unknown = body;
 	for (const step of path) {
-		if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
+		if (!isObject(cursor)) return undefined;
 		cursor = Reflect.get(cursor, step);
 	}
 	return cursor;
@@ -96,9 +102,9 @@ const bodyValue = (
 	next: { readonly field: string } | { readonly path: ReadonlyArray<string> }
 ): string | undefined => {
 	const value = walk(body, 'field' in next ? [next.field] : next.path);
-	return typeof value === 'string' && value !== ''
+	return isString(value) && value !== ''
 		? value
-		: typeof value === 'number'
+		: isNumber(value)
 			? String(value)
 			: undefined;
 };
@@ -116,12 +122,12 @@ const bodyValue = (
 const watermark = (records: ReadonlyArray<unknown>, field: string): string | undefined => {
 	let highest: string | number | undefined;
 	for (const record of records) {
-		if (record === null || typeof record !== 'object') continue;
+		if (!isObjectLike(record)) continue;
 		const value: unknown = Reflect.get(record, field);
-		if (typeof value !== 'string' && typeof value !== 'number') continue;
+		if (!isString(value) && !isNumber(value)) continue;
 		const greater =
 			highest === undefined ||
-			(typeof value === 'number' && typeof highest === 'number'
+			(isNumber(value) && isNumber(highest)
 				? value > highest
 				: String(value) > String(highest));
 		if (greater) highest = value;
@@ -190,7 +196,7 @@ const pageUrl = (
 	for (const [key, value] of Object.entries(binding.query ?? {})) url.searchParams.set(key, value);
 	const cursorQuery =
 		binding.cursor === undefined ? undefined : Reflect.get(binding.cursor.send, 'query');
-	if (cursor !== null && typeof cursorQuery === 'string') {
+	if (cursor !== null && isString(cursorQuery)) {
 		url.searchParams.set(cursorQuery, cursor);
 	}
 	const pages = binding.pages;

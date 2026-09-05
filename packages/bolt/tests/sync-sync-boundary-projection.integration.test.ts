@@ -1,9 +1,14 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EffectId, type SyncAdvanceSubscription, type SyncQueryInput } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	type SyncAdvanceSubscription,
+	type SyncQueryInput
+} from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import * as Sync from '../src/runtime/sync/sync.js';
 import {
 	advanceActivePrefix,
 	describeSyncQuery,
@@ -132,6 +137,46 @@ const seedShifts = (h: BoltTestRuntime) =>
 const inDayLabels = ['midnight', 'noon', 'last'];
 
 describe('live day-boundary queries resolve against storage-wire values (S5)', () => {
+	it('an initially empty live query grows within its requested window after creates', async () => {
+		const h = await makeBoltTestRuntime(definition);
+		harness = h;
+		const opened = await h.runtime.runPromise(
+			Effect.flatMap(Sync.Service, (sync) =>
+				sync.connect(EffectId.make('empty-open'), adminSubject, adminSubject, null, {
+					queries: [{ queryKey: 'day', input: dayQuery, requestedPrefix: 20 }],
+					detached: [],
+					pending: []
+				})
+			)
+		);
+		const entry = opened.results[0];
+		if (entry === undefined) throw new Error('initial answer missing');
+		expect(entry.rows).toEqual([]);
+		expect(entry.loadedPrefix).toBe(20);
+		const committed = await seedShifts(h);
+		const update = await h.runtime.runPromise(
+			advanceActivePrefix(
+				EffectId.make('empty-grow'),
+				adminSubject,
+				{
+					subId: 'day',
+					input: dayQuery,
+					planKey: entry.planKey,
+					version: entry.version,
+					prefixKeys: entry.prefixKeys,
+					prefixBytes: entry.prefixBytes,
+					viewerPrefixes: [entry.loadedPrefix],
+					credential: 'host-opaque',
+					authorityFingerprint: entry.authorityFingerprint
+				},
+				committed.batch
+			)
+		);
+		const delta = update?.deltas[0]?.delta;
+		if (delta === undefined) throw new Error('new matching rows did not produce a delta');
+		expect(applyPrefixDelta(entry.rows, delta).map((row) => row['label'])).toEqual(inDayLabels);
+	});
+
 	it('admits exactly the instants inside the day and keys the prefix on the stored value', async () => {
 		const h = await makeBoltTestRuntime(definition);
 		harness = h;
@@ -153,7 +198,11 @@ describe('live day-boundary queries resolve against storage-wire values (S5)', (
 		// Named rather than left implicit: the wire value for an instant is a JSON string. A driver
 		// that handed a `Date` across the facility seam instead would make the key unencodable and the
 		// day-pick would stall on its first extension.
-		expect(resolved.rows.map((row) => typeof row['started_at'])).toEqual(['string', 'string', 'string']);
+		expect(resolved.rows.map((row) => typeof row['started_at'])).toEqual([
+			'string',
+			'string',
+			'string'
+		]);
 	});
 
 	it('extends a day-bounded prefix across the stored instant cursor without skipping or repeating', async () => {

@@ -50,6 +50,9 @@ export interface WorkspaceShape {
 	readonly customTypes?: Readonly<Record<string, unknown>>;
 }
 
+// repository-health:allow STATE3 -- the registry is deliberately module-scoped: a workspace's modules
+// load into an isolate of their own, so one heap holds exactly one workspace and the slot cannot be
+// contended; two workspaces in one heap would be a host bug, not a supported case.
 let registered: WorkspaceShape | undefined;
 
 /** Publishes the workspace whose collections `schema()` resolves names against. */

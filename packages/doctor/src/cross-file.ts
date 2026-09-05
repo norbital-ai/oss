@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { Schema } from 'effect';
 import { registerFact, type FactContext } from './facts.js';
 import {
 	LANGUAGE_HEALTH_PROFILE,
@@ -38,6 +39,9 @@ function resolveRelative(
 }
 
 const OUTPUT = /^(?:build|dist|lib|out)\//;
+
+const isString = Schema.is(Schema.String);
+const isRecordValue = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 function sourceCandidates(target: string): ReadonlyArray<string> {
 	const bare = target.replace(/^\.\//, '');
@@ -113,11 +117,11 @@ function resolveSubpath(
 	if (!specifier.startsWith('#')) return undefined;
 	for (const manifest of manifestsAbove(from)) {
 		const imports = readManifest(join(root, manifest))['imports'];
-		if (imports === null || typeof imports !== 'object') continue;
+		if (!isRecordValue(imports)) continue;
 		const directory = dirname(manifest);
 		const base = directory === '' || directory === '.' ? '' : `${directory}/`;
 		for (const [key, value] of Object.entries(imports)) {
-			if (typeof value !== 'string') continue;
+			if (!isString(value)) continue;
 			const substituted = substitute(key, value, specifier);
 			if (substituted === undefined) continue;
 			const found = firstKnown(base, substituted, known);
@@ -210,7 +214,7 @@ function declaredEntries(
 	files: ReadonlySet<string>,
 	roots: Set<string>
 ): void {
-	if (typeof value === 'string' && value.startsWith('.')) {
+	if (isString(value) && value.startsWith('.')) {
 		const resolved = resolveRelative(manifest, value, files);
 		if (resolved !== undefined) roots.add(resolved);
 		const source = value.replace(/^\.\/build\//, './src/').replace(/\.js$/, '.ts');
@@ -229,7 +233,7 @@ function scriptEntries(
 	roots: Set<string>
 ): void {
 	for (const command of Object.values(scripts)) {
-		if (typeof command !== 'string') continue;
+		if (!isString(command)) continue;
 		for (const token of command.split(/[\s'"=]+/)) {
 			if (!/\.[cm]?[jt]sx?$/.test(token) || token.startsWith('-')) continue;
 			const named = token.startsWith('.') ? token : `./${token}`;
@@ -256,7 +260,7 @@ function entrypoints(
 	return roots;
 }
 
-export type CrossFileOptions = Readonly<{
+type CrossFileOptions = Readonly<{
 	readonly root: string;
 	readonly files: ReadonlyArray<Parsed>;
 	readonly consumers?: ReadonlyArray<Parsed> | undefined;
@@ -267,7 +271,7 @@ function siteKey(file: string, node: ts.Node, sourceFile: ts.SourceFile): string
 	return `${file}:${node.getStart(sourceFile)}`;
 }
 
-export type CrossFileIndex = Readonly<{
+type CrossFileIndex = Readonly<{
 	readonly unreferencedModules: ReadonlySet<string>;
 	readonly unreferencedExports: ReadonlySet<string>;
 	readonly duplicateBodies: ReadonlySet<string>;
@@ -418,6 +422,7 @@ registerFact({
 
 const GRAPH_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs', 'graph');
 
+// repository-health:allow STATE1 -- memoised lazy load of the graph rule pack; the rules are immutable once read and a re-read on every call would reload the pack files each time.
 let graphRules: ReadonlyArray<Rule> | undefined;
 
 export function loadGraphRules(): ReadonlyArray<Rule> {

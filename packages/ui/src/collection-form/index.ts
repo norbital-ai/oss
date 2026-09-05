@@ -20,7 +20,7 @@ export type {
 	CollectionFormName,
 	CollectionFormProps,
 	CollectionFormRendererProps,
-	CollectionFormValidation,
+	CollectionFormSemantic,
 	CollectionFormValidationIssue,
 	CollectionFormValidationValues
 } from './collection-form.types.js';

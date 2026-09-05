@@ -7,6 +7,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Popover, PopoverContent, PopoverTrigger } from '#lib/popover';
+	import { Stack } from '#lib/layout';
 	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -146,8 +147,8 @@
 	</PopoverTrigger>
 	<PopoverContent {align} class="w-auto p-3">
 		<div class="flex gap-4">
-			<div>
-				<div class="mb-2 grid grid-cols-[2rem_1fr_1fr_2rem] items-center">
+			<Stack gap="sm">
+				<div class="grid grid-cols-[2rem_1fr_1fr_2rem] items-center">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -179,7 +180,7 @@
 						/>
 					{/each}
 				</div>
-			</div>
+			</Stack>
 			{#if presets.length > 0}
 				<div class="flex flex-col gap-2 border-l border-border pl-4">
 					{#each presets as preset (preset)}

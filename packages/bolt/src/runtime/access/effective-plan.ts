@@ -29,6 +29,10 @@ import { policyHashSource, type PolicyHashSource } from './policy-surface.js';
 
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isJson = Schema.is(Schema.Json);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isBoolean = Schema.is(Schema.Boolean);
+const isBigint = Schema.is(Schema.BigInt);
 
 const DEFAULT_LIVE_PREFIX = 100;
 export const DEFAULT_RELATION_PREFIX_LIMIT = 100;
@@ -83,7 +87,7 @@ export const requestedColumns = (spec: unknown): ColumnSelection | undefined => 
 	if (!isObject(spec) || !isObject(spec['columns'])) return undefined;
 	const selected: Record<string, boolean> = {};
 	for (const [name, enabled] of Object.entries(spec['columns']))
-		if (typeof enabled === 'boolean') selected[name] = enabled;
+		if (isBoolean(enabled)) selected[name] = enabled;
 	return Object.keys(selected).length === 0 ? undefined : selected;
 };
 
@@ -107,7 +111,7 @@ export const referenceArmSpec = (spec: unknown, tag: string): unknown =>
 	isObject(spec) ? (spec[tag] ?? spec) : spec;
 
 export const boundedCount = (value: unknown): number | undefined =>
-	typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+	isNumber(value) && Number.isInteger(value) && value >= 0 ? value : undefined;
 
 const fingerprint = (value: unknown): string => `sha256:${sha256Text(canonicalJson(value))}`;
 
@@ -472,7 +476,7 @@ const bindSubject = (subject: Subject, name: SubjectOperandName): Schema.Json =>
 const subjectOperand = (value: unknown): SubjectOperandName | undefined => {
 	if (!isObject(value) || Object.keys(value).length !== 1) return undefined;
 	const name = value['$subject'];
-	return typeof name === 'string' && (SUBJECT_OPERANDS as ReadonlyArray<string>).includes(name)
+	return isString(name) && (SUBJECT_OPERANDS as ReadonlyArray<string>).includes(name)
 		? (name as SubjectOperandName)
 		: undefined;
 };
@@ -499,7 +503,7 @@ const bindOperand = (
 		return Number.isNaN(value.getTime())
 			? diagnostic('invalid-node', node, `Query node ${node} contains an invalid Date operand.`)
 			: Result.succeed(value.toISOString());
-	if (typeof value === 'bigint') return Result.succeed(value.toString());
+	if (isBigint(value)) return Result.succeed(value.toString());
 	return isJson(value)
 		? Result.succeed(value)
 		: diagnostic('invalid-node', node, `Query node ${node} contains an unbindable operand.`);
@@ -566,7 +570,7 @@ const jsonSegments = (
 	requireNonEmpty: boolean
 ): ReadonlyArray<string> | undefined => {
 	if (!Array.isArray(path) || (requireNonEmpty && path.length === 0)) return undefined;
-	return path.every((part) => typeof part === 'string' && part.length > 0) ? path : undefined;
+	return path.every((part) => isString(part) && part.length > 0) ? path : undefined;
 };
 
 const compileJsonPath = (
@@ -608,7 +612,7 @@ const compileJsonPath = (
 				? `Query node ${node} requires exactly one comparison.`
 				: `Query node ${node} has unsupported comparison ${String(operator)}.`
 		);
-	if ((operator === 'isNull' || operator === 'isNotNull') && typeof value[operator] !== 'boolean')
+	if ((operator === 'isNull' || operator === 'isNotNull') && !isBoolean(value[operator]))
 		return diagnostic(
 			'invalid-node',
 			`${node}.${operator}`,
@@ -635,9 +639,9 @@ const compileJsonPath = (
 	const valueMatchesType = (entry: Schema.Json): boolean =>
 		entry === null ||
 		valueType === 'json' ||
-		(valueType === 'number' && typeof entry === 'number') ||
-		(valueType === 'boolean' && typeof entry === 'boolean') ||
-		((valueType === 'string' || valueType === 'instant') && typeof entry === 'string');
+		(valueType === 'number' && isNumber(entry)) ||
+		(valueType === 'boolean' && isBoolean(entry)) ||
+		((valueType === 'string' || valueType === 'instant') && isString(entry));
 	if (!values.success.every(valueMatchesType))
 		return diagnostic(
 			'invalid-node',
@@ -693,7 +697,7 @@ const compileJsonArraySome = (
 					(bound) => [bound]
 				);
 	if (Result.isFailure(values)) return failed(values);
-	if (!values.success.every((entry) => entry === null || typeof entry === 'string'))
+	if (!values.success.every((entry) => entry === null || isString(entry)))
 		return diagnostic(
 			'invalid-node',
 			node,
@@ -719,7 +723,7 @@ const compileReferenceField = (
 	node: string
 ): PlanResult<RowPredicateExpression> => {
 	if (operator === 'isNull' || operator === 'isNotNull') {
-		if (typeof value !== 'boolean')
+		if (!isBoolean(value))
 			return diagnostic('invalid-node', node, `Query node ${node} requires a boolean operand.`);
 		const wantsNull = operator === 'isNull' ? value : !value;
 		return Result.succeed(
@@ -742,7 +746,7 @@ const compileReferenceField = (
 			entries.length !== 1 ||
 			comparison === undefined ||
 			(comparison[0] !== 'eq' && comparison[0] !== 'ne') ||
-			typeof comparison[1] !== 'string'
+			!isString(comparison[1])
 		)
 			return diagnostic(
 				'invalid-node',
@@ -770,7 +774,7 @@ const compileReferenceField = (
 		const kind = bound.success['kind'];
 		const id = bound.success['id'];
 		const target = definition.targets.find(({ tag }) => tag === kind);
-		if (target === undefined || typeof id !== 'string')
+		if (target === undefined || !isString(id))
 			return diagnostic(
 				'invalid-node',
 				node,
@@ -879,7 +883,7 @@ const compileFieldOperator = (
 		return Result.succeed({ kind: 'team-scope-users', column: field, subjectId: subject.userId });
 	}
 	if (operator === 'isNull' || operator === 'isNotNull') {
-		if (typeof value !== 'boolean')
+		if (!isBoolean(value))
 			return diagnostic('invalid-node', node, `Query node ${node} requires a boolean operand.`);
 		return Result.succeed({
 			kind: 'null',
@@ -908,7 +912,7 @@ const compileFieldOperator = (
 				? boundValues(value, subject, state, node)
 				: Result.map(bindScalarOperand(value, subject, state, node), (bound) => [bound]);
 		if (Result.isFailure(values)) return failed(values);
-		if (!values.success.every((entry) => entry === null || typeof entry === 'string'))
+		if (!values.success.every((entry) => entry === null || isString(entry)))
 			return diagnostic('invalid-node', node, `Query node ${node} requires string operands.`);
 		return Result.succeed({
 			kind: 'case-fold',
@@ -920,7 +924,7 @@ const compileFieldOperator = (
 	if (operator === 'contains_date') {
 		const bound = bindScalarOperand(value, subject, state, node);
 		if (Result.isFailure(bound)) return failed(bound);
-		return typeof bound.success === 'string'
+		return isString(bound.success)
 			? Result.succeed({ kind: 'contains-date', column: field, value: bound.success })
 			: diagnostic('invalid-node', node, `Query node ${node} requires a canonical instant string.`);
 	}
@@ -931,7 +935,7 @@ const compileFieldOperator = (
 		if (Result.isFailure(start)) return failed(start);
 		const end = bindScalarOperand(value['end'], subject, state, `${node}.end`);
 		if (Result.isFailure(end)) return failed(end);
-		return typeof start.success !== 'string' || typeof end.success !== 'string'
+		return !isString(start.success) || !isString(end.success)
 			? diagnostic('invalid-node', node, `Query node ${node} requires canonical instant strings.`)
 			: Result.succeed({ kind: 'overlaps', column: field, start: start.success, end: end.success });
 	}
@@ -948,7 +952,7 @@ const compileFieldOperator = (
 			operator === 'ilike' ||
 			operator === 'notLike' ||
 			operator === 'notIlike') &&
-		typeof bound.success !== 'string'
+		!isString(bound.success)
 	)
 		return diagnostic('invalid-node', node, `Query node ${node} requires a string operand.`);
 	if (routeSafe && operator === 'eq') {
@@ -1358,7 +1362,7 @@ const selectedFields = (
 	if (!isObject(columns)) return available;
 	const selection: Record<string, boolean> = {};
 	for (const [field, selected] of Object.entries(columns))
-		if (typeof selected === 'boolean') selection[field] = selected;
+		if (isBoolean(selected)) selection[field] = selected;
 	return selectedColumnNames(available, selection);
 };
 
@@ -1453,7 +1457,7 @@ const projectionPlan = (
 					`${node}.columns.${field}`,
 					`Projection node ${node}.columns.${field} is not a field of ${collection}.`
 				);
-			if (typeof selected !== 'boolean')
+			if (!isBoolean(selected))
 				return diagnostic(
 					'invalid-node',
 					`${node}.columns.${field}`,
@@ -1560,7 +1564,7 @@ const projectionPlan = (
 			if (
 				enforceLive &&
 				limit !== undefined &&
-				(typeof limit !== 'number' ||
+				(!isNumber(limit) ||
 					!Number.isInteger(limit) ||
 					limit < 1 ||
 					limit > MAX_SYNC_LOADED_KEYS)
@@ -1590,7 +1594,7 @@ const projectionPlan = (
 				isObject(childSpec) ? childSpec['with'] : undefined,
 				isObject(childSpec) ? childSpec['columns'] : undefined,
 				isObject(childSpec) ? childSpec['orderBy'] : undefined,
-				typeof limit === 'number' ? limit : DEFAULT_LIVE_PREFIX,
+				isNumber(limit) ? limit : DEFAULT_LIVE_PREFIX,
 				enforceLive,
 				policyFor,
 				depth + 1,

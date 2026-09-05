@@ -100,7 +100,7 @@ const decodeRows = <S extends Schema.ConstraintDecoder<unknown>>(
 	rows: ReadonlyArray<unknown>
 ) => Effect.forEach(rows, (row) => Schema.decodeUnknownEffect(schema)(row));
 const messageText = (message: Prompt.MessageEncoded): string =>
-	typeof message.content === 'string'
+	isString(message.content)
 		? message.content
 		: message.content
 				.flatMap((part) => (part.type === 'text' || part.type === 'reasoning' ? [part.text] : []))
@@ -119,6 +119,7 @@ const SystemToolNames = Schema.Literals([
 type SystemToolName = Schema.Schema.Type<typeof SystemToolNames>;
 
 export const isSystemTool = Schema.is(SystemToolNames);
+const isString = Schema.is(Schema.String);
 
 const objectInput = (
 	properties: Schema.JsonObject,
@@ -755,7 +756,7 @@ const responseBody = (status: number, headers: Headers, body: Schema.Json): Body
 	}
 	return contentType === 'application/json' ||
 		contentType?.endsWith('+json') === true ||
-		typeof body !== 'string'
+		!isString(body)
 		? JSON.stringify(body)
 		: body;
 };
@@ -768,7 +769,7 @@ const connectorFetch = (
 ): FetchLike => {
 	let roundTrip = 0;
 	return async (url, init) => {
-		if ((init?.method?.toUpperCase() ?? 'GET') !== 'POST' || typeof init?.body !== 'string') {
+		if ((init?.method?.toUpperCase() ?? 'GET') !== 'POST' || !isString(init?.body)) {
 			throw new McpAdapterFailure(
 				'protocol-error',
 				'The host connector accepts only stateless MCP JSON POST requests.'
@@ -781,7 +782,7 @@ const connectorFetch = (
 				operation: INTEGRATION_HTTP_OPERATION,
 				input: {
 					method: 'POST',
-					url: typeof url === 'string' ? url : url.toString(),
+					url: isString(url) ? url : url.toString(),
 					headers: Object.fromEntries(new Headers(init.headers)),
 					body
 				}

@@ -104,7 +104,7 @@ const AILayers = {
 export const AI = Object.freeze({ Service: AIService, layer: AILayers.make });
 
 /** Outbound and inbound communication capability bound by the host. */
-type CommunicationInterface = Readonly<{
+export type CommunicationInterface = Readonly<{
 	readonly execute: (
 		effectId: EffectId,
 		request: CommunicationRequest

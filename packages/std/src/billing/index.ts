@@ -149,8 +149,9 @@ export function formatBillingAmountFromMinorUnits(
 		maximumFractionDigits?: number;
 	}
 ): string {
-	const numericAmount =
-		typeof amountMinorUnits === 'number' ? amountMinorUnits : Number(amountMinorUnits);
+	const numericAmount = Schema.is(Schema.Number)(amountMinorUnits)
+		? amountMinorUnits
+		: Number(amountMinorUnits);
 
 	return `${BILLING_CURRENCY} ${new Intl.NumberFormat('en-SG', {
 		minimumFractionDigits: options?.minimumFractionDigits ?? 0,

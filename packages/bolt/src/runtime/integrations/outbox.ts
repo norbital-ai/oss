@@ -10,6 +10,10 @@ import type {
 } from '#lib/authoring/workspace-schema.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isBigint = Schema.is(Schema.BigInt);
+
 /**
  * The enqueue half of outbound delivery: one collection write, turned into rows for the outbox.
  *
@@ -87,9 +91,8 @@ const resolvePath = (
 	const missing: Array<string> = [];
 	const filled = path.replaceAll(/\{([^{}]+)\}/g, (_token, name: string) => {
 		const value: unknown = Reflect.get(record, name);
-		if (typeof value === 'string' && value !== '') return encodeURIComponent(value);
-		if (typeof value === 'number' || typeof value === 'bigint')
-			return encodeURIComponent(String(value));
+		if (isString(value) && value !== '') return encodeURIComponent(value);
+		if (isNumber(value) || isBigint(value)) return encodeURIComponent(String(value));
 		missing.push(name);
 		return '';
 	});

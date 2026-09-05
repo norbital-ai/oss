@@ -1,6 +1,12 @@
 import type { FormSchema, InferSchema } from '../form/form_state.svelte';
+import { Schema } from 'effect';
 import { fieldAndFormErrorsFromStandardIssues } from '#lib/form/standard_schema_form_errors';
 import type { Step, StepFormConfig, StepFormSubmitContract } from '#lib/step-form/types';
+
+/** Bare `typeof x === 'object'` acceptance of the Standard Schema answer: arrays included, null excluded. */
+const isObjectish = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
 
 export class StepFormState<T extends FormSchema> {
 	currentStep = $state(0);
@@ -25,7 +31,7 @@ export class StepFormState<T extends FormSchema> {
 		const data = this.submission.getData();
 		const result = currentSchema['~standard'].validate(data);
 		const issues =
-			result !== null && typeof result === 'object' ? Reflect.get(result, 'issues') : undefined;
+			result !== null && isObjectish(result) ? Reflect.get(result, 'issues') : undefined;
 
 		if (!Array.isArray(issues)) {
 			this.submission.clearErrors();

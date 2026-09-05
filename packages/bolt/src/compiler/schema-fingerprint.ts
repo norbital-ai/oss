@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { Schema } from 'effect';
 import type { RelationDefinition } from '../authoring/workspace-schema.js';
 
 type SnapshotColumn = Readonly<{
@@ -15,16 +16,17 @@ type SnapshotColumn = Readonly<{
 
 type SnapshotLike = Readonly<{ readonly ddl: ReadonlyArray<unknown> }>;
 
-const isSnapshotColumn = (value: unknown): value is SnapshotColumn => {
-	if (value === null || typeof value !== 'object') return false;
-	return (
-		Reflect.get(value, 'entityType') === 'columns' &&
-		typeof Reflect.get(value, 'table') === 'string' &&
-		typeof Reflect.get(value, 'name') === 'string' &&
-		typeof Reflect.get(value, 'type') === 'string' &&
-		typeof Reflect.get(value, 'notNull') === 'boolean'
-	);
-};
+/** The five fields a mutation-visible snapshot column must declare; excess fields are ignored. */
+const SnapshotColumnShape = Schema.Struct({
+	entityType: Schema.Literal('columns'),
+	table: Schema.String,
+	name: Schema.String,
+	type: Schema.String,
+	notNull: Schema.Boolean
+});
+const isSnapshotColumnShape = Schema.is(SnapshotColumnShape);
+
+const isSnapshotColumn = (value: unknown): value is SnapshotColumn => isSnapshotColumnShape(value);
 
 /** Identifies the mutation-visible part of one committed workspace schema. */
 export const workspaceSchemaFingerprint = (

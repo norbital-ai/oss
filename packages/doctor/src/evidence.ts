@@ -67,7 +67,9 @@ function catalogueBytes(findings: ReadonlyArray<Finding>): string {
 					finding.summary,
 					finding.location,
 					finding.principles.join(',')
-				].join('\t')
+				]
+					.map((column) => column.replace(/[\t\r\n]/g, ' '))
+					.join('\t')
 			)
 			.join('\n') + (sorted.length === 0 ? '' : '\n')
 	);

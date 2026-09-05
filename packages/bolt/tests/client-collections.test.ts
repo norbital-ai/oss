@@ -20,6 +20,7 @@ import type {
 	WorkspaceClientRuntime
 } from '../src/client/contracts.js';
 import type { SyncClient } from '../src/client/sync/index.js';
+import type { ErasedAutomationClientApi } from '../src/client/automation-client.svelte.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -119,6 +120,98 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceCli
 });
 
 describe('typed browser client', () => {
+	it('sends compact approval decisions without echoing the review snapshot', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: async (command, input) => {
+				commands.push({ command, input });
+				return null;
+			}
+		});
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt));
+		await proxy.approvals.process({ approvalRequestId: 'request-1', action: 'APPROVED' });
+		await proxy.approvals.withdraw('request-2');
+		expect(commands).toEqual([
+			{
+				command: 'approvals.decide',
+				input: { state: { requestId: 'request-1' }, decision: 'approve' }
+			},
+			{ command: 'approvals.withdraw', input: { state: { requestId: 'request-2' } } }
+		]);
+	});
+	it('settles the automation UI from the actual automation_run projection', async () => {
+		const sync = fakeSyncClient();
+		const bolt = createBoltClient(scope, {
+			command: async () => ({ taskId: 'review-1', result: null })
+		});
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
+		const automation = Reflect.get(
+			proxy.automations,
+			'review'
+		) as ErasedAutomationClientApi[string];
+		const run = await automation.run({});
+		const row = {
+			id: 'run-1',
+			task_id: 'review-1',
+			name: 'review',
+			status: 'running',
+			progress: { progress: 0.5, text: 'Reviewing' },
+			progress_sequence: 1,
+			progress_updated_at: '2026-09-05T00:00:00Z',
+			error: null,
+			result: null
+		};
+		sync.client.publish(sync.mounted[0]?.key ?? '', [row]);
+		expect(run.current?.status).toBe('running');
+		expect(automation.pending).toBe(1);
+		sync.client.publish(sync.mounted[0]?.key ?? '', [
+			{ ...row, status: 'done', result: { checked: 4 } }
+		]);
+		expect(run.current?.result).toEqual({ checked: 4 });
+		expect(automation.pending).toBe(0);
+		sync.client.publish(sync.mounted[0]?.key ?? '', [{ ...row, status: 'stopped' }]);
+		expect(run.current?.status).toBe('stopped');
+		expect(automation.pending).toBe(0);
+	});
+
+	it('retains identity and whole-row versions for projected records and nested edits', async () => {
+		const sync = fakeSyncClient();
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client), {
+			orders: {
+				name: 'orders',
+				fields: [],
+				relationships: [{ name: 'lines', target: 'order_lines', cardinality: 'many' }]
+			},
+			order_lines: { name: 'order_lines', fields: [], relationships: [] }
+		});
+		const orders = Reflect.get(proxy.db, 'orders') as {
+			findMany: (input: Schema.Json) => unknown;
+			findFirst: (input: Schema.Json) => unknown;
+			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<unknown>;
+		};
+		orders.findMany({ columns: { reference: true }, with: { lines: { columns: { sku: true } } } });
+		expect(sync.mounted[0]?.input).toMatchObject({
+			columns: { reference: true, id: true, row_version: true },
+			with: { lines: { columns: { sku: true, id: true, row_version: true } } }
+		});
+		sync.client.publish(sync.mounted[0]?.key ?? '', [
+			{
+				id: 'order-1',
+				reference: 'A',
+				row_version: 3,
+				lines: [{ id: 'line-1', sku: 'OLD', row_version: 9 }]
+			}
+		]);
+		await orders.mutate([{ id: 'order-1', lines: [{ id: 'line-1', sku: 'NEW' }] }]);
+		expect(sync.enqueued[0]?.baseVersions).toEqual([
+			{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 3 },
+			{ row: { collection: 'order_lines', recordId: 'line-1' }, rowVersion: 9 }
+		]);
+		orders.findFirst({ columns: { secret: false, id: false, row_version: false } });
+		expect(sync.mounted[1]?.input).toMatchObject({ columns: { secret: false } });
+	});
+
 	it('preserves actionable transport failures at the command boundary', async () => {
 		const failure = new Error('invalid_input: employees.created_at is managed by Bolt');
 		const bolt = createBoltClient(scope, { command: () => Promise.reject(failure) });
@@ -416,14 +509,6 @@ describe('typed browser client', () => {
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				commands.push({ command, input });
-				if (command === 'approvals.status') {
-					return Promise.resolve({
-						_tag: 'Pending',
-						requestId: 'request-1',
-						step: 0,
-						operation: { collection: 'orders' }
-					});
-				}
 				return Promise.resolve({});
 			}
 		});
@@ -436,16 +521,10 @@ describe('typed browser client', () => {
 		});
 
 		expect(commands).toEqual([
-			{ command: 'approvals.status', input: { requestId: 'request-1' } },
 			{
 				command: 'approvals.decide',
 				input: {
-					state: {
-						_tag: 'Pending',
-						requestId: 'request-1',
-						step: 0,
-						operation: { collection: 'orders' }
-					},
+					state: { requestId: 'request-1' },
 					decision: 'request_changes',
 					reason: 'Attach the supporting document.'
 				}

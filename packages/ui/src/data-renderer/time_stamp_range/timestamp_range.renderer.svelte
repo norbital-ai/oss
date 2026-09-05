@@ -12,6 +12,12 @@
 	const decodeCanonicalRange = Schema.decodeUnknownResult(rangeValueSchema);
 	type RangeValue = typeof rangeValueSchema.Type;
 
+	// Bare `typeof item === 'object'` acceptance: arrays included, null excluded.
+	const isObjectish = Schema.is(
+		Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+	);
+	const isString = Schema.is(Schema.String);
+
 	const { t } = useI18n<UiKeys>();
 
 	let {
@@ -26,12 +32,12 @@
 	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
 
 	function parseRange(item: unknown): RangeValue {
-		if (item != null && typeof item === 'object') {
+		if (item != null && isObjectish(item)) {
 			const canonical = decodeCanonicalRange(item);
 			return canonical._tag === 'Success' ? canonical.success : {};
 		}
 		// PostgreSQL's own tstzrange literal grammar (a bound pair in brackets), not a data shape.
-		if (typeof item !== 'string' || item === 'empty') return {};
+		if (!isString(item) || item === 'empty') return {};
 		const match = item.match(/^[[(]\"?([^,\"]*)\"?,\"?([^\]\)\"]*)\"?[\])]$/);
 		return match ? { start: match[1] || undefined, end: match[2] || undefined } : {};
 	}

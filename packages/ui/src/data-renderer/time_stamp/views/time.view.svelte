@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { Button } from '#lib/button';
 	import DateView from './date.view.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -30,8 +31,10 @@
 		onValueChange?: (value: string | string[] | null) => void;
 	} = $props();
 
+	const isString = Schema.is(Schema.String);
+
 	const values = $derived(
-		multiple ? (Array.isArray(value) ? value : []) : typeof value === 'string' ? [value] : []
+		multiple ? (Array.isArray(value) ? value : []) : isString(value) ? [value] : []
 	);
 
 	function emit(next: string[]): void {

@@ -19,7 +19,7 @@ import { renderArtifact } from '../src/compiler/workspace-build.js';
 const root = '/workspace';
 
 /** An artifact with one of everything the renderer knows how to emit. */
-const artifactWithEverything = (): string =>
+const artifactWithEverything = (withMcp = true): string =>
 	renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
 		compiledAuthoring: {
@@ -34,24 +34,28 @@ const artifactWithEverything = (): string =>
 			relationships: [],
 			customTypeReferences: [],
 			capabilities: {
-				skills: [{
-					name: 'payroll',
-					description: 'Payroll workflow',
-					digest: 'skill',
-					body: '# Payroll\n',
-					files: []
-				}],
-				mcp: [{
-					name: 'search',
-					digest: 'mcp',
-					protocol: '2026-07-28',
-					transport: { kind: 'streamable-http', endpoint: 'https://mcp.example' }
-				}]
+				skills: [
+					{
+						name: 'payroll',
+						description: 'Payroll workflow',
+						digest: 'skill',
+						body: '# Payroll\n',
+						files: []
+					}
+				],
+				mcp: withMcp
+					? [
+							{
+								name: 'search',
+								digest: 'mcp',
+								protocol: '2026-07-28',
+								transport: { kind: 'streamable-http', endpoint: 'https://mcp.example' }
+							}
+						]
+					: []
 			}
 		},
-		collectionHooks: [
-			{ name: 'invoices', path: `${root}/src/collections/invoices/+hooks.ts` }
-		],
+		collectionHooks: [{ name: 'invoices', path: `${root}/src/collections/invoices/+hooks.ts` }],
 		apps: [
 			{
 				name: 'billing',
@@ -108,6 +112,11 @@ describe('emitted artifact bindings', () => {
 		expect(() => new Function(...imported, `${body}\nreturn true;`)).not.toThrow();
 	});
 
+	it('declares the connector for automation web reads even without MCP', () => {
+		const artifact = artifactWithEverything(false);
+		expect(artifact).toContain('requiredFacilities: ["ai","connector","database","tasks"]');
+	});
+
 	it('emits the imports and declarations the authored runtime is built from', () => {
 		const artifact = artifactWithEverything();
 		// Named explicitly because the compile check above passes if a binding is declared *empty*,
@@ -149,9 +158,7 @@ describe('emitted artifact bindings', () => {
 		]) {
 			expect(artifact).toContain(JSON.stringify(sourcePath));
 		}
-		expect(artifact).toContain(
-			`\"compiledManifestVersion\": ${COMPILED_MANIFEST_VERSION}`
-		);
+		expect(artifact).toContain(`\"compiledManifestVersion\": ${COMPILED_MANIFEST_VERSION}`);
 	});
 
 	it('boots one automation descriptor with its declared policies intact', () => {

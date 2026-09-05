@@ -4,7 +4,6 @@
 	import { FileTree, type FileTreeEntry } from '@norbital-ai/ui/file-tree';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import {
 		sourceTreeChildren,
@@ -68,7 +67,7 @@
 			class="border-b border-border/60 px-3 py-1.5 text-muted-foreground"
 		>
 			<Icon icon="lucide:file-code-2" class="size-3.5 shrink-0" />
-			<span class={cn('shrink-0 truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
+			<span class="shrink-0 truncate {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
 				>{t('bolt.studio.source')}</span
 			>
 			{#if files.length > 0}
@@ -81,7 +80,8 @@
 			<label class="relative ml-auto flex min-w-0 flex-1 items-center">
 				<Icon
 					icon="lucide:search"
-					class="pointer-events-none absolute left-1.5 size-3 shrink-0 opacity-70"
+					class="pointer-events-none left-1.5 size-3 shrink-0 opacity-70"
+					style="position: absolute /* repository-health:allow UI23 -- the search icon pins inside the filter input; no layout primitive expresses icon-in-field placement */"
 				/>
 				<input
 					type="search"
@@ -103,7 +103,7 @@
 						getEntryBadge={entryBadge}
 					/>
 				{:else}
-					<p class={cn('px-3 py-2 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
+					<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
 						{t('bolt.studio.noSourceFiles')}
 					</p>
 				{/if}
@@ -117,7 +117,7 @@
 						getEntryBadge={entryBadge}
 					/>
 				{:else}
-					<p class={cn('px-3 py-2 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
+					<p class="px-3 py-2 text-muted-foreground {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}">
 						{t('bolt.studio.noSourceMatches')}
 					</p>
 				{/if}

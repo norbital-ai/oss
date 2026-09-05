@@ -88,14 +88,14 @@ export type PublicPlatformSchema = {
 /**
  * The browser client's view of a workspace's collections.
  *
- * `Inputs` is the same generated map `Api` takes, and it types `client.db.<collection>.mutate` from
- * the same `export const input` the server's `api.db.<collection>.mutate` reads. One declaration,
- * both callers — which is the property the old `create.input`/`update.input` pair could not have,
- * since it was two of them and neither reached the client at all.
+ * `Inputs` is the generated map the compiler emits, and it types `client.db.<collection>.mutate`
+ * from the same `input` the server's `api.db.<collection>.mutate` reads. One declaration, both
+ * callers. Unset, every collection is wholly writable — which is what unsynced workspaces and
+ * Bolt's own sources see.
  */
 export type CollectionRegistryFor<
 	S extends import('./contracts-schema.js').AnySchema,
-	Inputs = unknown
+	Inputs = import('./contracts-schema.js').WorkspaceInputsOf<S>
 > = {
 	readonly [N in TableName<S>]: {
 		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;

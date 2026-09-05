@@ -17,6 +17,8 @@ type FileRef = Schema.Schema.Type<typeof FileRefSchema>;
 
 const decodeFileRef = Schema.decodeUnknownResult(FileRefSchema);
 
+const isString = Schema.is(Schema.String);
+
 /** Reads a stored file-column value; anything that is not the full reference is not a file. */
 export function readFileRef(candidate: unknown): FileRef | null {
 	const decoded = decodeFileRef(candidate);
@@ -48,9 +50,7 @@ export function fileRefFromFileValue(file: FileValue): FileRef {
 	const uploadedStorageKey = Reflect.get(file, 'storageKey');
 	return {
 		storage_key:
-			typeof uploadedStorageKey === 'string' && uploadedStorageKey.length > 0
-				? uploadedStorageKey
-				: file.id,
+			isString(uploadedStorageKey) && uploadedStorageKey.length > 0 ? uploadedStorageKey : file.id,
 		file_name: file.name,
 		file_size: file.size,
 		mime_type: file.type

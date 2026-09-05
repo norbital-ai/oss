@@ -3,7 +3,7 @@
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
-	import { Result } from 'effect';
+	import { Result, Schema } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import type { CompactOrigin } from './context-view.js';
 	import { plainMessageText } from './context-view.js';
@@ -47,8 +47,10 @@
 		}
 	}
 
+	const isString = Schema.is(Schema.String);
+
 	function diagnostic(value: unknown): string {
-		if (typeof value === 'string') return value;
+		if (isString(value)) return value;
 		return Result.getOrElse(
 			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
 			() => String(value)
@@ -61,7 +63,7 @@
 	}
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {
-		if (typeof part.data === 'string') return part.data;
+		if (isString(part.data)) return part.data;
 		if (part.data instanceof URL) return part.data.toString();
 		return null;
 	}
@@ -131,9 +133,9 @@
 			</div>
 		{:else if typeof message.message.content === 'string'}
 				<div
-					class={message.author.kind === 'human' && !parentAttribution
+					class="{message.author.kind === 'human' && !parentAttribution
 						? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-						: 'w-full text-sm leading-6 text-foreground'}
+						: 'w-full text-sm leading-6 text-foreground'}"
 				>
 					{#if message.message.role === 'assistant'}
 						<ReadonlyMarkdown scale="reading" content={message.message.content} />
@@ -145,9 +147,9 @@
 				{#each message.message.content as part, index (`${message.id}:${index}`)}
 					{#if part.type === 'text'}
 						<div
-							class={message.author.kind === 'human' && !parentAttribution
+							class="{message.author.kind === 'human' && !parentAttribution
 								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-								: 'w-full text-sm leading-6 text-foreground'}
+								: 'w-full text-sm leading-6 text-foreground'}"
 						>
 							{#if message.message.role === 'assistant'}
 								<ReadonlyMarkdown scale="reading" content={part.text} />
@@ -192,7 +194,8 @@
 									<span class="font-medium">{part.name}</span>
 								</Inline>
 							</summary>
-							<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
+									<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
+									<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
 								<CodeEditor
 									value={diagnostic(part.params)}
 									language={diagnosticLanguage(part.params)}
@@ -209,12 +212,13 @@
 								<Inline as="span" gap="sm">
 									<Icon
 										icon={part.isFailure ? 'lucide:circle-alert' : 'lucide:circle-check'}
-										class={part.isFailure ? 'size-3.5 text-destructive' : 'size-3.5 text-muted-foreground'}
+										class="{part.isFailure ? 'size-3.5 text-destructive' : 'size-3.5 text-muted-foreground'}"
 									/>
 									<span class="font-medium">{part.name}</span>
 								</Inline>
 							</summary>
-							<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
+									<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
+									<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
 								<CodeEditor
 									value={diagnostic(part.result)}
 									language={diagnosticLanguage(part.result)}

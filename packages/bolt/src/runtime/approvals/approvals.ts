@@ -1,6 +1,11 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
+import {
+	readConsistencyStatements,
+	READ_CONFLICT_MESSAGE,
+	type ReadSnapshot
+} from '#lib/runtime/collections/read-consistency.js';
 import { ApprovalState, EffectId } from '@norbital-ai/bolt-protocol';
 import { and, asc, desc, eq, exists, isNull, notExists } from 'drizzle-orm';
 import { compileModelTable } from '#lib/authoring/model-introspection.js';
@@ -18,7 +23,8 @@ import {
 	excluded,
 	executeBuilt,
 	jsonb,
-	jsonTextEquals
+	jsonTextEquals,
+	toStatement
 } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -118,6 +124,12 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /** The `JsonObject` predicate, built once: it is consulted for every operation value crossing the seam. */
 const isJsonObject = Schema.is(JsonObject);
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
 const jsonObjectEquivalent = Schema.toEquivalence(JsonObject);
 /** The requestor schema predicate, built once for reviewer-safe approval projections. */
 const isSubject = Schema.is(Identity.Subject);
@@ -250,6 +262,7 @@ type ApprovalGatePlan = Readonly<{
 	readonly root: ApprovalRoot;
 	readonly storedGraph: Schema.Json;
 	readonly proposedValues?: Readonly<Record<string, Schema.Json>>;
+	readonly readSnapshots?: ReadonlyArray<ReadSnapshot>;
 	readonly approval: Schema.Json | undefined;
 	readonly review: Schema.Json | undefined;
 	readonly approved?: ApprovedGate;
@@ -332,7 +345,7 @@ export const maskApprovalReview = (
 				if (entry === undefined) return value;
 				const collection = entry['collection'];
 				const snapshot = entry['snapshot'];
-				return typeof collection === 'string' && typeof snapshot === 'string'
+				return isString(collection) && isString(snapshot)
 					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
 					: value;
 			})
@@ -343,7 +356,7 @@ export const maskApprovalReview = (
 				if (entry === undefined) return value;
 				const collection = entry['childCollection'];
 				const snapshot = entry['snapshot'];
-				return typeof collection === 'string' && typeof snapshot === 'string'
+				return isString(collection) && isString(snapshot)
 					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
 					: value;
 			})
@@ -370,7 +383,7 @@ export type Interface = Readonly<{
 	readonly decide: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		state: ApprovalState,
+		state: Pick<ApprovalState, 'requestId'>,
 		decision: 'approve' | 'reject' | 'request_changes' | 'supersede',
 		reason?: string
 	) => Effect.Effect<
@@ -380,7 +393,7 @@ export type Interface = Readonly<{
 	readonly withdraw: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		state: ApprovalState
+		state: Pick<ApprovalState, 'requestId'>
 	) => Effect.Effect<
 		ApprovalState,
 		ApprovalConflict | AccessControl.AccessDenied | Database.FacilityError
@@ -423,13 +436,7 @@ export const layer = Layer.effect(
 		/** Resolves only the concrete configuration embedded when the flow was selected. */
 		const approvalConfigurations = {
 			resolve: (state: ApprovalState) => {
-				if (
-					state._tag !== 'Pending' ||
-					typeof state.operation !== 'object' ||
-					state.operation === null ||
-					Array.isArray(state.operation)
-				)
-					return undefined;
+				if (state._tag !== 'Pending' || !isObject(state.operation)) return undefined;
 				const embedded = Reflect.get(state.operation, 'approval');
 				if (isResolvedApprovalConfiguration(embedded)) return embedded;
 				return undefined;
@@ -459,7 +466,7 @@ export const layer = Layer.effect(
 					.limit(1)
 			);
 			const row = result.rows[0];
-			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
+			const state = isObjectLike(row) ? Reflect.get(row, 'state') : undefined;
 			if (state === undefined) return undefined;
 			return yield* decodeState(requestId, state);
 		});
@@ -468,8 +475,7 @@ export const layer = Layer.effect(
 			const stored = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(state.operation));
 			if (stored === undefined) return state;
 			const requestor = isSubject(stored['subject']) ? stored['subject'] : undefined;
-			const collection =
-				typeof stored['collection'] === 'string' ? stored['collection'] : undefined;
+			const collection = isString(stored['collection']) ? stored['collection'] : undefined;
 			const policy = requestor === undefined ? undefined : access.invocation();
 			const review =
 				requestor === undefined || policy === undefined
@@ -602,9 +608,8 @@ export const layer = Layer.effect(
 					.limit(1)
 			);
 			const row = result.rows[0];
-			const requestId =
-				typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : undefined;
-			if (typeof requestId !== 'string') return undefined;
+			const requestId = isObjectLike(row) ? Reflect.get(row, 'id') : undefined;
+			if (!isString(requestId)) return undefined;
 			return yield* status(effectId, requestId);
 		});
 		const timeline = Effect.fn('Approvals.timeline')(function* (
@@ -669,9 +674,8 @@ export const layer = Layer.effect(
 					.limit(1)
 			);
 			const row = result.rows[0];
-			const sequence =
-				typeof row === 'object' && row !== null ? Reflect.get(row, 'sequence') : undefined;
-			return typeof sequence === 'number' ? sequence : null;
+			const sequence = isObjectLike(row) ? Reflect.get(row, 'sequence') : undefined;
+			return isNumber(sequence) ? sequence : null;
 		});
 
 		const projectionOf = Effect.fn('Approvals.projectionOf')(function* (
@@ -680,10 +684,9 @@ export const layer = Layer.effect(
 		) {
 			const operation = state.operation;
 			const fields = isJsonObject(operation) ? operation : {};
-			const collectionName =
-				typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
-			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
-			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
+			const collectionName = isString(fields['collection']) ? fields['collection'] : 'unknown';
+			const recordId = isString(fields['id']) ? fields['id'] : 'unknown';
+			const action = isString(fields['action']) ? fields['action'] : 'update';
 			const configuration = approvalConfigurations.resolve(state);
 			const activeStep = state._tag === 'Pending' ? configuration?.steps[state.step] : undefined;
 			const nowEpochMs = yield* Clock.currentTimeMillis;
@@ -854,9 +857,8 @@ export const layer = Layer.effect(
 			};
 			const projection = yield* projectionOf(next, current.decidedBy);
 			const operation = isJsonObject(current.operation) ? current.operation : {};
-			const collection =
-				typeof operation['collection'] === 'string' ? operation['collection'] : undefined;
-			const recordId = typeof operation['id'] === 'string' ? operation['id'] : undefined;
+			const collection = isString(operation['collection']) ? operation['collection'] : undefined;
+			const recordId = isString(operation['id']) ? operation['id'] : undefined;
 			const updatedState = composer.$with('updated').as(
 				composer
 					.update(approvalStateTable)
@@ -961,7 +963,8 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			requestId: string,
 			operation: Schema.Json,
-			lock?: ApprovalRecordLock
+			lock?: ApprovalRecordLock,
+			readSnapshots: ReadonlyArray<ReadSnapshot> = []
 		) {
 			const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
 			if (
@@ -1101,7 +1104,30 @@ export const layer = Layer.effect(
 							.with(locked, insertedState, audited, projected, requestorProjected)
 							.select({ state: insertedState.state })
 							.from(insertedState);
-			const inserted = yield* executeBuilt(effectId, database, requestQuery);
+			const inserted =
+				readSnapshots.length === 0
+					? yield* executeBuilt(effectId, database, requestQuery)
+					: yield* database
+							.execute(effectId, {
+								_tag: 'Transaction',
+								statements: [
+									...readConsistencyStatements(readSnapshots, [
+										'approval_request',
+										...(lock == null ? [] : [lock.collection])
+									]),
+									toStatement(requestQuery.toSQL())
+								]
+							})
+							.pipe(
+								Effect.catch(
+									(error): Effect.Effect<never, Database.FacilityError | ApprovalConflict> =>
+										error.message.includes(READ_CONFLICT_MESSAGE)
+											? Effect.fail(
+													new ApprovalConflict({ requestId, reason: READ_CONFLICT_MESSAGE })
+												)
+											: Effect.fail(error)
+								)
+							);
 			if (inserted.rows.length > 0) {
 				return state;
 			}
@@ -1139,7 +1165,7 @@ export const layer = Layer.effect(
 			const expectedReview = operation?.['reviewDigest'];
 			const storedSubject = operation?.['subject'];
 			const subject = isSubject(storedSubject) ? storedSubject : undefined;
-			if (storedGraph === undefined || typeof expectedReview !== 'string' || subject === undefined)
+			if (storedGraph === undefined || !isString(expectedReview) || subject === undefined)
 				return yield* new ApprovalConflict({
 					requestId,
 					reason: 'approved request does not contain a resumable engine plan'
@@ -1236,7 +1262,7 @@ export const layer = Layer.effect(
 				const storedDigest = operation['reviewDigest'];
 				const preparedDigest = approvalReviewDigest(plan.review);
 				if (
-					typeof storedDigest !== 'string' ||
+					!isString(storedDigest) ||
 					storedDigest !== plan.approved.expectedReview ||
 					preparedDigest !== plan.approved.expectedReview
 				)
@@ -1288,7 +1314,8 @@ export const layer = Layer.effect(
 				operation,
 				plan.root.action === 'create'
 					? undefined
-					: { collection: plan.root.collection, id: plan.root.id }
+					: { collection: plan.root.collection, id: plan.root.id },
+				plan.readSnapshots
 			);
 			if (state._tag !== 'Pending')
 				return yield* new ApprovalConflict({
@@ -1348,11 +1375,6 @@ export const layer = Layer.effect(
 									input: { requestId: next.requestId }
 								}
 							: undefined;
-				if (followup !== undefined)
-					yield* queue.wake(
-						EffectId.make(`${effectId}:approval-followup-wake`),
-						yield* Clock.currentTimeMillis
-					);
 				const notification =
 					next._tag === 'Approved' || next._tag === 'Rejected' || next._tag === 'ChangesRequested'
 						? {
@@ -1393,6 +1415,11 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval decision lost a competing update'
 					});
+				if (followup !== undefined)
+					yield* queue.wake(
+						EffectId.make(`${effectId}:approval-followup-wake`),
+						yield* Clock.currentTimeMillis
+					);
 				return publicState(next);
 			}),
 			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {

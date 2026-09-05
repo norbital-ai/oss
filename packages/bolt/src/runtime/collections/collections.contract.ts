@@ -36,6 +36,8 @@ export type CollectionAction = typeof CollectionAction.Type;
 
 export type QueryInput = Readonly<{
 	readonly collection: string;
+	/** Server authoring only: candidates held for approval, filtered by their collection's read policy. */
+	readonly pendingOnly?: boolean;
 	// `where` and `orderBy` stay `unknown`: authored handlers bind `Date` operands the wire form
 	// never carries, and the where compiler is the one place that decides what is bindable.
 	readonly where?: unknown | undefined;
@@ -358,13 +360,7 @@ export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailur
 		phase: MutationPhase,
 		/** The exact post-commit operation, when `phase` is `settle`. */
 		step: Schema.optionalKey(
-			Schema.Literals([
-				'wake',
-				'sync-commit',
-				'after-hook',
-				'change-events',
-				'embedding-refresh'
-			])
+			Schema.Literals(['wake', 'sync-commit', 'after-hook', 'change-events', 'embedding-refresh'])
 		),
 		collection: Schema.NonEmptyString,
 		committed: Schema.Array(Schema.NonEmptyString),
@@ -530,8 +526,14 @@ export type Interface = Readonly<{
 		impersonatedTeam: string | null,
 		ids: ReadonlyArray<CollectionMutationIdempotencyKey>
 	) => Effect.Effect<ReadonlyArray<SyncOutcome>, Database.FacilityError>;
-	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, BatchMutationError>;
-	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, BatchMutationError>;
+	readonly resume: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<void, BatchMutationError>;
+	readonly discard: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<void, BatchMutationError>;
 	readonly import: (
 		effectId: EffectId,
 		subject: Subject,

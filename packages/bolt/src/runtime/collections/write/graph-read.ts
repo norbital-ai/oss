@@ -3,6 +3,8 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
 import type { WritableManyRelation } from './plan.js';
 
+const isNumber = Schema.is(Schema.Number);
+
 export type RelatedRowsRequest = Readonly<{
 	readonly edge: WritableManyRelation;
 	readonly parentId: string;
@@ -184,7 +186,7 @@ const graphWaveRead = <Error, Requirements>(
 			const kind = row['__bolt_write_wave_kind'];
 			const ordinal = row['__bolt_write_wave_ordinal'];
 			const record = row['__bolt_write_wave_record'];
-			if (typeof ordinal !== 'number' || !ports.isJsonObject(record)) continue;
+			if (!isNumber(ordinal) || !ports.isJsonObject(record)) continue;
 			if (kind === 'row') rawRows.set(ordinal, record);
 			if (kind === 'relation') {
 				const bucket = rawRelations.get(ordinal) ?? [];

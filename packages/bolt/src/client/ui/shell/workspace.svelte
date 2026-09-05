@@ -2,7 +2,7 @@
 	import { Effect, Option, Schema } from 'effect';
 	import { untrack, type Component } from 'svelte';
 	import { ModeWatcher } from 'mode-watcher';
-	import { toError } from '@norbital-ai/std';
+	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { CollectionQuery, CollectionRecord } from '@norbital-ai/std/collection';
 	import {
@@ -95,9 +95,11 @@
 		...SYSTEM_COLLECTION_SURFACES
 	});
 	const requestedCollectionSurfaces = new Set<string>();
+	const isString = Schema.is(Schema.String);
+	const isNumber = Schema.is(Schema.Number);
 	const collectionSurfaces = new Proxy(loadedCollectionSurfaces, {
 		get: (surfaces, property, receiver) => {
-			if (typeof property === 'string' && !requestedCollectionSurfaces.has(property)) {
+			if (isString(property) && !requestedCollectionSurfaces.has(property)) {
 				const load = workspace.representationLoaders[property];
 				if (load !== undefined) {
 					requestedCollectionSurfaces.add(property);
@@ -117,8 +119,7 @@
 							),
 							Effect.catch((failure) =>
 								Effect.sync(() => {
-									const message =
-										failure.cause instanceof Error ? failure.cause.message : String(failure.cause);
+									const message = getErrorMessage(failure.cause);
 									console.error(`[bolt] representation for ${property} failed to load: ${message}`);
 									Object.assign(loadedCollectionSurfaces, {
 										[property]: { representationFailure: message }
@@ -169,7 +170,7 @@
 			where,
 			orderBy,
 			limit:
-				typeof requestedLimit === 'number' && Number.isInteger(requestedLimit)
+				isNumber(requestedLimit) && Number.isInteger(requestedLimit)
 					? Math.max(1, Math.min(100, requestedLimit))
 					: 100
 		};

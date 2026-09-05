@@ -1,0 +1,20 @@
+id: ERR1
+summary: caught value is stringified into a new Error, so its type and stack are destroyed
+severity: error
+principles: [straightforwardness, testability]
+dominates:
+  - ERR2
+rule:
+  all:
+    - pattern: 'new Error(String($X))'
+    - not:
+        inside:
+          pattern: '$A instanceof Error ? $B : new Error(String($C))'
+          stopBy: end
+examples:
+  bad:
+    - 'export const fail = (cause) => new Error(String(cause));'
+  good:
+    - "export const fail = (cause) => new Error('request failed', { cause });"
+    - 'export const normalize = (cause) => cause instanceof Error ? cause : new Error(String(cause));'
+    - 'export const normalize = (cause) => toError(cause);'

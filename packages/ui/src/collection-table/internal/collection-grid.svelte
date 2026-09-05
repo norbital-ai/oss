@@ -293,6 +293,7 @@
 		);
 
 		const resizeObserver =
+			// repository-health:allow GUARD2 -- Feature-detects the DOM ResizeObserver API, which older engines omit.
 			typeof ResizeObserver !== 'undefined'
 				? new ResizeObserver(() => syncBodyScrollState())
 				: null;
@@ -408,6 +409,7 @@
 			// attachment is installed can therefore capture the collapsed 48px row and leave the expanded
 			// panel outside the virtual spacer, where the grid's scroll boundary clips it. Observe the row
 			// itself so every disclosure/content resize updates the virtual extent.
+			// repository-health:allow GUARD2 -- Feature-detects the DOM ResizeObserver API, which older engines omit.
 			if (typeof ResizeObserver === 'undefined') {
 				return () => mountedRowElements.delete(rowElement);
 			}

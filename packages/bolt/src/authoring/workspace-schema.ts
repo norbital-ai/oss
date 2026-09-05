@@ -140,6 +140,12 @@ interface FieldOptions {
 	readonly sqlDefault?: string;
 }
 
+const isBoolean = Schema.is(Schema.Boolean);
+const isString = Schema.is(Schema.String);
+const isTriggerShape = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 const makeField =
 	<TType extends ScalarType>(type: TType) =>
@@ -149,11 +155,11 @@ const makeField =
 		if (typeof required !== 'boolean') {
 			throw new TypeError(`Field ${type} required flag must be boolean.`);
 		}
-		if (typeof indexed !== 'boolean') {
+		if (!isBoolean(indexed)) {
 			throw new TypeError(`Field ${type} indexed flag must be boolean.`);
 		}
 		const unique = options.unique ?? false;
-		if (typeof unique !== 'boolean') {
+		if (!isBoolean(unique)) {
 			throw new TypeError(`Field ${type} unique flag must be boolean.`);
 		}
 		if (unique && !indexed) {
@@ -844,11 +850,12 @@ export const defineSend = <Row>(binding: SendBinding<Row>): typeof binding => {
 			'A send binding requires a path: there is nowhere to deliver to without one.'
 		);
 	}
+	const on: unknown = binding.on;
 	if (
-		typeof binding.on === 'object' &&
-		binding.on.create === undefined &&
-		binding.on.update === undefined &&
-		binding.on.delete === undefined
+		isTriggerShape(on) &&
+		Reflect.get(on, 'create') === undefined &&
+		Reflect.get(on, 'update') === undefined &&
+		Reflect.get(on, 'delete') === undefined
 	) {
 		throw new TypeError(
 			'A send binding subscribes to no collection event, so nothing could ever queue a delivery for it.'
@@ -883,7 +890,7 @@ const McpToolDefinition = Schema.Union([
 ]);
 
 const mcpToolName = (tool: Schema.Schema.Type<typeof McpToolDefinition>): string =>
-	typeof tool === 'string' ? tool : tool.name;
+	isString(tool) ? tool : tool.name;
 
 /** One compiler-discovered MCP v2 server. Its filename owns its name. */
 const McpServerDefinition = Schema.Struct({
@@ -935,7 +942,7 @@ const describeMcpServer = (
 			: `${server.description} — ${tool}`;
 	return server.tools.map((declared) => {
 		const tool =
-			typeof declared === 'string'
+			isString(declared)
 				? { name: declared, description: defaultDescription(declared) }
 				: {
 						name: declared.name,

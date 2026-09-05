@@ -36,6 +36,9 @@ import { readFileAsset, type FileAsset } from './file-assets.js';
 import { nearestQueryInput, queryInput } from './query-input.js';
 import { HookEffectIds } from './hooks/boundary.js';
 
+const isNumber = Schema.is(Schema.Number);
+const isString = Schema.is(Schema.String);
+
 /**
  * The runtime carrier for a workspace's authored business logic.
  *
@@ -61,12 +64,10 @@ type AuthoredPerRecord = Readonly<{
 
 export type AuthoredCollectionHookModule = Readonly<{
 	/**
-	 * The collection's declared write shape — `export const input` in its `+hooks.ts`, carried
-	 * beside the default export rather than inside it.
+	 * The collection's declared write shape — the `input` key of its `+hooks.ts` default export.
 	 *
-	 * One input for one write. There used to be two, `create.input` and `update.input`, free to
-	 * drift and describing the same operation; and neither could type the caller, because a hook
-	 * property cannot be read without reading the hook. A standalone binding can.
+	 * One input for one write. A create must carry the record the shape names, an update carries
+	 * a patch of it, and everything the shape does not name is stripped before `prepare` runs.
 	 */
 	readonly input?: Schema.Codec<unknown, unknown>;
 	readonly mutate?: Readonly<{
@@ -166,7 +167,9 @@ type AuthoredHandlerResult<A> = A | PromiseLike<A> | Effect.Effect<A>;
 // repository-health:allow EFF2 -- The thenable predicate belongs to the same authored-JavaScript boundary and feeds only Effect.tryPromise below.
 const isPromiseLike = <A>(value: AuthoredHandlerResult<A>): value is PromiseLike<A> => {
 	if (value === null) return false;
+	// repository-health:allow GUARD2 -- The authored boundary admits any thenable from author-supplied JavaScript, and recognizing one needs the object-or-function duck check no schema can express.
 	if (typeof value !== 'object' && typeof value !== 'function') return false;
+	// repository-health:allow GUARD2 -- A thenable is recognized by `then` being callable; no Effect schema accepts functions.
 	return typeof Reflect.get(value, 'then') === 'function';
 };
 
@@ -335,6 +338,9 @@ export type RuntimeAuthoringApi<E = never> = Readonly<{
 /** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
 type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 	Readonly<{
+		readonly readUrl: (
+			url: string
+		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
 		readonly progress: (value: AutomationProgression) => Effect.Effect<void, E, never>;
 	}>;
 
@@ -460,7 +466,7 @@ const isDurationInputString = (
 
 export const afterMillisOf = (after: string | number | undefined): number | undefined => {
 	if (after === undefined) return 0;
-	if (typeof after === 'number') return after;
+	if (isNumber(after)) return after;
 	if (!isDurationInputString(after)) return undefined;
 	const decoded = Duration.fromInput(after);
 	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
@@ -544,6 +550,8 @@ const collectionReadApi = <E>(
 	ops: AuthoringReadOps<E>,
 	collection: string
 ): Readonly<Record<string, unknown>> => ({
+	findPending: (input: Readonly<Record<string, unknown>> = {}) =>
+		ops.findMany(collection, { ...input, pendingOnly: true }),
 	findMany: (input: Readonly<Record<string, unknown>> = {}) => ops.findMany(collection, input),
 	findFirst: (input: Readonly<Record<string, unknown>> = {}) => ops.findFirst(collection, input),
 	count: (input: Readonly<Record<string, unknown>> = {}) => ops.count(collection, input),
@@ -558,9 +566,7 @@ const databaseApi = (
 		{},
 		{
 			get: (_target, property) =>
-				typeof property === 'string' && allowedCollections.has(property)
-					? collection(property)
-					: undefined
+				isString(property) && allowedCollections.has(property) ? collection(property) : undefined
 		}
 	);
 
@@ -609,10 +615,11 @@ export const makePolicyDecisionApi = <E>(ops: AuthoringReadOps<E>, subject: Subj
 	});
 
 /** Adds the current durable run's progression capability without widening the ordinary API. */
-export const makeAutomationApi = <E, P>(
+export const makeAutomationApi = <E, P, W>(
 	api: RuntimeAuthoringApi<E>,
-	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>
-): RuntimeAutomationApi<E | P> => ({ ...api, progress });
+	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>,
+	readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, W, never>
+): RuntimeAutomationApi<E | P | W> => ({ ...api, progress, readUrl });
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = <RunE = never>(

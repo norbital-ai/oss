@@ -129,6 +129,8 @@ export type Interface = Readonly<{
 }>;
 
 const Service = Context.Service<Interface>('@norbital-ai/bolt/Secrets');
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
 
 const layer = Layer.effect(
 	Service,
@@ -164,15 +166,12 @@ const layer = Layer.effect(
 					.limit(1)
 			);
 			const [row] = result.rows;
-			const stored =
-				row !== null && typeof row === 'object' && !Array.isArray(row)
-					? Reflect.get(row, 'value')
-					: undefined;
+			const stored = isObject(row) ? Reflect.get(row, 'value') : undefined;
 			// A stored row that will not open is a failure, not a fall-through to the default: silently
 			// answering with the declared default would start an integration against the wrong endpoint,
 			// or — worse for a `secret: true` name, which cannot carry a default — read as "not set" and
 			// send somebody to re-enter a credential without ever saying the stored one was unreadable.
-			if (typeof stored === 'string' && stored !== '')
+			if (isString(stored) && stored !== '')
 				return yield* cipher.decrypt(name, workspaceBinding(name), stored);
 			// A declared default stands in for an unset value, and `defineEnvironment` refuses a default
 			// on anything marked secret — so this can never hand back a credential from source.
@@ -189,11 +188,11 @@ const layer = Layer.effect(
 			);
 			const stored = new Map<string, string | undefined>();
 			for (const row of result.rows) {
-				if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
+				if (!isObject(row)) continue;
 				const name = Reflect.get(row, 'name');
 				const updatedAt = Reflect.get(row, 'updated_at');
-				if (typeof name === 'string')
-					stored.set(name, typeof updatedAt === 'string' ? updatedAt : undefined);
+				if (isString(name))
+					stored.set(name, isString(updatedAt) ? updatedAt : undefined);
 			}
 			return declared().map((variable) => {
 				const updatedAt = stored.get(variable.name);

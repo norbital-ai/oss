@@ -1,9 +1,10 @@
 /**
  * Open fact registry. A fact is a named, parameterised, memoised predicate — never a rule.
  */
+// repository-health:allow STATE2 -- open registry: packs register once at load and every rule evaluation must observe the same registry.
 import type ts from 'typescript';
 
-export type FactBindings = Map<string, ts.Node>;
+type FactBindings = Map<string, ts.Node>;
 
 export type FactContext = Readonly<{
 	node: ts.Node;
@@ -13,9 +14,9 @@ export type FactContext = Readonly<{
 	root: string;
 }>;
 
-export type FactParams = Readonly<Record<string, unknown>>;
+type FactParams = Readonly<Record<string, unknown>>;
 
-export type Fact = Readonly<{
+type Fact = Readonly<{
 	name: string;
 	parameters: ReadonlyArray<string>;
 	optional?: ReadonlyArray<string>;
@@ -52,8 +53,4 @@ export function evaluateFact(name: string, params: FactParams, context: FactCont
 		if (params[key] === undefined)
 			throw new Error(`norbital-doctor: fact "${name}" requires parameter "${key}"`);
 	return fact.run(context, params);
-}
-
-export function knownFact(name: string): boolean {
-	return FACTS.has(name);
 }

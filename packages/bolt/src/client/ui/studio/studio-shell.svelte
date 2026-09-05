@@ -463,7 +463,7 @@
 			</Cluster>
 		</Stack>
 
-		<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
+		<Stack gap="none" shrink={false} class="{INSET_X_CLASS}">
 			<span class="sr-only" aria-live="polite" aria-atomic="true">{hostStatusAnnouncement}</span>
 			{#if isWorkbench}
 				<WorkbenchToolbar
@@ -508,7 +508,7 @@
 		</Stack>
 	{/snippet}
 
-	<Inline align="stretch" gap="none" fill class={INSET_X_CLASS}>
+	<Inline align="stretch" gap="none" fill class="{INSET_X_CLASS}">
 		<aside
 			class="hidden w-72 shrink-0 border-r border-border/60 bg-card font-sans md:block"
 			aria-label={t('bolt.studio.sidebar')}

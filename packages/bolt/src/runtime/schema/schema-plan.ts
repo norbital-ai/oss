@@ -1,4 +1,5 @@
 import { canonicalSchemaStepEncoding, digestSchemaSteps } from '@norbital-ai/std/reckon/hash';
+import { Schema } from 'effect';
 export { canonicalSchemaStepEncoding, digestSchemaSteps };
 import type { CollectionIndexRequirement } from '@norbital-ai/bolt-protocol/collections';
 import type { ModelExclusion, ModelIndex } from '../../authoring/models-schema.js';
@@ -35,6 +36,7 @@ export type SchemaPlan = Readonly<{
 }>;
 
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
+const isString = Schema.is(Schema.String);
 
 export const planTableNames = (plan: SchemaPlan): ReadonlyArray<string> => {
 	const pattern = /create table if not exists\s+(?:"((?:[^"]|"")+)"|([A-Za-z_][A-Za-z0-9_$]*))/giu;
@@ -155,14 +157,14 @@ const modelIndexSteps = (
 		if (declaration.columns.length === 0)
 			throw new TypeError(`Collection ${collection.name} declares an index with no columns.`);
 		const columnNames = declaration.columns.map((column) =>
-			typeof column === 'string' ? column : column.expr
+			isString(column) ? column : column.expr
 		);
 		const derivedName = columnNames.join('_').replaceAll(/[^a-zA-Z0-9_]/g, '_');
 		const name =
 			declaration.name ?? collectionIndexName(collection.name, derivedName || 'expression');
 		const columns = declaration.columns
 			.map((column) => {
-				if (typeof column !== 'string') return `(${column.expr})`;
+				if (!isString(column)) return `(${column.expr})`;
 				const opclass = declaration.opclass?.[column];
 				return `${quoteIdentifier(column)}${opclass === undefined ? '' : ` ${opclass}`}`;
 			})

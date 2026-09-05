@@ -5,6 +5,8 @@ import {
 	type Server
 } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { Predicate } from 'effect';
+import { decodeNumber } from '@norbital-ai/std/json';
 
 const hopByHop = new Set([
 	'connection',
@@ -120,6 +122,7 @@ const listen = (server: Server, host: string, port: number): Promise<SessionGate
 		server.once('error', reject);
 		server.listen(port, host, () => {
 			const address = server.address();
+			// repository-health:allow GUARD2 -- `server.address()` returns Node's own `string | AddressInfo | null` union; discriminating the platform SDK value is the seam itself.
 			if (address === null || typeof address === 'string') {
 				reject(new Error('session gateway did not bind a TCP port'));
 				return;
@@ -237,8 +240,9 @@ export const workspaceDocumentHtml = (input: WorkspaceDocumentInput): string => 
  */
 export const startSessionGateway = async (input: SessionGatewayInput): Promise<SessionGateway> => {
 	const browserSession = randomUUID();
-	const document =
-		typeof input.document === 'function' ? input.document({ browserSession }) : input.document;
+	const document = Predicate.isFunction(input.document)
+		? input.document({ browserSession })
+		: input.document;
 	const upstreamHost = loopbackHost(input.upstream.host);
 	const listenHost = input.listen?.host ?? '127.0.0.1';
 	const listenPort = input.listen?.port ?? 0;
@@ -281,6 +285,7 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 				headers: {
 					host: `${upstreamHost}:${input.upstream.port}`,
 					authorization: `Bearer ${input.credential}`,
+					// repository-health:allow LIVE2 -- this gateway relays the sync engine's own SSE stream to the browser; the engine's client driver and server are the documented owners and this is their transport hop.
 					accept: 'text/event-stream'
 				},
 				agent: false
@@ -345,7 +350,10 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 				return;
 			}
 			const lane = openInbox(connectionId, streamUrl.pathname, streamUrl.search);
-			const waitMs = Math.min(2_000, Math.max(0, Number(url.searchParams.get('waitMs') ?? '2000')));
+			const waitMs = Math.min(
+				2_000,
+				Math.max(0, decodeNumber(url.searchParams.get('waitMs') ?? '2000'))
+			);
 			const finish = (events: readonly SseInboxEvent[]): void => {
 				if (response.writableEnded) return;
 				response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });

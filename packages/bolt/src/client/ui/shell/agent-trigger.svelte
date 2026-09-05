@@ -12,7 +12,6 @@
 	 */
 	import { tick } from 'svelte';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
@@ -52,10 +51,7 @@
 	onclick={handleClick}
 	data-dismiss-mobile-sheet
 	data-testid="workspace-agent-trigger"
-	class={cn(
-		'rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
-		expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
-	)}
+	class="rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'}"
 >
 	<!--
 		The same box every other sidebar icon sits in, so the orb lands where a `size-4` glyph lands.
@@ -68,7 +64,8 @@
 
 		No label on the orb: the button already carries one, and a second would be read twice.
 	-->
-	<div class="grid size-4 shrink-0 place-items-center">
+		<!-- repository-health:allow UI6 -- a fixed 16px icon chip centres the orb in one grid cell; the Grid primitive's auto-fit/tracks column sizing cannot express a single place-items cell of this size -->
+		<div class="grid size-4 shrink-0 place-items-center">
 		<NorbitalThinkingOrb {state} size={16} />
 	</div>
 	{#if expanded}

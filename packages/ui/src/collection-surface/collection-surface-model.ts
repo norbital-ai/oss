@@ -27,6 +27,8 @@ const cardTitleSourceSchema = Schema.Union([
 ]);
 type CardTitleSource = typeof cardTitleSourceSchema.Type;
 
+const isString = Schema.is(Schema.String);
+
 const autoCardModelSchema = Schema.Struct({
 	title: cardTitleSourceSchema,
 	subtitles: Schema.Array(Schema.String),
@@ -54,21 +56,24 @@ export function deriveAutoCard(
 		? { kind: 'field', name: titleName }
 		: { kind: 'collection' };
 	const titleFieldName = title.kind === 'field' ? title.name : undefined;
+	const badgeName = roles?.badge ?? visible.find((field) => field.kind === 'enum')?.name;
+	const badge = badgeName === titleFieldName ? undefined : badgeName;
 	const subtitleSource =
 		roles?.subtitle && roles.subtitle.length > 0
 			? roles.subtitle
 			: visible
 					.filter((field) => isTextLike(field) || field.relation != null)
 					.map((field) => field.name);
-	const subtitles = subtitleSource.filter((name) => name !== titleFieldName).slice(0, 2);
-	const badge = roles?.badge ?? visible.find((field) => field.kind === 'enum')?.name;
+	const subtitles = [...new Set(subtitleSource)]
+		.filter((name) => name !== titleFieldName && name !== badge)
+		.slice(0, 2);
 	return { title, subtitles, ...(badge ? { badge } : {}) };
 }
 
 export function optionalCollectionRecordId(record: object | undefined | null): string | undefined {
 	if (record == null) return undefined;
 	const value = Reflect.get(record, 'id');
-	return typeof value === 'string' && value.length > 0 ? value : undefined;
+	return isString(value) && value.length > 0 ? value : undefined;
 }
 
 function singularizeWord(word: string): string {

@@ -13,7 +13,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { Cause, Effect } from 'effect';
+import { Cause, Effect, Schema } from 'effect';
 import {
 	assertSha512Integrity,
 	inspectPackageArchive,
@@ -25,6 +25,8 @@ import {
 	readManifest,
 	readPublicPackageEntries
 } from './lib/package-release.mjs';
+
+const isString = Schema.is(Schema.String);
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha512Pattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -119,7 +121,7 @@ function resolvePublishedPackagesEffect({
 										)
 									);
 								}
-								if (typeof published.dist?.tarball !== 'string' || published.dist.tarball === '') {
+								if (!isString(published.dist?.tarball) || published.dist.tarball === '') {
 									return yield* Effect.fail(
 										new Error(`${local.name}@${local.version} has no dist.tarball.`)
 									);

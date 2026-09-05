@@ -18,7 +18,7 @@
  * YAML extensions in the same directory join automatically. A root-level `doctor.config.*` is
  * still found so fixture tests and older checkouts keep loading.
  */
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import * as Result from 'effect/Result';
 import { existsSync } from 'node:fs';
 import { registerHooks } from 'node:module';
@@ -176,7 +176,8 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	// modules, and awaiting them one at a time made startup scale with pack count for no reason.
 	const loaded = await Promise.all(
 		(config.packs ?? []).map(async (entry) => {
-			if (typeof entry !== 'string') return { name: definePack(entry).name, rules: definePack(entry).rules };
+			if (!Schema.is(Schema.String)(entry))
+				return { name: definePack(entry).name, rules: definePack(entry).rules };
 			const registered = await loadRegisteredPack(entry);
 			if (registered !== undefined) return { name: registered.name, rules: registered.rules };
 			const module = await importDefault(entry, root);

@@ -10,6 +10,19 @@ rule:
         - kind: FunctionExpression
         - kind: MethodDeclaration
         - kind: SourceFile
+    # A source file contains independent owners. A Set in module loading and a query read in
+    # navigation do not form a query cache; a module-level match requires a refresh timer.
+    - any:
+        - not:
+            kind: SourceFile
+        - has:
+            all:
+              - kind: CallExpression
+              - regex: '^set(Interval|Timeout)\b'
+              - has:
+                  regex: '\.(refresh|refetch|reload|invalidate)\s*\('
+                stopBy: end
+          stopBy: end
     - atLeast: 2
       of:
         - all:
@@ -68,3 +81,8 @@ examples:
         const timer = setInterval(() => tick(), 1000);
         void timer;
       }
+    - |
+      const modules = new Set();
+      const views = new Set();
+      $effect(() => { const visible = query.current; chooseView(visible); });
+      void modules; void views;

@@ -102,7 +102,7 @@
 
 		// Delete the node from the editor
 		const pos = getPos();
-		if (typeof pos === 'number') {
+		if (pos !== undefined) {
 			editor.commands.deleteRange({ from: pos, to: pos + node.nodeSize });
 		}
 	}

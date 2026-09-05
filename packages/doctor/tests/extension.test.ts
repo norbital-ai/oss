@@ -126,7 +126,11 @@ test('an overlap YAML rule reports the shape, and an importer of its owner is ex
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const loaded = await loadPatternFiles(root, 'patterns/clamp.yml');
-	const findings = runRules({ root, rules: loaded.rules, files: ['src/unaware.ts', 'src/aware.ts'] });
+	const findings = runRules({
+		root,
+		rules: loaded.rules,
+		files: ['src/unaware.ts', 'src/aware.ts']
+	});
 
 	assert.equal(findings.length, 1);
 	assert.match(findings[0]?.location ?? '', /^src\/unaware\.ts:/);
@@ -294,12 +298,12 @@ test('source discovery needs neither git nor ripgrep outside a repository', (con
 	}
 });
 
-test('authored-only evidence publishes a durable receipt that consolidated assessment authenticates', async (context) => {
+test('authored evidence with source tabs remains a catalogue that assessment authenticates', async (context) => {
 	const root = repository('authored-evidence', {
 		'package.json': '{"name":"authored-evidence","type":"module"}',
 		// A script directory is a framework entrypoint, so the neutral baseline's reachability
 		// check stays quiet and this fixture measures exactly the authored rule.
-		'scripts/run.ts': 'export const load = () => fetch("/api");\n',
+		'scripts/run.ts': 'export const load = () =>\tfetch("/api");\n',
 		'dr/rules/no-fetch.ts': `import { defineRule } from '${packageRoot}build/index.js';
 export default defineRule({
 	id: 'ACME1', severity: 'error', summary: 'raw fetch',

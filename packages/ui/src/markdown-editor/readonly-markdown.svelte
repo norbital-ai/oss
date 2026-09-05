@@ -44,7 +44,7 @@
 		return marked
 			.lexer(trimmed, OPTIONS)
 			.map((token) => marked.parser([token], OPTIONS))
-			.filter((html): html is string => typeof html === 'string' && html !== '');
+			.filter((html) => html !== '');
 	});
 </script>
 

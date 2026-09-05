@@ -1,4 +1,4 @@
-import { Result, Schema } from 'effect';
+import { Predicate, Result, Schema } from 'effect'; // repository-health:allow STATE2 -- compiled grant functions ride the policy declaration through a WeakMap keyed by the frozen policy object; describePolicy writes each entry once and the runtime reads them for the workspace lifetime.
 import { CollectionPredicate } from '@norbital-ai/bolt-protocol/collections';
 import type { PolicyDeclaration, RuntimePolicyGrant } from './workspace-schema.js';
 import {
@@ -78,6 +78,8 @@ const AuthoredEnvoy = Schema.Struct({
 });
 
 const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
+const isString = Schema.is(Schema.String);
+const isRecord = Schema.is(jsonObject);
 
 /** The decoded-failure fallback, once, typed without a cast: an empty map is never reached. */
 const EMPTY_RECORD: Record<string, unknown> = Object.freeze({});
@@ -105,7 +107,7 @@ const grantKeys = (action: PolicyAction): ReadonlySet<string> =>
 
 const validateGrantFields = (grant: Record<string, unknown>, location: string): void => {
 	if (!('fields' in grant)) return;
-	if (!Array.isArray(grant.fields) || grant.fields.some((field) => typeof field !== 'string')) {
+	if (!Array.isArray(grant.fields) || grant.fields.some((field) => !isString(field))) {
 		throw new TypeError(`${location}.fields must be an array of field names.`);
 	}
 	if (new Set(grant.fields).size !== grant.fields.length) {
@@ -116,13 +118,13 @@ const validateGrantFields = (grant: Record<string, unknown>, location: string): 
 const validateGrantApproval = (grant: Record<string, unknown>, location: string): void => {
 	if (!('approval' in grant)) return;
 	requireExactKeys(grant.approval, APPROVAL_KEYS, `${location}.approval`);
-	if (typeof grant.approval.flow !== 'function') {
+	if (!Predicate.isFunction(grant.approval.flow)) {
 		throw new TypeError(`${location}.approval.flow must be a function.`);
 	}
 	const superseders = grant.approval.superceded_by;
 	if (
 		!Array.isArray(superseders) ||
-		superseders.some((team) => typeof team !== 'string' || team.trim() === '') ||
+		superseders.some((team) => !isString(team) || team.trim() === '') ||
 		new Set(superseders).size !== superseders.length
 	) {
 		throw new TypeError(`${location}.approval.superceded_by must be a unique array of team names.`);
@@ -130,7 +132,7 @@ const validateGrantApproval = (grant: Record<string, unknown>, location: string)
 };
 
 const rejectLegacySqlTokens = (value: unknown, location: string): void => {
-	if (value === null || typeof value !== 'object') return;
+	if (!isRecord(value) && !Array.isArray(value)) return;
 	if (Array.isArray(value)) {
 		value.forEach((entry, index) => rejectLegacySqlTokens(entry, `${location}[${index}]`));
 		return;
@@ -154,7 +156,7 @@ const policyGrammarProjection = (value: unknown, location: string): unknown => {
 	if (Array.isArray(value)) {
 		return value.map((entry, index) => policyGrammarProjection(entry, `${location}[${index}]`));
 	}
-	if (value === null || typeof value !== 'object') return value;
+	if (!isRecord(value)) return value;
 	const entries = Object.entries(value);
 	if (entries.some(([key]) => key === 'teamScopeUsers')) {
 		if (entries.length !== 1 || Reflect.get(value, 'teamScopeUsers') !== true) {
@@ -170,12 +172,7 @@ const policyGrammarProjection = (value: unknown, location: string): unknown => {
 const validateGrantWhere = (grant: Record<string, unknown>, location: string): void => {
 	if (!('where' in grant)) return;
 	const where = grant.where;
-	if (
-		where !== null &&
-		typeof where === 'object' &&
-		!Array.isArray(where) &&
-		Reflect.get(where, 'kind') === 'policy-sql'
-	) {
+	if (isRecord(where) && Reflect.get(where, 'kind') === 'policy-sql') {
 		throw new TypeError(
 			`${location}.where uses administrative one-shot SQL in a read/history policy; use the closed structured predicate language.`
 		);
@@ -201,7 +198,7 @@ const validateGrantShape = (
 	const location = `Policy ${name}.grants.${collection}.${authoredCoordinate}`;
 	requireExactKeys(grant, grantKeys(action), location);
 	const authorize = Reflect.get(grant, 'authorize');
-	if (authorize !== undefined && typeof authorize !== 'function') {
+	if (authorize !== undefined && !Predicate.isFunction(authorize)) {
 		throw new TypeError(`${location}.authorize must be a function.`);
 	}
 	validateGrantFields(grant, location);
@@ -275,7 +272,7 @@ const describeGrant = (
 		...(where === undefined ? {} : { where }),
 		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> })
 	};
-	if (typeof grant.authorize === 'function') {
+	if (Predicate.isFunction(grant.authorize)) {
 		const id = policyAuthorizationId(policyName, collection, action);
 		authorizations.set(id, grant.authorize as PolicyRuntimeFunction);
 		Object.assign(described, { authorization: { id, live: true } });

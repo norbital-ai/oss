@@ -61,6 +61,7 @@
 		No teams configured.
 	</div>
 {:else}
+	<!-- repository-health:allow UI22 -- the SvelteFlow canvas box clips the flow renderer inside a fixed 18rem frame; Bound's named height contract and container-type containment are not safe around the flow library's own measurement -->
 	<div class="h-72 overflow-hidden rounded-lg border border-border/70 bg-card/20">
 		<SvelteFlow
 			nodes={[...nodes]}

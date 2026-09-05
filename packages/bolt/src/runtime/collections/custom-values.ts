@@ -1,5 +1,7 @@
-import { Result, type Schema } from 'effect';
+import { Result, Schema } from 'effect';
 import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
+
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 /**
  * Checks `custom()` column values against the schema their type declares.
@@ -28,29 +30,34 @@ const validatorOf = (
 	options: Readonly<Record<string, Schema.Json>> | undefined
 	// repository-health:allow EFF2 -- Standard Schema validators may return a Promise by specification; this boundary detects that result and never composes it as native concurrency.
 ): ((value: unknown) => StandardResult | Promise<StandardResult>) | undefined => {
-	if (definition === null || typeof definition !== 'object') return undefined;
+	if (!isRecord(definition)) return undefined;
 	let schema = Reflect.get(definition, 'schema');
 	// A factory is told apart by the *absence of `~standard`*, not by being callable: an Effect
 	// `Schema` is itself callable, so testing
 	// `typeof schema === 'object'` read every Effect-declared custom type as a factory and skipped its
 	// validation in silence — a value of the wrong shape was stored and nothing reported anything,
 	// which is the exact failure this module exists to stop.
+	// repository-health:allow GUARD2 -- The schema value comes from an author-chosen Standard Schema library and may be either its object or its factory function; no schema expresses that union.
 	if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
 		return undefined;
 	let standard = Reflect.get(schema, '~standard');
+	// repository-health:allow GUARD2 -- Distinguishing a Standard Schema factory requires testing it callable; no Effect schema accepts functions.
 	if ((standard === null || typeof standard !== 'object') && typeof schema === 'function') {
+		const factory = schema;
 		const factoryOptions = Object.fromEntries(
 			Object.entries(options ?? {}).filter(([key]) => key !== 'multiple')
 		);
-		const created = Result.try(() => Reflect.apply(schema, undefined, [factoryOptions]));
+		const created = Result.try(() => Reflect.apply(factory, undefined, [factoryOptions]));
 		if (Result.isFailure(created)) return undefined;
 		schema = created.success;
+		// repository-health:allow GUARD2 -- The factory's product is an external Standard Schema object or function; no schema expresses that union.
 		if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
 			return undefined;
 		standard = Reflect.get(schema, '~standard');
 	}
-	if (standard === null || typeof standard !== 'object') return undefined;
+	if (!isRecord(standard)) return undefined;
 	const validate = Reflect.get(standard, 'validate');
+	// repository-health:allow GUARD2 -- Standard Schema's `validate` is a callable on a third-party object; no Effect schema accepts functions.
 	return typeof validate === 'function'
 		? (value: unknown) => validate.call(standard, value)
 		: undefined;

@@ -1,3 +1,4 @@
+import { Schema } from 'effect';
 import {
 	MAX_SYNC_INITIAL_ANSWER_BYTES,
 	MAX_SYNC_LOADED_KEYS,
@@ -45,6 +46,7 @@ export interface SyncRegistryConnection {
 
 type SyncAttachmentState = {
 	readonly authority?: string | undefined;
+	/** Admitted live window, preserved when fewer matching rows currently exist. */
 	loadedPrefix: number;
 };
 
@@ -179,9 +181,13 @@ const validPrefixState = (entry: {
 	readonly prefixBytes: number;
 }): boolean =>
 	validPrefixKeys(entry.prefixKeys) &&
-	entry.loadedPrefix <= entry.prefixKeys.length &&
+	Number.isSafeInteger(entry.loadedPrefix) &&
+	entry.loadedPrefix >= 0 &&
+	entry.loadedPrefix <= MAX_SYNC_LOADED_KEYS &&
 	entry.prefixBytes >= 0 &&
 	entry.prefixBytes <= MAX_SYNC_RETAINED_PREFIX_BYTES;
+
+const isString = Schema.is(Schema.String);
 
 const validDelta = (delta: SyncPrefixDelta, retainedPrefix: number): boolean => {
 	const removeIds = new Set(delta.removeIds);
@@ -191,8 +197,7 @@ const validDelta = (delta: SyncPrefixDelta, retainedPrefix: number): boolean => 
 		putIds.size === delta.put.length &&
 		[...removeIds].every((id) => !putIds.has(id)) &&
 		delta.put.every(
-			({ id, index, row }) =>
-				index < retainedPrefix && typeof row.id === 'string' && row.id === id
+			({ id, index, row }) => index < retainedPrefix && isString(row.id) && row.id === id
 		)
 	);
 };
@@ -276,9 +281,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 				state.attached.set(connection, viewers);
 			}
 			viewers.set(entry.key, {
-				...(entry.impersonatedTeam === undefined
-					? {}
-					: { authority: entry.impersonatedTeam }),
+				...(entry.impersonatedTeam === undefined ? {} : { authority: entry.impersonatedTeam }),
 				loadedPrefix: entry.loadedPrefix
 			});
 			connection.subscriptions.set(entry.key, subId);
@@ -311,7 +314,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 			: {
 					subId: state.subId,
 					version: state.version,
-					loadedPrefix: viewer.loadedPrefix,
+					loadedPrefix: Math.min(viewer.loadedPrefix, state.keys.length),
 					retainedPrefix: state.keys.length,
 					retainedBytes: state.retainedBytes
 				};
@@ -319,21 +322,26 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 
 	extendPrefix(
 		connection: Connection,
-		evaluation: SyncExtendPrefixEvaluation
+		evaluation: SyncExtendPrefixEvaluation,
+		requestedPrefix = evaluation.toPrefix
 	): SyncPrefixExtensionDecision {
 		const subId = connection.subscriptions.get(evaluation.queryKey);
 		const state = subId === undefined ? undefined : this.#plans.get(subId);
 		const viewer = state?.attached.get(connection)?.get(evaluation.queryKey);
 		if (state === undefined || viewer === undefined)
 			return { accepted: false, reason: 'not-attached' };
-		if (evaluation.version !== state.version)
-			return { accepted: false, reason: 'stale-version' };
+		if (evaluation.version !== state.version) return { accepted: false, reason: 'stale-version' };
+		const currentLength = Math.min(viewer.loadedPrefix, state.keys.length);
 		if (
-			evaluation.fromPrefix !== viewer.loadedPrefix ||
-			evaluation.toPrefix <= viewer.loadedPrefix
+			evaluation.fromPrefix !== currentLength ||
+			evaluation.toPrefix < currentLength ||
+			(evaluation.toPrefix === currentLength && requestedPrefix <= viewer.loadedPrefix)
 		)
 			return { accepted: false, reason: 'non-monotonic' };
 		if (
+			!Number.isSafeInteger(requestedPrefix) ||
+			requestedPrefix < evaluation.toPrefix ||
+			requestedPrefix > MAX_SYNC_LOADED_KEYS ||
 			evaluation.toPrefix > MAX_SYNC_LOADED_KEYS ||
 			evaluation.toPrefix > evaluation.prefixKeys.length ||
 			!validPrefixKeys(evaluation.prefixKeys)
@@ -349,12 +357,12 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 
 		state.keys = [...evaluation.prefixKeys];
 		state.retainedBytes = evaluation.retainedBytes;
-		viewer.loadedPrefix = evaluation.toPrefix;
+		viewer.loadedPrefix = Math.max(viewer.loadedPrefix, requestedPrefix);
 		return {
 			accepted: true,
 			subId: state.subId,
 			version: state.version,
-			loadedPrefix: viewer.loadedPrefix,
+			loadedPrefix: Math.min(viewer.loadedPrefix, state.keys.length),
 			retainedPrefix: state.keys.length,
 			retainedBytes: state.retainedBytes
 		};
@@ -456,7 +464,9 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 		const expectedPrefixes = sortedUniqueNumbers(
 			this.#attachmentsOf(state).map(({ loadedPrefix }) => loadedPrefix)
 		);
-		const deltaPrefixes = update.deltas.map(({ loadedPrefix }) => loadedPrefix).sort((a, b) => a - b);
+		const deltaPrefixes = update.deltas
+			.map(({ loadedPrefix }) => loadedPrefix)
+			.sort((a, b) => a - b);
 		return (
 			expectedPrefixes.length === deltaPrefixes.length &&
 			expectedPrefixes.every((prefix, index) => prefix === deltaPrefixes[index]) &&
@@ -475,9 +485,6 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 		state.keys = [...update.prefixKeys];
 		state.retainedBytes = update.prefixBytes;
 		state.dependencies = sortedUnique(update.dependencies);
-		for (const viewers of state.attached.values())
-			for (const viewer of viewers.values())
-				viewer.loadedPrefix = Math.min(viewer.loadedPrefix, state.keys.length);
 		this.#index(state);
 		return true;
 	}
@@ -708,8 +715,10 @@ export class SyncConnectionLane<
 				!sameStrings(requestedKeys, resultKeys) ||
 				evaluation.results.some(
 					(result) =>
-						result.rows.length !== result.loadedPrefix ||
-						result.loadedPrefix > result.prefixKeys.length
+						result.rows.length !== Math.min(result.loadedPrefix, result.prefixKeys.length) ||
+						result.loadedPrefix >
+							(options.request.queries.find(({ queryKey }) => queryKey === result.key)
+								?.requestedPrefix ?? 0)
 				)
 			) {
 				// This request's answer is unusable. Detaching here is what turned one refused
@@ -767,7 +776,11 @@ export class SyncConnectionLane<
 			};
 			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES)
 				return this.#resetExtension(connection, options.request.queryKey, 'prefix-bytes');
-			const decision = this.registry.extendPrefix(connection, evaluation);
+			const decision = this.registry.extendPrefix(
+				connection,
+				evaluation,
+				options.request.requestedPrefix
+			);
 			if (!decision.accepted)
 				return this.#resetExtension(
 					connection,
@@ -799,8 +812,7 @@ export class SyncConnectionLane<
 			});
 		} catch (cause) {
 			for (const { attachments } of affected)
-				for (const { connection } of attachments)
-					this.detach(connection.id, this.#guestFailure);
+				for (const { connection } of attachments) this.detach(connection.id, this.#guestFailure);
 			if (writer !== undefined) this.detach(writer.id, this.#guestFailure);
 			throw cause;
 		}
@@ -881,13 +893,13 @@ export class SyncConnectionLane<
 			throw new Error('writer sync frame was not accepted');
 	}
 
-	#resetExtension(
-		connection: Connection,
-		queryKey: string,
-		reason: SyncResetReason
-	): never {
+	#resetExtension(connection: Connection, queryKey: string, reason: SyncResetReason): never {
 		const subId = connection.subscriptions.get(queryKey);
-		const frame = { updates: [], resets: [{ queryKey, reason }], outcomes: [] } satisfies SyncApplyFrame;
+		const frame = {
+			updates: [],
+			resets: [{ queryKey, reason }],
+			outcomes: []
+		} satisfies SyncApplyFrame;
 		if (!this.registry.emit(connection, frame)) this.detach(connection.id, this.#guestFailure);
 		else if (subId !== undefined) this.registry.release(connection, [queryKey]);
 		throw new Error(`sync prefix extension reset: ${reason}`);
@@ -904,8 +916,7 @@ export class SyncConnectionLane<
 		message: string
 	): never {
 		for (const { attachments } of affected)
-			for (const { connection } of attachments)
-				this.detach(connection.id, this.#guestFailure);
+			for (const { connection } of attachments) this.detach(connection.id, this.#guestFailure);
 		if (writer !== undefined) this.detach(writer.id, this.#guestFailure);
 		throw new Error(message);
 	}

@@ -27,6 +27,10 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
 
 const { bolt_schema_state: schemaState } = SYSTEM_MODEL_TABLES;
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
 // `__drizzle_migrations` is drizzle's ledger, not Bolt's. The runtime descriptor names only the one
 // column this service reads and writes.
 const migrationLedger = pgTable('__drizzle_migrations', {
@@ -138,10 +142,10 @@ export const layer = (schemaPlan: SchemaPlan) =>
 				);
 				const live = new Map<string, Set<string>>();
 				for (const row of result.rows) {
-					if (typeof row !== 'object' || row === null) continue;
+					if (!isObjectLike(row)) continue;
 					const table = Reflect.get(row, 'table_name');
 					const column = Reflect.get(row, 'column_name');
-					if (typeof table !== 'string' || typeof column !== 'string') continue;
+					if (!isString(table) || !isString(column)) continue;
 					const columns = live.get(table);
 					if (columns === undefined) live.set(table, new Set([column]));
 					else columns.add(column);
@@ -214,9 +218,8 @@ export const layer = (schemaPlan: SchemaPlan) =>
 				);
 				return new Set(
 					result.rows.flatMap((row) => {
-						const tag =
-							typeof row === 'object' && row !== null ? Reflect.get(row, 'tag') : undefined;
-						return typeof tag === 'string' ? [tag] : [];
+						const tag = isObjectLike(row) ? Reflect.get(row, 'tag') : undefined;
+						return isString(tag) ? [tag] : [];
 					})
 				);
 			});

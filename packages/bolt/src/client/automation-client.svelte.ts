@@ -8,9 +8,7 @@ import type { RemoteQuery } from '@norbital-ai/std/collection';
 
 /** The queue row projected to a browser watching one durable automation run. */
 export const AutomationTaskSnapshot = Schema.Struct({
-	status: Schema.Literals(['pending', 'running', 'done', 'failed']),
-	attempts: Schema.Number,
-	maxAttempts: Schema.Number,
+	status: Schema.Literals(['pending', 'running', 'done', 'failed', 'stopped']),
 	error: Schema.NullOr(Schema.String),
 	result: Schema.NullOr(Schema.Json),
 	progress: Schema.NullOr(
@@ -20,9 +18,7 @@ export const AutomationTaskSnapshot = Schema.Struct({
 		})
 	),
 	progressSequence: Schema.Number,
-	progressUpdatedAt: Schema.NullOr(Schema.String),
-	/** The durable instant at which pending work becomes eligible to run again. */
-	nextRunAt: Schema.NullOr(Schema.String)
+	progressUpdatedAt: Schema.NullOr(Schema.String)
 });
 export type AutomationTaskSnapshot = Schema.Schema.Type<typeof AutomationTaskSnapshot>;
 
@@ -162,7 +158,7 @@ export class AutomationExecutionState<E = never> {
 			this.#runs.filter(({ current }) =>
 				current === undefined || current === null
 					? true
-					: current.status !== 'done' && current.status !== 'failed'
+					: current.status === 'pending' || current.status === 'running'
 			).length
 		);
 	}

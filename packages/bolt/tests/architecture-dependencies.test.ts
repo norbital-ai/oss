@@ -139,7 +139,16 @@ describe('Bolt architecture boundaries', () => {
 		// itself the signal: the next change to this basket should be removing lines, not adding.
 		// 8,762 → 8,770: the `bolt:kiosk` app declaration (metadata, compiler projection, authoring
 		// schema passthrough).
-		expect(total).toBeLessThanOrEqual(8_770);
+		// 8,770 → 8,785: declared hook inputs wired end to end (object-form module key, generated
+		// inputs map, narrowed client/server/hook types).
+		// 8,785 → 8,818: error-channel repairs (ERR1/ERR2 cause preservation, ENOENT-narrowed
+		// swallows in the compiler's i18n and migration reads) — failure paths grew, happy paths
+		// did not.
+		// 8,818 -> 8,969: declared Schema.Struct input extraction, canonical authoring audit
+		// enforcement, and explicit connector requirements for portable scraping automations.
+		// These are new authoring contracts; retain their checks rather than hiding them outside
+		// this measured basket. The file-count ceiling and deleted-parser assertion stay in force.
+		expect(total).toBeLessThanOrEqual(8_969);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -180,7 +189,10 @@ describe('Bolt architecture boundaries', () => {
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
 		// write port that routes through the same `mutate` with delete roots. See RFC/toolchain.md §7.5a.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_770);
+		// 4,770 -> 4,823: target-policy reads of pending proposals and commit-time validation
+		// of hook read sets close the cross-user visibility and concurrent overbooking gaps.
+		// The read-consistency leaf is also counted in the unchanged aggregate ceiling above.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_823);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
 		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);
@@ -192,13 +204,18 @@ describe('Bolt architecture boundaries', () => {
 		// 873 -> 910 (2026-09-04): hooks stage deletes as well as mutates (`api.db.X.delete`), so the
 		// staged wave drains a delete queue through `prepareDelete` before its writes, and staged
 		// mutate takes a batch. See RFC/toolchain.md §7.5a.
+		// 910 -> 923: before hooks receive relationship snapshots and approval reservations retain
+		// normalized values. 923 -> 940: each root primes and decodes its own input; only the batch
+		// preparation owner decodes the full batch, avoiding quadratic memory at 10,000 rows.
+		// The aggregate ceiling still includes this complete preparation path.
 		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
-			910
+			940
 		);
 		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
 		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives
 		// 10k ids. Recorded in RFC/toolchain.md §7.
-		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(322);
+		// 322 -> 324: the numeric wire guard is now a hoisted Schema predicate (GUARD2).
+		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(324);
 		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);
 		expect(await lines('runtime/collections/hooks/boundary.ts')).toBeLessThanOrEqual(275);
 		expect(accessLines).toBeLessThanOrEqual(1_705);

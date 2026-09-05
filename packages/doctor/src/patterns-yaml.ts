@@ -16,6 +16,7 @@ import { getErrorMessage } from '@norbital-ai/std';
 import { parse as parseYaml } from 'yaml';
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
 import { jsonRecord } from './manifest.js';
 import { defineRule, type Examples, type Matcher } from './pattern.js';
 import { PRINCIPLE_ORDER, type Confidence, type Principle, type Rule, type Severity } from './rules.js';
@@ -62,6 +63,13 @@ function fail(file: string, problem: string): never {
 	throw new Error(`norbital-doctor: ${file}: ${problem}`);
 }
 
+const isString = Schema.is(Schema.String);
+const isStringArray = Schema.is(Schema.Array(Schema.String));
+// The engine's own `Matcher` union: a pattern string or a matcher object (arrays rejected).
+const isMatcherValue = Schema.is(
+	Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.Unknown)])
+);
+
 function required(file: string, yaml: Readonly<Record<string, unknown>>, field: string): unknown {
 	const value = yaml[field];
 	if (value === undefined) fail(file, `missing required field "${field}"`);
@@ -69,7 +77,7 @@ function required(file: string, yaml: Readonly<Record<string, unknown>>, field: 
 }
 
 function readString(file: string, field: string, value: unknown): string {
-	if (typeof value !== 'string' || value.trim() === '')
+	if (!isString(value) || value.trim() === '')
 		fail(file, `"${field}" must be a non-empty string, received ${JSON.stringify(value)}`);
 	return value;
 }
@@ -79,11 +87,7 @@ function readStringArray(
 	field: string,
 	value: unknown
 ): ReadonlyArray<string> {
-	if (
-		!Array.isArray(value) ||
-		value.length === 0 ||
-		value.some((item) => typeof item !== 'string')
-	)
+	if (!isStringArray(value) || value.length === 0)
 		fail(file, `"${field}" must be a non-empty array of strings`);
 	return value as ReadonlyArray<string>;
 }
@@ -187,10 +191,7 @@ function readMatcherMap(
 ): Readonly<Record<string, Matcher>> {
 	const record = jsonRecord(value) ?? fail(file, `"${field}" must be a mapping of name to rule`);
 	for (const [name, matcher] of Object.entries(record))
-		if (
-			typeof matcher !== 'string' &&
-			(typeof matcher !== 'object' || matcher === null || Array.isArray(matcher))
-		)
+		if (!isMatcherValue(matcher))
 			fail(file, `"${field}.${name}" must be a pattern string or a matcher object`);
 	return record as Readonly<Record<string, Matcher>>;
 }
@@ -199,9 +200,9 @@ function readExamples(file: string, value: unknown): Examples {
 	const record = jsonRecord(value) ?? fail(file, '"examples" must be a mapping with bad and good');
 	const bad = record.bad;
 	const good = record.good;
-	if (!Array.isArray(bad) || bad.length === 0 || bad.some((item) => typeof item !== 'string'))
+	if (!isStringArray(bad) || bad.length === 0)
 		fail(file, '"examples.bad" must be a non-empty array of strings');
-	if (!Array.isArray(good) || good.length === 0 || good.some((item) => typeof item !== 'string'))
+	if (!isStringArray(good) || good.length === 0)
 		fail(file, '"examples.good" must be a non-empty array of strings');
 	const at = record.file === undefined ? undefined : readString(file, 'examples.file', record.file);
 	const fixture = record.fixture;
@@ -211,7 +212,7 @@ function readExamples(file: string, value: unknown): Examples {
 				? {}
 				: (jsonRecord(fixture) ?? fail(file, '"examples.fixture" must be a mapping of path to content'));
 		for (const [path, content] of Object.entries(files))
-			if (typeof content !== 'string')
+			if (!isString(content))
 				fail(file, `"examples.fixture.${path}" must be file content as a string`);
 		return {
 			bad: bad as ReadonlyArray<string>,
@@ -266,10 +267,7 @@ function loadFile(
 	const confidence = yaml.confidence as Confidence | undefined;
 
 	if (yaml.rule === undefined) fail(file, '"rule" is required');
-	if (
-		typeof yaml.rule !== 'string' &&
-		(typeof yaml.rule !== 'object' || yaml.rule === null || Array.isArray(yaml.rule))
-	)
+	if (!isMatcherValue(yaml.rule))
 		fail(file, '"rule" must be a pattern string or a matcher object');
 
 	const common = {
@@ -331,7 +329,7 @@ export async function loadPatternFiles(
 	patterns: string | ReadonlyArray<string>,
 	options: PatternLoadOptions = {}
 ): Promise<LoadedPatterns> {
-	const described = typeof patterns === 'string' ? [patterns] : patterns;
+	const described = isString(patterns) ? [patterns] : patterns;
 	const rules: Array<Rule> = [];
 	const sources: Array<string> = [];
 	const declared = new Map<string, string>();

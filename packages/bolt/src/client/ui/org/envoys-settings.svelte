@@ -636,6 +636,7 @@
 				? Math.max(0, connection.pairingExpiresAt - pairingNow)
 				: undefined}
 		{@const pairingExpired = pairingRemainingMs === 0}
+		<!-- repository-health:allow UI21 -- the pairing dialog panel width is viewport-responsive (min(28rem, 100vw - 2rem)); Bound states height contracts only -->
 		<Dialog.Content class="w-[min(28rem,calc(100vw-2rem))]">
 			<Dialog.Header>
 				<Dialog.Title>{reconnecting ? 'Reconnect' : 'Pair'} {target.name}</Dialog.Title>

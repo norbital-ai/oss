@@ -45,6 +45,8 @@ const approvalRequestModel = defineModel(
 			.default(sql`'[]'::jsonb`),
 		/** Exact scalar and explicitly included relationship graph the reviewer is deciding on. */
 		proposed_values: jsonb().notNull().default({}),
+		/** Written in the same transaction as the approved graph; approval alone is not settlement. */
+		applied_at: instant(),
 		closed_at: instant(),
 		closed_by: text()
 	},

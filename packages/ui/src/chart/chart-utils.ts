@@ -4,6 +4,8 @@ import { getContext, setContext, type Component } from 'svelte';
 
 export const THEMES = { light: '', dark: '.dark' } as const;
 
+const isString = Schema.is(Schema.String);
+
 export type ChartConfig = {
 	[k in string]: {
 		label?: string;
@@ -75,8 +77,6 @@ export function getPayloadConfigFromPayload(
 	payload: Tooltip.TooltipSeries,
 	key: string
 ) {
-	if (typeof payload !== 'object' || payload === null) return undefined;
-
 	let configLabelKey: string = key;
 
 	if (payload.key === key) {
@@ -85,7 +85,7 @@ export function getPayloadConfigFromPayload(
 		configLabelKey = payload.label;
 	} else {
 		const payloadValue = Reflect.get(payload, key);
-		if (typeof payloadValue === 'string') configLabelKey = payloadValue;
+		if (isString(payloadValue)) configLabelKey = payloadValue;
 	}
 
 	return Object.hasOwn(config, configLabelKey)

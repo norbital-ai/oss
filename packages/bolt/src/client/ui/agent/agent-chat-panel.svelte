@@ -46,7 +46,6 @@
 		agentOrbStatusKey
 	} from './agent-orb-state.js';
 	import {
-		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
 		AGENT_COMPOSER_EDITOR_CLASS,
 		AGENT_COMPOSER_FOCUS_EVENT,
 		AGENT_COMPOSER_SHELL_CLASS
@@ -266,13 +265,18 @@
 		}
 	}
 
+	const isNumber = Schema.is(Schema.Number);
+	const isString = Schema.is(Schema.String);
+
 	function elapsedSince(value: unknown): string {
 		const instant =
 			value instanceof Date
 				? value.getTime()
-				: typeof value === 'string' || typeof value === 'number'
+				: isNumber(value)
 					? new Date(value).getTime()
-					: Number.NaN;
+					: isString(value)
+						? new Date(value).getTime()
+						: Number.NaN;
 		if (!Number.isFinite(instant)) return 'Invalid timestamp';
 		const seconds = Math.max(0, Math.floor((Date.now() - instant) / 1_000));
 		if (seconds < 60) return `${seconds}s`;
@@ -382,26 +386,35 @@
 	function storePendingImages(taskId: string) {
 		const images = pendingImages;
 		return Effect.tryPromise({
-			try: async () => {
-				if (images.length === 0) return [];
+			try: () => {
+				if (images.length === 0) return Promise.resolve([]);
 				const session = workspaceSession();
-				const assets: ImageAsset[] = [];
-				for (const image of images) {
-					const key = taskAssetStorageKey(taskId, image.id, image.file.name);
-					await session.files.store(key, image.file);
-					assets.push(
-						ImageAsset.make({
-							key,
-							name: image.file.name,
-							mimeType: image.file.type.startsWith('image/') ? image.file.type : 'image/jpeg',
-							size: image.file.size
-						})
-					);
-				}
-				return assets;
+				return Effect.runPromise(
+					Effect.forEach(
+						images,
+						(image) => {
+							const key = taskAssetStorageKey(taskId, image.id, image.file.name);
+							return Effect.tryPromise(() => session.files.store(key, image.file)).pipe(
+								Effect.map(() =>
+									ImageAsset.make({
+										key,
+										name: image.file.name,
+										mimeType: image.file.type.startsWith('image/')
+											? image.file.type
+											: 'image/jpeg',
+										size: image.file.size
+									})
+								)
+							);
+						},
+						{ concurrency: 1 }
+					)
+				);
 			},
 			catch: (cause) =>
-				new Error(cause instanceof Error ? cause.message : 'The image could not be stored.')
+				new Error(cause instanceof Error ? cause.message : 'The image could not be stored.', {
+					cause
+				})
 		});
 	}
 
@@ -838,7 +851,7 @@
 										{:else}
 											<Icon icon="lucide:circle" class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 										{/if}
-										<span class={item.status === 'done' ? 'min-w-0 text-muted-foreground line-through' : 'min-w-0'}>{item.text}</span>
+										<span class="min-w-0 {item.status === 'done' ? 'text-muted-foreground line-through' : ''}">{item.text}</span>
 										</Inline>
 									</li>
 								{/each}
@@ -928,7 +941,7 @@
 			</p>
 		{/if}
 		<form
-			class={AGENT_COMPOSER_SHELL_CLASS}
+			class="{AGENT_COMPOSER_SHELL_CLASS}"
 			onsubmit={(event) => {
 				event.preventDefault();
 				attemptSend('normal');
@@ -943,7 +956,7 @@
 				onpaste={onComposerPaste}
 				rows={3}
 				placeholder="Ask anything, or type /plan or /compact"
-				class={AGENT_COMPOSER_EDITOR_CLASS}
+				class="{AGENT_COMPOSER_EDITOR_CLASS}"
 				disabled={pending || controlPending || !taskAcceptsSubmission}
 			></textarea>
 			{#if pendingImages.length > 0}
@@ -951,7 +964,8 @@
 					{#each pendingImages as image (image.id)}
 						<button
 							type="button"
-							class="relative size-10 overflow-hidden rounded-md border border-border/70"
+							class="relative size-10 rounded-md border border-border/70"
+							style="overflow: hidden"
 							aria-label={`Remove ${image.file.name}`}
 							onclick={() => removePendingImage(image.id)}
 						>
@@ -978,7 +992,7 @@
 					aria-label="Attach image"
 					disabled={pending || controlPending || !taskAcceptsSubmission}
 					onclick={() => imagePicker?.click()}
-					class={`rounded-md px-1.5 py-0.5 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} text-muted-foreground hover:bg-muted`}
+					class="rounded-md px-1.5 py-0.5 text-xs font-normal text-muted-foreground hover:bg-muted"
 				>
 					<Icon icon="lucide:image" class="size-4" />
 				</button>
@@ -988,9 +1002,7 @@
 					aria-keyshortcuts="Tab"
 					disabled={pending || controlPending || !taskAcceptsSubmission}
 					onclick={() => (planMode = !planMode)}
-					class={`rounded-md px-1.5 py-0.5 ${AGENT_COMPOSER_CONTROL_TEXT_CLASS} ${
-						planMode ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'
-					}`}
+					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}"
 				>
 					{planMode ? 'Plan' : 'Agent'}
 				</button>

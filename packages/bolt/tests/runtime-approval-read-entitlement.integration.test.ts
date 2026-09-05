@@ -12,6 +12,7 @@ import {
 import { subject } from '../src/authoring/contracts-schema.js';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
+import * as Collections from '../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
@@ -179,6 +180,68 @@ const raise = (runtime: BoltTestRuntime) =>
 	);
 
 describe('an approver may read what they were asked to approve', () => {
+	it('exposes pending candidate data to its owner without granting approval inbox access', async () => {
+		harness = await makeBoltTestRuntime(reviewWorkspace);
+		await place(harness);
+		await harness.database.query('delete from jobs where id = $1', [JOB_ID]);
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Approvals.Service).gate({
+					effectId: APPROVAL_EFFECT_ID,
+					subject: raiserSubject,
+					root: APPROVAL_ROOT,
+					storedGraph: { version: 1, collection: 'jobs', id: JOB_ID, action: 'create' },
+					proposedValues: {
+						title: 'Reserved on behalf of the owner',
+						owner_id: fixtureUserId('bystander')
+					},
+					approval: jobApproval,
+					review: undefined
+				});
+			})
+		);
+		const owner: Identity.Subject = {
+			...raiserSubject,
+			userId: fixtureUserId('bystander'),
+			teamPath: ['Bystanders']
+		};
+		const read = (who: Identity.Subject, pendingOnly: boolean, collection = 'jobs') =>
+			harness!.runtime.runPromise(
+				Effect.flatMap(Collections.Service, (collections) =>
+					collections.findMany(
+						EffectId.make(`pending:${who.userId}:${collection}:${pendingOnly}`),
+						who,
+						{
+							collection,
+							pendingOnly,
+							where:
+								collection === 'jobs'
+									? { title: { eq: 'Reserved on behalf of the owner' } }
+									: undefined
+						}
+					)
+				)
+			);
+		expect(await read(owner, false)).toEqual([]);
+		expect(await read(owner, false, 'approval_request')).toEqual([]);
+		expect(await read(owner, true)).toEqual([
+			expect.objectContaining({
+				id: JOB_ID,
+				approval_id: REQUEST_ID,
+				owner_id: owner.userId,
+				title: 'Reserved on behalf of the owner'
+			})
+		]);
+		expect(await read({ ...owner, userId: fixtureUserId('unrelated') }, true)).toEqual([]);
+		await harness.database.query("update approval_request set status = 'APPROVED' where id = $1", [
+			REQUEST_ID
+		]);
+		expect(await read(owner, true)).toHaveLength(1);
+		await harness.database.query('update approval_request set applied_at = now() where id = $1', [
+			REQUEST_ID
+		]);
+		expect(await read(owner, true)).toEqual([]);
+	});
 	it('projects only the actions each visible principal may actually take', async () => {
 		harness = await makeBoltTestRuntime(reviewWorkspace);
 		await place(harness);

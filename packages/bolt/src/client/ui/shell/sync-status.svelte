@@ -18,7 +18,8 @@
 	<Stack
 		as="aside"
 		gap="sm"
-		class="pointer-events-none fixed bottom-6 right-6 z-40 w-[min(24rem,calc(100vw-2rem))]"
+		class="pointer-events-none bottom-6 right-6 z-40 w-[min(24rem,calc(100vw-2rem))]"
+		style="position: fixed /* repository-health:allow UI23 -- the sync notices float at the viewport corner above workspace chrome; no layout primitive owns viewport-fixed placement */"
 		aria-label="Workspace sync status"
 		data-testid="workspace-sync-status"
 		data-sync-status={state?.link ?? 'unavailable'}
@@ -28,7 +29,7 @@
 			<Inline
 				align="start"
 				gap="sm"
-				class={`pointer-events-auto min-w-0 rounded-lg border border-l-4 bg-popover px-3 py-2.5 shadow-lg ${toneClass(notice.tone)}`}
+				class="pointer-events-auto min-w-0 rounded-lg border border-l-4 bg-popover px-3 py-2.5 shadow-lg {toneClass(notice.tone)}"
 				role={notice.tone === 'destructive' ? 'alert' : 'status'}
 				aria-live={notice.tone === 'destructive' ? 'assertive' : 'polite'}
 			>

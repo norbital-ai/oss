@@ -39,8 +39,11 @@
 	import xml from 'highlight.js/lib/languages/xml';
 	import yaml from 'highlight.js/lib/languages/yaml';
 	import { watch } from 'runed';
+	import { Schema } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
+
+	const isString = Schema.is(Schema.String);
 
 	// The tenant-facing set, not lowlight's `common` (~37 grammars, each with its sibling imports).
 	// Fenced blocks for anything outside it still render; only the highlighting pass falls back.
@@ -143,7 +146,7 @@
 
 	function openLinkDialog(): void {
 		const href = editor?.getAttributes('link').href;
-		linkDraft = typeof href === 'string' ? href : '';
+		linkDraft = isString(href) ? href : '';
 		linkDialogOpen = true;
 	}
 
@@ -497,7 +500,7 @@
 			extensions,
 			content: value,
 			onCreate: ({ editor: createdEditor }) => {
-				if (typeof value === 'string' && value.trim() && createdEditor.markdown) {
+				if (value.trim() && createdEditor.markdown) {
 					createdEditor.commands.setContent(value, {
 						contentType: 'markdown',
 						emitUpdate: false

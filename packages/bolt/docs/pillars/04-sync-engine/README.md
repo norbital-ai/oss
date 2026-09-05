@@ -35,6 +35,12 @@ prefix continuation then needs an ordering cursor the search planner owns, or th
 (prefix keys, version, viewer prefixes, and the credential the guest re-authenticates), `pending`,
 and an optional `writer` so ledger outcomes can ride the same frame.
 
+The filed `loadedPrefix` and `viewerPrefixes` are admitted window sizes, not the number of rows
+currently matching. An empty 25-row query keeps a window of 25 and receives later inserts; deleting
+rows does not shrink that window. An extension request's `loadedPrefix` is the actual current row
+count, capped by its viewer window. The registry retains the requested bound even when an extension
+finds fewer rows (including zero), and reports the actual count to the browser.
+
 A `SyncChange` is `insert` / `update` / `delete` with `before` and/or `after` **link-and-route
 values**, not an id-only wake. The write transaction projects those fields in the same commit that
 mutates the row (`compactSyncChanges` collapses per-id transitions). There is no changelog cursor,

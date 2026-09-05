@@ -29,20 +29,26 @@ function resolveText(t: Translate | undefined, key: string): string {
 	return t ? t(key) : (FALLBACK_TEXT[key] ?? key);
 }
 
+const isString = Schema.is(Schema.String);
+/** Bare `typeof x === 'object'` acceptance: arrays included, null excluded. */
+const isObjectish = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 function dateValue(input: unknown): Date | null {
 	const value = input instanceof Date ? input : new Date(String(input));
 	return Number.isNaN(value.getTime()) ? null : value;
 }
 
 function objectProperty(input: unknown, key: string): unknown {
-	return input != null && typeof input === 'object' ? Reflect.get(input, key) : undefined;
+	return input != null && isObjectish(input) ? Reflect.get(input, key) : undefined;
 }
 
 const decodeMoneyValue = Schema.decodeUnknownOption(MoneyValueSchema);
 
 export function formatStructuredValue(value: unknown, pretty = false): string {
 	if (value == null) return '—';
-	if (typeof value !== 'object') return String(value);
+	if (!isObjectish(value)) return String(value);
 	return Effect.runSync(
 		Effect.try(() => JSON.stringify(value, null, pretty ? 2 : undefined)).pipe(
 			Effect.match({
@@ -64,7 +70,7 @@ function formatInstantRange(
 ): string {
 	let start = objectProperty(value, 'start');
 	let end = objectProperty(value, 'end');
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		if (value === 'empty') return resolveText(t, 'dataRenderer.null');
 		const match = value.match(/^[[(]\"?([^,\"]*)\"?,\"?([^\]\)\"]*)\"?[\])]$/);
 		if (!match) return value;
@@ -87,8 +93,8 @@ function formatDateRange(value: unknown, locale: string): string {
 		Effect.try(() =>
 			formatDateRangeLocal(
 				{
-					start: typeof start === 'string' ? start : null,
-					end: typeof end === 'string' ? end : null
+					start: isString(start) ? start : null,
+					end: isString(end) ? end : null
 				},
 				{ locale, dateStyle: 'medium' }
 			)
@@ -150,7 +156,7 @@ function formatScalar(
 			return formatInstantRange(field, value, locale, t);
 		case 'geolocation': {
 			const address = objectProperty(value, 'formatted_address');
-			return typeof address === 'string' ? address : resolveText(t, 'dataRenderer.null');
+			return isString(address) ? address : resolveText(t, 'dataRenderer.null');
 		}
 		case 'enum':
 			return humanize(String(value));

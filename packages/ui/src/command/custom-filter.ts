@@ -1,4 +1,7 @@
+import { Schema } from 'effect';
 import type { TOption } from '#lib/combobox/types';
+
+const isString = Schema.is(Schema.String);
 
 // Custom filter function for enhanced search (for Command component)
 export function buildCustomFilterFn<T, AP extends Record<string, unknown>>(
@@ -12,7 +15,7 @@ export function buildCustomFilterFn<T, AP extends Record<string, unknown>>(
 
 		const option = options.find(
 			(opt: TOption<T, AP>) =>
-				(typeof opt.value === 'string' ? opt.value : JSON.stringify(opt.value)) === optionValue
+				(isString(opt.value) ? opt.value : JSON.stringify(opt.value)) === optionValue
 		);
 
 		if (!option) return 0;
@@ -21,9 +24,7 @@ export function buildCustomFilterFn<T, AP extends Record<string, unknown>>(
 		search = search.toLowerCase().trim();
 		if (search === '') return 1;
 
-		const labelText = (
-			typeof option.label === 'string' ? option.label : 'Custom Label'
-		).toLowerCase();
+		const labelText = (isString(option.label) ? option.label : 'Custom Label').toLowerCase();
 		const valueText = JSON.stringify(option.value).toLowerCase();
 
 		// Check if the combined text contains the search term

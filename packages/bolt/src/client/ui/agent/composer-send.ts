@@ -9,7 +9,7 @@ export const COMPOSER_COMMAND_DEADLINE = '5 seconds' as const satisfies Duration
 /** Operator-visible sentence when admit does not return before the wall. */
 export const COMPOSER_ADMISSION_TIMEOUT_MESSAGE = 'The Task did not admit within 5 seconds.';
 
-export type ComposerSendHandlers<A> = Readonly<{
+type ComposerSendHandlers<A> = Readonly<{
 	readonly onSuccess: (result: A) => void;
 	readonly onFailure: (message: string) => void;
 	readonly onSettled: () => void;

@@ -1,3 +1,4 @@
+import { webReader } from '#lib/runtime/automations/web.js';
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import {
 	DEFAULT_RECORD_EMBEDDING_DIMENSIONS,
@@ -52,7 +53,7 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { refusalOf } from '#lib/authoring/refusal.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { AI, Files, SyncCommit } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, Files, SyncCommit } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -210,6 +211,13 @@ import {
 	type AuthoringOps,
 	type AuthoredCollectionHookModule
 } from '#lib/runtime/collections/authored.js';
+import {
+	PreparingReads,
+	READ_CONFLICT_MESSAGE,
+	executeObservedRead,
+	readConsistencyStatements,
+	type ReadSnapshot
+} from '#lib/runtime/collections/read-consistency.js';
 import { readFileAsset } from '#lib/runtime/collections/file-assets.js';
 import { AuthoredRefusal, refusalAt, type RefusalSite } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
@@ -304,6 +312,11 @@ const isPolicyApprovalMarker = Schema.is(PolicyApprovalMarker);
 /** The `JsonObject` predicate, built once: it is consulted for every row the facility hands back. */
 const isJsonObject = Schema.is(JsonObject);
 const queryRowOf = Schema.decodeUnknownSync(JsonObject);
+const isNumber = Schema.is(Schema.Number);
+const isString = Schema.is(Schema.String);
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+const isPlainRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isFiniteNumber = (value: unknown): boolean => isNumber(value) && Number.isFinite(value);
 /**
  * Drizzle's connectionless `toSQL()` does not run a JSONB column's driver encoder.
  *
@@ -355,6 +368,7 @@ class GraphApprovalRequired extends Schema.TaggedError<GraphApprovalRequired>()(
 		action: CollectionAction,
 		approval: Schema.optionalKey(Schema.Json),
 		review: DeclarativeReview,
+		preparedValues: JsonObject,
 		coordinates: Schema.Array(
 			Schema.Struct({ collection: Schema.NonEmptyString, id: Schema.NonEmptyString })
 		)
@@ -368,16 +382,12 @@ const CollectionSql = {
 const quoteIdentifier = CollectionSql.quoteIdentifier;
 
 /**
- * The most parameters one statement may carry.
- *
- * Postgres sends a statement's parameters under a 16-bit count and refuses one carrying more than
- * 65,535 of them, so a multi-row insert is bounded by `columns x rows` and never by rows: 10,000
- * rows of ten columns is 100,000 and is not a statement any server will accept. The headroom under
- * the hard ceiling is deliberate rather than superstitious — a batch is already capped at 5,000
- * rows, a wide collection reaches this bound at thirteen columns, and a group that later gains one
- * more parameter per row should split one row earlier instead of failing at the server.
+ * Keep each statement within the parameter range supported by both database bindings.
+ * PostgreSQL accepts 65,535, but PGlite 0.5.5 silently rolls back the 59,997-parameter history
+ * insert in the 10,000-row integration case. A 30,000-parameter bound preserves that whole atomic
+ * transaction while splitting its statements. The final capture also binds at most 30,000.
  */
-const MAX_STATEMENT_PARAMETERS = 60_000;
+const MAX_STATEMENT_PARAMETERS = 30_000;
 
 /**
  * One row on its way into a table, before anything has decided how many rows a statement carries.
@@ -546,9 +556,8 @@ const ordinaryMutationCaptureStatement = (
  * freely. A payroll run, its 89 payslips and their lines are three layers, and therefore three
  * statements rather than several hundred.
  *
- * A row that names a *later* row's id is left alone: it is either not a reference at all or it is
- * already broken today, and rows merged into one statement can name each other in any case, because
- * a non-deferred foreign key fires its check at the end of the statement rather than per tuple.
+ * Dependencies include later rows and are ordered before their dependents. Collection identity
+ * distinguishes equal UUIDs in different tables.
  */
 export const insertionLayers = (
 	nodes: ReadonlyArray<{
@@ -604,24 +613,18 @@ export const insertionLayers = (
 				const field = fields?.[name];
 				const relationTarget = relationTargets.get(`${node.collection}\u0000${name}`);
 				const referenceHandle =
-					field?.reference !== undefined &&
-					value !== null &&
-					typeof value === 'object' &&
-					!Array.isArray(value)
-						? value
-						: undefined;
+					field?.reference !== undefined && isJsonObject(value) ? value : undefined;
 				const kind =
 					referenceHandle === undefined ? undefined : Reflect.get(referenceHandle, 'kind');
-				const referenceTarget =
-					typeof kind === 'string'
-						? field?.reference?.targets.find((target) => target.tag === kind)?.collection
-						: undefined;
+				const referenceTarget = isString(kind)
+					? field?.reference?.targets.find((target) => target.tag === kind)?.collection
+					: undefined;
 				const identifier =
 					referenceTarget === undefined || referenceHandle === undefined
 						? value
 						: Reflect.get(referenceHandle, 'id');
 				const targetCollection = referenceTarget ?? relationTarget;
-				if (targetCollection === undefined || typeof identifier !== 'string') continue;
+				if (targetCollection === undefined || !isString(identifier)) continue;
 				const referenced = positions.get(`${targetCollection}\u0000${identifier}`);
 				// A dependency absent from `positions` is a row this graph is not writing, so it already
 				// exists and orders nothing. A self-reference cannot raise its own layer.
@@ -882,6 +885,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const approvals = yield* Approvals.Service;
 			const ai = yield* AI.Service;
 			const files = yield* Files.Service;
+			const connector = yield* Connector.Service;
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const syncCommit = yield* SyncCommit.Service;
@@ -892,6 +896,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					.filter((name) => !SYSTEM_COLLECTION_NAMES.has(name)),
 				'approval_request'
 			]);
+			const observedRead = (
+				effectId: EffectId,
+				database: Database.Interface,
+				query: Parameters<typeof executeBuilt>[2]
+			) =>
+				executeObservedRead(effectId, database, query, [
+					...workspace.definition.collections.map(({ name }) => name),
+					...SYSTEM_COLLECTION_NAMES
+				]);
 			/** The authenticated composite key, in the same order as the unique database index. */
 			const browserMutationScopeParameters = (
 				scope: BrowserMutationScope,
@@ -1147,9 +1160,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return {
 					_tag: 'InProgress' as const,
 					retryAfterSeconds:
-						typeof retryAfter === 'number' && Number.isInteger(retryAfter) && retryAfter > 0
-							? retryAfter
-							: 1
+						isNumber(retryAfter) && Number.isInteger(retryAfter) && retryAfter > 0 ? retryAfter : 1
 				};
 			});
 
@@ -1276,7 +1287,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										 * same, because nothing here can vouch for what the other side sent.
 										 */
 										message:
-											typeof outcome.message === 'string' && outcome.message.trim() !== ''
+											outcome.message.trim() !== ''
 												? outcome.message
 												: 'This operation was refused by a workspace rule.',
 										...(outcome.collection === undefined ? {} : { collection: outcome.collection }),
@@ -1330,9 +1341,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				if (currentVersion === expected) return;
 				if (
 					currentVersion !== null &&
-					(typeof currentVersion !== 'number' ||
-						!Number.isInteger(currentVersion) ||
-						currentVersion < 1)
+					(!isNumber(currentVersion) || !Number.isInteger(currentVersion) || currentVersion < 1)
 				)
 					return yield* invalidBrowserMutationLedger(
 						`The authoritative ${collection} ${id} has no valid row_version.`
@@ -1782,6 +1791,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const admitted = yield* Schema.decodeUnknownEffect(AutomationExecutionInput)(raw);
 					const turnEffectId = EffectId.make(attemptEffectId);
 					const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
+					const readUrl = webReader(turnEffectId, connector);
 					const api = makeAutomationApi(
 						makeAuthoringApi(
 							guardAuthoringOps(
@@ -1803,7 +1813,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								Effect.flatMap((progression) =>
 									automations.progress(turnEffectId, taskId, progression)
 								)
-							)
+							),
+						(url) => guard('web.read').pipe(Effect.andThen(readUrl(url)))
 					);
 					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
 						admitted.args
@@ -1968,7 +1979,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				module: AuthoredCollectionHookModule | undefined,
 				depth = 0,
 				prepared: unknown = undefined,
-				staged?: HookWriteOps<Error>
+				staged?: HookWriteOps<Error>,
+				relationships: ReadonlyArray<string> = []
 			) {
 				const api = authoringApi(effectId, subject, false, depth + 1, staged);
 				// Already decoded by the caller. `prepare` sees the batch's inputs and the handler sees one
@@ -1978,15 +1990,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const values = input.values;
 				const before = yield* runHook(
 					module?.mutate?.perRecord?.before,
-					{ input: values, existing, prepared, api },
+					{ input: values, existing, recordId: input.id, prepared, api, relationships },
 					{
 						collection: input.collection,
 						action: 'mutate.before'
 					}
 				);
-				return before != null && typeof before === 'object' && !Array.isArray(before)
-					? (before as Readonly<Record<string, Schema.Json>>)
-					: values;
+				return isPlainRecord(before) ? (before as Readonly<Record<string, Schema.Json>>) : values;
 			});
 			/** The subject-bound facts a `with` clause is planned against. */
 			const planContextFor = (
@@ -2147,7 +2157,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						planContext: planContextFor(subject, policy),
 						mask: maskFor(subject, policy),
 						execute: (statement) =>
-							executeBuilt(effectId, database, statement).pipe(Effect.map((result) => result.rows))
+							observedRead(effectId, database, statement).pipe(Effect.map((result) => result.rows))
 					},
 					collection,
 					config
@@ -2157,12 +2167,75 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				subject: Identity.Subject,
 				input: QueryInput
 			) {
-				const { policy, compiled, searched, visibility } = yield* prepareRead(
+				const { definition, policy, compiled, searched, visibility } = yield* prepareRead(
 					effectId,
 					subject,
 					input,
 					ROOT_ALIAS
 				);
+				if (input.pendingOnly === true) {
+					if (
+						input.with !== undefined ||
+						input.search !== undefined ||
+						input.after !== undefined ||
+						input.columns !== undefined ||
+						input.orderBy !== undefined
+					)
+						return yield* new WhereCompileError({
+							collection: input.collection,
+							field: 'findPending',
+							message: 'Pending reads accept only where and limit.'
+						});
+					const table = sql.identifier(input.collection);
+					const candidate = sql.identifier(ROOT_ALIAS);
+					const proposalValues = Object.entries(definition.fields).reduce<SQL>(
+						(values, [name, field]) =>
+							(field.reference?.targets ?? []).reduce<SQL>(
+								(encoded, target) => sql`${encoded} || case when pending.proposed_values ? ${name}
+									then jsonb_build_object(${target.storageColumn}, case
+										when pending.proposed_values -> ${name} ->> 'kind' = ${target.tag}
+										then pending.proposed_values -> ${name} ->> 'id' else null end)
+									else '{}'::jsonb end`,
+								values
+							),
+						sql`pending.proposed_values`
+					);
+					// The proposal is data about its target collection. Reading it must apply that collection's
+					// predicates and masks even when another person submitted it. Approval-party access remains
+					// the separate authority for inbox metadata and decisions.
+					const result = yield* observedRead(
+						effectId,
+						database,
+						composer
+							.select({ record: sql`to_jsonb(${candidate})`.as('record') })
+							.from(
+								sql`approval_request as pending
+							left join ${table} as stored on stored.id = pending.record_id::uuid
+							cross join lateral jsonb_populate_record(null::${table},
+								coalesce(to_jsonb(stored), '{}'::jsonb) || ${proposalValues} ||
+								jsonb_build_object('id', pending.record_id, 'approval_id', pending.id)) as ${candidate}`
+							)
+							.where(
+								and(
+									sql`pending.collection_name = ${input.collection}`,
+									sql`pending.action in ('create', 'update')`,
+									sql`pending.status in ('ONGOING', 'APPROVED') and pending.applied_at is null`,
+									compiled,
+									AccessControl.predicateExpression(visibility, { qualifier: ROOT_ALIAS })
+								)
+							)
+							.orderBy(sql`pending.created_at`, sql`pending.id`)
+							.limit(Math.max(1, Math.min(2000, input.limit ?? 100)))
+					);
+					return result.rows.map((value) =>
+						policy.mask(
+							subject,
+							'read',
+							input.collection,
+							decodeReferenceRow(queryRowOf(queryRowOf(value)['record']), definition.fields)
+						)
+					);
+				}
 				if (input.after !== undefined && searched.mode !== 'none')
 					return yield* new WhereCompileError({
 						collection: input.collection,
@@ -2250,10 +2323,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						`No distance metric '${String(input.metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
 					);
 				}
-				if (
-					input.probe.length === 0 ||
-					!input.probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
-				) {
+				if (input.probe.length === 0 || !input.probe.every((entry) => isFiniteNumber(entry))) {
 					return yield* refuse(
 						'probe',
 						"probe must be a non-empty array of finite numbers with the column's dimension."
@@ -2269,7 +2339,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const columns = columnsOf(table);
 				const vectorColumn = columns[column]!;
 				const distance = vectorDistance(vectorColumn, operator, input.probe);
-				const result = yield* executeBuilt(
+				const result = yield* observedRead(
 					effectId,
 					database,
 					composer
@@ -2297,7 +2367,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							input.collection,
 							decodeReferenceRow(record, definition.fields)
 						),
-						distance: typeof measured === 'number' ? measured : decodeNumber(measured ?? Number.NaN)
+						distance: isNumber(measured) ? measured : decodeNumber(measured ?? Number.NaN)
 					};
 				});
 			});
@@ -2335,12 +2405,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						return JSON.stringify(value);
 					}
 				}
-				if (
-					isJsonColumn(definition, column) &&
-					value !== null &&
-					typeof value === 'object' &&
-					!Array.isArray(value)
-				) {
+				if (isJsonColumn(definition, column) && isJsonObject(value)) {
 					return JSON.stringify(value);
 				}
 				return value;
@@ -2355,12 +2420,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (isVectorColumn(definition, column)) return `$${position}::vector`;
 					if (isJsonColumn(definition, column)) return `$${position}::jsonb`;
 				}
-				if (
-					isJsonColumn(definition, column) &&
-					value !== null &&
-					typeof value === 'object' &&
-					!Array.isArray(value)
-				) {
+				if (isJsonColumn(definition, column) && isJsonObject(value)) {
 					return `$${position}::jsonb`;
 				}
 				return `$${position}`;
@@ -2437,12 +2497,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								if (isVectorColumn(definition, name)) return '::vector';
 								if (isJsonColumn(definition, name)) return '::jsonb';
 							}
-							if (
-								isJsonColumn(definition, name) &&
-								value !== null &&
-								typeof value === 'object' &&
-								!Array.isArray(value)
-							) {
+							if (isJsonColumn(definition, name) && isJsonObject(value)) {
 								return '::jsonb';
 							}
 							return '';
@@ -2567,7 +2622,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				previous: Readonly<Record<string, unknown>> | undefined
 			): string | null => {
 				const held = previous?.['approval_id'];
-				return typeof held === 'string' && held !== '' ? held : null;
+				return isNonEmptyString(held) ? held : null;
 			};
 
 			const updateStatements = (
@@ -2869,7 +2924,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						);
 					const rows: Array<Readonly<Record<string, unknown>>> = [];
 					for (const entry of value) {
-						if (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+						if (!isPlainRecord(entry))
 							return yield* graphRefusal(
 								collection,
 								action,
@@ -2914,6 +2969,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				effectId: EffectId,
 				subject: Identity.Subject,
 				statementPlan: WriteStatementPlan,
+				readSnapshots: ReadonlyArray<ReadSnapshot>,
 				relationshipSnapshots: ReadonlyArray<RelationshipSnapshot>,
 				elevated: boolean,
 				browserMutation?: BrowserMutationFence,
@@ -3065,10 +3121,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							)
 						);
 				}
-				for (const table of statementPlan.collections)
-					statements.push(
-						transactionSql(`lock table ${quoteIdentifier(table)} in share row exclusive mode`)
-					);
+				statements.push(...readConsistencyStatements(readSnapshots, statementPlan.collections));
 				for (const expectation of statementPlan.before)
 					statements.push(assertionStatement(expectation));
 				statements.push(...recordAssertions, ...relationshipAssertions);
@@ -3121,6 +3174,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					statements.push(assertionStatement(expectation));
 				}
 				statements.push(...historyPrunes);
+				if (approvalRequestId !== undefined)
+					statements.push(
+						transactionSql(
+							'update approval_request set applied_at = CURRENT_TIMESTAMP where id = $1',
+							[approvalRequestId]
+						)
+					);
 				if (statementPlan.claimLedger && browserMutation !== undefined)
 					statements.push(
 						approvalRequestId === undefined || approvalRoot === undefined
@@ -3137,6 +3197,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				statements.push(captureStatement);
 				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements }).pipe(
 					Effect.catch((error): Effect.Effect<never, Database.FacilityError | AuthoredRefusal> => {
+						if (error.message.includes(READ_CONFLICT_MESSAGE))
+							return Effect.fail(new AuthoredRefusal({ message: READ_CONFLICT_MESSAGE }));
 						for (const [message, site] of predicateGuards) {
 							// `includes` rather than equality: the sentence is what a host binding reports,
 							// and a binding is free to prefix it with its own context.
@@ -3152,7 +3214,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (!isJsonObject(row)) continue;
 					const ordinal = row['__bolt_graph_ordinal'];
 					const record = row['__bolt_graph_record'];
-					if (typeof ordinal !== 'number' || !isJsonObject(record)) continue;
+					if (!isNumber(ordinal) || !isJsonObject(record)) continue;
 					const operation = capturedOperations[ordinal];
 					if (operation === undefined) continue;
 					const key = `${operation.collection}\u0000${operation.id}`;
@@ -3238,6 +3300,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				rootAction: typeof CollectionAction.Type,
 				rootValues: Readonly<Record<string, unknown>>,
 				cause: GraphApprovalRequired,
+				readSnapshots: ReadonlyArray<ReadSnapshot>,
 				browserMutation?: BrowserMutationFence
 			) {
 				const values = yield* Schema.decodeUnknownEffect(JsonObject)(rootValues).pipe(
@@ -3293,8 +3356,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						payload: values,
 						...(browserMutation === undefined ? {} : { browserMutation })
 					},
-					proposedValues: values,
+					// The reviewer and authored reservation reads need the server-normalized scalar
+					// values. Replay still uses the original input in storedGraph above.
+					proposedValues: { ...values, ...cause.preparedValues },
 					approval: cause.approval,
+					readSnapshots,
 					review
 				});
 				if (decision._tag !== 'Hold')
@@ -3373,11 +3439,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const submittedId = payload['id'];
 						const rootCollection = explicitRoots?.[index]?.collection ?? collection;
 						const rootAction =
-							explicitRoots?.[index]?.action ??
-							(typeof submittedId === 'string' ? 'update' : 'create');
+							explicitRoots?.[index]?.action ?? (isString(submittedId) ? 'update' : 'create');
 						const rootId =
 							explicitRoots?.[index]?.id ??
-							(typeof submittedId === 'string'
+							(isString(submittedId)
 								? submittedId
 								: deriveRecordId(`${rootCollection}:${effectId}:root:${index}`));
 						const rootEffectId =
@@ -3422,6 +3487,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						}>
 					>();
 					const heldRequestIds = new Map<string, string>();
+					const readSnapshots: Array<ReadSnapshot> = [];
 					const readSession = graphReads.session(
 						effectId,
 						roots.map((root) => root.rootId)
@@ -3469,6 +3535,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									readSession.batch.participants.clear();
 									for (const root of groupRoots) readSession.batch.participants.set(root.rootId, 0);
 									readSession.batch.completed.clear();
+									const primeRoots = groupRoots.map((candidate) => ({
+										collection: candidate.collection,
+										payload: candidate.payload,
+										id: candidate.rootId,
+										action: candidate.rootAction
+									}));
 									const outcomes = yield* Effect.forEach(
 										groupRoots,
 										(root) =>
@@ -3554,12 +3626,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 															? {}
 															: { expectedRootVersion: root.expectedVersion }),
 														readSession,
-														primeRoots: groupRoots.map((candidate) => ({
-															collection: candidate.collection,
-															payload: candidate.payload,
-															id: candidate.rootId,
-															action: candidate.rootAction
-														})),
+														primeRoots,
 														rootPreparation,
 														rootDeletePreparation
 													}
@@ -3697,6 +3764,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										root.rootAction,
 										values,
 										held.cause,
+										readSnapshots,
 										browserMutation
 									);
 									heldRequestIds.set(key, requestId);
@@ -3724,6 +3792,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										effectId,
 										subject,
 										compiled,
+										readSnapshots,
 										preparedGraphs.flatMap((graph) => graph.relationshipSnapshots),
 										elevated,
 										browserMutation,
@@ -3824,7 +3893,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							);
 						for (const [groupCollection, groupRoots] of groupsByCollection) {
 							yield* readRootGroup(groupCollection, groupRoots);
-							yield* prepareRootGroup(groupRoots);
+							yield* prepareRootGroup(groupRoots).pipe(
+								Effect.provideService(PreparingReads, readSnapshots)
+							);
 						}
 						yield* gatePreparedGraphs();
 						yield* commitPreparedGraphs();
@@ -3906,7 +3977,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// is what a "1 of 335" reads from; counting only the rows past the cursor would shrink that
 				// total on every page turn.
 				const table = queryTableFor(input.collection, definition.fields);
-				const result = yield* executeBuilt(
+				const result = yield* observedRead(
 					effectId,
 					database,
 					composer
@@ -3915,9 +3986,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						.where(and(compiled, searched.predicate, AccessControl.predicateExpression(visibility)))
 				);
 				const row = result.rows[0];
-				const value =
-					typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
-				return typeof value === 'number' ? value : decodeNumber(value ?? 0);
+				const value = isPlainRecord(row) ? Reflect.get(row, 'count') : undefined;
+				return isNumber(value) ? value : decodeNumber(value ?? 0);
 			});
 			/**
 			 * One complete authoritative grouping.
@@ -4207,7 +4277,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								collection: outcome.collection,
 								where: { id: { in: [outcome.id] } },
 								limit: 1
-							}).pipe(Effect.catch(() => Effect.succeed([])))
+							}).pipe(
+								// repository-health:allow SWALLOW2 -- the mutation is already durable when this post-commit readback runs; a readback failure settles the accepted outcome with the empty records `settle` legitimately supports, rather than failing an idempotent committed response the client would then replay.
+								Effect.catch(() => Effect.succeed([]))
+							)
 					).pipe(
 						Effect.map((records) =>
 							projectBrowserMutationOutcome(input.idempotencyKey, outcome).settle(records)
@@ -4270,7 +4343,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const version = baseVersions.find(
 						(entry) => entry.row.collection === graph.collection && entry.row.recordId === id
 					)?.rowVersion;
-					return typeof version === 'number' ? { expectedVersion: version } : {};
+					return isNumber(version) ? { expectedVersion: version } : {};
 				};
 				if (
 					writeRows.some(
@@ -4600,7 +4673,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						yield* importChunks(rows, (row, index) =>
 							Effect.gen(function* () {
 								const collection = inputs[index]?.collection ?? inputs[0]?.collection ?? '';
-								if (typeof row !== 'object' || row === null || Array.isArray(row))
+								if (!isPlainRecord(row))
 									return yield* new AccessControl.AccessDenied({
 										action: 'import',
 										resource: collection,
@@ -4608,20 +4681,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									});
 								const record = row as Readonly<Record<string, unknown>>;
 								const submittedId = record['id'];
-								if (
-									submittedId !== undefined &&
-									(typeof submittedId !== 'string' || submittedId.length === 0)
-								)
+								if (submittedId !== undefined && !isNonEmptyString(submittedId))
 									return yield* new AccessControl.AccessDenied({
 										action: 'import',
 										resource: collection,
 										reason: `import pipeline row ${index + 1} has an invalid id`
 									});
-								const action = typeof submittedId === 'string' ? 'update' : 'create';
-								const id =
-									typeof submittedId === 'string'
-										? submittedId
-										: deriveRecordId(`${collection}:${effectId}:${index}`);
+								const action = isString(submittedId) ? 'update' : 'create';
+								const id = isString(submittedId)
+									? submittedId
+									: deriveRecordId(`${collection}:${effectId}:${index}`);
 								return { collection, id, action, payload: { ...record, id } };
 							})
 						);

@@ -46,6 +46,9 @@
 	const NUMERIC_KINDS = new Set(['numeric', 'number', 'integer']);
 	const SIMPLE_INPUT_KINDS = new Set(['text', 'string', 'uuid']);
 	const decodeStructuredJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
+	const isObjectish = Schema.is(
+		Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+	);
 	const { t } = useI18n();
 
 	let {
@@ -89,7 +92,7 @@
 	);
 	const usesStructuredDisplay = $derived(
 		field.kind === 'json' ||
-			(value != null && typeof value === 'object' && !BUILTIN_DISPLAY_KINDS.has(field.kind))
+			(value != null && isObjectish(value) && !BUILTIN_DISPLAY_KINDS.has(field.kind))
 	);
 	let structuredDraft = $state('');
 	let structuredError = $state('');

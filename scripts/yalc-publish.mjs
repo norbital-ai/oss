@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { Schema } from 'effect';
 import { readManifest } from './lib/package-release.mjs';
 import {
 	readJsonIfPresent,
@@ -25,6 +26,8 @@ import {
 	tenantSubstratePackagePaths,
 	tenantSubstrateRootEnvironment
 } from './lib/yalc-consumers.mjs';
+
+const isString = Schema.is(Schema.String);
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tenantSubstrateRoot = resolveTenantSubstrateRoot();
@@ -110,7 +113,7 @@ const workspaceVersions = Object.fromEntries(
 		const manifestPath = path.join(repositoryRoot, 'packages', directory, 'package.json');
 		if (!existsSync(manifestPath)) return [];
 		const manifest = readManifest(manifestPath);
-		return typeof manifest.name === 'string' && typeof manifest.version === 'string'
+		return isString(manifest.name) && isString(manifest.version)
 			? [[manifest.name, manifest.version]]
 			: [];
 	})
@@ -151,14 +154,14 @@ const rewriteSpecifier = (name, specifier) => {
 		const sibling = yalcSibling(name);
 		if (sibling !== undefined) return sibling;
 		const version = workspaceVersions[name];
-		if (typeof version !== 'string') {
+		if (!isString(version)) {
 			throw new Error(`Cannot rewrite ${name} ${specifier}: workspace package version is missing.`);
 		}
 		return version;
 	}
 	if (specifier === 'catalog:') {
 		const version = catalog[name];
-		if (typeof version !== 'string') {
+		if (!isString(version)) {
 			throw new Error(`Cannot rewrite ${name} catalog: pin is missing.`);
 		}
 		return version;

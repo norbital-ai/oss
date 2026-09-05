@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { PersistedState } from 'runed';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -51,6 +52,8 @@
 	} = $props();
 
 	const { t } = useI18n();
+
+	const isString = Schema.is(Schema.String);
 
 	let filters = $state<Filter[]>([]);
 	let nextId = $state(0);
@@ -136,7 +139,7 @@
 		if (!filter.field || !filter.operator) return false;
 		if (!collectionFilterOperatorNeedsValue(filter.operator)) return true;
 		if (filter.value == null) return false;
-		if (typeof filter.value === 'string') return filter.value.trim().length > 0;
+		if (isString(filter.value)) return filter.value.trim().length > 0;
 		if (Array.isArray(filter.value)) return filter.value.length > 0;
 		return true;
 	}

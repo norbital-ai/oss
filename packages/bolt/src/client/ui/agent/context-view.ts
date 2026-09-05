@@ -1,4 +1,7 @@
+import { Schema } from 'effect';
 import type { AgentPlanRow, AgentRunRow, PanelMessage } from './transcript.js';
+
+const isString = Schema.is(Schema.String);
 
 export type CompactOrigin = 'automatic' | 'manual' | 'unresolved';
 
@@ -86,7 +89,7 @@ export function projectAgentContextView(input: Readonly<{
 
 /** Reads display text without exposing raw tool payloads in the focused context summary. */
 export function plainMessageText(message: PanelMessage): string {
-	if (typeof message.message.content === 'string') return message.message.content;
+	if (isString(message.message.content)) return message.message.content;
 	return message.message.content
 		.filter((part) => part.type === 'text')
 		.map((part) => part.text)
@@ -96,7 +99,7 @@ export function plainMessageText(message: PanelMessage): string {
 /** Returns editable plain user text without dropping files or other canonical message parts. */
 export function editableUserMessageText(message: PanelMessage): string | null {
 	if (message.author.kind !== 'human' || message.message.role !== 'user') return null;
-	if (typeof message.message.content === 'string') return message.message.content;
+	if (isString(message.message.content)) return message.message.content;
 	if (message.message.content.some((part) => part.type !== 'text')) return null;
 	return plainMessageText(message);
 }

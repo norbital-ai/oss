@@ -4,8 +4,13 @@ import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeParse } from '@norbital-ai/std/json';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { readPublicPackageEntries } from './package-release.mjs';
+
+const isObject = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
 
 export const signatureField = 'yalcSignature';
 
@@ -21,17 +26,16 @@ const microsandboxResourcePattern = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/;
 
 const exactResourceNames = (values) =>
 	Array.isArray(values) &&
-	values.every((value) => typeof value === 'string' && microsandboxResourcePattern.test(value)) &&
+	values.every((value) => isString(value) && microsandboxResourcePattern.test(value)) &&
 	new Set(values).size === values.length;
 
 const exactInstances = (values, root) =>
 	Array.isArray(values) &&
 	values.every((value) => {
 		if (
-			value === null ||
-			typeof value !== 'object' ||
+			!isObject(value) ||
 			!microsandboxResourcePattern.test(String(value.name ?? '')) ||
-			typeof value.workspace !== 'string' ||
+			!isString(value.workspace) ||
 			!path.isAbsolute(value.workspace) ||
 			canonicalPath(value.workspace) !== value.workspace
 		) {
@@ -246,7 +250,7 @@ export const ensurePureInstallation = ({
 	const outdated = names.filter((name) => {
 		const linked = readJsonIfPresent(linkedPackageManifest(name));
 		const version = linked?.version;
-		if (typeof version !== 'string') return false;
+		if (!isString(version)) return false;
 		const stored = manifestSignature(
 			path.join(yalcStoreDirectory, 'packages', ...name.split('/'), version, 'package.json')
 		);

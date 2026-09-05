@@ -2,6 +2,8 @@ id: GUARD1
 summary: hand-rolled object duck guard reconstructs a record
 severity: error
 principles: [simplicity, type-safety, no-bloat]
+dominates:
+  - GUARD2
 rule:
   any:
     - 'typeof $X === ''object'' && $X !== null ? $X : undefined'

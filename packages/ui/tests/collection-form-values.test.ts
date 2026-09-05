@@ -9,17 +9,7 @@ import {
 } from '../src/collection-form/collection-form-values.ts';
 
 test('an edited hydrated row submits only declared writable fields', () => {
-	const fields = [
-		{ name: 'id', kind: 'uuid', nullable: false },
-		{ name: 'created_at', kind: 'instant', nullable: false },
-		{ name: 'updated_at', kind: 'instant', nullable: false },
-		{ name: 'row_version', kind: 'integer', nullable: false },
-		{ name: 'approval_id', kind: 'uuid', nullable: true },
-		{ name: 'name', kind: 'text', nullable: false },
-		{ name: 'normalized_name', kind: 'text', nullable: false, readOnly: true },
-		{ name: 'email', kind: 'text', nullable: true }
-	];
-
+	const writableColumns = ['name', 'email'];
 	const hydrated = {
 		id: 'employee-1',
 		created_at: '2026-08-23T00:00:00.000Z',
@@ -32,23 +22,30 @@ test('an edited hydrated row submits only declared writable fields', () => {
 	};
 	Object.defineProperty(hydrated, 'email', { value: 'employee@example.test', enumerable: false });
 
-	assert.deepEqual(pickWritableFormValues(fields, hydrated), {
+	assert.deepEqual(pickWritableFormValues(writableColumns, hydrated), {
 		name: 'Updated employee',
 		email: 'employee@example.test'
 	});
 });
 
+test('a declared input narrows the write mask past the catalog', () => {
+	const writableColumns = ['company_id', 'period'];
+	assert.deepEqual(
+		pickWritableFormValues(
+			writableColumns,
+			{ company_id: 'c1', period: '2026-01', lifecycle: 'PAID', pay_date: '2026-02-01' }
+		),
+		{ company_id: 'c1', period: '2026-01' }
+	);
+});
+
 test('day-precision instants survive an unrelated edit without losing their stored precision', () => {
-	const fields = [
-		{ name: 'title', kind: 'text', nullable: false },
-		{ name: 'scheduled_for', kind: 'instant', nullable: false, precision: 'day' },
-		{ name: 'blackout_dates', kind: 'instant', nullable: false, precision: 'day', array: true }
-	];
+	const writableColumns = ['title', 'scheduled_for', 'blackout_dates'];
 	const localMidnight = new Date(2026, 6, 3);
 	const nextLocalMidnight = new Date(2026, 6, 4);
 
 	assert.deepEqual(
-		pickWritableFormValues(fields, {
+		pickWritableFormValues(writableColumns, {
 			title: 'Title only changed',
 			scheduled_for: localMidnight.toISOString(),
 			blackout_dates: [nextLocalMidnight, '2026-07-05']
@@ -71,10 +68,11 @@ test('form composition requires every mutable field exactly once and keeps ident
 	];
 
 	assert.deepEqual(collectionFormMutationFieldNames(fields), ['name', 'email']);
+	const expectedKeys = collectionFormMutationFieldNames(fields);
 	assert.doesNotThrow(() =>
 		assertCollectionFormFieldRegistration(
 			'employees',
-			fields,
+			expectedKeys,
 			new Map([
 				['name', 1],
 				['email', 1]
@@ -82,14 +80,14 @@ test('form composition requires every mutable field exactly once and keeps ident
 		)
 	);
 	assert.throws(
-		() => assertCollectionFormFieldRegistration('employees', fields, new Map([['name', 1]])),
+		() => assertCollectionFormFieldRegistration('employees', expectedKeys, new Map([['name', 1]])),
 		/missing: email/
 	);
 	assert.throws(
 		() =>
 			assertCollectionFormFieldRegistration(
 				'employees',
-				fields,
+				expectedKeys,
 				new Map([
 					['name', 2],
 					['email', 1]
@@ -101,7 +99,7 @@ test('form composition requires every mutable field exactly once and keeps ident
 		() =>
 			assertCollectionFormFieldRegistration(
 				'employees',
-				fields,
+				expectedKeys,
 				new Map([
 					['id', 1],
 					['name', 1],

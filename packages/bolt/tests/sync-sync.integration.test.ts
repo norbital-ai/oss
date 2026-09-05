@@ -7,11 +7,7 @@ import {
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
 import * as Sync from '../src/runtime/sync/sync.js';
-import {
-	adminSubject,
-	makeBoltTestRuntime,
-	testWorkspace
-} from './support/bolt-test-layer.js';
+import { adminSubject, makeBoltTestRuntime, testWorkspace } from './support/bolt-test-layer.js';
 
 describe('sync engine owner', () => {
 	it('accepts only exact ChangeBatch row transitions', () => {
@@ -66,7 +62,7 @@ describe('sync engine owner', () => {
 						planKey: 'sha256:plan',
 						version: 0,
 						prefixKeys: [],
-						loadedPrefix: 0,
+						loadedPrefix: 100,
 						prefixBytes: 0,
 						authorityFingerprint: 'sha256:policy',
 						dependencies: ['people'],
@@ -104,7 +100,7 @@ describe('sync engine owner', () => {
 			expect(first).toMatchObject({
 				key: 'people',
 				version: 0,
-				loadedPrefix: 0,
+				loadedPrefix: 100,
 				prefixKeys: [],
 				prefixBytes: 0,
 				rows: []

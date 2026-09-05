@@ -3,7 +3,6 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { diagnosisFindingTone } from '#lib/client/ui/studio/authoring-live.js';
 	import {
 		diagnosisFindingPath,
@@ -65,7 +64,7 @@
 
 <Stack
 	gap="sm"
-	class={cn('border-t border-border/60 bg-card/40 p-3 sm:p-4', dimmed && 'opacity-70')}
+	class="border-t border-border/60 bg-card/40 p-3 sm:p-4 {dimmed ? 'opacity-70' : ''}"
 	data-testid="studio-diagnosis"
 >
 	<Inline gap="sm" align="start" class="flex-wrap">
@@ -102,7 +101,7 @@
 						<p class="font-mono text-micro font-semibold text-foreground">{group.file}</p>
 						<ul class="divide-y divide-border/40">
 							{#each group.findings as finding (`${finding.rule}:${finding.location}`)}
-								<li class={cn('border-l-2 py-1.5 pl-2', toneClass(finding.severity))}>
+								<li class="border-l-2 py-1.5 pl-2 {toneClass(finding.severity)}">
 									<button
 										type="button"
 										class="w-full text-left"

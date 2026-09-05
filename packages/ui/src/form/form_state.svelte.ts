@@ -21,7 +21,7 @@ import { cloneDeep } from 'es-toolkit/object';
 import get from 'es-toolkit/compat/get';
 import merge from 'es-toolkit/compat/merge';
 import set from 'es-toolkit/compat/set';
-import { Cause, Effect, Predicate } from 'effect';
+import { Cause, Effect, Predicate, Schema } from 'effect';
 import type { JsonPatchOperation } from '@norbital-ai/std/json';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import { toast } from 'svelte-sonner';
@@ -86,6 +86,11 @@ export type SubmitSuccessBehavior = 'none' | 'commit' | 'reset';
 
 /** Helper type: value or getter function */
 type MaybeGetter<T> = T | (() => T);
+
+/** Bare `typeof x === 'object'` acceptance: arrays included, null excluded. */
+const isObjectish = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
 
 export type FormStateConfig<Schema extends FormSchema, TReturn, E = Cause.UnknownError> = {
 	/** Schema for validation */
@@ -213,7 +218,7 @@ export type FormStateHooks<T> = {
 function resolve<T>(v: MaybeGetter<T>): T {
 	// Check if it's a getter (function with 0 declared params)
 	// vs an actual function value (has params)
-	if (typeof v === 'function' && v.length === 0) {
+	if (Predicate.isFunction(v) && v.length === 0) {
 		return (v as () => T)();
 	}
 	return v as T;
@@ -554,7 +559,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown, E = Cause.U
 		// Move baseline forward so the form becomes clean without remounting.
 		// `_serverState` is derived from initial config; updating config alone
 		// won't reliably move baseline. Mutate the active baseline object in place.
-		if (this._serverState && typeof this._serverState === 'object') {
+		if (this._serverState && isObjectish(this._serverState)) {
 			for (const key in this._serverState) Reflect.deleteProperty(this._serverState, key);
 			Object.assign(this._serverState, cloneDeep(committed));
 		}

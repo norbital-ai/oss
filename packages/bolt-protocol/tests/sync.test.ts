@@ -24,7 +24,10 @@ import {
 } from '../src/index.js';
 
 const hash = (value: string): string =>
-	[...value].reduce((result, character) => `${result}${character.codePointAt(0)?.toString(16)}`, '');
+	[...value].reduce(
+		(result, character) => `${result}${character.codePointAt(0)?.toString(16)}`,
+		''
+	);
 
 const connection = (credential: string): SyncRegistryConnection => ({
 	credential,
@@ -139,9 +142,9 @@ describe('clean-cut live query v2 protocol', () => {
 			]
 		};
 		expect(Schema.is(ChangeBatch)(batch)).toBe(true);
-		expect(
-			Schema.is(SyncChange)({ collection: 'steps', id: 'step-1', operation: 'insert' })
-		).toBe(false);
+		expect(Schema.is(SyncChange)({ collection: 'steps', id: 'step-1', operation: 'insert' })).toBe(
+			false
+		);
 		expect(
 			Schema.is(SyncChange)({
 				collection: 'steps',
@@ -175,16 +178,12 @@ describe('clean-cut live query v2 protocol', () => {
 			operation: 'delete',
 			before: values
 		});
-		expect(compactSyncChanges([insert(before), update(before, middle), update(middle, after)])).toEqual(
-			[insert(after)]
-		);
-		expect(compactSyncChanges([update(before, middle), remove(middle)])).toEqual([
-			remove(before)
-		]);
+		expect(
+			compactSyncChanges([insert(before), update(before, middle), update(middle, after)])
+		).toEqual([insert(after)]);
+		expect(compactSyncChanges([update(before, middle), remove(middle)])).toEqual([remove(before)]);
 		expect(compactSyncChanges([insert(before), remove(before)])).toEqual([]);
-		expect(compactSyncChanges([remove(before), insert(after)])).toEqual([
-			update(before, after)
-		]);
+		expect(compactSyncChanges([remove(before), insert(after)])).toEqual([update(before, after)]);
 	});
 
 	it('uses one bounded atomic prefix delta and same-version extension request', () => {
@@ -241,6 +240,35 @@ describe('clean-cut live query v2 protocol', () => {
 			loadedPrefix: 2,
 			retainedPrefix: 3
 		});
+	});
+
+	it('retains the requested live window through an empty answer, growth, and deletion', () => {
+		const registry = new SyncRegistry<SyncRegistryConnection>({ hash });
+		const viewer = connection('growing');
+		registry.attach(viewer, [prefixEntry('growing', 0, 1)]);
+		expect(registry.extendPrefix(viewer, {
+			queryKey: 'growing', version: 7, fromPrefix: 0, toPrefix: 0, rows: [], prefixKeys: [], retainedBytes: 0
+		}, 3)).toMatchObject({ accepted: true, loadedPrefix: 0 });
+		const subId = registry.prefixViewer(viewer, 'growing')?.subId;
+		if (subId === undefined) throw new Error('fixture plan was not registered');
+		const update = (version: number, count: number) => ({
+			subId,
+			fromVersion: version,
+			toVersion: version + 1,
+			prefixKeys: prefixEntry('growing', count).prefixKeys,
+			prefixBytes: count * 32,
+			deltas: [{ loadedPrefix: 3, delta: { removeIds: [], put: [] } }],
+			authorityFingerprint: 'policy-a',
+			dependencies: ['steps']
+		});
+		expect(registry.prefixViewer(viewer, 'growing')?.loadedPrefix).toBe(0);
+		expect(registry.details(subId)?.subscription.viewerPrefixes).toEqual([3]);
+		expect(registry.commitAdvance(update(7, 2))).toBe(true);
+		expect(registry.prefixViewer(viewer, 'growing')?.loadedPrefix).toBe(2);
+		expect(registry.commitAdvance(update(8, 0))).toBe(true);
+		expect(registry.details(subId)?.subscription.viewerPrefixes).toEqual([3]);
+		expect(registry.commitAdvance(update(9, 3))).toBe(true);
+		expect(registry.prefixViewer(viewer, 'growing')?.loadedPrefix).toBe(3);
 	});
 
 	it('requires an empty delta for a shorter viewer on every shared version advance', () => {
@@ -315,9 +343,7 @@ describe('clean-cut live query v2 protocol', () => {
 					...exact.updates[0]!,
 					delta: {
 						removeIds: [],
-						put: [
-							{ id: 'r1', index: 0, row: { id: 'r1', payload: `${exactPayload}x` } }
-						]
+						put: [{ id: 'r1', index: 0, row: { id: 'r1', payload: `${exactPayload}x` } }]
 					}
 				}
 			]

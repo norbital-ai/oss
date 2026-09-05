@@ -3,6 +3,7 @@
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { Component } from 'svelte';
+	import { Schema } from 'effect';
 	import { getOptionalCollectionClientContext } from '#lib/collection-runtime';
 	import { useI18n } from '#lib/i18n';
 	import DataRendererBuiltin from './data-renderer-builtin.svelte';
@@ -12,6 +13,8 @@
 	import RelationshipRenderer from './relationship/relationship.renderer.svelte';
 
 	const { t } = useI18n();
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
 	let {
 		field,
 		value,
@@ -53,7 +56,7 @@
 		const related = Reflect.get(row, field.relation.name);
 		const records = Array.isArray(related) ? related : related == null ? [] : [related];
 		const labels = records.flatMap((record) => {
-			if (record == null || typeof record !== 'object' || Array.isArray(record)) return [];
+			if (record == null || !isRecord(record)) return [];
 			const label = (relationOptions ?? automaticRelationOptions)?.label(record);
 			return label ? [label] : [];
 		});

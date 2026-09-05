@@ -126,13 +126,13 @@
 				{#if build.stdout !== undefined}
 					<Scroll name="Build stdout" class="max-h-64">
 						<pre
-							class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-foreground">{build.stdout}</pre>
+							class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-xs leading-5 text-foreground">{build.stdout}</pre>
 					</Scroll>
 				{/if}
 				{#if build.stderr !== undefined}
 					<Scroll name="Build stderr" class="max-h-64">
 						<pre
-							class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-micro text-destructive">{build.stderr}</pre>
+							class="whitespace-pre-wrap break-all rounded-md bg-background p-2 font-mono text-xs leading-5 text-destructive">{build.stderr}</pre>
 					</Scroll>
 				{/if}
 			</Stack>
@@ -145,16 +145,20 @@
 			<p class="text-meta">{t('bolt.studio.noDeployLog')}</p>
 		{:else}
 			<Scroll name="Deploy log" class="max-h-64">
-				<ul class="rounded-md bg-muted/35 p-3 font-mono text-micro text-foreground">
+				<ul class="rounded-md bg-muted/35 p-3 font-mono text-xs leading-5 text-foreground">
 					{#each deploy as line, index (`${line.at}:${index}`)}
-						<li class={`whitespace-pre-wrap break-all ${logToneClass(line.level)}`}
-							>{line.at} {line.level} {line.line}</li
-						>
+						<li class="whitespace-pre-wrap break-all {logToneClass(line.level)}">
+							{line.at}
+							{line.level}
+							{line.line}
+						</li>
 					{/each}
-					{#each liveLogs as entry (entry.at + entry.line)}
-						<li class={`whitespace-pre-wrap break-all ${logToneClass(entry.level)}`}
-							>{entry.line}</li
-						>
+					{#each liveLogs as entry, index (`${entry.at}:${index}`)}
+						<li class="whitespace-pre-wrap break-all {logToneClass(entry.level)}">
+							{entry.at}
+							{entry.level}
+							{entry.line}
+						</li>
 					{/each}
 				</ul>
 			</Scroll>

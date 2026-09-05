@@ -87,7 +87,7 @@ const parseField = (input: string, bounds: Bounds): FieldParse => {
 		if (step === undefined || step < 1) {
 			return rejected(`step ${JSON.stringify(stepText ?? '')} is not a positive whole number`);
 		}
-		const span = ((): readonly [number, number] | string => {
+		const span = ((): [number, number] | string => {
 			if (range === '*') return [bounds.min, bounds.max];
 			const edges = range.split('-');
 			const low = integer(edges[0] ?? '');
@@ -102,7 +102,7 @@ const parseField = (input: string, bounds: Bounds): FieldParse => {
 			if (high < low) return `${JSON.stringify(range)} runs backwards`;
 			return [low, high];
 		})();
-		if (typeof span === 'string') return rejected(span);
+		if (!Array.isArray(span)) return rejected(span);
 		if (span[0] < bounds.min || span[1] > bounds.max) {
 			return rejected(`${JSON.stringify(range)} falls outside ${bounds.min}-${bounds.max}`);
 		}

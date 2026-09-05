@@ -1,15 +1,17 @@
 <script lang="ts">
-	import { Effect } from 'effect';
+	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { readMembershipEditor } from './membership-editor.svelte.js';
 
 	let { record }: { record: Record<string, unknown> | null; close?: () => void } = $props();
+	const isString = Schema.is(Schema.String);
 	const text = (name: string): string | undefined => {
 		const value = record?.[name];
-		return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+		return isString(value) && value.trim() !== '' ? value : undefined;
 	};
 	const name = $derived(text('name') ?? text('email') ?? 'Workspace member');
 	const initials = $derived(
@@ -30,8 +32,9 @@
 		if (teamName === undefined || editor === null) return null;
 		return editor.teams.find((team) => team.name === teamName)?.id ?? null;
 	});
+	// repository-health:allow V18 -- Svelte 5 writable derived: the draft follows the recorded value until the user edits it, then overrides it and resets when the record next changes; $state would never reset and an edit-object would leak across member switches.
 	let draftRole = $derived(recordedRole);
-	let draftTeamId = $derived(recordedTeamId);
+	let draftTeamId = $derived(recordedTeamId); // repository-health:allow V18 -- same writable-derived draft contract as draftRole above.
 	let pending = $state(false);
 	let saveFailure = $state<string | null>(null);
 	const dirty = $derived(draftRole !== recordedRole || draftTeamId !== recordedTeamId);
@@ -71,7 +74,7 @@
 					},
 					onFailure: (error) => {
 						pending = false;
-						saveFailure = error instanceof Error ? error.message : String(error);
+						saveFailure = getErrorMessage(error);
 					}
 				})
 			)

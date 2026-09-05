@@ -54,13 +54,30 @@ export const assistantToolCall = (
 		})
 	);
 
+/**
+ * A scripted Plan verification verdict. The default fixture verdict is always complete; a test
+ * that needs the verify phase to bite scripts these in call order.
+ */
+export type PlanVerdictReply = Readonly<{
+	readonly complete: boolean;
+	readonly summary: string;
+	readonly gaps?: ReadonlyArray<string>;
+}>;
+
+export type SuccessfulAIOptions = Readonly<{
+	readonly verdicts?: ReadonlyArray<PlanVerdictReply>;
+	readonly onVerdict?: (request: GenerateRequest) => void;
+}>;
+
 export const successfulAI = (
 	generate: (
 		request: GenerateRequest,
 		index: number
-	) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>
+	) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>,
+	options: SuccessfulAIOptions = {}
 ): FacilityBinding<AIRequest, AIResponse> => {
 	let index = 0;
+	const verdicts = [...(options.verdicts ?? [])];
 	return {
 		call: async (_metadata, request) => {
 			if (request._tag === 'Catalog') return modelCatalogResponse();
@@ -77,6 +94,12 @@ export const successfulAI = (
 			}
 			if (request.output._tag === 'PlanVerdict') {
 				index += 1;
+				options.onVerdict?.(request);
+				const scripted = verdicts.shift() ?? {
+					complete: true,
+					summary: 'Every verification criterion is evidenced.',
+					gaps: []
+				};
 				return {
 					_tag: 'Success',
 					value: {
@@ -84,9 +107,9 @@ export const successfulAI = (
 						result: {
 							_tag: 'PlanVerdict',
 							verdict: {
-								complete: true,
-								summary: 'Every verification criterion is evidenced.',
-								gaps: []
+								complete: scripted.complete,
+								summary: scripted.summary,
+								gaps: scripted.gaps ?? []
 							}
 						},
 						observation: {
@@ -187,7 +210,10 @@ export const inspectGenerate = (request: GenerateRequest): GenerateInspection =>
 
 export type TranscriptReply =
 	| Prompt.MessageEncoded
-	| ((request: GenerateRequest, inspection: GenerateInspection) => Prompt.MessageEncoded);
+	| ((
+			request: GenerateRequest,
+			inspection: GenerateInspection
+		) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>);
 
 /**
  * Streams a scripted assistant transcript into the AI facility.
@@ -197,34 +223,45 @@ export type TranscriptReply =
  * a scripted reply, so the feed still records what the model was given.
  */
 export const scriptedTranscript = (
-	script: ReadonlyArray<TranscriptReply>
+	script: ReadonlyArray<TranscriptReply>,
+	options: SuccessfulAIOptions = {}
 ): {
 	readonly ai: FacilityBinding<AIRequest, AIResponse>;
 	readonly feed: GenerateInspection[];
 	readonly requests: GenerateRequest[];
+	/** The PlanVerdict Generate calls in arrival order. */
+	readonly verdictRequests: GenerateRequest[];
 } => {
 	const feed: GenerateInspection[] = [];
 	const requests: GenerateRequest[] = [];
+	const verdictRequests: GenerateRequest[] = [];
 	let scriptIndex = 0;
 	return {
 		feed,
 		requests,
-		ai: successfulAI((request) => {
-			requests.push(request);
-			const inspection = inspectGenerate(request);
-			feed.push(inspection);
-			if (inspection.automaticCompact) {
-				return assistantText(
-					'Retained: the current user instruction, open decisions, and unresolved work.'
-				);
+		verdictRequests,
+		ai: successfulAI(
+			(request) => {
+				requests.push(request);
+				const inspection = inspectGenerate(request);
+				feed.push(inspection);
+				if (inspection.automaticCompact) {
+					return assistantText(
+						'Retained: the current user instruction, open decisions, and unresolved work.'
+					);
+				}
+				const reply = script[scriptIndex];
+				scriptIndex += 1;
+				if (reply === undefined) {
+					throw new Error(`scripted transcript exhausted after ${script.length} replies`);
+				}
+				return typeof reply === 'function' ? reply(request, inspection) : reply;
+			},
+			{
+				...options,
+				onVerdict: (request) => verdictRequests.push(request)
 			}
-			const reply = script[scriptIndex];
-			scriptIndex += 1;
-			if (reply === undefined) {
-				throw new Error(`scripted transcript exhausted after ${script.length} replies`);
-			}
-			return typeof reply === 'function' ? reply(request, inspection) : reply;
-		})
+		)
 	};
 };
 
@@ -238,6 +275,49 @@ export const lastToolResult = (
 			const result = part.result;
 			if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
 				return result as Readonly<Record<string, unknown>>;
+			}
+		}
+	}
+	return undefined;
+};
+
+/** The first tool result recorded for one tool name, searched newest-first. */
+export const toolResultFor = (
+	request: GenerateRequest,
+	name: string
+): unknown | undefined => {
+	for (const message of request.messages.toReversed()) {
+		if (message.role !== 'tool' || typeof message.content === 'string') continue;
+		for (const part of message.content) {
+			if (part.type === 'tool-result' && part.name === name) return part.result;
+		}
+	}
+	return undefined;
+};
+
+/** Every tool result for one tool name across the request, in transcript order. */
+export const toolResultsFor = (request: GenerateRequest, name: string): ReadonlyArray<unknown> => {
+	const results: Array<unknown> = [];
+	for (const message of request.messages) {
+		if (message.role !== 'tool' || typeof message.content === 'string') continue;
+		for (const part of message.content) {
+			if (part.type === 'tool-result' && part.name === name) results.push(part.result);
+		}
+	}
+	return results;
+};
+
+/** The newest failed tool result, as the Toolkit encoded the failure. */
+export const lastToolFailure = (
+	request: GenerateRequest
+): Readonly<{ readonly name: string; readonly failure: Readonly<Record<string, unknown>> }> | undefined => {
+	for (const message of request.messages.toReversed()) {
+		if (message.role !== 'tool' || typeof message.content === 'string') continue;
+		for (const part of message.content.toReversed()) {
+			if (part.type !== 'tool-result' || part.isFailure !== true) continue;
+			const result = part.result;
+			if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+				return { name: part.name, failure: result as Readonly<Record<string, unknown>> };
 			}
 		}
 	}

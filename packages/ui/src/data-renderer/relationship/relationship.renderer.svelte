@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { CollectionRecord, CollectionRelationOptions } from '@norbital-ai/std/collection';
+	import { Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Combobox } from '#lib/combobox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -46,6 +47,7 @@
 	});
 	const multiple = $derived(field.array ?? false);
 	const readonly = $derived(mode === 'display');
+	const isString = Schema.is(Schema.String);
 
 	const selectedIds = $derived(
 		(Array.isArray(value) ? value : value ? [value] : []).filter((id) => id.length > 0)
@@ -98,9 +100,9 @@
 			: null
 	);
 	const resolvedLabel = (record: CollectionRecord): string => {
-		if (target === 'user' && typeof record.name === 'string') return record.name;
+		if (target === 'user' && isString(record.name)) return record.name;
 		if (relationOptions) return relationOptions.label(record);
-		return typeof record.id === 'string' ? record.id : '—';
+		return isString(record.id) ? record.id : '—';
 	};
 
 	/** Label per selected id: the caller's, else one resolved from the target record. */
@@ -112,7 +114,7 @@
 		});
 		for (const record of valueQuery?.current ?? []) {
 			const id = record.id;
-			if (typeof id === 'string') byId.set(id, resolvedLabel(record));
+			if (isString(id)) byId.set(id, resolvedLabel(record));
 		}
 		return byId;
 	});
@@ -121,7 +123,7 @@
 		const byId = new Map<string, string>();
 		for (const record of optionsQuery?.current ?? []) {
 			const id = record.id;
-			if (typeof id !== 'string') continue;
+			if (!isString(id)) continue;
 			byId.set(id, resolvedLabel(record));
 		}
 		// Keep a labelled current selection visible even when it falls outside the option query.

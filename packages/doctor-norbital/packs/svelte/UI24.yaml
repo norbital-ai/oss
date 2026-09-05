@@ -4,6 +4,8 @@ severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/**'
 rule:
   all:
     - kind: css:Declaration

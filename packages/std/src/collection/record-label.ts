@@ -13,6 +13,14 @@ import { Effect, Option, Schema } from 'effect';
  * private to the collection contract, so record labels do not create a second general CEL surface.
  */
 
+const isNumber = Schema.is(Schema.Number);
+const isString = Schema.is(Schema.String);
+const isRecordValue = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+// JSON containers as they arrive from CEL and JSONB: any object or an array.
+const isJsonContainer = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 const celEnvironment = (() => {
 	const env = new Environment({
 		unlistedVariablesAreDyn: true,
@@ -36,20 +44,20 @@ const celEnvironment = (() => {
 	env.registerFunction(
 		'reduce(map<string, dyn>, string, dyn): dyn',
 		(values, expression, initial) => {
-			if (values === null || typeof values !== 'object' || Array.isArray(values)) return initial;
+			if (!isRecordValue(values)) return initial;
 			return reduceValues(Object.values(values), expression, initial);
 		}
 	);
 	env.registerFunction('toDouble(dyn): double', (value: unknown) => {
-		if (typeof value === 'number') return value;
-		if (typeof value === 'string') {
+		if (isNumber(value)) return value;
+		if (isString(value)) {
 			const parsed = parseFloat(value);
 			return Number.isNaN(parsed) ? 0.0 : parsed;
 		}
 		return 0.0;
 	});
 	env.registerFunction('has(dyn, string): bool', (obj: unknown, field: unknown) => {
-		if (obj === null || typeof obj !== 'object') return false;
+		if (!isJsonContainer(obj)) return false;
 		return Object.prototype.hasOwnProperty.call(obj, String(field ?? ''));
 	});
 	return env;
@@ -59,7 +67,7 @@ function evaluateCelExpression(expr: string, context: unknown): unknown {
 	const data =
 		context == null
 			? {}
-			: typeof context !== 'object' || Array.isArray(context)
+			: !isRecordValue(context)
 				? { value: context }
 				: Object.fromEntries(Object.entries(context));
 	return celEnvironment.evaluate(expr, data);
@@ -114,7 +122,7 @@ export function labelTermText(value: unknown): string | null {
 	// a record label can never produce one, and no coercion changes that — so it contributes
 	// nothing and the caller degrades to the placeholder, rather than printing `{"status":"OK"}`
 	// or, worse, falling through to a scan that puts a foreign key on screen.
-	if (typeof value === 'object') return null;
+	if (isJsonContainer(value)) return null;
 	const text = String(value).trim();
 	if (!text || UUID_SHAPED.test(text)) return null;
 	// The same blob, after a round trip through JSONB, arrives as its own serialization. The bracket
@@ -131,6 +139,8 @@ export function labelTermText(value: unknown): string | null {
  * for, and the caller's whole point is to fall back to the terms that did produce something.
  */
 function evaluateLabelExpression(expression: string, record: object): unknown {
+	if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expression))
+		return Object.hasOwn(record, expression) ? Reflect.get(record, expression) : null;
 	return Effect.runSync(
 		Effect.try(() => evaluateCelExpression(expression, { scope: { record } })).pipe(
 			Effect.orElseSucceed(() => null)

@@ -26,7 +26,6 @@ const runRow = (id: string, mode: 'agent' | 'plan' | 'compact') => ({
 	phase: 'model',
 	input_through_sequence: 8,
 	model_id: 'openrouter/test-model',
-	capability_snapshot: {},
 	status: 'succeeded'
 });
 
@@ -68,10 +67,7 @@ describe('agent model-view projection', () => {
 				}
 			])
 		);
-		const runs = projectAgentRuns([
-			runRow(agentRunId, 'agent'),
-			runRow(planRunId, 'plan')
-		]);
+		const runs = projectAgentRuns([runRow(agentRunId, 'agent'), runRow(planRunId, 'plan')]);
 		const [activePlan] = projectAgentPlans([
 			{
 				id: planId,

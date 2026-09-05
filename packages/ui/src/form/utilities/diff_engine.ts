@@ -7,6 +7,12 @@
  */
 
 import { deepDiff, type JsonPatchOperation } from '@norbital-ai/std/json';
+import { Schema } from 'effect';
+
+/** Non-null object acceptance of the original probe: arrays included. */
+const isObjectish = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
 
 /**
  * Reserved identity keys used to identify objects in arrays.
@@ -19,13 +25,13 @@ const IDENTITY_KEYS = ['id', 'id'] as const;
  * Returns undefined for arrays of primitives or objects without identity keys.
  */
 function readKey(value: unknown, key: string | number): unknown {
-	return value !== null && typeof value === 'object' ? Reflect.get(value, key) : undefined;
+	return isObjectish(value) ? Reflect.get(value, key) : undefined;
 }
 
 function findIdentityKey(arr: unknown[]): string | undefined {
 	if (arr.length === 0) return undefined;
 	const first = arr[0];
-	if (typeof first !== 'object' || first === null) return undefined;
+	if (!isObjectish(first)) return undefined;
 
 	for (const key of IDENTITY_KEYS) {
 		if (key in first) return key;
@@ -60,7 +66,7 @@ function resolvePathToIdentity(obj: unknown, path: string): string {
 function resolveArrayIndex(current: unknown, part: string): string | null {
 	if (!Array.isArray(current)) return null;
 	const item = current[parseInt(part, 10)];
-	if (item == null || typeof item !== 'object') return null;
+	if (item == null || !isObjectish(item)) return null;
 	const idKey = findIdentityKey(current);
 	return idKey ? String(readKey(item, idKey)) : null;
 }
@@ -89,7 +95,7 @@ function normalizeForDiff(obj: unknown): unknown {
 		return obj;
 	}
 
-	if (typeof obj === 'object' && obj !== null) {
+	if (isObjectish(obj)) {
 		const normalized: Record<string, unknown> = {};
 		for (const [key, value] of Object.entries(obj)) {
 			normalized[key] = normalizeForDiff(value);

@@ -7,8 +7,7 @@ import type {
 	CollectionRow,
 	SystemCollectionFieldName
 } from '@norbital-ai/std/collection';
-import { type Cause, Effect, Schema } from 'effect';
-import type { StandardSchemaOf } from '#lib/form/standard_schema_form_errors';
+import { Effect, Schema } from 'effect';
 import type { CollectionRecordMetadata } from '#lib/collection-record-metadata';
 import type {
 	FieldRendererCallerProps,
@@ -36,14 +35,9 @@ const collectionFormValidationIssueSchema = Schema.Struct({
 });
 export type CollectionFormValidationIssue = typeof collectionFormValidationIssueSchema.Type;
 
-export interface CollectionFormValidation {
-	/** Effect schema validation, read through the schema's `~standard` adapter. */
-	readonly schema?: StandardSchemaOf<Schema.Codec<unknown, unknown>>;
-	/** Cross-field or domain validation that may perform asynchronous checks. */
-	readonly semantic?: (
-		values: CollectionFormValidationValues
-	) => Effect.Effect<readonly CollectionFormValidationIssue[] | void>;
-}
+export type CollectionFormSemantic = (
+	values: CollectionFormValidationValues
+) => Effect.Effect<readonly CollectionFormValidationIssue[] | void>;
 
 export interface CollectionFormRendererProps extends FieldRendererProps {
 	value: unknown;
@@ -129,9 +123,16 @@ export interface CollectionFormProps<
 	 */
 	defaultValues?: Partial<CollectionRow<TCollections[TName]>>;
 	submitLabel?: string;
-	validation?: CollectionFormValidation;
-	/** Replaces the default write. A failure is shown as the form's submission error, like the default write's. */
-	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void, Cause.UnknownError>;
+	/** Cross-field or domain validation that may perform asynchronous checks. */
+	semantic?: CollectionFormSemantic;
+	/** Opt-in success toast text; silent when omitted. */
+	success_message?: string;
+	/** Opt-in failure toast text; silent when omitted. */
+	failure_message?: string;
+	/** Manual shows the footer submit button; auto saves debounced when fully valid. */
+	sendMode?: 'manual' | 'auto';
+	/** Debounce for auto send, in milliseconds. */
+	sendDebounceMs?: number;
 	deleteAction?: CollectionFormDeleteAction;
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];

@@ -103,7 +103,7 @@ const headerValue = (
 	for (const [key, values] of Object.entries(headers)) {
 		if (key.toLocaleLowerCase() !== name) continue;
 		const first = values[0];
-		if (typeof first === 'string' && first.length > 0) return first;
+		if (first !== undefined && first.length > 0) return first;
 	}
 	return undefined;
 };

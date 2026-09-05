@@ -349,7 +349,15 @@ describe('Automations owner', () => {
 				}
 			}
 		};
-		const harness = await makeBoltTestRuntime(directDefinition, { authored });
+		const harness = await makeBoltTestRuntime(
+			{
+				...directDefinition,
+				automations: directDefinition.automations.filter(({ name }) =>
+					Object.hasOwn(authored.automations, name)
+				)
+			},
+			{ authored }
+		);
 		try {
 			await seedSession(harness, {
 				token: 'automation-test-token',
@@ -410,7 +418,15 @@ describe('Automations owner', () => {
 				}
 			}
 		};
-		const harness = await makeBoltTestRuntime(directDefinition, { authored });
+		const harness = await makeBoltTestRuntime(
+			{
+				...directDefinition,
+				automations: directDefinition.automations.filter(({ name }) =>
+					Object.hasOwn(authored.automations, name)
+				)
+			},
+			{ authored }
+		);
 		try {
 			await seedSession(harness, {
 				token: 'automation-test-token',

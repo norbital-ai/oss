@@ -366,7 +366,10 @@ export const SystemCommandContracts = [
 	}),
 	commandContract({
 		name: 'identity.assignTeam',
-		input: Schema.Struct({ memberId: Schema.NonEmptyString, teamId: Schema.NullOr(Schema.NonEmptyString) }),
+		input: Schema.Struct({
+			memberId: Schema.NonEmptyString,
+			teamId: Schema.NullOr(Schema.NonEmptyString)
+		}),
 		responses: [ok(Schema.Json)],
 		clientPath: ['identity', 'assignTeam'],
 		clientMode: 'operation'
@@ -391,7 +394,7 @@ export const SystemCommandContracts = [
 	commandContract({
 		name: 'approvals.decide',
 		input: Schema.Struct({
-			state: ApprovalState,
+			state: RequestIdInput,
 			decision: Schema.Literals(['approve', 'reject', 'request_changes', 'supersede']),
 			reason: Schema.optionalKey(Schema.String)
 		}),
@@ -399,7 +402,7 @@ export const SystemCommandContracts = [
 	}),
 	commandContract({
 		name: 'approvals.withdraw',
-		input: Schema.Struct({ state: ApprovalState }),
+		input: Schema.Struct({ state: RequestIdInput }),
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({

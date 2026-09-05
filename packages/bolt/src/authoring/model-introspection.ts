@@ -15,7 +15,7 @@ import {
 	type PgTableExtraConfigValue,
 	type PgTableWithColumns
 } from 'drizzle-orm/pg-core';
-import { Effect, Record as EffectRecord, Schema } from 'effect';
+import { Predicate, Record as EffectRecord, Schema } from 'effect';
 import { collection } from './workspace-schema.js';
 import type {
 	CollectionCatalogEntry,
@@ -108,11 +108,19 @@ type ColumnConfig = Readonly<{
 
 const dialect = new PgDialect();
 
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isStringArray = Schema.is(Schema.Array(Schema.String));
+const isObjectOrArray = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 /** Reads a builder's configuration without depending on Drizzle's private field names at the call site. */
 const configOf = (builder: unknown): ColumnConfig | undefined => {
-	if (builder === null || typeof builder !== 'object') return undefined;
+	if (!isRecord(builder)) return undefined;
 	const config = Reflect.get(builder, 'config');
-	return config === null || typeof config !== 'object' ? undefined : (config as ColumnConfig);
+	return isRecord(config) ? (config as ColumnConfig) : undefined;
 };
 
 /**
@@ -122,8 +130,8 @@ const configOf = (builder: unknown): ColumnConfig | undefined => {
 const generatedExpression = (config: ColumnConfig): string | undefined => {
 	const as = config.generated?.as;
 	if (as === undefined) return undefined;
-	if (typeof as === 'string') return as;
-	if (typeof as === 'function')
+	if (isString(as)) return as;
+	if (Predicate.isFunction(as))
 		return generatedExpression({ generated: { as: (as as () => unknown)() } });
 	const query = dialect.sqlToQuery(as as Parameters<PgDialect['sqlToQuery']>[0]);
 	if (query.params.length > 0) {
@@ -138,7 +146,7 @@ const scalarOf = (config: ColumnConfig): ScalarType => {
 	// `columnType: 'PgUUID'`. An array is not the scalar it holds — planning
 	// `statutory_contributions.relief_for` as `uuid` would refuse the JSON list the runtime writes
 	// there — so a dimensioned column keeps the `string` answer every array has always had here.
-	if (typeof config.dimensions === 'number' && config.dimensions > 0) return 'string';
+	if (isNumber(config.dimensions) && config.dimensions > 0) return 'string';
 	const byColumnType =
 		config.columnType === undefined ? undefined : SCALAR_BY_COLUMN_TYPE[config.columnType];
 	if (byColumnType !== undefined) return byColumnType;
@@ -197,7 +205,7 @@ const declaredDefault = (column: AnyPgColumn): string | undefined => {
 	// right for a plain object (it falls through to `JSON.stringify`) and silently wrong for a `Date`
 	// or an array — `new Date()` would reach the DDL as `'Mon Aug 17 2026 …'`. Refusing here names the
 	// column and the fix; letting it through would plant the next plan-versus-lineage divergence.
-	if (typeof value === 'object' && value !== null && String(value) !== '[object Object]') {
+	if (isObjectOrArray(value) && String(value) !== '[object Object]') {
 		throw new TypeError(
 			`Column default ${String(value)} cannot be rendered as SQL. Declare it as a sql\`…\` expression instead.`
 		);
@@ -230,24 +238,20 @@ const declaredColumnSql = (
 	columns: Readonly<Record<string, AnyPgColumnBuilder>>
 ): ReadonlyMap<string, Pick<FieldDefinition, 'sqlType' | 'sqlDefault'>> => {
 	const declared = new Map<string, Pick<FieldDefinition, 'sqlType' | 'sqlDefault'>>();
-	// Only the binding is guarded. A builder that cannot be bound to a table is not a reason to lose
-	// every other column's type — the scalar mapping in `buildSchemaPlan` still answers, exactly as it
-	// did before this existed — but a default this cannot render is a divergence, and swallowing that
-	// here would trade a named error for the silent mismatch this function exists to prevent.
-	// The module is deliberately synchronous API (its callers read it in plain passes), so the Effect
-	// pipeline is adapted once at this edge.
-	const built = Effect.runSync(
-		// repository-health:allow DDL1 -- this module IS the model compiler; `pgTable` is what a
-		// `defineModel` declaration compiles into, so "prefer defineModel" is circular here.
-		Effect.try(() => getColumns(pgTable('bolt_column_types', columns))).pipe(
-			Effect.catch(() => Effect.succeed<Readonly<Record<string, AnyPgColumn>>>({}))
-		)
-	) as Readonly<Record<string, AnyPgColumn>>;
+	// A builder that cannot be bound to a table is a divergence, and swallowing it here would trade
+	// a named error for the silent mismatch this function exists to prevent: an empty map erases
+	// every column's SQL type, and the schema plan and migration lineage would then read a schema
+	// the author did not write.
+	// repository-health:allow DDL1 -- this module IS the model compiler; `pgTable` is what a
+	// `defineModel` declaration compiles into, so "prefer defineModel" is circular here.
+	const built = getColumns(pgTable('bolt_column_types', columns)) as Readonly<
+		Record<string, AnyPgColumn>
+	>;
 	for (const [name, column] of Object.entries(built)) {
 		const sqlDefault = declaredDefault(column);
 		const declaredType = column.getSQLType();
 		const dimensions = Math.max(
-			typeof column.dimensions === 'number' ? column.dimensions : 0,
+			isNumber(column.dimensions) ? column.dimensions : 0,
 			configOf(columns[name])?.dimensions ?? 0
 		);
 		const sqlType = declaredType.endsWith('[]')
@@ -300,7 +304,7 @@ export const describeModelColumns = (
 		fields[name] = {
 			type: scalarOf(config),
 			presentationKind: presentationOf(config),
-			...(typeof config.dimensions === 'number' && config.dimensions > 0 ||
+			...(isNumber(config.dimensions) && config.dimensions > 0 ||
 			sqlType?.includes('[]') === true
 				? { array: true }
 				: {}),
@@ -319,7 +323,7 @@ export const describeModelColumns = (
 			...(config.enumValues === undefined || config.enumValues.length === 0
 				? {}
 				: { values: [...config.enumValues] }),
-			...(typeof config.boltCustomType === 'string' ? { customType: config.boltCustomType } : {}),
+			...(isString(config.boltCustomType) ? { customType: config.boltCustomType } : {}),
 			...(config.boltCustomTypeOptions === undefined
 				? {}
 				: { customTypeOptions: config.boltCustomTypeOptions }),
@@ -421,7 +425,7 @@ const assertNoSystemColumnOverrides = (declaration: ModelDeclaration | undefined
 const simpleIndexColumn = (index: ModelIndex): string | undefined => {
 	if (index.columns.length !== 1) return undefined;
 	const [column] = index.columns;
-	return typeof column === 'string' &&
+	return isString(column) &&
 		index.name === undefined &&
 		index.unique === undefined &&
 		index.where === undefined &&
@@ -464,7 +468,7 @@ export const compileModel = (
 	const lexicalFields = searchableColumns(described);
 	const authoredLabel = metadata?.recordLabel;
 	const recordLabel =
-		typeof authoredLabel === 'string'
+		isString(authoredLabel)
 			? authoredLabel
 			: authoredLabel?.join(" + ' · ' + ");
 	return {
@@ -505,7 +509,7 @@ const relationshipValue = Symbol('@norbital-ai/bolt/compiled-relationship');
 const relationshipEndpoint = Symbol('@norbital-ai/bolt/relationship-endpoint');
 
 const immutable = <T>(value: T): T => {
-	if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+	if (isObjectOrArray(value) && !Object.isFrozen(value)) {
 		for (const child of Object.values(value as Record<string, unknown>)) immutable(child);
 		Object.freeze(value);
 	}
@@ -516,9 +520,7 @@ type EndpointValue = Readonly<{ readonly collection: string; readonly column: st
 type RelationshipValue = Pick<RelationDefinition, 'target' | 'cardinality' | 'from' | 'to'>;
 
 const reflectedValue = <Value>(value: unknown, key: symbol): Value | undefined =>
-	value !== null && typeof value === 'object'
-		? (Reflect.get(value, key) as Value | undefined)
-		: undefined;
+	isRecord(value) ? (Reflect.get(value, key) as Value | undefined) : undefined;
 const endpointOf = (value: unknown) => reflectedValue<EndpointValue>(value, relationshipEndpoint);
 const relationshipOf = (value: unknown) =>
 	reflectedValue<RelationshipValue>(value, relationshipValue);
@@ -528,7 +530,7 @@ const endpointCollection = (collection: string): object =>
 		{},
 		{
 			get: (_target, column) =>
-				typeof column === 'string'
+				isString(column)
 					? Object.freeze({ [relationshipEndpoint]: { collection, column } })
 					: undefined
 		}
@@ -539,7 +541,7 @@ const relationFactories = (cardinality: 'one' | 'many'): object =>
 		{},
 		{
 			get: (_target, target) => {
-				if (typeof target !== 'string') return undefined;
+				if (!isString(target)) return undefined;
 				return (input?: Readonly<Record<string, unknown>>) => {
 					const hasEndpoints =
 						input !== undefined &&
@@ -564,7 +566,7 @@ const relationshipHelpers = new Proxy(
 	{
 		get: (_target, property) => {
 			if (property === 'one' || property === 'many') return relationFactories(property);
-			return typeof property === 'string' ? endpointCollection(property) : undefined;
+			return isString(property) ? endpointCollection(property) : undefined;
 		}
 	}
 );
@@ -586,14 +588,14 @@ const orderedRelationshipEndpoints = (
 /** Executes one authored relationship declaration and resolves inverse ownership exactly once. */
 const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefinition> => {
 	if (declaration === undefined) return Object.freeze([]);
-	if (typeof declaration !== 'function')
+	if (!Predicate.isFunction(declaration))
 		throw new TypeError('The relationship module must default-export a relationship function.');
 	const output = declaration(relationshipHelpers) as unknown;
-	if (output === null || typeof output !== 'object' || Array.isArray(output))
+	if (!isRecord(output))
 		throw new TypeError('The relationship declaration must return an object keyed by collection.');
 	const relations: Array<RelationDefinition> = [];
 	for (const [source, values] of Object.entries(output)) {
-		if (values === null || typeof values !== 'object' || Array.isArray(values))
+		if (!isRecord(values))
 			throw new TypeError(`Relationships for ${source} must be an object.`);
 		for (const [name, value] of Object.entries(values)) {
 			const described = relationshipOf(value);
@@ -745,18 +747,18 @@ const stringOption = (
 	name: string
 ): ReadonlyArray<string> | undefined => {
 	const value = options?.[name];
-	return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string')
-		? value
-		: undefined;
+	return isStringArray(value) ? value : undefined;
 };
 
 /** Projects a compiled collection into the existing client catalog contract. */
 export const collectionCatalogEntry = (
 	collection: CollectionDefinition<Readonly<Record<string, CompiledFieldDefinition>>>,
-	relationships: ReadonlyArray<RelationDefinition>
+	relationships: ReadonlyArray<RelationDefinition>,
+	inputColumns?: readonly string[]
 ): CollectionCatalogEntry => ({
 	name: collection.name,
 	...(collection.recordLabel === undefined ? {} : { recordLabel: collection.recordLabel }),
+	...(inputColumns === undefined ? {} : { inputColumns }),
 	fields: Object.entries(collection.fields).map(([name, field]) => {
 		const relation = relationships.find(
 			(candidate) =>
@@ -975,20 +977,20 @@ export const compileModelTables = <
  * runtime, hence `mutate.before` rather than `mutate.perRecord.before`.
  */
 export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
-	if (declaration === null || typeof declaration !== 'object') return [];
+	if (!isRecord(declaration)) return [];
 	const named: Array<string> = [];
 	for (const operation of ['mutate', 'delete'] as const) {
 		const operationDeclaration = Reflect.get(declaration, operation);
-		if (operationDeclaration === null || typeof operationDeclaration !== 'object') continue;
-		if (typeof Reflect.get(operationDeclaration, 'prepare') === 'function') {
+		if (!isRecord(operationDeclaration)) continue;
+		if (Predicate.isFunction(Reflect.get(operationDeclaration, 'prepare'))) {
 			named.push(`${operation}.prepare`);
 		}
 		const perRecord = Reflect.get(operationDeclaration, 'perRecord');
-		if (perRecord === null || typeof perRecord !== 'object') continue;
+		if (!isRecord(perRecord)) continue;
 		for (const phase of ['before', 'after'] as const) {
 			const hook = Reflect.get(perRecord, phase);
-			if (hook === null || typeof hook !== 'object') continue;
-			if (typeof Reflect.get(hook, 'handler') === 'function') {
+			if (!isRecord(hook)) continue;
+			if (Predicate.isFunction(Reflect.get(hook, 'handler'))) {
 				named.push(`${operation}.${phase}`);
 			}
 		}

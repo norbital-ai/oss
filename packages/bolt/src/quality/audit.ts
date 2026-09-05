@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parse } from 'svelte/compiler';
 import { Result, Schema } from 'effect';
 import ts from 'typescript';
@@ -25,6 +27,8 @@ const forbiddenProviderDependencies = ['openai', 'pg', '@aws-sdk', '@slack', 'st
 const AstNode = Schema.Record(Schema.String, Schema.Unknown);
 const isAstNode = Schema.is(AstNode);
 const decodeAstNode = Schema.decodeUnknownResult(AstNode);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
 
 /**
  * Host surfaces Bolt must not open for itself.
@@ -45,7 +49,7 @@ const forbiddenHostModules = [
 	'ws'
 ] as const;
 
-export type AuditFinding = Readonly<{ readonly file: string; readonly dependency: string }>;
+type AuditFinding = Readonly<{ readonly file: string; readonly dependency: string }>;
 
 /** Owns TypeScript dependency extraction and boundary classification for architecture tests. */
 const DependencyAudit = {
@@ -107,7 +111,7 @@ const DependencyAudit = {
 	}
 };
 
-export type SystemColumnFinding = Readonly<{
+type SystemColumnFinding = Readonly<{
 	readonly file: string;
 	readonly line: number;
 	readonly component: string;
@@ -152,7 +156,7 @@ const AuthoringAudit = {
 				: property['type'] === 'Literal'
 					? property['value']
 					: undefined;
-		return typeof name === 'string' && SYSTEM_COLUMN_NAMES.includes(name) ? name : undefined;
+		return isString(name) && SYSTEM_COLUMN_NAMES.includes(name) ? name : undefined;
 	},
 	/**
 	 * The sub-expressions that become part of the prop's value, as opposed to those it merely holds.
@@ -233,8 +237,8 @@ const reportAttributeColumnReads = (
 			report(
 				column,
 				component,
-				typeof attribute['name'] === 'string' ? attribute['name'] : '',
-				typeof expression['start'] === 'number' ? expression['start'] : 0
+				isString(attribute['name']) ? attribute['name'] : '',
+				isNumber(expression['start']) ? expression['start'] : 0
 			);
 			continue;
 		}
@@ -247,7 +251,7 @@ const systemColumnReadsInComponent = (
 	node: Readonly<Record<string, unknown>>,
 	report: (column: string, component: string, prop: string, start: number) => void
 ): void => {
-	const component = typeof node['name'] === 'string' ? node['name'] : 'component';
+	const component = isString(node['name']) ? node['name'] : 'component';
 	const attributes = node['attributes'];
 	for (const attribute of Array.isArray(attributes) ? attributes.filter(isAstNode) : []) {
 		if (attribute['type'] !== 'Attribute') continue;
@@ -317,6 +321,378 @@ export const auditImports = (
 		}
 		if (DependencyAudit.readsAmbientEnvironment(file, source))
 			findings.push({ file, dependency: 'process.env' });
+	}
+	return findings;
+};
+
+type ClientWrapperFinding = Readonly<{
+	readonly file: string;
+	readonly line: number;
+	readonly functionName: string;
+	readonly call: string;
+}>;
+
+type HooklessMutationFinding = Readonly<{
+	readonly collection: string;
+	readonly file: string;
+	readonly line: number;
+	readonly expectedHooks: string;
+}>;
+
+/**
+ * A named helper that performs a write the author should have made onsite.
+ *
+ * Writes are `client.db.<collection>.mutate|delete` and `client.invoke.<fn>` — the calls a
+ * surface makes because it was interacted with. Reads (`findMany`, `findFirst`, `count`,
+ * `pending`) belong in helpers, `$derived` and loaders; flagging them would ban the query
+ * layer the framework exists to serve. `pending` in particular is state, not a write.
+ *
+ * Judged on the TypeScript syntax tree, in expression position only. Type references and
+ * imports use different node kinds (`TypeReference`, `QualifiedName`, `ImportDeclaration`),
+ * so matching only `PropertyAccessExpression`/`ElementAccessExpression` rooted at the
+ * identifier `client` already leaves them out. Any other root (`operations.mutate` on a
+ * prop, `api.db.*` on the server) is a different client and is not reported.
+ */
+const ClientWrapperAudit = {
+	/** Files the rule never reads, mirroring the build guard in `vite-plugin.ts`. */
+	skipped: (file: string): boolean => /\/(?:node_modules|\.yalc|\.norbital)\//.test(file),
+	/**
+	 * The member chain of one property/element access, unwrapping parens and assertions.
+	 *
+	 * `client.db['loans'].mutate` spells the same path with brackets, so element accesses with
+	 * a static string or number count as segments; anything computed is not a path the rule
+	 * can name and ends the walk.
+	 */
+	chainOf: (expression: ts.Expression): ReadonlyArray<string> | undefined => {
+		const segments: Array<string> = [];
+		let current: ts.Expression = expression;
+		for (;;) {
+			if (ts.isPropertyAccessExpression(current)) {
+				segments.unshift(current.name.text);
+				current = current.expression;
+				continue;
+			}
+			if (ts.isElementAccessExpression(current)) {
+				const argument = current.argumentExpression;
+				if (argument !== undefined && ts.isStringLiteralLike(argument)) {
+					segments.unshift(argument.text);
+					current = current.expression;
+					continue;
+				}
+				if (argument !== undefined && ts.isNumericLiteral(argument)) {
+					segments.unshift(argument.text);
+					current = current.expression;
+					continue;
+				}
+				return undefined;
+			}
+			if (ts.isParenthesizedExpression(current) || ts.isAsExpression(current)) {
+				current = current.expression;
+				continue;
+			}
+			if (ts.isNonNullExpression(current) || ts.isSatisfiesExpression(current)) {
+				current = current.expression;
+				continue;
+			}
+			if (ts.isIdentifier(current)) {
+				segments.unshift(current.text);
+				return segments;
+			}
+			return undefined;
+		}
+	},
+	/**
+	 * The dotted call when a `client`-rooted chain is a write, otherwise undefined.
+	 *
+	 * `client.db` only counts with `.mutate`/`.delete` further along the chain — `pending`
+	 * and every read (`findMany`, `findFirst`, `count`, …) stay silent. `client.invoke.*`
+	 * is always effectful so any named call counts. `client.automations.*` counts for
+	 * `.run`/`.stop` and stays silent for `.pending`/`.latest` reads. `client.records`,
+	 * `client.history` and `client.collections` are reads and metadata, so they are
+	 * recognised here and never reported.
+	 */
+	writeOf: (chain: ReadonlyArray<string>): string | undefined => {
+		if (chain.length < 3 || chain[0] !== 'client') return undefined;
+		const second = chain[1];
+		if (second === 'invoke') return chain.join('.');
+		if (second === 'db')
+			return chain.slice(2).includes('mutate') || chain.slice(2).includes('delete')
+				? chain.join('.')
+				: undefined;
+		if (second === 'automations')
+			return chain.slice(2).includes('run') || chain.slice(2).includes('stop')
+				? chain.join('.')
+				: undefined;
+		return undefined;
+	},
+	/** The display name of a property-style name, or undefined for a computed key. */
+	propertyName: (name: ts.PropertyName): string | undefined => {
+		if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) return name.text;
+		if (ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+		return undefined;
+	},
+	/**
+	 * The name an arrow or function expression takes from its assignment, if any.
+	 *
+	 * `const save = () => …`, `{ save: () => … }` and `class C { save = () => … }` are all
+	 * named helpers by the variable or property that holds them. A bare arrow passed as an
+	 * argument (`onSubmit={(values) => …}`, thunks, `$derived` callbacks) has no such
+	 * holder and stays anonymous. A named function expression standing alone keeps its own
+	 * name.
+	 */
+	assignedName: (fn: ts.ArrowFunction | ts.FunctionExpression): string | undefined => {
+		const parent = fn.parent;
+		if (
+			ts.isVariableDeclaration(parent) &&
+			ts.isIdentifier(parent.name) &&
+			parent.initializer === fn
+		)
+			return parent.name.text;
+		if (ts.isPropertyAssignment(parent) && parent.initializer === fn)
+			return ClientWrapperAudit.propertyName(parent.name);
+		if (ts.isPropertyDeclaration(parent) && parent.initializer === fn)
+			return ClientWrapperAudit.propertyName(parent.name);
+		if (ts.isFunctionExpression(fn) && fn.name !== undefined) return fn.name.text;
+		return undefined;
+	},
+	/**
+	 * The nearest named function holding a node, skipping anonymous arrows.
+	 *
+	 * The skip is the thunk case: `function save() { submit(() => client.db.x.mutate()) }`
+	 * still performs its write inside the named `save` — the inner arrow is how the
+	 * settlement API takes the write, not a second onsite position. Markup arrows and
+	 * `$derived` callbacks have no named holder above them, so they stay silent.
+	 */
+	enclosingName: (node: ts.Node): string | undefined => {
+		let current: ts.Node | undefined = node.parent;
+		while (current !== undefined) {
+			const name = ClientWrapperAudit.holderName(current);
+			if (name !== undefined) return name;
+			current = current.parent;
+		}
+		return undefined;
+	},
+	/** The name a syntactic function position contributes, or undefined when it holds none. */
+	holderName: (node: ts.Node): string | undefined => {
+		if (ts.isFunctionDeclaration(node)) return node.name?.text;
+		if (
+			ts.isMethodDeclaration(node) ||
+			ts.isGetAccessorDeclaration(node) ||
+			ts.isSetAccessorDeclaration(node)
+		)
+			return ClientWrapperAudit.propertyName(node.name);
+		if (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+			return ClientWrapperAudit.assignedName(node);
+		return undefined;
+	}
+};
+
+/** The `<script>` and `<script context="module">` bodies of a component, with file offsets. */
+const svelteScriptBlocks = (
+	source: string,
+	file: string
+): ReadonlyArray<Readonly<{ readonly content: string; readonly start: number }>> => {
+	const root: unknown = parse(source, { modern: true, filename: file });
+	const module = isAstNode(root) && isAstNode(root['module']) ? root['module'] : undefined;
+	const instance = isAstNode(root) && isAstNode(root['instance']) ? root['instance'] : undefined;
+	const holders = [module, instance];
+	const blocks: Array<Readonly<{ readonly content: string; readonly start: number }>> = [];
+	for (const holder of holders) {
+		const content = holder?.['content'];
+		if (!isAstNode(content)) continue;
+		const start = content['start'];
+		const end = content['end'];
+		if (!isNumber(start) || !isNumber(end) || end < start) continue;
+		blocks.push({ content: source.slice(start, end), start });
+	}
+	return blocks;
+};
+
+/**
+ * Reports named helpers that perform onsite writes.
+ *
+ * `.svelte` files go through Svelte's own parser first — the same parser the system-column
+ * rule uses — and each `<script>` body is then parsed with the TypeScript compiler API, the
+ * same approach `auditImports` takes. `.ts` files are parsed whole. Markup event-handler
+ * arrows live in the fragment, not in either script, so they are never visited and never
+ * reported. One finding per offending access, attributed to its nearest named holder.
+ */
+export const auditAuthoredClientWrappers = (
+	files: Readonly<Record<string, string>>
+): ReadonlyArray<ClientWrapperFinding> => {
+	const findings: Array<ClientWrapperFinding> = [];
+	for (const [file, source] of Object.entries(files)) {
+		if (ClientWrapperAudit.skipped(file)) continue;
+		const blocks: ReadonlyArray<Readonly<{ readonly content: string; readonly start: number }>> =
+			file.endsWith('.svelte')
+				? svelteScriptBlocks(source, file)
+				: file.endsWith('.ts')
+					? [{ content: source, start: 0 }]
+					: [];
+		for (const block of blocks) {
+			const sourceFile = ts.createSourceFile(
+				file,
+				block.content,
+				ts.ScriptTarget.Latest,
+				true,
+				ts.ScriptKind.TS
+			);
+			const visit = (node: ts.Node): void => {
+				if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+					const chain = ClientWrapperAudit.chainOf(node);
+					const call = chain === undefined ? undefined : ClientWrapperAudit.writeOf(chain);
+					if (call !== undefined) {
+						const functionName = ClientWrapperAudit.enclosingName(node);
+						if (functionName !== undefined) {
+							findings.push({
+								file,
+								line: source.slice(0, block.start + node.getStart(sourceFile)).split('\n').length,
+								functionName,
+								call
+							});
+						}
+					}
+				}
+				ts.forEachChild(node, visit);
+			};
+			visit(sourceFile);
+		}
+	}
+	return findings;
+};
+
+/**
+ * Reports collections granted `mutate.*` that ship no `+hooks.ts`.
+ *
+ * Reads `src/access/policies/*.ts` under the workspace root for direct `grantOn` /
+ * `grantsOn` pairs or literal policy `grants` objects and checks `src/collections/<collection>/+hooks.ts` presence. Only
+ * literal collection/action pairs count — an action list held in a variable, or a grant
+ * composed through a helper like `peopleGrants('read')`, is not resolved. One finding per
+ * collection, at its first `mutate` grant site; `read`/`delete`-only collections stay
+ * silent. Paths in findings are workspace-relative POSIX paths.
+ */
+export const auditHooklessMutations = (
+	workspaceRoot: string
+): ReadonlyArray<HooklessMutationFinding> => {
+	const policiesDir = join(workspaceRoot, 'src', 'access', 'policies');
+	let entries: ReadonlyArray<string>;
+	// repository-health:allow EFF1 -- a missing policies directory degrades to no findings; this is a sync workspace probe, not Effect error control.
+	try {
+		// repository-health:allow IO1 -- sync workspace audit scanner with a synchronous public API; it runs as a build-time quality gate, not request runtime.
+		entries = [...readdirSync(policiesDir)].sort();
+		// repository-health:allow S1 -- an absent or unreadable policies directory contributes no findings; the audit reports grant hygiene, not IO health, and has no error channel for it.
+	} catch {
+		return [];
+	}
+	const firstGrant = new Map<string, Readonly<{ readonly file: string; readonly line: number }>>();
+	const noteGrant = (collection: string, file: string, line: number): void => {
+		if (!firstGrant.has(collection)) firstGrant.set(collection, { file, line });
+	};
+	const isMutateAction = (action: string): boolean =>
+		action === 'mutate' || action.startsWith('mutate.');
+	for (const entry of entries) {
+		if (!entry.endsWith('.ts') || entry.endsWith('.d.ts')) continue;
+		const absolute = join(policiesDir, entry);
+		let text: string;
+		// repository-health:allow EFF1 -- an unreadable policy file is skipped, not an Effect failure; same sync workspace probe as above.
+		try {
+			// repository-health:allow IO1 -- same sync audit scanner contract.
+			text = readFileSync(absolute, 'utf8');
+			// repository-health:allow S1 -- an unreadable policy file is skipped; the audit reads every grant file in the tree and one unreadable file must not fail the whole hygiene report.
+		} catch {
+			continue;
+		}
+		const sourceFile = ts.createSourceFile(
+			absolute,
+			text,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS
+		);
+		const relativeFile = ['src', 'access', 'policies', entry].join('/');
+		const visit = (node: ts.Node): void => {
+			if (
+				ts.isPropertyAssignment(node) &&
+				ClientWrapperAudit.propertyName(node.name) === 'grants' &&
+				ts.isObjectLiteralExpression(node.initializer)
+			) {
+				for (const member of node.initializer.properties) {
+					if (!ts.isPropertyAssignment(member) || !ts.isObjectLiteralExpression(member.initializer))
+						continue;
+					const collection = ClientWrapperAudit.propertyName(member.name);
+					const mutates = member.initializer.properties.some(
+						(grant) =>
+							ts.isPropertyAssignment(grant) &&
+							ClientWrapperAudit.propertyName(grant.name) === 'mutate' &&
+							ts.isObjectLiteralExpression(grant.initializer) &&
+							grant.initializer.properties.some(
+								(phase) =>
+									ts.isPropertyAssignment(phase) &&
+									['new', 'existing'].includes(ClientWrapperAudit.propertyName(phase.name) ?? '')
+							)
+					);
+					if (collection !== undefined && mutates)
+						noteGrant(
+							collection,
+							relativeFile,
+							sourceFile.getLineAndCharacterOfPosition(member.getStart(sourceFile)).line + 1
+						);
+				}
+			}
+			if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) {
+				ts.forEachChild(node, visit);
+				return;
+			}
+			const callee = node.expression.text;
+			if (callee === 'grantOn') {
+				const [collectionArg, actionArg] = node.arguments;
+				if (
+					collectionArg !== undefined &&
+					actionArg !== undefined &&
+					ts.isStringLiteralLike(collectionArg) &&
+					ts.isStringLiteralLike(actionArg) &&
+					isMutateAction(actionArg.text)
+				) {
+					noteGrant(
+						collectionArg.text,
+						relativeFile,
+						sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
+					);
+				}
+			} else if (callee === 'grantsOn') {
+				const [collectionArg, actionsArg] = node.arguments;
+				if (
+					collectionArg !== undefined &&
+					actionsArg !== undefined &&
+					ts.isStringLiteralLike(collectionArg) &&
+					ts.isArrayLiteralExpression(actionsArg) &&
+					actionsArg.elements.some(
+						(element) => ts.isStringLiteralLike(element) && isMutateAction(element.text)
+					)
+				) {
+					noteGrant(
+						collectionArg.text,
+						relativeFile,
+						sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
+					);
+				}
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(sourceFile);
+	}
+	const findings: Array<HooklessMutationFinding> = [];
+	for (const collection of [...firstGrant.keys()].sort()) {
+		const site = firstGrant.get(collection);
+		if (site === undefined) continue;
+		// repository-health:allow IO1 -- same sync audit scanner contract; a hooks-file existence probe.
+		if (existsSync(join(workspaceRoot, 'src', 'collections', collection, '+hooks.ts'))) continue;
+		findings.push({
+			collection,
+			file: site.file,
+			line: site.line,
+			expectedHooks: ['src', 'collections', collection, '+hooks.ts'].join('/')
+		});
 	}
 	return findings;
 };

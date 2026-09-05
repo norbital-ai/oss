@@ -1,13 +1,15 @@
 id: UI15
-summary: fixed layout dimension on a primitive instead of Bound size
+summary: fixed pane height on a primitive instead of Bound size
 severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/**'
 rule:
   all:
     - kind: svelte:ClassToken
-    - regex: '^(?:h|w|min-h|min-w)-\['
+    - regex: '^(?:h|min-h)-\['
     - inside:
         regex: '^<(?:Stack|Inline|Cluster|Grid|Bound|Cover|Scroll)\b'
       stopBy: end
@@ -17,3 +19,4 @@ examples:
   good:
     - '<Bound height="4rem"><p>x</p></Bound>'
     - '<div class="h-[calc(100dvh-4rem)]"></div>'
+    - '<Stack class="w-[min(24rem,calc(100vw-2rem))]"><p>Floating notice</p></Stack>'

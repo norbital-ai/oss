@@ -129,7 +129,7 @@ describe('Effect AI durable contract', () => {
 		expectTypeOf<AgentMessage['message']>().toEqualTypeOf<Prompt.MessageEncoded>();
 	});
 
-	it('decodes Task, Plan, directive, and immutable run snapshot boundaries', () => {
+	it('decodes Task, Plan, directive, and public run metadata boundaries', () => {
 		expect(
 			Schema.decodeUnknownSync(AgentTaskRow)({
 				id: durableIds.task,
@@ -161,16 +161,9 @@ describe('Effect AI durable contract', () => {
 				phase: 'model',
 				input_through_sequence: 2,
 				model_id: 'effect-model',
-				capability_snapshot: {
-					releaseId: 'release-1',
-					authorityDigest: 'sha256:authority',
-					capabilities: [
-						{ id: 'system/todo', kind: 'tool', digest: 'sha256:todo' }
-					]
-				},
 				status: 'running'
-			}).capability_snapshot.capabilities[0]?.id
-		).toBe('system/todo');
+			}).model_id
+		).toBe('effect-model');
 	});
 
 	it('encodes exact integer charge observations without floating totals', () => {

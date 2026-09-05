@@ -245,7 +245,7 @@
 							</p>
 						</Stack>
 						<a
-							class={buttonVariants({ variant: 'secondary', size: 'sm' })}
+							class="{buttonVariants({ variant: 'secondary', size: 'sm' })}"
 							href={stripeDashboardUrl}
 							target="_blank"
 							rel="noreferrer"

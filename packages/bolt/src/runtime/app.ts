@@ -162,6 +162,7 @@ const InvocationLayers = {
 		const collections = Collections.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
+					connector,
 					workspaceLayer,
 					tenantScope,
 					access,

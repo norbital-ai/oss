@@ -21,14 +21,13 @@ function collectionFormValueFieldNames(fields: readonly CollectionField[]): stri
  */
 export function assertCollectionFormFieldRegistration(
 	collection: string,
-	fields: readonly CollectionField[],
+	expectedKeys: readonly string[],
 	registrations: ReadonlyMap<string, number>
 ): void {
-	const expected = collectionFormMutationFieldNames(fields);
-	const knownSet = new Set(collectionFormValueFieldNames(fields));
-	const missing = expected.filter((name) => (registrations.get(name) ?? 0) === 0);
+	const expectedSet = new Set(expectedKeys);
+	const missing = [...expectedSet].filter((name) => (registrations.get(name) ?? 0) === 0);
 	const duplicate = [...registrations].flatMap(([name, count]) => (count > 1 ? [name] : [])).sort();
-	const unknown = [...registrations.keys()].filter((name) => !knownSet.has(name)).sort();
+	const unknown = [...registrations.keys()].filter((name) => !expectedSet.has(name)).sort();
 	if (missing.length === 0 && duplicate.length === 0 && unknown.length === 0) return;
 
 	const details = [
@@ -56,15 +55,20 @@ export function pickCollectionFormValues(
  * Keeps only values the collection form is allowed to send back to a mutation.
  *
  * An edit form starts from a complete hydrated row so it can render field values and framework
- * metadata. The mutation boundary is deliberately narrower: Bolt-managed columns and generated
- * authored columns are read context, never write input. Picking through the catalog here also keeps
- * an undeclared key from a custom form composition from becoming an accidental graph mutation.
+ * metadata. The mutation boundary is deliberately narrower: the caller names the writable
+ * columns — the collection's declared `input` when it has one, the catalog's mutable fields
+ * otherwise — so a hook-derived column and an undeclared key alike can never become an
+ * accidental graph mutation. Declared `many` relationships ride along when custom composition
+ * set them (a matrix stating a schedule's complete desired set).
  */
 export function pickWritableFormValues(
-	fields: readonly CollectionField[],
-	values: Readonly<Record<string, unknown>>
+	writableColumns: readonly string[],
+	values: Readonly<Record<string, unknown>>,
+	relationships: ReadonlyArray<{ readonly name: string }> = []
 ): Record<string, unknown> {
-	return Object.fromEntries(
-		collectionFormMutationFieldNames(fields).map((name) => [name, Reflect.get(values, name)])
-	);
+	const names = [
+		...writableColumns,
+		...relationships.map(({ name }) => name).filter((name) => Reflect.get(values, name) !== undefined)
+	];
+	return Object.fromEntries(names.map((name) => [name, Reflect.get(values, name)]));
 }

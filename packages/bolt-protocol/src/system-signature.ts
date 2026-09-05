@@ -1,3 +1,5 @@
+import { Schema } from 'effect';
+
 /**
  * What a host signs to run one invocation as the system principal, in the package both ends import.
  *
@@ -68,17 +70,22 @@ export const systemSignaturePayload = (parameters: SystemSignaturePayload): stri
  * is what makes those two the same string. Anything that is not JSON renders as `null`, which can
  * only ever fail a comparison rather than pass one.
  */
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+const isBoolean = Schema.is(Schema.Boolean);
+const isNumber = Schema.is(Schema.Number);
+
 const canonicalJson = (value: unknown): string => {
 	if (value == null) return 'null';
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-	if (typeof value === 'object') {
+	if (isRecord(value)) {
 		const entries = Object.entries(value)
 			.filter(([, entry]) => entry !== undefined)
 			.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`);
 		return `{${entries.join(',')}}`;
 	}
-	if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
-	if (typeof value === 'number') return Number.isFinite(value) ? JSON.stringify(value) : 'null';
+	if (isString(value) || isBoolean(value)) return JSON.stringify(value);
+	if (isNumber(value)) return Number.isFinite(value) ? JSON.stringify(value) : 'null';
 	return 'null';
 };

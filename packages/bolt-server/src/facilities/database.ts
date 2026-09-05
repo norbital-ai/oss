@@ -11,7 +11,7 @@ import {
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
-import { Config, Effect, Redacted } from 'effect';
+import { Config, Effect, Redacted, Schema } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -45,13 +45,17 @@ export interface DatabaseProvider {
 	readonly close: () => Promise<void>;
 }
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isBigInt = Schema.is(Schema.BigInt);
+const isString = Schema.is(Schema.String);
+
 /** Converts driver-specific row values into Schema.Json-safe data. */
 const jsonSafe = (value: unknown): unknown => {
 	if (value instanceof Date) return value.toISOString();
-	if (typeof value === 'bigint') return value.toString();
+	if (isBigInt(value)) return value.toString();
 	if (Buffer.isBuffer(value)) return value.toString('base64');
 	if (Array.isArray(value)) return value.map(jsonSafe);
-	if (value !== null && typeof value === 'object') {
+	if (isRecord(value)) {
 		return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonSafe(entry)]));
 	}
 	return value;
@@ -59,9 +63,10 @@ const jsonSafe = (value: unknown): unknown => {
 
 /** Finds the SQLSTATE through the small wrapper shapes used by Effect and both Postgres drivers. */
 export const databaseSqlState = (cause: unknown, depth = 0): string | undefined => {
+	// repository-health:allow GUARD2 -- The walkers here inspect thrown platform values (Effect defects and pg/pglite error objects), not a decoded boundary value.
 	if (depth > 6 || cause === null || typeof cause !== 'object') return undefined;
 	const code = Reflect.get(cause, 'code');
-	if (typeof code === 'string' && /^\d{5}$/.test(code)) return code;
+	if (isString(code) && /^\d{5}$/.test(code)) return code;
 	for (const key of ['cause', 'error', 'reason', 'originalError']) {
 		const nested = databaseSqlState(Reflect.get(cause, key), depth + 1);
 		if (nested !== undefined) return nested;
@@ -325,40 +330,59 @@ const queryThroughBinding =
  * Temporary PGlite selected the same way a self-host embedder selects it: `makeLocalDatabase`,
  * then `pg_trgm` / `btree_gist` / `vector`. No process env. Close removes the directory.
  */
-export const startLocalDatabase = async (): Promise<StartedLocalDatabase> => {
-	const dataDirectory = await mkdtemp(join(tmpdir(), 'bolt-server-pglite-'));
+export const startLocalDatabase = (): Promise<StartedLocalDatabase> => {
 	let database: LocalDatabase | undefined;
-	try {
-		database = await makeLocalDatabase({ dataDirectory });
-		const installed = await database.binding.call(
-			localDatabaseCall('extensions'),
-			DatabaseRequest.cases.Transaction.make({
-				statements: LOCAL_EXTENSIONS.map((name) => ({
-					sql: `create extension if not exists ${name}`,
-					parameters: []
-				}))
-			}),
-			new AbortController().signal
+	return Effect.gen(function* () {
+		const dataDirectory = yield* Effect.tryPromise(() =>
+			mkdtemp(join(tmpdir(), 'bolt-server-pglite-'))
 		);
-		if (installed._tag === 'Failure') {
-			throw new Error(installed.error.message);
-		}
-		const handle = database;
-		return {
-			binding: handle.binding,
-			query: queryThroughBinding(handle.binding),
-			dataDirectory,
-			close: async () => {
-				try {
-					await handle.close();
-				} finally {
-					await rm(dataDirectory, { recursive: true, force: true });
-				}
+		return yield* Effect.gen(function* () {
+			database = yield* Effect.tryPromise(() => makeLocalDatabase({ dataDirectory }));
+			const handle = database;
+			const installed = yield* Effect.tryPromise(() =>
+				handle.binding.call(
+					localDatabaseCall('extensions'),
+					DatabaseRequest.cases.Transaction.make({
+						statements: LOCAL_EXTENSIONS.map((name) => ({
+							sql: `create extension if not exists ${name}`,
+							parameters: []
+						}))
+					}),
+					new AbortController().signal
+				)
+			);
+			if (installed._tag === 'Failure') {
+				return yield* Effect.fail(new Error(installed.error.message));
 			}
-		};
-	} catch (error) {
-		if (database !== undefined) await database.close().catch(() => undefined);
-		await rm(dataDirectory, { recursive: true, force: true });
-		throw error;
-	}
+			return {
+				binding: handle.binding,
+				query: queryThroughBinding(handle.binding),
+				dataDirectory,
+				close: () =>
+					Effect.runPromise(
+						Effect.tryPromise(() => handle.close()).pipe(
+							Effect.catch((cause) =>
+								Effect.tryPromise(() => rm(dataDirectory, { recursive: true, force: true })).pipe(
+									Effect.andThen(() => Effect.fail(cause))
+								)
+							),
+							Effect.flatMap(() =>
+								Effect.tryPromise(() => rm(dataDirectory, { recursive: true, force: true }))
+							)
+						)
+					)
+			};
+		}).pipe(
+			Effect.catch((cause) =>
+				Effect.gen(function* () {
+					const failed = database;
+					if (failed !== undefined) {
+						yield* Effect.tryPromise(() => failed.close().catch(() => undefined));
+					}
+					yield* Effect.tryPromise(() => rm(dataDirectory, { recursive: true, force: true }));
+					return yield* Effect.fail(cause);
+				})
+			)
+		);
+	}).pipe(Effect.runPromise);
 };

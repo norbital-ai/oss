@@ -1,5 +1,6 @@
 // repository-health:allow SEM_PARALLEL -- matcher is the engine pattern.ts drives; one pipeline, two phases.
-import { Effect } from 'effect';
+// repository-health:allow STATE2 -- host bindings live for the process lifetime, keyed by parsed source file; a per-run registry would thread the host through every matcher signature.
+import { Effect, Schema } from 'effect';
 import * as Result from 'effect/Result';
 import ts from 'typescript';
 import { evaluateFact } from './facts.js';
@@ -79,6 +80,19 @@ export type Bindings = Map<string, ts.Node>;
 
 const METAVARIABLE = /^\$[A-Z][A-Z0-9_]*$/;
 
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+
+// The engine's own `NthChild` union member; the guard discriminates it per GUARD2's sanctioned form.
+type NthChildDescription = Extract<NthChild, { readonly position: unknown }>;
+const isNthChildObject = Schema.is(
+	Schema.Struct({
+		position: Schema.Union([Schema.Number, Schema.String]),
+		ofRule: Schema.optionalKey(Schema.Unknown),
+		reverse: Schema.optionalKey(Schema.Unknown)
+	})
+) as (value: unknown) => value is NthChildDescription;
+
 const utilities = new Map<string, Compiled>();
 
 export function withUtils<T>(utils: Utils, compileTree: () => T): T {
@@ -109,7 +123,7 @@ function findKind(node: ts.Node, kind: NodeKind): ts.Node | undefined {
 }
 
 function parseAnB(described: number | string): (position: number) => boolean {
-	if (typeof described === 'number') return (position) => position === described;
+	if (isNumber(described)) return (position) => position === described;
 	const text = described.trim().toLowerCase();
 	if (text === 'odd') return (position) => position % 2 === 1;
 	if (text === 'even') return (position) => position % 2 === 0;
@@ -210,6 +224,7 @@ function fieldsOf(node: ts.Node): ReadonlyMap<string, ReadonlyArray<ts.Node>> {
 				fields.set(key, value as ReadonlyArray<ts.Node>);
 			continue;
 		}
+		// repository-health:allow GUARD2 -- ts.Node fields are the TypeScript compiler's own AST wrapper objects; the walker inspects the node graph the compiler produced, not a decoded boundary.
 		if (value !== null && typeof value === 'object' && visited.has(value as ts.Node))
 			fields.set(key, [value as ts.Node]);
 	}
@@ -390,14 +405,13 @@ type Compiled = Readonly<{
 }>;
 
 export function compile(matcher: Matcher): Compiled {
-	if (typeof matcher === 'string') return compile({ pattern: matcher });
+	if (isString(matcher)) return compile({ pattern: matcher });
 
 	if ('pattern' in matcher) {
 		const style = matcher.pattern;
-		const text = typeof style === 'string' ? style : style.context;
-		const selector = typeof style === 'string' ? undefined : style.selector;
-		const strictness: Strictness =
-			(typeof style === 'string' ? undefined : style.strictness) ?? 'ast';
+		const text = isString(style) ? style : style.context;
+		const selector = isString(style) ? undefined : style.selector;
+		const strictness: Strictness = (isString(style) ? undefined : style.strictness) ?? 'ast';
 		const whole = parsePattern(text);
 		const parsed = selector === undefined ? whole : (findKind(whole, selector) ?? whole);
 		const kind = ts.SyntaxKind[unwrap(parsed).kind] as NodeKind;
@@ -409,13 +423,13 @@ export function compile(matcher: Matcher): Compiled {
 
 	if ('nthChild' in matcher) {
 		const described = matcher.nthChild;
-		const simple = typeof described === 'object' ? described.position : described;
+		const simple = isNthChildObject(described) ? described.position : described;
 		const step = parseAnB(simple);
 		const ofRule =
-			typeof described === 'object' && described.ofRule !== undefined
+			isNthChildObject(described) && described.ofRule !== undefined
 				? compile(described.ofRule)
 				: undefined;
-		const reverse = typeof described === 'object' && described.reverse === true;
+		const reverse = isNthChildObject(described) && described.reverse === true;
 		return {
 			kinds: undefined,
 			run: (node, source, bindings) => {
@@ -623,7 +637,7 @@ export function compile(matcher: Matcher): Compiled {
 
 	if ('importsFrom' in matcher) {
 		const specifier = matcher.importsFrom;
-		if (typeof specifier !== 'string' || specifier.length === 0)
+		if (!isString(specifier) || specifier.length === 0)
 			throw new Error('norbital-doctor: importsFrom requires a package specifier');
 		return {
 			kinds: undefined,
@@ -650,7 +664,7 @@ export function compile(matcher: Matcher): Compiled {
 
 	if ('fact' in matcher) {
 		const { name, ...params } = matcher.fact;
-		if (typeof name !== 'string' || name.length === 0)
+		if (!isString(name) || name.length === 0)
 			throw new Error('norbital-doctor: fact requires a name');
 		return {
 			kinds: undefined,
@@ -714,9 +728,9 @@ export function compile(matcher: Matcher): Compiled {
 export function metavariablesOf(matcher: Matcher): ReadonlySet<string> {
 	const found = new Set<string>();
 	const walk = (current: Matcher): void => {
-		if (typeof current === 'string') return walk({ pattern: current });
+		if (isString(current)) return walk({ pattern: current });
 		if ('pattern' in current) {
-			const text = typeof current.pattern === 'string' ? current.pattern : current.pattern.context;
+			const text = isString(current.pattern) ? current.pattern : current.pattern.context;
 			for (const name of text.match(/\$\.\.\.[A-Z][A-Z0-9_]*|\$[A-Z][A-Z0-9_]*/g) ?? [])
 				found.add(name.startsWith('$...') ? `$${name.slice(4)}` : name);
 			return;
@@ -730,7 +744,7 @@ export function metavariablesOf(matcher: Matcher): ReadonlySet<string> {
 		if ('of' in current) current.of.forEach(walk);
 		if ('count' in current) walk(current.count.of);
 		const nth = Reflect.get(current, 'nthChild');
-		if (typeof nth === 'object' && nth !== null) {
+		if (isNthChildObject(nth)) {
 			const ofRule = Reflect.get(nth, 'ofRule');
 			if (ofRule !== undefined) walk(ofRule as Matcher);
 		}

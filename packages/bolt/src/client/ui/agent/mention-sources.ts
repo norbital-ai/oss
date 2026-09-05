@@ -4,6 +4,7 @@
  * Bolt ships a minimal mention source adapter; hosts wire search through their transport later.
  */
 import { Effect, Result, Schema } from 'effect';
+import { resolveRecordLabel } from '@norbital-ai/std/collection';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 export {
 	consumeTrigger,
@@ -191,6 +192,7 @@ type MentionSourcesOptions = {
 	readonly getCollections?: () => readonly string[];
 	readonly getApps?: () => readonly MentionAppHit[];
 	readonly findRecords?: WorkspaceClient['records']['findMany'];
+	readonly getRecordLabel?: (collection: string) => string | null | undefined;
 };
 
 /**
@@ -208,6 +210,8 @@ const MentionRecordRow = Schema.Struct({
 	email: Schema.optionalKey(Schema.NullishOr(Schema.String))
 });
 
+const isString = Schema.is(Schema.String);
+
 function readRecordLabel(
 	collection: string,
 	row: Schema.Schema.Type<typeof MentionRecordRow>
@@ -215,10 +219,10 @@ function readRecordLabel(
 	const candidates = ['name', 'title', 'label', 'email'] as const;
 	for (const key of candidates) {
 		const value = row[key];
-		if (typeof value === 'string' && value.trim()) return value.trim();
+		if (isString(value) && value.trim()) return value.trim();
 	}
 	const id = row.id;
-	if (typeof id === 'string' && id.length > 0) return id;
+	if (isString(id) && id.length > 0) return id;
 	return collection;
 }
 
@@ -226,7 +230,9 @@ function readRecordLabel(
 export function createMentionSources(options: MentionSourcesOptions = {}): MentionSources {
 	const hitsPerSource = options.hitsPerSource ?? 8;
 	// The decoder is a pure function of nothing — built once for every record rather than per row.
-	const decodeMentionRow = Schema.decodeUnknownResult(MentionRecordRow);
+	const decodeMentionRow = Schema.decodeUnknownResult(MentionRecordRow, {
+		onExcessProperty: 'preserve'
+	});
 	return {
 		collections() {
 			const getCollections = options.getCollections;
@@ -234,7 +240,10 @@ export function createMentionSources(options: MentionSourcesOptions = {}): Menti
 			return Effect.runSync(
 				Effect.try(() =>
 					[...getCollections()].sort((left, right) => left.localeCompare(right))
-				).pipe(Effect.catch(() => Effect.succeed<readonly string[]>([])))
+				).pipe(
+					// repository-health:allow SWALLOW2 -- a throwing host-provided collection list is one unavailable mention source; the omni-finder has no per-source error surface, so this source contributes zero candidates and the menu still opens.
+					Effect.catch(() => Effect.succeed<readonly string[]>([]))
+				)
 			);
 		},
 		apps() {
@@ -243,7 +252,10 @@ export function createMentionSources(options: MentionSourcesOptions = {}): Menti
 			return Effect.runSync(
 				Effect.try(() =>
 					[...getApps()].sort((left, right) => left.label.localeCompare(right.label))
-				).pipe(Effect.catch(() => Effect.succeed<readonly MentionAppHit[]>([])))
+				).pipe(
+					// repository-health:allow SWALLOW2 -- a throwing host-provided app list is one unavailable mention source; the omni-finder has no per-source error surface, so this source contributes zero candidates and the menu still opens.
+					Effect.catch(() => Effect.succeed<readonly MentionAppHit[]>([]))
+				)
 			);
 		},
 		search(query, collection) {
@@ -267,11 +279,14 @@ export function createMentionSources(options: MentionSourcesOptions = {}): Menti
 							{
 								collection,
 								recordId,
-								label: readRecordLabel(collection, row)
+								label:
+									resolveRecordLabel(options.getRecordLabel?.(collection) ?? null, row) ??
+									readRecordLabel(collection, row)
 							}
 						];
 					})
 				),
+				// repository-health:allow SWALLOW2 -- a failed record search is one source returning no rows; the finder palette has no per-source error surface and must still offer its collection, app, and command rows when record search is unavailable.
 				Effect.catch(() => Effect.succeed<readonly MentionRecordHit[]>([]))
 			);
 		}

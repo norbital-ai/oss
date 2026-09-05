@@ -4,7 +4,6 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 
 	interface NotificationItem {
@@ -38,10 +37,9 @@
 			<Sidebar.MenuButton
 				{...props}
 				aria-label={unread.length > 0 ? `${unread.length} unread notifications` : 'Notifications'}
-				class={cn(
-					'relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
-					expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
-				)}
+				class="relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded
+					? 'h-8 px-2'
+					: 'size-8 justify-center p-0'}"
 			>
 				<IconWrapper name="lucide:bell" class="size-4 shrink-0" />
 				{#if expanded}
@@ -50,15 +48,17 @@
 					>
 				{/if}
 				{#if unread.length > 0}
-					<span
+					<Inline
+						as="span"
+						justify="center"
+						gap="none"
 						data-testid="notification-unread-badge"
-						class={cn(
-							'grid min-w-4 place-items-center rounded-full bg-primary px-1 text-micro leading-4 font-medium text-primary-foreground',
-							expanded ? 'ml-auto' : 'absolute -top-0.5 -right-0.5'
-						)}
+						class="min-w-4 rounded-full bg-primary px-1 text-micro leading-4 font-medium text-primary-foreground {expanded
+							? 'ml-auto'
+							: 'absolute -top-0.5 -right-0.5'}"
 					>
 						{badge}
-					</span>
+					</Inline>
 				{/if}
 			</Sidebar.MenuButton>
 		{/snippet}
@@ -103,10 +103,9 @@
 						<li>
 							<button
 								type="button"
-								class={cn(
-									'flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent',
-									item.read ? '' : 'bg-accent/40'
-								)}
+								class="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent {item.read
+									? ''
+									: 'bg-accent/40'}"
 								onclick={() => onread?.(item.id)}
 							>
 								<Inline as="span" gap="xs">

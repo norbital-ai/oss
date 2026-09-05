@@ -119,9 +119,9 @@ describe('the statements a batch of creates is', () => {
 		expect(insertsInto(statements, 'bolt_collection_history')).toHaveLength(1);
 		expect(insertsInto(statements, 'bolt_sync_outbox')).toHaveLength(0);
 		expect(changes).toHaveLength(40);
-		expect(changes.every((change) => change.collection === 'notes' && change.operation === 'insert')).toBe(
-			true
-		);
+		expect(
+			changes.every((change) => change.collection === 'notes' && change.operation === 'insert')
+		).toBe(true);
 	}, 60_000);
 
 	/**
@@ -154,8 +154,8 @@ describe('the statements a batch of creates is', () => {
  * The two bounds the grouping is built against, checked on the grouping itself.
  *
  * Against the pure function rather than through a workspace, because both of them are about sizes a
- * database test cannot reach: 65,535 parameters is ten thousand rows, and a batch is capped at five
- * thousand. Writing them through PGlite would measure PGlite.
+ * database test cannot reach: wide rows can exceed the driver parameter bound before reaching the changed-row limit.
+ * The mutation-phases integration suite separately proves the complete 10,000-row transaction.
  */
 describe('the bounds a grouped insert is built against', () => {
 	const wideRows = (count: number): ReadonlyArray<PlannedInsert> =>
@@ -174,8 +174,8 @@ describe('the bounds a grouped insert is built against', () => {
 
 		expect(statements.length).toBeGreaterThan(1);
 		for (const statement of statements) {
-			expect(parameterCount(statement.sql)).toBeLessThanOrEqual(65_535);
-			expect(statement.parameters.length).toBeLessThanOrEqual(65_535);
+			expect(parameterCount(statement.sql)).toBeLessThanOrEqual(30_000);
+			expect(statement.parameters.length).toBeLessThanOrEqual(30_000);
 			// Each statement binds its own parameters from $1, rather than continuing the last one's
 			// numbering.
 			expect(statement.sql).toContain('values ($1, $2,');
@@ -289,20 +289,18 @@ describe('graph insertion dependency identity', () => {
 			envoys: [],
 			requiredFacilities: []
 		});
-		const layers = insertionLayers(
-			[
-				{ collection: 'time_entries', id: sharedId, values: {} },
-				{
-					collection: 'claims',
-					id: '018f9f89-6cb2-7b3c-8fc8-832ea10c46d2',
-					values: { source: { kind: 'LEAVE_REQUEST', id: sharedId } }
-				},
-				{ collection: 'leave_requests', id: sharedId, values: {} }
-			],
-			graphDefinition
-		);
-		// The earlier time entry has the same UUID but is not this handle's target. The leave row is
-		// later, so neither one creates an earlier-row dependency for the claim.
-		expect(layers).toEqual([0, 0, 0]);
+		const operations = [
+			{ collection: 'time_entries', id: sharedId, values: {} },
+			{
+				collection: 'claims',
+				id: '018f9f89-6cb2-7b3c-8fc8-832ea10c46d2',
+				values: { source: { kind: 'LEAVE_REQUEST', id: sharedId } }
+			},
+			{ collection: 'leave_requests', id: sharedId, values: {} }
+		];
+		// The claim depends on the matching leave row, even when it appears later in the batch.
+		expect(insertionLayers(operations, graphDefinition)).toEqual([0, 1, 0]);
+		// A time entry with the same UUID is not the claim's target.
+		expect(insertionLayers(operations.slice(0, 2), graphDefinition)).toEqual([0, 0]);
 	});
 });

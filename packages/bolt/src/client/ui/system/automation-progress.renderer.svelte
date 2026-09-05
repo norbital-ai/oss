@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Schema } from 'effect';
 	import type { FieldRendererProps } from '@norbital-ai/ui/data-renderer';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
@@ -6,26 +7,28 @@
 
 	let { value, class: className }: FieldRendererProps = $props();
 	const { t } = useI18n();
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+	const isNumber = Schema.is(Schema.Number);
+	const isString = Schema.is(Schema.String);
 	const progress = $derived.by(() => {
-		if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+		if (!isRecord(value)) return undefined;
 		const fraction = Reflect.get(value, 'progress');
 		const text = Reflect.get(value, 'text');
-		if (typeof fraction !== 'number' || !Number.isFinite(fraction)) return undefined;
+		if (!isNumber(fraction) || !Number.isFinite(fraction)) return undefined;
 		return {
 			percent: Math.round(Math.min(1, Math.max(0, fraction)) * 100),
-			message: typeof text === 'string' && text.trim() !== '' ? text : undefined
+			message: isString(text) && text.trim() !== '' ? text : undefined
 		};
 	});
 </script>
 
 {#if progress === undefined}
-	<span class={['text-muted-foreground', className]}
-		>{t('bolt.automations.progress.notReported')}</span
+	<span class="text-muted-foreground {className}">{t('bolt.automations.progress.notReported')}</span
 	>
 {:else}
 	<Stack
 		gap="xs"
-		class={['min-w-52 max-w-md py-1', className]}
+		class="min-w-52 max-w-md py-1 {className}"
 		aria-label={progress.message === undefined
 			? t('bolt.automations.progress.aria', { percent: progress.percent })
 			: t('bolt.automations.progress.ariaWithMessage', {

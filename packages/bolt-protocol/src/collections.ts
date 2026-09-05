@@ -229,11 +229,14 @@ const exclusiveOperator = (
 	return operators.length === 1 ? operators[0] : undefined;
 };
 
+const isString = Schema.is(Schema.String);
+const isBoolean = Schema.is(Schema.Boolean);
+
 const pathSegmentsProblem = (path: unknown, requireNonEmpty: boolean): string | undefined => {
 	if (path === undefined && !requireNonEmpty) return undefined;
 	if (!Array.isArray(path) || (requireNonEmpty && path.length === 0))
 		return 'must be a non-empty array of path segments';
-	return path.some((part) => typeof part !== 'string' || part.length === 0)
+	return path.some((part) => !isString(part) || part.length === 0)
 		? 'must be a non-empty array of path segments'
 		: undefined;
 };
@@ -251,7 +254,7 @@ const jsonPathProblem = (value: unknown): string | undefined => {
 	const operator = exclusiveOperator(object, ['path', 'type', 'transform']);
 	if (operator === undefined) return 'jsonPath requires exactly one comparison';
 	if (operator === 'isNull' || operator === 'isNotNull')
-		return typeof object[operator] === 'boolean' ? undefined : `${operator} requires a boolean`;
+		return isBoolean(object[operator]) ? undefined : `${operator} requires a boolean`;
 	return operator === 'in' || operator === 'notIn'
 		? setOperandProblem(object[operator])
 		: scalarOperandProblem(object[operator]);
@@ -298,7 +301,7 @@ const fieldPredicateProblem = (value: unknown): string | undefined => {
 			continue;
 		}
 		if (operator === 'isNull' || operator === 'isNotNull') {
-			if (typeof operand !== 'boolean') return `${operator} requires a boolean`;
+			if (!isBoolean(operand)) return `${operator} requires a boolean`;
 			continue;
 		}
 		if (operator === 'in' || operator === 'notIn' || operator === 'caseFoldIn') {
@@ -313,7 +316,7 @@ const fieldPredicateProblem = (value: unknown): string | undefined => {
 			if (
 				kindEntries.length !== 1 ||
 				(kindEntries[0]?.[0] !== 'eq' && kindEntries[0]?.[0] !== 'ne') ||
-				typeof kindEntries[0]?.[1] !== 'string'
+				!isString(kindEntries[0]?.[1])
 			)
 				return 'kind requires exactly eq or ne with a string discriminator';
 			continue;

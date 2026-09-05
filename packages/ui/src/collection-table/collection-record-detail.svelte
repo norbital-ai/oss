@@ -138,15 +138,7 @@
 
 	function recordTitle(row: CollectionRecord): string {
 		if (!definition) return humanize(collectionName);
-		// Bolt declares `recordLabel` as a plain column name — `recordLabel: 'summary'`. The CEL
-		// resolver evaluates it as an expression and returns null for a bare identifier, so the title
-		// fell through to the first non-uuid column, which on a leave request is the raw event JSON.
-		// A bare name is read as what it is; anything else is still an expression.
 		const declared = definition.recordLabel ?? null;
-		if (declared && /^[A-Za-z_][A-Za-z0-9_]*$/.test(declared)) {
-			const value = Reflect.get(row, declared);
-			if (typeof value === 'string' && value.trim() !== '') return value;
-		}
 		const label = resolveRecordLabel(declared, row);
 		if (label) return label;
 		return humanize(collectionName);

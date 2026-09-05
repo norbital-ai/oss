@@ -1,8 +1,11 @@
+import { Schema } from 'effect';
 import type { ComputationDefinition } from './definition.js';
+
+const isRecordValue = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 function canonicalize(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(canonicalize);
-	if (value === null || typeof value !== 'object') return value;
+	if (!isRecordValue(value)) return value;
 	return Object.fromEntries(
 		Object.entries(value)
 			.sort(([a], [b]) => a.localeCompare(b))

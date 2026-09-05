@@ -1,7 +1,14 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { Schema } from 'effect';
 import { safeParse } from '@norbital-ai/std/json';
+
+const isObject = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 const localProtocol = /^(?:workspace|catalog|file|link|portal):/;
 const sha512Pattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -12,7 +19,7 @@ function fail(message) {
 
 function parseJsonFragment(text, label) {
 	const parsed = safeParse(text);
-	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+	if (!isRecord(parsed)) {
 		fail(`${label} is not a JSON object.`);
 	}
 	return parsed;
@@ -56,7 +63,7 @@ const reportCandidateFilename = (output, start) => {
 	const end = balancedEnd(output, start);
 	if (end === undefined) return undefined;
 	const result = safeParse(output.slice(start, end));
-	if (result === null || typeof result !== 'object') {
+	if (!isObject(result)) {
 		// Lifecycle scripts may write JSON-like output before the pack report.
 		return undefined;
 	}
@@ -120,8 +127,8 @@ function validatePublishedManifest(manifest, directory, expected = {}) {
 }
 
 const importTargets = (value) => {
-	if (typeof value === 'string') return [value];
-	if (value === null || typeof value !== 'object' || Array.isArray(value)) return [];
+	if (isString(value)) return [value];
+	if (!isRecord(value)) return [];
 	return Object.values(value).flatMap(importTargets);
 };
 

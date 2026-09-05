@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Predicate, Schema } from 'effect';
 import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core/columns/common';
 import { jsonb } from 'drizzle-orm/pg-core/columns/jsonb';
 import { numeric as pgNumeric } from 'drizzle-orm/pg-core/columns/numeric';
@@ -149,6 +149,9 @@ export type AnyModelFieldBuilder = AnyPgColumnBuilder | ReferenceBuilder;
 const REFERENCE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const REFERENCE_TAG = /^[A-Z][A-Z0-9_]*$/;
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isJsonObject = Schema.is(Schema.JsonObject);
+
 const emptyReferenceHandle = <TTargets extends ReferenceTargets>(
 	targets: TTargets
 ): ReferenceHandle<TTargets> => {
@@ -277,8 +280,7 @@ const validateEmbeddingDeclaration = (
 			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
 		const config = Reflect.get(builder, 'config');
 		const embeddable =
-			config !== null &&
-			typeof config === 'object' &&
+			isRecord(config) &&
 			(Reflect.get(config, 'dataType') === 'string' || Reflect.get(config, 'boltFile') === true);
 		if (!embeddable)
 			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
@@ -308,13 +310,12 @@ const ColumnAuthoring = {
 	searchable: <T>(builder: T, options: { readonly search?: boolean }): T => {
 		if (options.search !== true) return builder;
 		const config = Reflect.get(builder as object, 'config');
-		if (config !== null && typeof config === 'object') Reflect.set(config, 'boltSearch', true);
+		if (isRecord(config)) Reflect.set(config, 'boltSearch', true);
 		return builder;
 	},
 	presentedAs: <T>(builder: T, kind: string): T => {
 		const config = Reflect.get(builder as object, 'config');
-		if (config !== null && typeof config === 'object')
-			Reflect.set(config, 'boltPresentationKind', kind);
+		if (isRecord(config)) Reflect.set(config, 'boltPresentationKind', kind);
 		return builder;
 	},
 	text: (options: { readonly search?: boolean } = {}) =>
@@ -333,7 +334,7 @@ const ColumnAuthoring = {
 		// all see the same serializable instant shape instead of alternating between Date and string.
 		const builder = pgTimestamp({ withTimezone: true, mode: 'string' });
 		const config = Reflect.get(builder, 'config');
-		if (config !== null && typeof config === 'object' && options.precision !== undefined)
+		if (isRecord(config) && options.precision !== undefined)
 			Reflect.set(config, 'boltInstantPrecision', options.precision);
 		return ColumnAuthoring.presentedAs(builder, 'instant');
 	},
@@ -459,7 +460,7 @@ function fileColumn(
 ) {
 	const builder = options.multiple === true ? manyFilesColumn() : oneFileColumn();
 	const config = Reflect.get(builder, 'config');
-	if (config !== null && typeof config === 'object') {
+	if (isRecord(config)) {
 		Reflect.set(config, 'boltPresentationKind', 'file');
 		if (options.mimeTypes !== undefined)
 			Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
@@ -589,17 +590,11 @@ const customTypeColumn = {
 		...arguments_: Arguments
 	) => {
 		const options = arguments_[0];
-		if (
-			options !== undefined &&
-			(typeof options !== 'object' ||
-				options === null ||
-				Array.isArray(options) ||
-				!Schema.is(Schema.Json)(options))
-		)
+		if (options !== undefined && !isJsonObject(options))
 			throw new TypeError(`custom(${JSON.stringify(name)}) options must be JSON-serializable.`);
 		const builder = jsonb().$type<CustomColumnValue<Name, Arguments[0]>>();
 		const config = Reflect.get(builder, 'config');
-		if (config !== null && typeof config === 'object') {
+		if (isRecord(config)) {
 			Reflect.set(config, 'boltCustomType', name);
 			Reflect.set(config, 'boltPresentationKind', name);
 			if (options !== undefined) Reflect.set(config, 'boltCustomTypeOptions', options);
@@ -722,7 +717,7 @@ const CustomTypeAuthoring = {
 		if (definition.description.trim() === '')
 			throw new Error(`Custom type "${definition.name}" requires a non-empty description.`);
 		const schema =
-			typeof definition.schema === 'function'
+			Predicate.isFunction(definition.schema)
 				? definition.schema
 				: Schema.toStandardSchemaV1(definition.schema, {
 						parseOptions: { onExcessProperty: 'error' }
@@ -787,9 +782,7 @@ export const cascade = CustomTypeAuthoring.cascade;
 
 /** Read only by authoring introspection after the relationship declaration has executed. */
 export const relationshipCascades = (value: unknown): boolean =>
-	value !== null &&
-	typeof value === 'object' &&
-	Reflect.get(value, relationshipDelete) === 'cascade';
+	isRecord(value) && Reflect.get(value, relationshipDelete) === 'cascade';
 
 /**
  * What a `group()` declaration may say about a group of apps.

@@ -144,14 +144,13 @@ export type Interface = Readonly<{
 }>;
 
 const Service = Context.Service<Interface>('@norbital-ai/bolt/PersonalSecrets');
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
 
 /** Reads the loosely-typed values a SQL row hands back without scattering guards through each projection. */
 const rowText = (row: unknown, field: string): string | undefined => {
-	const value =
-		row === null || typeof row !== 'object' || Array.isArray(row)
-			? undefined
-			: Reflect.get(row, field);
-	return typeof value === 'string' ? value : undefined;
+	const value = isObject(row) ? Reflect.get(row, field) : undefined;
+	return isString(value) ? value : undefined;
 };
 
 const layer = Layer.effect(
@@ -286,10 +285,7 @@ const layer = Layer.effect(
 				const name = rowText(row, 'name');
 				if (name === undefined || name === '') return [];
 				const updatedAt = rowText(row, 'updated_at');
-				const configured =
-					row !== null && typeof row === 'object' && !Array.isArray(row)
-						? Reflect.get(row, 'configured')
-						: undefined;
+				const configured = isObject(row) ? Reflect.get(row, 'configured') : undefined;
 				return [
 					{
 						name,

@@ -1,0 +1,44 @@
+id: REACT5
+summary: an $effect hides its dependency set behind untrack or a dependency-only read
+severity: error
+principles: [straightforwardness, testability]
+files:
+  - '**/*.svelte'
+  - '**/*.svelte.ts'
+rule:
+  any:
+    - all:
+        - pattern: 'untrack($...A)'
+        - inside:
+            pattern: '$effect($FN)'
+          stopBy: end
+    - pattern: '$effect(() => untrack($...A))'
+    - all:
+        - pattern: 'void $A'
+        - regex: '^[A-Za-z_$][\w$]*$'
+          on: A
+        - inside:
+            pattern: '$effect($FN)'
+          stopBy: end
+        - not:
+            follows:
+              any:
+                - 'const $A = $V'
+                - 'let $A = $V'
+            stopBy: end
+    - all:
+        - pattern: '$A'
+        - regex: '^[A-Za-z_$][\w$]*$'
+          on: A
+        - inside: { kind: ExpressionStatement, stopBy: neighbor }
+        - inside:
+            pattern: '$effect($FN)'
+          stopBy: end
+examples:
+  bad:
+    - '$effect(() => { void key; untrack(() => { view = key; }); });'
+    - '$effect(() => { communicationTimeline; queueScroll(); });'
+  good:
+    - '$effect(() => { const current = view; target = current; });'
+    - '$effect(() => { const timer = setInterval(tick, 10); void timer; return () => clearInterval(timer); });'
+    - 'const initial = untrack(() => boltSession);'

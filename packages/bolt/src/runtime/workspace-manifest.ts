@@ -13,11 +13,17 @@ const jsonObject = (
 	return value;
 };
 
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 const property = (value: unknown, key: string): unknown =>
-	value === null || typeof value !== 'object' ? undefined : Reflect.get(value, key);
+	isObjectLike(value) ? Reflect.get(value, key) : undefined;
 
 const text = (value: unknown): string | undefined =>
-	typeof value === 'string' && value !== '' ? value : undefined;
+	isString(value) && value !== '' ? value : undefined;
 
 const sourcePathFor = (projection: unknown, registry: string, name: string): string | undefined =>
 	text(property(property(projection, registry), name));
@@ -37,7 +43,7 @@ const provenance = (sourcePath: string | undefined): Readonly<Record<string, Sch
 	sourcePath === undefined ? { origin: 'system' } : { sourcePath, origin: 'authored' };
 
 const entries = (value: unknown): ReadonlyArray<readonly [string, unknown]> =>
-	value === null || typeof value !== 'object' ? [] : Object.entries(value);
+	isObjectLike(value) ? Object.entries(value) : [];
 
 const authoredHookEntries = (
 	module: unknown,
@@ -46,6 +52,7 @@ const authoredHookEntries = (
 	const declarations: Array<Readonly<Record<string, Schema.Json>>> = [];
 	for (const operation of ['mutate', 'delete'] as const) {
 		const operationDeclaration = property(module, operation);
+		// repository-health:allow GUARD2 -- an authored mutate.prepare hook is a function inside a dynamically loaded declaration module; no schema can recognize one.
 		if (operation === 'mutate' && typeof property(operationDeclaration, 'prepare') === 'function') {
 			declarations.push(
 				jsonObject({
@@ -58,6 +65,7 @@ const authoredHookEntries = (
 		const perRecord = property(operationDeclaration, 'perRecord');
 		for (const phase of ['before', 'after'] as const) {
 			const declaration = property(perRecord, phase);
+			// repository-health:allow GUARD2 -- an authored per-record hook handler is a function inside a dynamically loaded declaration module; no schema can recognize one.
 			if (typeof property(declaration, 'handler') !== 'function') continue;
 			declarations.push(
 				jsonObject({
@@ -77,6 +85,7 @@ const authoredPipelineEntries = (
 ): ReadonlyArray<Readonly<Record<string, Schema.Json>>> =>
 	(['import', 'export'] as const).flatMap((direction) => {
 		const declaration = property(module, direction);
+		// repository-health:allow GUARD2 -- an authored import/export pipeline handler is a function inside a dynamically loaded declaration module; no schema can recognize one.
 		return typeof property(declaration, 'handler') !== 'function'
 			? []
 			: [
@@ -162,7 +171,7 @@ export const authoredManifestDeclarations = (
 	const projection = property(definition, 'manifestProjection');
 	const projectedVersion = property(projection, 'compiledManifestVersion');
 	return {
-		...(typeof projectedVersion === 'number' ? { compiledManifestVersion: projectedVersion } : {}),
+		...(isNumber(projectedVersion) ? { compiledManifestVersion: projectedVersion } : {}),
 		collections: definition.collections.map((collection) => ({
 			name: collection.name,
 			history: collection.history,

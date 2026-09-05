@@ -492,7 +492,7 @@ export const sourceTreeEntryBadge = (
 	}
 };
 
-export type DiagnosisFinding = NonNullable<HostSnapshot['diagnosis']>['findings'][number];
+type DiagnosisFinding = NonNullable<HostSnapshot['diagnosis']>['findings'][number];
 
 type WorkbenchDiagnosisState = 'missing' | 'stale' | 'errors' | 'clean';
 

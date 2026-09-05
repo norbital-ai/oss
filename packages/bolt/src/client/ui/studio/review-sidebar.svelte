@@ -1,7 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import {
@@ -39,7 +38,7 @@
 {#snippet sidebarHeading(icon: string, label: string)}
 	<Inline gap="xs">
 		<Icon {icon} class="size-3.5 text-muted-foreground" />
-		<span class={cn('text-foreground', WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS)}>{label}</span>
+		<span class="text-foreground {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">{label}</span>
 	</Inline>
 {/snippet}
 
@@ -56,10 +55,7 @@
 					type="button"
 					data-testid="studio-release-request-option"
 					data-status={request.state}
-					class={cn(
-						'w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70',
-						request.id === selected?.id && 'bg-primary/5'
-					)}
+					class="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70 {request.id === selected?.id ? 'bg-primary/5' : ''}"
 					onclick={() => onselect?.(request.id)}
 				>
 					<span class="block truncate text-xs font-medium text-foreground">

@@ -80,8 +80,23 @@ describe('Task resume control', () => {
 			})
 		);
 		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('queued-followup'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Also retain the queued follow-up.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		await harness.runtime.runPromise(
 			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
 		);
+		expect(
+			await harness.database.query(
+				'select state from agent_inbox where task_id = $1 order by sequence',
+				[taskId]
+			)
+		).toEqual([{ state: 'cancelled' }, { state: 'cancelled' }]);
 		expect(
 			await harness.runtime.runPromise(
 				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
@@ -95,6 +110,8 @@ describe('Task resume control', () => {
 		).toMatchObject({ taskId, status: 'done' });
 		expect(JSON.stringify(prompts[0])).toContain('Continue this from durable history.');
 		expect(JSON.stringify(prompts[0])).toContain('Resume this Task from durable epoch');
+		expect(JSON.stringify(prompts[0])).toContain('Also retain the queued follow-up.');
+		expect(prompts).toHaveLength(1);
 		expect(
 			await harness.database.query(
 				`select task.status, task.epoch, run.status as run_status, run.epoch as run_epoch
@@ -134,9 +151,7 @@ describe('Task resume control', () => {
 			})
 		);
 		await expect(
-			harness.runtime.runPromise(
-				agents.execute(harness.effectId('execute'), adminSubject, taskId)
-			)
+			harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, taskId))
 		).rejects.toMatchObject({ message: expect.stringContaining('PROBE_FAILURE_REASON') });
 		expect(
 			await harness.database.query(

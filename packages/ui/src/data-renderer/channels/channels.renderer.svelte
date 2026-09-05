@@ -20,6 +20,7 @@
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Badge } from '#lib/badge';
 	import { Button } from '#lib/button';
@@ -45,10 +46,10 @@
 
 	const typeOptions = CHANNEL_TYPES.map((type) => ({ value: type, label: humanize(type) }));
 
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
 	const rows = $derived<ChannelRow[]>(
-		Array.isArray(value)
-			? value.filter((entry): entry is ChannelRow => typeof entry === 'object' && entry !== null)
-			: []
+		Array.isArray(value) ? value.filter((entry): entry is ChannelRow => isRecord(entry)) : []
 	);
 
 	function update(index: number, patch: Partial<ChannelRow>): void {

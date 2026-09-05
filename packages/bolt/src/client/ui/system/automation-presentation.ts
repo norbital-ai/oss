@@ -1,10 +1,11 @@
 import { getContext, setContext } from 'svelte';
 
-export type AutomationRunStatus = 'pending' | 'running' | 'done' | 'failed';
+export type AutomationRunStatus = 'pending' | 'running' | 'done' | 'failed' | 'stopped';
 
 type AutomationStatusMessageKey =
 	| 'bolt.automations.status.running'
 	| 'bolt.automations.status.completed'
+	| 'bolt.automations.status.stopped'
 	| 'bolt.automations.status.failed';
 
 type AutomationStatusPresentation = Readonly<{
@@ -18,6 +19,13 @@ export const presentAutomationStatus = (
 	status: AutomationRunStatus | undefined
 ): AutomationStatusPresentation => {
 	const normalized = status ?? 'pending';
+	if (normalized === 'stopped')
+		return {
+			status: normalized,
+			messageKey: 'bolt.automations.status.stopped',
+			canStop: false,
+			canResume: false
+		};
 	if (normalized === 'done')
 		return {
 			status: normalized,

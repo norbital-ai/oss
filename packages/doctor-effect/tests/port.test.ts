@@ -12,7 +12,7 @@ import { runRules, type Rule } from '@norbital-ai/doctor';
 import { effectRules } from '../build/index.js';
 
 const ALL: ReadonlyArray<Rule> = [...effectRules];
-const PRELUDE = "import { Effect } from 'effect';\n";
+const PRELUDE = "import { Effect } from 'effect';\nconst owned = Effect.succeed(1);\n";
 
 type Case = Readonly<{
 	rule: string;
@@ -57,7 +57,7 @@ const CASES: ReadonlyArray<Case> = [
 	},
 	{
 		rule: 'NONDET1',
-		bad: `${PRELUDE}export const id = Math.random();`,
+		bad: `${PRELUDE}export const id = Effect.succeed(Math.random());`,
 		good: `${PRELUDE}export const id = Effect.succeed(0);`
 	},
 	{
@@ -112,7 +112,9 @@ test('every ported rule reports its positive example', () => {
 		const rule = ALL.find((candidate) => candidate.id === testCase.rule);
 		assert.ok(rule !== undefined, `${testCase.rule} is not in the Effect pack`);
 		if (!scan(testCase.bad, file, [rule], testCase.fixture).includes(testCase.rule))
-			missing.push(`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`);
+			missing.push(
+				`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`
+			);
 	}
 	assert.deepEqual(missing, [], missing.join('\n'));
 });
@@ -133,4 +135,36 @@ test('every Effect rule has a port case', () => {
 	const covered = new Set(CASES.map((testCase) => testCase.rule));
 	const uncovered = ALL.map((rule) => rule.id).filter((id) => !covered.has(id));
 	assert.deepEqual(uncovered, [], `no port case for: ${uncovered.join(' ')}`);
+});
+
+test('Effect ownership excludes schema-only, type-only and unused imports', () => {
+	const rules = ALL.filter((rule) => ['EFF1', 'EFF2', 'EFF3', 'EFF5'].includes(rule.id));
+	for (const imports of [
+		"import { Schema } from 'effect'; const codec = Schema.String;",
+		"import type { Effect } from 'effect';",
+		"import { Effect } from 'effect';"
+	]) {
+		assert.deepEqual(
+			scan(
+				`${imports} async function native() { try { await Promise.all([]); } catch {} }`,
+				'src/probe.ts',
+				rules
+			),
+			[]
+		);
+	}
+	for (const runtime of [
+		"import { Effect as E } from 'effect'; const owned = E.succeed(1);",
+		"import * as E from 'effect/Effect'; const owned = E.succeed(1);",
+		"import { succeed as own } from 'effect/Effect'; const owned = own(1);",
+		"import * as E from 'effect'; const owned = E.Effect.succeed(1);"
+	]) {
+		const found = scan(
+			`${runtime} async function native() { try { await Promise.all([]); } catch {} }`,
+			'src/probe.ts',
+			rules
+		);
+		assert.ok(found.includes('EFF1'), runtime);
+		assert.ok(found.includes('EFF2'), runtime);
+	}
 });

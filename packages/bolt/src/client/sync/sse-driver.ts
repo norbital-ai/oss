@@ -10,10 +10,7 @@ import { getErrorMessage } from '@norbital-ai/std';
 import { Option, Schema } from 'effect';
 import type { WorkspaceSession } from '../session.js';
 import { SyncAttachmentError } from './client.js';
-import type {
-	SyncWorkspaceAttachment,
-	SyncWorkspaceAttachmentListener
-} from './client.js';
+import type { SyncWorkspaceAttachment, SyncWorkspaceAttachmentListener } from './client.js';
 import type { SyncHttpDriver } from './http-driver.js';
 
 export type { SyncApplyFrame as SyncClientApplyFrame };
@@ -129,6 +126,7 @@ const decodeBrokerMessage = (value: unknown): BrokerMessage | undefined => {
 };
 
 const eventData = (event: unknown): string | undefined => {
+	// repository-health:allow GUARD2 -- `event` is a browser EventSource MessageEvent, a platform object this layer only ever reads `data` from; there is no schema to decode it against.
 	if (event === null || typeof event !== 'object' || !('data' in event)) return undefined;
 	const data = Reflect.get(event, 'data');
 	return data === undefined ? undefined : String(data);
@@ -148,6 +146,7 @@ const browserEventSource = (url: string): EventSourceLike => {
 	};
 };
 const newId = (label: string): string => {
+	// repository-health:allow GUARD2 -- this is a WebCrypto capability probe on the browser's `crypto` global, not a data-boundary check.
 	if (typeof crypto === 'undefined' || typeof crypto.randomUUID !== 'function')
 		throw new Error(`Browser Sync requires crypto.randomUUID for its ${label}`);
 	return crypto.randomUUID();
@@ -157,6 +156,7 @@ const streamUrl = (url: string, connectionId: string): string => {
 	try {
 		parsed = new URL(url);
 	} catch {
+		// repository-health:allow GUARD2 -- this is a `location` global capability probe for relative-URL resolution in the browser runtime, not a data-boundary check.
 		if (typeof location === 'undefined')
 			throw new Error('Browser Sync requires a browser location to resolve a relative stream URL');
 		parsed = new URL(url, location.href);
@@ -212,14 +212,7 @@ const openTransport = (options: {
 		if (report) options.onDisconnect(cause);
 	};
 	const fail = (cause: unknown): void => {
-		terminate(
-			new SyncAttachmentError(
-				'transport',
-				getErrorMessage(cause),
-				{ cause }
-			),
-			true
-		);
+		terminate(new SyncAttachmentError('transport', getErrorMessage(cause), { cause }), true);
 	};
 	const drain = (): void => {
 		if (draining || closed) return;
@@ -322,9 +315,10 @@ type Owner = {
 };
 
 export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): BrowserSyncBroker => {
+	// repository-health:allow GUARD2 -- these are Web Locks and BroadcastChannel capability probes on browser runtime globals, not data-boundary checks.
 	if (typeof navigator === 'undefined' || navigator.locks === undefined)
 		throw new Error('Browser Sync requires the standard Web Locks API');
-	if (typeof BroadcastChannel === 'undefined')
+	if (typeof globalThis.BroadcastChannel === 'undefined')
 		throw new Error('Browser Sync requires the standard BroadcastChannel API');
 	const locks = navigator.locks;
 	const profileKey = profileKeyOf(options.election);
@@ -332,7 +326,10 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 	const memberId = newId('broker member id');
 	const electionAbort = new AbortController();
 	const localScopes = new Map<string, LocalScope>();
-	const remotes = new Map<string, { lastSeenAt: number; scopes: ReadonlyArray<BrowserSyncScope> }>();
+	const remotes = new Map<
+		string,
+		{ lastSeenAt: number; scopes: ReadonlyArray<BrowserSyncScope> }
+	>();
 	const waiters = new Set<Waiter>();
 	const ready = new Set<string>();
 	let current:
@@ -391,7 +388,8 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 		return { connectionId: current.connectionId, signal: current.abort.signal };
 	};
 	const notifyDisconnect = (cause: SyncAttachmentError): void => {
-		for (const { bindings } of localScopes.values()) eachListener(bindings, (listener) => listener.onDisconnect(cause));
+		for (const { bindings } of localScopes.values())
+			eachListener(bindings, (listener) => listener.onDisconnect(cause));
 	};
 	const clearConnection = (
 		cause: SyncAttachmentError,
@@ -425,7 +423,11 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 		ready.add(key);
 		flushWaiters();
 	};
-	const acceptHeartbeat = (ownerMemberId: string, connectionId: string, announcedAt: number): void => {
+	const acceptHeartbeat = (
+		ownerMemberId: string,
+		connectionId: string,
+		announcedAt: number
+	): void => {
 		const now = Date.now();
 		if (current?.ownerMemberId === ownerMemberId && current.connectionId === connectionId) {
 			current = { ...current, lastSeenAt: now };
@@ -437,7 +439,9 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 				announcedAt < current.announcedAt ||
 				(announcedAt === current.announcedAt && ownerMemberId <= current.ownerMemberId);
 			if (older) return;
-			clearConnection(new SyncAttachmentError('transport', 'Browser Sync physical connection rotated'));
+			clearConnection(
+				new SyncAttachmentError('transport', 'Browser Sync physical connection rotated')
+			);
 		}
 		current = {
 			ownerMemberId,
@@ -484,7 +488,12 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 	const reconcile = (): void => {
 		const transport = owner?.transport;
 		const connectionId = owner?.connectionId;
-		if (owner === undefined || owner.finished || transport === undefined || connectionId === undefined)
+		if (
+			owner === undefined ||
+			owner.finished ||
+			transport === undefined ||
+			connectionId === undefined
+		)
 			return;
 		const desired = desiredScopes();
 		for (const [key, lane] of owner.lanes) {
@@ -640,8 +649,7 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 		presence();
 		if (owner !== undefined) ownerHeartbeat(owner);
 		const now = Date.now();
-		for (const [id, remote] of remotes)
-			if (now - remote.lastSeenAt > LEASE_MS) remotes.delete(id);
+		for (const [id, remote] of remotes) if (now - remote.lastSeenAt > LEASE_MS) remotes.delete(id);
 		if (current !== undefined && now - current.lastSeenAt > LEASE_MS)
 			clearConnection(
 				new SyncAttachmentError('transport', 'Browser Sync profile owner heartbeat expired')
@@ -682,7 +690,11 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 		const lease = await awaitLease(binding, signal);
 		const combined = new AbortController();
 		const removals: Array<() => void> = [];
-		for (const source of [binding.abort.signal, lease.signal, ...(signal === undefined ? [] : [signal])]) {
+		for (const source of [
+			binding.abort.signal,
+			lease.signal,
+			...(signal === undefined ? [] : [signal])
+		]) {
 			const onAbort = (): void => combined.abort(source.reason);
 			if (source.aborted) onAbort();
 			else {
@@ -732,7 +744,8 @@ export const createBrowserSyncBroker = (options: BrowserSyncBrokerOptions): Brow
 				closed: false
 			};
 			const existing = localScopes.get(scopeKey);
-			if (existing === undefined) localScopes.set(scopeKey, { scope, bindings: new Set([binding]) });
+			if (existing === undefined)
+				localScopes.set(scopeKey, { scope, bindings: new Set([binding]) });
 			else existing.bindings.add(binding);
 			presence();
 			reconcile();

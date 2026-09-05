@@ -55,18 +55,20 @@ export type EmbeddingModelRegistry<TRegistry extends ProviderRegistry = Provider
 			readonly [modelRegistryKind]?: 'embedding';
 		}>;
 
-type CheckedRegistration<TKey extends string, TDescriptor extends LlmProviderDescriptor> =
-	TDescriptor extends { readonly endpoint: LlmProviderEndpoint }
-		? TKey extends `openai-compatible/${TDescriptor['model']}`
-			? TDescriptor
-			: never
-		: TKey extends `openai-compatible/${string}`
-			? never
-			: TKey extends `${infer TAdapter}/${TDescriptor['model']}`
-				? TAdapter extends ''
-					? never
-					: TDescriptor
-				: never;
+type CheckedRegistration<
+	TKey extends string,
+	TDescriptor extends LlmProviderDescriptor
+> = TDescriptor extends { readonly endpoint: LlmProviderEndpoint }
+	? TKey extends `openai-compatible/${TDescriptor['model']}`
+		? TDescriptor
+		: never
+	: TKey extends `openai-compatible/${string}`
+		? never
+		: TKey extends `${infer TAdapter}/${TDescriptor['model']}`
+			? TAdapter extends ''
+				? never
+				: TDescriptor
+			: never;
 
 type CheckedRegistry<TRegistry extends ProviderRegistry> = Readonly<{
 	readonly [TKey in keyof TRegistry]: TKey extends string
@@ -113,10 +115,7 @@ export type BoltHostConfig<
 
 const ADAPTER_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
-const validateRegistry = (
-	kind: 'language' | 'embedding',
-	registry: ProviderRegistry
-): void => {
+const validateRegistry = (kind: 'language' | 'embedding', registry: ProviderRegistry): void => {
 	if (Object.keys(registry).length === 0) {
 		throw new LlmProviderConfigurationError(
 			'invalid-default',

@@ -17,8 +17,10 @@ const authoredLaneSchema = Schema.Struct({
 type AuthoredLane = typeof authoredLaneSchema.Type;
 export type AuthoredLaneInput = string | AuthoredLane;
 
+const isString = Schema.is(Schema.String);
+
 function normalizeAuthoredLane(lane: AuthoredLaneInput): AuthoredLane {
-	return typeof lane === 'string'
+	return isString(lane)
 		? { value: lane }
 		: { value: String(lane.value), label: lane.label, color: lane.color };
 }

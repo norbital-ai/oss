@@ -1,9 +1,12 @@
 import { Effect, Schema } from 'effect';
+import { httpRequest } from '@norbital-ai/std/http';
 import { HealthSnapshot } from './health.js';
 
 /** `GET /readyz` must be 200 with `ready === true` after `startApplication` listens. */
 export const waitUntilReady = async (baseUrl: string): Promise<HealthSnapshot> => {
-	const ready = await fetch(`${baseUrl.replace(/\/$/, '')}/readyz`);
+	const ready = await Effect.runPromise(
+		httpRequest(`${baseUrl.replace(/\/$/, '')}/readyz`, { operation: 'readyz' })
+	);
 	if (ready.status !== 200) {
 		throw new Error(`GET /readyz returned ${ready.status}`);
 	}

@@ -5,19 +5,24 @@
  * picks a day, the time field a time, this a month or a span of months. Keys stay strings so a
  * template can hand one straight to a `period` column or a `contains_date` bound.
  */
+import { decodeNumber } from '@norbital-ai/std/json';
+import { Schema } from 'effect';
+
 export type MonthKey = string;
 
 export type MonthRange = Readonly<{ start: MonthKey; end: MonthKey }>;
 
 const MONTH_KEY = /^(\d{4})-(0[1-9]|1[0-2])$/u;
 
+const isString = Schema.is(Schema.String);
+
 export const isMonthKey = (value: unknown): value is MonthKey =>
-	typeof value === 'string' && MONTH_KEY.test(value);
+	isString(value) && MONTH_KEY.test(value);
 
 export const parseMonth = (key: MonthKey): Readonly<{ year: number; month: number }> => {
 	const match = MONTH_KEY.exec(key);
 	if (match === null) throw new Error(`Not a month key: ${key}`);
-	return { year: Number(match[1]), month: Number(match[2]) };
+	return { year: decodeNumber(match[1]), month: decodeNumber(match[2]) };
 };
 
 export const monthKeyOf = (year: number, month: number): MonthKey =>

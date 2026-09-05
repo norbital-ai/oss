@@ -7,13 +7,17 @@
  * are identities. The fat columns stay in the database.
  */
 
+import { Schema } from 'effect';
+
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+
 export const membershipIdentitySnapshot = (
 	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
 ): string =>
 	JSON.stringify(
 		rows
 			.map((row) => row['id'])
-			.filter((id): id is string => typeof id === 'string' && id.length > 0)
+			.filter((id): id is string => isNonEmptyString(id))
 			.toSorted((left, right) => left.localeCompare(right))
 	);
 
@@ -21,5 +25,5 @@ export const deleteHistoryIdentity = (
 	previous: Readonly<Record<string, unknown>> | undefined
 ): Readonly<Record<string, string>> => {
 	const id = previous?.['id'];
-	return typeof id === 'string' && id.length > 0 ? { id } : {};
+	return isNonEmptyString(id) ? { id } : {};
 };

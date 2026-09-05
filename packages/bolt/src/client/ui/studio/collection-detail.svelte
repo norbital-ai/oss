@@ -4,7 +4,6 @@
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Cover, Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import {
@@ -67,7 +66,8 @@
 					<Stack
 						as="div"
 						gap="none"
-						class="min-w-[42rem] divide-y divide-border/50 border-y border-border/50"
+						class="divide-y divide-border/50 border-y border-border/50"
+						style="min-width: 42rem"
 					>
 						<Inline gap="sm" class="px-1 py-1 text-micro text-muted-foreground">
 							<span class="min-w-0 flex-1">{t('bolt.studio.field')}</span>
@@ -202,7 +202,7 @@
 			gap="sm"
 			as="header"
 			align="center"
-			class={cn('flex-wrap border-b border-border/60 py-2.5 sm:flex-nowrap', INSET_X_CLASS)}
+			class="flex-wrap border-b border-border/60 py-2.5 sm:flex-nowrap {INSET_X_CLASS}"
 		>
 			<IconWrapper name={collection.icon ?? 'lucide:box'} class="size-5 text-muted-foreground" />
 			<Stack gap="none" grow class="min-w-0">

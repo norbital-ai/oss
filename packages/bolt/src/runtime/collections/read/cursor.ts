@@ -6,6 +6,7 @@ import { WhereCompileError, type OrderTerm } from '#lib/runtime/access/effective
 const CursorValueSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
 type CursorValue = typeof CursorValueSchema.Type;
 const isCursorValue = Schema.is(CursorValueSchema);
+const isJsonObjectRow = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 const CursorPayloadFromJson = Schema.fromJsonString(
 	Schema.Struct({
@@ -42,7 +43,7 @@ const CollectionCursor = {
 			);
 		}),
 	encode: (terms: ReadonlyArray<OrderTerm>, row: Schema.Json): string | null => {
-		if (row === null || typeof row !== 'object' || Array.isArray(row)) return null;
+		if (!isJsonObjectRow(row)) return null;
 		const order: Array<OrderTerm & { readonly value: CursorValue }> = [];
 		for (const term of terms) {
 			const value: unknown = Reflect.get(row, term.column);

@@ -30,7 +30,11 @@
 	} from './app-header-actions.svelte.js';
 	import { setPlatformStateContext, type PlatformState } from '#lib/client/ui/state/platform.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { CollectionNavigationSurface } from '@norbital-ai/ui/collection-navigation';
+	import {
+		CollectionNavigationSurface,
+		CollectionUrlNavigation,
+		createCollectionRouteKey
+	} from '@norbital-ai/ui/collection-navigation';
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
@@ -41,6 +45,7 @@
 		AUTOMATIONS_PATH,
 		automationsHref,
 		buildApplicationNavigation,
+		buildKioskNavigation,
 		buildSystemNavigation,
 		buildWorkspaceNavigationSections,
 		resolveAppHeaderDescription,
@@ -227,9 +232,10 @@
 
 	// A bare string carries no description; an entry object keeps whatever it declared, so the
 	// mention catalog and finder can show it.
+	const isString = Schema.is(Schema.String);
 	const normalizedApps = $derived.by(() =>
 		apps.map((entry) =>
-			typeof entry === 'string'
+			isString(entry)
 				? { name: entry, label: entry, description: null as string | null }
 				: { ...entry, description: entry.description ?? null }
 		)
@@ -254,7 +260,7 @@
 	const activeKioskApp = $derived.by(() => {
 		if (!currentPath.startsWith('/app/')) return false;
 		const name = currentPath.slice('/app/'.length).split(/[?#]/)[0] ?? '';
-		return normalizedApps.some((app) => typeof app !== 'string' && app.name === name && app.kiosk === true);
+		return normalizedApps.some((app) => !isString(app) && app.name === name && app.kiosk === true);
 	});
 
 	const currentPath = $derived(path ?? (current ? `/app/${current}` : '/'));
@@ -268,6 +274,10 @@
 	 * had ever provided one.
 	 */
 	const detailUrl = $derived(new URL(`${currentPath}${search}`, 'http://workspace.invalid'));
+	const finderNavigation = new CollectionUrlNavigation({
+		getUrl: () => detailUrl,
+		navigate: (href) => onNavigate?.(href)
+	});
 
 	const resolvedHeaderTitle = $derived(
 		currentPath.startsWith('/app/')
@@ -290,11 +300,33 @@
 		logoUrl: organization?.logoUrl ?? null
 	});
 	const canAccessAutomations = $derived(isAdmin === true && !(impersonation?.isActive ?? false));
+	/**
+	 * Kiosk leaves under Settings. Every entry carries the enter-kiosk confirm copy: the mounted
+	 * app is chromeless, so the sidebar that offered the click is exactly what the kiosk takes
+	 * away — the way out is the URL bar, and the confirm says so before the fact.
+	 */
+	const kioskNavigation = $derived(
+		buildKioskNavigation({
+			apps: normalizedApps,
+			accessibleAppNames: accessibleApps,
+			currentPath,
+			i18n: { has, t }
+		}).map((item) => ({
+			...item,
+			confirm: {
+				title: t('bolt.shell.kioskEnterTitle'),
+				description: t('bolt.shell.kioskEnterDescription'),
+				confirmLabel: t('bolt.shell.kioskEnterConfirm'),
+				cancelLabel: t('bolt.shell.kioskEnterCancel')
+			}
+		}))
+	);
 	const systemNavigation = $derived(
 		buildSystemNavigation({
 			plugins,
 			isAdmin: isAdmin === true,
 			canAccessAutomations,
+			kiosk: kioskNavigation,
 			currentPath,
 			i18n: { has, t }
 		})
@@ -400,7 +432,7 @@
 			Schema.decodeUnknownResult(NotificationText)(payload),
 			() => undefined
 		);
-		if (typeof decoded === 'string') return decoded;
+		if (isString(decoded)) return decoded;
 		return decoded?.text ?? decoded?.message ?? decoded?.title ?? 'Notification';
 	};
 
@@ -474,7 +506,8 @@
 {#snippet applicationCard(app: WorkspaceNavigationItem)}
 	<a
 		href={app.href}
-		class="group w-[17rem] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		class="group shrink-0 snap-start rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		style="width: 17rem; overflow: hidden"
 		onclick={(event) => {
 			event.preventDefault();
 			onNavigate?.(app.href);
@@ -559,280 +592,294 @@
 		{@render children?.()}
 	</CollectionNavigationSurface>
 {:else}
-<WorkspaceShell
-	model={navigationModel}
-	{onNavigate}
-	{onOrganizationChange}
-	{onSignOut}
-	onSearch={toggleFinder}
-	searchLabel={t('bolt.shell.omniTitle')}
-	{searchShortcut}
-	{impersonation}
-	{onImpersonate}
-	{onStopImpersonating}
->
-	{#snippet agent({ expanded })}
-		<AgentTrigger
-			state={fabAgentState}
-			label={t('bolt.shell.askAgent')}
-			shortcut={agentShortcut}
-			{expanded}
-			onclick={() => openAgent()}
-		/>
-	{/snippet}
-	{#snippet notifications({ expanded })}
-		<Notifications
-			{expanded}
-			items={notificationItems}
-			loading={notificationsQuery?.loading ?? false}
-			error={notificationsError}
-			onread={markNotificationRead}
-		/>
-	{/snippet}
-	<Stack gap="none" fill>
-		<Bound size="full" clip grow>
-			{#if currentPath === '/' || onAgentPath}
-				<Scroll name={t('bolt.shell.workspaceOverview')} inset>
-					<Center measure="wide">
-						<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
-							<Stack as="header" gap="xs">
-								<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
-								<p class="text-meta">{t('bolt.shell.pickApplication')}</p>
-							</Stack>
+	<WorkspaceShell
+		model={navigationModel}
+		{onNavigate}
+		{onOrganizationChange}
+		{onSignOut}
+		onSearch={toggleFinder}
+		searchLabel={t('bolt.shell.omniTitle')}
+		{searchShortcut}
+		{impersonation}
+		{onImpersonate}
+		{onStopImpersonating}
+	>
+		{#snippet agent({ expanded })}
+			<AgentTrigger
+				state={fabAgentState}
+				label={t('bolt.shell.askAgent')}
+				shortcut={agentShortcut}
+				{expanded}
+				onclick={() => openAgent()}
+			/>
+		{/snippet}
+		{#snippet notifications({ expanded })}
+			<Notifications
+				{expanded}
+				items={notificationItems}
+				loading={notificationsQuery?.loading ?? false}
+				error={notificationsError}
+				onread={markNotificationRead}
+			/>
+		{/snippet}
+		<Stack gap="none" fill>
+			<Bound size="full" clip grow>
+				{#if currentPath === '/' || onAgentPath}
+					<Scroll name={t('bolt.shell.workspaceOverview')} inset>
+						<Center measure="wide">
+							<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
+								<Stack as="header" gap="xs">
+									<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
+									<p class="text-meta">{t('bolt.shell.pickApplication')}</p>
+								</Stack>
 
-							<Stack as="section" gap="sm">
-								<h2 class="text-overline">{t('bolt.shell.applications')}</h2>
-								{#if navigationModel.applications.length === 0}
-									<Stack
-										align="center"
-										justify="center"
-										gap="xs"
-										class="rounded-lg border border-dashed p-8"
-									>
-										<IconWrapper
-											name="lucide:layout-dashboard"
-											class="size-8 text-muted-foreground"
-										/>
-										<span class="text-meta">{t('bolt.shell.noApplications')}</span>
-										<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-											{t('bolt.shell.addApplication')}
-										</span>
-									</Stack>
-								{:else}
-									<!--
+								<Stack as="section" gap="sm">
+									<h2 class="text-overline">{t('bolt.shell.applications')}</h2>
+									{#if navigationModel.applications.length === 0}
+										<Stack
+											align="center"
+											justify="center"
+											gap="xs"
+											class="rounded-lg border border-dashed p-8"
+										>
+											<IconWrapper
+												name="lucide:layout-dashboard"
+												class="size-8 text-muted-foreground"
+											/>
+											<span class="text-meta">{t('bolt.shell.noApplications')}</span>
+											<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
+												{t('bolt.shell.addApplication')}
+											</span>
+										</Stack>
+									{:else}
+										<!--
 									A group is a heading over its own apps, not a card standing in for them. Rendering
 									every entry flat put "HR Controller" beside its own children as though it were a
 									sibling, and gave a card to something you cannot actually open.
 								-->
-									{@const standalone = navigationModel.applications.filter(
-										(app) => (app.children?.length ?? 0) === 0
-									)}
-									{@const grouped = navigationModel.applications.filter(
-										(app) => (app.children?.length ?? 0) > 0
-									)}
-									{#if standalone.length > 0}
-										<Scroll
-											axis="x"
-											name="overview-apps"
-											layout="inline"
-											gap="sm"
-											class="-mx-1 snap-x snap-mandatory px-1 pb-2"
-										>
-											{#each standalone as app (app.key)}
-												{@render applicationCard(app)}
-											{/each}
-										</Scroll>
-									{/if}
-									{#each grouped as group (group.key)}
-										<Stack as="section" gap="sm" class="border-l-2 border-brand/40 pl-3">
-											<Inline gap="sm" align="center">
-												<Inline
-													shrink={false}
-													justify="center"
-													align="center"
-													class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
-												>
-													<IconWrapper name={group.icon ?? 'lucide:layout-grid'} class="size-4" />
-												</Inline>
-												<Stack gap="xs" class="min-w-0">
-													<p class="truncate text-sm font-semibold text-foreground">
-														{group.label}
-													</p>
-													{#if group.description}
-														<p class="text-micro text-muted-foreground">{group.description}</p>
-													{/if}
-												</Stack>
-											</Inline>
+										{@const standalone = navigationModel.applications.filter(
+											(app) => (app.children?.length ?? 0) === 0
+										)}
+										{@const grouped = navigationModel.applications.filter(
+											(app) => (app.children?.length ?? 0) > 0
+										)}
+										{#if standalone.length > 0}
 											<Scroll
 												axis="x"
-												name={`overview-group-${group.key}`}
+												name="overview-apps"
 												layout="inline"
 												gap="sm"
 												class="-mx-1 snap-x snap-mandatory px-1 pb-2"
 											>
-												{#each group.children ?? [] as child (child.key)}
-													{@render applicationCard(child)}
+												{#each standalone as app (app.key)}
+													{@render applicationCard(app)}
 												{/each}
 											</Scroll>
-										</Stack>
-									{/each}
-								{/if}
+										{/if}
+										{#each grouped as group (group.key)}
+											<Stack as="section" gap="sm" class="border-l-2 border-brand/40 pl-3">
+												<Inline gap="sm" align="center">
+													<Inline
+														shrink={false}
+														justify="center"
+														align="center"
+														class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
+													>
+														<IconWrapper name={group.icon ?? 'lucide:layout-grid'} class="size-4" />
+													</Inline>
+													<Stack gap="xs" class="min-w-0">
+														<p class="truncate text-sm font-semibold text-foreground">
+															{group.label}
+														</p>
+														{#if group.description}
+															<p class="text-micro text-muted-foreground">{group.description}</p>
+														{/if}
+													</Stack>
+												</Inline>
+												<Scroll
+													axis="x"
+													name={`overview-group-${group.key}`}
+													layout="inline"
+													gap="sm"
+													class="-mx-1 snap-x snap-mandatory px-1 pb-2"
+												>
+													{#each group.children ?? [] as child (child.key)}
+														{@render applicationCard(child)}
+													{/each}
+												</Scroll>
+											</Stack>
+										{/each}
+									{/if}
+								</Stack>
 							</Stack>
-						</Stack>
-					</Center>
-				</Scroll>
-			{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
-				<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-					<!--
+						</Center>
+					</Scroll>
+				{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
+					<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+						<!--
 					Approvals is a system surface, but it follows the same page contract as the host plugins:
 					one fixed heading, one responsive page gutter, then one bounded content region whose table
 					owns its vertical and horizontal scrolling. Rendering the table directly under the shell used
 					to put its toolbar against the viewport edge and its pagination against the shell footer.
 				-->
-					<Cover class="relative bg-background" gap="none">
-						{#snippet top()}
-							<Stack
-								as="header"
-								gap="xs"
-								shrink={false}
-								class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
-							>
-								<h1 class="text-heading">{t('bolt.shell.approvals')}</h1>
-								<p class="max-w-2xl text-meta">
-									{t('bolt.shell.approvalsDescription')}
-								</p>
-							</Stack>
-						{/snippet}
-
-						<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
-							<Bound size="full" grow clip class="relative min-w-0 w-full">
-								<CollectionTable
-									client={runtime.client}
-									collection="approval_request"
-									view="bolt:approval-inbox"
-									title={t('bolt.shell.pendingRequests')}
-									description={t('bolt.shell.pendingRequestsDescription')}
-									features={{ create: false }}
-									query={{
-										where: { status: { eq: 'ONGOING' } },
-										orderBy: { created_at: 'desc' }
-									}}
-									class="min-h-0"
+						<Cover class="relative bg-background" gap="none">
+							{#snippet top()}
+								<Stack
+									as="header"
+									gap="xs"
+									shrink={false}
+									class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
 								>
-									{#snippet columns({ Column })}
-										<Column
-											name="collection_name"
-											label={t('bolt.shell.collection')}
-											card="title"
-										/>
-										<Column name="action" label={t('bolt.shell.action')} card="badge" />
-										<Column name="record_id" label={t('bolt.shell.record')} card="subtitle" />
-										<Column name="status" label={t('bolt.shell.status')} />
-										<Column name="proposed_values" label={t('bolt.shell.proposedChange')} />
-									{/snippet}
-								</CollectionTable>
-							</Bound>
-						</Inline>
-					</Cover>
-				</CollectionNavigationSurface>
-			{:else if currentPath === AUTOMATIONS_PATH || currentPath.startsWith(`${AUTOMATIONS_PATH}/`)}
-				{#if canAccessAutomations}
-					<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-						<AutomationRunsPane
-							client={runtime.client}
-							automations={automationCatalog}
-							selected={selectedAutomation}
-							onselect={(name) => onNavigate?.(automationsHref(name))}
-						/>
+									<h1 class="text-heading">{t('bolt.shell.approvals')}</h1>
+									<p class="max-w-2xl text-meta">
+										{t('bolt.shell.approvalsDescription')}
+									</p>
+								</Stack>
+							{/snippet}
+
+							<Inline
+								align="stretch"
+								gap="none"
+								fill
+								class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6"
+							>
+								<Bound size="full" grow clip class="relative min-w-0 w-full">
+									<CollectionTable
+										client={runtime.client}
+										collection="approval_request"
+										view="bolt:approval-inbox"
+										title={t('bolt.shell.pendingRequests')}
+										description={t('bolt.shell.pendingRequestsDescription')}
+										features={{ create: false }}
+										query={{
+											where: { status: { eq: 'ONGOING' } },
+											orderBy: { created_at: 'desc' }
+										}}
+										class="min-h-0"
+									>
+										{#snippet columns({ Column })}
+											<Column
+												name="collection_name"
+												label={t('bolt.shell.collection')}
+												card="title"
+											/>
+											<Column name="action" label={t('bolt.shell.action')} card="badge" />
+											<Column name="record_id" label={t('bolt.shell.record')} card="subtitle" />
+											<Column name="status" label={t('bolt.shell.status')} />
+											<Column name="proposed_values" label={t('bolt.shell.proposedChange')} />
+										{/snippet}
+									</CollectionTable>
+								</Bound>
+							</Inline>
+						</Cover>
 					</CollectionNavigationSurface>
-				{:else}
-					<Stack fill align="center" justify="center" gap="sm" class="px-6 text-center">
-						<IconWrapper name="product:automations" class="size-9 text-muted-foreground/40" />
-						<p class="text-sm font-medium text-foreground">
-							{t('bolt.automations.unavailable')}
-						</p>
-					</Stack>
-				{/if}
-			{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
-				{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
-					<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
-						<!--
+				{:else if currentPath === AUTOMATIONS_PATH || currentPath.startsWith(`${AUTOMATIONS_PATH}/`)}
+					{#if canAccessAutomations}
+						<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+							<AutomationRunsPane
+								client={runtime.client}
+								automations={automationCatalog}
+								selected={selectedAutomation}
+								onselect={(name) => onNavigate?.(automationsHref(name))}
+							/>
+						</CollectionNavigationSurface>
+					{:else}
+						<Stack fill align="center" justify="center" gap="sm" class="px-6 text-center">
+							<IconWrapper name="product:automations" class="size-9 text-muted-foreground/40" />
+							<p class="text-sm font-medium text-foreground">
+								{t('bolt.automations.unavailable')}
+							</p>
+						</Stack>
+					{/if}
+				{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
+					{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
+						<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
+							<!--
 						Workspace settings and host plugins may render CollectionTable just like authored apps do.
 						Keep their rows inside the same URL-owned detail surface so selecting a member, invitation,
 						or plugin record opens a sheet instead of throwing for a missing navigation provider.
 					-->
-						<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-							{@render children?.()}
-						</CollectionNavigationSurface>
-					</Bound>
-				{/key}
-			{:else}
-				<!--
+							<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+								{@render children?.()}
+							</CollectionNavigationSurface>
+						</Bound>
+					{/key}
+				{:else}
+					<!--
 				`gap="none"` sat the app's first row flush against the banner image, so a tab strip began
 				on the pixel the artwork ended. The banner is a header, not a border: the content below it
 				needs the same separation any other section gets.
 			-->
-				<Cover gap="md" {...resolvedHeaderTitle ? { top: activeAppBanner } : {}}>
-					<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
-						<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-							{@render children?.()}
-						</CollectionNavigationSurface>
-					</Bound>
-				</Cover>
-			{/if}
-		</Bound>
-	</Stack>
-</WorkspaceShell>
-
-<OmniFinder
-	bind:open={finderOpen}
-	collections={finderCollections}
-	{navigationModel}
-	agentAvailable={true}
-	{onNavigate}
-	onAskAgent={openAgent}
-	{onOpenRecord}
-/>
-
-<BillingBanner fixed />
-
-<Sheet.Root open={agentSheetOpen} onOpenChange={closeAgentSheet}>
-	<Sheet.Content
-		flush
-		contained
-		portalTarget="[data-slot='sidebar-inset']"
-		side="right"
-		class="flex h-full w-[min(30rem,100%)] flex-col max-md:min-h-[min(85dvh,48rem)] sm:max-w-[30rem]"
-		persistenceKey="bolt-workspace-agent"
-		preventBackgroundClick="narrow"
-		onOpenAutoFocus={(event) => {
-			event.preventDefault();
-		}}
-	>
-		<Stack gap="none" fill class="min-h-0">
-			<Sheet.Header class="shrink-0 bg-card px-4 pt-3 pr-12 pb-1 text-left sm:px-5 sm:pr-12">
-				<Inline gap="sm" align="center" class="min-w-0">
-					<div
-						class="grid size-4 shrink-0 place-items-center text-foreground"
-						data-testid="workspace-agent-orb"
-					>
-						<NorbitalThinkingOrb
-							state={fabAgentState}
-							size={16}
-							label={t(agentOrbStatusKey(fabAgentState))}
-						/>
-					</div>
-					<Sheet.Title class="min-w-0 truncate text-sm font-semibold">
-						{t('bolt.shell.workspaceAgentTitle')}
-					</Sheet.Title>
-				</Inline>
-			</Sheet.Header>
-			<Stack gap="none" grow class="min-h-0">
-				<AgentChatPanel headerOrb={false} />
-			</Stack>
+					<Cover gap="md" {...resolvedHeaderTitle ? { top: activeAppBanner } : {}}>
+						<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
+							<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+								{@render children?.()}
+							</CollectionNavigationSurface>
+						</Bound>
+					</Cover>
+				{/if}
+			</Bound>
 		</Stack>
-	</Sheet.Content>
-</Sheet.Root>
+	</WorkspaceShell>
+
+	<OmniFinder
+		bind:open={finderOpen}
+		collections={finderCollections}
+		findRecords={runtime.client.records.findMany}
+		getRecordLabel={(collection) => runtime.client.collections[collection]?.recordLabel}
+		{navigationModel}
+		agentAvailable={true}
+		{onNavigate}
+		onAskAgent={openAgent}
+		onOpenRecord={(target) => {
+			if (onOpenRecord) onOpenRecord(target);
+			else
+				finderNavigation.open({
+					...target,
+					routeKey: createCollectionRouteKey({ view: 'finder' })
+				});
+		}}
+	/>
+
+	<BillingBanner fixed />
+
+	<Sheet.Root open={agentSheetOpen} onOpenChange={closeAgentSheet}>
+		<Sheet.Content
+			flush
+			contained
+			portalTarget="[data-slot='sidebar-inset']"
+			side="right"
+			class="h-full {'w-[min(30rem,100%)]'} flex-col max-md:min-h-[min(85dvh,48rem)] sm:max-w-[30rem]"
+			persistenceKey="bolt-workspace-agent"
+			preventBackgroundClick="narrow"
+			onOpenAutoFocus={(event) => {
+				event.preventDefault();
+			}}
+		>
+			<Stack gap="none" fill class="min-h-0">
+				<Sheet.Header class="shrink-0 bg-card px-4 pt-3 pr-12 pb-1 text-left sm:px-5 sm:pr-12">
+					<Inline gap="sm" align="center" class="min-w-0">
+						<div
+							class="grid size-4 shrink-0 place-items-center text-foreground"
+							data-testid="workspace-agent-orb"
+						>
+							<NorbitalThinkingOrb
+								state={fabAgentState}
+								size={16}
+								label={t(agentOrbStatusKey(fabAgentState))}
+							/>
+						</div>
+						<Sheet.Title class="min-w-0 truncate text-sm font-semibold">
+							{t('bolt.shell.workspaceAgentTitle')}
+						</Sheet.Title>
+					</Inline>
+				</Sheet.Header>
+				<Stack gap="none" grow class="min-h-0">
+					<AgentChatPanel headerOrb={false} />
+				</Stack>
+			</Stack>
+		</Sheet.Content>
+	</Sheet.Root>
 {/if}
 
 {#if status === 'error'}
@@ -841,7 +888,7 @@
 
 <style>
 	.sr-only {
-		position: absolute;
+		position: absolute; /* repository-health:allow UI24 -- .sr-only is the visually-hidden accessibility recipe, not layout composition; no layout primitive expresses it */
 		width: 1px;
 		height: 1px;
 		padding: 0;

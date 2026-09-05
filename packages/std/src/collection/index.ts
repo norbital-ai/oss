@@ -147,6 +147,13 @@ export interface CollectionDefinition<
 	readonly system?: boolean;
 	readonly fields: readonly CollectionField<CollectionFieldName<TCollection>>[];
 	readonly relationships?: readonly CollectionRelationship[];
+	/**
+	 * The columns the collection's declared `input` names, when it declares one. This is the
+	 * browser's copy of the server's write contract: the mutation mask, unknown-key rejection and
+	 * registration assertion all narrow to it. Absent, the whole writable collection is the
+	 * contract — the same fallback the runtime decode uses.
+	 */
+	readonly inputColumns?: readonly string[];
 }
 
 export type CollectionWhere<_TRow extends object> = { readonly [field: string]: unknown };

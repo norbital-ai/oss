@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { DataRenderer } from '#lib/data-renderer';
 	import { Inline, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -23,9 +24,10 @@
 	const { t } = useI18n<UiKeys>();
 	const conditions = $derived(collectionAppliedFilterConditions(where, definition, collections));
 	const VALUE_TOKEN = '__norbital_filter_value__';
+	const isString = Schema.is(Schema.String);
 
 	function displayOperand(condition: CollectionAppliedFilterCondition): unknown {
-		return condition.operator === 'ilike' && typeof condition.operand === 'string'
+		return condition.operator === 'ilike' && isString(condition.operand)
 			? condition.operand.replace(/^%|%$/g, '')
 			: condition.operand;
 	}

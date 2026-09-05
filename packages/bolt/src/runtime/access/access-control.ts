@@ -39,6 +39,11 @@ export type { RowPredicate } from './predicate.js';
 export { unrestricted } from './policy-surface.js';
 
 const isJson = Schema.is(Schema.Json);
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
 
 type PolicyDecision = Readonly<{
 	readonly allowed: boolean;
@@ -108,8 +113,8 @@ const approvalReadExpression = (
 
 const isActorBoundWhere = (value: unknown): boolean => {
 	if (Array.isArray(value)) return value.some(isActorBoundWhere);
-	if (value === null || typeof value !== 'object') return false;
-	if (typeof Reflect.get(value, '$subject') === 'string') return true;
+	if (!isObject(value)) return false;
+	if (isString(Reflect.get(value, '$subject'))) return true;
 	return Object.values(value).some(isActorBoundWhere);
 };
 
@@ -649,10 +654,10 @@ export const layer = Layer.effect(
 					.limit(1)
 			);
 			const row = found.rows[0];
-			if (row == null || typeof row !== 'object') return undefined;
+			if (!isObjectLike(row)) return undefined;
 			const teamId = Reflect.get(row, 'id');
 			const teamName = Reflect.get(row, 'name');
-			if (typeof teamId !== 'string' || typeof teamName !== 'string') return undefined;
+			if (!isString(teamId) || !isString(teamName)) return undefined;
 			const path: Array<string> = [teamName];
 			const visited = new Set<string>([teamId]);
 			let parents: ReadonlyArray<string> = [teamId];
@@ -668,10 +673,10 @@ export const layer = Layer.effect(
 				);
 				const next: Array<string> = [];
 				for (const entry of descendants.rows) {
-					if (entry === null || typeof entry !== 'object') continue;
+					if (!isObjectLike(entry)) continue;
 					const id = Reflect.get(entry, 'id');
 					const childName = Reflect.get(entry, 'name');
-					if (typeof id !== 'string' || !isNonEmptyString(childName) || visited.has(id)) continue;
+					if (!isString(id) || !isNonEmptyString(childName) || visited.has(id)) continue;
 					visited.add(id);
 					next.push(id);
 					path.push(childName);
@@ -833,8 +838,7 @@ export const layer = Layer.effect(
 				).pipe(
 					Effect.map((result) =>
 						result.rows.flatMap((row): ReadonlyArray<ImpersonationTeam> => {
-							const name =
-								row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : undefined;
+							const name = isObjectLike(row) ? Reflect.get(row, 'name') : undefined;
 							return isNonEmptyString(name) ? [{ id: name, name }] : [];
 						})
 					)

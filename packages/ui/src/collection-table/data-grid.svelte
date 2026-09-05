@@ -41,6 +41,7 @@
 
 <script lang="ts" generics="TRow extends object">
 	import { decodeNumber } from '@norbital-ai/std/json';
+	import { Schema } from 'effect';
 	import CollectionGrid from './internal/collection-grid.svelte';
 	import {
 		RowAPI,
@@ -79,12 +80,15 @@
 		return column.value?.(row) ?? Reflect.get(row, column.id);
 	}
 
+	const isNumber = Schema.is(Schema.Number);
+	const isBoolean = Schema.is(Schema.Boolean);
+
 	function compareValues(left: unknown, right: unknown): number {
 		if (left == null && right == null) return 0;
 		if (left == null) return 1;
 		if (right == null) return -1;
-		if (typeof left === 'number' && typeof right === 'number') return left - right;
-		if (typeof left === 'boolean' && typeof right === 'boolean')
+		if (isNumber(left) && isNumber(right)) return left - right;
+		if (isBoolean(left) && isBoolean(right))
 			return decodeNumber(left ? 1 : 0) - decodeNumber(right ? 1 : 0);
 		return String(left).localeCompare(String(right), undefined, {
 			numeric: true,

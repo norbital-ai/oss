@@ -41,10 +41,7 @@ export type Interface = Readonly<{
 		request: SyncConnectRequest
 	) => Effect.Effect<
 		SyncConnectEvaluation,
-		| Collections.QueryError
-		| Database.FacilityError
-		| SyncPrefixResolutionError
-		| EffectivePlanError
+		Collections.QueryError | Database.FacilityError | SyncPrefixResolutionError | EffectivePlanError
 	>;
 	readonly advance: (
 		effectId: EffectId,
@@ -125,7 +122,7 @@ export const layer = Layer.effect(
 						planKey: resolved.plan.effectivePlan.fingerprint,
 						version: 0,
 						prefixKeys: resolved.keys,
-						loadedPrefix: resolved.rows.length,
+						loadedPrefix: Math.min(query.requestedPrefix, resolved.plan.effectivePlan.limit),
 						prefixBytes: resolved.retainedBytes,
 						...(impersonatedTeam === null ? {} : { impersonatedTeam }),
 						authorityFingerprint: resolved.plan.effectivePlan.authority.fingerprint,

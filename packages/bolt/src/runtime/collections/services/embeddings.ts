@@ -44,6 +44,7 @@ const RECORD_EMBEDDING_REQUEST_CONCURRENCY = 4;
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
 const jsonRecord = Schema.is(JsonObject);
+const isString = Schema.is(Schema.String);
 const encodeJsonText = (value: unknown): string => {
 	const encoded = JSON.stringify(value);
 	if (encoded === undefined) throw new TypeError('Embedding state is not JSON encodable');
@@ -92,7 +93,7 @@ export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput'
 			imageAssets.push(decoded.value);
 			continue;
 		}
-		const encoded = typeof value === 'string' ? value : encodeJsonText(value);
+		const encoded = isString(value) ? value : encodeJsonText(value);
 		if (encoded.trim() === '') continue;
 		text.push(encoded);
 	}

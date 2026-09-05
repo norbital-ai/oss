@@ -18,11 +18,6 @@ export type StandardSchemaIssue = Extract<
 	{ readonly issues: readonly unknown[] }
 >['issues'][number];
 
-/** Any schema the realm's forms accept: an Effect schema, standard-adapted or raw. */
-export type StandardSchemaOf<S extends Schema.Codec<unknown, unknown>> = ReturnType<
-	typeof Schema.toStandardSchemaV1<S>
->;
-
 /** Errors grouped for the form state: per-field lists plus whole-form messages. */
 interface FieldAndFormErrors {
 	fieldErrors: Record<string, string[]>;

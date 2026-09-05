@@ -3,7 +3,15 @@
  */
 import type { Matcher } from './matcher.js';
 import { evaluateFact } from './facts.js';
+import { Schema } from 'effect';
 import ts from 'typescript';
+
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+// The original check on fact parameter values accepted arrays too.
+const isUnknownContainer = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
 
 export type Language = 'ts' | 'svelte' | 'css' | 'trivia' | 'sql';
 
@@ -21,7 +29,7 @@ export type Node = {
 	origin: ts.Node | undefined;
 };
 
-export type ModelHost = Readonly<{
+type ModelHost = Readonly<{
 	file: string;
 	root: string;
 	source: ts.SourceFile;
@@ -79,14 +87,14 @@ export function lineOf(source: string, offset: number): number {
 	return line;
 }
 
-export function kindMatches(wanted: string, node: Node): boolean {
+function kindMatches(wanted: string, node: Node): boolean {
 	const name = wanted.startsWith('ts:') ? wanted.slice(3) : wanted;
 	if (name === node.kind || wanted === node.kind) return true;
 	if (node.kind.startsWith('ts:') && node.kind.slice(3) === name) return true;
 	const origin = node.origin;
 	if (origin === undefined || name.includes(':')) return false;
 	const numeric = ts.SyntaxKind[name as keyof typeof ts.SyntaxKind];
-	return typeof numeric === 'number' && origin.kind === numeric;
+	return isNumber(numeric) && origin.kind === numeric;
 }
 
 function ancestors(node: Node): ReadonlyArray<Node> {
@@ -110,7 +118,7 @@ const NAMESPACED = /^(?:ts|svelte|css|trivia|sql):/;
 
 /** True when a matcher tree names a front-end kind the TypeScript walker cannot see. */
 export function hasNamespacedKind(matcher: Matcher): boolean {
-	if (typeof matcher === 'string') return false;
+	if (isString(matcher)) return false;
 	if ('kind' in matcher) return NAMESPACED.test(matcher.kind) && !matcher.kind.startsWith('ts:');
 	if ('inside' in matcher) return hasNamespacedKind(matcher.inside);
 	if ('has' in matcher) return hasNamespacedKind(matcher.has);
@@ -122,9 +130,9 @@ export function hasNamespacedKind(matcher: Matcher): boolean {
 	if ('of' in matcher) return matcher.of.some(hasNamespacedKind);
 	if ('count' in matcher) return hasNamespacedKind(matcher.count.of);
 	if ('fact' in matcher) {
-		const fact = matcher.fact as Readonly<Record<string, unknown>>;
+		const fact: Readonly<Record<string, unknown>> = matcher.fact;
 		for (const value of Object.values(fact))
-			if (value !== null && typeof value === 'object') return hasNamespacedKind(value as Matcher);
+			if (isUnknownContainer(value)) return hasNamespacedKind(value as Matcher);
 	}
 	return false;
 }
@@ -132,7 +140,7 @@ export function hasNamespacedKind(matcher: Matcher): boolean {
 type ModelCompiled = (node: Node, host: ModelHost) => boolean;
 
 function compileModel(matcher: Matcher): ModelCompiled {
-	if (typeof matcher === 'string')
+	if (isString(matcher))
 		return (node) => node.text.replace(/\s+/g, ' ').trim().includes(matcher.replace(/\s+/g, ' ').trim());
 	if ('kind' in matcher) return (node) => kindMatches(matcher.kind, node);
 	if ('regex' in matcher) {
@@ -145,7 +153,7 @@ function compileModel(matcher: Matcher): ModelCompiled {
 		const field = matcher.field;
 		return (node, host) => {
 			const chain = ancestors(node);
-			const scope = stop === 'neighbor' ? chain.slice(0, 1) : stop === 'end' ? chain : chain;
+			const scope = stop === 'neighbor' ? chain.slice(0, 1) : chain;
 			return scope.some(
 				(parent) =>
 					(field === undefined || node.field === field || parent.fields.get(field)?.includes(node)) &&

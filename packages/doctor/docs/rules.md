@@ -80,14 +80,19 @@ to more than one principle total.
 | Q4       | hint  | medium     | Private function has one same-file direct call and a small mutation-free single expression                      | Review whether its name earns the indirection; inline when it does not.             |
 | IDENT1   | error | high       | `onSuccess` handler returns its argument unchanged                                                              | Drop the match; use `orElseSucceed` / `catch` / `getOrElse` so success is implicit. |
 | SWALLOW1 | error | high       | `Effect.catch` handler is empty or returns `undefined`                                                          | Log, fail, or recover with a real value; do not discard the error channel.          |
+| SWALLOW2 | error | high       | `Effect.catch` handler returns an empty value (`[]`, `{}`, `null`, `undefined`, `''`)                           | Fail, or recover with `succeedNone`/`Option.none` so absent stays typed.            |
 | FETCH1   | error | high       | Bare `fetch(` call                                                                                              | Use `httpRequest` from `@norbital-ai/std/http`.                                     |
 | EFF11    | error | high       | `Effect.Effect<A, unknown>` erases the error channel                                                            | Name the failure type; `R` as `unknown` is not this rule.                           |
 | COERCE1  | error | high       | `Number()` used as an IO decoder                                                                                | Use `decodeNumber` from `@norbital-ai/std/json`.                                    |
 | Q5       | error | high       | Parameter is typed as the `undefined` or `void` singleton                                                       | Drop the phantom argument or type a real domain value.                              |
 | RET1     | hint  | high       | Implementation writes a return type TypeScript already infers                                                    | Drop the annotation; keep type predicates, overloads, and `declare`/interface contracts. |
 | GUARD1   | error | high       | `typeof x === 'object' && x !== null` reconstructs a record by hand                                             | Decode with Effect Schema (`JsonObject` / the domain schema).                       |
+| GUARD2   | error | high       | `typeof x === '<kind>'` decides what a value is at runtime                                                       | Decode with Effect Schema (`Schema.is`); a typeof ask means the boundary upstream failed. |
 | REFLECT1 | error | high       | `Reflect.get(Object(...), key)` reads a coerced value instead of a decoded boundary                             | Decode once; read typed fields.                                                     |
-| STATE2   | error | high       | Module `const` Map/Set is mutated from a function                                                               | Move lifetime into a factory or inject the cache.                                   |
+| STATE2   | error | high       | Module `const` Map/Set is mutated from a function                                                                | Move lifetime into a factory or inject the cache.                                   |
+| STATE3   | error | high       | Module `let` binding is mutated from a function                                                                  | Move lifetime into a factory, scoped service, or instance owner.                    |
+| ERR1     | error | high       | `new Error(String(cause))` stringifies the caught value into a new Error                                         | Preserve the failure: `new Error(message, { cause })` or `toError` from std.        |
+| ERR2     | error | high       | A catch arm builds a new Error without preserving the caught failure as its `cause`                              | Attach `{ cause }` to the error the arm builds.                                     |
 | STD2     | error | high       | `instanceof Error ? .message : String(.)` reimplements `getErrorMessage`                                        | Import `getErrorMessage` from `@norbital-ai/std`.                                   |
 | STD3     | error | high       | `instanceof Error ? cause : new Error(String(cause))` reimplements `toError`                                    | Import `toError` from `@norbital-ai/std`.                                           |
 | PARSE1   | error | high       | Ternary `JSON.parse` branch skips the decode boundary                                                           | Decode with Effect Schema (`Schema.parseJson`).                                     |
@@ -241,6 +246,14 @@ implementations; general syntax, boundary, Effect, and Tailwind runtime-value ru
 
 `V20`. An `$effect` whose entire body is a call to a named function — `$effect(() => reveal())` or
 `$effect(reveal)` — publishes nothing about what re-runs it.
+
+`REACT5`. The same law applies when the effect itself manufactures or suppresses its dependency set:
+`untrack` among the effect's statements, a whole-body `untrack`, or a dependency-only read —
+`void key;` / a bare `value;` statement — declares a dependency while everything else in the effect
+reads invisibly. A reader at the effect can no longer answer "what re-runs this?" without tracing the
+suppressed reads. Write the reads at the effect, or move one-way state sync into `watch` from
+`runed`. A `void` discard of a binding declared earlier in the same effect block — `const timer = …;
+void timer;` — is a discarded handle, not a hidden dependency, and stays quiet.
 
 The reactivity is not the problem. Svelte tracks reads made synchronously inside a called function,
 measured against 5.56 rather than assumed: an effect calling `reveal()` re-runs when `reveal` reads
@@ -412,6 +425,28 @@ property, a helper that returns only a Transaction request, or a direct call to 
 `transactionSql` imported from Bolt's persistence owner. A same-named local/lookalike helper is still
 raw SQL. Model/compiler tagged expressions and the policy compiler's explicit `policySql` input are the DDL
 bootstrap exceptions; ordinary runtime tagged SQL is not.
+
+The error-channel rules are one law at three depths. SWALLOW2 fires only on an *empty* recovered
+value — `[]`, `{}`, `null`, `undefined`, `''` — where corruption and a legitimately empty result are
+indistinguishable; an honest absent marker (`succeedNone`, `Option.none`) and a real fallback value
+stay quiet. ERR1 fires on `new Error(String(cause))` and exempts the `instanceof` ternary that STD3
+already diagnoses. ERR2 follows a caught value statically through both arm hosts (`Effect.catch`
+calls and `catch:` properties) and stays quiet the moment the arm's Error carries that value as its
+`cause`, in property or shorthand form; an arm that omits the binding entirely is always reported.
+ERR1 dominates ERR2 where one arm matches both, because one `{ cause }` repair clears both claims.
+
+GUARD2 carries the no-runtime-type-checking law: if code must ask `typeof` what a value is, the
+type system broke at the boundary that handed the value over, so the repair is a schema decode
+(`Schema.is` / a domain schema), not a sharper discriminant. Ambient receivers — `globalThis`,
+`process`, `import.meta`, `window`, `document`, `module` — are environment detection, not value
+type checking, and stay quiet. GUARD1 dominates GUARD2 where the object-record conjunction matches
+both, because one `decodeUnknownOption` repair clears both claims.
+
+STATE3 pairs with STATE1 and STATE2 to close the hidden-state family: STATE1 owns module `let` in
+Effect-importing modules, STATE2 owns module `const` collections, and STATE3 owns module `let`
+mutated from a function elsewhere. Function-local `let`, `??=` memo assignments, and plain reads
+stay quiet. The first bound top-level `let` names the binding the mutation must target, the same
+single-coupling limitation STATE2 carries.
 
 SUP1 accepts only an exact known rule on the same line or immediately before the suppressed syntax,
 followed by `--` and a concrete domain reason. Rule identifiers are token-matched (`UI1` cannot

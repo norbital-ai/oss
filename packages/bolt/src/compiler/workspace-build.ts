@@ -14,6 +14,7 @@ import {
 	type TenantRelease
 } from '@norbital-ai/bolt-protocol';
 import { toError } from '@norbital-ai/std';
+import ts from 'typescript';
 import {
 	collection,
 	type CollectionCatalogEntry,
@@ -51,6 +52,9 @@ import {
 } from './artifact-release.js';
 
 const boltPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+/** Authored MCP module exports are read defensively before their own schema decodes them. */
+const isAuthoredModule = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 export const tenantRuntimeBoundary = (): Plugin => ({
 	name: '@norbital-ai/bolt:tenant-runtime-boundary',
@@ -420,11 +424,20 @@ class WorkspaceCompiler {
 	};
 
 	static readonly readI18nMessages = (root: string) => {
-		const readLocale = (locale: 'en' | 'zh'): Effect.Effect<Readonly<Record<string, string>>> =>
-			Effect.tryPromise(() =>
-				readFile(join(root, 'src', 'i18n', `messages.${locale}.json`), 'utf8')
-			).pipe(
-				Effect.catch(() => Effect.succeed<string | undefined>(undefined)),
+		const readLocale = (
+			locale: 'en' | 'zh'
+		): Effect.Effect<Readonly<Record<string, string>>, Error> =>
+			Effect.tryPromise({
+				try: () => readFile(join(root, 'src', 'i18n', `messages.${locale}.json`), 'utf8'),
+				catch: (cause) => toError(cause)
+			}).pipe(
+				// A missing locale file is an absent catalog; an unreadable one must fail rather than
+				// silently compile a workspace whose tenant i18n keys no longer exist.
+				Effect.catch((cause) =>
+					Reflect.get(cause, 'code') === 'ENOENT'
+						? Effect.succeed<string | undefined>(undefined)
+						: Effect.fail(cause)
+				),
 				Effect.map((source) => (source === undefined ? {} : decodeI18nMessagesFile(source)))
 			);
 		return Effect.map(Effect.all([readLocale('en'), readLocale('zh')] as const), ([en, zh]) => ({
@@ -448,7 +461,7 @@ class WorkspaceCompiler {
 	};
 
 	static readonly renderCollectionCatalogDeclaration = (): string =>
-		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly array?: boolean; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string>; readonly currencies?: ReadonlyArray<string>; readonly precision?: 'day' | 'minute'; readonly mimeTypes?: ReadonlyArray<string>; readonly relation?: { readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many' } }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true }>;\n}>>;\nexport declare const publicCollectionNames: ReadonlyArray<string>;\n`;
+		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly array?: boolean; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string>; readonly currencies?: ReadonlyArray<string>; readonly precision?: 'day' | 'minute'; readonly mimeTypes?: ReadonlyArray<string>; readonly relation?: { readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many' } }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true }>;\n\treadonly inputColumns?: ReadonlyArray<string>;\n}>>;\nexport declare const publicCollectionNames: ReadonlyArray<string>;\n`;
 
 	static readonly renderRelationTypes = (relations: ReadonlyArray<RelationDefinition>): string => {
 		const byCollection = new Map<string, Array<string>>();
@@ -616,12 +629,7 @@ class WorkspaceCompiler {
 					'./generated/**/*.ts',
 					'./types/**/*.d.ts'
 				],
-				exclude: [
-					'../node_modules',
-					'./dist',
-					'../src/**/*.test.ts',
-					'../src/**/*.spec.ts'
-				]
+				exclude: ['../node_modules', './dist', '../src/**/*.test.ts', '../src/**/*.spec.ts']
 			},
 			null,
 			'\t'
@@ -651,148 +659,147 @@ class WorkspaceCompiler {
 }
 
 export const buildAssetIndex = (
-		root: string,
-		workspaceKey: string,
-		artifactDirectory: string,
-		capabilities: CompiledTenantCapabilities = { skills: [], mcp: [] }
-	) => {
-		const blobDirectory = join(artifactDirectory, ARTIFACT_ASSET_DIRECTORY);
-		const written = new Set<string>();
-		const store = (path: string, key: string): Effect.Effect<AssetIndexEntry, Error> =>
-			Effect.gen(function* () {
-				const bytes = yield* Effect.tryPromise(() => readFile(path));
-				const sha256 = createHash('sha256').update(bytes).digest('hex');
-				if (!written.has(sha256)) {
-					written.add(sha256);
-					yield* Effect.tryPromise(() => writeFile(join(blobDirectory, sha256), bytes));
-				}
-				return {
-					path: key,
-					contentType: WorkspaceCompiler.contentType(path),
-					sha256,
-					byteLength: bytes.byteLength
-				};
-			});
-		return Effect.gen(function* () {
-			const dist = join(root, '.norbital', 'dist');
-			const emitted = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
-			const declarationPath = join(dist, SERVER_ASSET_DECLARATION_FILE_NAME);
-			const declared = (yield* fileExists(declarationPath))
-				? (yield* decodeServerAssetDeclaration(
-						yield* Effect.tryPromise(() => readFile(declarationPath, 'utf8'))
-					).pipe(
-						Effect.mapError(
-							(cause) =>
-								new Error(
-									`The client build under ${dist} left an unreadable ${SERVER_ASSET_DECLARATION_FILE_NAME}: ${String(cause)}`
-								)
-						)
-					)).targets
-				: [];
-			const built = emitted.filter((path) => path !== declarationPath);
-			if (built.length === 0) {
-				return yield* Effect.fail(
-					new Error(
-						`No compiled client under ${dist}. \`bolt sync\` builds it; an empty directory means that build produced no output.`
-					)
-				);
+	root: string,
+	workspaceKey: string,
+	artifactDirectory: string,
+	capabilities: CompiledTenantCapabilities = { skills: [], mcp: [] }
+) => {
+	const blobDirectory = join(artifactDirectory, ARTIFACT_ASSET_DIRECTORY);
+	const written = new Set<string>();
+	const store = (path: string, key: string): Effect.Effect<AssetIndexEntry, Error> =>
+		Effect.gen(function* () {
+			const bytes = yield* Effect.tryPromise(() => readFile(path));
+			const sha256 = createHash('sha256').update(bytes).digest('hex');
+			if (!written.has(sha256)) {
+				written.add(sha256);
+				yield* Effect.tryPromise(() => writeFile(join(blobDirectory, sha256), bytes));
 			}
-			if (!built.some((path) => relative(dist, path) === WORKSPACE_ENTRY_FILE_NAME)) {
-				return yield* Effect.fail(
-					new Error(
-						[
-							`The client build under ${dist} emitted no ${WORKSPACE_ENTRY_FILE_NAME}.`,
-							`It emitted: ${built.map((path) => WorkspaceCompiler.posix(relative(dist, path))).join(', ')}.`,
-							`A host fetches this artifact's client at \`${BOLT_TENANT_STATIC_PREFIX}/${WORKSPACE_ENTRY_FILE_NAME}\`, so an artifact without it serves a workspace with no apps.`,
-							`This is what a stale \`@norbital-ai/bolt\` looks like: check that the workspace resolves the same build as the \`bolt\` that ran this sync (\`node -e "console.log(require.resolve('@norbital-ai/bolt/package.json'))"\` in the workspace root), and re-link or re-install if it does not.`
-						].join(' ')
-					)
-				);
-			}
-			const emittedKeys = new Set(
-				built.map((path) => WorkspaceCompiler.posix(relative(dist, path)))
-			);
-			const missing = declared.filter((target) => !emittedKeys.has(target));
-			if (missing.length > 0) {
-				return yield* Effect.fail(
-					new Error(
-						`The workspace declares server assets the client build did not copy into ${dist}: ${missing.join(', ')}. Check the \`serverAssets\` sources in vite.config.ts.`
-					)
-				);
-			}
-			const serverKeys = new Set(declared);
-			const media = join(root, 'assets');
-			const authored = (yield* WorkspaceCompiler.filesUnder(media)).toSorted();
-			yield* Effect.tryPromise(() => rm(blobDirectory, { recursive: true, force: true }));
-			yield* Effect.tryPromise(() => mkdir(blobDirectory, { recursive: true }));
-			const capabilityDirectory = join(artifactDirectory, 'capabilities');
-			const capabilityIndexPath = join(capabilityDirectory, 'index.json');
-			yield* Effect.tryPromise(() => mkdir(capabilityDirectory, { recursive: true }));
-			yield* Effect.tryPromise(() =>
-				writeFile(
-					capabilityIndexPath,
-					`${JSON.stringify({
-						format: 'norbital-capabilities-v1',
-						skills: capabilities.skills.map(({ body: _body, ...skill }) => skill),
-						mcp: capabilities.mcp
-					})}\n`,
-					'utf8'
-				)
-			);
-			const capabilityAssets = yield* Effect.all(
-				[
-					store(capabilityIndexPath, 'capabilities/index.json'),
-					...capabilities.skills.flatMap((skill) =>
-						skill.files.map((file) =>
-							Effect.gen(function* () {
-								const entry = yield* store(
-									join(root, 'src', 'capabilities', 'skills', skill.name, file.path),
-									`capabilities/skills/${skill.name}/${file.path}`
-								);
-								if (entry.sha256 !== file.sha256 || entry.byteLength !== file.byteLength)
-									return yield* Effect.fail(
-										new Error(
-											`Tenant skill ${skill.name}/${file.path} changed after capability compilation.`
-										)
-									);
-								return entry;
-							})
-						)
-					)
-				],
-				{ concurrency: 'unbounded' }
-			);
-			const [browser, server] = yield* Effect.all(
-				[
-					Effect.all(
-						[
-							...built
-								.filter((path) => !serverKeys.has(WorkspaceCompiler.posix(relative(dist, path))))
-								.map((path) => store(path, `/${WorkspaceCompiler.posix(relative(dist, path))}`)),
-							...authored.map((path) =>
-								store(
-									path,
-									`${BOLT_TENANT_REQUEST_PREFIX}/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
-								)
-							)
-						],
-						{ concurrency: 'unbounded' }
-					),
-					Effect.all(
-						declared.toSorted().map((target) => store(join(dist, target), target)),
-						{ concurrency: 'unbounded' }
-					)
-				] as const,
-				{ concurrency: 'unbounded' }
-			);
 			return {
-				browser,
-				server: [...server, ...capabilityAssets].toSorted((left, right) =>
-					left.path.localeCompare(right.path)
-				)
-			} satisfies TenantReleaseAssets;
+				path: key,
+				contentType: WorkspaceCompiler.contentType(path),
+				sha256,
+				byteLength: bytes.byteLength
+			};
 		});
-	};
+	return Effect.gen(function* () {
+		const dist = join(root, '.norbital', 'dist');
+		const emitted = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
+		const declarationPath = join(dist, SERVER_ASSET_DECLARATION_FILE_NAME);
+		const declared = (yield* fileExists(declarationPath))
+			? (yield* decodeServerAssetDeclaration(
+					yield* Effect.tryPromise(() => readFile(declarationPath, 'utf8'))
+				).pipe(
+					Effect.mapError(
+						(cause) =>
+							new Error(
+								`The client build under ${dist} left an unreadable ${SERVER_ASSET_DECLARATION_FILE_NAME}: ${String(cause)}`,
+								{ cause }
+							)
+					)
+				)).targets
+			: [];
+		const built = emitted.filter((path) => path !== declarationPath);
+		if (built.length === 0) {
+			return yield* Effect.fail(
+				new Error(
+					`No compiled client under ${dist}. \`bolt sync\` builds it; an empty directory means that build produced no output.`
+				)
+			);
+		}
+		if (!built.some((path) => relative(dist, path) === WORKSPACE_ENTRY_FILE_NAME)) {
+			return yield* Effect.fail(
+				new Error(
+					[
+						`The client build under ${dist} emitted no ${WORKSPACE_ENTRY_FILE_NAME}.`,
+						`It emitted: ${built.map((path) => WorkspaceCompiler.posix(relative(dist, path))).join(', ')}.`,
+						`A host fetches this artifact's client at \`${BOLT_TENANT_STATIC_PREFIX}/${WORKSPACE_ENTRY_FILE_NAME}\`, so an artifact without it serves a workspace with no apps.`,
+						`This is what a stale \`@norbital-ai/bolt\` looks like: check that the workspace resolves the same build as the \`bolt\` that ran this sync (\`node -e "console.log(require.resolve('@norbital-ai/bolt/package.json'))"\` in the workspace root), and re-link or re-install if it does not.`
+					].join(' ')
+				)
+			);
+		}
+		const emittedKeys = new Set(built.map((path) => WorkspaceCompiler.posix(relative(dist, path))));
+		const missing = declared.filter((target) => !emittedKeys.has(target));
+		if (missing.length > 0) {
+			return yield* Effect.fail(
+				new Error(
+					`The workspace declares server assets the client build did not copy into ${dist}: ${missing.join(', ')}. Check the \`serverAssets\` sources in vite.config.ts.`
+				)
+			);
+		}
+		const serverKeys = new Set(declared);
+		const media = join(root, 'assets');
+		const authored = (yield* WorkspaceCompiler.filesUnder(media)).toSorted();
+		yield* Effect.tryPromise(() => rm(blobDirectory, { recursive: true, force: true }));
+		yield* Effect.tryPromise(() => mkdir(blobDirectory, { recursive: true }));
+		const capabilityDirectory = join(artifactDirectory, 'capabilities');
+		const capabilityIndexPath = join(capabilityDirectory, 'index.json');
+		yield* Effect.tryPromise(() => mkdir(capabilityDirectory, { recursive: true }));
+		yield* Effect.tryPromise(() =>
+			writeFile(
+				capabilityIndexPath,
+				`${JSON.stringify({
+					format: 'norbital-capabilities-v1',
+					skills: capabilities.skills.map(({ body: _body, ...skill }) => skill),
+					mcp: capabilities.mcp
+				})}\n`,
+				'utf8'
+			)
+		);
+		const capabilityAssets = yield* Effect.all(
+			[
+				store(capabilityIndexPath, 'capabilities/index.json'),
+				...capabilities.skills.flatMap((skill) =>
+					skill.files.map((file) =>
+						Effect.gen(function* () {
+							const entry = yield* store(
+								join(root, 'src', 'capabilities', 'skills', skill.name, file.path),
+								`capabilities/skills/${skill.name}/${file.path}`
+							);
+							if (entry.sha256 !== file.sha256 || entry.byteLength !== file.byteLength)
+								return yield* Effect.fail(
+									new Error(
+										`Tenant skill ${skill.name}/${file.path} changed after capability compilation.`
+									)
+								);
+							return entry;
+						})
+					)
+				)
+			],
+			{ concurrency: 'unbounded' }
+		);
+		const [browser, server] = yield* Effect.all(
+			[
+				Effect.all(
+					[
+						...built
+							.filter((path) => !serverKeys.has(WorkspaceCompiler.posix(relative(dist, path))))
+							.map((path) => store(path, `/${WorkspaceCompiler.posix(relative(dist, path))}`)),
+						...authored.map((path) =>
+							store(
+								path,
+								`${BOLT_TENANT_REQUEST_PREFIX}/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
+							)
+						)
+					],
+					{ concurrency: 'unbounded' }
+				),
+				Effect.all(
+					declared.toSorted().map((target) => store(join(dist, target), target)),
+					{ concurrency: 'unbounded' }
+				)
+			] as const,
+			{ concurrency: 'unbounded' }
+		);
+		return {
+			browser,
+			server: [...server, ...capabilityAssets].toSorted((left, right) =>
+				left.path.localeCompare(right.path)
+			)
+		} satisfies TenantReleaseAssets;
+	});
+};
 
 export const renderAuthoringTypes = (input: RenderAuthoringTypesInput): string => {
 	const union = WorkspaceCompiler.quotedUnion;
@@ -816,16 +823,26 @@ export const renderAuthoringTypes = (input: RenderAuthoringTypesInput): string =
 	].join('\n');
 };
 
-export const renderWorkspaceTypes = (
-	relations: ReadonlyArray<RelationDefinition> = []
-): string =>
+export const renderWorkspaceTypes = (relations: ReadonlyArray<RelationDefinition> = []): string =>
 	`import type { Api as AuthoringApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations };\nexport type Api = AuthoringApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n`;
 
 export const renderCollectionTypes = (name: string): string =>
 	`import type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
 export const renderWorkspaceAuthoring = (): string =>
-	`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
+	`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceInputs } from '../generated/inputs.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName; readonly inputs: WorkspaceInputs } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
+
+/** Declared write shapes, one `typeof import` per hooks module (`never` when none is declared). */
+const renderInputsDeclaration = (hookFiles: ReadonlyArray<string>, root: string): string => {
+	const entries = hookFiles
+		.filter((path) => WorkspaceCompiler.posix(path).includes('/collections/'))
+		.map(
+			(path) =>
+				`\treadonly ${JSON.stringify(basename(dirname(path)))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default extends { readonly input: infer Declared } ? Declared : never;`
+		)
+		.join('\n');
+	return `export type WorkspaceInputs = {\n${entries}\n};\n`;
+};
 
 export const renderClientDeclaration = (
 	functions: ReadonlyArray<string>,
@@ -894,7 +911,8 @@ const renderArtifactHandlers = (remoteEntries: string, toolEntries: string): str
 const toolHandlers = {\n\t${toolEntries}\n};
 const authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };`;
 
-const renderArtifactExports = (): string => `const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);
+const renderArtifactExports =
+	(): string => `const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);
 export const protocolVersion = bundle.protocolVersion;
 export const manifest = bundle.manifest;
 export const dispatch = bundle.dispatch;
@@ -903,259 +921,260 @@ export default bundle;
 `;
 
 export const renderArtifact = (input: RenderArtifactInput): string => {
-		const {
-			metadata,
-			compiledAuthoring,
-			collectionHooks,
-			apps,
-			policies,
-			functions,
-			toolFiles,
-			envoyFiles,
-			automations,
-			automationFiles,
-			pipelineFiles,
-			appGroups = [],
-			prompt,
-			root,
-			assetIndex,
-			customTypeDefinitions,
-			environmentFile,
-			migrations,
-			schemaFingerprint,
-			integrationFiles = [],
-			anonymousLimitFile,
-			teamsFile
-		} = input;
-		const { collections, relationships: relations } = compiledAuthoring;
-		const functionNames = functions.map((path) => basename(path).slice(1, -3));
-		const policyNames = policies.map((path) => basename(path).slice(1, -3));
-		const tools = toolFiles.map((path) => basename(path).slice(1, -3));
-		const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
-		const hasMcp = compiledAuthoring.capabilities.mcp.length > 0;
-		const authoredTools = tools.map((name) => ({
+	const {
+		metadata,
+		compiledAuthoring,
+		collectionHooks,
+		apps,
+		policies,
+		functions,
+		toolFiles,
+		envoyFiles,
+		automations,
+		automationFiles,
+		pipelineFiles,
+		appGroups = [],
+		prompt,
+		root,
+		assetIndex,
+		customTypeDefinitions,
+		environmentFile,
+		migrations,
+		schemaFingerprint,
+		integrationFiles = [],
+		anonymousLimitFile,
+		teamsFile
+	} = input;
+	const { collections, relationships: relations } = compiledAuthoring;
+	const functionNames = functions.map((path) => basename(path).slice(1, -3));
+	const policyNames = policies.map((path) => basename(path).slice(1, -3));
+	const tools = toolFiles.map((path) => basename(path).slice(1, -3));
+	const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
+	const hasMcp = compiledAuthoring.capabilities.mcp.length > 0;
+	const hasConnector = hasMcp || automations.length > 0;
+	const authoredTools = tools.map((name) => ({
+		name,
+		description: `Workspace tool ${name}`,
+		command: `workspace:${name}`
+	}));
+	const requiredFacilities = hasConnector
+		? (['database', 'ai', 'tasks', 'files', 'hostTools', 'connector'] as const)
+		: (['database', 'ai', 'tasks', 'files', 'hostTools'] as const);
+	const manifestFacilities = hasConnector
+		? (['ai', 'connector', 'database', 'tasks'] as const)
+		: (['ai', 'database', 'tasks'] as const);
+	const relativeSourcePath = (path: string): string =>
+		WorkspaceCompiler.posix(relative(root, path));
+	const manifestProjection = {
+		compiledManifestVersion: COMPILED_MANIFEST_VERSION,
+		appGroups: appGroups.map(({ name, label, description, icon, defaultChild, sourcePath }) => ({
 			name,
-			description: `Workspace tool ${name}`,
-			command: `workspace:${name}`
-		}));
-		const requiredFacilities = hasMcp
-			? (['database', 'ai', 'tasks', 'files', 'hostTools', 'connector'] as const)
-			: (['database', 'ai', 'tasks', 'files', 'hostTools'] as const);
-		const manifestFacilities = hasMcp
-			? (['ai', 'connector', 'database', 'tasks'] as const)
-			: (['ai', 'database', 'tasks'] as const);
-		const relativeSourcePath = (path: string): string =>
-			WorkspaceCompiler.posix(relative(root, path));
-		const manifestProjection = {
-			compiledManifestVersion: COMPILED_MANIFEST_VERSION,
-			appGroups: appGroups.map(({ name, label, description, icon, defaultChild, sourcePath }) => ({
-				name,
-				...(label === undefined ? {} : { label }),
-				...(description === undefined ? {} : { description }),
-				...(icon === undefined ? {} : { icon }),
-				...(defaultChild === undefined ? {} : { defaultChild }),
-				...(sourcePath === undefined ? {} : { sourcePath })
-			})),
-			policySourcePaths: Object.fromEntries(
-				policies.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
-			),
-			remoteSourcePaths: Object.fromEntries(
-				functions.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
-			),
-			envoySourcePaths: Object.fromEntries(
-				envoyFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
-			),
-			automationSourcePaths: Object.fromEntries(
-				automationFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
-			),
-			hookSourcePaths: Object.fromEntries(
-				collectionHooks.map(({ name, path }) => [name, relativeSourcePath(path)])
-			),
-			pipelineSourcePaths: Object.fromEntries(
-				pipelineFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
-			),
-			integrationSourcePaths: Object.fromEntries(
-				integrationFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
-			),
-			...(environmentFile === undefined
-				? {}
-				: { environmentSourcePath: relativeSourcePath(environmentFile) })
-		};
-		const workspace = {
-			name: metadata.name,
-			version: metadata.version,
-			collections,
-			relations,
-			apps: apps.map((app) => ({
-				name: app.name,
-				label: app.label,
-				...(app.icon === undefined ? {} : { icon: app.icon }),
-				...(app.description === undefined ? {} : { description: app.description }),
-				...(app.banner === undefined ? {} : { banner: app.banner }),
-				...(app.thumbnail === undefined ? {} : { thumbnail: app.thumbnail }),
-				...(app.sourcePath === undefined ? {} : { sourcePath: app.sourcePath }),
-				destination: { kind: 'app' as const, name: app.name }
-			})),
-			policies: [],
-			prompt,
-			tools: authoredTools,
-			skills: compiledAuthoring.capabilities.skills.map(({ name, body }) => ({ name, body })),
-			automations: automations.map((name) => ({
-				name,
-				trigger: { _tag: 'Schedule', cron: '0 * * * *' },
-				command: name,
-				policies: []
-			})),
-			envoys: envoys.map((name) => ({ name })),
-			integrations: [],
-			requiredFacilities,
-			migrations,
-			schemaFingerprint,
-			manifestProjection
-		};
-		const hookImports = collectionHooks
-			.map(
-				(collection, index) =>
-					`import hooks${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, collection.path))};`
-			)
-			.join('\n');
-		const hookEntriesByCollection = collectionHooks
-			.map((collection, index) => `${JSON.stringify(collection.name)}: hooks${index}`)
-			.join(', ');
-		const policyImports = policies
-			.map(
-				(path, index) =>
-					`import policy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const functionImports = functions
-			.map(
-				(path, index) =>
-					`import fn${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const authoredToolImports = toolFiles.map(
-			(path, index) =>
-				`import tool${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-		);
-		const schemaImport =
-			functions.length === 0 && toolFiles.length === 0 ? [] : ["import { Schema } from 'effect';"];
-		const toolImports = [...schemaImport, ...authoredToolImports].join('\n');
-		const automationImports = automationFiles
-			.map(
-				(path, index) =>
-					`import automation${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const pipelineImports = pipelineFiles
-			.map(
-				(path, index) =>
-					`import pipelines${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const pipelineEntriesByCollection = pipelineFiles
-			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: pipelines${index}`)
-			.join(', ');
-		const automationEntries = automations
-			.map(
-				(name, index) =>
-					`{ name: ${JSON.stringify(name)}, description: automation${index}.spec.description, trigger: typeof automation${index}.trigger.schedule === 'string' ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : automation${index}.trigger.trigger === undefined ? { _tag: 'Manual' } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, ...(automation${index}.spec.input === undefined ? {} : { input: automation${index}.spec.input }), ...(automation${index}.spec.output === undefined ? {} : { output: automation${index}.spec.output }), handler: automation${index}.spec.handler }`
-			)
-			.join(', ');
-		const envoyImports = envoyFiles
-			.map(
-				(path, index) =>
-					`import envoy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const envoyEntries = envoyFiles
-			.map((path, index) => `${JSON.stringify(envoys[index])}: envoy${index}`)
-			.join(', ');
-		const customTypeImports = [
-			"import { platformCustomTypes } from '@norbital-ai/bolt/authoring';",
-			...customTypeDefinitions.map(
-				(path, index) =>
-					`import customType${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-		].join('\n');
-		const integrationImports = integrationFiles
-			.map(
-				(path, index) =>
-					`import integrations${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
-			)
-			.join('\n');
-		const integrationEntries = integrationFiles
-			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: integrations${index}`)
-			.join(', ');
-		const rateLimitImport =
-			anonymousLimitFile === undefined
-				? ''
-				: `import declaredAnonymousLimits from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, anonymousLimitFile))};`;
-		const rateLimitEntry =
-			anonymousLimitFile === undefined ? '' : ', rateLimits: declaredAnonymousLimits';
-		const teamsImport =
-			teamsFile === undefined
-				? ''
-				: `import declaredTeams from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, teamsFile))};`;
-		const declaredTeamsEntry = teamsFile === undefined ? '' : ', teams: declaredTeams';
-		const teamsEntry = declaredTeamsEntry;
-		const environmentImport =
-			environmentFile === undefined
-				? ''
-				: `import declaredEnvironment from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, environmentFile))};`;
-		const environmentEntry =
-			environmentFile === undefined ? '' : ', environment: declaredEnvironment';
-		const customTypeEntries = customTypeDefinitions
-			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: customType${index}`)
-			.join(', ');
-		const policyEntries = policies
-			.map((_, index) => `${JSON.stringify(policyNames[index])}: policy${index}`)
-			.join(', ');
-		const functionEntries = functions
-			.map(
-				(path, index) =>
-					`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => fn${index}.handler(Schema.decodeUnknownSync(fn${index}.schema)(input), api)`
-			)
-			.join(',\n\t');
-		const toolEntries = toolFiles
-			.map(
-				(path, index) =>
-					`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => tool${index}.run(api, Schema.decodeUnknownSync(tool${index}.input)(input))`
-			)
-			.join(',\n\t');
-		return [
-			renderArtifactImports([
-				hookImports,
-				policyImports,
-				functionImports,
-				toolImports,
-				automationImports,
-				pipelineImports,
-				envoyImports,
-				customTypeImports,
-				integrationImports,
-				environmentImport,
-				rateLimitImport,
-				teamsImport
-			]),
-			renderCompiledDeclarations({
-				policyEntries,
-				hookEntries: hookEntriesByCollection,
-				customTypeEntries,
-				envoyEntries,
-				pipelineEntries: pipelineEntriesByCollection,
-				integrationEntries,
-				automationEntries,
-				workspace,
-				environmentEntry,
-				rateLimitEntry,
-				teamsEntry
-			}),
-			renderArtifactManifest({ metadata, facilities: manifestFacilities, assets: assetIndex }),
-			renderArtifactHandlers(functionEntries, toolEntries),
-			renderArtifactExports()
-		].join('\n');
+			...(label === undefined ? {} : { label }),
+			...(description === undefined ? {} : { description }),
+			...(icon === undefined ? {} : { icon }),
+			...(defaultChild === undefined ? {} : { defaultChild }),
+			...(sourcePath === undefined ? {} : { sourcePath })
+		})),
+		policySourcePaths: Object.fromEntries(
+			policies.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
+		),
+		remoteSourcePaths: Object.fromEntries(
+			functions.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
+		),
+		envoySourcePaths: Object.fromEntries(
+			envoyFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
+		),
+		automationSourcePaths: Object.fromEntries(
+			automationFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
+		),
+		hookSourcePaths: Object.fromEntries(
+			collectionHooks.map(({ name, path }) => [name, relativeSourcePath(path)])
+		),
+		pipelineSourcePaths: Object.fromEntries(
+			pipelineFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
+		),
+		integrationSourcePaths: Object.fromEntries(
+			integrationFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
+		),
+		...(environmentFile === undefined
+			? {}
+			: { environmentSourcePath: relativeSourcePath(environmentFile) })
 	};
+	const workspace = {
+		name: metadata.name,
+		version: metadata.version,
+		collections,
+		relations,
+		apps: apps.map((app) => ({
+			name: app.name,
+			label: app.label,
+			...(app.icon === undefined ? {} : { icon: app.icon }),
+			...(app.description === undefined ? {} : { description: app.description }),
+			...(app.banner === undefined ? {} : { banner: app.banner }),
+			...(app.thumbnail === undefined ? {} : { thumbnail: app.thumbnail }),
+			...(app.sourcePath === undefined ? {} : { sourcePath: app.sourcePath }),
+			destination: { kind: 'app' as const, name: app.name }
+		})),
+		policies: [],
+		prompt,
+		tools: authoredTools,
+		skills: compiledAuthoring.capabilities.skills.map(({ name, body }) => ({ name, body })),
+		automations: automations.map((name) => ({
+			name,
+			trigger: { _tag: 'Schedule', cron: '0 * * * *' },
+			command: name,
+			policies: []
+		})),
+		envoys: envoys.map((name) => ({ name })),
+		integrations: [],
+		requiredFacilities,
+		migrations,
+		schemaFingerprint,
+		manifestProjection
+	};
+	const hookImports = collectionHooks
+		.map(
+			(collection, index) =>
+				`import hooks${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, collection.path))};`
+		)
+		.join('\n');
+	const hookEntriesByCollection = collectionHooks
+		.map((collection, index) => `${JSON.stringify(collection.name)}: hooks${index}`)
+		.join(', ');
+	const policyImports = policies
+		.map(
+			(path, index) =>
+				`import policy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const functionImports = functions
+		.map(
+			(path, index) =>
+				`import fn${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const authoredToolImports = toolFiles.map(
+		(path, index) =>
+			`import tool${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+	);
+	const schemaImport =
+		functions.length === 0 && toolFiles.length === 0 ? [] : ["import { Schema } from 'effect';"];
+	const toolImports = [...schemaImport, ...authoredToolImports].join('\n');
+	const automationImports = automationFiles
+		.map(
+			(path, index) =>
+				`import automation${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const pipelineImports = pipelineFiles
+		.map(
+			(path, index) =>
+				`import pipelines${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const pipelineEntriesByCollection = pipelineFiles
+		.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: pipelines${index}`)
+		.join(', ');
+	const automationEntries = automations
+		.map(
+			(name, index) =>
+				`{ name: ${JSON.stringify(name)}, description: automation${index}.spec.description, trigger: typeof automation${index}.trigger.schedule === 'string' ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : automation${index}.trigger.trigger === undefined ? { _tag: 'Manual' } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, ...(automation${index}.spec.input === undefined ? {} : { input: automation${index}.spec.input }), ...(automation${index}.spec.output === undefined ? {} : { output: automation${index}.spec.output }), handler: automation${index}.spec.handler }`
+		)
+		.join(', ');
+	const envoyImports = envoyFiles
+		.map(
+			(path, index) =>
+				`import envoy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const envoyEntries = envoyFiles
+		.map((path, index) => `${JSON.stringify(envoys[index])}: envoy${index}`)
+		.join(', ');
+	const customTypeImports = [
+		"import { platformCustomTypes } from '@norbital-ai/bolt/authoring';",
+		...customTypeDefinitions.map(
+			(path, index) =>
+				`import customType${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+	].join('\n');
+	const integrationImports = integrationFiles
+		.map(
+			(path, index) =>
+				`import integrations${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const integrationEntries = integrationFiles
+		.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: integrations${index}`)
+		.join(', ');
+	const rateLimitImport =
+		anonymousLimitFile === undefined
+			? ''
+			: `import declaredAnonymousLimits from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, anonymousLimitFile))};`;
+	const rateLimitEntry =
+		anonymousLimitFile === undefined ? '' : ', rateLimits: declaredAnonymousLimits';
+	const teamsImport =
+		teamsFile === undefined
+			? ''
+			: `import declaredTeams from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, teamsFile))};`;
+	const declaredTeamsEntry = teamsFile === undefined ? '' : ', teams: declaredTeams';
+	const teamsEntry = declaredTeamsEntry;
+	const environmentImport =
+		environmentFile === undefined
+			? ''
+			: `import declaredEnvironment from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, environmentFile))};`;
+	const environmentEntry =
+		environmentFile === undefined ? '' : ', environment: declaredEnvironment';
+	const customTypeEntries = customTypeDefinitions
+		.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: customType${index}`)
+		.join(', ');
+	const policyEntries = policies
+		.map((_, index) => `${JSON.stringify(policyNames[index])}: policy${index}`)
+		.join(', ');
+	const functionEntries = functions
+		.map(
+			(path, index) =>
+				`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => fn${index}.handler(Schema.decodeUnknownSync(fn${index}.schema)(input), api)`
+		)
+		.join(',\n\t');
+	const toolEntries = toolFiles
+		.map(
+			(path, index) =>
+				`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => tool${index}.run(api, Schema.decodeUnknownSync(tool${index}.input)(input))`
+		)
+		.join(',\n\t');
+	return [
+		renderArtifactImports([
+			hookImports,
+			policyImports,
+			functionImports,
+			toolImports,
+			automationImports,
+			pipelineImports,
+			envoyImports,
+			customTypeImports,
+			integrationImports,
+			environmentImport,
+			rateLimitImport,
+			teamsImport
+		]),
+		renderCompiledDeclarations({
+			policyEntries,
+			hookEntries: hookEntriesByCollection,
+			customTypeEntries,
+			envoyEntries,
+			pipelineEntries: pipelineEntriesByCollection,
+			integrationEntries,
+			automationEntries,
+			workspace,
+			environmentEntry,
+			rateLimitEntry,
+			teamsEntry
+		}),
+		renderArtifactManifest({ metadata, facilities: manifestFacilities, assets: assetIndex }),
+		renderArtifactHandlers(functionEntries, toolEntries),
+		renderArtifactExports()
+	].join('\n');
+};
 
 export const STATEMENT_BREAKPOINT = '--> statement-breakpoint';
 
@@ -1168,9 +1187,18 @@ const migrationStatements = (source: string): ReadonlyArray<string> =>
 export const readWorkspaceMigrations = (workspaceRoot: string) =>
 	Effect.gen(function* () {
 		const migrationsRoot = join(workspaceRoot, '.norbital', 'migrations');
-		const entries = yield* Effect.tryPromise(() =>
-			readdir(migrationsRoot, { withFileTypes: true })
-		).pipe(Effect.catch(() => Effect.succeed<Array<Dirent>>([])));
+		const entries = yield* Effect.tryPromise({
+			try: () => readdir(migrationsRoot, { withFileTypes: true }),
+			catch: (cause) => toError(cause)
+		}).pipe(
+			// A missing migrations root means the workspace has no migrations yet; any other read
+			// failure must not silently truncate the committed migration history the build reads.
+			Effect.catch((cause) =>
+				Reflect.get(cause, 'code') === 'ENOENT'
+					? Effect.succeed<Array<Dirent>>([])
+					: Effect.fail(cause)
+			)
+		);
 		const tags = entries
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
@@ -1236,7 +1264,9 @@ const compileSkillPackages = (
 		const packagesRoot = join(workspaceRoot, ...relativeRoot.split('/'));
 		const packages = yield* listCapabilityDirectories(packagesRoot);
 		if (packages.length > 64)
-			return yield* Effect.fail(new Error('A workspace may ship at most 64 tenant skill packages.'));
+			return yield* Effect.fail(
+				new Error('A workspace may ship at most 64 tenant skill packages.')
+			);
 		return yield* Effect.all(
 			packages
 				.toSorted((left, right) => left.name.localeCompare(right.name))
@@ -1329,15 +1359,18 @@ export const compileTenantCapabilities = (
 				Effect.gen(function* () {
 					const name = basename(path).slice(1, -3);
 					if (!capabilityName.test(name) || name.length > 64)
-						return yield* Effect.fail(new Error(`MCP registration ${name} is not lower-kebab-case.`));
+						return yield* Effect.fail(
+							new Error(`MCP registration ${name} is not lower-kebab-case.`)
+						);
 					const source = yield* Effect.tryPromise(() => readFile(path));
 					const sourceDigest = createHash('sha256').update(source).digest('hex');
-					const loaded = yield* Effect.tryPromise(() =>
-						import(`${pathToFileURL(path).href}?bolt-mcp=${sourceDigest}`)
+					const loaded = yield* Effect.tryPromise(
+						() => import(`${pathToFileURL(path).href}?bolt-mcp=${sourceDigest}`)
 					);
 					const authored = loaded.default;
+					const authoredRecord = isAuthoredModule(authored) ? authored : undefined;
 					const forbidden = ['protocol', 'transport', 'tools', 'schemas', 'command', 'args'].filter(
-						(key) => typeof authored === 'object' && authored !== null && Object.hasOwn(authored, key)
+						(key) => authoredRecord !== undefined && Object.hasOwn(authoredRecord, key)
 					);
 					if (forbidden.length > 0)
 						return yield* Effect.fail(
@@ -1346,7 +1379,9 @@ export const compileTenantCapabilities = (
 					const declaration = yield* Effect.try({
 						try: () => decodeMcpRegistration(authored),
 						catch: (cause) =>
-							cause instanceof Error ? cause : new Error(`Invalid MCP registration ${name}: ${String(cause)}`)
+							cause instanceof Error
+								? cause
+								: new Error(`Invalid MCP registration ${name}: ${String(cause)}`)
 					});
 					const semantic = {
 						name,
@@ -1578,6 +1613,99 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 	});
 };
 
+/**
+ * The columns a hooks file's declared `input` names, read off the source.
+ *
+ * Two grammars declare inputs and both are read here, syntactically: the projection form
+ * `input: schema('<collection>', { columns: { … } })`, where only the `true` members are the
+ * contract, and the plain struct form — an inline `Schema.Struct({ … })` or a same-file `const`
+ * holding one, where every member is a column. A third form is deliberately unread: importing
+ * the module would drag the whole hooks chain (server-typed, sometimes host-coupled) into the
+ * sync process for one key set. Anything the extractor cannot see yields `undefined`, which
+ * every consumer reads as "the whole collection is writable" — the same fallback the runtime
+ * decode uses, so under-reading is safe and the declaration is still authoritative at run time.
+ */
+export const declaredHookInputColumns = (source: string): readonly string[] | undefined => {
+	const sourceFile = ts.createSourceFile('+hooks.ts', source, ts.ScriptTarget.Latest, true);
+	const structKeys = (literal: ts.Expression): readonly string[] | undefined =>
+		ts.isObjectLiteralExpression(literal)
+			? literal.properties.flatMap((property) =>
+					ts.isPropertyAssignment(property) &&
+					(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+						? [property.name.text]
+						: []
+				)
+			: undefined;
+	/** A same-file `const <name> = Schema.Struct({ … })`, read once the identifier names it. */
+	const structConst = (name: string): readonly string[] | undefined => {
+		let columns: readonly string[] | undefined;
+		const seek = (node: ts.Node): void => {
+			if (columns !== undefined) return;
+			if (
+				ts.isVariableDeclaration(node) &&
+				ts.isIdentifier(node.name) &&
+				node.name.text === name &&
+				node.initializer !== undefined &&
+				ts.isCallExpression(node.initializer) &&
+				structCallOf(node.initializer)
+			) {
+				columns = structKeys(node.initializer.arguments[0]!);
+				return;
+			}
+			ts.forEachChild(node, seek);
+		};
+		seek(sourceFile);
+		return columns;
+	};
+	const structCallOf = (call: ts.CallExpression): boolean =>
+		ts.isPropertyAccessExpression(call.expression) &&
+		ts.isIdentifier(call.expression.expression) &&
+		call.expression.expression.text === 'Schema' &&
+		call.expression.name.text === 'Struct';
+
+	let columns: readonly string[] | undefined;
+	const visit = (node: ts.Node): void => {
+		if (columns !== undefined || !ts.isPropertyAssignment(node)) {
+			ts.forEachChild(node, visit);
+			return;
+		}
+		if (!ts.isIdentifier(node.name) || node.name.text !== 'input') {
+			ts.forEachChild(node, visit);
+			return;
+		}
+		const initializer = node.initializer;
+		if (ts.isIdentifier(initializer)) {
+			columns = structConst(initializer.text);
+			return;
+		}
+		if (ts.isCallExpression(initializer)) {
+			if (structCallOf(initializer)) {
+				columns = structKeys(initializer.arguments[0]!);
+				return;
+			}
+			const config = initializer.arguments[1];
+			if (config === undefined || !ts.isObjectLiteralExpression(config)) return;
+			const declaredColumns = config.properties.find(
+				(property): property is ts.PropertyAssignment =>
+					ts.isPropertyAssignment(property) &&
+					ts.isIdentifier(property.name) &&
+					property.name.text === 'columns'
+			);
+			if (declaredColumns === undefined) return;
+			if (!ts.isObjectLiteralExpression(declaredColumns.initializer)) return;
+			columns = declaredColumns.initializer.properties.flatMap((property) =>
+				ts.isPropertyAssignment(property) &&
+				property.initializer.kind === ts.SyntaxKind.TrueKeyword &&
+				(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+					? [property.name.text]
+					: []
+			);
+		}
+	};
+	visit(sourceFile);
+	return columns;
+};
+
 const WorkspaceSynchronization = {
 	sync: (workspaceRoot = process.cwd()) => {
 		const compiler = WorkspaceCompiler;
@@ -1626,6 +1754,20 @@ const WorkspaceSynchronization = {
 				join(root, 'src', 'collections', '+relationship.ts')
 			);
 			const capabilities = yield* compileTenantCapabilities(root, mcpFiles);
+			/**
+			 * The declared write shapes, narrowed to the columns each `input` names, projected into
+			 * the browser catalog. This is how `client.db` knows a collection's write contract: the
+			 * form's mutation mask, its unknown-key rejection and its registration assertion all
+			 * narrow to these, and a collection that declares no input narrows to nothing at all —
+			 * the whole collection stays writable.
+			 */
+			const declaredInputColumns = new Map<string, readonly string[]>();
+			for (const path of hookFiles) {
+				if (!compiler.posix(path).includes('/collections/')) continue;
+				const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
+				const columns = declaredHookInputColumns(source);
+				if (columns !== undefined) declaredInputColumns.set(basename(dirname(path)), columns);
+			}
 			const compiledAuthoring = compileWorkspaceAuthoring({
 				models: authoredModels,
 				sourcePaths: Object.fromEntries(
@@ -1646,7 +1788,7 @@ const WorkspaceSynchronization = {
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
 			const collectionCatalog = compiledAuthoring.collections.map((entry) =>
-				collectionCatalogEntry(entry, relations)
+				collectionCatalogEntry(entry, relations, declaredInputColumns.get(entry.name))
 			);
 			const appMetaEntries = yield* Effect.all(
 				appFiles.map((path) =>
@@ -1767,6 +1909,7 @@ const WorkspaceSynchronization = {
 						join(generated, 'client.d.ts'),
 						renderClientDeclaration(functionFiles, root, automationFiles)
 					),
+					compiler.write(join(generated, 'inputs.d.ts'), renderInputsDeclaration(hookFiles, root)),
 					compiler.write(
 						join(generated, 'client.js'),
 						compiler.renderClientRuntime(
@@ -1787,10 +1930,7 @@ const WorkspaceSynchronization = {
 						join(types, 'custom-type-values.d.ts'),
 						compiler.renderCustomAugmentation(definitions, root)
 					),
-					compiler.write(
-						join(types, 'workspace-authoring.d.ts'),
-						renderWorkspaceAuthoring()
-					),
+					compiler.write(join(types, 'workspace-authoring.d.ts'), renderWorkspaceAuthoring()),
 					compiler.write(
 						join(types, 'client-runtime.d.ts'),
 						compiler.renderClientRuntimeDeclaration()
@@ -1935,74 +2075,75 @@ const WorkspaceSynchronization = {
 				])
 			);
 			yield* Effect.tryPromise({
-				try: () => build({
-					root,
-					configFile: false,
-					plugins: [
-						tenantRuntimeBoundary(),
-						closeServerModuleGraph(),
-						captureServerCodeGraph(partitionInput, (chunks) => {
-							serverCodeChunks = chunks;
-						})
-					],
-					define: { global: 'globalThis' },
-					resolve: {
-						preserveSymlinks: false,
-						dedupe: ['effect', 'svelte'],
-						alias: [
-							{
-								find: '@norbital-ai/bolt/authoring/internals',
-								replacement: authoringInternalsEntry
-							},
-							{
-								find: '@norbital-ai/bolt/authoring',
-								replacement: authoringEntry
-							},
-							{
-								find: '@norbital-ai/bolt/runtime',
-								replacement: runtimeEntry
-							},
-							{
-								find: '@norbital-ai/bolt/client-runtime',
-								replacement: clientRuntimeEntry
-							},
-							{
-								find: '@norbital-ai/bolt/client',
-								replacement: clientEntry
-							},
-							{
-								find: '@norbital-ai/bolt/host',
-								replacement: hostEntry
-							},
-							{
-								find: '@norbital-ai/bolt',
-								replacement: rootEntry
-							}
-						]
-					},
-					build: {
-						outDir: artifactDirectory,
-						emptyOutDir: false,
-						minify: false,
-						rollupOptions: {
-							input: artifactEntry,
-							preserveEntrySignatures: 'allow-extension',
-							output: {
-								strictExecutionOrder: true,
-								entryFileNames: 'bundle.mjs',
-								chunkFileNames: 'code/[name].mjs',
-								codeSplitting: {
-									includeDependenciesRecursively: false,
-									groups: [
-										{
-											name: (id) => serverModulePartition(id, partitionInput)?.name ?? null
-										}
-									]
+				try: () =>
+					build({
+						root,
+						configFile: false,
+						plugins: [
+							tenantRuntimeBoundary(),
+							closeServerModuleGraph(),
+							captureServerCodeGraph(partitionInput, (chunks) => {
+								serverCodeChunks = chunks;
+							})
+						],
+						define: { global: 'globalThis' },
+						resolve: {
+							preserveSymlinks: false,
+							dedupe: ['effect', 'svelte'],
+							alias: [
+								{
+									find: '@norbital-ai/bolt/authoring/internals',
+									replacement: authoringInternalsEntry
+								},
+								{
+									find: '@norbital-ai/bolt/authoring',
+									replacement: authoringEntry
+								},
+								{
+									find: '@norbital-ai/bolt/runtime',
+									replacement: runtimeEntry
+								},
+								{
+									find: '@norbital-ai/bolt/client-runtime',
+									replacement: clientRuntimeEntry
+								},
+								{
+									find: '@norbital-ai/bolt/client',
+									replacement: clientEntry
+								},
+								{
+									find: '@norbital-ai/bolt/host',
+									replacement: hostEntry
+								},
+								{
+									find: '@norbital-ai/bolt',
+									replacement: rootEntry
+								}
+							]
+						},
+						build: {
+							outDir: artifactDirectory,
+							emptyOutDir: false,
+							minify: false,
+							rollupOptions: {
+								input: artifactEntry,
+								preserveEntrySignatures: 'allow-extension',
+								output: {
+									strictExecutionOrder: true,
+									entryFileNames: 'bundle.mjs',
+									chunkFileNames: 'code/[name].mjs',
+									codeSplitting: {
+										includeDependenciesRecursively: false,
+										groups: [
+											{
+												name: (id) => serverModulePartition(id, partitionInput)?.name ?? null
+											}
+										]
+									}
 								}
 							}
 						}
-					}
-				}),
+					}),
 				catch: toError
 			});
 			if (serverCodeChunks.length === 0)
@@ -2015,7 +2156,7 @@ const WorkspaceSynchronization = {
 					artifactId: `${metadata.name}:local`,
 					artifactVersion: metadata.version,
 					requiredFacilities:
-						capabilities.mcp.length === 0
+						capabilities.mcp.length === 0 && automationNames.length === 0
 							? ['ai', 'database', 'tasks']
 							: ['ai', 'connector', 'database', 'tasks'],
 					assets: assetIndex,

@@ -1,5 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
+import { Option, Schema } from 'effect';
+
+const ROW_RECORD = Schema.Record(Schema.String, Schema.Unknown);
+const isString = Schema.is(Schema.String);
 
 const BANK_SEGMENT = 'seed_bank';
 const BANK_ROOT_ENV = 'NORBITAL_SEED_BANK_ROOT';
@@ -59,7 +63,7 @@ const refuseIfBank = (input: string): void => {
 };
 
 const rowsSource = (rows: PublicSeedRows | string): RowsSource => {
-	if (typeof rows === 'string') return { kind: 'directory', directory: rows };
+	if (isString(rows)) return { kind: 'directory', directory: rows };
 	return { kind: 'records', records: rows };
 };
 
@@ -90,6 +94,7 @@ const insertRow = async (
 	}
 	const columns = entries.map(([name]) => quoteIdent(name)).join(', ');
 	const placeholders = entries.map((_, index) => `$${index + 1}`).join(', ');
+	// repository-health:allow SQL1 -- fixture seeder runs through the host query facility it is handed; pre-bootstrap seed rows have no collection client to route through, and every value stays a bound parameter.
 	await query(`INSERT INTO ${quoteIdent(stage)} (${columns}) VALUES (${placeholders})`, [
 		...entries.map(([, value]) => value)
 	]);
@@ -100,24 +105,27 @@ const readDirectoryRows = async (
 	stages: readonly string[]
 ): Promise<PublicSeedRows> => {
 	const records: Record<string, readonly Readonly<Record<string, unknown>>[]> = {};
-	for (const stage of stages) {
-		const filePath = join(directory, `${stage}.json`);
-		refuseIfBank(filePath);
-		const text = await readFile(filePath, 'utf8').catch((error: unknown) => {
-			if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return '[]';
-			throw error;
-		});
-		const parsed: unknown = JSON.parse(text);
-		if (!Array.isArray(parsed)) {
-			throw new Error(`loadPublicSeed expected an array in ${filePath}`);
-		}
+	await Promise.all(
+		stages.map(async (stage) => {
+			const filePath = join(directory, `${stage}.json`);
+			refuseIfBank(filePath);
+			const text = await readFile(filePath, 'utf8').catch((error: unknown) => {
+				if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return '[]';
+				throw error;
+			});
+			const parsed: unknown = JSON.parse(text);
+			if (!Array.isArray(parsed)) {
+				throw new Error(`loadPublicSeed expected an array in ${filePath}`);
+			}
 		records[stage] = parsed.map((row, index) => {
-			if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+			const record = Schema.decodeUnknownOption(ROW_RECORD)(row);
+			if (Option.isNone(record)) {
 				throw new Error(`loadPublicSeed expected an object at ${filePath}[${index}]`);
 			}
-			return row as Readonly<Record<string, unknown>>;
+			return record.value;
 		});
-	}
+		})
+	);
 	return records;
 };
 
@@ -160,6 +168,7 @@ export async function loadPublicSeed(input: LoadPublicSeedInput): Promise<void> 
 	const records = await resolveRecords(source, input.stages);
 	for (const stage of input.stages) {
 		for (const row of records[stage] ?? []) {
+			// repository-health:allow A6 -- rows insert in stage and row order so foreign keys resolve; the order is the loader's contract.
 			await insertRow(stage, row, input.query);
 		}
 	}

@@ -11,7 +11,7 @@ const formState = readFileSync(new URL('../src/form/form_state.svelte.ts', impor
 
 test('semantic validation issues prevent CollectionForm from calling the mutation', () => {
 	assert.match(formSource, /applySemanticValidation/);
-	assert.match(formSource, /return issues\.length > 0 \? \{ issues \} : \{ value: candidate \}/);
+	assert.match(formSource, /issues\.length > 0 \? \{ issues \} : \{ value: candidate \}/);
 	assert.match(formState, /if \(Array\.isArray\(issues\)\) \{/);
 	assert.match(formState, /this\.submissionState = \{ status: 'idle' \}/);
 	assert.match(formState, /return null;/);

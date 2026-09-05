@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import RemoteQueryView from './support/remote-query-view.svelte';
 import { Effect, Schema } from 'effect';
 import { syncRetainedPrefixBytes, type StoredRecord } from '@norbital-ai/bolt-protocol';
 import { createMachineQuery, createRemoteQuery } from '../src/client/remote-query.svelte.js';
@@ -86,6 +89,42 @@ const fakeMachine = () => {
 };
 
 describe('machine-backed query read semantics', () => {
+	it('repaints a mounted Svelte consumer when the live row set grows', async () => {
+		const machine = fakeMachine();
+		const makeQuery = () =>
+			createMachineQuery(
+				machine.client,
+				{ key: 'jobs', extend: () => undefined, detach: () => undefined },
+				projectIds
+			);
+		const target = document.createElement('div');
+		document.body.append(target);
+		const component = mount(RemoteQueryView, { target, props: { makeQuery } });
+		try {
+			flushSync();
+			for (const ids of [['first'], ['first', 'second'], []]) {
+				const rows = ids.map((id) => ({ id }));
+				machine.publish({
+					...initialClientState(),
+					queries: new Map([
+						[
+							'jobs',
+							queryState({
+								prefix: { version: 1, rows, retainedBytes: syncRetainedPrefixBytes(rows) }
+							})
+						]
+					])
+				});
+				await Promise.resolve();
+				flushSync();
+				expect(target.textContent).toBe(ids.join(','));
+			}
+		} finally {
+			await unmount(component);
+			target.remove();
+		}
+	});
+
 	it('resolves with the first projected value and repaints the retained answer while loading', async () => {
 		const machine = fakeMachine();
 		let detached = 0;

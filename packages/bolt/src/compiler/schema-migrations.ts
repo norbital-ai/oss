@@ -86,6 +86,8 @@ const GeneratedNotNullColumn = Schema.Struct({
 	generated: Schema.Struct({ as: Schema.String, type: Schema.String })
 });
 const isGeneratedNotNullColumn = Schema.is(GeneratedNotNullColumn);
+const isString = Schema.is(Schema.String);
+const isMissingFile = Schema.is(Schema.Struct({ code: Schema.Literal('ENOENT') }));
 
 /**
  * A generated lineage entry: what the artifact carries, plus the snapshot only the generator uses.
@@ -112,7 +114,7 @@ const authoredIndex = (
 	}>;
 	let variants: ReadonlyArray<Variant> = [{ members: [], predicates: [], tags: [] }];
 	for (const member of declaration.columns) {
-		if (typeof member !== 'string') {
+		if (!isString(member)) {
 			variants = variants.map((variant) => ({
 				...variant,
 				members: [...variant.members, sql.raw(member.expr)]
@@ -159,7 +161,7 @@ const authoredIndex = (
 				: referenceDatabaseIdentifier(
 						declaration.name ??
 							`${collectionName}_${declaration.columns
-								.map((column) => (typeof column === 'string' ? column : 'expression'))
+								.map((column) => (isString(column) ? column : 'expression'))
 								.join('_')}_${declaration.unique === true ? 'uidx' : 'idx'}`,
 						...variant.tags
 					);
@@ -235,8 +237,8 @@ const referenceEntities = (
 			const column = self[target.storageColumn];
 			if (column === undefined)
 				throw new Error(
-						`Reference "${collection.name}.${fieldName}" is missing generated column "${target.storageColumn}".`
-					);
+					`Reference "${collection.name}.${fieldName}" is missing generated column "${target.storageColumn}".`
+				);
 			return { ...target, column };
 		});
 		const count = sql`num_nonnulls(${sql.join(
@@ -349,7 +351,9 @@ const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = {
 
 const arrayDimensionsOf = (sqlType: string): number => sqlType.match(/\[\]/g)?.length ?? 0;
 
-const pgArrayDimension = (dimensions: number): '[]' | '[][]' | '[][][]' | '[][][][]' | '[][][][][]' => {
+const pgArrayDimension = (
+	dimensions: number
+): '[]' | '[][]' | '[][][]' | '[][][][]' | '[][][][][]' => {
 	switch (dimensions) {
 		case 1:
 			return '[]';
@@ -373,10 +377,8 @@ const compiledColumn = (
 ): AnyPgColumnBuilder => {
 	if (field.sqlType === undefined)
 		throw new TypeError(`Compiled field ${collection}.${name} has no physical SQL type.`);
-	const arrayDimensions =
-		field.array === true ? Math.max(1, arrayDimensionsOf(field.sqlType)) : 0;
-	const baseSqlType =
-		arrayDimensions > 0 ? field.sqlType.replace(/\[\]+$/g, '') : field.sqlType;
+	const arrayDimensions = field.array === true ? Math.max(1, arrayDimensionsOf(field.sqlType)) : 0;
+	const baseSqlType = arrayDimensions > 0 ? field.sqlType.replace(/\[\]+$/g, '') : field.sqlType;
 	const builder = customType<{ data: unknown; driverData: unknown }>({
 		dataType: () => baseSqlType
 	})();
@@ -722,12 +724,7 @@ export const importWorkspaceRelationships = (relationshipFile: string) =>
 			try {
 				source = await readFile(relationshipFile, 'utf8');
 			} catch (caught) {
-				if (
-					caught !== null &&
-					typeof caught === 'object' &&
-					Reflect.get(caught, 'code') === 'ENOENT'
-				)
-					return undefined;
+				if (isMissingFile(caught)) return undefined;
 				throw caught;
 			}
 			const revision = createHash('sha256').update(source).digest('hex');
@@ -750,17 +747,31 @@ export const latestSnapshot = (
 	migrationsRoot: string
 ): Effect.Effect<WorkspaceSnapshot | undefined, Error> =>
 	Effect.gen(function* () {
-		const entries = yield* Effect.tryPromise(() =>
-			readdir(migrationsRoot, { withFileTypes: true })
-		).pipe(Effect.catch(() => Effect.succeed<Array<Dirent>>([])));
+		const entries = yield* Effect.tryPromise({
+			try: () => readdir(migrationsRoot, { withFileTypes: true }),
+			catch: toError
+		}).pipe(
+			// A missing migrations root means the workspace has no lineage yet; any other read failure
+			// must not masquerade as "no lineage" and let sync compile against the wrong authority.
+			Effect.catch((cause) =>
+				isMissingFile(cause) ? Effect.succeed<Array<Dirent>>([]) : Effect.fail(cause)
+			)
+		);
 		const tags = entries
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
 			.toSorted();
 		for (const tag of tags.toReversed()) {
-			const source = yield* Effect.tryPromise(() =>
-				readFile(join(migrationsRoot, tag, 'snapshot.json'), 'utf8')
-			).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
+			const source = yield* Effect.tryPromise({
+				try: () => readFile(join(migrationsRoot, tag, 'snapshot.json'), 'utf8'),
+				catch: toError
+			}).pipe(
+				// A tag without a snapshot.json is a partial lineage entry to skip; an unreadable
+				// snapshot must fail rather than silently fall back to an older tag's snapshot.
+				Effect.catch((cause) =>
+					isMissingFile(cause) ? Effect.succeed<string | undefined>(undefined) : Effect.fail(cause)
+				)
+			);
 			if (source !== undefined) {
 				// The snapshot is a drizzle-kit JSON document; parse it through the JSON schema so a
 				// truncated file is a named failure of this read rather than a value the differ trusts.
@@ -831,7 +842,11 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 	Effect.gen(function* () {
 		// Discovery is `sync`'s, not a second walk: a migration must cover exactly the collections the
 		// compiler emits, and two rules for "what is a collection" would eventually disagree.
-		const { root, models: modelFiles, datatypeNames } = yield* discoverAuthoredSource(workspaceRoot);
+		const {
+			root,
+			models: modelFiles,
+			datatypeNames
+		} = yield* discoverAuthoredSource(workspaceRoot);
 		const migrationsRoot = join(root, '.norbital', 'migrations');
 		const models = yield* importWorkspaceModels(modelFiles);
 		const relationshipDeclaration = yield* importWorkspaceRelationships(
@@ -840,7 +855,10 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 		const authoring = compileWorkspaceAuthoring({
 			models,
 			sourcePaths: Object.fromEntries(
-				modelFiles.map((path) => [basename(dirname(path)), relative(root, path).replaceAll('\\', '/')])
+				modelFiles.map((path) => [
+					basename(dirname(path)),
+					relative(root, path).replaceAll('\\', '/')
+				])
 			),
 			relationships: relationshipDeclaration,
 			customTypeNames: datatypeNames

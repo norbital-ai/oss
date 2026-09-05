@@ -252,6 +252,7 @@ export const readLockfileProvenance = async (
 	try {
 		return { path, bytes: await readFile(join(workspaceRoot, path)) };
 	} catch (cause) {
+		// repository-health:allow GUARD2 -- `cause` is a thrown Node fs error whose `code` is platform state, not schema-authored input.
 		if (typeof cause === 'object' && cause !== null && Reflect.get(cause, 'code') === 'ENOENT')
 			return undefined;
 		throw cause;

@@ -1,0 +1,58 @@
+id: ERR2
+summary: catch arm builds a new Error without preserving the caught failure as its cause
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  any:
+    - all:
+        - pattern: 'Effect.catch(($C) => new Error($...MSG))'
+        - not:
+            has:
+              any:
+                - pattern:
+                    context: '({ cause: $C });'
+                    selector: 'ObjectLiteral'
+                - pattern:
+                    context: '({ cause });'
+                    selector: 'ObjectLiteral'
+            stopBy: end
+    - all:
+        - pattern: 'Effect.catch(($C) => { throw new Error($...MSG) })'
+        - not:
+            has:
+              any:
+                - pattern:
+                    context: '({ cause: $C });'
+                    selector: 'ObjectLiteral'
+                - pattern:
+                    context: '({ cause });'
+                    selector: 'ObjectLiteral'
+            stopBy: end
+    - all:
+        - pattern: 'Effect.catch(() => new Error($...MSG))'
+    - all:
+        - pattern:
+            context: '({ catch: ($C) => new Error($...MSG) });'
+            selector: 'ArrowFunction'
+        - not:
+            has:
+              any:
+                - pattern:
+                    context: '({ cause: $C });'
+                    selector: 'ObjectLiteral'
+                - pattern:
+                    context: '({ cause });'
+                    selector: 'ObjectLiteral'
+            stopBy: end
+    - all:
+        - pattern:
+            context: '({ catch: () => new Error($...MSG) });'
+            selector: 'ArrowFunction'
+examples:
+  bad:
+    - "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed')));"
+    - "export const fail = (input) => Effect.tryPromise({ try: () => go(input), catch: (cause) => new Error('request failed') });"
+  good:
+    - "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed', { cause })));"
+    - "export const fail = (input) => Effect.tryPromise({ try: () => go(input), catch: (cause) => new Error('request failed', { cause }) });"
+    - 'export const fail = (effect) => effect.pipe(Effect.catch((cause) => Effect.fail(toError(cause))));'

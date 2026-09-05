@@ -8,6 +8,8 @@ const localDateTimePartsSchema = Schema.Struct({
 });
 type LocalDateTimeParts = typeof localDateTimePartsSchema.Type;
 
+const isString = Schema.is(Schema.String);
+
 export function instantFieldAllowsClear(
 	field: Pick<CollectionField, 'array' | 'nullable'>
 ): boolean {
@@ -18,7 +20,7 @@ export function toLocalDateTimeParts(
 	value: unknown,
 	timeZone = getLocalTimeZone()
 ): LocalDateTimeParts | null {
-	if (typeof value !== 'string' || value.length === 0) return null;
+	if (!isString(value) || value.length === 0) return null;
 	return Option.getOrNull(
 		Effect.runSync(
 			Effect.try(() => {

@@ -71,7 +71,6 @@ const AgentRunRow = Schema.Struct({
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
-	capability_snapshot: Schema.Json,
 	status: RunStatus
 });
 export type AgentRunRow = typeof AgentRunRow.Type;
@@ -117,16 +116,16 @@ export function projectAgentMessages(rows: readonly unknown[]): PanelMessage[] {
 	}
 	decoded.sort((left, right) => left.sequence - right.sequence);
 	return decoded.map((row) => ({
-			kind: 'message',
-			key: row.id,
-			id: row.id,
-			taskId: row.task_id,
-			sequence: row.sequence,
-			runId: row.run_id,
-			author: row.author,
-			message: row.message,
-			annotation: row.annotation
-		}));
+		kind: 'message',
+		key: row.id,
+		id: row.id,
+		taskId: row.task_id,
+		sequence: row.sequence,
+		runId: row.run_id,
+		author: row.author,
+		message: row.message,
+		annotation: row.annotation
+	}));
 }
 
 export function projectAgentPlans(rows: readonly unknown[]): AgentPlanRow[] {
@@ -150,6 +149,7 @@ export function projectAgentUsage(rows: readonly unknown[]): AgentUsageRow[] {
 	});
 }
 
+const isString = Schema.is(Schema.String);
 const TodoItem = Schema.Struct({
 	id: Schema.NonEmptyString,
 	text: Schema.NonEmptyString,
@@ -167,7 +167,7 @@ export function latestTodo(
 	for (const entry of [...messages].toReversed()) {
 		if (activeRunId !== null && entry.runId !== activeRunId) continue;
 		const content = entry.message.content;
-		if (typeof content === 'string') continue;
+		if (isString(content)) continue;
 		for (const part of [...content].toReversed()) {
 			if (part.type !== 'tool-result' || part.name !== 'system/todo' || part.isFailure) {
 				continue;

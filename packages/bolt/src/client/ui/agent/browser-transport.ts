@@ -15,11 +15,14 @@ export type HttpBoltTransportOptions = Readonly<{
 	readonly credential: string;
 }>;
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+
 /** A string field of an object, or nothing — the shape checks every branch below would repeat. */
 const textField = (value: unknown, field: string): string | undefined => {
-	if (value === null || typeof value !== 'object') return undefined;
+	if (!isRecord(value)) return undefined;
 	const held = Reflect.get(value, field);
-	return typeof held === 'string' && held.trim() !== '' ? held : undefined;
+	return isString(held) && held.trim() !== '' ? held : undefined;
 };
 
 /**
@@ -40,10 +43,9 @@ const textField = (value: unknown, field: string): string | undefined => {
 const refusalMessage = (command: string, status: number, payload: unknown): string => {
 	const direct = textField(payload, 'message');
 	if (direct !== undefined) return direct;
-	const wire =
-		payload !== null && typeof payload === 'object'
-			? (payload as { readonly error?: unknown }).error
-			: undefined;
+	const wire = isRecord(payload)
+		? (payload as { readonly error?: unknown }).error
+		: undefined;
 	const nested = textField(wire, 'message');
 	if (nested !== undefined) {
 		const code = textField(wire, 'code');

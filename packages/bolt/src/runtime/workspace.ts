@@ -3,6 +3,12 @@ import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { registerWorkspaceShape } from '#lib/authoring/schema-registry.js';
 import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
 
+const isString = Schema.is(Schema.String);
+const isBigint = Schema.is(Schema.BigInt);
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 /** Carries workspace lookup error through the typed runtime failure channel without losing diagnostic context. */
 export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupError>()(
 	'Bolt.Workspace.LookupError',
@@ -35,8 +41,8 @@ export class DispatchError extends Schema.TaggedError<DispatchError>()('Bolt.Dis
 
 /** Renders any thrown value as a non-empty, attributable sentence. */
 const describeCauseAt = (cause: unknown, seen: ReadonlySet<object>): string => {
-	if (typeof cause === 'string' && cause.length > 0) return cause;
-	if (cause !== null && typeof cause === 'object') {
+	if (isString(cause) && cause.length > 0) return cause;
+	if (isObjectLike(cause)) {
 		if (seen.has(cause)) return 'A cyclic failure occurred';
 		const nextSeen = new Set(seen).add(cause);
 		const tag = Reflect.get(cause, '_tag');
@@ -45,11 +51,11 @@ const describeCauseAt = (cause: unknown, seen: ReadonlySet<object>): string => {
 		// Phase wrappers are Error instances whose generated message serializes a native nested Error as
 		// `{}`. Prefer the attributable inner message while retaining the wrapper's phase and collection,
 		// otherwise Studio reports only that settlement failed and hides the line that actually broke.
-		if (typeof tag === 'string' && nested !== undefined && nested !== cause) {
+		if (isString(tag) && nested !== undefined && nested !== cause) {
 			const phase = Reflect.get(cause, 'phase');
 			const step = Reflect.get(cause, 'step');
 			const collection = Reflect.get(cause, 'collection');
-			const site = [phase, step, collection].filter((value) => typeof value === 'string').join(' ');
+			const site = [phase, step, collection].filter((value) => isString(value)).join(' ');
 			return `${tag}${site === '' ? '' : ` (${site})`}: ${describeCauseAt(nested, nextSeen)}`;
 		}
 		/**
@@ -67,23 +73,23 @@ const describeCauseAt = (cause: unknown, seen: ReadonlySet<object>): string => {
 		const nestedIssue = Reflect.get(cause, 'issue');
 		const issues =
 			Reflect.get(cause, 'issues') ??
-			(nestedIssue !== null && typeof nestedIssue === 'object'
+			(isObjectLike(nestedIssue)
 				? (Reflect.get(nestedIssue, 'issues') ?? [nestedIssue])
 				: undefined);
 		if (Array.isArray(issues) && issues.length > 0) {
 			const described = issues.slice(0, 3).map((issue: unknown) => {
-				if (issue === null || typeof issue !== 'object') return String(issue);
+				if (!isObjectLike(issue)) return String(issue);
 				const path = Reflect.get(issue, 'path');
 				const where =
 					Array.isArray(path) && path.length > 0 ? `${path.map(String).join('.')}: ` : '';
 				const detail = Reflect.get(issue, 'message');
-				return `${where}${typeof detail === 'string' && detail.length > 0 ? detail : JSON.stringify(issue)}`;
+				return `${where}${isString(detail) && detail.length > 0 ? detail : JSON.stringify(issue)}`;
 			});
 			const more =
 				issues.length > described.length ? ` (+${issues.length - described.length} more)` : '';
 			const headline =
-				typeof message === 'string' && message.length > 0 ? message : 'Schema validation failed';
-			return `${typeof tag === 'string' ? `${tag}: ` : ''}${headline} — ${described.join('; ')}${more}`;
+				isString(message) && message.length > 0 ? message : 'Schema validation failed';
+			return `${isString(tag) ? `${tag}: ` : ''}${headline} — ${described.join('; ')}${more}`;
 		}
 		/**
 		 * A tagged error that died building itself still knows where it was built.
@@ -118,12 +124,12 @@ const describeCauseAt = (cause: unknown, seen: ReadonlySet<object>): string => {
 				? 'Schema validation failed while constructing a tagged error; its cause was lost'
 				: `Schema validation failed while constructing a tagged error (${frame}); its cause was lost`;
 		}
-		if (typeof message === 'string' && message.length > 0) {
-			return typeof tag === 'string' ? `${tag}: ${message}` : message;
+		if (isString(message) && message.length > 0) {
+			return isString(tag) ? `${tag}: ${message}` : message;
 		}
-		if (typeof tag === 'string' && tag.length > 0) {
+		if (isString(tag) && tag.length > 0) {
 			const detail = JSON.stringify(cause, (_key, value: unknown) =>
-				typeof value === 'bigint' ? value.toString() : value
+				isBigint(value) ? value.toString() : value
 			);
 			return detail === undefined || detail === '{}' ? tag : `${tag}: ${detail}`;
 		}

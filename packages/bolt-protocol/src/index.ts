@@ -11,6 +11,8 @@ export const FixedCommandCatalogue = [
 export type FixedCommandContract = (typeof FixedCommandCatalogue)[number];
 export type FixedCommandName = FixedCommandContract['name'];
 
+export { WebPage, WebPageRequest, WEB_READ_OPERATION, WEB_PAGE_BYTE_LIMIT } from './web.js';
+
 export {
 	CollectionBaseRowVersion,
 	CollectionGroup,

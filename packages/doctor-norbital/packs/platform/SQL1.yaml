@@ -13,7 +13,7 @@ rule:
                 - kind: TemplateExpression
             - regex: '\b(?:SELECT\b[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*\bSET\b|DELETE\s+FROM\b|MERGE\s+INTO\b|TRUNCATE\s+(?:TABLE\s+)?(?:\"[\w$]+\"|''[\w$]+''|[\w$]+)|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|ALTER\s+(?:TABLE|POLICY|VIEW)\b|DROP\s+(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b)'
     - not:
-        regex: '(?:begin|commit|rollback|BEGIN|COMMIT|ROLLBACK)(?:\s+(?:work|transaction|WORK|TRANSACTION))?|start\s+transaction|START\s+TRANSACTION|savepoint\b|SAVEPOINT\b'
+        regex: '(?:[Bb][Ee][Gg][Ii][Nn]|[Cc][Oo][Mm][Mm][Ii][Tt]|[Rr][Oo][Ll][Ll][Bb][Aa][Cc][Kk])(?:\s+(?:work|transaction|WORK|TRANSACTION))?|start\s+transaction|START\s+TRANSACTION|savepoint\b|SAVEPOINT\b'
     - not:
         fact:
           name: enclosingOwnerMatches
@@ -58,3 +58,4 @@ examples:
     - "export const commit = 'commit';"
     - "export const rollback = 'rollback';"
     - "export const disk = 'truncate -s 8G image';"
+    - "export const labels = { commit: 'Commit', rollback: 'Rollback', begin: 'Begin' };"

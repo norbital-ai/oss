@@ -10,7 +10,10 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, matchesGlob, relative, sep } from 'node:path';
+import { Schema } from 'effect';
 import { jsonRecord, readJsonObject, recordField } from '../manifest.js';
+
+const isString = Schema.is(Schema.String);
 
 /** Require a package test command that can actually select the test source. */
 export function isConfiguredTest(path: string, owner: Readonly<{ root: string }>): boolean {
@@ -30,7 +33,7 @@ export function isConfiguredTest(path: string, owner: Readonly<{ root: string }>
 	const commands = Object.entries(scripts)
 		.filter(([name]) => name === 'test' || name.startsWith('test:'))
 		.map(([, command]) => command)
-		.filter((command): command is string => typeof command === 'string');
+		.filter(isString);
 	const local = relative(owner.root, path).split(sep).join('/');
 	for (const command of commands) {
 		if (/\b(?:vitest|jest|mocha|ava|playwright)\b/.test(command)) return true;

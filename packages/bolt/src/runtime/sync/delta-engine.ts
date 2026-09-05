@@ -70,6 +70,9 @@ const ReversePathRowShape = Schema.Struct({
 });
 const decodeReversePathRowShape = Schema.decodeUnknownResult(ReversePathRowShape);
 const decodeReversePathValue = Schema.decodeUnknownResult(Schema.Json);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isBoolean = Schema.is(Schema.Boolean);
 
 const reset = (reason: SyncResetReasonType, message: string): SyncPrefixResolutionError =>
 	new SyncPrefixResolutionError({ reason, message });
@@ -129,7 +132,11 @@ export const describeSyncQuery: (
 
 const queryInput = (
 	plan: SyncLivePlan,
-	narrowing: Readonly<{ readonly where?: unknown; readonly limit?: number; readonly after?: string }>
+	narrowing: Readonly<{
+		readonly where?: unknown;
+		readonly limit?: number;
+		readonly after?: string;
+	}>
 ): Collections.QueryInput => {
 	const execution = narrowEffectiveQuery(plan.effectivePlan, narrowing);
 	return {
@@ -139,9 +146,13 @@ const queryInput = (
 		...(execution.userFilter === undefined ? {} : { userFilter: execution.userFilter }),
 		...(execution.orderBy === undefined ? {} : { orderBy: execution.orderBy }),
 		...(execution.with === undefined ? {} : { with: execution.with }),
-		...(execution.columns === undefined ? {} : { columns: execution.columns as Collections.QueryInput['columns'] }),
+		...(execution.columns === undefined
+			? {}
+			: { columns: execution.columns as Collections.QueryInput['columns'] }),
 		...(execution.after === undefined ? {} : { after: execution.after }),
-		...(execution.search === undefined ? {} : { search: execution.search as Collections.QueryInput['search'] })
+		...(execution.search === undefined
+			? {}
+			: { search: execution.search as Collections.QueryInput['search'] })
 	};
 };
 
@@ -161,20 +172,18 @@ const findMany = Effect.fn('Sync.findMany')(function* (
 
 const recordId = (row: StoredRecord): string => {
 	const id = row['id'];
-	if (typeof id !== 'string' || id.length === 0)
+	if (!isString(id) || id.length === 0)
 		throw reset('inconsistent-prefix', 'A keyed prefix body did not expose its id.');
 	return id;
 };
 
 const prefixKeyOf = (row: StoredRecord, plan: EffectiveQueryPlan): SyncPrefixKey => {
 	const id = row['id'];
-	if (typeof id !== 'string' || id.length === 0)
+	if (!isString(id) || id.length === 0)
 		throw reset('inconsistent-prefix', 'An admitted live row did not expose its string id.');
 	const order = plan.order.map(({ field }) => row[field]);
 	if (
-		order.some(
-			(value) => value !== null && !['string', 'number', 'boolean'].includes(typeof value)
-		)
+		order.some((value) => value !== null && !['string', 'number', 'boolean'].includes(typeof value))
 	)
 		throw reset(
 			'inconsistent-prefix',
@@ -211,7 +220,10 @@ export const resolveInitialPrefix: (
 	const limit = Math.min(requestedPrefix, plan.effectivePlan.limit);
 	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SYNC_LOADED_KEYS)
 		return yield* Effect.fail(
-			reset('prefix-limit', `A live prefix must contain between 1 and ${MAX_SYNC_LOADED_KEYS} rows.`)
+			reset(
+				'prefix-limit',
+				`A live prefix must contain between 1 and ${MAX_SYNC_LOADED_KEYS} rows.`
+			)
 		);
 	const rows = uniqueRows(yield* findMany(effectId, new SyncPlanWork(), plan, { limit }));
 	const retainedBytes = retainedPrefixBytes(rows);
@@ -260,7 +272,10 @@ const boundaryCursor = (plan: SyncLivePlan, boundary: SyncPrefixKey): string => 
 	);
 	const cursor = encodeCollectionCursor(effectiveOrderTerms(plan.effectivePlan), row);
 	if (cursor === null)
-		throw reset('inconsistent-prefix', 'The retained boundary cannot be encoded as a keyset cursor.');
+		throw reset(
+			'inconsistent-prefix',
+			'The retained boundary cannot be encoded as a keyset cursor.'
+		);
 	return cursor;
 };
 
@@ -317,7 +332,7 @@ const decodeGraphRows = (
 ): ReadonlyArray<GraphRow> =>
 	rows.map((row) => {
 		const decoded = decodeReversePathRowShape({ id: row['id'], value: row[field] });
-		if (Result.isFailure(decoded) || typeof decoded.success.id !== 'string')
+		if (Result.isFailure(decoded) || !isString(decoded.success.id))
 			throw reset('inconsistent-prefix', 'A reverse-path lookup returned a malformed row.');
 		const decodedValue = decodeReversePathValue(decoded.success.value);
 		if (Result.isFailure(decodedValue))
@@ -377,10 +392,12 @@ const valuesForGraphRows = Effect.fn('Sync.valuesForGraphRows')(function* (
 	);
 	const values: string[] = [];
 	for (const id of ids) {
-		const change = batch.changes.find((entry) => entry.collection === collection && entry.id === id);
+		const change = batch.changes.find(
+			(entry) => entry.collection === collection && entry.id === id
+		);
 		const value = change === undefined ? current.get(id) : valueAt(change, graph, field);
 		if (value === undefined || value === null) continue;
-		if (typeof value !== 'string')
+		if (!isString(value))
 			return yield* Effect.fail(
 				reset('inconsistent-prefix', `Relationship route ${collection}.${field} is not a string.`)
 			);
@@ -402,14 +419,21 @@ const matchingIdsForGraph = Effect.fn('Sync.matchingIdsForGraph')(function* (
 	if (values.length === 0) return [] as ReadonlyArray<string>;
 	const wanted = new Set(values);
 	const current = new Set(
-		(yield* routeRows(effectId, work, plan.subject, collection, field, field, values, MAX_REVERSE_ROOTS + 1)).map(
-			({ id }) => id
-		)
+		(yield* routeRows(
+			effectId,
+			work,
+			plan.subject,
+			collection,
+			field,
+			field,
+			values,
+			MAX_REVERSE_ROOTS + 1
+		)).map(({ id }) => id)
 	);
 	for (const change of batch.changes) {
 		if (change.collection !== collection) continue;
 		const value = valueAt(change, graph, field);
-		if (typeof value === 'string' && wanted.has(value)) current.add(change.id);
+		if (isString(value) && wanted.has(value)) current.add(change.id);
 		else current.delete(change.id);
 	}
 	return [...current];
@@ -498,7 +522,10 @@ const resolveAffectedRootIds = Effect.fn('Sync.resolveAffectedRootIds')(function
 	return [...roots];
 });
 
-const sameKeys = (left: ReadonlyArray<SyncPrefixKey>, right: ReadonlyArray<SyncPrefixKey>): boolean =>
+const sameKeys = (
+	left: ReadonlyArray<SyncPrefixKey>,
+	right: ReadonlyArray<SyncPrefixKey>
+): boolean =>
 	left.length === right.length &&
 	left.every(
 		(entry, index) =>
@@ -506,6 +533,18 @@ const sameKeys = (left: ReadonlyArray<SyncPrefixKey>, right: ReadonlyArray<SyncP
 			entry.order.length === right[index]?.order.length &&
 			entry.order.every((value, orderIndex) => Object.is(value, right[index]?.order[orderIndex]))
 	);
+
+/** The scalar kind two prefix-key order coordinates must share to be comparable. */
+const scalarKind = (
+	value: SyncPrefixKey['order'][number]
+): 'string' | 'number' | 'boolean' | undefined =>
+	isString(value)
+		? 'string'
+		: isNumber(value)
+			? 'number'
+			: isBoolean(value)
+				? 'boolean'
+				: undefined;
 
 const compareScalar = (
 	left: SyncPrefixKey['order'][number],
@@ -515,8 +554,11 @@ const compareScalar = (
 	if (Object.is(left, right)) return 0;
 	if (left === null) return direction === 'asc' ? 1 : -1;
 	if (right === null) return direction === 'asc' ? -1 : 1;
-	if (typeof left !== typeof right || !['string', 'number', 'boolean'].includes(typeof left))
-		throw reset('inconsistent-prefix', 'An effective order produced incomparable runtime coordinates.');
+	if (scalarKind(left) === undefined || scalarKind(left) !== scalarKind(right))
+		throw reset(
+			'inconsistent-prefix',
+			'An effective order produced incomparable runtime coordinates.'
+		);
 	const compared = left < right ? -1 : 1;
 	return direction === 'asc' ? compared : -compared;
 };
@@ -545,7 +587,10 @@ const validateState = (state: SyncAdvanceSubscription): void => {
 		state.prefixKeys.length > MAX_SYNC_LOADED_KEYS ||
 		new Set(state.prefixKeys.map(({ id }) => id)).size !== state.prefixKeys.length
 	)
-		throw reset('inconsistent-prefix', 'The retained prefix is duplicated or exceeds its row ceiling.');
+		throw reset(
+			'inconsistent-prefix',
+			'The retained prefix is duplicated or exceeds its row ceiling.'
+		);
 	if (
 		!Number.isSafeInteger(state.prefixBytes) ||
 		state.prefixBytes < 0 ||
@@ -620,108 +665,108 @@ export const advanceActivePrefix: (
 	batch: ChangeBatch
 ) => Effect.Effect<SyncAdvanceUpdate | undefined, SyncEngineError, SyncEngineRequirements> =
 	Effect.fn('Sync.advanceActivePrefix')(function* (
-	effectId: EffectId,
-	subject: Subject,
-	state: SyncAdvanceSubscription,
-	batch: ChangeBatch
-) {
-	validateState(state);
-	const plan = yield* requirePlan(
-		subject,
-		state,
-		'The effective plan key changed before this commit was applied.'
-	);
-	const targetLimit = Math.min(plan.effectivePlan.limit, Math.max(...state.viewerPrefixes));
-	if (targetLimit < state.prefixKeys.length)
-		return yield* Effect.fail(
-			reset('inconsistent-prefix', 'The retained prefix exceeds every attached viewer bound.')
+		effectId: EffectId,
+		subject: Subject,
+		state: SyncAdvanceSubscription,
+		batch: ChangeBatch
+	) {
+		validateState(state);
+		const plan = yield* requirePlan(
+			subject,
+			state,
+			'The effective plan key changed before this commit was applied.'
 		);
-	if (state.version >= Number.MAX_SAFE_INTEGER)
-		return yield* Effect.fail(reset('stale-version', 'The live prefix version is exhausted.'));
-
-	const compacted: ChangeBatch = { changes: [...compactSyncChanges(batch.changes)] };
-	const work = new SyncPlanWork();
-	const affectedRootIds = yield* resolveAffectedRootIds(
-		EffectId.make(`${effectId}:reverse`),
-		work,
-		plan,
-		compacted
-	);
-	const affected = new Set(affectedRootIds);
-	const oldPrefix = [...state.prefixKeys];
-	const survivors = oldPrefix.filter(({ id }) => !affected.has(id));
-	const probeRows = yield* resolveRowsByIds(
-		EffectId.make(`${effectId}:probe`),
-		work,
-		plan,
-		affectedRootIds
-	);
-	const boundaryRows = yield* resolveBoundaryRows(
-		EffectId.make(`${effectId}:boundary`),
-		work,
-		plan,
-		oldPrefix.at(-1),
-		affectedRootIds,
-		oldPrefix.length - survivors.length
-	);
-	const proposedRows = rowsByKeyOrder([...probeRows, ...boundaryRows], plan, targetLimit);
-	const proposedById = bodyMap(proposedRows);
-	const proposedKeys = [
-		...survivors,
-		...proposedRows.map((row) => prefixKeyOf(row, plan.effectivePlan))
-	]
-		.toSorted((left, right) => compareKeys(left, right, plan))
-		.filter((key, index, values) => index === 0 || key.id !== values[index - 1]?.id)
-		.slice(0, targetLimit);
-	const prefixChanged = !sameKeys(oldPrefix, proposedKeys);
-	const affectedHeldBody = oldPrefix.some(({ id }) => affected.has(id) && proposedById.has(id));
-	if (!prefixChanged && !affectedHeldBody) return undefined;
-	const survivorRows = yield* resolveRowsByIds(
-		EffectId.make(`${effectId}:survivors`),
-		work,
-		plan,
-		proposedKeys.filter(({ id }) => !proposedById.has(id)).map(({ id }) => id)
-	);
-	const allBodies = bodyMap([...probeRows, ...boundaryRows, ...survivorRows]);
-	const retainedRows: StoredRecord[] = [];
-	for (const { id } of proposedKeys) {
-		const row = allBodies.get(id);
-		if (row === undefined)
+		const targetLimit = Math.min(plan.effectivePlan.limit, Math.max(...state.viewerPrefixes));
+		if (targetLimit < state.prefixKeys.length)
 			return yield* Effect.fail(
-				reset('inconsistent-prefix', `The proposed prefix has no authoritative body for ${id}.`)
+				reset('inconsistent-prefix', 'The retained prefix exceeds every attached viewer bound.')
 			);
-		retainedRows.push(row);
-	}
-	const retainedBytes = retainedPrefixBytes(retainedRows);
-	if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
-		return yield* Effect.fail(
-			reset('prefix-bytes', 'The committed prefix exceeds its cumulative encoded byte ceiling.')
+		if (state.version >= Number.MAX_SAFE_INTEGER)
+			return yield* Effect.fail(reset('stale-version', 'The live prefix version is exhausted.'));
+
+		const compacted: ChangeBatch = { changes: [...compactSyncChanges(batch.changes)] };
+		const work = new SyncPlanWork();
+		const affectedRootIds = yield* resolveAffectedRootIds(
+			EffectId.make(`${effectId}:reverse`),
+			work,
+			plan,
+			compacted
 		);
-	const toVersion = state.version + 1;
-	return {
-		subId: state.subId,
-		fromVersion: state.version,
-		toVersion,
-		prefixKeys: proposedKeys,
-		prefixBytes: retainedBytes,
-		deltas: [...new Set(state.viewerPrefixes)]
-			.toSorted((left, right) => left - right)
-			.map(
-				(loadedPrefix) =>
-					({
-						loadedPrefix,
-						delta: derivePrefixDelta(
-							oldPrefix.slice(0, loadedPrefix),
-							proposedKeys.slice(0, loadedPrefix),
-							affected,
-							allBodies
-						)
-					}) satisfies SyncViewerPrefixDelta
-			),
-		authorityFingerprint: plan.effectivePlan.authority.fingerprint,
-		dependencies: plan.effectivePlan.dependencies
-	} satisfies SyncAdvanceUpdate;
-});
+		const affected = new Set(affectedRootIds);
+		const oldPrefix = [...state.prefixKeys];
+		const survivors = oldPrefix.filter(({ id }) => !affected.has(id));
+		const probeRows = yield* resolveRowsByIds(
+			EffectId.make(`${effectId}:probe`),
+			work,
+			plan,
+			affectedRootIds
+		);
+		const boundaryRows = yield* resolveBoundaryRows(
+			EffectId.make(`${effectId}:boundary`),
+			work,
+			plan,
+			oldPrefix.at(-1),
+			affectedRootIds,
+			oldPrefix.length - survivors.length
+		);
+		const proposedRows = rowsByKeyOrder([...probeRows, ...boundaryRows], plan, targetLimit);
+		const proposedById = bodyMap(proposedRows);
+		const proposedKeys = [
+			...survivors,
+			...proposedRows.map((row) => prefixKeyOf(row, plan.effectivePlan))
+		]
+			.toSorted((left, right) => compareKeys(left, right, plan))
+			.filter((key, index, values) => index === 0 || key.id !== values[index - 1]?.id)
+			.slice(0, targetLimit);
+		const prefixChanged = !sameKeys(oldPrefix, proposedKeys);
+		const affectedHeldBody = oldPrefix.some(({ id }) => affected.has(id) && proposedById.has(id));
+		if (!prefixChanged && !affectedHeldBody) return undefined;
+		const survivorRows = yield* resolveRowsByIds(
+			EffectId.make(`${effectId}:survivors`),
+			work,
+			plan,
+			proposedKeys.filter(({ id }) => !proposedById.has(id)).map(({ id }) => id)
+		);
+		const allBodies = bodyMap([...probeRows, ...boundaryRows, ...survivorRows]);
+		const retainedRows: StoredRecord[] = [];
+		for (const { id } of proposedKeys) {
+			const row = allBodies.get(id);
+			if (row === undefined)
+				return yield* Effect.fail(
+					reset('inconsistent-prefix', `The proposed prefix has no authoritative body for ${id}.`)
+				);
+			retainedRows.push(row);
+		}
+		const retainedBytes = retainedPrefixBytes(retainedRows);
+		if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
+			return yield* Effect.fail(
+				reset('prefix-bytes', 'The committed prefix exceeds its cumulative encoded byte ceiling.')
+			);
+		const toVersion = state.version + 1;
+		return {
+			subId: state.subId,
+			fromVersion: state.version,
+			toVersion,
+			prefixKeys: proposedKeys,
+			prefixBytes: retainedBytes,
+			deltas: [...new Set(state.viewerPrefixes)]
+				.toSorted((left, right) => left - right)
+				.map(
+					(loadedPrefix) =>
+						({
+							loadedPrefix,
+							delta: derivePrefixDelta(
+								oldPrefix.slice(0, loadedPrefix),
+								proposedKeys.slice(0, loadedPrefix),
+								affected,
+								allBodies
+							)
+						}) satisfies SyncViewerPrefixDelta
+				),
+			authorityFingerprint: plan.effectivePlan.authority.fingerprint,
+			dependencies: plan.effectivePlan.dependencies
+		} satisfies SyncAdvanceUpdate;
+	});
 
 export const extendActivePrefix: (
 	effectId: EffectId,
@@ -737,7 +782,11 @@ export const extendActivePrefix: (
 	request: SyncExtendPrefixRequest
 ) {
 	validateState(state);
-	if (!state.viewerPrefixes.includes(request.loadedPrefix))
+	if (
+		!state.viewerPrefixes.some(
+			(prefix) => Math.min(prefix, state.prefixKeys.length) === request.loadedPrefix
+		)
+	)
 		return yield* Effect.fail(reset('stale-version', 'The prefix viewer is no longer attached.'));
 	if (request.version !== state.version)
 		return yield* Effect.fail(reset('stale-version', 'The prefix extension base is stale.'));
@@ -745,12 +794,18 @@ export const extendActivePrefix: (
 		return yield* Effect.fail(
 			reset('stale-version', 'A live prefix extension must be strictly monotonic.')
 		);
-	const plan = yield* requirePlan(subject, state, 'The effective plan changed before prefix extension.');
+	const plan = yield* requirePlan(
+		subject,
+		state,
+		'The effective plan changed before prefix extension.'
+	);
 	if (
 		request.requestedPrefix > MAX_SYNC_LOADED_KEYS ||
 		request.requestedPrefix > plan.effectivePlan.limit
 	)
-		return yield* Effect.fail(reset('prefix-limit', 'The requested prefix exceeds plan admission.'));
+		return yield* Effect.fail(
+			reset('prefix-limit', 'The requested prefix exceeds plan admission.')
+		);
 
 	const work = new SyncPlanWork();
 	const oldLength = state.prefixKeys.length;
@@ -781,13 +836,12 @@ export const extendActivePrefix: (
 		})
 	)
 		return yield* Effect.fail(
-			reset('inconsistent-prefix', 'The extension is not a strict continuation of the retained prefix.')
+			reset(
+				'inconsistent-prefix',
+				'The extension is not a strict continuation of the retained prefix.'
+			)
 		);
 	const toPrefix = Math.min(request.requestedPrefix, nextKeys.length);
-	if (toPrefix === 0)
-		return yield* Effect.fail(
-			reset('inconsistent-prefix', 'An empty prefix cannot produce a positive extension response.')
-		);
 	const requestedKeys = nextKeys.slice(request.loadedPrefix, toPrefix);
 	const newBodies = bodyMap(extensionRows);
 	const bodies = bodyMap([

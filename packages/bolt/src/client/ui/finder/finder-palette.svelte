@@ -52,9 +52,9 @@
 </script>
 
 <div
-	class={showInput
+	class="{showInput
 		? 'contents'
-		: 'overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg'}
+		: 'overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg'}"
 >
 	{#if scope}
 		<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-1.5 text-meta">
@@ -109,7 +109,7 @@
 		<Command.List
 			itemHeight={34}
 			gap={0}
-			class={showInput ? 'max-h-[min(60vh,22rem)]' : 'max-h-64'}
+			class="{showInput ? 'max-h-[min(60vh,22rem)]' : 'max-h-64'}"
 		>
 			{#snippet itemSnippet({ item, isIndicator })}
 				{@const row = items.find((candidate) => candidate.value === item.value)}
@@ -119,11 +119,7 @@
 						fill
 						gap={row.kind === 'group' ? 'xs' : 'sm'}
 						justify={row.kind === 'empty' ? 'center' : 'start'}
-						class={`${
-							row.kind === 'group' ? 'text-overline px-3' : 'px-3'
-						} ${highlighted ? 'bg-accent text-accent-foreground' : ''} ${
-							row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''
-						}`}
+						class="{row.kind === 'group' ? 'text-overline px-3' : 'px-3'} {highlighted ? 'bg-accent text-accent-foreground' : ''} {row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''}"
 					>
 						{#if row.kind === 'group'}
 							<span>{row.label}</span>
@@ -137,6 +133,7 @@
 							<span data-testid="agent-mention-empty" class="truncate text-meta">{row.label}</span>
 						{:else}
 							{#if row.thumbnail}
+								<!-- repository-health:allow UI22 -- this chip clips the row thumbnail image; Bound imposes a named height contract the 1rem chip cannot take -->
 								<span class="size-4 shrink-0 overflow-hidden rounded-sm">
 									<img
 										src={row.thumbnail}
@@ -164,9 +161,7 @@
 							without one let the label run the full width instead of leaving a hole.
 						-->
 							<span
-								class={`truncate text-xs font-normal text-foreground sm:text-micro ${
-									row.description ? 'w-40 shrink-0 sm:w-52' : 'min-w-0 flex-1'
-								}`}>{row.label}</span
+								class="truncate text-xs font-normal text-foreground sm:text-micro {row.description ? 'w-40 shrink-0 sm:w-52' : 'min-w-0 flex-1'}">{row.label}</span
 							>
 							{#if row.description}
 								<span class="min-w-0 flex-1 truncate text-micro text-muted-foreground"

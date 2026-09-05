@@ -3,6 +3,7 @@ import type {
 	CollectionRegistry,
 	ErasedCollectionRegistry
 } from '@norbital-ai/std/collection';
+import { Predicate, Schema } from 'effect';
 import type { Component as CollectionRepresentationComponent } from 'svelte';
 import { getContext, hasContext, setContext } from 'svelte';
 // Imported above rather than only re-exported: a bare `export type { … } from` does not bind the
@@ -59,21 +60,27 @@ export function getOptionalCollectionClientGetter(): CollectionClientGetter | un
 		: undefined;
 }
 
+/**
+ * The duck shape a collection client must stand on: an object (array tolerated by the original
+ * probe) under `db` and `collections`, and a `records` object exposing a `findMany` callable.
+ * One decode replaces the individual typeof probes it used to be assembled from.
+ */
+const collectionClientShapeSchema = Schema.Struct({
+	db: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)]),
+	collections: Schema.Union([
+		Schema.Record(Schema.String, Schema.Unknown),
+		Schema.Array(Schema.Unknown)
+	]),
+	records: Schema.Struct({
+		findMany: Schema.Unknown.check(Schema.makeFilter(Predicate.isFunction))
+	})
+});
+const isCollectionClientShape = Schema.is(collectionClientShapeSchema);
+
 function isCollectionClient<TCollections extends CollectionRegistry>(
 	candidate: object
 ): candidate is CollectionClient<TCollections> {
-	const db = Reflect.get(candidate, 'db');
-	const collections = Reflect.get(candidate, 'collections');
-	const records = Reflect.get(candidate, 'records');
-	return (
-		db !== null &&
-		typeof db === 'object' &&
-		collections !== null &&
-		typeof collections === 'object' &&
-		records !== null &&
-		typeof records === 'object' &&
-		typeof Reflect.get(records, 'findMany') === 'function'
-	);
+	return isCollectionClientShape(candidate);
 }
 
 export function resolveCollectionClient<

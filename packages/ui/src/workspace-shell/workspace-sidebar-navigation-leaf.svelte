@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
 	import { ProductIcon, productIconNameFromReference } from '#lib/product-icon';
+	import * as AlertDialog from '#lib/alert-dialog';
 	import * as Sidebar from '#lib/sidebar';
 	import { cn } from '#lib/utils';
 	import {
@@ -21,13 +22,43 @@
 	const productIconName = $derived(productIconNameFromReference(item.icon));
 	const badgeIconName = $derived(productIconNameFromReference(item.badge));
 
+	/** Open while the confirm copy is up; the href follows only once confirmed. */
+	let confirming = $state(false);
+
 	/** Follows the leaf's href through the shell navigator when one is provided. */
 	function navigate(event: MouseEvent): void {
+		if (item.confirm !== undefined) {
+			event.preventDefault();
+			confirming = true;
+			return;
+		}
 		if (!onNavigate) return;
 		event.preventDefault();
 		onNavigate(item.href);
 	}
+
+	/** The destination takes over the session; the sidebar will not be there to come back to. */
+	function confirmNavigate(): void {
+		confirming = false;
+		if (onNavigate) onNavigate(item.href);
+		else window.location.assign(item.href);
+	}
 </script>
+
+<AlertDialog.Root bind:open={confirming}>
+	<AlertDialog.Content class="max-w-md">
+		<AlertDialog.Header>
+			<AlertDialog.Title>{item.confirm?.title ?? ''}</AlertDialog.Title>
+			<AlertDialog.Description>{item.confirm?.description ?? ''}</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>{item.confirm?.cancelLabel ?? ''}</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={confirmNavigate}>
+				{item.confirm?.confirmLabel ?? ''}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <Sidebar.MenuSubItem>
 	<Sidebar.MenuSubButton isActive={item.active} size="sm">

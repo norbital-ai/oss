@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import {
-	AgentId,
-	DirectiveMode,
-	DirectivePriority,
-	TaskId
-} from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -68,7 +63,7 @@ describe('Task directive queue', () => {
 		);
 		expect(followUp.directiveId).toEqual(expect.any(String));
 		releaseGeneration();
-		expect((await execution).status).toBe('done');
+		expect((await execution).status).toBe('idle');
 
 		expect(generated).toHaveLength(1);
 		expect(JSON.stringify(generated[0]?.messages)).not.toContain('newly queued detail');
@@ -88,6 +83,15 @@ describe('Task directive queue', () => {
 				[taskId]
 			)
 		).toEqual([{ input_through_sequence: 1, status: 'succeeded' }]);
+		expect(
+			(
+				await harness.runtime.runPromise(
+					agents.execute(harness.effectId('queue:follow-up-execute'), adminSubject, taskId)
+				)
+			).status
+		).toBe('done');
+		expect(generated).toHaveLength(2);
+		expect(JSON.stringify(generated[1]?.messages)).toContain('newly queued detail');
 	});
 
 	it('claims a steering directive ahead of an older normal directive', async () => {

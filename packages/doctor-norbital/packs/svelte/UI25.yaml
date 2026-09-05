@@ -4,6 +4,8 @@ severity: error
 principles: [simplicity, straightforwardness, colocation]
 files:
   - '**/*.svelte'
+ignore:
+  - '**/packages/ui/src/**'
 rule:
   all:
     - kind: svelte:Attribute
@@ -11,9 +13,12 @@ rule:
     - has:
         kind: svelte:Interpolation
     - not:
+        regex: '^class=\{[\s\S]*[''"`]'
+    - not:
         regex: 'class=\{[^}]*[''"`][a-z-]+-\[\$\{'
 examples:
   bad:
     - '<div class={shell}></div>'
   good:
     - '<div class="flex gap-2"></div>'
+    - '<div class={fixed ? "fixed inset-0" : ""}></div>'

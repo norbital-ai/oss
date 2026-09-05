@@ -74,12 +74,15 @@ export function replayManifest(
 	return { outputs, matches, ...(matches ? {} : { mismatches }) };
 }
 
+// Containers are what deepEqual recurses into: any object (record) or array.
+const isContainer = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 function deepEqual(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
-	if (typeof a !== typeof b) return false;
-	if (a === null || b === null) return a === b;
-	if (typeof a !== 'object') return a === b;
-	if (typeof b !== 'object') return false;
+	if (a === null || b === null) return false;
+	if (!isContainer(a) || !isContainer(b)) return false;
 	if (Array.isArray(a)) {
 		if (!Array.isArray(b) || a.length !== b.length) return false;
 		return a.every((value, index) => deepEqual(value, b[index]));

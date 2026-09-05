@@ -1,0 +1,23 @@
+id: GUARD2
+summary: runtime typeof discriminant instead of a schema decode
+severity: error
+principles: [type-safety, straightforwardness]
+rule:
+  any:
+    - all:
+        - pattern: 'typeof $X === $T'
+        - not:
+            regex: '^(?:globalThis|process|import\.meta|window|document|module|require|console|Function)'
+            on: X
+    - all:
+        - pattern: 'typeof $X !== $T'
+        - not:
+            regex: '^(?:globalThis|process|import\.meta|window|document|module|require|console|Function)'
+            on: X
+examples:
+  bad:
+    - "export const label = (value) => typeof value === 'string' ? value : String(value);"
+    - "export const pick = (style) => typeof style === 'string' ? style : style.context;"
+  good:
+    - 'export const label = (value) => getErrorMessage(value);'
+    - "export const pick = (style) => Schema.is(Schema.String)(style) ? style : style.context;"

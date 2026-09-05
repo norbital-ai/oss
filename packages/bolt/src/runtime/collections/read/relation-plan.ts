@@ -63,6 +63,7 @@ export type PlanContext = Readonly<{
 }>;
 
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
 const parseRelationJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const fieldsOf = (
@@ -319,7 +320,7 @@ const asRow = (value: unknown): Readonly<Record<string, Schema.Json>> =>
 	value as Readonly<Record<string, Schema.Json>>;
 
 const relationValue = (value: unknown): unknown =>
-	typeof value === 'string' ? parseRelationJson(value) : value;
+	isString(value) ? parseRelationJson(value) : value;
 
 const split = (
 	row: Readonly<Record<string, unknown>>,
@@ -357,7 +358,7 @@ const readRow = (
 			continue;
 		}
 		const handle = record[attachment.field];
-		if (!isObject(handle) || handle['kind'] !== attachment.tag || typeof handle['id'] !== 'string')
+		if (!isObject(handle) || handle['kind'] !== attachment.tag || !isString(handle['id']))
 			continue;
 		record[attachment.field] = {
 			kind: attachment.tag,

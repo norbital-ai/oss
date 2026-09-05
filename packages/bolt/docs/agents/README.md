@@ -50,16 +50,16 @@ The fixed command catalogue exposes:
 
 ```ts
 tasks.submit({
-  taskId,
-  agentId,
-  message,
-  mode: "agent" | "plan" | "compact",
-  priority: "normal" | "steer",
+	taskId,
+	agentId,
+	message,
+	mode: 'agent' | 'plan' | 'compact',
+	priority: 'normal' | 'steer'
 });
 
 tasks.editMessage({ taskId, messageId, message });
 
-tasks.control({ taskId, action: "stop" | "resume" });
+tasks.control({ taskId, action: 'stop' | 'resume' });
 ```
 
 `tasks.editMessage` appends a revision of one of the subject's own user messages and queues the
@@ -72,7 +72,9 @@ Task, canonical message, and directive. A later submission must match the immuta
 agent, and audience, then appends its message and directive atomically. Completed and failed Tasks
 do not accept more work.
 
-`steer` is directive priority, not a separate execution path. Stop takes effect at a safe boundary.
+`steer` is directive priority, not a separate execution path. Completing one run leaves the Task
+ready while directives remain queued and schedules the next execution. Stop cancels queued and
+claimed executions at a safe boundary; their messages remain in the durable transcript.
 Resume is explicit and is admitted only for a stopped or attention Task after subject, agent,
 model, capability, and access checks run again; it creates a new directive and execution fence.
 
@@ -85,14 +87,14 @@ descendant in the root Task's workbench.
 
 These ordinary Bolt system collections are the complete logical agent store:
 
-| Collection      | Durable responsibility |
-| --------------- | ---------------------- |
-| `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence |
-| `agent_run`     | One claimed directive, mode, phase, input boundary, model, immutable capability snapshot, status, and matching epoch |
+| Collection      | Durable responsibility                                                                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence                                                    |
+| `agent_run`     | One claimed directive, mode, phase, input boundary, model, immutable capability snapshot, status, and matching epoch                                     |
 | `agent_message` | One complete encoded Effect `Prompt.Message`, ordered by Task sequence, with author, semantic hash, optional run, and Compact or Plan-verdict annotation |
-| `agent_inbox`   | The Task's only queue: ordered message directives with mode, priority, claim state, and claimed run |
-| `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state |
-| `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity |
+| `agent_inbox`   | The Task's only queue: ordered message directives with mode, priority, claim state, and claimed run                                                      |
+| `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                           |
+| `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                              |
 
 `agent_task.epoch` and `agent_run.epoch` form the write fence. Claiming work increments the Task
 epoch and installs the active run atomically. Every later append, tool effect, usage observation, and
@@ -208,12 +210,12 @@ declarative queries such as:
 ```ts
 client.db.agent_task.findMany({ where: { id: { eq: taskId } } });
 client.db.agent_message.findMany({
-  where: { task_id: { eq: taskId } },
-  orderBy: { sequence: "asc" },
+	where: { task_id: { eq: taskId } },
+	orderBy: { sequence: 'asc' }
 });
 client.db.agent_plan.findMany({
-  where: { task_id: { eq: taskId } },
-  orderBy: { revision: "desc" },
+	where: { task_id: { eq: taskId } },
+	orderBy: { revision: 'desc' }
 });
 client.db.agent_task.findMany({ where: { parent_id: { eq: taskId } } });
 ```

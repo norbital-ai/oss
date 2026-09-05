@@ -116,7 +116,7 @@
 		}
 		cancelUpload();
 		const pos = getPos();
-		if (typeof pos !== 'number') return;
+		if (pos === undefined) return;
 		editor.commands.deleteRange({ from: pos, to: pos + node.nodeSize });
 	}
 

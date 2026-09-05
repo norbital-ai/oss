@@ -1,0 +1,19 @@
+id: STATE3
+summary: module let binding is mutated from a function
+severity: error
+principles: [simplicity, modularity, testability]
+ignore:
+  - '**/*.svelte'
+  - '**/*.svelte.ts'
+rule:
+  all:
+    - pattern: 'let $NAME;'
+    - inside: { kind: SourceFile, stopBy: neighbor }
+    - fact: { name: bindingMutatedInFunction }
+examples:
+  bad:
+    - "let registered;\nfunction register(shape) { registered = shape; return registered; }"
+  good:
+    - 'export function create(shape) { let registered; registered = shape; return registered; }'
+    - "let described;\nfunction describe() { described ??= compute(); return described; }"
+    - 'const index = new Map([["a", 1]]);\nexport const get = (k) => index.get(k);'

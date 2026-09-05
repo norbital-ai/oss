@@ -229,7 +229,7 @@
 									button recipe so it reads as one control with `Remove logo` beside it.
 								-->
 								<label
-									class={buttonVariants({ variant: 'secondary' })}
+									class="{buttonVariants({ variant: 'secondary' })}"
 									aria-disabled={busy !== null}
 								>
 									<Inline as="span" gap="sm" justify="center">

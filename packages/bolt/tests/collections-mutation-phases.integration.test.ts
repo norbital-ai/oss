@@ -12,10 +12,7 @@ import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-
 import * as Collections from '../src/runtime/collections/collections.js';
 import { MAX_ORDINARY_MUTATION_CHANGED_ROWS } from '../src/runtime/collections/write/plan.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
-import {
-	emptyAuthoredRuntime,
-	type AuthoredRuntime
-} from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -212,12 +209,7 @@ describe('a batched write that fails', () => {
 				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
 				const outcome = yield* Effect.result(
-					collections.mutate(
-						EffectId.make('phases-commit-failure'),
-						adminSubject,
-						'notes',
-						[{}]
-					)
+					collections.mutate(EffectId.make('phases-commit-failure'), adminSubject, 'notes', [{}])
 				);
 				return { outcome, changes: yield* syncCommit.drainChanges };
 			})
@@ -237,12 +229,9 @@ describe('a batched write that fails', () => {
 				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
 				const outcome = yield* Effect.result(
-					collections.mutate(
-						EffectId.make('phases-pending-approval'),
-						pendingSubject,
-						'notes',
-						[{ body: 'Held for review' }]
-					)
+					collections.mutate(EffectId.make('phases-pending-approval'), pendingSubject, 'notes', [
+						{ body: 'Held for review' }
+					])
 				);
 				return { outcome, changes: yield* syncCommit.drainChanges };
 			})
@@ -255,7 +244,7 @@ describe('a batched write that fails', () => {
 		expect(await harness.database.query('select id from notes')).toEqual([]);
 	}, 60_000);
 
-	it('admits one thousand changed rows and refuses one thousand and one before commit', async () => {
+	it('admits the changed-row limit and refuses one more before commit', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
@@ -288,7 +277,9 @@ describe('a batched write that fails', () => {
 		expect(result.admitted.records).toHaveLength(MAX_ORDINARY_MUTATION_CHANGED_ROWS);
 		expect(result.admittedChanges).toHaveLength(MAX_ORDINARY_MUTATION_CHANGED_ROWS);
 		expect(result.refused._tag).toBe('Failure');
-		expect(JSON.stringify(result.refused)).toContain('may change at most 1000 rows');
+		expect(JSON.stringify(result.refused)).toContain(
+			`may change at most ${MAX_ORDINARY_MUTATION_CHANGED_ROWS} rows`
+		);
 		expect(result.refusedChanges).toEqual([]);
 		expect(await harness.database.query('select id from notes')).toHaveLength(
 			MAX_ORDINARY_MUTATION_CHANGED_ROWS

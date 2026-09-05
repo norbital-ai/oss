@@ -37,7 +37,7 @@
 		{#if pathSegments.length > 0}
 			<Stack gap="none" shrink={false} class="border-b border-border/60 bg-muted/20">
 				<Breadcrumb.Root
-					class={SCROLL_AXIS_CLASSES.x}
+					class="{SCROLL_AXIS_CLASSES.x}"
 					data-testid="studio-file-breadcrumb"
 				>
 					<Breadcrumb.List class="h-7 flex-nowrap px-3 font-mono text-xs">

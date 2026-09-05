@@ -3,6 +3,7 @@ import type {
 	CollectionFilter,
 	CollectionRelationship
 } from '@norbital-ai/std/collection';
+import { Schema } from 'effect';
 import { humanize } from '@norbital-ai/std/string';
 import { isSystemCollectionField } from '@norbital-ai/std/collection';
 import { ENTITY_ICONS } from '#lib/icon-wrapper/entity-icons';
@@ -26,6 +27,8 @@ interface RelationshipBranchNode {
 	readonly fields: CollectionFilterField[];
 	readonly children: Map<string, RelationshipBranchNode>;
 }
+
+const isString = Schema.is(Schema.String);
 
 function collectionFilterFieldIcon(field: CollectionField): string {
 	switch (field.kind) {
@@ -173,7 +176,7 @@ export function collectionFilterClause(
 	operand: unknown
 ): CollectionFilter {
 	const wireOperand =
-		operator === 'contains_date' && typeof operand === 'string'
+		operator === 'contains_date' && isString(operand)
 			? (calendarDateToInstant(operand) ?? operand)
 			: operand;
 	return { path: filterField.path, operator, operand: wireOperand };

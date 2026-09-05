@@ -7,11 +7,11 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { Schema } from 'effect';
 import {
 	chromium,
 	type Browser,
@@ -31,11 +31,12 @@ export type HeadedPage = {
 	readonly evaluate: (expression: string) => Promise<unknown>;
 	readonly click: (selector: string) => Promise<void>;
 	readonly clickAt: (x: number, y: number) => Promise<void>;
+	readonly dragAndDrop: (source: string, target: string) => Promise<void>;
 	readonly openWindow: (url: string) => Promise<HeadedPage>;
 	readonly close: () => Promise<void>;
 };
 
-export type OpenPageOptions = Readonly<{
+type OpenPageOptions = Readonly<{
 	/** Open a distinct browser profile (own contexts, Web Locks, storage). Default: shared profile. */
 	readonly profile?: boolean;
 }>;
@@ -47,15 +48,17 @@ export type HeadedBrowser = {
 	readonly stop: () => Promise<void>;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	value !== null && typeof value === 'object';
+// CDP Runtime.evaluate responses are plain JSON objects; the original helper also accepted arrays, which never occur in these slots.
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+const isAddressInfo = Schema.is(Schema.Struct({ port: Schema.Number }));
 
 const evaluatedValue = (response: unknown): unknown => {
 	if (!isRecord(response)) return undefined;
 	if (response.exceptionDetails !== undefined) {
 		const details = response.exceptionDetails;
 		const text =
-			isRecord(details) && typeof details.text === 'string'
+			isRecord(details) && isString(details.text)
 				? details.text
 				: JSON.stringify(details);
 		throw new Error(text);
@@ -82,6 +85,7 @@ export const launchChromiumOrSkip = async (
 		return await launchChromium(initScript);
 	} catch (error: unknown) {
 		if (error instanceof MissingChromiumError) {
+			// repository-health:allow LOG1 -- skip notice for a headed E2E probe run outside any Effect runtime; the probe contract reports the skip on stderr for the human reading the run.
 			console.warn(`missing_chromium: ${error.message}`);
 			return undefined;
 		}
@@ -102,6 +106,10 @@ const wrapPage = async (page: Page): Promise<HeadedPage> => {
 		evaluate: (expression) => runOnSession(client, expression),
 		click: (selector) => page.click(selector),
 		clickAt: (x, y) => page.mouse.click(x, y),
+		dragAndDrop: async (source, target) => {
+			await page.locator(source).hover({ force: true });
+			await page.dragAndDrop(source, target);
+		},
 		openWindow: async (url) => {
 			const child = await page.context().newPage();
 			await child.goto(url, { waitUntil: 'domcontentloaded' });
@@ -124,7 +132,7 @@ const freePort = (): Promise<number> =>
 		server.once('error', reject);
 		server.listen(0, '127.0.0.1', () => {
 			const address = server.address();
-			const port = address !== null && typeof address === 'object' ? address.port : undefined;
+			const port = isAddressInfo(address) ? address.port : undefined;
 			server.close(() => {
 				if (port === undefined) reject(new Error('free port probe failed'));
 				else resolve(port);
@@ -134,11 +142,14 @@ const freePort = (): Promise<number> =>
 
 const APP_BINARIES = ['Chromium', 'Google Chrome', 'Google Chrome for Testing'] as const;
 
-const chromiumApplicationPath = (): string | undefined => {
+const chromiumApplicationPath = async (): Promise<string | undefined> => {
 	const executable = chromium.executablePath();
 	const app = resolve(executable, '../../..');
 	const contents = join(app, 'Contents', 'MacOS');
-	return APP_BINARIES.some((name) => existsSync(join(contents, name))) ? app : undefined;
+	const present = await Promise.all(
+		APP_BINARIES.map((name) => access(join(contents, name)).then(() => true, () => false))
+	);
+	return present.some(Boolean) ? app : undefined;
 };
 
 type Session = {
@@ -156,7 +167,7 @@ type Session = {
 const openBackgroundSession = async (
 	initScripts: readonly string[]
 ): Promise<Session> => {
-	const app = chromiumApplicationPath();
+	const app = await chromiumApplicationPath();
 	if (app === undefined) {
 		throw new MissingChromiumError(`Chromium bundle missing for ${chromium.executablePath()}`);
 	}
@@ -178,14 +189,17 @@ const openBackgroundSession = async (
 	});
 	const deadline = Date.now() + 20_000;
 	let last: unknown = 'never answered';
+	// repository-health:allow LIVE1 -- one-shot CDP readiness wait for the Chromium process this call just spawned; the live sync engine does not own browser process launch.
 	while (Date.now() < deadline) {
 		try {
+			// repository-health:allow FETCH1 -- this published isolation harness has no @norbital-ai/std dependency, and the request targets the local Chromium debug port it just opened.
+			// repository-health:allow A6 -- deadline poll: each attempt re-checks the deadline and records the last error, so attempts cannot batch.
 			const response = await fetch(`http://127.0.0.1:${port}/json/version`);
 			if (response.ok) break;
 		} catch (error) {
 			last = error;
 		}
-		await sleep(200);
+		await sleep(200); // repository-health:allow A6 -- backoff of the same deadline poll.
 	}
 	const ready = Date.now() < deadline;
 	if (!ready) {
@@ -198,7 +212,7 @@ const openBackgroundSession = async (
 		await rm(profileDirectory, { recursive: true, force: true }).catch(() => undefined);
 		throw new MissingChromiumError('background Chromium has no default context');
 	}
-	for (const script of initScripts) await primary.addInitScript(script);
+	await Promise.all(initScripts.map((script) => primary.addInitScript(script)));
 	const stop = async (): Promise<void> => {
 		await browser.close().catch(() => undefined);
 		spawn('pkill', ['-f', profileDirectory], { stdio: 'ignore' }).unref();
@@ -227,7 +241,7 @@ export const launchChromium = async (initScript?: string): Promise<HeadedBrowser
 		};
 		const shared = await openContext();
 		const close = async (): Promise<void> => {
-			for (const session of sessions) await session.stop();
+			await Promise.all([...sessions].map((session) => session.stop()));
 			sessions.clear();
 		};
 		return {
@@ -251,6 +265,7 @@ export const launchChromium = async (initScript?: string): Promise<HeadedBrowser
 			args: ['--disable-background-timer-throttling', '--disable-popup-blocking']
 		});
 	} catch (error: unknown) {
+		// repository-health:allow STD2 -- this published harness has no @norbital-ai/std dependency; the message is folded into MissingChromiumError below.
 		const message = error instanceof Error ? error.message : String(error);
 		throw new MissingChromiumError(message);
 	}
@@ -260,12 +275,12 @@ export const launchChromium = async (initScript?: string): Promise<HeadedBrowser
 			viewport: { width: 1440, height: 900 }
 		});
 		contexts.add(context);
-		for (const script of initScripts) await context.addInitScript(script);
+		await Promise.all(initScripts.map((script) => context.addInitScript(script)));
 		return context;
 	};
 	const shared = await openContext();
 	const close = async (): Promise<void> => {
-		for (const context of contexts) await context.close().catch(() => undefined);
+		await Promise.all([...contexts].map((context) => context.close().catch(() => undefined)));
 		contexts.clear();
 		await browser.close().catch(() => undefined);
 	};

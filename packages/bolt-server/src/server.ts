@@ -55,6 +55,9 @@ import {
 	type SyncSink
 } from './sync-host.js';
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isString = Schema.is(Schema.String);
+
 /** Identifies a bounded Node transport operation that could not complete safely. */
 export class ServerTransportError extends Schema.TaggedError<ServerTransportError>()(
 	'BoltServer.ServerTransportError',
@@ -153,8 +156,7 @@ const readBody = (
 			);
 		};
 		function onData(chunk: string | Buffer): void {
-			const bytes =
-				typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
+			const bytes = isString(chunk) ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
 			length += bytes.byteLength;
 			if (length > limit) {
 				failure(new Error('request body exceeds configured limit'));
@@ -315,14 +317,10 @@ const mutationIdsFrom = (
 		if (change.mutationId !== undefined) pending.add(change.mutationId);
 	}
 	if (command !== 'collections.mutate') return [...pending];
-	const inputId =
-		typeof input === 'object' && input !== null && !Array.isArray(input)
-			? Reflect.get(input, 'idempotencyKey')
-			: undefined;
-	const responseId =
-		typeof response.value === 'object' && response.value !== null && !Array.isArray(response.value)
-			? Reflect.get(response.value, 'mutationId')
-			: undefined;
+	const inputId = isRecord(input) ? Reflect.get(input, 'idempotencyKey') : undefined;
+	const responseId = isRecord(response.value)
+		? Reflect.get(response.value, 'mutationId')
+		: undefined;
 	for (const candidate of [inputId, responseId]) {
 		const decoded = Schema.decodeUnknownOption(CollectionMutationIdempotencyKey)(candidate);
 		if (Option.isSome(decoded)) pending.add(decoded.value);
@@ -542,24 +540,25 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			return;
 		}
 		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const registration = body === undefined
-			? yield* Effect.fail(
-					new CommandInputError({
-						code: 'malformed_json',
-						message: 'Bolt sync registration requires a body'
-					})
-				)
-			: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncConnectRequest))(
-					new TextDecoder().decode(body)
-				).pipe(
-					Effect.mapError(
-						() =>
-							new CommandInputError({
-								code: 'malformed_json',
-								message: 'Bolt sync registration body is invalid'
-							})
+		const registration =
+			body === undefined
+				? yield* Effect.fail(
+						new CommandInputError({
+							code: 'malformed_json',
+							message: 'Bolt sync registration requires a body'
+						})
+					)
+				: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncConnectRequest))(
+						new TextDecoder().decode(body)
+					).pipe(
+						Effect.mapError(
+							() =>
+								new CommandInputError({
+									code: 'malformed_json',
+									message: 'Bolt sync registration body is invalid'
+								})
 						)
-				);
+					);
 		if (
 			registration.queries.some(
 				({ input, requestedPrefix }) => input.kind === 'findFirst' && requestedPrefix !== 1
@@ -626,24 +625,25 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			return;
 		}
 		const body = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const extension = body === undefined
-			? yield* Effect.fail(
-					new CommandInputError({
-						code: 'malformed_json',
-						message: 'Bolt sync prefix extension requires a body'
-					})
-				)
-			: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncExtendPrefixRequest))(
-					new TextDecoder().decode(body)
-				).pipe(
-					Effect.mapError(
-						() =>
-							new CommandInputError({
-								code: 'malformed_json',
-								message: 'Bolt sync prefix extension body is invalid'
-							})
+		const extension =
+			body === undefined
+				? yield* Effect.fail(
+						new CommandInputError({
+							code: 'malformed_json',
+							message: 'Bolt sync prefix extension requires a body'
+						})
 					)
-				);
+				: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SyncExtendPrefixRequest))(
+						new TextDecoder().decode(body)
+					).pipe(
+						Effect.mapError(
+							() =>
+								new CommandInputError({
+									code: 'malformed_json',
+									message: 'Bolt sync prefix extension body is invalid'
+								})
+						)
+					);
 		const extended = yield* Effect.tryPromise({
 			try: () =>
 				sync.extendPrefix({
@@ -837,7 +837,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			const pending = mutationIdsFrom(command, input, result.response);
 			if ((result.response.changes?.length ?? 0) > 0 || pending.length > 0) {
 				const headers = rawRequestHeaders(request);
-					yield* Effect.tryPromise({
+				yield* Effect.tryPromise({
 					try: () =>
 						sync.committed({
 							scope: configuration.scope,
@@ -880,8 +880,13 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	 * declaring a server-side dependency published it. Two lists rather than one list with a flag is
 	 * what makes the omission here structural: there is no field to forget to test.
 	 */
+	// Authored browser URLs use the same public namespace on every host. Artifact keys themselves
+	// are relative to that namespace; the standalone shell also serves their native paths.
+	const assetPath = url.pathname.startsWith('/__bolt/static/')
+		? url.pathname.slice('/__bolt/static'.length)
+		: url.pathname;
 	const asset = bundle.manifest.browserAssets.find(
-		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === url.pathname
+		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === assetPath
 	);
 	if (asset !== undefined && (request.method === 'GET' || request.method === 'HEAD')) {
 		response.statusCode = 200;
@@ -1008,7 +1013,11 @@ const startServerEffect = <E>(
 			scope: SyncScope,
 			input: Schema.Json,
 			headers: Record<string, Array<string>>
-		): Effect.Effect<unknown, SyncGuestRejected | BundleLoadError | AdmissionStopped | ServerTransportError, RuntimeServices> =>
+		): Effect.Effect<
+			unknown,
+			SyncGuestRejected | BundleLoadError | AdmissionStopped | ServerTransportError,
+			RuntimeServices
+		> =>
 			Effect.gen(function* () {
 				const now = yield* Clock.currentTimeMillis;
 				const invocation = Invocation.cases.Command.make({
@@ -1026,9 +1035,7 @@ const startServerEffect = <E>(
 					configuration.invocationTimeoutMillis
 				);
 				if (result._tag === 'Failure') {
-					return yield* Effect.fail(
-						new SyncGuestRejected(result.error.httpStatus ?? 500, command)
-					);
+					return yield* Effect.fail(new SyncGuestRejected(result.error.httpStatus ?? 500, command));
 				}
 				return result.response.value ?? null;
 			});
@@ -1053,9 +1060,7 @@ const startServerEffect = <E>(
 						'sync.extendPrefix',
 						scope.tenantId,
 						input
-					).pipe(
-						Effect.mapError(() => new SyncGuestRejected(503, 'sync.extendPrefix'))
-					)
+					).pipe(Effect.mapError(() => new SyncGuestRejected(503, 'sync.extendPrefix')))
 				);
 				const unsafe = await runtime.runPromise(
 					dispatchSyncCommand('sync.extendPrefix', scope, input, headers)
@@ -1073,9 +1078,7 @@ const startServerEffect = <E>(
 						'sync.advance',
 						scope.tenantId,
 						request
-					).pipe(
-						Effect.mapError(() => new SyncGuestRejected(503, 'sync.advance'))
-					)
+					).pipe(Effect.mapError(() => new SyncGuestRejected(503, 'sync.advance')))
 				);
 				const unsafe = await runtime.runPromise(
 					dispatchSyncCommand('sync.advance', scope, request, headers)
@@ -1229,6 +1232,7 @@ const startServerEffect = <E>(
 		});
 
 		const address = server.address();
+		// repository-health:allow GUARD2 -- `server.address()` returns Node's own `string | AddressInfo | null` union; discriminating the platform SDK value is the seam itself.
 		if (address === null || typeof address === 'string') {
 			return yield* new ServerTransportError({
 				operation: 'BoltServer.Server.address',
@@ -1254,11 +1258,10 @@ const startServerEffect = <E>(
 					);
 				})
 			);
-			yield* Effect.forEach(
-				cancelConnections,
-				(cancel) => cancel.pipe(Effect.result),
-				{ concurrency: 'unbounded', discard: true }
-			);
+			yield* Effect.forEach(cancelConnections, (cancel) => cancel.pipe(Effect.result), {
+				concurrency: 'unbounded',
+				discard: true
+			});
 			shutdown.abort(new Error('Bolt server is shutting down'));
 			for (const client of websocketServer.clients) {
 				client.close(1001, 'Server shutting down');

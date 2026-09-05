@@ -10,9 +10,11 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { AreaChart, BarChart, LineChart, PieChart } from 'layerchart';
-	import { Number as Number_ } from 'effect';
+	import { Number as Number_, Schema } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
+
+	const isNumber = Schema.is(Schema.Number);
 
 	interface Props {
 		spec: ChartDisplaySpec;
@@ -87,7 +89,7 @@
 	};
 
 	const formatYAxisLabel = (value: unknown): string => {
-		if (typeof value !== 'number') return String(value ?? '');
+		if (!isNumber(value)) return String(value ?? '');
 		return formatChartValue(value, spec.valueFormat);
 	};
 </script>

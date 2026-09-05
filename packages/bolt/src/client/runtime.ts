@@ -6,6 +6,7 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '#lib/client.js';
+import { getErrorMessage } from '@norbital-ai/std';
 import type {
 	BoltClient,
 	BoltTransport,
@@ -170,7 +171,7 @@ export const createBrowserWorkspaceRuntime = (
 					acceptSettlements([
 						rejectedSyncOutcome(
 							request.idempotencyKey,
-							cause instanceof Error ? cause.message : String(cause),
+							getErrorMessage(cause),
 							request.schemaFingerprint
 						)
 					]);

@@ -22,6 +22,12 @@ const PlainRecordSchema = Schema.Record(Schema.String, Schema.Unknown).check(
 
 export const isPlainRecord = Schema.is(PlainRecordSchema);
 
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isObjectish = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 /**
  * A filter whose path cannot be resolved against the row in hand.
  *
@@ -107,13 +113,13 @@ function resolveFilterPath(row: object, path: readonly string[]): PathResolution
 
 function searchableValue(value: unknown): string {
 	if (value == null) return '';
-	if (typeof value === 'object') return JSON.stringify(value) ?? '';
+	if (isObjectish(value)) return JSON.stringify(value) ?? '';
 	return String(value);
 }
 
 function compareValues(left: unknown, right: unknown): number | null {
-	if (typeof left === 'number' && typeof right === 'number') return left - right;
-	if (typeof left === 'string' && typeof right === 'string') return left.localeCompare(right);
+	if (isNumber(left) && isNumber(right)) return left - right;
+	if (isString(left) && isString(right)) return left.localeCompare(right);
 	return null;
 }
 
@@ -132,7 +138,7 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 }
 
 function containsValue(value: unknown, operand: unknown): boolean {
-	if (typeof value === 'string') return value.includes(String(operand ?? ''));
+	if (isString(value)) return value.includes(String(operand ?? ''));
 	if (Array.isArray(value)) {
 		const expected = Array.isArray(operand) ? operand : [operand];
 		return expected.every((candidate) => value.some((item) => valuesEqual(item, candidate)));
@@ -144,7 +150,7 @@ function instantRangeValue(value: unknown): { start: string; end: string } | nul
 	if (!isPlainRecord(value)) return null;
 	const start = Reflect.get(value, 'start');
 	const end = Reflect.get(value, 'end');
-	return typeof start === 'string' && typeof end === 'string' ? { start, end } : null;
+	return isString(start) && isString(end) ? { start, end } : null;
 }
 
 export function collectionTableRowMatchesSearch(row: object, search: string): boolean {
@@ -223,7 +229,7 @@ function matchesOperator(value: unknown, operator: string, operand: unknown): bo
 			);
 		case 'contains_date': {
 			const range = instantRangeValue(value);
-			const date = typeof operand === 'string' ? operand : null;
+			const date = isString(operand) ? operand : null;
 			return range != null && date != null && range.start <= date && date <= range.end;
 		}
 		case 'overlaps': {

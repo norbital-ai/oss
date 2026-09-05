@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { Schema } from 'effect';
 import { jsonRecord } from '../manifest.js';
 import { scannerInputInventory } from './inventory.js';
 import type { ScannerInventory } from './inventory.js';
@@ -133,9 +134,19 @@ export type StaticQualityBase = Readonly<{
 /** A file record as finding attachment sees it. */
 export type FindingTarget = Readonly<{ displayPath: string; concept: string }>;
 
-function isSha256(value: unknown): value is string {
-	return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
-}
+const isSha256 = Schema.is(
+	Schema.String.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/u))
+);
+
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+
+const TierCoverage = Schema.Struct({
+	syntactic: Schema.Literal(true),
+	graph: Schema.Boolean,
+	typeAware: Schema.Boolean
+});
+const isTierCoverage = Schema.is(TierCoverage);
 
 const SEVERITIES: ReadonlyArray<string> = ['error', 'warning', 'hint'];
 
@@ -162,9 +173,9 @@ export function scannerCatalogues(
 		// Parsed without wrapping: the engine surfaced raw JSON syntax errors and gate operators
 		// grep for them.
 		const parsed: unknown = JSON.parse(readFileSync(receiptPath, 'utf8'));
-		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+		const record = jsonRecord(parsed);
+		if (record === undefined)
 			throw new Error(`scanner receipt fields do not match schema: ${receiptPath}`);
-		const record = parsed as Record<string, unknown>;
 		const fields = [
 			'catalogueDigest',
 			'complete',
@@ -190,19 +201,9 @@ export function scannerCatalogues(
 		)
 			throw new Error(`unsupported scanner receipt: ${receiptPath}`);
 		const tiers = record.tiers;
-		if (
-			typeof tiers !== 'object' ||
-			tiers === null ||
-			(tiers as Record<string, unknown>).syntactic !== true ||
-			typeof (tiers as Record<string, unknown>).graph !== 'boolean' ||
-			typeof (tiers as Record<string, unknown>).typeAware !== 'boolean'
-		)
+		if (!isTierCoverage(tiers))
 			throw new Error(`scanner receipt does not record tier coverage: ${receiptPath}`);
-		const tierCoverage = tiers as {
-			syntactic: boolean;
-			graph: boolean;
-			typeAware: boolean;
-		};
+		const tierCoverage = tiers;
 		if (
 			record.scope !== 'all' ||
 			record.includeTests !== false ||
@@ -210,7 +211,7 @@ export function scannerCatalogues(
 			record.findings !== 'findings.tsv'
 		)
 			throw new Error(`scanner receipt is not a complete production scan: ${receiptPath}`);
-		if (typeof record.root !== 'string')
+		if (!isString(record.root))
 			throw new Error(`scanner receipt root is not canonical: ${receiptPath}`);
 		const root = realpathSync(record.root);
 		if (record.root !== root)
@@ -219,7 +220,7 @@ export function scannerCatalogues(
 		if (byRoot.has(root)) throw new Error(`duplicate scanner receipt for root: ${root}`);
 		if (receiptPath !== join(root, '.norbital/diagnosis/receipt.json'))
 			throw new Error(`scanner receipt is not at the canonical root path: ${receiptPath}`);
-		if (typeof record.files !== 'number' || !Number.isSafeInteger(record.files) || record.files < 0)
+		if (!isNumber(record.files) || !Number.isSafeInteger(record.files) || record.files < 0)
 			throw new Error(`invalid scanner source count: ${receiptPath}`);
 		const catalogue = join(dirname(receiptPath), record.findings);
 		if (!existsSync(catalogue)) throw new Error(`scanner catalogue does not exist: ${catalogue}`);

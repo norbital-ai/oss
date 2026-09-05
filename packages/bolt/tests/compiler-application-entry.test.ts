@@ -19,11 +19,49 @@ function compilerPlugin(): Plugin {
 }
 
 describe('workspace application entry', () => {
+	it('enforces the canonical authored client write path during compilation', () => {
+		const plugin = compilerPlugin();
+		const configure = typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
+		if (typeof configure !== 'function') throw new Error('Missing compiler config hook');
+		configure.call({} as never, { root: '/workspace' } as never, {} as never);
+		const transform =
+			typeof plugin.transform === 'function' ? plugin.transform : plugin.transform?.handler;
+		if (typeof transform !== 'function') throw new Error('Missing compiler transform hook');
+		const context = {} as never;
+		expect(() =>
+			transform.call(
+				context,
+				'<script>function save() { return client.db.rows.mutate([]); }</script>',
+				'/workspace/src/apps/+rows.svelte'
+			)
+		).toThrow(/save wraps/);
+		expect(() =>
+			transform.call(
+				context,
+				'export const save = () => client.invoke.refresh({});',
+				'/workspace/src/lib/actions.ts'
+			)
+		).toThrow(/save wraps/);
+		expect(() =>
+			transform.call(
+				context,
+				'<button onclick={() => client.invoke.refresh({})}>Refresh</button>',
+				'/workspace/src/apps/+rows.svelte'
+			)
+		).not.toThrow();
+		expect(() =>
+			transform.call(
+				context,
+				'export const save = () => client.invoke.refresh({});',
+				'/workspace/node_modules/example/index.ts'
+			)
+		).not.toThrow();
+	});
 	it('rejects private runtime imports from authored browser source', () => {
 		const plugin = compilerPlugin();
-		const configure =
-			typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
-		if (typeof configure !== 'function') throw new Error('The Bolt compiler plugin has no config hook');
+		const configure = typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
+		if (typeof configure !== 'function')
+			throw new Error('The Bolt compiler plugin has no config hook');
 		configure.call({} as never, { root: '/workspace' } as never, {} as never);
 
 		const resolve =

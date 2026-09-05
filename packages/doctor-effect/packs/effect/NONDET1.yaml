@@ -11,7 +11,7 @@ rule:
         - pattern: Math.random()
         - pattern: performance.now()
         - pattern: crypto.randomUUID()
-    - importsFrom: effect
+    - fact: { name: usesImportedRuntime, from: effect, symbol: Effect }
     - not:
         inside:
           any:
@@ -24,6 +24,7 @@ rule:
         stopBy: end
 examples:
   bad:
-    - "import { Effect } from 'effect';\nexport const id = Math.random();"
+    - "import { Effect } from 'effect';\nexport const id = Effect.succeed(Math.random());"
   good:
     - "import { Effect } from 'effect';\nexport const id = Effect.succeed(0);"
+    - "import { Schema } from 'effect';\nexport const deadline = Date.now() + 20_000;"

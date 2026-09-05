@@ -6,6 +6,7 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { Popover, PopoverContent, PopoverTrigger } from '#lib/popover';
+	import { Stack } from '#lib/layout';
 	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
@@ -84,7 +85,8 @@
 		{/snippet}
 	</PopoverTrigger>
 	<PopoverContent {align} class="w-auto p-3">
-		<div class="mb-2 flex items-center justify-between">
+		<Stack gap="sm">
+			<div class="flex items-center justify-between">
 			<Button
 				variant="ghost"
 				size="icon"
@@ -104,16 +106,17 @@
 			>
 				<Icon icon="lucide:chevron-right" class="size-4" />
 			</Button>
-		</div>
-		<MonthGrid
-			year={viewYear}
-			{today}
-			state={(key) => (key === value ? 'single' : null)}
-			disabled={outOfBounds}
-			onSelect={(key) => {
-				onValueChange(key);
-				open = false;
-			}}
-		/>
+			</div>
+			<MonthGrid
+				year={viewYear}
+				{today}
+				state={(key) => (key === value ? 'single' : null)}
+				disabled={outOfBounds}
+				onSelect={(key) => {
+					onValueChange(key);
+					open = false;
+				}}
+			/>
+		</Stack>
 	</PopoverContent>
 </Popover>

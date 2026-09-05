@@ -1,8 +1,12 @@
-import type { Schema } from 'effect';
+import { Schema } from 'effect';
 import type { SyncQueryInput } from '@norbital-ai/bolt-protocol';
 
+const isRecordOrArray = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 const encode = (value: unknown, preserveObjectOrder = false): string => {
-	if (value === null || typeof value !== 'object') return JSON.stringify(value);
+	if (!isRecordOrArray(value)) return JSON.stringify(value);
 	if (Array.isArray(value)) return `[${value.map((entry) => encode(entry)).join(',')}]`;
 
 	const entries = Object.entries(value);

@@ -1,17 +1,21 @@
+import { Schema } from 'effect';
 import type { EnvironmentReference as AuthoredEnvironmentReference } from './authoring/workspace-schema.js';
+
+const isObject = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+const isString = Schema.is(Schema.String);
 
 const ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]*$/;
 const DESCRIPTOR_KEYS = new Set(['model', 'apiKey', 'endpoint']);
 
-export type EnvironmentReference<TName extends string = string> =
-	AuthoredEnvironmentReference &
-		Readonly<{
-			readonly env: TName;
-		}>;
+export type EnvironmentReference<TName extends string = string> = AuthoredEnvironmentReference &
+	Readonly<{
+		readonly env: TName;
+	}>;
 
 export type LlmProviderEndpoint<TEnvironmentName extends string = string> =
-	| string
-	| EnvironmentReference<TEnvironmentName>;
+	string | EnvironmentReference<TEnvironmentName>;
 
 /**
  * Provider-neutral authored model connection. The registry key supplies the adapter name; this
@@ -34,7 +38,7 @@ export type LlmProviderDescriptor<
 			readonly endpoint: LlmProviderEndpoint<TEndpointEnvironment>;
 	  }>;
 
-export type LlmProviderConfigurationErrorCode =
+type LlmProviderConfigurationErrorCode =
 	| 'unsupported-option'
 	| 'invalid-model'
 	| 'invalid-environment-reference'
@@ -57,23 +61,15 @@ export class LlmProviderConfigurationError extends Error {
 	}
 }
 
-const fail = (
-	code: LlmProviderConfigurationErrorCode,
-	path: string,
-	message: string
-): never => {
+const fail = (code: LlmProviderConfigurationErrorCode, path: string, message: string): never => {
 	throw new LlmProviderConfigurationError(code, path, message);
 };
 
-const validateEnvironmentReference = (
-	reference: EnvironmentReference,
-	path: string
-): void => {
+const validateEnvironmentReference = (reference: EnvironmentReference, path: string): void => {
 	if (
-		typeof reference !== 'object' ||
-		reference === null ||
+		!isObject(reference) ||
 		Object.keys(reference).length !== 1 ||
-		typeof reference.env !== 'string' ||
+		!isString(reference.env) ||
 		!ENVIRONMENT_NAME.test(reference.env)
 	) {
 		fail(
@@ -89,11 +85,7 @@ const parseLiteralEndpoint = (endpoint: string, path: string): URL => {
 		return new URL(endpoint);
 	} catch {
 		/* best effort */
-		return fail(
-			'invalid-endpoint',
-			path,
-			'literal endpoints must be absolute HTTP(S) URLs'
-		);
+		return fail('invalid-endpoint', path, 'literal endpoints must be absolute HTTP(S) URLs');
 	}
 };
 
@@ -122,9 +114,7 @@ const validateLiteralEndpoint = (endpoint: string, path: string): void => {
  */
 export const llm_provider = <const TDescriptor extends LlmProviderDescriptor>(
 	descriptor: TDescriptor &
-		Readonly<
-			Record<Exclude<keyof TDescriptor, 'model' | 'apiKey' | 'endpoint'>, never>
-		>
+		Readonly<Record<Exclude<keyof TDescriptor, 'model' | 'apiKey' | 'endpoint'>, never>>
 ): TDescriptor => {
 	for (const key of Object.keys(descriptor)) {
 		if (!DESCRIPTOR_KEYS.has(key)) {
@@ -133,7 +123,7 @@ export const llm_provider = <const TDescriptor extends LlmProviderDescriptor>(
 	}
 
 	if (
-		typeof descriptor.model !== 'string' ||
+		!isString(descriptor.model) ||
 		descriptor.model.trim() !== descriptor.model ||
 		descriptor.model.length === 0 ||
 		descriptor.model.split('/').some((segment) => segment.length === 0 || /\s/.test(segment))
@@ -165,7 +155,7 @@ export const llm_provider = <const TDescriptor extends LlmProviderDescriptor>(
 	if (descriptor.apiKey !== undefined) {
 		validateEnvironmentReference(descriptor.apiKey, 'llm_provider.apiKey');
 	}
-	if (typeof descriptor.endpoint === 'string') {
+	if (isString(descriptor.endpoint)) {
 		validateLiteralEndpoint(descriptor.endpoint, 'llm_provider.endpoint');
 	} else {
 		validateEnvironmentReference(descriptor.endpoint, 'llm_provider.endpoint');

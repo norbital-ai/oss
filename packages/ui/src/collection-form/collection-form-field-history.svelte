@@ -19,6 +19,10 @@
 	});
 	type CollectionFieldHistoryEntry = typeof collectionFieldHistoryEntrySchema.Type;
 
+	const isObjectish = Schema.is(
+		Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+	);
+
 	function collectionFieldHistory(
 		history: readonly CollectionRecordHistoryEntry[],
 		fieldName: string
@@ -97,7 +101,7 @@
 
 	/** One revision reads as one line, so structured values collapse to a single-line summary. */
 	function revisionText(entryValue: unknown): string {
-		return entryValue != null && typeof entryValue === 'object'
+		return entryValue != null && isObjectish(entryValue)
 			? formatStructuredValue(entryValue)
 			: formatDataValue(field, entryValue, localeEffective, t);
 	}

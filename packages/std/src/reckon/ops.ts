@@ -1,4 +1,4 @@
-import { Number as ENumber } from 'effect';
+import { Number as ENumber, Schema } from 'effect';
 import type { InlinedTable, RoundingMethod } from './definition.js';
 
 /** A single audit entry pushed by an op during evaluation. */
@@ -10,10 +10,19 @@ export type AuditRef = { sink: AuditEntry[] };
 /** Spec for registering an op on the CEL environment; `signature` is the CEL function signature string. */
 export type OpRegistration = { signature: string; handler: (...args: unknown[]) => unknown };
 
+const isNumber = Schema.is(Schema.Number);
+const isBigInt = Schema.is(Schema.BigInt);
+const isString = Schema.is(Schema.String);
+const isRecordValue = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+// Any non-null object the ops may read fields from; the original check accepted arrays too.
+const isContainer = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 function toNumber(value: unknown): number {
-	if (typeof value === 'number') return value;
-	if (typeof value === 'bigint') return Number(value);
-	if (typeof value === 'string') {
+	if (isNumber(value)) return value;
+	if (isBigInt(value)) return Number(value);
+	if (isString(value)) {
 		const parsed = parseFloat(value);
 		return Number.isNaN(parsed) ? 0 : parsed;
 	}
@@ -21,7 +30,7 @@ function toNumber(value: unknown): number {
 }
 
 function fieldValue(value: unknown, field: string): unknown {
-	if (value == null || typeof value !== 'object') return undefined;
+	if (value == null || !isContainer(value)) return undefined;
 	return Reflect.get(value, field);
 }
 
@@ -341,7 +350,7 @@ export function createTableOps(tables: TableMap, audit: AuditRef): OpRegistratio
 			const row = findTierRow(table, v);
 			const colKey = String(key);
 			const colValue = row?.[colKey];
-			const result = typeof colValue === 'number' ? colValue : 0;
+			const result = isNumber(colValue) ? colValue : 0;
 			audit.sink.push({
 				op: 'applyTier',
 				audit: { table: String(tableName), matchedRow: row, key: colKey, value: result }
@@ -401,10 +410,7 @@ export function createTableOps(tables: TableMap, audit: AuditRef): OpRegistratio
 				});
 				return null;
 			}
-			const dimensions =
-				dims != null && typeof dims === 'object' && !Array.isArray(dims)
-					? Object.fromEntries(Object.entries(dims))
-					: {};
+			const dimensions = isRecordValue(dims) ? Object.fromEntries(Object.entries(dims)) : {};
 
 			if (table.kind === 'flat') {
 				const matched = table.rows.find((row) =>

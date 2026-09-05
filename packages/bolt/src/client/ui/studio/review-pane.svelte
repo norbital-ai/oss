@@ -112,15 +112,13 @@
 	);
 	const triple = $derived(selected === undefined ? undefined : boundTriple(selected));
 	const logs = $derived(mergeRequestEvidence(selected));
-	const changeTabs = $derived(
-		[
-			{ name: 'manifest', label: t('bolt.studio.manifest'), content: '' },
-			{ name: 'files', label: t('bolt.studio.changes.files'), content: '' },
-			{ name: 'data', label: t('bolt.studio.changes.data'), content: '' },
-			{ name: 'conversation', label: t('bolt.studio.changes.conversation'), content: '' },
-			{ name: 'logs', label: t('bolt.studio.changes.logs'), content: '' }
-		] satisfies TabConfig[]
-	);
+	const changeTabs = $derived([
+		{ name: 'manifest', label: t('bolt.studio.manifest'), content: '' },
+		{ name: 'files', label: t('bolt.studio.changes.files'), content: '' },
+		{ name: 'data', label: t('bolt.studio.changes.data'), content: '' },
+		{ name: 'conversation', label: t('bolt.studio.changes.conversation'), content: '' },
+		{ name: 'logs', label: t('bolt.studio.changes.logs'), content: '' }
+	] satisfies TabConfig[]);
 	let reviewReason = $state('');
 	let commentBody = $state('');
 	let openSql = $state<ReadonlyArray<string>>([]);
@@ -170,14 +168,11 @@
 						{#each LIFECYCLE_RAIL as stage (stage)}
 							{@const current = lifecycleRailCurrent(selected.state) === stage}
 							<li
-								class={[
-									'rounded-full px-2 py-0.5 text-micro',
-									current
-										? 'bg-primary/10 font-semibold text-foreground'
-										: lifecycleRailReached(selected.state, stage)
-											? 'text-foreground'
-											: 'text-muted-foreground'
-								]}
+								class="rounded-full px-2 py-0.5 text-micro {current
+									? 'bg-primary/10 font-semibold text-foreground'
+									: lifecycleRailReached(selected.state, stage)
+										? 'text-foreground'
+										: 'text-muted-foreground'}"
 							>
 								{t(lifecycleRailMessageKey(stage))}
 							</li>
@@ -246,7 +241,7 @@
 				}}
 				showContent={false}
 				animate={false}
-				variant="underline"
+				variant="chip"
 				listClass="mx-0"
 				config={changeTabs}
 			/>
@@ -281,7 +276,8 @@
 						{#each selected.changedFiles as file (file.path)}
 							<Stack
 								gap="none"
-								class="max-w-full overflow-hidden rounded-md border border-border/70"
+								class="max-w-full rounded-md border border-border/70"
+								style="overflow: hidden"
 							>
 								<p
 									class="border-b border-border/70 bg-muted/40 px-3 py-2 font-mono text-micro text-foreground"

@@ -8,6 +8,7 @@
 	 * - Null-safe placeholders (never Command.Item)
 	 *********************************************************************/
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { Inline, Stack } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
@@ -19,6 +20,8 @@
 	import type { TComboboxCommandItem, TComboboxProps, TOption } from '#lib/combobox/types';
 
 	const { t } = useI18n<UiKeys>();
+
+	const isString = Schema.is(Schema.String);
 
 	/* ═══════════════════════════════════════════════════════════════════ */
 	/* PROPS                                                               */
@@ -144,7 +147,7 @@
 		return sortedOptions.filter((option) => {
 			const searchableValue =
 				option.search_term ??
-				(typeof option.label === 'string' ? option.label : JSON.stringify(option.value));
+				(isString(option.label) ? option.label : JSON.stringify(option.value));
 			return searchableValue.toLowerCase().includes(query);
 		});
 	});
@@ -218,8 +221,7 @@
 			} else if (item.type === 'option') {
 				return {
 					value: JSON.stringify(item.option.value),
-					label:
-						typeof item.option.label === 'string' ? item.option.label : String(item.option.value),
+					label: isString(item.option.label) ? item.option.label : String(item.option.value),
 					_type: 'option' as const,
 					_option: item.option
 				};
@@ -256,7 +258,7 @@
 		}
 		if (value) {
 			const option = sortedOptions.find((o) => isEqual(o.value, value));
-			return option && typeof option.label === 'string'
+			return option && isString(option.label)
 				? t('common.selectedLabel', { label: option.label })
 				: t('common.itemSelected');
 		}

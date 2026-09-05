@@ -1,12 +1,12 @@
 import { getContext, setContext } from 'svelte';
 import type { Effect } from 'effect';
 
-export type MembershipTeam = Readonly<{
+type MembershipTeam = Readonly<{
 	readonly id: string;
 	readonly name: string;
 }>;
 
-export type MembershipEditor = Readonly<{
+type MembershipEditor = Readonly<{
 	readonly canManage: boolean;
 	readonly teams: ReadonlyArray<MembershipTeam>;
 	readonly assignTeam: (

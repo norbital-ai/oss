@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
@@ -20,9 +21,9 @@
 	}: DataRendererProps = $props();
 	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
-	const values = $derived(
-		Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-	);
+	const isString = Schema.is(Schema.String);
+
+	const values = $derived(Array.isArray(value) ? value.filter(isString) : []);
 	const valuePlaceholderText = t('dataRenderer.valuePlaceholder');
 	const phonePlaceholder = $derived(
 		placeholder === valuePlaceholderText ? t('dataRenderer.phonePlaceholder') : placeholder

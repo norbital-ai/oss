@@ -127,7 +127,7 @@ function documented(): ReadonlyMap<string, Documented> {
 	return rows;
 }
 
-const SQL = "export const q = sql`SELECT id FROM things WHERE tenant_id = ${id}`;";
+const SQL = 'export const q = sql`SELECT id FROM things WHERE tenant_id = ${id}`;';
 
 /** Extra cases already asserted in packs.test.ts / svelte-layout.test.ts / port.test.ts. */
 const EXTRAS: ReadonlyArray<Observation> = [
@@ -191,8 +191,7 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'LIVE2',
 		file: 'src/api/bolt/sync/stream/+server.ts',
-		source:
-			"export const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
+		source: "export const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
 		expect: 'quiet'
 	},
 	{
@@ -205,8 +204,7 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'LIVE2',
 		file: 'src/detect-stream.ts',
-		source:
-			"export const isSse = (contentType: string) => contentType === 'text/event-stream';\n",
+		source: "export const isSse = (contentType: string) => contentType === 'text/event-stream';\n",
 		expect: 'quiet'
 	},
 	{
@@ -835,7 +833,8 @@ const EXTRAS: ReadonlyArray<Observation> = [
 		id: 'UI15',
 		file: 'src/Thing.svelte',
 		source: '<Inline class="w-[12rem]"><p>x</p></Inline>',
-		expect: 'fire'
+		// Bound sizes own pane height; they provide no width contract.
+		expect: 'quiet'
 	},
 	{
 		id: 'UI15',
@@ -847,7 +846,7 @@ const EXTRAS: ReadonlyArray<Observation> = [
 		id: 'UI15',
 		file: 'src/Thing.svelte',
 		source: '<Cover class="min-w-[20rem]"><p>x</p></Cover>',
-		expect: 'fire'
+		expect: 'quiet'
 	},
 	{
 		id: 'UI15',
@@ -1019,7 +1018,10 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	}
 ];
 
-function observationsFor(id: string, docs: ReadonlyMap<string, Documented>): ReadonlyArray<Observation> {
+function observationsFor(
+	id: string,
+	docs: ReadonlyMap<string, Documented>
+): ReadonlyArray<Observation> {
 	const document = docs.get(id);
 	const fromYaml: Array<Observation> = [];
 	if (document !== undefined) {
@@ -1051,9 +1053,11 @@ function wrapComponent(rule: Rule, file: string, source: string): string {
 }
 
 function fires(rule: Rule, observation: Observation): boolean {
-	const file = observation.file ?? ((rule.files ?? []).some((glob) => glob.includes('.svelte'))
-		? 'src/Probe.svelte'
-		: 'src/probe.ts');
+	const file =
+		observation.file ??
+		((rule.files ?? []).some((glob) => glob.includes('.svelte'))
+			? 'src/Probe.svelte'
+			: 'src/probe.ts');
 	const body = wrapComponent(rule, file, observation.source);
 	const root = mkdtempSync(join(tmpdir(), 'doctor-norbital-d8-'));
 	try {
@@ -1091,7 +1095,9 @@ function judge(docs: ReadonlyMap<string, Documented>): ReadonlyArray<Verdict> {
 		for (const observation of observations) {
 			const reported = fires(rule, observation);
 			if (observation.expect === 'fire' && !reported)
-				failures.push(`${id} did not fire on ${observation.source.replace(/\s+/g, ' ').slice(0, 72)}`);
+				failures.push(
+					`${id} did not fire on ${observation.source.replace(/\s+/g, ' ').slice(0, 72)}`
+				);
 			if (observation.expect === 'quiet' && reported)
 				failures.push(`${id} fired on ${observation.source.replace(/\s+/g, ' ').slice(0, 72)}`);
 		}
@@ -1119,11 +1125,16 @@ test('the harness refuses a verdict below three discriminating observations', ()
 });
 
 test('every leftover Norbital rule with a discriminating harness is proven', () => {
-	const leftover = verdicts.filter((verdict) => (LEFTOVER as ReadonlyArray<string>).includes(verdict.id));
+	const leftover = verdicts.filter((verdict) =>
+		(LEFTOVER as ReadonlyArray<string>).includes(verdict.id)
+	);
 	const failures = leftover.flatMap((verdict) => verdict.failures);
 	assert.deepEqual(failures, [], failures.join('\n'));
 	for (const verdict of leftover)
-		assert.ok(verdict.proven, `${verdict.id} has ${verdict.observations} observations and must prove`);
+		assert.ok(
+			verdict.proven,
+			`${verdict.id} has ${verdict.observations} observations and must prove`
+		);
 });
 
 test('first-sweep Norbital rules keep their existing proofs', () => {
@@ -1163,14 +1174,16 @@ const FIRST_SWEEP_MOVED = ['E2', 'LIVE2', 'QRY3', 'ROOT1', 'TRANS2'] as const;
 test('leftover Norbital rules with visitor-era extras are the ones that move', () => {
 	for (const id of MOVED) {
 		const verdict = leftoverVerdict(id);
-		assert.ok(verdict.proven, `${id} has ${verdict.observations} observations: ${verdict.failures.join('; ')}`);
+		assert.ok(
+			verdict.proven,
+			`${id} has ${verdict.observations} observations: ${verdict.failures.join('; ')}`
+		);
 	}
 });
 
 test('first-sweep Norbital rules with visitor-era extras are the ones that move', () => {
 	const extrasById = new Map<string, number>();
-	for (const extra of EXTRAS)
-		extrasById.set(extra.id, (extrasById.get(extra.id) ?? 0) + 1);
+	for (const extra of EXTRAS) extrasById.set(extra.id, (extrasById.get(extra.id) ?? 0) + 1);
 	for (const id of FIRST_SWEEP_MOVED) {
 		const verdict = leftoverVerdict(id);
 		assert.ok(

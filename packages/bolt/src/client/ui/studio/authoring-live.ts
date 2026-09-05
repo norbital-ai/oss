@@ -1,25 +1,25 @@
 import { Option, Schema } from 'effect';
 
 /** Long-running Studio jobs that must push status; they must never be polled. */
-export const AuthoringLiveJob = Schema.Literals([
+const AuthoringLiveJob = Schema.Literals([
 	'diagnose',
 	'preview',
 	'publish',
 	'merge',
 	'deploy'
 ]);
-export type AuthoringLiveJob = typeof AuthoringLiveJob.Type;
+type AuthoringLiveJob = typeof AuthoringLiveJob.Type;
 
-export const AuthoringLivePhase = Schema.Literals([
+const AuthoringLivePhase = Schema.Literals([
 	'prepare',
 	'checks',
 	'publish',
 	'provision',
 	'complete'
 ]);
-export type AuthoringLivePhase = typeof AuthoringLivePhase.Type;
+type AuthoringLivePhase = typeof AuthoringLivePhase.Type;
 
-export const AuthoringLiveLogStream = Schema.Literals(['build', 'deploy', 'guest']);
+const AuthoringLiveLogStream = Schema.Literals(['build', 'deploy', 'guest']);
 type AuthoringLiveLogStream = typeof AuthoringLiveLogStream.Type;
 
 export const AUTHORING_LOG_LINE_MAX_CHARS = 800;
@@ -298,13 +298,9 @@ const decodeAuthoringLiveFrame = (
 	data: string,
 	tenantId: string
 ): Option.Option<AuthoringLiveEvent> => {
-	let raw: unknown;
-	try {
-		raw = JSON.parse(data) as unknown;
-	} catch {
-		return Option.none();
-	}
-	const decoded = Schema.decodeUnknownOption(AuthoringLiveEvent)(raw);
+	// One decode: the JSON text is parsed and validated in a single Schema step, so a malformed
+	// frame and a frame that matches no event are the same none.
+	const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(AuthoringLiveEvent))(data);
 	if (Option.isNone(decoded)) return decoded;
 	if (decoded.value.tenantId !== tenantId) return Option.none();
 	return decoded;

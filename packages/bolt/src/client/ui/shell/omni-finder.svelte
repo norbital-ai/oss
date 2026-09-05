@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Schema } from 'effect';
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { humanize } from '@norbital-ai/std/string';
@@ -18,8 +19,10 @@
 	import { createDebouncedRecordSearch } from '#lib/client/ui/agent/debounced-record-search.js';
 	import type { FinderEntity, FinderRow } from '#lib/client/ui/finder/finder-entity.js';
 	import FinderPalette from '../finder/finder-palette.svelte';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	const { t } = useI18n();
+	const isString = Schema.is(Schema.String);
 
 	/**
 	 * Cmd+/ host for the shared finder. Record search is a second step: pick a collection,
@@ -28,6 +31,8 @@
 	let {
 		open = $bindable(false),
 		collections = [],
+		findRecords,
+		getRecordLabel,
 		navigationModel,
 		agentAvailable = true,
 		onNavigate,
@@ -36,6 +41,8 @@
 	}: {
 		open?: boolean;
 		collections?: readonly string[];
+		findRecords: WorkspaceClient['records']['findMany'];
+		getRecordLabel: (collection: string) => string | null | undefined;
 		navigationModel: WorkspaceNavigationModel;
 		agentAvailable?: boolean;
 		onNavigate?: ((href: string) => void) | undefined;
@@ -45,6 +52,8 @@
 
 	const mentionSources = createMentionSources({
 		hitsPerSource: 8,
+		findRecords: (collection, query) => findRecords(collection, query),
+		getRecordLabel: (collection) => getRecordLabel(collection),
 		getCollections: () => collections,
 		getApps: () =>
 			flattenedApps().map((app) => ({
@@ -144,8 +153,8 @@
 					icon: item.icon ?? null,
 					// `'x' in item` is a presence test, not a type: it leaves the value as `{}`. Reading it
 					// and checking the type is what actually narrows to a string.
-					thumbnail: typeof item.thumbnail === 'string' ? item.thumbnail : null,
-					description: typeof item.description === 'string' ? item.description : null,
+					thumbnail: isString(item.thumbnail) ? item.thumbnail : null,
+					description: isString(item.description) ? item.description : null,
 					depth
 				});
 				if (item.children?.length) walk(item.children, depth + 1);
@@ -463,7 +472,8 @@
 
 <Dialog.Root bind:open {onOpenChange}>
 	<Dialog.Content
-		class="w-[min(46rem,calc(100vw-2rem))] gap-0 overflow-hidden p-0 shadow-2xl [&>button]:hidden"
+		class="gap-0 p-0 shadow-2xl [&>button]:hidden"
+		style="width: min(46rem, calc(100vw - 2rem)); overflow: hidden"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			queueMicrotask(() => inputElement?.focus());

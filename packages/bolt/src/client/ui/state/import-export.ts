@@ -91,8 +91,8 @@ export function collectionExportCommandInput(input: CollectionExportInput): {
 
 const CollectionTransfer = {
 	download: (input: CollectionExportInput, options: CollectionExportOptions = {}) =>
-		Effect.runPromise(
-			Effect.tryPromise({
+		Effect.runPromise( // repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections export method (note inside try).
+			Effect.tryPromise({ // repository-health:allow UI18 -- outer wrapper of the same call; the gap is a missing generated `collections` API, not a refactor (note inside try).
 				try: () =>
 					// repository-health:allow UI18 -- `collections.export` has no generated method, and a
 					// WorkspaceSession carries a BoltTransport rather than a client. Routing it needs a
@@ -110,8 +110,8 @@ const CollectionTransfer = {
 			)
 		),
 	importRecords: (input: CollectionImportInput) =>
-		Effect.runPromise(
-			Effect.tryPromise({
+		Effect.runPromise( // repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections import method.
+			Effect.tryPromise({ // repository-health:allow UI18 -- outer wrapper of the same call; see the note inside try.
 				try: () =>
 					// repository-health:allow UI18 -- the import half of the same gap; see the note above.
 					workspaceSession().transport.command('collections.import', input),

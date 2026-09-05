@@ -17,6 +17,9 @@ import { prepareOwnedDescendants } from './cascade-delete.js';
 import { membershipIdentitySnapshot } from './identity-snapshot.js';
 import { WRITE_DEPTH_LIMIT, ownsManyRelation, type WritableManyRelation } from './plan.js';
 
+const isString = Schema.is(Schema.String);
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+
 export type GraphPreparedOperation = Readonly<{
 	readonly action: 'create' | 'update' | 'delete';
 	readonly collection: string;
@@ -219,7 +222,8 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 		module: CollectionHookModule | undefined,
 		depth: number,
 		prepared: unknown,
-		staged?: HookWriteOps<Error>
+		staged?: HookWriteOps<Error>,
+		relationships?: ReadonlyArray<string>
 	) => Effect.Effect<Readonly<Record<string, Schema.Json>>, Error, Requirements>;
 	readonly runMutatePrepare: (
 		effectId: EffectId,
@@ -275,7 +279,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 			function* (collection, row, depth, requiresBrowserBaseVersion, wavePrepared) {
 				const operationPosition = ports.operations.length;
 				const id = row['id'];
-				if (typeof id !== 'string' || id.length === 0)
+				if (!isNonEmptyString(id))
 					return yield* ports.graphRefusal(
 						collection,
 						'delete',
@@ -391,18 +395,14 @@ export const makeGraphPreparers = <Error, Requirements>(
 						`A nested write on ${collection} is more than ${WRITE_DEPTH_LIMIT} levels deep.`
 					);
 				const submittedId = payload['id'];
-				if (
-					submittedId !== undefined &&
-					(typeof submittedId !== 'string' || submittedId.length === 0)
-				)
+				if (submittedId !== undefined && !isNonEmptyString(submittedId))
 					return yield* ports.graphRefusal(
 						collection,
 						'update',
 						`The id of a ${collection} mutation must be a non-empty string.`
 					);
-				const action = identity?.action ?? (typeof submittedId === 'string' ? 'update' : 'create');
-				const id =
-					identity?.id ?? (typeof submittedId === 'string' ? submittedId : ports.randomId());
+				const action = identity?.action ?? (isString(submittedId) ? 'update' : 'create');
+				const id = identity?.id ?? (isString(submittedId) ? submittedId : ports.randomId());
 				const coordinate = `${collection}\u0000${id}`;
 				if (ports.graphCoordinates.has(coordinate))
 					return yield* ports.graphRefusal(
@@ -424,7 +424,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 				let included = submitted.included;
 				let previous: Readonly<Record<string, unknown>> | undefined;
 				let snapshot: string | undefined;
-				if (action === 'create' && typeof submittedId === 'string' && requiresBrowserBaseVersion) {
+				if (action === 'create' && isString(submittedId) && requiresBrowserBaseVersion) {
 					const collision = (yield* ports.storedGraphRow(
 						EffectId.make(`${ports.effectId}:create-identity:${collection}:${id}`),
 						collection,
@@ -489,7 +489,8 @@ export const makeGraphPreparers = <Error, Requirements>(
 						module,
 						ports.hookDepth + depth,
 						wavePrepared,
-						ports.stageHookWrites
+						ports.stageHookWrites,
+						submitted.included.map((entry) => entry.edge.name)
 					);
 					// Only a `before` hook can reshape the graph, so the one re-split below runs only
 					// when one ran: a payload the hook never saw is not split and decoded a second time.
@@ -603,21 +604,19 @@ export const makeGraphPreparers = <Error, Requirements>(
 						);
 					const existing = related?.rows ?? [];
 					const byId = new Map(
-						existing.flatMap((row) =>
-							typeof row['id'] === 'string' ? [[row['id'], row] as const] : []
-						)
+						existing.flatMap((row) => (isString(row['id']) ? [[row['id'], row] as const] : []))
 					);
 					const desiredIds = new Set<string>();
 					for (const child of relation.rows) {
 						const childId = child['id'];
 						let childIdentity: PlannedGraphNodeIdentity | undefined;
-						if (childId !== undefined && (typeof childId !== 'string' || childId.length === 0))
+						if (childId !== undefined && !isNonEmptyString(childId))
 							return yield* ports.graphRefusal(
 								relation.edge.childCollection,
 								'update',
 								`The id of a nested ${relation.edge.childCollection} mutation must be a non-empty string.`
 							);
-						if (typeof childId === 'string') {
+						if (isString(childId)) {
 							if (desiredIds.has(childId))
 								return yield* ports.graphRefusal(
 									relation.edge.childCollection,

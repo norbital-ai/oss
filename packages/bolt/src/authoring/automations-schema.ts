@@ -8,6 +8,12 @@ import type {
 	TableName
 } from './contracts-schema.js';
 
+const isString = Schema.is(Schema.String);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
+
 export interface AutomationDeclaration {
 	readonly name: string;
 	/** Human-readable purpose projected into read-only workspace manifests. */
@@ -75,6 +81,8 @@ export type AutomationProgression = Schema.Schema.Type<typeof AutomationProgress
  * can outlive or partially report that write.
  */
 export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S> & {
+	/** Retrieves a bounded public HTTPS page through the host connector, without stored sign-ins. */
+	readonly readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage>;
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
 	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
 };
@@ -168,19 +176,20 @@ const AutomationAuthoring: {
 			);
 		}
 		if (hasSchedule) {
-			if (typeof authored['schedule'] !== 'string' || authored['schedule'].trim() === '') {
+			const schedule = authored['schedule'];
+			if (!isString(schedule) || schedule.trim() === '') {
 				throw new Error('An automation schedule must be a non-empty cron expression');
 			}
 		}
 		if (hasChange) {
 			const change = authored['trigger'];
-			if (typeof change !== 'object' || change === null) {
+			if (!isObjectLike(change)) {
 				throw new Error('An automation change trigger must name a collection and event');
 			}
 			const collection = Reflect.get(change, 'collection');
 			const event = Reflect.get(change, 'event');
 			if (
-				typeof collection !== 'string' ||
+				!isString(collection) ||
 				collection.trim() === '' ||
 				(event !== 'created' && event !== 'updated' && event !== 'deleted')
 			) {

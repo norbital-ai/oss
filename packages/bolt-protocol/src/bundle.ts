@@ -122,9 +122,11 @@ export const ArtifactCodeGraph = Schema.Struct({
 }).annotate({ identifier: 'BoltArtifactCodeGraph' });
 export interface ArtifactCodeGraph extends Schema.Schema.Type<typeof ArtifactCodeGraph> {}
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
 const canonicalJson = (value: unknown): string => {
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-	if (value !== null && typeof value === 'object') {
+	if (isRecord(value)) {
 		return `{${Object.entries(value)
 			.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
@@ -814,7 +816,7 @@ export const decodeBoltBundleModule = Effect.fn('BoltProtocol.decodeBoltBundleMo
 	);
 	const dispatch = input['dispatch'];
 	const activate = input['activate'];
-	if (typeof dispatch !== 'function' || typeof activate !== 'function') {
+	if (!Predicate.isFunction(dispatch) || !Predicate.isFunction(activate)) {
 		return yield* new BundleModuleError({
 			message: 'Bolt bundle module must export dispatch and activate functions'
 		});

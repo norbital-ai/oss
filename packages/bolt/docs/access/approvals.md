@@ -78,6 +78,18 @@ no database triggers; the runtime checks the stamp before it writes.
 Convention: `approval_id IS NULL` means an existing row is not held; a non-null value identifies
 the open request holding its committed state.
 
+Server hooks and remotes can read held candidates with
+`api.db.<collection>.findPending({ where, limit })`. These are partial candidate rows under the
+target collection's read predicate and field mask, with `id` and `approval_id`; they do not expose
+approval inbox metadata. Use this for reservations that must include requests submitted by another
+person. Ordinary `findMany` still returns committed rows. The candidate read includes approved
+requests until the mutation transaction stamps `approval_request.applied_at`, and excludes rejected,
+withdrawn and applied requests. Merge candidates by record ID and exclude the hook's `recordId`
+when validating that same request again during approval replay.
+
+Decision and withdrawal commands send only `{ state: { requestId }, ... }`. The server loads the
+durable state and checks authority; the client never needs to upload the review snapshot again.
+
 ---
 
 ## Statuses
@@ -129,3 +141,12 @@ It does **not** auto-create flow-stage approver teams — those must exist via o
 
 The flow itself is not a table. It is the grant's live function; the snapshot carries **team
 names**.
+
+## Reads that validate a write
+
+Database reads made during hook preparation are fingerprinted with their result. Before committing
+or reserving an approval, Bolt rechecks those queries inside the write transaction under ordered
+table locks. A changed result, including a new matching row or pending proposal, refuses the stale
+write and asks the caller to refresh and retry. Queries for unrelated records can still pass.
+External calls are not repeated inside a database transaction. This protects concurrent mutations;
+a hook that accepts a batch must also validate the combined effect of its inputs.

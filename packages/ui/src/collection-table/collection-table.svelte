@@ -13,7 +13,7 @@
 	import { isSystemCollectionField, labelTermText } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
-	import { Effect, Number as Number_ } from 'effect';
+	import { Effect, Number as Number_, Schema } from 'effect';
 	import { onDestroy, onMount } from 'svelte';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet } from '#lib/utils';
@@ -70,6 +70,8 @@
 		collectionTablePageRows,
 		collectionTablePageWindow
 	} from './collection-table-pagination.js';
+
+	const isString = Schema.is(Schema.String);
 
 	const COLUMN_WIDTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
 		boolean: [72, 112],
@@ -171,7 +173,7 @@
 								operations,
 								selectedRows.flatMap((row) => {
 									const id = Reflect.get(row, 'id');
-									return typeof id === 'string' && id.length > 0 ? [id] : [];
+									return isString(id) && id.length > 0 ? [id] : [];
 								})
 							))
 				}
@@ -431,11 +433,12 @@
 			filterOptions: queryState.queryOptions
 		};
 	});
-	const countQuery = $derived(
-		countQueryInput
-			? countQueryInput.operations.count(countQueryInput.query, countQueryInput.filterOptions)
-			: null
-	);
+	const countQuery = $derived.by(() => {
+		// Counts are one-shot reads. Refresh the pagination count when the live answer changes.
+		const rows = rowsQuery?.current;
+		if (rows === undefined || !countQueryInput) return null;
+		return countQueryInput.operations.count(countQueryInput.query, countQueryInput.filterOptions);
+	});
 	let columnTextMeasurement = $state.raw<{
 		readonly ready: boolean;
 		readonly measure?: (text: string) => number;
@@ -451,7 +454,7 @@
 
 	function recordId(row: TRow): string {
 		const value = Reflect.get(row, recordIdField);
-		if (typeof value !== 'string' || value.length === 0) {
+		if (!isString(value) || value.length === 0) {
 			throw new Error('CollectionTable records require a id.');
 		}
 		return value;

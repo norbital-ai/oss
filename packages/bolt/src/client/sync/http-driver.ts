@@ -55,12 +55,15 @@ export type SyncHttpDriverOptions = Readonly<{
 const terminalStatus = (status: number): boolean =>
 	status === 400 || status === 401 || status === 403 || status === 410 || status === 426;
 
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+
 const responseMessage = async (response: Response): Promise<string> => {
 	try {
 		const payload: unknown = await response.json();
-		if (payload !== null && typeof payload === 'object') {
+		if (isRecord(payload)) {
 			const message = Reflect.get(payload, 'message');
-			if (typeof message === 'string' && message.length > 0) return message;
+			if (isNonEmptyString(message)) return message;
 		}
 	} catch {
 		/* non-JSON host failures use status text */

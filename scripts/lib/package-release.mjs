@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Result, Schema } from 'effect';
 
+const isString = Schema.is(Schema.String);
+
 const jsonObject = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.JsonObject));
 
 /**
@@ -30,7 +32,7 @@ export const publicPackageDirectories = [
 
 export function readPublicPackageEntries(repositoryRoot) {
 	const releaseVersion = readManifest(path.join(repositoryRoot, 'package.json')).version;
-	if (typeof releaseVersion !== 'string' || releaseVersion === '') {
+	if (!isString(releaseVersion) || releaseVersion === '') {
 		throw new Error('The workspace package.json has no release version.');
 	}
 	return publicPackageDirectories
@@ -42,7 +44,7 @@ export function readPublicPackageEntries(repositoryRoot) {
 			if (!manifest.name?.startsWith('@norbital-ai/')) {
 				throw new Error(`Unexpected public package name in packages/${directory}.`);
 			}
-			if (typeof manifest.version !== 'string' || manifest.version === '') {
+			if (!isString(manifest.version) || manifest.version === '') {
 				throw new Error(`${manifest.name} has no version.`);
 			}
 			if (manifest.version !== releaseVersion) {
@@ -71,7 +73,7 @@ export function readPublicPackageEntries(repositoryRoot) {
 export function platformPackageKey(entries) {
 	const contentIdentity = entries
 		.map(({ name, version, integrity }) => {
-			if (typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {
+			if (!isString(integrity) || !integrity.startsWith('sha512-')) {
 				throw new Error(`${name}@${version} has no sha512 integrity.`);
 			}
 			return { name, version, integrity };

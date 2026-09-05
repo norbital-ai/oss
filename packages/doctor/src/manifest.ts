@@ -53,11 +53,13 @@ export function recordField(
 	return decodeObject(source[name]) ?? {};
 }
 
+const isString = Schema.is(Schema.String);
+
 /** A string field, or `undefined` when the field is absent or another type. */
 export function stringField(
 	source: Readonly<Record<string, unknown>>,
 	name: string
 ): string | undefined {
 	const value = source[name];
-	return typeof value === 'string' ? value : undefined;
+	return isString(value) ? value : undefined;
 }

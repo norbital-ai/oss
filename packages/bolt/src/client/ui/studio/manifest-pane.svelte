@@ -1,12 +1,13 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import * as Accordion from '@norbital-ai/ui/accordion';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Grid, INSET_CLASS, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
-	import { cn } from '@norbital-ai/ui/utils';
 	import { useI18n } from '@norbital-ai/ui/i18n';
+	import { Tabs } from '@norbital-ai/ui/tabs';
 	import CollectionDetail from './collection-detail.svelte';
 	import {
 		canShowStudioSource,
@@ -20,6 +21,7 @@
 	import type {
 		EnvironmentVariable,
 		ManifestDestination,
+		ManifestCollection,
 		ManifestSection,
 		WorkspaceManifest
 	} from '#lib/client/ui/studio/studio-state.js';
@@ -81,10 +83,10 @@
 		description?: string | undefined;
 		detail?: string;
 		icon?: string;
+		image?: string | undefined;
 		origin?: 'authored' | 'system' | undefined;
 		sourcePath?: string | undefined;
 		destination?: ManifestDestination | undefined;
-		versioned?: boolean;
 	}>;
 
 	const sectionLabel = (id: ManifestSection['id']): string => t(MANIFEST_SECTION_MESSAGES[id][0]);
@@ -133,17 +135,7 @@
 	};
 	const listEntries = $derived.by<ReadonlyArray<ListEntry>>(() => {
 		if (manifest === undefined) return [];
-		if (kind === 'collections')
-			return manifest.collections.map((entry) => ({
-				name: entry.name,
-				description: entry.description,
-				detail: `${countLabel(entry.fields.length, 'fields')} · ${countLabel(entry.relations.length, 'relations')} · ${countLabel(entry.hookDeclarations?.length ?? 0, 'hooks')}`,
-				icon: entry.icon ?? 'lucide:box',
-				origin: entry.origin,
-				sourcePath: entry.sourcePath,
-				destination: entry.destination,
-				versioned: entry.history
-			}));
+
 		if (kind === 'apps')
 			return [...manifest.apps, ...(manifest.appGroups ?? [])].map((entry, index) => ({
 				key: `${entry.name}:${index}`,
@@ -151,6 +143,9 @@
 				label: entry.label,
 				description: entry.description,
 				icon: entry.icon ?? 'product:apps',
+				image:
+					('thumbnail' in entry ? entry.thumbnail : undefined) ??
+					('banner' in entry ? entry.banner : undefined),
 				origin: entry.origin,
 				sourcePath: entry.sourcePath,
 				destination: entry.destination
@@ -199,23 +194,21 @@
 	<Inline
 		gap="xs"
 		shrink={false}
-		class="flex-wrap border-b border-border/60 px-4 py-2 sm:px-6"
+		class="flex-wrap border-b border-border/60 {INSET_CLASS}"
 		data-testid="studio-manifest-sections"
 	>
-		{#each sections as branch (branch.id)}
-			<button
-				type="button"
-				class={cn(
-					'rounded-full px-2 py-0.5 text-micro',
-					kind === branch.id
-						? 'bg-primary/10 font-semibold text-foreground'
-						: 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
-				)}
-				onclick={() => (localSelected = branch.id)}
-			>
-				{sectionLabel(branch.id)}
-			</button>
-		{/each}
+		<Tabs
+			value={kind}
+			onValueChange={(next) => (localSelected = next)}
+			variant="chip"
+			showContent={false}
+			animate={false}
+			config={sections.map((branch) => ({
+				name: branch.id,
+				label: sectionLabel(branch.id),
+				content: ''
+			}))}
+		/>
 	</Inline>
 {/snippet}
 
@@ -283,6 +276,38 @@
 	{/if}
 {/snippet}
 
+{#snippet collectionBehaviors(entry: ManifestCollection, workspace: WorkspaceManifest)}
+	<Stack gap="md" class="pl-7">
+		{#each [{ title: t('bolt.studio.hooks'), empty: t('bolt.studio.noHooks'), entries: entry.hookDeclarations ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.collection === entry.name) }] as group (group.title)}
+			<Stack as="section" gap="xs">
+				<h4 class="text-xs font-medium text-foreground">{group.title}</h4>
+				{#if group.entries.length === 0}
+					<p class="text-xs text-muted-foreground">{group.empty}</p>
+				{:else}
+					<Stack as="ul" gap="sm">
+						{#each group.entries as behavior (behavior.name)}
+							<li class="text-sm text-muted-foreground">
+								<span class="font-medium text-foreground">{behavior.name}</span>
+								{#if behavior.description}<p class="mt-1">{behavior.description}</p>{/if}
+							</li>
+						{/each}
+					</Stack>
+				{/if}
+			</Stack>
+		{/each}
+		<Cluster gap="sm">
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={() => (localSelected = `collections:${entry.name}`)}
+				>{t('bolt.studio.model')}</Button
+			>
+			{@render destinationAction(entry.destination, entry.name)}
+			{@render sourceAction(entry.sourcePath, entry.name)}
+		</Cluster>
+	</Stack>
+{/snippet}
+
 {#snippet listPanel(branch: ManifestSection, entries: ReadonlyArray<ListEntry>)}
 	<Scroll name={sectionLabel(branch.id)} class="p-4 sm:p-6">
 		<Stack gap="md">
@@ -298,11 +323,20 @@
 					{#each entries as entry (entry.key ?? entry.name)}
 						<Stack as="article" gap="sm" class="py-3 md:flex-row md:items-start md:justify-between">
 							<Inline align="start" gap="sm" grow>
-								<IconWrapper
-									name={entry.icon ??
-										(kind === 'collections' ? 'lucide:box' : `product:${branch.icon}`)}
-									class="mt-0.5 size-4 shrink-0 text-muted-foreground"
-								/>
+								{#if entry.image}
+									<img
+										src={entry.image}
+										alt=""
+										loading="lazy"
+										class="h-16 w-28 shrink-0 rounded-md object-cover"
+									/>
+								{:else}
+									<IconWrapper
+										name={entry.icon ??
+											(kind === 'collections' ? 'lucide:box' : `product:${branch.icon}`)}
+										class="mt-0.5 size-4 shrink-0 text-muted-foreground"
+									/>
+								{/if}
 								<Stack gap="xs" grow class="min-w-0">
 									<Inline gap="xs" class="min-w-0">
 										<button
@@ -311,19 +345,14 @@
 											onclick={() => (localSelected = `${kind}:${entry.name}`)}
 										>
 											<h3
-												class={cn(
-													'min-w-0 truncate text-xs font-medium text-foreground',
-													kind !== 'apps' && 'font-mono'
-												)}
+												class="min-w-0 truncate text-xs font-medium text-foreground {kind !== 'apps'
+													? 'font-mono'
+													: ''}"
 											>
 												{entry.label ?? entry.name}
 											</h3>
 										</button>
 										{@render systemMarker(entry.origin)}
-										{#if entry.versioned}<span
-												class="shrink-0 text-micro text-muted-foreground"
-												>{t('bolt.studio.versioned')}</span
-											>{/if}
 									</Inline>
 									{#if entry.description !== undefined}
 										{@render description(entry.description)}
@@ -514,6 +543,35 @@
 			</Stack>
 		{:else if kind === 'policies'}
 			{@render policiesPanel(section, manifest)}
+		{:else if kind === 'collections'}
+			<Scroll name={sectionLabel(section.id)} class="p-4 sm:p-6">
+				<Stack gap="md">
+					{@render panelHeading(section, manifest.collections.length)}
+					<Accordion.Root type="multiple">
+						{#each manifest.collections as entry (entry.name)}
+							<Accordion.Item value={entry.name}>
+								<Accordion.Trigger>
+									<Inline as="span" gap="sm" grow>
+										<IconWrapper
+											name={entry.icon ?? 'lucide:box'}
+											class="size-4 shrink-0 text-muted-foreground"
+										/>
+										<Stack as="span" gap="xs" class="min-w-0">
+											<span class="text-sm font-medium text-foreground">{entry.name}</span>
+											{#if entry.description}<span class="text-xs font-normal text-muted-foreground"
+													>{entry.description}</span
+												>{/if}
+										</Stack>
+									</Inline>
+								</Accordion.Trigger>
+								<Accordion.Content>
+									{@render collectionBehaviors(entry, manifest)}
+								</Accordion.Content>
+							</Accordion.Item>
+						{/each}
+					</Accordion.Root>
+				</Stack>
+			</Scroll>
 		{:else}
 			{@render listPanel(section, listEntries)}
 		{/if}

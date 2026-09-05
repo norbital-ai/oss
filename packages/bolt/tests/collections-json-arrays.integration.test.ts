@@ -10,7 +10,7 @@ import {
 	emptyAuthoredRuntime
 } from '../src/runtime/collections/authored.js';
 import * as Database from '../src/runtime/facilities/database.js';
-import { AI, Files, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
+import { AI, Connector, Files, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import * as Workspace from '../src/runtime/workspace.js';
 import * as TaskQueue from '../src/runtime/tasks/tasks.js';
@@ -160,6 +160,7 @@ const testLayer = (
 				database,
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
+				Connector.layer(undefined, context),
 				taskQueue,
 				automations,
 				syncCommit,
@@ -203,12 +204,10 @@ describe('JSON columns holding a list', () => {
 			// The cast is what makes the difference: without it the driver sends array-literal syntax.
 			expect(statement?.sql).toContain('::jsonb');
 			expect(statement?.parameters).toContain(JSON.stringify(intervals));
-			// An object is left alone — a driver already serialises it, and stringifying it here would
-			// double-encode a column that was never broken.
-			expect(statement?.parameters).toContainEqual({ source: 'roster' });
-			// The array column keeps its array: one `::jsonb` in the statement, for `intervals` alone.
+			// Both JSON columns bind JSON text; the native Postgres array remains an array.
+			expect(statement?.parameters).toContain(JSON.stringify({ source: 'roster' }));
 			expect(statement?.parameters).toContainEqual(['night', 'weekend']);
-			expect(statement?.sql.match(/::jsonb/g)).toHaveLength(1);
+			expect(statement?.sql.match(/::jsonb/g)).toHaveLength(2);
 		}).pipe(Effect.provide(testLayer(seen)));
 	});
 

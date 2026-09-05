@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
 import { Prompt, Tool, Toolkit } from 'effect/unstable/ai';
 import { EffectId, ReleaseId } from '@norbital-ai/bolt-protocol';
+import { getErrorMessage } from '@norbital-ai/std';
 import {
 	AgentId,
 	DirectiveId,
@@ -97,7 +98,8 @@ class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()('Bolt.Task
 }
 
 const CapabilityId = Schema.String.check(
-	Schema.isPattern(/^(?:system|host|tenant|personal)\/[A-Za-z0-9][A-Za-z0-9._/-]*$/)
+	// MCP tool declarations are named `server:tool`, so the id body admits the colon.
+	Schema.isPattern(/^(?:system|host|tenant|personal)\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
 ).pipe(Schema.brand('AgentCapabilityId'));
 const CapabilitySnapshot = Schema.Struct({
 	releaseId: ReleaseId,
@@ -184,7 +186,6 @@ export const AgentRunRow = Schema.Struct({
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
-	capability_snapshot: CapabilitySnapshot,
 	status: RunStatus
 });
 type AgentRun = typeof AgentRunRow.Type;
@@ -212,7 +213,7 @@ export const decodeRows = <S extends Schema.ConstraintDecoder<unknown>>(
 const canonicalJson = (value: unknown): string => {
 	if (value instanceof Date) return JSON.stringify(value.toISOString()) ?? 'null';
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-	if (value !== null && typeof value === 'object') {
+	if (isObjectLike(value)) {
 		return `{${Object.keys(value)
 			.toSorted()
 			.filter((key) => Reflect.get(value, key) !== undefined)
@@ -286,7 +287,7 @@ const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) 
 
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
 export const messageText = (message: Prompt.MessageEncoded): string =>
-	typeof message.content === 'string'
+	isString(message.content)
 		? message.content
 		: message.content
 				.flatMap((part) => (part.type === 'text' || part.type === 'reasoning' ? [part.text] : []))
@@ -401,7 +402,7 @@ const projectTaskPrompt = (input: {
 
 type EncodedToolCall = Readonly<{ id: string; name: string; params: unknown }>;
 const toolCalls = (message: Prompt.MessageEncoded): ReadonlyArray<EncodedToolCall> =>
-	typeof message.content === 'string'
+	isString(message.content)
 		? []
 		: message.content.flatMap((part) =>
 				part.type === 'tool-call' ? [{ id: part.id, name: part.name, params: part.params }] : []
@@ -411,7 +412,7 @@ const unresolvedToolCalls = (
 ): ReadonlyArray<EncodedToolCall> => {
 	const resolved = new Set(
 		messages.flatMap(({ message }) =>
-			typeof message.content === 'string'
+			isString(message.content)
 				? []
 				: message.content.flatMap((part) => (part.type === 'tool-result' ? [part.id] : []))
 		)
@@ -657,14 +658,19 @@ const ToolFailure = Schema.Struct({
 interface ToolFailure extends Schema.Schema.Type<typeof ToolFailure> {}
 
 const describeFailure = (failure: unknown): ToolFailure => {
-	if (failure instanceof Error)
-		return { code: failure.name || 'tool_error', message: failure.message };
-	if (typeof failure === 'object' && failure !== null) {
+	if (failure instanceof Error) {
+		const tag = Reflect.get(failure, '_tag');
+		return {
+			code: isString(tag) && tag !== '' ? tag : failure.name || 'tool_error',
+			message: failure.message
+		};
+	}
+	if (isObjectLike(failure)) {
 		const tag = Reflect.get(failure, '_tag');
 		const message = Reflect.get(failure, 'message');
 		return {
-			code: typeof tag === 'string' && tag !== '' ? tag : 'tool_error',
-			message: typeof message === 'string' && message !== '' ? message : 'Tool execution failed.'
+			code: isString(tag) && tag !== '' ? tag : 'tool_error',
+			message: isString(message) && message !== '' ? message : 'Tool execution failed.'
 		};
 	}
 	return { code: 'tool_error', message: String(failure) };
@@ -680,6 +686,10 @@ const writeActions: ReadonlyArray<'create' | 'update' | 'delete'> = ['create', '
 const ParkedResult = Schema.Struct({ state: Schema.Literal('parked'), taskId: TaskId });
 
 const isParkedResult = Schema.is(ParkedResult);
+const isString = Schema.is(Schema.String);
+const isObjectLike = Schema.is(
+	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+);
 
 const MAX_PLAN_VERIFICATION_ATTEMPTS = 3;
 const PLAN_VERIFICATION_OUTPUT_TOKENS = 768;
@@ -762,7 +772,7 @@ export const layer = Layer.effect(
 					(error) =>
 						new TaskRuntimeError({
 							operation: 'enqueue',
-							message: error instanceof Error ? error.message : String(error)
+							message: getErrorMessage(error)
 						})
 				)
 			);
@@ -1439,17 +1449,19 @@ export const layer = Layer.effect(
 			}>
 		) {
 			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
+			// Preserve the readable run metadata while advancing its state. The immutable capability
+			// snapshot stays in storage; the system read policy deliberately does not expose it.
 			const completeRuns = yield* retainTaskRows(
 				EffectId.make(`${effectId}:retain-runs`),
 				subject,
 				task.id,
 				'agent_run',
-				[{ id: run.id, status: input.runStatus, phase: input.phase }]
+				[{ ...run, status: input.runStatus, phase: input.phase }]
 			);
 			if (input.plans !== undefined) {
 				for (const plan of input.plans) {
 					const id = plan['id'];
-					if (typeof id !== 'string' || id === '')
+					if (!isString(id) || id === '')
 						return yield* Effect.fail(new TypeError('A Task Plan mutation requires an id.'));
 				}
 			}
@@ -1473,9 +1485,16 @@ export const layer = Layer.effect(
 							'agent_inbox',
 							[{ id: run.directive_id, state: input.directiveState }]
 						);
+			const hasQueued =
+				input.directiveState === 'settled' &&
+				(yield* collections.findFirst(EffectId.make(`${effectId}:queued`), subject, {
+					collection: 'agent_inbox',
+					where: { task_id: { eq: task.id }, state: { eq: 'queued' } }
+				})) !== undefined;
+			const taskStatus = input.taskStatus === 'done' && hasQueued ? 'ready' : input.taskStatus;
 			yield* mutateTask(effectId, subject, {
 				id: task.id,
-				status: input.taskStatus,
+				status: taskStatus,
 				active_run_id: input.active ? run.id : null,
 				epoch: run.epoch,
 				...(input.activePlanId === undefined ? {} : { active_plan_id: input.activePlanId }),
@@ -1483,6 +1502,11 @@ export const layer = Layer.effect(
 				runs: completeRuns,
 				...(completeDirectives === undefined ? {} : { directives: completeDirectives })
 			});
+			if (taskStatus === 'ready' && hasQueued) {
+				// Admission's wake may have been consumed while this run was still active.
+				yield* enqueueExecute(effectId, subject, task.id, `settled:${run.id}`);
+			}
+			return taskStatus;
 		});
 		const settleRun = (
 			effectId: EffectId,
@@ -1531,7 +1555,7 @@ export const layer = Layer.effect(
 				subject,
 				parent.id,
 				'agent_run',
-				[{ id: parentRun.id, epoch, status: 'running', phase: 'children' }]
+				[{ ...parentRun, epoch, status: 'running', phase: 'children' }]
 			);
 			yield* mutateTask(effectId, subject, {
 				id: parent.id,
@@ -1549,7 +1573,7 @@ export const layer = Layer.effect(
 		): TodoListValue | undefined => {
 			for (const row of messages.toReversed()) {
 				if (row.run_id !== runId) continue;
-				if (typeof row.message.content === 'string') continue;
+				if (isString(row.message.content)) continue;
 				for (const part of row.message.content.toReversed()) {
 					if (part.type !== 'tool-result' || part.name !== 'todo' || part.isFailure) continue;
 					const decoded = Schema.decodeUnknownOption(TodoList)(part.result);
@@ -1567,7 +1591,7 @@ export const layer = Layer.effect(
 			for (const row of messages) {
 				assets.push(...imageAssetsFromMessage(row.message));
 				if (row.run_id !== runId) continue;
-				if (typeof row.message.content === 'string') continue;
+				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
 					if (part.type !== 'tool-result' || part.name !== 'use_image' || part.isFailure) continue;
 					const decoded = Schema.decodeUnknownOption(ImageAsset)(part.result);
@@ -1593,7 +1617,7 @@ export const layer = Layer.effect(
 			if (children.length === 0) return { state: 'clear' as const };
 			const consumed = new Set<TaskId>();
 			for (const row of messages) {
-				if (typeof row.message.content === 'string') continue;
+				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
 					if (part.type !== 'tool-result' || part.name !== 'subagent' || part.isFailure) continue;
 					const result = Schema.decodeUnknownOption(ConsumedChildResult)(part.result);
@@ -1649,21 +1673,49 @@ export const layer = Layer.effect(
 					directiveId: result.directiveId
 				};
 			}
-			const completeRuns =
+			const directives: Array<Readonly<{ id: DirectiveId; state: string }>> = [];
+			for (;;) {
+				const after = directives.at(-1)?.id;
+				const page = yield* collections.findMany(
+					EffectId.make(`${effectId}:directives:${directives.length}`),
+					subject,
+					{
+						collection: 'agent_inbox',
+						where: {
+							task_id: { eq: taskId },
+							...(after === undefined ? {} : { id: { gt: after } })
+						},
+						orderBy: { id: 'asc' },
+						limit: 500
+					}
+				);
+				directives.push(
+					...(yield* decodeRows(Schema.Struct({ id: DirectiveId, state: Schema.String }), page))
+				);
+				if (page.length < 500) break;
+			}
+			const stoppingRun =
 				task.active_run_id === undefined || task.active_run_id === null
+					? undefined
+					: yield* runById(EffectId.make(`${effectId}:stopping-run`), subject, task.active_run_id);
+			const completeRuns =
+				stoppingRun === undefined
 					? undefined
 					: yield* retainTaskRows(
 							EffectId.make(`${effectId}:retain-runs`),
 							subject,
 							task.id,
 							'agent_run',
-							[{ id: task.active_run_id, status: 'stopped' }]
+							[{ ...stoppingRun, status: 'stopped' }]
 						);
 			yield* mutateTask(effectId, subject, {
 				id: task.id,
 				status: 'stopped',
 				active_run_id: null,
 				epoch: task.epoch,
+				directives: directives.map(({ id, state }) =>
+					state === 'queued' || state === 'claimed' ? { id, state: 'cancelled' } : { id }
+				),
 				...(completeRuns === undefined ? {} : { runs: completeRuns })
 			});
 			yield* tasks.execute(EffectId.make(`${effectId}:interrupt`), {
@@ -2006,11 +2058,19 @@ export const layer = Layer.effect(
 						annotation
 					);
 					const complete = verified.verdict.complete;
-					yield* settleRun(effectId, subject, run, complete ? 'done' : 'attention', 'verify', {
-						plans: [{ id: plan.id, status: complete ? 'verified' : 'stalled' }]
-					});
-					if (complete) yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
-					return complete ? 'done' : 'attention';
+					const status = yield* settleRun(
+						effectId,
+						subject,
+						run,
+						complete ? 'done' : 'attention',
+						'verify',
+						{
+							plans: [{ id: plan.id, status: complete ? 'verified' : 'stalled' }]
+						}
+					);
+					if (status === 'done')
+						yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
+					return status === 'ready' ? 'idle' : complete ? 'done' : 'attention';
 				}
 				yield* admit(EffectId.make(`${effectId}:continue:${attempt}`), subject, {
 					taskId: task.id,
@@ -2025,9 +2085,10 @@ export const layer = Layer.effect(
 				yield* settleRun(effectId, subject, run, 'ready', 'verify');
 				return 'idle';
 			}
-			yield* settleRun(effectId, subject, run, 'done', 'model');
-			yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
-			return 'done';
+			const status = yield* settleRun(effectId, subject, run, 'done', 'model');
+			if (status === 'done')
+				yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
+			return status === 'ready' ? 'idle' : 'done';
 		});
 
 		const execute = Effect.fn('Agents.execute')(function* (

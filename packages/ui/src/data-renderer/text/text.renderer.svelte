@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Schema } from 'effect';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
@@ -18,10 +19,12 @@
 		class: className
 	}: DataRendererProps = $props();
 
-	const scalarValue = $derived(value == null || typeof value !== 'string' ? '' : value);
+	const isString = Schema.is(Schema.String);
+
+	const scalarValue = $derived(value == null || !isString(value) ? '' : value);
 	const values = $derived.by((): Array<string | number> => {
 		if (!Array.isArray(value)) return [];
-		return value.filter((item): item is string => typeof item === 'string');
+		return value.filter(isString);
 	});
 
 	function parseInput(input: HTMLInputElement): string | null | undefined {

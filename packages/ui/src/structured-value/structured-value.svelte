@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Grid, Scroll } from '#lib/layout';
@@ -14,27 +15,30 @@
 
 	const { t } = useI18n<UiKeys>();
 
+	const isBoolean = Schema.is(Schema.Boolean);
+	const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+	// Bare `typeof item === 'object'` acceptance: arrays included, null excluded.
+	const isObjectish = Schema.is(
+		Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
+	);
+
 	function primitiveLabel(item: unknown): string {
 		if (item == null || item === '') return '—';
-		if (typeof item === 'boolean') return item ? 'Yes' : 'No';
+		if (isBoolean(item)) return item ? 'Yes' : 'No';
 		return String(item);
 	}
 
 	function recordColumns(items: unknown[]): string[] | null {
-		if (
-			items.length === 0 ||
-			items.some((item) => item == null || typeof item !== 'object' || Array.isArray(item))
-		)
-			return null;
+		if (items.length === 0 || items.some((item) => item == null || !isRecord(item))) return null;
 		return [
 			...new Set(
-				items.flatMap((item) => (item != null && typeof item === 'object' ? Object.keys(item) : []))
+				items.flatMap((item) => (item != null && isObjectish(item) ? Object.keys(item) : []))
 			)
 		];
 	}
 
 	function recordProperty(item: unknown, key: string): unknown {
-		return item != null && typeof item === 'object' ? Reflect.get(item, key) : undefined;
+		return item != null && isObjectish(item) ? Reflect.get(item, key) : undefined;
 	}
 </script>
 
