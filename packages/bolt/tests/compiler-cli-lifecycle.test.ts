@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const run = promisify(execFile);
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cli = join(packageRoot, 'src/compiler/cli.ts');
-const jiti = join(packageRoot, 'node_modules/.bin/jiti');
+// Exercise the executable consumers receive. The test task depends on this package's build;
+// running source through jiti also transpiles the compiler graph before the CLI can start.
+const cli = join(packageRoot, 'build/compiler/cli.js');
 const temporaryRoots: Array<string> = [];
 
 afterEach(async () => {
@@ -23,7 +24,7 @@ describe('Bolt CLI lifecycle', () => {
 
 		let failure: unknown;
 		try {
-			await run(jiti, [cli, 'sync', '--root', root], { cwd: packageRoot });
+			await run(process.execPath, [cli, 'sync', '--root', root], { cwd: packageRoot });
 		} catch (error) {
 			failure = error;
 		}
@@ -42,7 +43,7 @@ describe('Bolt CLI lifecycle', () => {
 		await writeFile(join(root, 'package.json'), '{"name":"bolt-cli-audit","type":"module"}\n');
 		await writeFile(join(root, 'src', 'ok.ts'), 'export const value = 1;\n');
 
-		const ran = await run(jiti, [cli, 'audit', '--root', root, '--json'], {
+		const ran = await run(process.execPath, [cli, 'audit', '--root', root, '--json'], {
 			cwd: packageRoot
 		}).catch((failure: NodeJS.ErrnoException & { stdout?: string }) => failure);
 		const stdout = 'stdout' in ran ? String(ran.stdout) : '';
