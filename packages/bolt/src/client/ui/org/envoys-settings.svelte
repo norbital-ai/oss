@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Effect, Fiber, Schema } from 'effect';
 	import { onMount } from 'svelte';
+	import { watch } from 'runed';
 	import { Button } from '@norbital-ai/ui/button';
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -292,7 +293,10 @@
 		});
 
 	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
-		Effect.tryPromise({ try: () => ownPairingOpen(envoy.name, envoy.transport), catch: toError }).pipe(
+		Effect.tryPromise({
+			try: () => ownPairingOpen(envoy.name, envoy.transport),
+			catch: toError
+		}).pipe(
 			Effect.andThen(observePairing(envoy)),
 			Effect.catch((cause) => {
 				// `runPairingRequest` reports its own refusals and cannot fail, so a rejection here is the
@@ -343,56 +347,50 @@
 	 * misattribution this page exists to prevent.
 	 */
 	let pairingNow = $state(Date.now());
-	$effect(() => {
-		const target = pairingTarget;
-		if (target === undefined) return;
-		const connection = connections[target.name];
-		if (connection?.state !== 'pairing' || connection.pairingExpiresAt === undefined) return;
-		pairingNow = Date.now();
-		const timer = setInterval(() => {
-			pairingNow = Date.now();
-		}, 500);
-		return () => clearInterval(timer);
-	});
-
-	/**
-	 * The provider rotates the code on its own clock and the long poll delivers each rotation, so
-	 * expiry normally passes unseen. When a code has been expired this long with no newer revision,
-	 * the poll itself is what died — a proxy can drop a long request without an error reaching either
-	 * end — and the dialog would wait forever on a socket that is still rotating. One re-ask per
-	 * stalled revision resynchronizes and resumes observing; the revision guard keeps a slow first
-	 * kick from stacking a second.
-	 */
 	const EXPIRED_REFRESH_GRACE_MS = 5_000;
 	const refreshKicks = new Map<string, number>();
-	$effect(() => {
-		const target = pairingTarget;
-		if (target === undefined) return;
-		const connection = connections[target.name];
-		if (connection?.state !== 'pairing' || connection.pairingExpiresAt === undefined) return;
-		if (pairingNow - connection.pairingExpiresAt < EXPIRED_REFRESH_GRACE_MS) return;
-		const revision = connection.revision ?? 0;
-		if (refreshKicks.get(target.name) === revision) return;
-		refreshKicks.set(target.name, revision);
-		Effect.runFork(
-			runPairingRequest(target.name, target.transport, 'status').pipe(
-				Effect.andThen(observePairing(target))
-			)
-		);
-	});
+	watch(
+		[() => pairingTarget, () => (pairingTarget ? connections[pairingTarget.name] : undefined)],
+		([target, connection]) => {
+			if (target === undefined) return;
+			if (connection?.state !== 'pairing' || connection.pairingExpiresAt === undefined) return;
+			const checkStall = (): void => {
+				const current = connections[target.name];
+				if (current?.state !== 'pairing' || current.pairingExpiresAt === undefined) return;
+				const now = Date.now();
+				pairingNow = now;
+				if (now - current.pairingExpiresAt < EXPIRED_REFRESH_GRACE_MS) return;
+				const revision = current.revision ?? 0;
+				if (refreshKicks.get(target.name) === revision) return;
+				refreshKicks.set(target.name, revision);
+				Effect.runFork(
+					runPairingRequest(target.name, target.transport, 'status').pipe(
+						Effect.andThen(observePairing(target))
+					)
+				);
+			};
+			checkStall();
+			const timer = setInterval(checkStall, 500);
+			return () => clearInterval(timer);
+		}
+	);
 
 	// The read is the browser's, as it is in `studio/envoys-panel.svelte`: server rendering must not
 	// issue a Bolt command, and a reader who opens Envoys has already asked the question it answers.
 	// It ran at component init here, which happens on the server too under any host that renders this
 	// surface — `workspaceSession()` throws there rather than returning a session to command with.
 	const pairingStarted = new Set<string>();
-	$effect(() => {
-		for (const envoy of envoys) {
-			if (pairingStarted.has(envoy.name)) continue;
-			pairingStarted.add(envoy.name);
-			Effect.runFork(runPairingRequest(envoy.name, envoy.transport, 'status'));
+	const pairingStatusTargets = $derived(envoys.map((envoy) => envoy.name));
+	watch(
+		() => pairingStatusTargets,
+		(names) => {
+			for (const envoy of envoys) {
+				if (!names.includes(envoy.name) || pairingStarted.has(envoy.name)) continue;
+				pairingStarted.add(envoy.name);
+				Effect.runFork(runPairingRequest(envoy.name, envoy.transport, 'status'));
+			}
 		}
-	});
+	);
 </script>
 
 {#snippet pairingPanel(envoy: DeclaredEnvoy)}

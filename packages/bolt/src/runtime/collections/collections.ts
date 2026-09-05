@@ -223,6 +223,7 @@ import { AuthoredRefusal, refusalAt, type RefusalSite } from '#lib/authoring/ref
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { approvalFlowDescriptor } from '#lib/authoring/approval-flow.js';
 import { approvalStepId } from '#lib/authoring/policy-introspection.js';
+import { drizzle } from 'drizzle-orm/pg-proxy';
 import {
 	aliased,
 	always,
@@ -230,7 +231,7 @@ import {
 	dbNow,
 	executeBuilt,
 	lessThanOrEqual,
-	relationalComposer,
+	refuseExecution,
 	toStatement,
 	transactionSql,
 	vectorDistance,
@@ -1490,7 +1491,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				table: (name, fields) => queryTableFor(name, fields),
 				resolveMany: resolveWritableManyRelation
 			});
-			const relational = relationalComposer(workspaceRelations);
+			const relational = drizzle(refuseExecution, { relations: workspaceRelations });
 			/**
 			 * The relational query builder for one collection, once the workspace has declared it.
 			 *

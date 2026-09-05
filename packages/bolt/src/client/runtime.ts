@@ -16,13 +16,9 @@ import type {
 	MutationSettlements,
 	WorkspaceClientRuntime
 } from '#lib/client/contracts.js';
-import {
-	createBrowserSyncBroker,
-	createSyncClient,
-	createSyncHttpDriver,
-	type BrowserSyncScope,
-	type SyncClient
-} from './sync/index.js';
+import { createSyncClient, type SyncClient } from './sync/client.js';
+import { createBrowserSyncBroker, type BrowserSyncScope } from './sync/sse-driver.js';
+import { createSyncHttpDriver } from './sync/http-driver.js';
 import {
 	mutationSettlementOf,
 	rejectedSyncOutcome,
@@ -136,8 +132,8 @@ export const createBrowserWorkspaceRuntime = (
 	});
 	const bolt = createBoltClient(scope, options.transport ?? browserTransport);
 	const syncScope: BrowserSyncScope = { workspaceId: session.workspaceId, ...scope };
-	let acceptSettlements: (outcomes: Parameters<MutationSettlements['accept']>[0]) => void =
-		() => undefined;
+	let acceptSettlements: (outcomes: Parameters<MutationSettlements['accept']>[0]) => void = () =>
+		undefined;
 	const machine = createSyncClient({
 		scope: syncScope,
 		onOutcomes: (outcomes) => acceptSettlements(outcomes),

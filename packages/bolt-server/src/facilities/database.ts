@@ -22,6 +22,9 @@ import { makeWireBinding } from '../config.js';
 /** The database SPI stays beside its wire adapter. */
 export interface LocalDatabase {
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
+	/** Export a durable PGlite backup after the owner has quiesced borrowed sessions. */
+	// repository-health:allow EFF2 -- Public host backup preserves the Promise lifecycle boundary.
+	readonly dumpDataDirectory: () => Promise<Blob>;
 	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
 	readonly close: () => Promise<void>;
 }
@@ -30,6 +33,8 @@ export interface LocalDatabase {
 export interface LocalDatabaseOptions {
 	/** Use `memory://` only for explicitly non-durable development. */
 	readonly dataDirectory: string;
+	/** Restore a backup into a new, empty data directory. */
+	readonly loadDataDirectory?: Blob;
 }
 
 /** The Postgres options stay beside their constructor. */
@@ -212,7 +217,7 @@ export const makeDatabaseFromConfig = Effect.fn('BoltServer.Database.makeDatabas
 );
 
 /** Creates the explicitly local PGlite adapter used by deterministic development and tests. */
-export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
+export const makeLocalDatabase = ({ dataDirectory, loadDataDirectory }: LocalDatabaseOptions) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			// PGlite ships these but registers none by default, so `create extension` answered "not
@@ -226,7 +231,8 @@ export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 			// the deployed database can do; a test that cannot express a constraint cannot prove one.
 			const database = yield* Effect.tryPromise(() =>
 				PGlite.create(dataDirectory, {
-					extensions: { pg_trgm, btree_gist, vector }
+					extensions: { pg_trgm, btree_gist, vector },
+					...(loadDataDirectory === undefined ? {} : { loadDataDir: loadDataDirectory })
 				})
 			);
 
@@ -294,7 +300,16 @@ export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 					)
 			});
 
-			return { binding, close: () => database.close() };
+			return {
+				binding,
+				dumpDataDirectory: () =>
+					Effect.runPromise(
+						Effect.tryPromise(() => database.exec('CHECKPOINT')).pipe(
+							Effect.andThen(Effect.tryPromise(() => database.dumpDataDir('gzip')))
+						)
+					),
+				close: () => database.close()
+			};
 		})
 	);
 

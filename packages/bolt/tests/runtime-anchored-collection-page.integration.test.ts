@@ -16,14 +16,10 @@ import type { WorkspaceClientRuntime } from '../src/client/contracts.js';
 import { stableKey } from '../src/client/live-query/stable-key.js';
 import { createWorkspaceApiProxy } from '../src/client/runtime.js';
 import { initialClientState } from '../src/client/sync/machine.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 import { FixedCommandBindings } from '../src/runtime/commands.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
-import {
-	makeBoltTestRuntime,
-	recordId,
-	type BoltTestRuntime
-} from './support/bolt-test-layer.js';
+import { makeBoltTestRuntime, recordId, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { seedSession } from './support/fixture-identity.js';
 
 const scope = {
@@ -84,14 +80,10 @@ afterEach(async () => {
 describe('anchored collection page command', () => {
 	it('pages a findMany after cursor through the declared command, not a live prefix', async () => {
 		harness = await makeBoltTestRuntime(peopleWorkspace);
-		await harness.database.query('insert into people (id, name) values ($1, $2), ($3, $4), ($5, $6)', [
-			recordId('person-ada'),
-			'Ada',
-			recordId('person-bea'),
-			'Bea',
-			recordId('person-cam'),
-			'Cam'
-		]);
+		await harness.database.query(
+			'insert into people (id, name) values ($1, $2), ($3, $4), ($5, $6)',
+			[recordId('person-ada'), 'Ada', recordId('person-bea'), 'Bea', recordId('person-cam'), 'Cam']
+		);
 		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 
 		const posted: Array<string> = [];
@@ -99,7 +91,9 @@ describe('anchored collection page command', () => {
 		const bolt = createBoltClient(scope, {
 			command: async (name, input) => {
 				posted.push(name);
-				const response = await harness!.runtime.runPromise(dispatchInvocation(command(name, input)));
+				const response = await harness!.runtime.runPromise(
+					dispatchInvocation(command(name, input))
+				);
 				return response.value;
 			}
 		});

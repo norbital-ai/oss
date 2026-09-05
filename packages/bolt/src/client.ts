@@ -3,50 +3,33 @@ import type { InvocationScope } from '@norbital-ai/bolt-protocol';
 import type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
 import { decodeUnknownSchema } from '#lib/schema-decode.js';
 
-export type {
-	BoltClient,
-	BoltTransport,
-	CollectionMutationValues,
-	MemoryMutationResult,
-	MutationSettlement,
-	MutationSettlementHandle,
-	MutationSettlementStatus,
-	RemoteQuery,
-	WorkspaceClientRuntime
-} from '#lib/client/contracts.js';
-
 /** Owns authenticated transport decoding and the remote client view built on top of it. */
-const ClientFactories = {
-	bolt: (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
-		scope,
-		command: <S extends Schema.Top>(
-			command: string,
-			input: Schema.Json,
-			output: S,
-			signal?: AbortSignal,
-			headers?: Readonly<Record<string, string>>
-		): Promise<Schema.Schema.Type<S>> => {
-			const effect = Effect.gen(function* () {
-				const raw = yield* Effect.tryPromise({
-					try: () => transport.command(command, input, signal, headers),
-					catch: (cause) => cause
-				});
-				return yield* decodeUnknownSchema(output, raw) as Effect.Effect<
-					Schema.Schema.Type<S>,
-					Schema.SchemaError
-				>;
+export const createBoltClient = (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
+	scope,
+	command: <S extends Schema.Top>(
+		command: string,
+		input: Schema.Json,
+		output: S,
+		signal?: AbortSignal,
+		headers?: Readonly<Record<string, string>>
+	): Promise<Schema.Schema.Type<S>> => {
+		const effect = Effect.gen(function* () {
+			const raw = yield* Effect.tryPromise({
+				try: () => transport.command(command, input, signal, headers),
+				catch: (cause) => cause
 			});
-			return signal === undefined
-				? Effect.runPromise(effect)
-				: Effect.runPromise(effect, { signal });
-		}
-	}),
-	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>
-		client.command(command, input, Schema.Json, signal)
-};
+			return yield* decodeUnknownSchema(output, raw) as Effect.Effect<
+				Schema.Schema.Type<S>,
+				Schema.SchemaError
+			>;
+		});
+		return signal === undefined ? Effect.runPromise(effect) : Effect.runPromise(effect, { signal });
+	}
+});
 
-export const createBoltClient = ClientFactories.bolt;
-export const remote = ClientFactories.remote;
+export const remote =
+	(client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>
+		client.command(command, input, Schema.Json, signal);
 
 /**
  * What a host may reach for, and nothing besides.
@@ -70,37 +53,12 @@ export const remote = ClientFactories.remote;
  * change exists to end. The *types* below are erased, so they cost nothing and keep both ends of the
  * dynamic import in agreement.
  */
-export type {
-	AppGroup,
-	AppMeta,
-	CompiledWorkspace,
-	HostMountOptions,
-	MountWorkspaceOptions,
-	WorkspaceEntry,
-	WorkspaceHandle,
-	WorkspaceHostActions,
-	WorkspaceView
-} from './client/ui/shell/workspace-contract.js';
-export type {
-	WorkspaceFilesHost,
-	WorkspaceOperationsHost,
-	WorkspaceSession
-} from './client/session.js';
 export { workspaceSession } from './client/session.js';
 export { createHttpBoltTransport } from './client/ui/agent/browser-transport.js';
-export type { HttpBoltTransportOptions } from './client/ui/agent/browser-transport.js';
 export { AGENT_PATH, WORKSPACE_SETTINGS_PATH } from './client/ui/shell/workspace-navigation.js';
-export type { TenantMessageCatalogs } from './client/ui/agent/i18n.js';
 export { getPlatformStateContext, setPlatformStateContext } from './client/ui/state/platform.js';
 export {
 	collectionExportCommandInput,
 	downloadCollectionExport,
 	importCollectionRecords
-} from './client/ui/state/import-export.js';
-export type {
-	CollectionExportInput,
-	CollectionImportInput,
-	ExportAction,
-	ExportAttachment,
-	ExportManifest
 } from './client/ui/state/import-export.js';

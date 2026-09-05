@@ -19,7 +19,7 @@ import type {
 	MutationSettlements,
 	WorkspaceClientRuntime
 } from '../src/client/contracts.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),

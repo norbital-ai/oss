@@ -9,19 +9,17 @@ import { Effect } from 'effect';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import type { CollectionRegistryFor, PlatformSchema } from '../src/authoring/internals.js';
 import type { AgentRuntimeConfig } from '../src/client/ui/agent/client.svelte.js';
-import { createBoltClient, type BoltTransport } from '../src/client.js';
+import { createBoltClient } from '../src/client.js';
+import type { BoltTransport } from '../src/client/contracts.js';
 import type {
 	MutationSettlement,
 	MutationSettlements,
 	WorkspaceClientRuntime
 } from '../src/client/contracts.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 import { initialClientState } from '../src/client/sync/machine.js';
 import { stableKey } from '../src/client/live-query/stable-key.js';
-import {
-	createWorkspaceApiProxy,
-	type SystemClientApi
-} from '../src/client/workspace-api.js';
+import { createWorkspaceApiProxy, type SystemClientApi } from '../src/client/workspace-api.js';
 
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,

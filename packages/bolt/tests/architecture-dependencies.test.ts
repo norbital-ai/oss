@@ -197,7 +197,9 @@ describe('Bolt architecture boundaries', () => {
 		// 4,823 -> 4,847: approval settlement now captures and publishes its actual before/after
 		// projection in the domain-write transaction, keeping live reservations and inboxes current.
 		// The aggregate ceiling remains unchanged.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_847);
+		// 4,847 -> 4,848: zero-shim — `relationalComposer` factory folded into its single call site;
+		// persistence.ts shrinks 17 lines net (`expression`+`fixed` → `frag`), this file absorbs one import.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_848);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
 		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(820);

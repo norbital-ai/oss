@@ -16,6 +16,7 @@ import {
 	type PgTableWithColumns
 } from 'drizzle-orm/pg-core';
 import { Predicate, Record as EffectRecord, Schema } from 'effect';
+import { isNumber, isObjectLike, isRecord, isString, isStringArray } from '../schema-decode.js';
 import { collection } from './workspace-schema.js';
 import type {
 	CollectionCatalogEntry,
@@ -108,14 +109,6 @@ type ColumnConfig = Readonly<{
 
 const dialect = new PgDialect();
 
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isStringArray = Schema.is(Schema.Array(Schema.String));
-const isObjectOrArray = Schema.is(
-	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
-);
-
 /** Reads a builder's configuration without depending on Drizzle's private field names at the call site. */
 const configOf = (builder: unknown): ColumnConfig | undefined => {
 	if (!isRecord(builder)) return undefined;
@@ -205,7 +198,7 @@ const declaredDefault = (column: AnyPgColumn): string | undefined => {
 	// right for a plain object (it falls through to `JSON.stringify`) and silently wrong for a `Date`
 	// or an array — `new Date()` would reach the DDL as `'Mon Aug 17 2026 …'`. Refusing here names the
 	// column and the fix; letting it through would plant the next plan-versus-lineage divergence.
-	if (isObjectOrArray(value) && String(value) !== '[object Object]') {
+	if (isObjectLike(value) && String(value) !== '[object Object]') {
 		throw new TypeError(
 			`Column default ${String(value)} cannot be rendered as SQL. Declare it as a sql\`…\` expression instead.`
 		);
@@ -304,8 +297,7 @@ export const describeModelColumns = (
 		fields[name] = {
 			type: scalarOf(config),
 			presentationKind: presentationOf(config),
-			...(isNumber(config.dimensions) && config.dimensions > 0 ||
-			sqlType?.includes('[]') === true
+			...((isNumber(config.dimensions) && config.dimensions > 0) || sqlType?.includes('[]') === true
 				? { array: true }
 				: {}),
 			...(config.notNull === true ? { databaseNotNull: true } : {}),
@@ -467,10 +459,7 @@ export const compileModel = (
 	const exclusions = metadata?.exclusions ?? [];
 	const lexicalFields = searchableColumns(described);
 	const authoredLabel = metadata?.recordLabel;
-	const recordLabel =
-		isString(authoredLabel)
-			? authoredLabel
-			: authoredLabel?.join(" + ' · ' + ");
+	const recordLabel = isString(authoredLabel) ? authoredLabel : authoredLabel?.join(" + ' · ' + ");
 	return {
 		...base,
 		...(Object.keys(described).length === 0 ? {} : { fields: described }),
@@ -509,7 +498,7 @@ const relationshipValue = Symbol('@norbital-ai/bolt/compiled-relationship');
 const relationshipEndpoint = Symbol('@norbital-ai/bolt/relationship-endpoint');
 
 const immutable = <T>(value: T): T => {
-	if (isObjectOrArray(value) && !Object.isFrozen(value)) {
+	if (isObjectLike(value) && !Object.isFrozen(value)) {
 		for (const child of Object.values(value as Record<string, unknown>)) immutable(child);
 		Object.freeze(value);
 	}
@@ -544,12 +533,13 @@ const relationFactories = (cardinality: 'one' | 'many'): object =>
 				if (!isString(target)) return undefined;
 				return (input?: Readonly<Record<string, unknown>>) => {
 					const hasEndpoints =
-						input !== undefined &&
-						(Object.hasOwn(input, 'from') || Object.hasOwn(input, 'to'));
+						input !== undefined && (Object.hasOwn(input, 'from') || Object.hasOwn(input, 'to'));
 					const from = endpointOf(input?.['from']);
 					const to = endpointOf(input?.['to']);
 					if (hasEndpoints && (from === undefined || to === undefined))
-						throw new TypeError(`Relationship to ${target} must declare both from and to endpoints.`);
+						throw new TypeError(
+							`Relationship to ${target} must declare both from and to endpoints.`
+						);
 					const endpoints = from === undefined || to === undefined ? {} : { from, to };
 					const value = {};
 					Reflect.defineProperty(value, relationshipValue, {
@@ -576,8 +566,7 @@ const orderedRelationshipEndpoints = (
 	from: EndpointValue,
 	to: EndpointValue
 ): Readonly<{ readonly from: EndpointValue; readonly to: EndpointValue }> => {
-	if (from.collection === relation.source && to.collection === relation.target)
-		return { from, to };
+	if (from.collection === relation.source && to.collection === relation.target) return { from, to };
 	if (to.collection === relation.source && from.collection === relation.target)
 		return { from: to, to: from };
 	throw new TypeError(
@@ -595,12 +584,13 @@ const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefin
 		throw new TypeError('The relationship declaration must return an object keyed by collection.');
 	const relations: Array<RelationDefinition> = [];
 	for (const [source, values] of Object.entries(output)) {
-		if (!isRecord(values))
-			throw new TypeError(`Relationships for ${source} must be an object.`);
+		if (!isRecord(values)) throw new TypeError(`Relationships for ${source} must be an object.`);
 		for (const [name, value] of Object.entries(values)) {
 			const described = relationshipOf(value);
 			if (described === undefined)
-				throw new TypeError(`Relationship ${source}.${name} was not created through r.one or r.many.`);
+				throw new TypeError(
+					`Relationship ${source}.${name} was not created through r.one or r.many.`
+				);
 			relations.push({
 				name,
 				source,
@@ -674,7 +664,9 @@ export const compileWorkspaceAuthoring = (
 			};
 		});
 	const relationships = compileRelationships(input.relationships);
-	const known = new Map(collections.map((entry) => [entry.name, new Set(Object.keys(entry.fields))]));
+	const known = new Map(
+		collections.map((entry) => [entry.name, new Set(Object.keys(entry.fields))])
+	);
 	for (const collection of collections) {
 		const physical = new Set(
 			Object.entries(collection.fields).flatMap(([name, field]) =>
@@ -728,8 +720,9 @@ export const compileWorkspaceAuthoring = (
 	if (customTypeProblems.length > 0)
 		throw new TypeError(
 			`Workspace models reference undeclared custom types:\n  - ${customTypeProblems
-				.map((reference) =>
-					`${collections.find(({ name }) => name === reference.collection)?.sourcePath ?? reference.collection}:${reference.field} references undeclared datatype ${JSON.stringify(reference.name)}`
+				.map(
+					(reference) =>
+						`${collections.find(({ name }) => name === reference.collection)?.sourcePath ?? reference.collection}:${reference.field} references undeclared datatype ${JSON.stringify(reference.name)}`
 				)
 				.join('\n  - ')}`
 		);
@@ -777,8 +770,8 @@ export const collectionCatalogEntry = (
 			...(field.generated === undefined ? {} : { readOnly: true }),
 			...(field.search === true ? { search: true } : {}),
 			...(field.array === true ||
-				field.fileMultiple === true ||
-				field.customTypeOptions?.['multiple'] === true
+			field.fileMultiple === true ||
+			field.customTypeOptions?.['multiple'] === true
 				? { array: true }
 				: {}),
 			...(field.values === undefined ? {} : { values: field.values }),

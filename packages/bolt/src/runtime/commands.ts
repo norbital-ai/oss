@@ -53,6 +53,7 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import { authoredManifestDeclarations } from '#lib/runtime/workspace-manifest.js';
+import { isRecord as isObject, isString } from '#lib/schema-decode.js';
 
 export type InvocationOrigin = 'Command' | 'Task' | 'Plugin';
 type PrincipalRule = 'public' | 'session-or-system' | 'system' | 'runtime-task';
@@ -145,9 +146,6 @@ const authorizeMembership = Effect.fn('Bolt.command.authorizeMembership')(functi
 
 const membershipRefusal = (reason: string) =>
 	new AccessControl.AccessDenied({ action: 'manage', resource: 'identity', reason });
-
-const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
 
 const isNonEmptyRecord = (value: unknown): value is Readonly<Record<string, Schema.Json>> =>
 	isObject(value) && Object.keys(value).length > 0;
@@ -426,7 +424,7 @@ const executeDirectAutomation = Effect.fn('Bolt.command.executeDirectAutomation'
 	);
 });
 
-const fixedBindings = [
+const BINDINGS = [
 	binding(
 		'secrets.status',
 		{ Command: { ...session('manage secrets'), authorize: protect('manage', 'secrets') } },
@@ -565,10 +563,7 @@ const fixedBindings = [
 			yield* (yield* Identity.Service).sendCode(context.effectId, input.email);
 			return json({ sent: true });
 		})
-	)
-];
-
-const remainingBindings = [
+	),
 	binding('identity.verifyCode', { Command: publicCommand }, (context, input) =>
 		Effect.gen(function* () {
 			const credential = yield* (yield* Identity.Service).verifyCode(
@@ -1128,10 +1123,7 @@ const remainingBindings = [
 	)
 ];
 
-const allBindings: ReadonlyArray<CommandBinding<unknown>> = [
-	...fixedBindings,
-	...remainingBindings
-];
+const allBindings: ReadonlyArray<CommandBinding<unknown>> = BINDINGS;
 const fixedByName = new Map<string, (typeof allBindings)[number]>();
 for (const entry of allBindings) {
 	if (fixedByName.has(entry.contract.name))
@@ -1145,7 +1137,7 @@ for (const contract of FixedCommandCatalogue) {
 
 export const FixedCommandBindings: ReadonlyMap<string, (typeof allBindings)[number]> = fixedByName;
 
-export const resolveFixedCommand = (name: string) => fixedByName.get(name);
+const resolveFixedCommand = (name: string) => fixedByName.get(name);
 
 /** Boot invariant shared by exact automation membership and fixed-name collision checks. */
 export const assertCommandNamespace = Effect.fn('Bolt.assertCommandNamespace')(function* () {
@@ -1179,7 +1171,7 @@ export const assertCommandNamespace = Effect.fn('Bolt.assertCommandNamespace')(f
 	}
 });
 
-export const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')(function* (
+const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')(function* (
 	name: string,
 	origin: Exclude<InvocationOrigin, 'Plugin'>
 ) {
@@ -1228,7 +1220,7 @@ export const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')
 	return undefined;
 });
 
-export const resolveCompositeCommand = (plugin: string, command: string) => {
+const resolveCompositeCommand = (plugin: string, command: string) => {
 	if (plugin !== 'data-browser' || command !== 'query') return undefined;
 	return {
 		contract: DataBrowserCommandContract,
@@ -1250,3 +1242,17 @@ export const resolveCompositeCommand = (plugin: string, command: string) => {
 			})
 	};
 };
+
+export const resolveCommand = Effect.fn('Bolt.resolveCommand')(function* (
+	name: string,
+	origin: InvocationOrigin,
+	plugin?: string
+) {
+	if (origin === 'Plugin') {
+		if (plugin === undefined) return undefined;
+		return resolveCompositeCommand(plugin, name) as CommandBinding<unknown> | undefined;
+	}
+	const fixed = resolveFixedCommand(name);
+	if (fixed !== undefined) return fixed as CommandBinding<unknown>;
+	return (yield* resolveWorkspaceCommand(name, origin)) as CommandBinding<unknown> | undefined;
+});

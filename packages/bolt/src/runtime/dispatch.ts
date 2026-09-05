@@ -11,23 +11,20 @@ import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
-import { decodeUnknownSchema } from '#lib/schema-decode.js';
+import {
+	decodeUnknownSchema,
+	isRecord as isObject,
+	isString,
+	JsonObject
+} from '#lib/schema-decode.js';
 import {
 	assertCommandNamespace,
-	resolveCompositeCommand,
-	resolveFixedCommand,
-	resolveWorkspaceCommand,
+	resolveCommand,
 	type CommandBinding,
 	type ExecutionContext,
 	type InvocationOrigin
 } from './commands.js';
 
-export { DispatchError } from '#lib/runtime/workspace.js';
-export { collectionQuery } from './commands.js';
-
-const JsonObject = Schema.Record(Schema.String, Schema.Json);
-const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
 const MintedIdentityFields = [
 	'subject',
 	'actor',
@@ -102,8 +99,7 @@ const stripMintedIdentityFields = (input: unknown): unknown => {
 	return stripped;
 };
 
-const commandBudgetKey = (contract: CommandContract): string =>
-	contract.budgetKey ?? contract.name;
+const commandBudgetKey = (contract: CommandContract): string => contract.budgetKey ?? contract.name;
 
 const invalidInput = () =>
 	new DispatchError({
@@ -136,7 +132,9 @@ const validateOutput = Effect.fn('Bolt.validateCommandOutput')(function* <E>(
 	binding: CommandBinding<E>,
 	response: DispatchResponse
 ) {
-	const declared = binding.contract.responses.find((candidate) => candidate.status === response.status);
+	const declared = binding.contract.responses.find(
+		(candidate) => candidate.status === response.status
+	);
 	if (declared === undefined)
 		return yield* invalidOutput(binding.contract.name, `status ${response.status}`);
 	const headers = yield* (
@@ -154,22 +152,16 @@ const validateOutput = Effect.fn('Bolt.validateCommandOutput')(function* <E>(
 	return { ...response, headers, value } as DispatchResponse;
 });
 
-const resolveCommand = Effect.fn('Bolt.resolveCommand')(function* (
-	name: string,
-	origin: Exclude<InvocationOrigin, 'Plugin'>
-) {
-	const fixed = resolveFixedCommand(name);
-	if (fixed !== undefined) return fixed;
-	return yield* resolveWorkspaceCommand(name, origin);
-});
-
 const resolveSession = Effect.fn('Bolt.resolveSession')(function* (
 	effectId: EffectId,
 	credential: string | undefined,
 	tenantId: Invocation['scope']['tenantId']
 ) {
 	if (credential === undefined || credential === '')
-		return yield* new DispatchError({ code: 'unauthorized', message: 'Missing command credential' });
+		return yield* new DispatchError({
+			code: 'unauthorized',
+			message: 'Missing command credential'
+		});
 	const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
 	if (actor.tenantId !== tenantId)
 		return yield* new DispatchError({
@@ -327,24 +319,30 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 				status: 200,
 				headers: {},
 				realtime: {
-					frames: [{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }],
+					frames: [
+						{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }
+					],
 					nextCursor: cursor
 				}
 			};
 		}
-		return {
-			status: 200,
-			headers: {},
-			realtime: {
-				frames: [],
-				...(invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel'
-					? { close: {
+		if (invocation.event._tag === 'Pull')
+			return { status: 200, headers: {}, realtime: { frames: [], nextCursor: '0' } };
+		if (invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel')
+			return {
+				status: 200,
+				headers: {},
+				realtime: {
+					frames: [],
+					close: {
 						code: invocation.event._tag === 'Close' ? invocation.event.code : 1000,
 						reason: invocation.event.reason
-					} }
-					: {})
-			}
-		};
+					}
+				}
+			};
+		const exhausted: never = invocation.event;
+		void exhausted;
+		throw new Error('Unhandled realtime event');
 	}
 	const effectId = EffectId.make(invocation.id);
 	if (invocation._tag === 'Plugin') {
@@ -356,7 +354,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 				claimed
 			);
 		const authority = yield* authenticatePlugin(invocation, effectId);
-		const binding = resolveCompositeCommand(invocation.plugin, invocation.command);
+		const binding = yield* resolveCommand(invocation.command, 'Plugin', invocation.plugin);
 		if (binding === undefined)
 			return yield* new DispatchError({
 				code: 'unknown_command',
@@ -370,18 +368,21 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			},
 			(yield* AccessControl.Service).limits(authority.principal)
 		);
-		return yield* invoke(binding, {
-			effectId,
-			tenantId: invocation.scope.tenantId,
-			origin: 'Plugin',
-			...authority
-		}, invocation.input);
+		return yield* invoke(
+			binding,
+			{
+				effectId,
+				tenantId: invocation.scope.tenantId,
+				origin: 'Plugin',
+				...authority
+			},
+			invocation.input
+		);
 	}
 	if (invocation._tag === 'Task') {
 		yield* assertCommandNamespace();
 		const claimed = mintedClaim(invocation.input);
-		if (claimed !== undefined)
-			return yield* mintedClaimDenied('Task', invocation.command, claimed);
+		if (claimed !== undefined) return yield* mintedClaimDenied('Task', invocation.command, claimed);
 		const binding = yield* resolveCommand(invocation.command, 'Task');
 		if (binding === undefined || binding.origins.Task === undefined)
 			return yield* new AccessControl.AccessDenied({
@@ -394,11 +395,15 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			{ tenantId: String(invocation.scope.tenantId) },
 			undefined
 		);
-		return yield* invoke(binding, {
-			effectId,
-			tenantId: invocation.scope.tenantId,
-			origin: 'Task'
-		}, invocation.input);
+		return yield* invoke(
+			binding,
+			{
+				effectId,
+				tenantId: invocation.scope.tenantId,
+				origin: 'Task'
+			},
+			invocation.input
+		);
 	}
 	if (invocation._tag !== 'Command')
 		return yield* new DispatchError({
@@ -406,9 +411,8 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			message: 'Unsupported command invocation'
 		});
 	yield* assertCommandNamespace();
-	const fixed = resolveFixedCommand(invocation.command);
-	const authority = yield* authenticateCommand(invocation, fixed, effectId);
-	const binding = fixed ?? (yield* resolveWorkspaceCommand(invocation.command, 'Command'));
+	const binding = yield* resolveCommand(invocation.command, 'Command');
+	const authority = yield* authenticateCommand(invocation, binding, effectId);
 	if (binding === undefined)
 		return yield* new DispatchError({
 			code: 'unknown_command',

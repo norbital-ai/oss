@@ -52,6 +52,7 @@ import {
 } from '../runtime/schema/schema-plan.js';
 import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './workspace-build.js';
 import { workspaceSchemaFingerprint } from './schema-fingerprint.js';
+import { isString } from '../schema-decode.js';
 
 /** Deterministic in-process Drizzle snapshot diffing; this boundary emits DDL but never executes it. */
 
@@ -86,7 +87,6 @@ const GeneratedNotNullColumn = Schema.Struct({
 	generated: Schema.Struct({ as: Schema.String, type: Schema.String })
 });
 const isGeneratedNotNullColumn = Schema.is(GeneratedNotNullColumn);
-const isString = Schema.is(Schema.String);
 const isMissingFile = Schema.is(Schema.Struct({ code: Schema.Literal('ENOENT') }));
 
 /**

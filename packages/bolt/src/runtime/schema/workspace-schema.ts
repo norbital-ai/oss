@@ -24,13 +24,9 @@ import {
 	transactionSql
 } from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
+import { isObjectLike, isString } from '#lib/schema-decode.js';
 
 const { bolt_schema_state: schemaState } = SYSTEM_MODEL_TABLES;
-const isObjectLike = Schema.is(
-	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
-);
-const isString = Schema.is(Schema.String);
 // `__drizzle_migrations` is drizzle's ledger, not Bolt's. The runtime descriptor names only the one
 // column this service reads and writes.
 const migrationLedger = pgTable('__drizzle_migrations', {
@@ -78,7 +74,7 @@ export const layer = (schemaPlan: SchemaPlan) =>
 			 * from — so "declared" cannot drift from "created" by being restated here.
 			 */
 			const declaredColumns = new Map<string, ReadonlySet<string>>(
-				withSystemCollections(workspace.definition).collections.map((collection) => [
+				workspace.definition.collections.map((collection) => [
 					collection.name,
 					new Set([
 						...SYSTEM_COLUMN_NAMES,

@@ -7,6 +7,7 @@ import {
 	type SyncExtendPrefixRequest
 } from '@norbital-ai/bolt-protocol';
 import { Schema } from 'effect';
+import { isNonEmptyString, isRecord } from '../../schema-decode.js';
 
 export class SyncHttpError extends Error {
 	readonly status: number;
@@ -55,9 +56,6 @@ export type SyncHttpDriverOptions = Readonly<{
 const terminalStatus = (status: number): boolean =>
 	status === 400 || status === 401 || status === 403 || status === 410 || status === 426;
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isNonEmptyString = Schema.is(Schema.NonEmptyString);
-
 const responseMessage = async (response: Response): Promise<string> => {
 	try {
 		const payload: unknown = await response.json();
@@ -85,9 +83,7 @@ const post = async (
 		headers: {
 			'content-type': 'application/json',
 			[SYNC_CONNECTION_HEADER]: connectionId,
-			...(authorization === undefined || authorization.length === 0
-				? {}
-				: { authorization })
+			...(authorization === undefined || authorization.length === 0 ? {} : { authorization })
 		},
 		body: JSON.stringify(body),
 		...(signal === undefined ? {} : { signal })
@@ -107,11 +103,25 @@ export const createSyncHttpDriver = (options: SyncHttpDriverOptions): SyncHttpDr
 	return {
 		register: async (connectionId, input, signal) =>
 			Schema.decodeUnknownSync(SyncConnectResponse)(
-				await post(request, options.registrationUrl, connectionId, input, options.authorization?.(), signal)
+				await post(
+					request,
+					options.registrationUrl,
+					connectionId,
+					input,
+					options.authorization?.(),
+					signal
+				)
 			),
 		extend: async (connectionId, input, signal) =>
 			Schema.decodeUnknownSync(SyncExtendPrefixResponse)(
-				await post(request, options.extensionUrl, connectionId, input, options.authorization?.(), signal)
+				await post(
+					request,
+					options.extensionUrl,
+					connectionId,
+					input,
+					options.authorization?.(),
+					signal
+				)
 			),
 		push: options.push
 	};

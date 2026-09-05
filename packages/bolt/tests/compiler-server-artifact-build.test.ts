@@ -130,9 +130,9 @@ describe('server artifact build', () => {
 					join(root, 'vite.config.ts'),
 					[
 						"import { defineConfig } from 'vite';",
-						"import { bolt } from '@norbital-ai/bolt/vite';",
+						"import { boltPlugin } from '@norbital-ai/bolt/vite';",
 						'',
-						'export default defineConfig({ plugins: [bolt()] });',
+						'export default defineConfig({ plugins: [boltPlugin()] });',
 						''
 					].join('\n'),
 					'utf8'

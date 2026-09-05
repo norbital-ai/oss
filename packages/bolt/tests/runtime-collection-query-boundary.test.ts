@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectionQuery } from '../src/runtime/dispatch.js';
+import { collectionQuery } from '../src/runtime/commands.js';
 
 /**
  * The command boundary rebuilds a collection query field by field, so a field it does not name is

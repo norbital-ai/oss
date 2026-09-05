@@ -121,6 +121,7 @@ export const approvalDiagnostics = (
 	definition: WorkspaceDefinition
 ): ReadonlyArray<ApprovalDiagnostic> => {
 	const diagnostics: Array<ApprovalDiagnostic> = [];
+	// Accepts authored or already-augmented; idempotent, so no double-augment.
 	const merged = withSystemCollections(definition);
 	const declaredPolicies = new Map(
 		merged.policies.map((policy) => [fold(policy.name), policy] as const)

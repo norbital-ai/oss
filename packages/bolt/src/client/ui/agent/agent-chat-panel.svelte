@@ -3,6 +3,7 @@
 	import { AgentId, FileAsset } from '@norbital-ai/bolt-protocol/facilities';
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
+	import { watch } from 'runed';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { getErrorMessage } from '@norbital-ai/std';
@@ -615,14 +616,18 @@
 		return () => window.removeEventListener(AGENT_COMPOSER_FOCUS_EVENT, onFocusRequest);
 	});
 
-	$effect(() => {
-		agentClient.writeSurface({
-			taskId: activeTaskId,
-			composingNew,
-			pending,
-			failed: sendFailure !== null
-		});
+	const surface = $derived({
+		taskId: activeTaskId,
+		composingNew,
+		pending,
+		failed: sendFailure !== null
 	});
+	watch(
+		() => surface,
+		(next) => {
+			agentClient.writeSurface(next);
+		}
+	);
 
 	const tasksWithHumanMessage = $derived(
 		new Set(
@@ -941,9 +946,9 @@
 				bind:value={draft}
 				onkeydown={onComposerKeydown}
 				onpaste={onComposerPaste}
-				rows={3}
+				rows={2}
 				placeholder="Ask anything, or type /plan or /compact"
-				class="field-sizing-fixed max-h-40 min-h-14 flex-1 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
+				class="max-h-40 min-h-14 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
 				disabled={pending || controlPending || !taskAcceptsSubmission}
 			/>
 			{#if pendingAttachments.length > 0}

@@ -232,8 +232,6 @@ const prefixKeyOf = (row: StoredRecord, plan: EffectiveQueryPlan): SyncPrefixKey
 	return { id, order: order as SyncPrefixKey['order'] };
 };
 
-const retainedPrefixBytes = syncRetainedPrefixBytes;
-
 const uniqueRows = (rows: ReadonlyArray<StoredRecord>): ReadonlyArray<StoredRecord> => {
 	const byId = new Map<string, StoredRecord>();
 	for (const row of rows) byId.set(recordId(row), row);
@@ -266,7 +264,7 @@ export const resolveInitialPrefix: (
 			)
 		);
 	const rows = uniqueRows(yield* findMany(effectId, new SyncPlanWork(), plan, { limit }));
-	const retainedBytes = retainedPrefixBytes(rows);
+	const retainedBytes = syncRetainedPrefixBytes(rows);
 	if (
 		syncJsonByteLength(rows) > MAX_SYNC_INITIAL_ANSWER_BYTES ||
 		retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES
@@ -731,7 +729,7 @@ export const advanceActivePrefix: (
 			const keys = rows.map((row) => prefixKeyOf(row, plan.effectivePlan));
 			const bodies = bodyMap(rows);
 			if (state.prefixKeys.length === 0 && keys.length === 0) return undefined;
-			const retainedBytes = retainedPrefixBytes(rows);
+			const retainedBytes = syncRetainedPrefixBytes(rows);
 			if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
 				return yield* Effect.fail(
 					reset('prefix-bytes', 'The pending prefix exceeds its encoded byte ceiling.')
@@ -809,7 +807,7 @@ export const advanceActivePrefix: (
 				);
 			retainedRows.push(row);
 		}
-		const retainedBytes = retainedPrefixBytes(retainedRows);
+		const retainedBytes = syncRetainedPrefixBytes(retainedRows);
 		if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
 			return yield* Effect.fail(
 				reset('prefix-bytes', 'The committed prefix exceeds its cumulative encoded byte ceiling.')
@@ -938,7 +936,7 @@ export const extendActivePrefix: (
 			throw reset('inconsistent-prefix', `Prefix extension has no body for ${id}.`);
 		return row;
 	});
-	const retainedBytes = state.prefixBytes + retainedPrefixBytes(rows);
+	const retainedBytes = state.prefixBytes + syncRetainedPrefixBytes(rows);
 	if (retainedBytes > MAX_SYNC_RETAINED_PREFIX_BYTES)
 		return yield* Effect.fail(
 			reset('prefix-bytes', 'The extended prefix exceeds its cumulative encoded byte ceiling.')

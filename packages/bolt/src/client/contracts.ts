@@ -11,7 +11,7 @@ import type {
 } from '@norbital-ai/std/collection';
 import type { Schema } from 'effect';
 import type { ClientState } from './sync/machine.js';
-import type { SyncClient } from './sync/index.js';
+import type { SyncClient } from './sync/client.js';
 
 /** The transport a Bolt client speaks over; the host owns routing, credentials and headers. */
 export type BoltTransport = Readonly<{

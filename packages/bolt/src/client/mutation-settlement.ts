@@ -1,10 +1,7 @@
 import { Option, Schema } from 'effect';
 import type { CollectionMutationIdempotencyKey, SyncOutcome } from '@norbital-ai/bolt-protocol';
 import type { MutationSettlement } from './contracts.js';
-
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
-const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+import { isNonEmptyString, isRecord, isString } from '../schema-decode.js';
 
 /**
  * The pending-approval shape the accepted outcome carries; mirrors
@@ -77,8 +74,11 @@ export const syncOutcomeFromMutateCommand = (
 			if (!isNonEmptyString(reason)) return null;
 			return { id, status: { resolution: 'quarantined', schemaFingerprint, reason } };
 		}
-		default:
+		default: {
+			const exhausted: never = resolution as never;
+			void exhausted;
 			return null;
+		}
 	}
 };
 

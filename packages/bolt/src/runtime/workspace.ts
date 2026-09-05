@@ -2,12 +2,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { registerWorkspaceShape } from '#lib/authoring/schema-registry.js';
 import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
-
-const isString = Schema.is(Schema.String);
-const isBigint = Schema.is(Schema.BigInt);
-const isObjectLike = Schema.is(
-	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
-);
+import { isBigint, isObjectLike, isString } from '#lib/schema-decode.js';
 
 /** Carries workspace lookup error through the typed runtime failure channel without losing diagnostic context. */
 export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupError>()(
@@ -170,19 +165,16 @@ export type Interface = Readonly<{
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Workspace');
 
 /** Owns lookup behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
-const WorkspaceValues = {
-	lookup: <A>(
-		kind: WorkspaceLookupError['kind'],
-		values: ReadonlyArray<A>,
-		nameOf: (value: A) => string
-	) =>
-		Effect.fn(`Workspace.${kind}`)(function* (name: string) {
-			const found = values.find((value) => nameOf(value) === name);
-			if (found === undefined) return yield* new WorkspaceLookupError({ kind, name });
-			return found;
-		})
-};
-const lookup = WorkspaceValues.lookup;
+export const lookup = <A>(
+	kind: WorkspaceLookupError['kind'],
+	values: ReadonlyArray<A>,
+	nameOf: (value: A) => string
+) =>
+	Effect.fn(`Workspace.${kind}`)(function* (name: string) {
+		const found = values.find((value) => nameOf(value) === name);
+		if (found === undefined) return yield* new WorkspaceLookupError({ kind, name });
+		return found;
+	});
 
 /**
  * Owns layer behavior at the runtime boundary so validation and typed semantics stay consistent for

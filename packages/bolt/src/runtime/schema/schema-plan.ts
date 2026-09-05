@@ -1,6 +1,6 @@
 import { canonicalSchemaStepEncoding, digestSchemaSteps } from '@norbital-ai/std/reckon/hash';
-import { Schema } from 'effect';
 export { canonicalSchemaStepEncoding, digestSchemaSteps };
+import { isString } from '../../schema-decode.js';
 import type { CollectionIndexRequirement } from '@norbital-ai/bolt-protocol/collections';
 import type { ModelExclusion, ModelIndex } from '../../authoring/models-schema.js';
 import {
@@ -36,7 +36,6 @@ export type SchemaPlan = Readonly<{
 }>;
 
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
-const isString = Schema.is(Schema.String);
 
 export const planTableNames = (plan: SchemaPlan): ReadonlyArray<string> => {
 	const pattern = /create table if not exists\s+(?:"((?:[^"]|"")+)"|([A-Za-z_][A-Za-z0-9_$]*))/giu;
@@ -211,9 +210,7 @@ const hasDeclaredIndex = (
 
 /** Index DDL owned by the schema plan for every field proven necessary by an effective plan. */
 const effectiveIndexSteps = (
-	collections: ReadonlyArray<
-		CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-	>,
+	collections: ReadonlyArray<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>>,
 	requirements: ReadonlyArray<CollectionIndexRequirement>
 ): ReadonlyArray<SchemaStep> => {
 	const byName = new Map(collections.map((definition) => [definition.name, definition] as const));
@@ -294,12 +291,13 @@ const exclusionStep = (collectionName: string, exclusion: ModelExclusion): Schem
 };
 
 export const buildSchemaPlan = (
-	authored: WorkspaceDefinition,
+	definition: WorkspaceDefinition,
 	requirements: ReadonlyArray<CollectionIndexRequirement> = []
 ): SchemaPlan => {
-	const authorityRefusal = approvalRefusal(authored);
+	const authorityRefusal = approvalRefusal(definition);
 	if (authorityRefusal !== undefined) throw new TypeError(authorityRefusal);
-	const workspace = withSystemCollections(authored);
+	// Accepts authored or already-augmented; `withSystemCollections` is idempotent (no double-augment).
+	const workspace = withSystemCollections(definition);
 	const foundation: ReadonlyArray<SchemaStep> = [
 		{ id: 'bolt:extension-btree-gist', sql: 'create extension if not exists btree_gist' },
 		{ id: 'bolt:extension-pg-trgm', sql: 'create extension if not exists pg_trgm' },

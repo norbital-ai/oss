@@ -11,7 +11,7 @@ import {
 	type QueryState
 } from '../src/client/sync/machine.js';
 import { stableKey } from '../src/client/live-query/stable-key.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 
 /**
  * What a failing remote tells the reader, and what a query promises the reader.

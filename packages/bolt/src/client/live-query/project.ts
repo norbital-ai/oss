@@ -1,4 +1,3 @@
-import { Schema } from 'effect';
 import {
 	MAX_SYNC_LOADED_KEYS,
 	mutationGraphDeleteIds,
@@ -6,12 +5,11 @@ import {
 	type StoredRecord,
 	type SyncPrefixDelta
 } from '@norbital-ai/bolt-protocol';
+import { isString } from '../../schema-decode.js';
 
 export type PendingProjectionWrite = Readonly<{
 	readonly graph: CollectionMutationGraph;
 }>;
-
-const isString = Schema.is(Schema.String);
 
 const recordIdOf = (row: StoredRecord): string | undefined => {
 	const id = row['id'];

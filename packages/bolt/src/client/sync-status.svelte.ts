@@ -1,4 +1,4 @@
-import type { SyncClient } from './sync/index.js';
+import type { SyncClient } from './sync/client.js';
 import type { ClientState } from './sync/machine.js';
 import { createSubscriber } from 'svelte/reactivity';
 

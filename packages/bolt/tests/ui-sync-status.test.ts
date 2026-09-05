@@ -1,6 +1,6 @@
 import type { CollectionMutationIdempotencyKey } from '@norbital-ai/bolt-protocol';
 import { createSyncStatusView } from '../src/client/sync-status.svelte.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 import type { ClientState } from '../src/client/sync/machine.js';
 import {
 	workspaceSyncIndicator,

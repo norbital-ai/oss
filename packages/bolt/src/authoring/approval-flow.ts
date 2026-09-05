@@ -1,10 +1,7 @@
-import { Schema } from 'effect';
 import type { TeamName } from './contracts-schema.js';
 import { ApprovalFlowBrand } from './contracts-schema.js';
 import type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './contracts-schema.js';
-
-const isString = Schema.is(Schema.String);
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+import { isRecord, isString } from '../schema-decode.js';
 
 export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './contracts-schema.js';
 

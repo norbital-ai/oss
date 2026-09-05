@@ -13,10 +13,7 @@ import { buildSchemaPlan } from '../runtime/schema/schema-plan.js';
 import { withSystemCollections } from '../runtime/schema/system-collections.js';
 
 /** Owns fingerprint behavior at the manifest boundary so validation and typed semantics stay consistent for every caller. */
-const ManifestValues = {
-	fingerprint: (value: unknown): string => `sha256:${sha256Text(canonicalJson(value))}`
-};
-export const fingerprint = ManifestValues.fingerprint;
+export const fingerprint = (value: unknown): string => `sha256:${sha256Text(canonicalJson(value))}`;
 
 const ManifestInput = Schema.Struct({ artifactId: Schema.NonEmptyString });
 interface ManifestInput extends Schema.Schema.Type<typeof ManifestInput> {}
@@ -26,8 +23,13 @@ export const buildManifest = (
 	input: ManifestInput
 ): BundleManifest => {
 	const requiredFacilities = [...new Set(workspace.requiredFacilities)].sort();
+	// Compile-time augmentation; downstream `buildSchemaPlan`/`approvalRefusal` accept this
+	// already-augmented definition and hit the `withSystemCollections` fast path (no double-augment).
 	const effectiveWorkspace = withSystemCollections(workspace);
-	const schemaPlan = buildSchemaPlan(workspace, policyIndexRequirements(effectiveWorkspace));
+	const schemaPlan = buildSchemaPlan(
+		effectiveWorkspace,
+		policyIndexRequirements(effectiveWorkspace)
+	);
 	const schemaFingerprint = workspace.schemaFingerprint;
 	if (schemaFingerprint === undefined)
 		throw new TypeError('Compiled workspace is missing its schema fingerprint.');

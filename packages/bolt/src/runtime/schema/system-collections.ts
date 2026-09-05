@@ -415,7 +415,14 @@ const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
 	COLONY_SYSTEM_POLICY
 ]);
 
-/** Merges runtime-owned collections and policies into an authored definition without letting either shadow the other. */
+/** Definitions already augmented by `withSystemCollections`; re-entry returns the same reference. */
+const augmentedDefinitions = new WeakSet<object>();
+
+/**
+ * Merges runtime-owned collections and policies into an authored definition. Idempotent:
+ * an already-augmented definition returns by reference. `Workspace.layer` is the single
+ * runtime augmenter; compile-time callers accept either form and rely on this fast path.
+ */
 export const withSystemCollections = <
 	T extends {
 		readonly collections: ReadonlyArray<
@@ -427,6 +434,7 @@ export const withSystemCollections = <
 >(
 	definition: T
 ): T => {
+	if (augmentedDefinitions.has(definition)) return definition;
 	const shadowed = definition.collections
 		.filter((collection) => {
 			const systemCollection = SYSTEM_COLLECTIONS_BY_NAME.get(collection.name);
@@ -451,10 +459,12 @@ export const withSystemCollections = <
 	);
 	if (missing.length === 0 && absent.length === 0 && missingRelations.length === 0)
 		return definition;
-	return {
+	const augmented = {
 		...definition,
 		collections: [...definition.collections, ...missing],
 		policies: [...definition.policies, ...absent],
 		relations: [...(definition.relations ?? []), ...missingRelations]
 	} as T;
+	augmentedDefinitions.add(augmented);
+	return augmented;
 };

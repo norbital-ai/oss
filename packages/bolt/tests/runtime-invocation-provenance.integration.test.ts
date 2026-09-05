@@ -21,7 +21,8 @@ import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { PendingApproval } from '../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
-import { DispatchError, dispatchInvocation } from '../src/runtime/dispatch.js';
+import { dispatchInvocation } from '../src/runtime/dispatch.js';
+import { DispatchError } from '../src/runtime/workspace.js';
 import { FixedCommandBindings } from '../src/runtime/commands.js';
 import {
 	adminSubject,

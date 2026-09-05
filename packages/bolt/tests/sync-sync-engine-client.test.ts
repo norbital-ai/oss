@@ -2,9 +2,9 @@ import type { StoredRecord, SyncPrefixUpdate, SyncQueryInput } from '@norbital-a
 import { syncJsonByteLength, syncRetainedPrefixBytes } from '@norbital-ai/bolt-protocol';
 import { describe, expect, it } from 'vitest';
 import { stableKey } from '../src/client/live-query/stable-key.js';
+import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import {
 	DETACH_GRACE_MS,
-	applyPrefixDelta,
 	applyPrefixUpdate,
 	applyPrefixUpdates,
 	extendRetainedPrefix,
@@ -21,10 +21,11 @@ const queryInput = (collection: string): SyncQueryInput => ({
 	orderBy: { position: 'asc', id: 'asc' }
 });
 
-const retained = (
-	version: number,
-	rows: ReadonlyArray<StoredRecord>
-): VersionedPrefixState => ({ version, rows, retainedBytes: syncRetainedPrefixBytes(rows) });
+const retained = (version: number, rows: ReadonlyArray<StoredRecord>): VersionedPrefixState => ({
+	version,
+	rows,
+	retainedBytes: syncRetainedPrefixBytes(rows)
+});
 
 const heldQuery = (
 	input: SyncQueryInput,
@@ -182,11 +183,7 @@ describe('keyed retained-prefix reducer', () => {
 				{ id: 'a', index: 2, row: { id: 'a', position: 2.5 } }
 			]
 		});
-		expect(result).toEqual([
-			{ id: 'x', position: 0 },
-			unchanged,
-			{ id: 'a', position: 2.5 }
-		]);
+		expect(result).toEqual([{ id: 'x', position: 0 }, unchanged, { id: 'a', position: 2.5 }]);
 		expect(result[1]).toBe(unchanged);
 	});
 

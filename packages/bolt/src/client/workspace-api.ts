@@ -24,9 +24,15 @@ import type {
 	RemoteQuery,
 	WorkspaceClientRuntime
 } from '#lib/client/contracts.js';
-import { decodeUnknownSchema } from '#lib/schema-decode.js';
-import type { ClientState, QueryState } from './sync/index.js';
-import { project } from './live-query/index.js';
+import {
+	decodeUnknownSchema,
+	isNonEmptyString,
+	isNumber,
+	isRecord,
+	isString
+} from '#lib/schema-decode.js';
+import type { ClientState, QueryState } from './sync/machine.js';
+import { project } from './live-query/project.js';
 import { createMachineQuery, createRemoteQuery } from './remote-query.svelte.js';
 import { CollectionMutationState } from './collection-mutation.svelte.js';
 import { AutomationExecutionState, AutomationTaskSnapshot } from './automation-client.svelte.js';
@@ -65,11 +71,6 @@ export type CollectionCatalogEntry = Readonly<{
 }>;
 
 export type CollectionCatalog = Readonly<Record<string, CollectionCatalogEntry>>;
-
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
-const isNonEmptyString = Schema.is(Schema.NonEmptyString);
 
 export type WorkspaceApiVisibility = Readonly<{
 	/** Exact generic collection names published through this proxy. Omission means framework-internal. */
@@ -494,7 +495,7 @@ const commandQueryOf = <Input extends Schema.Top, Output extends Schema.Top>(
 					Schema.Schema.Type<Input>,
 					Schema.SchemaError
 				>;
-				const payload = Schema.decodeUnknownSync(Schema.Json)(checked);
+				const payload = yield* decodeUnknownSchema(Schema.Json, checked);
 				return yield* Effect.tryPromise({
 					try: () => runtime.bolt.command(command, payload, outputSchema, signal),
 					catch: toError

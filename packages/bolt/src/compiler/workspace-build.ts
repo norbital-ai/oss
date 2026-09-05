@@ -42,6 +42,7 @@ import {
 	WORKSPACE_ENTRY_FILE_NAME
 } from './client-entry.js';
 import { appCapabilityNames } from './compiler.js';
+import { canonicalJson } from '../canonical-json.js';
 import { extractAppMetadata, extractGroupMetadata } from './app-metadata.js';
 import {
 	type EmittedServerChunk,
@@ -1255,7 +1256,7 @@ export const readWorkspaceMigrations = (workspaceRoot: string) =>
 const capabilityName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const skillRoots = new Set(['references', 'scripts', 'assets']);
 const capabilityDigest = (value: unknown): string =>
-	createHash('sha256').update(JSON.stringify(value)).digest('hex');
+	createHash('sha256').update(canonicalJson(value)).digest('hex');
 
 const skillMetadata = (path: string, source: string): { name: string; description: string } => {
 	const lines = source.replace(/\r\n/g, '\n').split('\n');

@@ -7,6 +7,7 @@ import type {
 	IntegrationPullDeclaration
 } from '#lib/authoring/workspace-schema.js';
 import { absorbRecords, type AbsorbDependencies } from '#lib/runtime/integrations/absorb.js';
+import { isNumber, isObjectLike, isRecord as isObject, isString } from '#lib/schema-decode.js';
 import {
 	IntegrationHttpRequest,
 	isRetryableStatus,
@@ -35,12 +36,6 @@ export type BindingReport = Readonly<{
 
 const MAX_PAGES_DEFAULT = 50;
 const REJECTIONS_REPORTED = 20;
-const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isObjectLike = Schema.is(
-	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
-);
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
 
 /** The read side of a response, narrowed to what the paging and cursor rules actually consult. */
 type Fetched = Readonly<{
@@ -102,11 +97,7 @@ const bodyValue = (
 	next: { readonly field: string } | { readonly path: ReadonlyArray<string> }
 ): string | undefined => {
 	const value = walk(body, 'field' in next ? [next.field] : next.path);
-	return isString(value) && value !== ''
-		? value
-		: isNumber(value)
-			? String(value)
-			: undefined;
+	return isString(value) && value !== '' ? value : isNumber(value) ? String(value) : undefined;
 };
 
 /**
@@ -127,9 +118,7 @@ const watermark = (records: ReadonlyArray<unknown>, field: string): string | und
 		if (!isString(value) && !isNumber(value)) continue;
 		const greater =
 			highest === undefined ||
-			(isNumber(value) && isNumber(highest)
-				? value > highest
-				: String(value) > String(highest));
+			(isNumber(value) && isNumber(highest) ? value > highest : String(value) > String(highest));
 		if (greater) highest = value;
 	}
 	return highest === undefined ? undefined : String(highest);

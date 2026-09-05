@@ -19,7 +19,7 @@ import type {
 	MutationSettlements,
 	WorkspaceClientRuntime
 } from '../src/client/contracts.js';
-import type { SyncClient } from '../src/client/sync/index.js';
+import type { SyncClient } from '../src/client/sync/client.js';
 import type { ErasedAutomationClientApi } from '../src/client/automation-client.svelte.js';
 
 const scope = {

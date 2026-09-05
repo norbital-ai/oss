@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { getAppHeaderActionsSlot } from './app-header-actions.svelte.js';
 
 	let {
@@ -18,12 +19,11 @@
 	// exactly what the slot exists to avoid. With a shell above, the controls travel up into the
 	// banner; standalone — a test, a story — they render where they stand.
 	const slot = getAppHeaderActionsSlot();
-	$effect(() => {
-		if (slot === null) return;
-		slot.current = toolbar;
-		return () => {
-			slot.current = null;
-		};
+	onMount(() => {
+		if (slot !== null) slot.current = toolbar;
+	});
+	onDestroy(() => {
+		if (slot !== null) slot.current = null;
 	});
 </script>
 

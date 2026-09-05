@@ -1,8 +1,9 @@
-import { Schema } from 'effect';
+import { isRecord } from './schema-decode.js';
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-
-/** Stable JSON bytes for identities and fingerprints that must ignore object insertion order. */
+/**
+ * Single stable encoder for identities and fingerprints that must ignore object insertion order.
+ * `stableKey` wraps this for live-query keys, preserving only `orderBy` object order.
+ */
 export const canonicalJson = (value: unknown): string => {
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
 	if (isRecord(value)) {

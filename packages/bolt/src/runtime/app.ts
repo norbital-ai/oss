@@ -29,7 +29,8 @@ import {
 	type RuntimeRemoteHandler,
 	type AuthoredRuntime
 } from '#lib/runtime/collections/authored.js';
-import { DispatchError, dispatchInvocation } from '#lib/runtime/dispatch.js';
+import { dispatchInvocation } from '#lib/runtime/dispatch.js';
+import { DispatchError } from '#lib/runtime/workspace.js';
 import {
 	HostConfig,
 	hostConfigFromFacility,
@@ -64,6 +65,9 @@ import * as TenantScope from '#lib/runtime/tenant.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import { policyRuntimeFunctionsFor } from '#lib/authoring/policy-introspection.js';
 
+// Public `/runtime` entry API (package.json `./runtime` → this file): generated `bundle-entry.mjs`
+// imports `buildManifest` from here. Owner stays `manifest/manifest.js`; this is the entry surface,
+// not an internal shim.
 export { buildManifest } from '#lib/manifest/manifest.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */

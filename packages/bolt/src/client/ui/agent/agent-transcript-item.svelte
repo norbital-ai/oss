@@ -113,47 +113,39 @@
 
 {#if !hideTodo || isString(message.message.content) || message.message.content.some((part) => !isProgressPart(part))}
 	<li
-		class="my-1.5 min-w-0 {mode === 'agent'
-			? 'border-l-2 border-l-primary pl-2'
-			: mode === 'plan'
-				? 'border-l-2 border-l-yellow-500/70 pl-2'
-				: ''}"
+		class="group/message my-4 min-w-0"
+		data-mode={mode ?? undefined}
+		aria-label={speaker(message)}
 		data-role={message.message.role}
 		data-model-view={outsideModelView ? 'outside' : 'inside'}
 		aria-busy={generating && message.annotation?.tag === 'generation'}
 	>
 		<Stack gap="xs" align={humanBubble ? 'end' : 'stretch'}>
-			<Inline align="center" gap="xs" justify={humanBubble ? 'end' : 'start'} class="min-w-0 px-1">
-				<span class="text-tiny font-medium text-muted-foreground">{speaker(message)}</span>
-				{#if cancelled}
-					<span class="text-tiny text-muted-foreground">Cancelled</span>
-				{:else if steering}
-					<Icon icon="lucide:milestone" class="size-3.5 text-muted-foreground" />
-					<span class="text-tiny text-muted-foreground"
-						>{queued ? 'Steering · next step' : 'Steering applied'}</span
-					>
-				{:else if queued}
-					<span class="text-tiny text-muted-foreground">Queued</span>
-				{/if}
-				{#if outsideModelView}
-					<span
-						class="rounded-full border border-border/70 bg-muted/50 px-1.5 py-0.5 text-micro text-muted-foreground"
-						title="Saved in the full transcript, but outside the agent's active model view"
-					>
-						Outside model view
-					</span>
-				{/if}
-				{#if onedit !== undefined && message.author.kind === 'human' && !parentAttribution}
-					<button
-						type="button"
-						class="rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label="Revise this message as a new instruction"
-						onclick={() => onedit?.(message)}
-					>
-						Revise
-					</button>
-				{/if}
-			</Inline>
+			{#if parentAttribution || !['human', 'agent'].includes(message.author.kind) || cancelled || steering || queued || outsideModelView}
+				<Inline align="center" gap="xs" justify={humanBubble ? 'end' : 'start'} class="min-w-0">
+					{#if parentAttribution || !['human', 'agent'].includes(message.author.kind)}
+						<span class="text-tiny font-medium text-muted-foreground">{speaker(message)}</span>
+					{/if}
+					{#if cancelled}
+						<span class="text-tiny text-muted-foreground">Cancelled</span>
+					{:else if steering}
+						<Icon icon="lucide:milestone" class="size-3.5 text-muted-foreground" />
+						<span class="text-tiny text-muted-foreground"
+							>{queued ? 'Steering · next step' : 'Steering applied'}</span
+						>
+					{:else if queued}
+						<span class="text-tiny text-muted-foreground">Queued</span>
+					{/if}
+					{#if outsideModelView}
+						<span
+							class="rounded-full border border-border/70 bg-muted/50 px-1.5 py-0.5 text-micro text-muted-foreground"
+							title="Saved in the full transcript, but outside the agent's active model view"
+						>
+							Outside model view
+						</span>
+					{/if}
+				</Inline>
+			{/if}
 
 			{#if failureText !== null}
 				<div
@@ -206,7 +198,7 @@
 								{/if}
 							</div>
 						{:else if part.type === 'reasoning'}
-							<details class="group/reasoning rounded-lg px-2 py-1.5 text-xs">
+							<details class="group/reasoning rounded-lg py-1.5 text-xs">
 								<summary class="cursor-pointer list-none text-muted-foreground">
 									<Inline as="span" gap="sm">
 										<Icon icon="lucide:brain" class="size-3.5" />
@@ -312,6 +304,18 @@
 						{/if}
 					{/if}
 				{/each}
+			{/if}
+
+			{#if onedit !== undefined && message.author.kind === 'human' && !parentAttribution}
+				<button
+					type="button"
+					class="flex min-h-6 items-center gap-1 self-end rounded px-1.5 text-micro text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover/message:opacity-100 md:group-focus-within/message:opacity-100"
+					aria-label="Revise this message as a new instruction"
+					onclick={() => onedit?.(message)}
+				>
+					<Icon icon="lucide:pencil" class="size-3" />
+					Revise
+				</button>
 			{/if}
 
 			{#if message.annotation?.tag === 'compact'}

@@ -70,6 +70,58 @@ it('classifies serialization SQLSTATE through driver wrappers without changing o
 });
 
 it.effect(
+	'restores a committed backup independently while its source remains open',
+	() =>
+		Effect.acquireUseRelease(
+			Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+			(database) =>
+				Effect.gen(function* () {
+					const query = (sql: string) =>
+						Effect.tryPromise(() =>
+							database.binding.call(
+								metadata,
+								DatabaseRequest.cases.Query.make({ sql, parameters: [] }),
+								signal
+							)
+						);
+					yield* query('create table backup_probe (id integer primary key, value text not null)');
+					yield* query("insert into backup_probe values (1, 'before')");
+					const backup = yield* Effect.tryPromise(database.dumpDataDirectory);
+					yield* query("update backup_probe set value = 'after' where id = 1");
+					yield* Effect.acquireUseRelease(
+						Effect.tryPromise(() =>
+							makeLocalDatabase({ dataDirectory: 'memory://', loadDataDirectory: backup })
+						),
+						(restored) =>
+							Effect.gen(function* () {
+								const result = yield* Effect.tryPromise(() =>
+									restored.binding.call(
+										metadata,
+										DatabaseRequest.cases.Query.make({
+											sql: 'select * from backup_probe',
+											parameters: []
+										}),
+										signal
+									)
+								);
+								assert.deepStrictEqual(result, {
+									_tag: 'Success',
+									value: { rows: [{ id: 1, value: 'before' }], affectedRows: 0 }
+								});
+							}),
+						(restored) => Effect.promise(restored.close)
+					);
+					assert.deepStrictEqual(yield* query('select * from backup_probe'), {
+						_tag: 'Success',
+						value: { rows: [{ id: 1, value: 'after' }], affectedRows: 0 }
+					});
+				}),
+			(database) => Effect.promise(database.close)
+		),
+	LOCAL_DATABASE_TEST_TIMEOUT_MILLIS
+);
+
+it.effect(
 	'reports the driver refusal and rolls back a failed data migration',
 	() =>
 		Effect.acquireUseRelease(

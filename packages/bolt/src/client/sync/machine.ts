@@ -19,8 +19,6 @@ import { Option, Schema } from 'effect';
 import type { SyncClientApplyFrame } from './sse-driver.js';
 import { applyPrefixDelta } from '../live-query/project.js';
 
-export { applyPrefixDelta } from '../live-query/project.js';
-
 export type DisconnectCause = Readonly<{
 	readonly kind: 'transport' | 'terminal';
 	readonly message: string;

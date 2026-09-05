@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
 	import { untrack, type Component } from 'svelte';
+	import { watch } from 'runed';
 	import { ModeWatcher } from 'mode-watcher';
 	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import { humanize } from '@norbital-ai/std/string';
@@ -502,10 +503,7 @@
 		};
 	});
 
-	$effect(() => {
-		const href = path;
-		const name = landingName;
-		const plugin = hostPlugin;
+	watch([() => path, () => landingName, () => hostPlugin], ([href, name, plugin]) => {
 		if (plugin !== null) {
 			// Same path as "no app here": it also has to invalidate a load still in flight, or that
 			// module lands on top of the plugin surface when it finally resolves.
@@ -520,36 +518,37 @@
 	});
 
 	/**
-	 * A policy preview can narrow the app set while an application is already mounted.
+	 * Merged auth-guard: policy preview narrowing and privileged-surface gating share one watcher.
 	 *
-	 * Hiding its navigation entry is not enough: leaving the component mounted keeps issuing reads
-	 * that the preview quite correctly refuses and lets a stale privileged surface remain on screen.
-	 * Wait for the authority query to settle, then replace an inaccessible app route with the overview
-	 * whose cards are already filtered to the newly visible set.
+	 * Hiding navigation is not enough in either case — a mounted app keeps issuing reads the preview
+	 * refuses, and a privileged component must unmount the moment a preview or role change revokes it.
+	 * Documentation and approvals stay outside the gate because members use them.
 	 */
-	$effect(() => {
-		const visible = visibleAppsQuery.current;
-		const current = landingName;
-		if (visible === undefined || current === undefined || visible.apps.includes(current)) return;
-		actions.navigate('/', { replace: true });
-	});
-
-	/**
-	 * Removing privileged navigation is not sufficient when the page is already mounted.
-	 *
-	 * An administrator can begin a team preview from People, and a person's role can also change
-	 * while their shell is open. In both cases the privileged component must unmount immediately;
-	 * Documentation and approvals deliberately remain outside this gate because members use them.
-	 */
-	$effect(() => {
-		if (hostPluginsVisible) return;
-		if (path === WORKSPACE_SETTINGS_PATH || path.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)) {
-			actions.navigate('/', { replace: true });
-			return;
+	watch(
+		[
+			() => visibleAppsQuery.current,
+			() => landingName,
+			() => hostPluginsVisible,
+			() => path,
+			() => hostPlugin,
+			() => hostPluginAvailableToMembers
+		],
+		([visible, current, pluginsVisible, currentPath, plugin, pluginForMembers]) => {
+			if (visible !== undefined && current !== undefined && !visible.apps.includes(current)) {
+				actions.navigate('/', { replace: true });
+				return;
+			}
+			if (pluginsVisible) return;
+			if (
+				currentPath === WORKSPACE_SETTINGS_PATH ||
+				currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)
+			) {
+				actions.navigate('/', { replace: true });
+				return;
+			}
+			if (plugin !== null && !pluginForMembers) actions.navigate('/', { replace: true });
 		}
-		if (hostPlugin !== null && !hostPluginAvailableToMembers)
-			actions.navigate('/', { replace: true });
-	});
+	);
 
 	let accessEpoch = $state(0);
 	const memberAccessQuery = $derived.by(() => {

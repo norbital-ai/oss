@@ -6,6 +6,7 @@ import {
 	validatePolicyLimits,
 	type RateLimitRule
 } from './rate-limits-schema.js';
+import { UnknownRecord, isRecord, isString } from '../schema-decode.js';
 
 export type PolicyRuntimeFunction = (context: unknown, api: unknown) => unknown;
 
@@ -77,9 +78,7 @@ const AuthoredEnvoy = Schema.Struct({
 	delegation: Schema.Literals(['enabled', 'disabled'])
 });
 
-const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
-const isString = Schema.is(Schema.String);
-const isRecord = Schema.is(jsonObject);
+const jsonObject = UnknownRecord;
 
 /** The decoded-failure fallback, once, typed without a cast: an empty map is never reached. */
 const EMPTY_RECORD: Record<string, unknown> = Object.freeze({});
@@ -160,7 +159,9 @@ const policyGrammarProjection = (value: unknown, location: string): unknown => {
 	const entries = Object.entries(value);
 	if (entries.some(([key]) => key === 'teamScopeUsers')) {
 		if (entries.length !== 1 || Reflect.get(value, 'teamScopeUsers') !== true) {
-			throw new TypeError(`${location}.teamScopeUsers must be the sole field operator with value true.`);
+			throw new TypeError(
+				`${location}.teamScopeUsers must be the sole field operator with value true.`
+			);
 		}
 		return { in: [] };
 	}

@@ -1,12 +1,5 @@
 import { drizzle } from 'drizzle-orm/pg-proxy';
-import {
-	sql,
-	type AnyDBQueryConfig,
-	type AnyRelations,
-	type SQL,
-	type SQLChunk,
-	type SQLWrapper
-} from 'drizzle-orm';
+import { sql, type AnyDBQueryConfig, type SQL, type SQLChunk, type SQLWrapper } from 'drizzle-orm';
 import { Effect, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type * as Database from '#lib/runtime/facilities/database.js';
@@ -39,7 +32,7 @@ type TransactionStatement = Statement & Readonly<{ readonly [TRANSACTION_STATEME
  * path. Calling a query directly is therefore a defect; callers render it with `toStatement` or
  * hand it to `executeBuilt`.
  */
-const refuseExecution = () =>
+export const refuseExecution = () =>
 	Effect.runPromise(
 		Effect.die(
 			new Error('bolt persistence: queries are composed here and executed by the facility')
@@ -47,17 +40,6 @@ const refuseExecution = () =>
 	);
 
 export const composer = drizzle(refuseExecution);
-
-/**
- * The same composer, told which relationships this workspace has.
- *
- * Drizzle's relational query builder is only reachable through an instance that was given a
- * relations map, and the map is the workspace's — so it cannot be the module-level `composer`.
- * The driver is the identical refusal: a relational read is still composed here and executed by
- * the facility, and `db.query.x.findMany(…).toSQL()` renders without touching it.
- */
-export const relationalComposer = (relations: AnyRelations) =>
-	drizzle(refuseExecution, { relations });
 
 /**
  * One collection's relational query builder, as the relational composer exposes it.
@@ -72,69 +54,66 @@ export type RelationalBuilder = Readonly<{
 }>;
 
 /** One fixed database expression, assembled only inside this closed persistence vocabulary. */
-const expression = <T>(chunks: ReadonlyArray<SQLChunk>): SQL<T> =>
-	sql.join([...chunks], sql.empty()) as SQL<T>;
-const fixed = (value: string): SQL => sql.raw(value);
+const frag = <T>(chunks: ReadonlyArray<SQLChunk | string>): SQL<T> =>
+	sql.join(
+		chunks.map((chunk) => (typeof chunk === 'string' ? sql.raw(chunk) : chunk)),
+		sql.empty()
+	) as SQL<T>;
 
 /** A bound scalar expression; unlike a tagged SQL template it cannot carry authored syntax. */
-export const bound = <T>(value: T): SQL<T> => expression([sql.param(value)]);
+export const bound = <T>(value: T): SQL<T> => frag([sql.param(value)]);
 
 /** Gives a selected expression its protocol-facing name without a handwritten SQL fragment. */
 export const aliased = <T>(value: SQLWrapper<T>, name: string): SQL.Aliased<T> =>
 	value.getSQL().as(name);
 
 /** The database clock used by durable ordering and lease decisions. */
-export const dbNow = (): SQL<string> => expression([fixed('now()')]);
+export const dbNow = (): SQL<string> => frag(['now()']);
 
 /** The schema selected by the current database connection. */
-export const currentSchema = (): SQL<string> => expression([fixed('current_schema()')]);
+export const currentSchema = (): SQL<string> => frag(['current_schema()']);
 
 /** Adds a bound number to a numeric column atomically. */
 export const increment = (value: SQLWrapper, by = 1): SQL<number> =>
-	expression([value, fixed(' + '), sql.param(by)]);
+	frag([value, ' + ', sql.param(by)]);
 
 /** Moves the database clock by a bound number of seconds. */
 export const dbNowPlusSeconds = (seconds: number): SQL<string> =>
-	expression([fixed('now() + make_interval(secs => '), sql.param(seconds), fixed(')')]);
+	frag(['now() + make_interval(secs => ', sql.param(seconds), ')']);
 
 /** Moves the database clock backwards by a bound number of days. */
 export const dbNowMinusDays = (days: number): SQL<string> =>
-	expression([fixed('now() - make_interval(days => '), sql.param(days), fixed(')')]);
+	frag(['now() - make_interval(days => ', sql.param(days), ')']);
 
 /** Chooses the earliest non-null result of two scalar queries. PostgreSQL ignores nulls in LEAST. */
 export const least = <T>(left: SQLWrapper<T>, right: SQLWrapper<T>): SQL<T> =>
-	expression([fixed('least('), left, fixed(', '), right, fixed(')')]);
+	frag(['least(', left, ', ', right, ')']);
 
 /** A one-row source for selecting over scalar subqueries without owning a real table. */
-export const singleton = (): SQL =>
-	expression([fixed('(values (1)) as '), sql.identifier('singleton')]);
+export const singleton = (): SQL => frag(['(values (1)) as ', sql.identifier('singleton')]);
 
 /** A typed `true` predicate for a builder branch that intentionally matches every row. */
-export const always = (): SQL<boolean> => expression([fixed('true')]);
+export const always = (): SQL<boolean> => frag(['true']);
 
 /** A typed constant used only as an EXISTS/RETURNING projection. */
-export const one = (): SQL<number> => expression([fixed('1')]);
+export const one = (): SQL<number> => frag(['1']);
 
 /** Refers to the value proposed by an `ON CONFLICT` insert. */
 export const excluded = <T extends SQLWrapper>(column: T): SQL =>
-	expression([
-		sql.identifier('excluded'),
-		fixed('.'),
-		sql.identifier(String(Reflect.get(column, 'name')))
-	]);
+	frag([sql.identifier('excluded'), '.', sql.identifier(String(Reflect.get(column, 'name')))]);
 
 /** Preserves a column unless the proposed discriminator differs. */
 export const excludedWhenDistinct = <T>(discriminator: SQLWrapper, value: SQLWrapper<T>): SQL<T> =>
-	expression([
-		fixed('case when '),
+	frag([
+		'case when ',
 		discriminator,
-		fixed(' is distinct from '),
+		' is distinct from ',
 		excluded(discriminator),
-		fixed(' then '),
+		' then ',
 		excluded(value),
-		fixed(' else '),
+		' else ',
 		value,
-		fixed(' end')
+		' end'
 	]);
 
 /**
@@ -150,29 +129,23 @@ export const vectorDistance = (
 	operator: '<->' | '<#>' | '<=>',
 	probe: ReadonlyArray<number>
 ): SQL<number> =>
-	expression([
-		fixed('('),
-		column,
-		fixed(` ${operator} `),
-		sql.param(JSON.stringify(probe)),
-		fixed('::vector)')
-	]);
+	frag(['(', column, ` ${operator} `, sql.param(JSON.stringify(probe)), '::vector)']);
 
 /** Compares two expressions without exposing a tagged SQL template at the caller. */
 export const lessThanOrEqual = <T>(left: SQLWrapper<T>, right: T): SQL<boolean> =>
-	expression([left, fixed(' <= '), sql.param(right)]);
+	frag([left, ' <= ', sql.param(right)]);
 
 /** Reads a JSON object's text field and compares it to a bound value. */
 export const jsonTextEquals = (column: SQLWrapper, key: string, value: string): SQL<boolean> =>
-	expression([column, fixed('->>'), sql.param(key), fixed(' = '), sql.param(value)]);
+	frag([column, '->>', sql.param(key), ' = ', sql.param(value)]);
 
 /** Binds already-encoded JSON text as a JSONB expression. */
 export const jsonb = (value: Schema.Json): SQL<Schema.Json> =>
-	expression([sql.param(JSON.stringify(value)), fixed('::jsonb')]);
+	frag([sql.param(JSON.stringify(value)), '::jsonb']);
 
 /** Captures every physical column of a named row, including routing fields and server defaults. */
 export const rowJson = (alias: string): SQL<Schema.Json> =>
-	expression([fixed('to_jsonb('), sql.identifier(alias), fixed(')')]);
+	frag(['to_jsonb(', sql.identifier(alias), ')']);
 
 /** Brands custom SQL at construction so it can never enter the single-query execution path. */
 export const transactionSql = (

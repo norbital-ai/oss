@@ -15,3 +15,14 @@ export const decodeUnknownSchema = <S extends Schema.Top>(
 		Schema.SchemaError,
 		S['DecodingServices']
 	>;
+
+/** Single ownership for boundary predicates; callers import these instead of `Schema.is` one-liners. */
+export const JsonObject = Schema.Record(Schema.String, Schema.Json);
+export const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown);
+export const isRecord = Schema.is(UnknownRecord);
+export const isString = Schema.is(Schema.String);
+export const isNumber = Schema.is(Schema.Number);
+export const isBigint = Schema.is(Schema.BigInt);
+export const isNonEmptyString = Schema.is(Schema.NonEmptyString);
+export const isStringArray = Schema.is(Schema.Array(Schema.String));
+export const isObjectLike = Schema.is(Schema.Union([UnknownRecord, Schema.Array(Schema.Unknown)]));
