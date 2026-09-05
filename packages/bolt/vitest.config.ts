@@ -1,4 +1,5 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
@@ -38,14 +39,11 @@ export default defineConfig({
 		unstubEnvs: true,
 		unstubGlobals: true,
 		pool: 'forks',
-		// Both suites include compiler-heavy files. Letting Vitest spawn one fork per core makes their
-		// TypeScript programs and temporary workspace builds compete for the same CPU and filesystem;
-		// on an 18-core host the otherwise-green unit suite reproducibly times out nine files at five
-		// seconds. Four workers keep useful parallelism while the same suite remains inside its real
-		// timeout budget. The integration suite also provisions a PGlite database per file, so it uses
-		// the same bound for memory as well as CPU.
-		maxWorkers: 4,
-		// Four workers sharing a small Actions runner push database boot and an in-process TypeScript
+		// Compiler workers also start TypeScript programs and temporary workspace builds. Reserve half
+		// the available CPUs for that work, capped at four forks: a fixed four oversubscribes smaller
+		// CI runners and pushes cold Drizzle imports beyond the unchanged unit-test deadline.
+		maxWorkers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))),
+		// Compiler workers sharing a small Actions runner push database boot and an in-process TypeScript
 		// program past five seconds even though their focused runs take two to three. Integration work
 		// gets that headroom; a unit test that needs more than five seconds is a unit test in the
 		// wrong suite.
