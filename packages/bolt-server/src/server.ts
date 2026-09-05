@@ -997,7 +997,8 @@ const startServerEffect = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,
 	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
-	taskInvocations?: TaskInvocationControl
+	taskInvocations?: TaskInvocationControl,
+	onFacilitiesReady?: (facilities: FacilityBindings) => void
 ): Effect.Effect<RunningServer, ServerTransportError> =>
 	Effect.gen(function* () {
 		const websocketServer = new WebSocketServer({ noServer: true });
@@ -1097,6 +1098,7 @@ const startServerEffect = <E>(
 			...facilities,
 			syncCommit: makeSyncCommitFacility(sync, configuration.scope)
 		};
+		onFacilitiesReady?.(liveFacilities);
 
 		const server = createServer((request, response) => {
 			const requestAbort = new AbortController();
@@ -1288,5 +1290,9 @@ export const startServer = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,
 	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
-	taskInvocations?: TaskInvocationControl
-) => Effect.runPromise(startServerEffect(configuration, facilities, runtime, taskInvocations));
+	taskInvocations?: TaskInvocationControl,
+	onFacilitiesReady?: (facilities: FacilityBindings) => void
+) =>
+	Effect.runPromise(
+		startServerEffect(configuration, facilities, runtime, taskInvocations, onFacilitiesReady)
+	);

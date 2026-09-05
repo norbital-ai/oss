@@ -5,6 +5,7 @@ import { ImageAsset, TaskId } from '@norbital-ai/bolt-protocol/facilities';
 
 /** Guest/host wire token for one image. Bytes never ride this string. */
 export const IMAGE_DESCRIPTOR_SCHEME = 'norbital-image:v1:';
+const FILE_DESCRIPTOR_SCHEME = 'norbital-file:v1:';
 
 const keySegment = (value: string): string => {
 	let binary = '';
@@ -40,19 +41,25 @@ const isString = Schema.is(Schema.String);
 
 /** Encodes one ImageAsset as a file-part data string. Never base64 or a data URL. */
 function encodeImageDescriptorData(asset: ImageAsset): string {
-	return `${IMAGE_DESCRIPTOR_SCHEME}${JSON.stringify({
-		key: asset.key,
-		name: asset.name,
-		mimeType: asset.mimeType,
-		size: asset.size,
-		...(asset.detail === undefined ? {} : { detail: asset.detail })
-	})}`;
+	return `${asset.mimeType.startsWith('image/') ? IMAGE_DESCRIPTOR_SCHEME : FILE_DESCRIPTOR_SCHEME}${JSON.stringify(
+		{
+			key: asset.key,
+			name: asset.name,
+			mimeType: asset.mimeType,
+			size: asset.size,
+			...(asset.detail === undefined ? {} : { detail: asset.detail })
+		}
+	)}`;
 }
 
 /** Reads one descriptor from a file-part data value. Bytes and data URLs are refused. */
-function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
-	if (!isString(data) || !data.startsWith(IMAGE_DESCRIPTOR_SCHEME)) return undefined;
-	const raw = data.slice(IMAGE_DESCRIPTOR_SCHEME.length);
+export function decodeAttachmentDescriptor(data: unknown): ImageAsset | undefined {
+	if (!isString(data)) return undefined;
+	const scheme = [IMAGE_DESCRIPTOR_SCHEME, FILE_DESCRIPTOR_SCHEME].find((scheme) =>
+		data.startsWith(scheme)
+	);
+	if (scheme === undefined) return undefined;
+	const raw = data.slice(scheme.length);
 	const parsed = Option.getOrUndefined(
 		Schema.decodeUnknownOption(Schema.fromJsonString(DescriptorPayload))(raw)
 	);
@@ -60,14 +67,17 @@ function decodeImageDescriptorData(data: unknown): ImageAsset | undefined {
 }
 
 /** Collects descriptor-sized assets from one canonical Effect message. */
-export function imageAssetsFromMessage(message: Prompt.MessageEncoded): ImageAsset[] {
+export function attachmentAssetsFromMessage(message: Prompt.MessageEncoded): ImageAsset[] {
 	if (isString(message.content)) return [];
 	return message.content.flatMap((part) => {
 		if (part.type !== 'file') return [];
-		const asset = decodeImageDescriptorData(part.data);
+		const asset = decodeAttachmentDescriptor(part.data);
 		return asset === undefined ? [] : [asset];
 	});
 }
+
+export const imageAssetsFromMessage = (message: Prompt.MessageEncoded): ImageAsset[] =>
+	attachmentAssetsFromMessage(message).filter((asset) => asset.mimeType.startsWith('image/'));
 
 /**
  * Removes file parts before the AI facility wire.
@@ -109,7 +119,7 @@ export function stripImageFileParts(message: Prompt.MessageEncoded): Prompt.Mess
  * `encodeSync` refuses (`Expected array at ["content"]`) — a sync throw, not a
  * typed Effect failure.
  */
-export function userMessageWithImages(
+export function userMessageWithAttachments(
 	text: string,
 	assets: readonly ImageAsset[]
 ): Prompt.UserMessageEncoded {
@@ -130,15 +140,19 @@ export function userMessageWithImages(
 }
 
 /** Same encoder as `userMessageWithImages`, with the sync throw on the typed channel. */
-export function encodeUserMessageWithImages(
+export function encodeUserMessageWithAttachments(
 	text: string,
 	assets: readonly ImageAsset[]
 ): Effect.Effect<Prompt.UserMessageEncoded, Error> {
 	return Effect.try({
-		try: () => userMessageWithImages(text, assets),
+		try: () => userMessageWithAttachments(text, assets),
 		catch: toError
 	});
 }
+
+/** Existing image-only callers use the same descriptor encoding. */
+export const userMessageWithImages = userMessageWithAttachments;
+export const encodeUserMessageWithImages = encodeUserMessageWithAttachments;
 
 /** True when a command payload carries no guest-expanded image bytes. */
 export function guestImageCommandHasNoBytes(payload: unknown): boolean {
@@ -151,8 +165,8 @@ export function assertGuestImageDescriptorsOnly(message: Prompt.MessageEncoded):
 	if (isString(message.content)) return;
 	for (const part of message.content) {
 		if (part.type !== 'file') continue;
-		if (decodeImageDescriptorData(part.data) === undefined) {
-			throw new Error('Guest image parts must be file descriptors, not bytes.');
+		if (decodeAttachmentDescriptor(part.data) === undefined) {
+			throw new Error('Guest attachment parts must be file descriptors, not bytes.');
 		}
 	}
 }

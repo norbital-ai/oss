@@ -103,8 +103,7 @@ export const tableMessages = defineMessages({
 		'table.searchActive': 'Search active',
 		'table.viewDisabled': 'This view is not accepting changes right now.',
 		'table.noCustomView': 'No custom record view',
-		'table.noCustomViewDesc':
-			'This collection has no dedicated UI representation. Use Raw to inspect its fields.',
+		'table.noCustomViewDesc': 'Details are available in this collection’s table.',
 		'table.approvalRequest': 'Approval request',
 		'table.approvalRequestId': 'Request ID',
 		'table.noApprovalRequest': 'No approval request',
@@ -284,7 +283,7 @@ export const tableMessages = defineMessages({
 		'table.searchActive': '搜索已应用',
 		'table.viewDisabled': '此视图当前不接受更改。',
 		'table.noCustomView': '没有自定义记录视图',
-		'table.noCustomViewDesc': '此集合没有专用的界面表示。使用原始视图检查其字段。',
+		'table.noCustomViewDesc': '可在此集合的表格中查看详细信息。',
 		'table.approvalRequest': '审批请求',
 		'table.approvalRequestId': '请求 ID',
 		'table.noApprovalRequest': '没有审批请求',

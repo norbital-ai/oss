@@ -213,6 +213,12 @@
 	{/if}
 {/snippet}
 
+{#snippet agentNavigation()}
+	{#if agent}
+		<Sidebar.MenuItem>{@render agent({ expanded: displayExpanded })}</Sidebar.MenuItem>
+	{/if}
+{/snippet}
+
 <Sidebar.Indicator />
 
 <Sidebar.Header class="gap-0 p-2">
@@ -255,39 +261,34 @@
 	</Inline>
 </Sidebar.Header>
 
-<Sidebar.Content class="text-xs">
-	{#if agent || notifications}
-		<Sidebar.Group class="pb-0">
-			<Sidebar.Menu>
-				{#if agent}
-					<Sidebar.MenuItem>{@render agent({ expanded: displayExpanded })}</Sidebar.MenuItem>
-				{/if}
-				{#if notifications}
-					<Sidebar.MenuItem>{@render notifications({ expanded: displayExpanded })}</Sidebar.MenuItem
-					>
-				{/if}
-			</Sidebar.Menu>
-		</Sidebar.Group>
-	{/if}
-	{#each model.sections as section, index (section.key)}
+<Sidebar.Content class="gap-0 text-xs">
+	{#each model.sections as section (section.key)}
 		<WorkspaceSidebarNavigationSection
 			label={section.label}
 			items={section.items}
 			open={displayExpanded}
 			href={section.href}
-			class={index === 0 && (agent || notifications) ? 'pt-0' : undefined}
+			leading={section.key === 'operations' ? agentNavigation : undefined}
+			class={section.key === 'workspace' ? 'mt-auto' : undefined}
 			{onNavigate}
 			{onPrefetch}
 		/>
 	{/each}
 </Sidebar.Content>
 
-<Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
-	<Sidebar.Menu class="gap-2">
+<Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-1.5 text-xs">
+	<Sidebar.Menu class="gap-1.5">
 		{#if displayExpanded}
-			<div class="px-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
-				{t('misc.account')}
-			</div>
+			<Inline justify="between" align="center" gap="xs" class="h-7 px-1">
+				<div class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{t('misc.account')}</div>
+				{#if notifications}
+					<Sidebar.MenuItem class="-mr-1">
+						{@render notifications({ expanded: true })}
+					</Sidebar.MenuItem>
+				{/if}
+			</Inline>
+		{:else if notifications}
+			<Sidebar.MenuItem>{@render notifications({ expanded: false })}</Sidebar.MenuItem>
 		{/if}
 		<Sidebar.MenuItem>
 			<DropdownMenu.Root>
@@ -299,12 +300,10 @@
 							aria-label={t('misc.openAccountMenu')}
 							class={cn(
 								'overflow-visible rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent',
-								displayExpanded
-									? 'h-auto min-h-14 items-start bg-popover px-2 py-2.5'
-									: 'size-8 p-0'
+								displayExpanded ? 'h-11 items-center bg-popover px-2 py-1.5' : 'size-8 p-0'
 							)}
 						>
-							<Avatar.Root class={displayExpanded ? 'mt-0.5 size-7 shrink-0' : 'size-8'}>
+							<Avatar.Root class={displayExpanded ? 'size-6 shrink-0' : 'size-8'}>
 								{#if model.user.avatarUrl}
 									<Avatar.Image src={model.user.avatarUrl} alt={model.user.name} />
 								{/if}
@@ -316,13 +315,8 @@
 								<div class="min-w-0 flex-1 text-left">
 									<p class="truncate text-xs font-medium">{model.user.name}</p>
 									<p class="truncate text-tiny text-muted-foreground">{model.user.email}</p>
-									<p class="truncate text-tiny text-muted-foreground capitalize">
-										{model.user.role}{model.user.teamLabels.length
-											? ` · ${model.user.teamLabels.join(', ')}`
-											: ''}
-									</p>
 								</div>
-								<Icon icon="lucide:chevron-up" class="ml-auto size-4 text-muted-foreground" />
+								<Icon icon="lucide:chevron-up" class="ml-auto size-3.5 text-muted-foreground" />
 							{/if}
 						</Sidebar.MenuButton>
 					{/snippet}
@@ -337,7 +331,9 @@
 						<p class="text-xs font-medium">{model.user.name}</p>
 						<p class="text-tiny text-muted-foreground">{model.user.email}</p>
 						<p class="text-tiny text-muted-foreground capitalize">
-							{t('misc.roleLabel', { role: model.user.role })}
+							{t('misc.roleLabel', { role: model.user.role })}{model.user.teamLabels.length
+								? ` · ${model.user.teamLabels.join(', ')}`
+								: ''}
 						</p>
 					</div>
 					<DropdownMenu.Separator />

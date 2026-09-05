@@ -1,6 +1,7 @@
 /** One client-minted idempotency key retained only while its command outcome is unknown. */
 export type UnsettledTaskAdmission = Readonly<{
 	taskId: string;
+	submissionId?: string;
 	agentId: string;
 	message: string;
 	mode: 'agent' | 'plan' | 'compact';
@@ -18,9 +19,14 @@ export type UnsettledTaskAdmission = Readonly<{
 export const visibleUnsettledAdmission = (
 	admission: UnsettledTaskAdmission | null,
 	tasksWithHumanMessage: ReadonlySet<string>,
-	taskPresent: boolean
+	taskPresent: boolean,
+	persistedMessageIds: ReadonlySet<string> = new Set()
 ): UnsettledTaskAdmission | null =>
-	admission !== null && taskPresent && tasksWithHumanMessage.has(admission.taskId)
+	admission !== null &&
+	taskPresent &&
+	(admission.submissionId === undefined
+		? tasksWithHumanMessage.has(admission.taskId)
+		: persistedMessageIds.has(admission.submissionId))
 		? null
 		: admission;
 

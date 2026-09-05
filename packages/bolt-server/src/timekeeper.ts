@@ -11,8 +11,8 @@ import { Effect } from 'effect';
  * never originates work, and the day it needs to, the seam has leaked.
  *
  * The instant, the overlap rule and the hop discipline are `makeTimekeeperCore` in
-	 * `@norbital-ai/bolt-protocol`, shared verbatim with Colony's Timekeeper and proved in that
-	 * package. What is left here is what a self-host alone owns: it serves exactly one
+ * `@norbital-ai/bolt-protocol`, shared verbatim with Colony's Timekeeper and proved in that
+ * package. What is left here is what a self-host alone owns: it serves exactly one
  * scope, it persists nothing (the tenant database is the only queue), and its backoff is its own.
  *
  * **A host with no timer still works.** Rows commit, schedules record, retries are scheduled. What
@@ -97,6 +97,7 @@ export const makeTimekeeper = <R = never, E = never>(
 	 * clears it.
 	 */
 	let consecutiveFailures = 0;
+	let stopped = false;
 
 	const core = makeTimekeeperCore<string>({
 		nowMillis,
@@ -115,25 +116,26 @@ export const makeTimekeeper = <R = never, E = never>(
 	const fire = () => {
 		const entry = core.takeDue(nowMillis());
 		if (entry === undefined) return core.arm();
-		void options.run(
-			Effect.map(options.tick(), (nextDueAtEpochMs) => {
-				consecutiveFailures = 0;
-				resolve(nextDueAtEpochMs, true);
-			}).pipe(
-				Effect.catch((cause) =>
-					Effect.sync(() => {
-						consecutiveFailures += 1;
-						options.onFailure(cause);
-						// Capped exponential host backoff; an earlier concurrent wake still wins.
-						const backoff = Math.min(
-							retryAfterMillis * 2 ** Math.min(consecutiveFailures - 1, 5),
-							MAX_FAILURE_BACKOFF_MILLIS
-						);
-						resolve(nowMillis() + backoff, false);
-					})
-				)
+		// The runtime itself can reject outside the Effect error channel (notably on disposal).
+		// Own that process-edge promise so shutdown never leaves an unhandled tick rejection.
+		void options
+			.run(
+				Effect.map(options.tick(), (nextDueAtEpochMs) => {
+					if (stopped) return;
+					consecutiveFailures = 0;
+					resolve(nextDueAtEpochMs, true);
+				})
 			)
-		);
+			.catch((cause) => {
+				if (stopped) return;
+				consecutiveFailures += 1;
+				options.onFailure(cause);
+				const backoff = Math.min(
+					retryAfterMillis * 2 ** Math.min(consecutiveFailures - 1, 5),
+					MAX_FAILURE_BACKOFF_MILLIS
+				);
+				resolve(nowMillis() + backoff, false);
+			});
 	};
 
 	return {
@@ -146,6 +148,9 @@ export const makeTimekeeper = <R = never, E = never>(
 			core.arm();
 		},
 		armedFor: () => core.armedFor(),
-		stop: () => core.stop()
+		stop: () => {
+			stopped = true;
+			core.stop();
+		}
 	};
 };

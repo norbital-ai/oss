@@ -3,6 +3,7 @@ import { request } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Schema } from 'effect';
 import { getErrorMessage } from '@norbital-ai/std';
+import { extractDocumentText } from './documents.js';
 import {
 	ConnectorRequest,
 	failure,
@@ -51,11 +52,12 @@ export const isPublicWebAddress = (address: string): boolean => {
 };
 
 type Address = Awaited<ReturnType<typeof lookup>>;
+const isString = Schema.is(Schema.String);
 type PageResponse = Readonly<{
 	status: number;
 	location?: string;
 	contentType: string;
-	body: string;
+	body: string | Uint8Array;
 }>;
 
 /** Bind the socket to the checked address, retaining the original hostname for TLS and Host. */
@@ -70,7 +72,7 @@ const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<P
 				agent: false,
 				lookup: (_hostname, _options, callback) => callback(null, address.address, address.family),
 				headers: {
-					accept: 'text/html,application/json,text/plain,application/xml',
+					accept: 'text/html,application/pdf,application/json,text/plain,application/xml',
 					'accept-encoding': 'identity',
 					'user-agent': 'Norbital-Public-Page-Reader/1.0'
 				}
@@ -96,7 +98,7 @@ const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<P
 					resolve({
 						status,
 						contentType: response.headers['content-type'] ?? '',
-						body: Buffer.concat(chunks).toString('utf8')
+						body: Buffer.concat(chunks)
 					})
 				);
 			}
@@ -144,12 +146,15 @@ export const makeWebConnectorBinding = (
 				}
 				if (response.status < 200 || response.status >= 300)
 					throw new Error(`Public page returned HTTP ${response.status}.`);
-				if (!/^(text\/|application\/(?:json|(?:[\w.-]+\+)?xml))/i.test(response.contentType))
-					throw new Error('Public page is not HTML, text, JSON or XML.');
-				if (new TextEncoder().encode(response.body).byteLength > WEB_PAGE_BYTE_LIMIT)
+				const bytes = isString(response.body)
+					? new TextEncoder().encode(response.body)
+					: response.body;
+				if (bytes.byteLength > WEB_PAGE_BYTE_LIMIT)
 					throw new Error('Public page exceeds the 2 MiB limit.');
+				// repository-health:allow A6 -- Decode only the final accepted redirect response, then return; no pages can be decoded in parallel here.
+				const document = await extractDocumentText(bytes, response.contentType, bounded);
 				return success({
-					output: { url: target.toString(), contentType: response.contentType, body: response.body }
+					output: { url: target.toString(), contentType: response.contentType, ...document }
 				});
 			}
 			throw new Error('Public page exceeded five redirects.');

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
-	import { AgentId, ImageAsset } from '@norbital-ai/bolt-protocol/facilities';
+	import { AgentId, FileAsset } from '@norbital-ai/bolt-protocol/facilities';
 	import Icon from '@iconify/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
@@ -13,20 +13,19 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { workspaceSession } from '#lib/client/session.js';
 	import {
-		encodeUserMessageWithImages,
+		encodeUserMessageWithAttachments,
 		taskAssetStorageKey
 	} from '#lib/runtime/agents/image-descriptors.js';
 	import { useAgentClient } from './client.svelte.js';
 	import { runComposerCommand } from './composer-send.js';
 	import TaskSelector from './conversation-selector.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
+	import AgentContextSegment from './agent-context-segment.svelte';
 	import { buildTaskSelector, projectAgentTasks, type AgentTask } from './conversation-selector.js';
 	import {
 		compactOrigin,
 		editableUserMessageText,
-		plainMessageText,
-		projectAgentContextView,
-		type CompactOrigin
+		projectAgentContextView
 	} from './context-view.js';
 	import {
 		aggregateTaskCharges,
@@ -36,8 +35,7 @@
 		projectAgentPlans,
 		projectAgentRuns,
 		projectAgentUsage,
-		type AgentPlanRow,
-		type TodoResult
+		type AgentPlanRow
 	} from './transcript.js';
 	import { agentOrbBusyStatusKey, agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
 	import { AGENT_COMPOSER_FOCUS_EVENT } from './composer-chrome.js';
@@ -73,9 +71,11 @@
 	let controlPending = $state(false);
 	let unsettledAdmission = $state<UnsettledTaskAdmission | null>(null);
 	let composer = $state<HTMLTextAreaElement | null>(null);
-	let imagePicker = $state<HTMLInputElement | null>(null);
+	let filePicker = $state<HTMLInputElement | null>(null);
 	let revisedMessage = $state<{ readonly id: string; readonly sequence: number } | null>(null);
-	let pendingImages = $state<Array<{ id: string; file: File; previewUrl: string }>>([]);
+	let pendingAttachments = $state<
+		Array<{ id: string; file: File; mimeType: string; previewUrl: string | null }>
+	>([]);
 
 	const taskQuery = $derived(
 		runtime.client.db.agent_task.findMany({ orderBy: { updated_at: 'desc' }, limit: 500 })
@@ -193,7 +193,7 @@
 		aggregateTaskCharges(projectAgentUsage(usageQuery?.current ?? []), new Set(runIds))
 	);
 	const costLabel = $derived(taskCharges.map(formatTaskCharge).join(' · '));
-	const todo = $derived(latestTodo(rootMessages, activeRun?.id ?? null));
+	const todo = $derived(latestTodo(contextView.focusMessages, activeRun?.id ?? null));
 
 	const taskSelector = $derived(
 		buildTaskSelector({
@@ -224,11 +224,14 @@
 			activeTask.status === 'ready' ||
 			activeTask.status === 'running' ||
 			activeTask.status === 'waiting' ||
-			activeTask.status === 'failed'
+			activeTask.status === 'done' ||
+			activeTask.status === 'failed' ||
+			activeTask.status === 'stopped' ||
+			activeTask.status === 'attention'
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
-		if (pendingImages.length > 0) return true;
+		if (pendingAttachments.length > 0) return true;
 		switch (parsed.kind) {
 			case 'message':
 				return parsed.message.trim().length > 0;
@@ -267,35 +270,6 @@
 		}
 	}
 
-	const isNumber = Schema.is(Schema.Number);
-	const isString = Schema.is(Schema.String);
-
-	function elapsedSince(value: unknown): string {
-		const instant =
-			value instanceof Date
-				? value.getTime()
-				: isNumber(value)
-					? new Date(value).getTime()
-					: isString(value)
-						? new Date(value).getTime()
-						: Number.NaN;
-		if (!Number.isFinite(instant)) return 'Invalid timestamp';
-		const seconds = Math.max(0, Math.floor((Date.now() - instant) / 1_000));
-		if (seconds < 60) return `${seconds}s`;
-		const minutes = Math.floor(seconds / 60);
-		if (minutes < 60) return `${minutes}m`;
-		return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-	}
-
-	function todoPosition(current: TodoResult): number {
-		const doing = current.items.findIndex((item) => item.status === 'doing');
-		if (doing >= 0) return doing + 1;
-		return Math.min(
-			current.items.filter((item) => item.status === 'done').length + 1,
-			current.items.length
-		);
-	}
-
 	function directChildren(taskId: string): AgentTask[] {
 		return allTasks.filter((task) => task.parent_id === taskId);
 	}
@@ -304,19 +278,6 @@
 		return task.active_plan_id === null
 			? undefined
 			: plans.find((plan) => plan.id === task.active_plan_id);
-	}
-
-	function compactTitle(origin: CompactOrigin | null): string {
-		switch (origin) {
-			case 'automatic':
-				return 'Automatic compact summary';
-			case 'manual':
-				return 'Manual compact summary';
-			case 'unresolved':
-				return 'Compact summary · origin unavailable';
-			case null:
-				return 'Compact summary';
-		}
 	}
 
 	function reviseMessage(message: (typeof rootMessages)[number]): void {
@@ -356,38 +317,66 @@
 		revisedMessage = null;
 	}
 
-	function addImageFiles(files: readonly File[]): void {
-		const images = files.filter((file) => file.type.startsWith('image/') && file.size > 0);
-		if (images.length === 0) return;
-		pendingImages = [
-			...pendingImages,
-			...images.map((file) => ({
-				id: globalThis.crypto.randomUUID(),
-				file,
-				previewUrl: URL.createObjectURL(file)
+	function addFiles(files: readonly File[]): void {
+		const additions: typeof pendingAttachments = [];
+		for (const file of files) {
+			const extension = file.name.split('.').at(-1)?.toLowerCase();
+			const mimeType =
+				/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml))$/.test(
+					file.type
+				)
+					? file.type
+					: extension === 'pdf'
+						? 'application/pdf'
+						: ['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].includes(
+									extension ?? ''
+							  )
+							? 'text/plain'
+							: null;
+			if (mimeType === null || file.size === 0) {
+				sendFailure = `${file.name}: attach a nonempty image, PDF or text document.`;
+				return;
+			}
+			additions.push({ id: globalThis.crypto.randomUUID(), file, mimeType, previewUrl: null });
+		}
+		const combined = [...pendingAttachments, ...additions];
+		if (
+			combined.length > 8 ||
+			combined.reduce((sum, item) => sum + item.file.size, 0) > 20 * 1024 * 1024
+		) {
+			sendFailure = 'Attach at most 8 files totaling 20 MiB.';
+			return;
+		}
+		sendFailure = null;
+		pendingAttachments = [
+			...pendingAttachments,
+			...additions.map((item) => ({
+				...item,
+				previewUrl: item.mimeType.startsWith('image/') ? URL.createObjectURL(item.file) : null
 			}))
 		];
 	}
 
-	function removePendingImage(id: string): void {
-		const next: Array<{ id: string; file: File; previewUrl: string }> = [];
-		for (const image of pendingImages) {
+	function removePendingAttachment(id: string): void {
+		const next: Array<{ id: string; file: File; mimeType: string; previewUrl: string | null }> = [];
+		for (const image of pendingAttachments) {
 			if (image.id === id) {
-				URL.revokeObjectURL(image.previewUrl);
+				if (image.previewUrl !== null) URL.revokeObjectURL(image.previewUrl);
 				continue;
 			}
 			next.push(image);
 		}
-		pendingImages = next;
+		pendingAttachments = next;
 	}
 
-	function clearPendingImages(): void {
-		for (const image of pendingImages) URL.revokeObjectURL(image.previewUrl);
-		pendingImages = [];
+	function clearPendingAttachments(): void {
+		for (const image of pendingAttachments)
+			if (image.previewUrl !== null) URL.revokeObjectURL(image.previewUrl);
+		pendingAttachments = [];
 	}
 
-	function storePendingImages(taskId: string) {
-		const images = pendingImages;
+	function storePendingAttachments(taskId: string) {
+		const images = pendingAttachments;
 		return Effect.tryPromise({
 			try: () => {
 				if (images.length === 0) return Promise.resolve([]);
@@ -399,10 +388,10 @@
 							const key = taskAssetStorageKey(taskId, image.id, image.file.name);
 							return Effect.tryPromise(() => session.files.store(key, image.file)).pipe(
 								Effect.map(() =>
-									ImageAsset.make({
+									FileAsset.make({
 										key,
 										name: image.file.name,
-										mimeType: image.file.type.startsWith('image/') ? image.file.type : 'image/jpeg',
+										mimeType: image.mimeType,
 										size: image.file.size
 									})
 								)
@@ -413,7 +402,7 @@
 				);
 			},
 			catch: (cause) =>
-				new Error(cause instanceof Error ? cause.message : 'The image could not be stored.', {
+				new Error(cause instanceof Error ? cause.message : 'The attachment could not be stored.', {
 					cause
 				})
 		});
@@ -421,15 +410,15 @@
 
 	function onComposerPaste(event: ClipboardEvent): void {
 		const files = [...(event.clipboardData?.files ?? [])];
-		if (!files.some((file) => file.type.startsWith('image/'))) return;
+		if (files.length === 0) return;
 		event.preventDefault();
-		addImageFiles(files);
+		addFiles(files);
 	}
 
-	function onImagePicked(event: Event): void {
+	function onFilePicked(event: Event): void {
 		const input = event.currentTarget;
 		if (!(input instanceof HTMLInputElement) || input.files === null) return;
-		addImageFiles([...input.files]);
+		addFiles([...input.files]);
 		input.value = '';
 	}
 
@@ -440,7 +429,7 @@
 			const revision = revisedMessage;
 			const revisionModelId = modelId;
 			if (
-				(message.length === 0 && pendingImages.length === 0) ||
+				(message.length === 0 && pendingAttachments.length === 0) ||
 				revision === null ||
 				activeTaskId === undefined ||
 				revisionModelId === undefined
@@ -450,9 +439,9 @@
 			pending = true;
 			sendFailure = null;
 			return runComposerCommand(
-				storePendingImages(activeTaskId).pipe(
+				storePendingAttachments(activeTaskId).pipe(
 					Effect.flatMap((assets) =>
-						encodeUserMessageWithImages(message, assets).pipe(
+						encodeUserMessageWithAttachments(message, assets).pipe(
 							Effect.flatMap((encoded) =>
 								agentClient.editMessage({
 									taskId: activeTaskId,
@@ -468,7 +457,7 @@
 					onSuccess: () => {
 						draft = '';
 						revisedMessage = null;
-						clearPendingImages();
+						clearPendingAttachments();
 					},
 					onFailure: (failure) => {
 						sendFailure = failure;
@@ -487,7 +476,10 @@
 			const parsed = parseTaskSlashCommand(draft);
 			const message = parsed.message.trim();
 			const submittedModelId = modelId;
-			if ((message.length === 0 && pendingImages.length === 0) || submittedModelId === undefined)
+			if (
+				(message.length === 0 && pendingAttachments.length === 0) ||
+				submittedModelId === undefined
+			)
 				return Effect.void;
 			const mode = parsed.kind === 'submission' ? parsed.mode : planMode ? 'plan' : 'agent';
 			const retry = retryableAdmission(visibleAdmission, {
@@ -499,29 +491,29 @@
 			});
 			const taskId =
 				retry?.taskId ??
-				(composingNew || activeTask?.status === 'done' || activeTask?.status === 'failed'
-					? undefined
-					: activeTask?.id) ??
+				(composingNew ? undefined : activeTask?.id) ??
 				globalThis.crypto.randomUUID();
-			const admission: UnsettledTaskAdmission = {
+			const admission = {
 				taskId,
+				submissionId: retry?.submissionId ?? globalThis.crypto.randomUUID(),
 				agentId: runtime.agentId,
 				message,
 				mode,
 				priority,
 				modelId: submittedModelId,
 				draft
-			};
+			} satisfies UnsettledTaskAdmission;
 			unsettledAdmission = admission;
 			pending = true;
 			sendFailure = null;
 			return runComposerCommand(
-				storePendingImages(taskId).pipe(
+				storePendingAttachments(taskId).pipe(
 					Effect.flatMap((assets) =>
-						encodeUserMessageWithImages(message, assets).pipe(
+						encodeUserMessageWithAttachments(message, assets).pipe(
 							Effect.flatMap((encoded) =>
 								agentClient.submit({
 									taskId,
+									submissionId: admission.submissionId,
 									message: encoded,
 									mode,
 									priority,
@@ -537,7 +529,7 @@
 						composingNew = false;
 						draft = '';
 						revisedMessage = null;
-						clearPendingImages();
+						clearPendingAttachments();
 					},
 					onFailure: (failure) => {
 						sendFailure = failure;
@@ -605,7 +597,7 @@
 	}
 
 	onDestroy(() => {
-		clearPendingImages();
+		clearPendingAttachments();
 	});
 
 	onMount(() => {
@@ -644,7 +636,8 @@
 		visibleUnsettledAdmission(
 			unsettledAdmission,
 			tasksWithHumanMessage,
-			admissionTaskId === undefined || allTasks.some((task) => task.id === admissionTaskId)
+			admissionTaskId === undefined || allTasks.some((task) => task.id === admissionTaskId),
+			new Set(panelMessages.map((message) => message.id))
 		)
 	);
 </script>
@@ -687,51 +680,23 @@
 		</summary>
 
 		<Stack gap="sm" class="border-l border-border/60 pl-3">
-			{#if childPlan !== undefined}
-				<div class="rounded-lg border border-border/60 bg-background/70 px-3 py-2">
-					<p class="m-0 text-tiny font-semibold">Plan r{childPlan.revision}</p>
-					<p class="mt-1 mb-0 whitespace-pre-wrap text-xs leading-5">{childPlan.body}</p>
-				</div>
-			{/if}
-			{#if childView.checkpoint !== null}
-				<div class="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
-					<p class="m-0 text-tiny font-semibold">{compactTitle(childView.checkpointOrigin)}</p>
-					<p
-						class="mt-1 mb-0 line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground"
-					>
-						{plainMessageText(childView.checkpoint)}
-					</p>
-				</div>
-			{/if}
+			<AgentContextSegment
+				plan={childPlan}
+				runs={childRuns}
+				messages={childMessages}
+				parentAttribution
+			/>
 
 			<ol class="m-0 list-none p-0" aria-label={`Child Task ${task.agent_id} active conversation`}>
 				{#each childView.focusMessages as message (message.key)}
 					<AgentTranscriptItem
 						{message}
+						generating={runs.some((run) => run.id === message.runId && run.status === 'running')}
 						mode={message.runId === null ? null : (childModeByRunId.get(message.runId) ?? null)}
 						parentAttribution={true}
 					/>
 				{/each}
 			</ol>
-
-			<details class="rounded-lg border border-border/60 px-2.5 py-2">
-				<summary class="cursor-pointer text-tiny font-medium text-muted-foreground">
-					Full child transcript · {childMessages.length} messages
-				</summary>
-				<ol class="list-none p-0" aria-label={`Child Task ${task.agent_id} full transcript`}>
-					{#each childMessages as message (message.key)}
-						<AgentTranscriptItem
-							{message}
-							mode={message.runId === null ? null : (childModeByRunId.get(message.runId) ?? null)}
-							parentAttribution={true}
-							outsideModelView={childView.outsideMessageIds.has(message.id)}
-							checkpointOrigin={message.annotation?.tag === 'compact'
-								? compactOrigin(message, childRuns)
-								: null}
-						/>
-					{/each}
-				</ol>
-			</details>
 
 			{#each directChildren(task.id) as child (child.id)}
 				{@render childConversation(child)}
@@ -753,25 +718,33 @@
 			<TaskSelector
 				model={taskSelector}
 				value={activeTaskId}
-				placeholder="No Tasks yet"
-				searchPlaceholder="Search Tasks…"
-				ariaLabel="Select Task"
-				emptyLabel="Task is not available"
+				placeholder="No conversations yet"
+				searchPlaceholder="Search conversations…"
+				ariaLabel="Select conversation"
+				emptyLabel="Conversation is not available"
 				onValueChange={selectTask}
 				icon="lucide:messages-square"
 			/>
 		</div>
-		<Button variant="ghost" size="icon" class="size-8" aria-label="New Task" onclick={beginNewTask}>
+		{#if costLabel !== ''}<span class="shrink-0 text-tiny text-muted-foreground">{costLabel}</span
+			>{/if}
+		<Button
+			variant="ghost"
+			size="icon"
+			class="size-8"
+			aria-label="New conversation"
+			onclick={beginNewTask}
+		>
 			<Icon icon="lucide:plus" class="size-4" />
 		</Button>
 	</Inline>
 
-	<Scroll class="min-h-0 flex-1" name="Task transcript">
+	<Scroll class="min-h-0 flex-1" name="Conversation transcript">
 		<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
 			{#if activeTask === undefined && visibleAdmission === null}
 				<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
 					<p class="max-w-sm">
-						Start a Task. Agent and Plan submissions share one durable transcript.
+						Start a conversation. Ask for help or switch to Plan to work through an approach.
 					</p>
 				</div>
 			{:else if activeTask === undefined && visibleAdmission !== null}
@@ -798,87 +771,43 @@
 							active model-view boundary cannot be certified until older rows are paged.
 						</div>
 					{/if}
-					{#if activePlan !== undefined}
-						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2" open>
-							<summary
-								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							>
-								<Inline align="center" gap="sm">
-									<Icon icon="lucide:notebook-tabs" class="size-4 text-primary" />
-									<div class="min-w-0 flex-1">
-										<p class="m-0 truncate text-xs font-semibold">Plan r{activePlan.revision}</p>
-										<p class="m-0 truncate text-tiny text-muted-foreground">
-											{activePlan.body.split('\n').find((line) => line.trim().length > 0) ??
-												'Empty Plan'}
-										</p>
-									</div>
-									<span class="rounded-full bg-background px-2 py-0.5 text-tiny">{planState()}</span
-									>
-								</Inline>
-							</summary>
-							<Stack gap="sm" class="border-t border-border/60 pt-2">
-								<Inline gap="md" class="text-tiny text-muted-foreground">
-									<span>{elapsedSince(activePlan.created_at)}</span>
-									{#if costLabel !== ''}<span>{costLabel}</span>{/if}
-								</Inline>
-								<p class="m-0 whitespace-pre-wrap text-xs leading-5">{activePlan.body}</p>
-								<Inline gap="xs" justify="end">
-									{#if canStop}
-										<Button size="sm" variant="ghost" onclick={() => control('stop')}>Stop</Button>
-									{:else if canResume}
-										<Button size="sm" variant="ghost" onclick={() => control('resume')}
-											>Resume</Button
-										>
-									{/if}
-								</Inline>
-							</Stack>
-						</details>
-					{/if}
-
-					{#if contextView.checkpoint !== null}
-						<section
-							class="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2"
-							aria-label={compactTitle(contextView.checkpointOrigin)}
-						>
-							<Inline align="center" gap="sm">
-								<Icon icon="lucide:scan-text" class="size-4 shrink-0 text-primary" />
-								<div class="min-w-0 flex-1">
-									<p class="m-0 text-xs font-semibold">
-										{compactTitle(contextView.checkpointOrigin)}
-									</p>
-									<p class="m-0 text-tiny text-muted-foreground">
-										The agent sees this checkpoint and newer in-view messages. Full history remains
-										saved.
-									</p>
-								</div>
-							</Inline>
-							<p class="mb-0 whitespace-pre-wrap text-xs leading-5">
-								{plainMessageText(contextView.checkpoint)}
-							</p>
-						</section>
-					{/if}
+					<AgentContextSegment
+						plan={activePlan}
+						runs={rootRuns}
+						messages={rootMessages}
+						status={planState()}
+					/>
 
 					{#if todo !== null && todo.items.length > 0}
+						{@const completed = todo.items.filter((item) => item.status === 'done').length}
 						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
 							<summary
 								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
-								<Inline align="center" gap="sm">
-									<span
-										class="grid size-6 place-items-center rounded-full text-micro font-semibold"
-										style={`background: conic-gradient(var(--primary) ${(todo.items.filter((item) => item.status === 'done').length / todo.items.length) * 100}%, var(--muted) 0)`}
-									>
-										<span class="grid size-4 place-items-center rounded-full bg-card"
-											>{todoPosition(todo)}</span
+								<Stack gap="sm">
+									<Inline justify="between" gap="md" class="text-xs">
+										<span class="font-medium"
+											>{completed === todo.items.length ? 'Goal complete' : 'Goal progress'}</span
 										>
-									</span>
-									<span class="text-xs font-medium"
-										>Step {todoPosition(todo)} / {todo.items.length}</span
-									>
-								</Inline>
+										<span class="shrink-0 text-muted-foreground"
+											>{completed} / {todo.items.length} complete</span
+										>
+									</Inline>
+									<progress
+										class="h-1 w-full accent-primary"
+										max={todo.items.length}
+										value={completed}
+										aria-label="Goal progress"
+									></progress>
+									<p class="m-0 text-sm">
+										{todo.items.find((item) => item.status === 'doing')?.text ??
+											todo.items.find((item) => item.status === 'pending')?.text ??
+											'All steps completed'}
+									</p>
+								</Stack>
 							</summary>
-							<Scroll name="Task progress" class="max-h-64">
-								<Stack as="ol" gap="xs" class="pl-0" aria-label="Task progress">
+							<Scroll name="Goal steps" class="max-h-64">
+								<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
 									{#each todo.items as item (item.id)}
 										<li class="min-w-0 text-xs">
 											<Inline align="start" gap="sm">
@@ -908,10 +837,14 @@
 						</details>
 					{/if}
 
-					<ol class="m-0 list-none p-0" aria-label="Task transcript">
-						{#each rootMessages as message (message.key)}
+					<ol class="m-0 list-none p-0" aria-label="Conversation transcript">
+						{#each contextView.focusMessages as message (message.key)}
 							<AgentTranscriptItem
+								hideTodo
 								{message}
+								generating={runs.some(
+									(run) => run.id === message.runId && run.status === 'running'
+								)}
 								mode={message.runId === null ? null : (modeByRunId.get(message.runId) ?? null)}
 								outsideModelView={contextView.outsideMessageIds.has(message.id)}
 								checkpointOrigin={message.annotation?.tag === 'compact'
@@ -968,17 +901,13 @@
 				</button>
 			</Inline>
 		{/if}
-		{#if activeTask?.status === 'done'}
+		{#if activeTask?.status === 'failed'}
 			<p class="text-xs text-muted-foreground">
-				This Task is complete and immutable. Start a new Task for another objective.
-			</p>
-		{:else if activeTask?.status === 'failed'}
-			<p class="text-xs text-muted-foreground">
-				This Task failed. Retry it, or send a message to start a new Task.
+				The last turn failed. Retry it or send a follow-up here.
 			</p>
 		{:else if canResume}
 			<p class="text-xs text-muted-foreground">
-				Resume this Task before submitting another message.
+				Resume the previous turn or send a follow-up here.
 			</p>
 		{/if}
 		{#if modelQuery.error !== undefined}
@@ -992,8 +921,8 @@
 		{#if planMode || parsedDraft.kind === 'submission'}
 			<p class="text-tiny text-muted-foreground">
 				{parsedDraft.kind === 'submission' && parsedDraft.mode === 'compact'
-					? 'Compact saves a focus checkpoint without deleting durable history.'
-					: 'Plan saves an objective and verification contract. Future Agent turns focus on the latest Plan; no new Task is needed.'}
+					? 'Summarize this conversation and keep its transcript available.'
+					: 'Revise the full plan before putting it into action.'}
 			</p>
 		{/if}
 		<Stack
@@ -1017,22 +946,46 @@
 				class="field-sizing-fixed max-h-40 min-h-14 flex-1 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
 				disabled={pending || controlPending || !taskAcceptsSubmission}
 			/>
-			{#if pendingImages.length > 0}
+			{#if pendingAttachments.length > 0}
 				<Inline gap="xs" class="px-2.5">
-					{#each pendingImages as image (image.id)}
+					{#each pendingAttachments as image (image.id)}
 						<button
 							type="button"
-							class="relative size-10 rounded-md border border-border/70"
+							class="relative flex h-10 max-w-48 items-center gap-2 rounded-md border border-border/70 px-2 text-xs"
 							style="overflow: hidden"
 							aria-label={`Remove ${image.file.name}`}
-							onclick={() => removePendingImage(image.id)}
+							onclick={() => removePendingAttachment(image.id)}
 						>
-							<img src={image.previewUrl} alt={image.file.name} class="size-full object-cover" />
+							{#if image.previewUrl !== null}
+								<img src={image.previewUrl} alt="" class="size-8 rounded object-cover" />
+							{:else}
+								<Icon icon="lucide:file-text" class="size-4 shrink-0" />
+							{/if}
+							<span class="truncate">{image.file.name}</span>
+							<Icon icon="lucide:x" class="size-3 shrink-0" />
 						</button>
 					{/each}
 				</Inline>
 			{/if}
 			<Inline align="center" gap="xs" class="px-2.5 pb-2">
+				<input
+					bind:this={filePicker}
+					type="file"
+					accept="image/*,text/*,application/pdf,application/json,application/xml,.md,.csv,.tsv,.log,.yaml,.yml"
+					multiple
+					class="sr-only"
+					onchange={onFilePicked}
+				/>
+				<button
+					type="button"
+					aria-label="Attach media or files"
+					disabled={pending || controlPending || !taskAcceptsSubmission}
+					onclick={() => filePicker?.click()}
+					class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<Icon icon="lucide:plus" class="size-5" />
+				</button>
+				<span class="flex-1"></span>
 				<Combobox
 					options={modelOptions}
 					value={modelId ?? null}
@@ -1047,30 +1000,14 @@
 					onValueChange={(value) => {
 						if (typeof value === 'string') selectedModelId = value;
 					}}
-					class="min-w-0 max-w-[40%]"
+					class="w-auto min-w-0 max-w-[45%]"
 					triggerClass="h-7 border-0 bg-transparent px-1.5 text-xs font-normal shadow-none hover:bg-muted"
 				/>
-				<input
-					bind:this={imagePicker}
-					type="file"
-					accept="image/*"
-					multiple
-					class="sr-only"
-					onchange={onImagePicked}
-				/>
-				<button
-					type="button"
-					aria-label="Attach image"
-					disabled={pending || controlPending || !taskAcceptsSubmission}
-					onclick={() => imagePicker?.click()}
-					class="rounded-md px-1.5 py-0.5 text-xs font-normal text-muted-foreground hover:bg-muted"
-				>
-					<Icon icon="lucide:image" class="size-4" />
-				</button>
 				<button
 					type="button"
 					aria-pressed={planMode}
 					aria-keyshortcuts="Tab"
+					title="Switch between Agent and Plan (Tab)"
 					disabled={pending || controlPending || !taskAcceptsSubmission}
 					onclick={() => (planMode = !planMode)}
 					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode
@@ -1079,11 +1016,6 @@
 				>
 					{planMode ? 'Plan' : 'Agent'}
 				</button>
-				<kbd class="rounded border border-border/70 bg-muted/60 px-1 py-0.5 font-mono text-micro"
-					>Tab</kbd
-				>
-				{#if costLabel !== ''}<span class="text-tiny text-muted-foreground">{costLabel}</span>{/if}
-				<span class="flex-1"></span>
 				{#if taskWorking}
 					<Button
 						type="button"
@@ -1091,7 +1023,8 @@
 						size="icon"
 						class="size-8 rounded-full"
 						disabled={!canSend}
-						aria-label="Steer Task"
+						aria-label="Steer current turn"
+						title="Send at the next agent step"
 						onclick={() => attemptSend('steer')}
 					>
 						<Icon icon="lucide:milestone" class="size-4" />
@@ -1102,7 +1035,7 @@
 						size="icon"
 						class="size-8 rounded-full"
 						disabled={!canStop}
-						aria-label="Stop Task"
+						aria-label="Stop generating"
 						onclick={() => control('stop')}
 					>
 						<Icon icon="lucide:square" class="size-4" />
@@ -1114,7 +1047,7 @@
 						size="icon"
 						class="size-8 rounded-full"
 						disabled={controlPending || !modelAvailable}
-						aria-label="Resume Task"
+						aria-label="Resume conversation"
 						onclick={() => control('resume')}
 					>
 						<Icon icon="lucide:play" class="size-4" />
@@ -1125,7 +1058,7 @@
 					size="icon"
 					class="size-8 rounded-full"
 					disabled={!canSend}
-					aria-label={revisedMessage !== null ? 'Send revised message' : 'Submit Task message'}
+					aria-label={revisedMessage !== null ? 'Send revised message' : 'Send message'}
 				>
 					{#if pending}
 						<Spinner class="size-4" label={t(agentOrbBusyStatusKey(orbState))} />

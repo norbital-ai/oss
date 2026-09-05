@@ -9,6 +9,7 @@ type AgentContextView = Readonly<{
 	checkpoint: PanelMessage | null;
 	checkpointOrigin: CompactOrigin | null;
 	focusMessages: readonly PanelMessage[];
+	historyMessages: readonly PanelMessage[];
 	outsideMessageIds: ReadonlySet<string>;
 	detailMessageIds: ReadonlySet<string>;
 }>;
@@ -34,16 +35,17 @@ export function compactOrigin(
  * Mirrors the durable Plan/Compact context boundary used by TaskRuntime, then separates detailed
  * Plan/Compact turns from the focused conversation. Nothing is deleted from the full transcript.
  */
-export function projectAgentContextView(input: Readonly<{
-	messages: readonly PanelMessage[];
-	runs: readonly AgentRunRow[];
-	activePlan?: AgentPlanRow | undefined;
-}>): AgentContextView {
+export function projectAgentContextView(
+	input: Readonly<{
+		messages: readonly PanelMessage[];
+		runs: readonly AgentRunRow[];
+		activePlan?: AgentPlanRow | undefined;
+	}>
+): AgentContextView {
 	const latestCheckpoint = compactCheckpoint(input.messages);
 	const planCutoff = input.activePlan?.checkpoint_sequence ?? null;
 	const checkpoint =
-		latestCheckpoint !== null &&
-		(planCutoff === null || latestCheckpoint.sequence > planCutoff)
+		latestCheckpoint !== null && (planCutoff === null || latestCheckpoint.sequence > planCutoff)
 			? latestCheckpoint
 			: null;
 	const retained =
@@ -57,20 +59,22 @@ export function projectAgentContextView(input: Readonly<{
 	const runModes = new Map(input.runs.map((run) => [String(run.id), run.mode] as const));
 
 	for (const message of input.messages) {
+		const sequence =
+			message.annotation?.tag === 'input' && message.annotation.consumedAfterSequence !== undefined
+				? Math.max(message.sequence, message.annotation.consumedAfterSequence + 1)
+				: message.sequence;
+		const queued =
+			message.annotation?.tag === 'input' && message.annotation.consumedAfterSequence === undefined;
 		const afterCompact =
 			compactCutoff === null ||
-			message.sequence > compactCutoff ||
+			sequence > compactCutoff ||
 			message.id === latestCheckpoint?.id ||
 			retained.has(message.id);
-		const afterPlan = planCutoff === null || message.sequence > planCutoff;
-		if (!afterCompact || !afterPlan) outsideMessageIds.add(message.id);
+		const afterPlan = planCutoff === null || sequence > planCutoff;
+		if (!queued && (!afterCompact || !afterPlan)) outsideMessageIds.add(message.id);
 
 		const runMode = message.runId === null ? undefined : runModes.get(message.runId);
-		if (
-			runMode === 'plan' ||
-			runMode === 'compact' ||
-			message.annotation?.tag === 'compact'
-		) {
+		if (runMode === 'plan' || runMode === 'compact' || message.annotation?.tag === 'compact') {
 			detailMessageIds.add(message.id);
 		}
 	}
@@ -79,8 +83,10 @@ export function projectAgentContextView(input: Readonly<{
 		checkpoint,
 		checkpointOrigin: checkpoint === null ? null : compactOrigin(checkpoint, input.runs),
 		focusMessages: input.messages.filter(
-			(message) =>
-				!outsideMessageIds.has(message.id) && !detailMessageIds.has(message.id)
+			(message) => !outsideMessageIds.has(message.id) && message.id !== checkpoint?.id
+		),
+		historyMessages: input.messages.filter(
+			(message) => outsideMessageIds.has(message.id) || message.id === checkpoint?.id
 		),
 		outsideMessageIds,
 		detailMessageIds

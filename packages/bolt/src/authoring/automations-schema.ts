@@ -81,6 +81,8 @@ export type AutomationProgression = Schema.Schema.Type<typeof AutomationProgress
  * can outlive or partially report that write.
  */
 export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S> & {
+	/** Runtime-owned occurrence identity, stable across retries. Use it to key durable receipts. */
+	readonly runId: string;
 	/** Retrieves a bounded public HTTPS page through the host connector, without stored sign-ins. */
 	readonly readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage>;
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */

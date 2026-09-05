@@ -5,7 +5,7 @@ import {
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage, toError } from '@norbital-ai/std';
-import { Clock, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
+import { Clock, Deferred, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
@@ -90,6 +90,7 @@ export const startApplication = async (
 ): Promise<RunningApplication> => {
 	const { configuration, facilities } = options;
 	const taskInvocations = makeTaskInvocationControl();
+	const dispatchReady = Deferred.makeUnsafe<void>();
 	const finalizeFacilities =
 		options.finalizeFacilities === undefined
 			? Effect.void
@@ -165,7 +166,7 @@ export const startApplication = async (
 			Effect.runFork(Effect.logError(`timekeeper.tick: ${getErrorMessage(cause)}`));
 		}
 	});
-	const bound: FacilityBindings = {
+	let bound: FacilityBindings = {
 		...facilities,
 		tasks: makeTaskBinding(timekeeper, () => {}, taskInvocations)
 	};
@@ -176,7 +177,10 @@ export const startApplication = async (
 		makeBundleLoaderLayer({ bundlePath: configuration.bundlePath, facilities: bound })
 	);
 	const runtime = ManagedRuntime.make(applicationLayer);
-	runScheduledTick = (effect) => runtime.runPromise(effect);
+	// Activation can announce immediate work before HTTP sync is wired. Hold that work so every
+	// background mutation publishes through the same commit lane as an HTTP invocation.
+	runScheduledTick = (effect) =>
+		runtime.runPromise(Deferred.await(dispatchReady).pipe(Effect.andThen(effect)));
 
 	const startup = Effect.gen(function* () {
 		const activated = Effect.gen(function* () {
@@ -222,7 +226,10 @@ export const startApplication = async (
 		const server = yield* Effect.gen(function* () {
 			yield* activated;
 			return yield* Effect.tryPromise(() =>
-				startServer(configuration, bound, runtime, taskInvocations)
+				startServer(configuration, bound, runtime, taskInvocations, (liveFacilities) => {
+					bound = liveFacilities;
+					Effect.runSync(Deferred.succeed(dispatchReady, undefined));
+				})
 			);
 		});
 		yield* Effect.gen(function* () {
@@ -236,7 +243,8 @@ export const startApplication = async (
 		// repository-health:allow SANDWICH1 -- Startup uses its managed runtime, but cleanup must survive disposal of that runtime and report its failure outside it.
 		Effect.tryPromise({ try: () => runtime.runPromise(startup), catch: toError }).pipe(
 			Effect.catch((cause) =>
-				finalizeFacilities.pipe(
+				Effect.sync(() => timekeeper.stop()).pipe(
+					Effect.andThen(finalizeFacilities),
 					Effect.catch(() => Effect.void),
 					Effect.andThen(Effect.tryPromise({ try: () => runtime.dispose(), catch: toError })),
 					Effect.andThen(

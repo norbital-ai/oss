@@ -388,7 +388,7 @@
 						Effect.tap(() =>
 							Effect.sync(() => {
 								if (message.includes('DDL was generated')) {
-									host.status = 'Migration ready — review or edit it, then Preview again.';
+									host.status = 'Migration ready — review or edit it, then Publish again.';
 									const migration = Object.keys(snapshot?.source.files ?? {})
 										.filter(
 											(path) =>

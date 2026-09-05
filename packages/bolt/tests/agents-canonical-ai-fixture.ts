@@ -151,12 +151,13 @@ export const successfulAI = (
 	};
 };
 
-export const modelMessages = (
-	request: GenerateRequest
-): ReadonlyArray<Prompt.MessageEncoded> => request.messages;
+export const modelMessages = (request: GenerateRequest): ReadonlyArray<Prompt.MessageEncoded> =>
+	request.messages;
 
 export const assistantToolCalls = (
-	calls: ReadonlyArray<Readonly<{ readonly name: string; readonly input: unknown; readonly id?: string }>>
+	calls: ReadonlyArray<
+		Readonly<{ readonly name: string; readonly input: unknown; readonly id?: string }>
+	>
 ): Prompt.MessageEncoded =>
 	encodeMessage(
 		Prompt.assistantMessage({
@@ -175,9 +176,7 @@ const encodedText = (message: Prompt.MessageEncoded): string =>
 	typeof message.content === 'string'
 		? message.content
 		: message.content
-				.flatMap((part) =>
-					part.type === 'text' || part.type === 'reasoning' ? [part.text] : []
-				)
+				.flatMap((part) => (part.type === 'text' || part.type === 'reasoning' ? [part.text] : []))
 				.join('\n');
 
 export type GenerateInspection = Readonly<{
@@ -198,11 +197,11 @@ export const inspectGenerate = (request: GenerateRequest): GenerateInspection =>
 		maxOutputTokens: request.maxOutputTokens,
 		promptBytes: new TextEncoder().encode(encoded).byteLength,
 		automaticCompact: texts.some((text) => text.includes('Automatic Compact:')),
-		planMode: texts.some((text) =>
-			text.includes('Plan mode: produce one objective, implementation approach, and verification contract.')
-		),
+		planMode: texts.some((text) => text.startsWith('Plan mode:')),
 		compactMode: texts.some((text) =>
-			text.includes('Compact mode: summarize durable context without performing work or calling tools.')
+			text.includes(
+				'Compact mode: summarize durable context without performing work or calling tools.'
+			)
 		),
 		roles: request.messages.map((message) => message.role)
 	};
@@ -213,7 +212,7 @@ export type TranscriptReply =
 	| ((
 			request: GenerateRequest,
 			inspection: GenerateInspection
-		) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>);
+	  ) => Prompt.MessageEncoded | Promise<Prompt.MessageEncoded>);
 
 /**
  * Streams a scripted assistant transcript into the AI facility.
@@ -282,10 +281,7 @@ export const lastToolResult = (
 };
 
 /** The first tool result recorded for one tool name, searched newest-first. */
-export const toolResultFor = (
-	request: GenerateRequest,
-	name: string
-): unknown | undefined => {
+export const toolResultFor = (request: GenerateRequest, name: string): unknown | undefined => {
 	for (const message of request.messages.toReversed()) {
 		if (message.role !== 'tool' || typeof message.content === 'string') continue;
 		for (const part of message.content) {
@@ -310,7 +306,9 @@ export const toolResultsFor = (request: GenerateRequest, name: string): Readonly
 /** The newest failed tool result, as the Toolkit encoded the failure. */
 export const lastToolFailure = (
 	request: GenerateRequest
-): Readonly<{ readonly name: string; readonly failure: Readonly<Record<string, unknown>> }> | undefined => {
+):
+	| Readonly<{ readonly name: string; readonly failure: Readonly<Record<string, unknown>> }>
+	| undefined => {
 	for (const message of request.messages.toReversed()) {
 		if (message.role !== 'tool' || typeof message.content === 'string') continue;
 		for (const part of message.content.toReversed()) {

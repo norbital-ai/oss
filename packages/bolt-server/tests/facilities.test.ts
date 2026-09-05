@@ -70,6 +70,48 @@ it('classifies serialization SQLSTATE through driver wrappers without changing o
 });
 
 it.effect(
+	'reports the driver refusal and rolls back a failed data migration',
+	() =>
+		Effect.acquireUseRelease(
+			Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+			(database) =>
+				Effect.gen(function* () {
+					const call = (request: DatabaseRequest) =>
+						Effect.tryPromise(() => database.binding.call(metadata, request, signal));
+					yield* call(
+						DatabaseRequest.cases.Query.make({
+							sql: 'create table migration_proof (id integer)',
+							parameters: []
+						})
+					);
+					const failed = yield* call(
+						DatabaseRequest.cases.Transaction.make({
+							statements: [
+								{ sql: 'insert into migration_proof values (1)', parameters: [] },
+								{ sql: 'select missing_field from migration_proof', parameters: [] }
+							]
+						})
+					);
+					assert.strictEqual(failed._tag, 'Failure');
+					if (failed._tag === 'Failure')
+						assert.match(failed.error.message, /column "missing_field" does not exist/);
+					const remaining = yield* call(
+						DatabaseRequest.cases.Query.make({
+							sql: 'select * from migration_proof',
+							parameters: []
+						})
+					);
+					assert.deepStrictEqual(remaining, {
+						_tag: 'Success',
+						value: { rows: [], affectedRows: 0 }
+					});
+				}),
+			(database) => Effect.promise(database.close)
+		),
+	LOCAL_DATABASE_TEST_TIMEOUT_MILLIS
+);
+
+it.effect(
 	'returns a retryable facility failure for bolt_assert serialization conflicts',
 	() =>
 		Effect.acquireUseRelease(

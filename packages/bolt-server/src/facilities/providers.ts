@@ -34,7 +34,8 @@ export interface AiProvider {
 	readonly call: (
 		metadata: FacilityCall,
 		input: AIRequest,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onProgress?: import('@norbital-ai/bolt-protocol').FacilityProgress
 		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
@@ -114,10 +115,7 @@ export type AiProviderRouterOptions = Readonly<{
 	readonly defaultProvider: string;
 }>;
 
-const registeredProvider = (
-	options: AiProviderRouterOptions,
-	name: string
-): AiProvider => {
+const registeredProvider = (options: AiProviderRouterOptions, name: string): AiProvider => {
 	const provider = options.providers[name];
 	if (provider === undefined) {
 		throw new Error(
@@ -127,10 +125,7 @@ const registeredProvider = (
 	return provider;
 };
 
-const providerNameForModelId = (
-	options: AiProviderRouterOptions,
-	modelId: string
-): string => {
+const providerNameForModelId = (options: AiProviderRouterOptions, modelId: string): string => {
 	const slash = modelId.indexOf('/');
 	const namespace = slash === -1 ? options.defaultProvider : modelId.slice(0, slash);
 	return options.aliases?.[namespace] ?? namespace;
@@ -143,20 +138,17 @@ const providerNameForModelId = (
  * `aliases`, then the registered name. Unprefixed ids use `defaultProvider`. No vendor is implied.
  */
 export const makeAiProviderRouter = (options: AiProviderRouterOptions): AiProvider => ({
-	call: (metadata: FacilityCall, request: AIRequest, signal: AbortSignal) => {
+	call: (metadata: FacilityCall, request: AIRequest, signal: AbortSignal, onProgress) => {
 		switch (request._tag) {
 			case 'Catalog':
-				return registeredProvider(options, options.defaultProvider).call(
-					metadata,
-					request,
-					signal
-				);
+				return registeredProvider(options, options.defaultProvider).call(metadata, request, signal);
 			case 'Generate':
 			case 'Embed':
 				return registeredProvider(options, providerNameForModelId(options, request.modelId)).call(
 					metadata,
 					request,
-					signal
+					signal,
+					onProgress
 				);
 			default: {
 				const _exhaustive: never = request;

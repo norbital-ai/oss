@@ -32,6 +32,8 @@ export type HeadedPage = {
 	readonly click: (selector: string) => Promise<void>;
 	readonly clickAt: (x: number, y: number) => Promise<void>;
 	readonly dragAndDrop: (source: string, target: string) => Promise<void>;
+	readonly setViewportSize: (size: { width: number; height: number }) => Promise<void>;
+	readonly screenshot: () => Promise<Uint8Array>;
 	readonly openWindow: (url: string) => Promise<HeadedPage>;
 	readonly close: () => Promise<void>;
 };
@@ -58,9 +60,7 @@ const evaluatedValue = (response: unknown): unknown => {
 	if (response.exceptionDetails !== undefined) {
 		const details = response.exceptionDetails;
 		const text =
-			isRecord(details) && isString(details.text)
-				? details.text
-				: JSON.stringify(details);
+			isRecord(details) && isString(details.text) ? details.text : JSON.stringify(details);
 		throw new Error(text);
 	}
 	if (!isRecord(response.result) || !('value' in response.result)) return undefined;
@@ -106,6 +106,8 @@ const wrapPage = async (page: Page): Promise<HeadedPage> => {
 		evaluate: (expression) => runOnSession(client, expression),
 		click: (selector) => page.click(selector),
 		clickAt: (x, y) => page.mouse.click(x, y),
+		setViewportSize: (size) => page.setViewportSize(size),
+		screenshot: () => page.screenshot(),
 		dragAndDrop: async (source, target) => {
 			await page.locator(source).hover({ force: true });
 			await page.dragAndDrop(source, target);
@@ -147,7 +149,12 @@ const chromiumApplicationPath = async (): Promise<string | undefined> => {
 	const app = resolve(executable, '../../..');
 	const contents = join(app, 'Contents', 'MacOS');
 	const present = await Promise.all(
-		APP_BINARIES.map((name) => access(join(contents, name)).then(() => true, () => false))
+		APP_BINARIES.map((name) =>
+			access(join(contents, name)).then(
+				() => true,
+				() => false
+			)
+		)
 	);
 	return present.some(Boolean) ? app : undefined;
 };
@@ -164,9 +171,7 @@ type Session = {
  * `document.hidden === false` still holds because the window is neither minimized nor occluded
  * by the app shell.
  */
-const openBackgroundSession = async (
-	initScripts: readonly string[]
-): Promise<Session> => {
+const openBackgroundSession = async (initScripts: readonly string[]): Promise<Session> => {
 	const app = await chromiumApplicationPath();
 	if (app === undefined) {
 		throw new MissingChromiumError(`Chromium bundle missing for ${chromium.executablePath()}`);
@@ -185,7 +190,9 @@ const openBackgroundSession = async (
 	await new Promise<void>((resolve, reject) => {
 		spawn('open', ['-jna', app, '--args', ...args], { stdio: 'ignore' })
 			.once('error', reject)
-			.once('exit', (code) => (code === 0 ? resolve() : reject(new Error(`open exited ${String(code)}`))));
+			.once('exit', (code) =>
+				code === 0 ? resolve() : reject(new Error(`open exited ${String(code)}`))
+			);
 	});
 	const deadline = Date.now() + 20_000;
 	let last: unknown = 'never answered';

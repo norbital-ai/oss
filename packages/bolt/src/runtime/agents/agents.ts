@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
 import { Prompt, Tool, Toolkit } from 'effect/unstable/ai';
-import { EffectId, ReleaseId } from '@norbital-ai/bolt-protocol';
+import { EffectId, ReleaseId, type AIMessageProgress } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
 import {
 	AgentId,
@@ -10,6 +10,7 @@ import {
 	DirectivePriority,
 	ExactCharge,
 	ImageAsset,
+	FileAsset,
 	MessageId,
 	ModelId,
 	PlanId,
@@ -27,7 +28,7 @@ import {
 	WorkbenchId
 } from '@norbital-ai/bolt-protocol/facilities';
 import {
-	imageAssetsFromMessage,
+	attachmentAssetsFromMessage,
 	stripImageFileParts,
 	taskAssetKeyPrefix,
 	taskAssetStorageKey as taskScopedImageKey,
@@ -124,6 +125,18 @@ type CapabilitySnapshot = typeof CapabilitySnapshot.Type;
  * the owning run, which is the mode of the turn, not of the checkpoint.
  */
 const MessageAnnotation = Schema.Union([
+	Schema.Struct({
+		tag: Schema.Literal('input'),
+		priority: DirectivePriority,
+		consumedAfterSequence: Schema.optionalKey(Schema.Natural),
+		cancelled: Schema.optionalKey(Schema.Boolean)
+	}),
+	Schema.Struct({
+		tag: Schema.Literal('generation'),
+		callId: ProviderCallId,
+		sequence: Schema.Natural,
+		activeParts: Schema.Array(Schema.Natural)
+	}),
 	Schema.Struct({
 		tag: Schema.Literal('compact'),
 		origin: Schema.Literals(['manual', 'automatic']),
@@ -259,7 +272,7 @@ const MAX_IMAGE_COUNT = 8;
 const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
 export const taskAssetStorageKey = (taskId: TaskId, documentId: string, fileName: string): string =>
 	taskScopedImageKey(taskId, documentId, fileName);
-const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) =>
+const validateAttachments = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) =>
 	Effect.gen(function* () {
 		const prefix = taskAssetKeyPrefix(taskId);
 		if (
@@ -267,8 +280,8 @@ const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) 
 			assets.reduce((sum, asset) => sum + asset.size, 0) > MAX_IMAGE_SOURCE_BYTES
 		) {
 			return yield* new TaskRuntimeError({
-				operation: 'image-assets',
-				message: 'The image count or source bytes exceed the provider boundary.'
+				operation: 'attachments',
+				message: 'The attachment count or source bytes exceed the provider boundary.'
 			});
 		}
 		for (const asset of assets) {
@@ -276,16 +289,27 @@ const validateImageAssets = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) 
 				!asset.key.startsWith(prefix) ||
 				asset.key.includes('..') ||
 				asset.key.split('/').length !== 3 ||
-				!asset.mimeType.toLowerCase().startsWith('image/') ||
+				!/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml))$/.test(
+					asset.mimeType
+				) ||
 				asset.size <= 0
 			) {
 				return yield* new TaskRuntimeError({
-					operation: 'image-assets',
-					message: 'An image descriptor is outside this Task or malformed.'
+					operation: 'attachments',
+					message: 'An attachment descriptor is outside this conversation or malformed.'
 				});
 			}
 		}
 	});
+
+const generationAssets = (assets: ReadonlyArray<ImageAsset>) => {
+	const imageAssets = assets.filter((asset) => asset.mimeType.startsWith('image/'));
+	const fileAssets = assets.filter((asset) => !asset.mimeType.startsWith('image/'));
+	return {
+		...(imageAssets.length === 0 ? {} : { imageAssets }),
+		...(fileAssets.length === 0 ? {} : { fileAssets })
+	};
+};
 
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
 export const messageText = (message: Prompt.MessageEncoded): string =>
@@ -360,8 +384,32 @@ const compactProjection = (messages: ReadonlyArray<AgentMessage>) => {
 	if (checkpoint === undefined || annotation?.tag !== 'compact') return messages;
 	const retained = new Set(annotation.retainedMessageIds);
 	return messages.filter(
-		({ id, sequence }) => sequence > annotation.cutoff || id === checkpoint.id || retained.has(id)
+		(message) =>
+			contextSequence(message) > annotation.cutoff ||
+			message.id === checkpoint.id ||
+			retained.has(message.id)
 	);
+};
+
+// A queued input can precede a checkpoint in storage but be delivered afterwards.
+const contextSequence = (message: AgentMessage): number =>
+	message.annotation?.tag === 'input' && message.annotation.consumedAfterSequence !== undefined
+		? Math.max(message.sequence, message.annotation.consumedAfterSequence + 1)
+		: message.sequence;
+
+const projectTaskMessages = (messages: ReadonlyArray<AgentMessage>, activePlan?: AgentPlan) => {
+	const projected = compactProjection(
+		supersessionProjection(
+			messages.filter(
+				(row) =>
+					row.annotation?.tag !== 'generation' &&
+					(row.annotation?.tag !== 'input' || row.annotation.consumedAfterSequence !== undefined)
+			)
+		)
+	);
+	return activePlan === undefined
+		? projected
+		: projected.filter((message) => contextSequence(message) > activePlan.checkpoint_sequence);
 };
 
 const projectTaskPrompt = (input: {
@@ -374,12 +422,8 @@ const projectTaskPrompt = (input: {
 	const system = [input.workspacePrompt, input.agentInstruction]
 		.filter((part): part is string => part !== undefined && part.trim() !== '')
 		.join('\n\n');
-	const projected = compactProjection(supersessionProjection(input.messages));
 	const activePlan = input.activePlan;
-	const messages =
-		activePlan === undefined
-			? projected
-			: projected.filter(({ sequence }) => sequence > activePlan.checkpoint_sequence);
+	const messages = projectTaskMessages(input.messages, activePlan);
 	return [
 		...(system === '' ? [] : [systemMessage(system)]),
 		...(activePlan === undefined
@@ -388,7 +432,7 @@ const projectTaskPrompt = (input: {
 		...(input.mode === 'plan'
 			? [
 					systemMessage(
-						'Plan mode: produce one objective, implementation approach, and verification contract. Do not execute implementation tools.'
+						'Plan mode: produce the complete replacement plan, including the objective, implementation approach, and verification contract. Incorporate the latest request and preserve unchanged requirements from the active plan. Return the whole revised plan, never a diff or a partial amendment. Do not execute implementation tools.'
 					)
 				]
 			: input.mode === 'compact'
@@ -419,8 +463,8 @@ const unresolvedToolCalls = (
 				: message.content.flatMap((part) => (part.type === 'tool-result' ? [part.id] : []))
 		)
 	);
-	return messages.flatMap(({ message }) =>
-		toolCalls(message).filter(({ id }) => !resolved.has(id))
+	return messages.flatMap(({ message, annotation }) =>
+		annotation?.tag === 'generation' ? [] : toolCalls(message).filter(({ id }) => !resolved.has(id))
 	);
 };
 const toolResultMessage = (call: EncodedToolCall, result: unknown, isFailure: boolean) =>
@@ -438,7 +482,7 @@ const toolResultMessage = (call: EncodedToolCall, result: unknown, isFailure: bo
 		})
 	);
 
-const generateMessage = Effect.fn('Agents.generateMessage')(function* (
+const generateMessage = Effect.fn('Agents.generateMessage')(function* <ProgressError = never>(
 	ai: AIInterface,
 	effectId: EffectId,
 	input: {
@@ -447,29 +491,36 @@ const generateMessage = Effect.fn('Agents.generateMessage')(function* (
 		messages: ReadonlyArray<Prompt.MessageEncoded>;
 		maxOutputTokens: number;
 		imageAssets?: ReadonlyArray<ImageAsset>;
+		fileAssets?: ReadonlyArray<FileAsset>;
 		tools?: ReadonlyArray<ToolDeclaration>;
+		onProgress?: (progress: AIMessageProgress) => Effect.Effect<void, ProgressError>;
 	}
 ) {
-	const response = yield* ai.generate(effectId, {
-		_tag: 'Generate',
-		callId: input.callId,
-		modelId: input.modelId,
-		messages: [...input.messages],
-		maxOutputTokens: input.maxOutputTokens,
-		output: {
-			_tag: 'Message',
-			...(input.tools === undefined || input.tools.length === 0
-				? {}
-				: {
-						tools: input.tools.map(({ name, description, inputSchema }) => ({
-							name,
-							description,
-							inputSchema: inputSchema ?? EmptyToolInput
-						}))
-					})
+	const response = yield* ai.generate(
+		effectId,
+		{
+			_tag: 'Generate',
+			callId: input.callId,
+			modelId: input.modelId,
+			messages: [...input.messages],
+			maxOutputTokens: input.maxOutputTokens,
+			output: {
+				_tag: 'Message',
+				...(input.tools === undefined || input.tools.length === 0
+					? {}
+					: {
+							tools: input.tools.map(({ name, description, inputSchema }) => ({
+								name,
+								description,
+								inputSchema: inputSchema ?? EmptyToolInput
+							}))
+						})
+			},
+			...(input.imageAssets === undefined ? {} : { imageAssets: [...input.imageAssets] }),
+			...(input.fileAssets === undefined ? {} : { fileAssets: [...input.fileAssets] })
 		},
-		...(input.imageAssets === undefined ? {} : { imageAssets: [...input.imageAssets] })
-	});
+		input.onProgress
+	);
 	if (
 		response.observation.callId !== input.callId ||
 		response.observation.operation !== 'language' ||
@@ -675,16 +726,30 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Agents');
 
 const ToolFailure = Schema.Struct({
 	code: Schema.NonEmptyString,
-	message: Schema.NonEmptyString
+	message: Schema.NonEmptyString,
+	phase: Schema.optionalKey(Schema.Literals(['prepare', 'commit', 'settle'])),
+	committed: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
 interface ToolFailure extends Schema.Schema.Type<typeof ToolFailure> {}
 
 const describeFailure = (failure: unknown): ToolFailure => {
+	if (failure instanceof Collections.MutationPhaseFailure) {
+		const underlying = describeFailure(failure.underlying);
+		return {
+			...underlying,
+			phase: failure.phase,
+			committed: failure.committed,
+			message:
+				failure.phase === 'settle'
+					? `The write committed; do not retry it. ${underlying.message}`
+					: underlying.message
+		};
+	}
 	if (failure instanceof Error) {
 		const tag = Reflect.get(failure, '_tag');
 		return {
 			code: isString(tag) && tag !== '' ? tag : failure.name || 'tool_error',
-			message: failure.message
+			message: failure.message.trim() || 'Tool execution failed.'
 		};
 	}
 	if (isObjectLike(failure)) {
@@ -1008,7 +1073,31 @@ export const layer = Layer.effect(
 				orderBy: { sequence: 'asc' },
 				limit: 500
 			});
-			return yield* decodeRows(AgentMessageRow, rows);
+			const messages = yield* decodeRows(AgentMessageRow, rows);
+			if (
+				!messages.some(
+					(message) =>
+						message.annotation == null &&
+						['human', 'parent-agent', 'system'].includes(message.author.kind)
+				)
+			)
+				return messages;
+			// Existing conversations may have queued inputs from before delivery annotations existed.
+			const queued = yield* collections.findMany(effectId, subject, {
+				collection: 'agent_inbox',
+				where: { task_id: { eq: taskId }, state: { eq: 'queued' } },
+				limit: 500
+			});
+			const pending = yield* decodeRows(
+				Schema.Struct({ message_id: MessageId, priority: DirectivePriority }),
+				queued
+			);
+			return messages.map((message) => {
+				const directive = pending.find((input) => input.message_id === message.id);
+				return message.annotation == null && directive !== undefined
+					? { ...message, annotation: { tag: 'input' as const, priority: directive.priority } }
+					: message;
+			});
 		});
 
 		type RelatedMutation = Readonly<Record<string, unknown>> & Readonly<{ id: string }>;
@@ -1071,6 +1160,7 @@ export const layer = Layer.effect(
 		type Admission = Readonly<{
 			taskId: TaskId;
 			agentId: AgentId;
+			submissionId?: MessageId;
 			message: Prompt.MessageEncoded;
 			author: Readonly<{ kind: 'human' | 'parent-agent' | 'system'; id?: string }>;
 			mode: DirectiveMode;
@@ -1091,13 +1181,22 @@ export const layer = Layer.effect(
 			const agent = yield* resolveAgent(input.agentId);
 			yield* access.authorize(subject, 'agent', agent.id);
 			const existing = yield* taskById(EffectId.make(`${effectId}:task`), subject, input.taskId);
+			// A human conversation outlives its runs. Delegated tasks retain terminal result semantics.
+			const conversation = existing?.parent_id == null && input.author.kind === 'human';
+			const continueConversation =
+				conversation &&
+				existing !== undefined &&
+				(existing.status === 'done' ||
+					existing.status === 'failed' ||
+					existing.status === 'stopped' ||
+					existing.status === 'attention');
 			if (existing !== undefined) {
 				if (
 					existing.subject_id !== subject.userId ||
 					existing.agent_id !== input.agentId ||
 					existing.audience !== agent.audience ||
-					existing.status === 'done' ||
-					(existing.status === 'failed' && !input.resume)
+					(existing.status === 'done' && !conversation) ||
+					(existing.status === 'failed' && !input.resume && !conversation)
 				) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
@@ -1105,7 +1204,7 @@ export const layer = Layer.effect(
 						reason: 'Task identity is immutable'
 					});
 				}
-				if (!input.resume && existing.status === 'stopped') {
+				if (!input.resume && !conversation && existing.status === 'stopped') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
 						resource: input.taskId,
@@ -1117,6 +1216,7 @@ export const layer = Layer.effect(
 			if (existing !== undefined) messages = yield* messageRows(effectId, subject, input.taskId);
 			const fingerprint = semanticHash({
 				taskId: input.taskId,
+				...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
 				author: input.author,
 				message: input.message,
 				annotation: input.annotation,
@@ -1126,8 +1226,16 @@ export const layer = Layer.effect(
 				priority: input.priority,
 				...(input.modelId === undefined ? {} : { modelId: input.modelId })
 			});
-			const duplicate = messages.find(({ semantic_hash }) => semantic_hash === fingerprint);
+			const duplicate = messages.find(({ id, semantic_hash }) =>
+				input.submissionId === undefined ? semantic_hash === fingerprint : id === input.submissionId
+			);
 			if (duplicate !== undefined) {
+				if (duplicate.semantic_hash !== fingerprint)
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: input.taskId,
+						reason: 'A submission ID cannot be reused for a different message.'
+					});
 				const directive = yield* collections.findFirst(effectId, subject, {
 					collection: 'agent_inbox',
 					where: { message_id: { eq: duplicate.id } }
@@ -1142,7 +1250,7 @@ export const layer = Layer.effect(
 			}
 			if (input.modelId !== undefined)
 				yield* selectModel(EffectId.make(`${effectId}:model`), input.modelId);
-			const messageId = messageIdFor(`${input.taskId}:${fingerprint}`);
+			const messageId = input.submissionId ?? messageIdFor(`${input.taskId}:${fingerprint}`);
 			const directiveId = directiveIdFor(`${input.taskId}:${fingerprint}`);
 			const nextSequence = lastSequence(messages) + 1;
 			const inbox = yield* collections.findMany(effectId, subject, {
@@ -1164,7 +1272,7 @@ export const layer = Layer.effect(
 				message: input.message,
 				semantic_hash: fingerprint,
 				...(input.runId === undefined ? {} : { run_id: input.runId }),
-				...(input.annotation === undefined ? {} : { annotation: input.annotation }),
+				annotation: input.annotation ?? { tag: 'input', priority: input.priority },
 				...(input.supersedesId === undefined ? {} : { supersedes_id: input.supersedesId })
 			};
 			const directive = {
@@ -1213,9 +1321,9 @@ export const layer = Layer.effect(
 				);
 				yield* mutateTask(effectId, subject, {
 					id: input.taskId,
-					status: input.resume ? 'ready' : existing.status,
+					status: input.resume || continueConversation ? 'ready' : existing.status,
 					epoch: existing.epoch,
-					...(input.resume ? { active_run_id: null } : {}),
+					...(input.resume || continueConversation ? { active_run_id: null } : {}),
 					messages: completeMessages,
 					directives: completeDirectives
 				});
@@ -1231,6 +1339,7 @@ export const layer = Layer.effect(
 		) {
 			return yield* admit(effectId, subject, {
 				taskId: request.taskId,
+				...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
 				agentId: request.agentId,
 				message: request.message,
 				author: { kind: 'human', id: subject.userId },
@@ -1371,6 +1480,8 @@ export const layer = Layer.effect(
 			const directives = yield* decodeRows(
 				Schema.Struct({
 					id: DirectiveId,
+					message_id: MessageId,
+					priority: DirectivePriority,
 					sequence: Schema.Number.check(Schema.isInt()),
 					mode: DirectiveMode,
 					model_id: Schema.optionalKey(Schema.NullOr(ModelId))
@@ -1421,13 +1532,36 @@ export const layer = Layer.effect(
 				'agent_run',
 				[run]
 			);
+			const directiveMessage = messages.find(({ id }) => id === directive.message_id);
+			const completeMessages = yield* retainTaskRows(
+				EffectId.make(`${effectId}:retain-input`),
+				subject,
+				task.id,
+				'agent_message',
+				[
+					{
+						id: directive.message_id,
+						run_id: runId,
+						...(directiveMessage?.annotation == null || directiveMessage.annotation.tag === 'input'
+							? {
+									annotation: {
+										tag: 'input',
+										priority: directive.priority,
+										consumedAfterSequence: lastSequence(messages)
+									}
+								}
+							: {})
+					}
+				]
+			);
 			yield* mutateTask(effectId, subject, {
 				id: task.id,
 				status: 'running',
 				active_run_id: runId,
 				epoch,
 				directives: completeDirectives,
-				runs: completeRuns
+				runs: completeRuns,
+				messages: completeMessages
 			});
 			return yield* Schema.decodeUnknownEffect(AgentRunRow)(run);
 		});
@@ -1449,6 +1583,64 @@ export const layer = Layer.effect(
 				});
 			}
 			return task;
+		});
+
+		const consumeSteering = Effect.fn('Agents.consumeSteering')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			run: AgentRun
+		) {
+			const task = yield* fencedTask(effectId, subject, run);
+			const rows = yield* collections.findMany(effectId, subject, {
+				collection: 'agent_inbox',
+				where: {
+					task_id: { eq: task.id },
+					state: { eq: 'queued' },
+					priority: { eq: 'steer' },
+					mode: { eq: run.mode }
+				},
+				orderBy: { sequence: 'asc' },
+				limit: 500
+			});
+			const directives = yield* decodeRows(
+				Schema.Struct({ id: DirectiveId, message_id: MessageId }),
+				rows
+			);
+			if (directives.length === 0) return false;
+			const messages = yield* messageRows(effectId, subject, task.id);
+			const consumedAfterSequence = lastSequence(messages);
+			const completeMessages = yield* retainTaskRows(
+				EffectId.make(`${effectId}:inputs`),
+				subject,
+				task.id,
+				'agent_message',
+				directives.map((directive) => ({
+					id: directive.message_id,
+					run_id: run.id,
+					annotation: { tag: 'input', priority: 'steer', consumedAfterSequence }
+				}))
+			);
+			const completeDirectives = yield* retainTaskRows(
+				EffectId.make(`${effectId}:directives`),
+				subject,
+				task.id,
+				'agent_inbox',
+				directives.map((directive) => ({
+					id: directive.id,
+					state: 'settled',
+					claimed_run_id: run.id
+				}))
+			);
+			// Delivery and its receipt commit together under the active run fence; retries cannot deliver twice.
+			yield* mutateTask(effectId, subject, {
+				id: task.id,
+				status: task.status,
+				active_run_id: run.id,
+				epoch: run.epoch,
+				messages: completeMessages,
+				directives: completeDirectives
+			});
+			return true;
 		});
 
 		const appendMessage = Effect.fn('Agents.appendMessage')(function* (
@@ -1490,6 +1682,116 @@ export const layer = Layer.effect(
 				messages: completeMessages
 			});
 			return yield* Schema.decodeUnknownEffect(AgentMessageRow)(row);
+		});
+
+		/** Only an active, fenced generation may replace its in-progress message. Completed turns stay immutable. */
+		const persistGeneration = Effect.fn('Agents.persistGeneration')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			run: AgentRun,
+			authorId: string,
+			progress: AIMessageProgress,
+			annotation: MessageAnnotation | null
+		) {
+			const progressMessage = yield* Schema.decodeUnknownEffect(Prompt.Message)(progress.message);
+			if (progressMessage.role !== 'assistant')
+				return yield* new TaskRuntimeError({
+					operation: 'generation',
+					message: 'Only assistant parts may stream.'
+				});
+			if (
+				new Set(progress.activeParts).size !== progress.activeParts.length ||
+				progress.activeParts.some((index) => index >= progressMessage.content.length)
+			)
+				return yield* new TaskRuntimeError({
+					operation: 'generation',
+					message: 'Generation contains invalid active part indexes.'
+				});
+			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
+			const messages = yield* messageRows(effectId, subject, task.id);
+			const fingerprint = semanticHash({ runId: run.id, callId: progress.callId });
+			const id = messageIdFor(`${task.id}:${fingerprint}`);
+			const previous = messages.find((row) => row.id === id);
+			if (previous !== undefined && previous.annotation?.tag !== 'generation')
+				return yield* new TaskRuntimeError({
+					operation: 'generation',
+					message: 'Completed generation is immutable.'
+				});
+			if (
+				previous?.annotation?.tag === 'generation' &&
+				progress.sequence <= previous.annotation.sequence
+			) {
+				if (
+					progress.sequence === previous.annotation.sequence &&
+					semanticHash(previous.message) === semanticHash(progress.message) &&
+					semanticHash(previous.annotation) === semanticHash(annotation)
+				)
+					return;
+				return yield* new TaskRuntimeError({
+					operation: 'generation',
+					message: 'Generation progress is out of order.'
+				});
+			}
+			if (
+				progress.sequence !==
+				(previous?.annotation?.tag === 'generation' ? previous.annotation.sequence + 1 : 0)
+			)
+				return yield* new TaskRuntimeError({
+					operation: 'generation',
+					message: 'Generation progress skipped a boundary.'
+				});
+			if (previous?.annotation?.tag === 'generation' && previous.message.role === 'assistant') {
+				const prior = previous.annotation;
+				const previousMessage = yield* Schema.decodeUnknownEffect(Prompt.AssistantMessage)(
+					previous.message
+				);
+				if (
+					previousMessage.content.some(
+						(part, index) =>
+							!prior.activeParts.includes(index) &&
+							(progress.activeParts.includes(index) ||
+								semanticHash(part) !== semanticHash(progressMessage.content[index]))
+					)
+				)
+					return yield* new TaskRuntimeError({
+						operation: 'generation',
+						message: 'Completed parts are immutable.'
+					});
+				if (
+					annotation?.tag !== 'generation' &&
+					(prior.activeParts.length !== 0 ||
+						semanticHash(previous.message) !== semanticHash(progress.message))
+				)
+					return yield* new TaskRuntimeError({
+						operation: 'generation',
+						message: 'Final response must match completed stream parts.'
+					});
+			}
+			const rows = yield* retainTaskRows(
+				EffectId.make(`${effectId}:retain`),
+				subject,
+				task.id,
+				'agent_message',
+				[
+					{
+						id,
+						task_id: task.id,
+						sequence: previous?.sequence ?? lastSequence(messages) + 1,
+						run_id: run.id,
+						author: { kind: 'agent', id: authorId },
+						message: progress.message,
+						semantic_hash: fingerprint,
+						annotation
+					}
+				]
+			);
+			yield* mutateTask(effectId, subject, {
+				id: task.id,
+				status: task.status,
+				active_run_id: run.id,
+				epoch: run.epoch,
+				messages: rows
+			});
 		});
 
 		const recordUsage = Effect.fn('Agents.recordUsage')(function* (
@@ -1673,13 +1975,15 @@ export const layer = Layer.effect(
 			return undefined;
 		};
 
-		const imageAssets = (
+		const attachments = (
 			messages: ReadonlyArray<AgentMessage>,
 			runId: RunId
 		): ReadonlyArray<ImageAsset> => {
 			const assets: Array<ImageAsset> = [];
 			for (const row of messages) {
-				assets.push(...imageAssetsFromMessage(row.message));
+				if (row.annotation?.tag === 'input' && row.annotation.consumedAfterSequence === undefined)
+					continue;
+				assets.push(...attachmentAssetsFromMessage(row.message));
 				if (row.run_id !== runId) continue;
 				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
@@ -1688,7 +1992,7 @@ export const layer = Layer.effect(
 					if (decoded._tag === 'Some') assets.push(decoded.value);
 				}
 			}
-			return assets.slice(-MAX_IMAGE_COUNT);
+			return assets;
 		};
 
 		const childBarrier = Effect.fn('Agents.childBarrier')(function* (
@@ -1774,13 +2078,39 @@ export const layer = Layer.effect(
 					resume: true,
 					modelId: selected
 				});
+				// Explicit resume recalls the stopped objective and its cancelled queue as context.
+				// Ordinary follow-ups keep cancelled instructions excluded.
+				const history = yield* messageRows(effectId, subject, taskId);
+				const recalled = history
+					.filter(
+						(message) =>
+							message.annotation?.tag === 'input' && message.annotation.cancelled === true
+					)
+					.map((message) => ({
+						id: message.id,
+						annotation: { ...message.annotation, consumedAfterSequence: lastSequence(history) }
+					}));
+				if (recalled.length > 0) {
+					const messages = yield* retainTaskRows(
+						EffectId.make(`${effectId}:recall`),
+						subject,
+						taskId,
+						'agent_message',
+						recalled
+					);
+					yield* mutateTask(EffectId.make(`${effectId}:recall-inputs`), subject, {
+						id: taskId,
+						messages
+					});
+				}
 				return {
 					taskId,
 					status: 'ready',
 					directiveId: result.directiveId
 				};
 			}
-			const directives: Array<Readonly<{ id: DirectiveId; state: string }>> = [];
+			const directives: Array<Readonly<{ id: DirectiveId; message_id: MessageId; state: string }>> =
+				[];
 			for (;;) {
 				const after = directives.at(-1)?.id;
 				const page = yield* collections.findMany(
@@ -1797,7 +2127,10 @@ export const layer = Layer.effect(
 					}
 				);
 				directives.push(
-					...(yield* decodeRows(Schema.Struct({ id: DirectiveId, state: Schema.String }), page))
+					...(yield* decodeRows(
+						Schema.Struct({ id: DirectiveId, message_id: MessageId, state: Schema.String }),
+						page
+					))
 				);
 				if (page.length < 500) break;
 			}
@@ -1815,6 +2148,24 @@ export const layer = Layer.effect(
 							'agent_run',
 							[{ ...stoppingRun, status: 'stopped' }]
 						);
+			const queuedIds = new Set(
+				directives
+					.filter((directive) => directive.state === 'queued')
+					.map((directive) => directive.message_id)
+			);
+			const cancelledMessages = (yield* messageRows(effectId, subject, taskId))
+				.filter((message) => queuedIds.has(message.id) && message.annotation?.tag === 'input')
+				.map((message) => ({
+					id: message.id,
+					annotation: { ...message.annotation, cancelled: true }
+				}));
+			const completeMessages = yield* retainTaskRows(
+				EffectId.make(`${effectId}:cancel-inputs`),
+				subject,
+				taskId,
+				'agent_message',
+				cancelledMessages
+			);
 			yield* mutateTask(effectId, subject, {
 				id: task.id,
 				status: 'stopped',
@@ -1823,6 +2174,7 @@ export const layer = Layer.effect(
 				directives: directives.map(({ id, state }) =>
 					state === 'queued' || state === 'claimed' ? { id, state: 'cancelled' } : { id }
 				),
+				messages: completeMessages,
 				...(completeRuns === undefined ? {} : { runs: completeRuns })
 			});
 			yield* tasks.execute(EffectId.make(`${effectId}:interrupt`), {
@@ -2059,7 +2411,11 @@ export const layer = Layer.effect(
 			messages: ReadonlyArray<AgentMessage>
 		) {
 			if (run.mode === 'plan') {
-				const body = messageText(output).trim();
+				const body = (
+					isString(output.content)
+						? output.content
+						: output.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
+				).trim();
 				if (body === '') {
 					return yield* new TaskRuntimeError({
 						operation: 'plan',
@@ -2240,6 +2596,7 @@ export const layer = Layer.effect(
 			const runEffect = Effect.gen(function* () {
 				for (let iteration = 0; iteration < 8; iteration += 1) {
 					task = yield* fencedTask(EffectId.make(`${effectId}:fence:${iteration}`), subject, run);
+					yield* consumeSteering(EffectId.make(`${effectId}:steer:${iteration}`), subject, run);
 					let messages = yield* messageRows(
 						EffectId.make(`${effectId}:messages:${iteration}`),
 						subject,
@@ -2252,8 +2609,8 @@ export const layer = Layer.effect(
 							subject,
 							task
 						);
-						let assets = imageAssets(messages, run.id);
-						yield* validateImageAssets(task.id, assets);
+						let assets = attachments(projectTaskMessages(messages, plan), run.id);
+						yield* validateAttachments(task.id, assets);
 						let projected = projectTaskPrompt({
 							workspacePrompt: workspace.definition.prompt,
 							...(agent.instruction === undefined ? {} : { agentInstruction: agent.instruction }),
@@ -2301,7 +2658,7 @@ export const layer = Layer.effect(
 										)
 									],
 									maxOutputTokens: AUTO_COMPACT_OUTPUT_TOKENS,
-									...(assets.length === 0 ? {} : { imageAssets: assets })
+									...generationAssets(assets)
 								}
 							);
 							yield* recordUsage(
@@ -2319,7 +2676,7 @@ export const layer = Layer.effect(
 								{
 									tag: 'compact',
 									origin: 'automatic',
-									cutoff: lastSequence(messages),
+									cutoff: Math.max(0, ...messages.map(contextSequence)),
 									retainedMessageIds
 								}
 							);
@@ -2328,7 +2685,7 @@ export const layer = Layer.effect(
 								subject,
 								task.id
 							);
-							assets = imageAssets(messages, run.id);
+							assets = attachments(projectTaskMessages(messages, plan), run.id);
 							projected = projectTaskPrompt({
 								workspacePrompt: workspace.definition.prompt,
 								...(agent.instruction === undefined ? {} : { agentInstruction: agent.instruction }),
@@ -2371,6 +2728,7 @@ export const layer = Layer.effect(
 							}
 						}
 						const callId = providerCallIdFor(`${run.id}:${iteration}`);
+						let progressSequence = -1;
 						const generated = yield* generateMessage(
 							ai,
 							EffectId.make(`${effectId}:provider:${iteration}`),
@@ -2380,7 +2738,29 @@ export const layer = Layer.effect(
 								messages: projected,
 								maxOutputTokens: 2_048,
 								tools: toolsForMode,
-								...(assets.length === 0 ? {} : { imageAssets: assets })
+								onProgress: (progress) =>
+									Effect.gen(function* () {
+										if (progress.callId !== callId)
+											return yield* new TaskRuntimeError({
+												operation: 'generation',
+												message: 'Progress belongs to another provider call.'
+											});
+										yield* persistGeneration(
+											EffectId.make(`${effectId}:part:${iteration}:${progress.sequence}`),
+											subject,
+											run,
+											agent.id,
+											progress,
+											{
+												tag: 'generation',
+												callId,
+												sequence: progress.sequence,
+												activeParts: progress.activeParts
+											}
+										);
+										progressSequence = progress.sequence;
+									}),
+								...generationAssets(assets)
 							}
 						);
 						yield* recordUsage(
@@ -2394,23 +2774,48 @@ export const layer = Layer.effect(
 								? {
 										tag: 'compact',
 										origin: 'manual',
-										cutoff: lastSequence(messages),
+										cutoff: Math.max(0, ...messages.map(contextSequence)),
 										retainedMessageIds: []
 									}
 								: undefined;
-						yield* appendMessage(
-							EffectId.make(`${effectId}:assistant:${iteration}`),
-							subject,
-							run,
-							{ kind: 'agent', id: agent.id },
-							generated.message,
-							annotation
-						);
+						if (progressSequence >= 0)
+							yield* persistGeneration(
+								EffectId.make(`${effectId}:assistant:${iteration}`),
+								subject,
+								run,
+								agent.id,
+								{
+									callId,
+									sequence: progressSequence + 1,
+									message: generated.message,
+									activeParts: []
+								},
+								annotation ?? null
+							);
+						else
+							yield* appendMessage(
+								EffectId.make(`${effectId}:assistant:${iteration}`),
+								subject,
+								run,
+								{ kind: 'agent', id: agent.id },
+								generated.message,
+								annotation
+							);
 						output = generated.message;
 						calls = toolCalls(generated.message);
 						messages = yield* messageRows(effectId, subject, task.id);
 					}
 					if (calls.length === 0 && output !== undefined) {
+						if (
+							yield* consumeSteering(
+								EffectId.make(`${effectId}:final-steer:${iteration}`),
+								subject,
+								run
+							)
+						) {
+							output = undefined;
+							continue;
+						}
 						const barrier = yield* childBarrier(
 							EffectId.make(`${effectId}:children:${iteration}`),
 							subject,

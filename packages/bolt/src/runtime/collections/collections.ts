@@ -1814,7 +1814,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									automations.progress(turnEffectId, taskId, progression)
 								)
 							),
-						(url) => guard('web.read').pipe(Effect.andThen(readUrl(url)))
+						(url) => guard('web.read').pipe(Effect.andThen(readUrl(url))),
+						taskId
 					);
 					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
 						admitted.args
@@ -1822,10 +1823,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const output = yield* runAuthoredHandler(() =>
 						declaration.handler(api, { args, scope: admitted.scope ?? {} })
 					);
-					const declaredOutput = yield* Schema.decodeUnknownEffect(
-						declaration.output ?? Schema.Unknown
-					)(output);
-					return yield* Schema.decodeUnknownEffect(Schema.Json)(declaredOutput);
+					return yield* Schema.decodeUnknownEffect(declaration.output ?? Schema.Unknown)(
+						output
+					).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)));
 				}
 			);
 			/**

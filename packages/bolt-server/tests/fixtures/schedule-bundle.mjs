@@ -34,7 +34,10 @@ const occurrence = {
 
 const ok = (value) => ({ _tag: 'Success', response: { status: 200, headers: {}, value } });
 
-export const dispatch = async (invocation) => {
+export const dispatch = async (invocation, facilities, signal) => {
+	if (invocation._tag === 'Command' && invocation.command === 'sync.advance') {
+		return ok({ updates: [], resets: [], outcomes: [] });
+	}
 	if (invocation._tag === 'Command' && invocation.command === 'host.schedules.discover') {
 		log.push({
 			kind: 'discover',
@@ -56,11 +59,22 @@ export const dispatch = async (invocation) => {
 		return ok({ settled: true, nextDueAtEpochMs: null });
 	}
 	if (invocation._tag === 'Task') {
+		const committed = await facilities.syncCommit?.call(
+			{
+				invocationId: invocation.id,
+				effectId: `${invocation.id}:commit`,
+				deadlineEpochMs: invocation.deadlineEpochMs,
+				idempotencyKey: `${invocation.id}:commit`
+			},
+			{ changes: [] },
+			signal
+		);
 		log.push({
 			kind: 'task',
 			command: invocation.command,
 			input: invocation.input,
-			attempt: invocation.attempt
+			attempt: invocation.attempt,
+			syncCommitted: committed?._tag === 'Success'
 		});
 		return ok({ ran: invocation.command });
 	}

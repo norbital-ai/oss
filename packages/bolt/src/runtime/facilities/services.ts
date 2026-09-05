@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- services consumes database's binding/invocation port
 // (CallContext, invokeBinding) over the #lib alias, so the pair is linked, not parallel.
-import { Context, Effect, Layer, Ref } from 'effect';
-import { compactSyncChanges, EffectId } from '@norbital-ai/bolt-protocol';
+import { Context, Effect, Layer, Ref, Schema } from 'effect';
+import { AIMessageProgress, compactSyncChanges, EffectId } from '@norbital-ai/bolt-protocol';
 import type {
 	AIRequest,
 	AIResponse,
@@ -43,9 +43,10 @@ export type AIInterface = Readonly<{
 		effectId: EffectId,
 		request: AICatalogRequest
 	) => Effect.Effect<AICatalogResponse, BoundFacilityError>;
-	readonly generate: (
+	readonly generate: <ProgressError = never>(
 		effectId: EffectId,
-		request: AIGenerateRequest
+		request: AIGenerateRequest,
+		onProgress?: (progress: AIMessageProgress) => Effect.Effect<void, ProgressError>
 	) => Effect.Effect<AIGeneratedResponse, BoundFacilityError>;
 	readonly embed: (
 		effectId: EffectId,
@@ -79,15 +80,31 @@ const AILayers = {
 							)
 						)
 					),
-					generate: Effect.fn('AI.generate')((id, request) =>
-						invoke(id, request).pipe(
+					generate: Effect.fn('AI.generate')(function* (id, request, onProgress) {
+						const services = yield* Effect.context<never>();
+						return yield* invokeBinding(
+							'ai',
+							binding,
+							context,
+							id,
+							request,
+							onProgress === undefined
+								? undefined
+								: (event, signal) =>
+										Effect.runPromiseWith(services)(
+											Schema.decodeUnknownEffect(AIMessageProgress)(event).pipe(
+												Effect.flatMap(onProgress)
+											),
+											{ signal }
+										)
+						).pipe(
 							Effect.flatMap((response) =>
 								response._tag === 'Generated'
 									? Effect.succeed(response)
 									: Effect.fail(unexpected('Generated', response._tag))
 							)
-						)
-					),
+						);
+					}),
 					embed: Effect.fn('AI.embed')((id, request) =>
 						invoke(id, request).pipe(
 							Effect.flatMap((response) =>

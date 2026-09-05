@@ -76,14 +76,14 @@ const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Sch
 });
 
 export interface WorkspaceNavigationSection {
-	readonly key: 'applications' | 'operations' | 'resources' | 'administration';
+	readonly key: 'applications' | 'operations' | 'workspace';
 	readonly label: string;
 	readonly items: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly href?: string;
 }
 
 const WorkspaceNavigationSectionSchema = Schema.Struct({
-	key: Schema.Literals(['applications', 'operations', 'resources', 'administration']),
+	key: Schema.Literals(['applications', 'operations', 'workspace']),
 	label: Schema.String,
 	items: Schema.Array(WorkspaceNavigationItemSchema),
 	href: Schema.optional(Schema.String)

@@ -30,6 +30,8 @@ export {
 /** The only public admission contract. A first submit atomically creates Task, message, and directive. */
 export const TaskSubmitRequest = Schema.Struct({
 	taskId: TaskId,
+	/** Stable across retries of one send, distinct for intentional repeated messages. */
+	submissionId: Schema.optionalKey(MessageId),
 	agentId: AgentId,
 	message: Schema.toEncoded(Prompt.Message),
 	mode: DirectiveMode,

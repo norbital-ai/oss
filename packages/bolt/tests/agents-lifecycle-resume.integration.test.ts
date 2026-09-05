@@ -118,7 +118,7 @@ describe('Task stop and run-fence boundaries', () => {
 		).toEqual([{ count: 0 }]);
 	});
 
-	it('refuses ordinary admission into a stopped Task', async () => {
+	it('accepts a follow-up in a stopped conversation without reviving cancelled instructions', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) =>
 				request._tag === 'Catalog'
@@ -143,8 +143,19 @@ describe('Task stop and run-fence boundaries', () => {
 			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
 		);
 
-		await expect(
-			harness.runtime.runPromise(submit(agents, harness, taskId, 'This is not a resume.'))
-		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
+		await harness.runtime.runPromise(
+			submit(agents, harness, taskId, 'Continue with this message.')
+		);
+		expect(
+			await harness.database.query(
+				'select state from agent_inbox where task_id = $1 order by sequence',
+				[taskId]
+			)
+		).toEqual([{ state: 'cancelled' }, { state: 'queued' }]);
+		expect(
+			await harness.runtime.runPromise(
+				agents.execute(harness.effectId('follow-up'), adminSubject, taskId)
+			)
+		).toMatchObject({ status: 'done' });
 	});
 });

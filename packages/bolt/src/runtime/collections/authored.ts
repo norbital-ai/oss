@@ -338,6 +338,7 @@ export type RuntimeAuthoringApi<E = never> = Readonly<{
 /** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
 type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 	Readonly<{
+		readonly runId: string;
 		readonly readUrl: (
 			url: string
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
@@ -618,8 +619,9 @@ export const makePolicyDecisionApi = <E>(ops: AuthoringReadOps<E>, subject: Subj
 export const makeAutomationApi = <E, P, W>(
 	api: RuntimeAuthoringApi<E>,
 	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>,
-	readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, W, never>
-): RuntimeAutomationApi<E | P | W> => ({ ...api, progress, readUrl });
+	readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, W, never>,
+	runId: string
+): RuntimeAutomationApi<E | P | W> => ({ ...api, progress, readUrl, runId });
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = <RunE = never>(
@@ -629,14 +631,28 @@ export const makeBoundAuthoringOps = <RunE = never>(
 	ai: AIInterface,
 	files: FilesInterface,
 	automations: Automations.Interface,
-	runAutomation?: AuthoringOps<
-		| QueryError
-		| BatchMutationError
-		| Schema.SchemaError
-		| Automations.AutomationStopped
-		| Automations.AutomationDeferredUnsupported
-		| RunE
-	>['runAutomation']
+	runAutomation?: (
+		childEffectId: EffectIdType,
+		...args: Parameters<
+			AuthoringOps<
+				| QueryError
+				| BatchMutationError
+				| Schema.SchemaError
+				| Automations.AutomationStopped
+				| Automations.AutomationDeferredUnsupported
+				| RunE
+			>['runAutomation']
+		>
+	) => ReturnType<
+		AuthoringOps<
+			| QueryError
+			| BatchMutationError
+			| Schema.SchemaError
+			| Automations.AutomationStopped
+			| Automations.AutomationDeferredUnsupported
+			| RunE
+		>['runAutomation']
+	>
 ): AuthoringOps<
 	| QueryError
 	| BatchMutationError
@@ -698,9 +714,12 @@ export const makeBoundAuthoringOps = <RunE = never>(
 		 * depth into a child; integrations and remotes take this same default rather than admitting a
 		 * row that no scheduler is allowed to execute.
 		 */
-		runAutomation:
-			runAutomation ??
-			((name, input, options) => collections.runAutomation(effectId, name, input, {}, options)),
+		runAutomation: (name, input, options) => {
+			const childEffectId = writeEffectIds.next({ phase: 'automation', collection: name });
+			return runAutomation === undefined
+				? collections.runAutomation(childEffectId, name, input, {}, options)
+				: runAutomation(childEffectId, name, input, options);
+		},
 		infer: inferOp(effectId, ai),
 		readFileAsset: readAsset
 	};

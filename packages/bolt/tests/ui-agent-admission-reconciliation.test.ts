@@ -15,6 +15,20 @@ const unsettled: UnsettledTaskAdmission = {
 };
 
 describe('Task admission reconciliation', () => {
+	it('keeps a follow-up visible until that exact message arrives, despite older human messages', () => {
+		const next = { ...unsettled, submissionId: 'new-message' };
+		expect(
+			visibleUnsettledAdmission(next, new Set(['task-1']), true, new Set(['old-message']))
+		).toBe(next);
+		expect(
+			visibleUnsettledAdmission(
+				next,
+				new Set(['task-1']),
+				true,
+				new Set(['old-message', 'new-message'])
+			)
+		).toBeNull();
+	});
 	it('reuses a client-minted Task id only for the exact unknown submission', () => {
 		expect(
 			retryableAdmission(unsettled, {

@@ -47,7 +47,6 @@ export interface DatabaseProvider {
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isBigInt = Schema.is(Schema.BigInt);
-const isString = Schema.is(Schema.String);
 
 /** Converts driver-specific row values into Schema.Json-safe data. */
 const jsonSafe = (value: unknown): unknown => {
@@ -61,18 +60,32 @@ const jsonSafe = (value: unknown): unknown => {
 	return value;
 };
 
-/** Finds the SQLSTATE through the small wrapper shapes used by Effect and both Postgres drivers. */
-export const databaseSqlState = (cause: unknown, depth = 0): string | undefined => {
+const DriverFailure = Schema.Struct({
+	code: Schema.String.check(Schema.isPattern(/^[0-9A-Z]{5}$/)),
+	message: Schema.optionalKey(Schema.String)
+});
+
+/** Keeps the driver diagnosis through Effect's nested exception wrappers. */
+const databaseDriverFailure = (
+	cause: unknown,
+	depth = 0
+): typeof DriverFailure.Type | undefined => {
 	// repository-health:allow GUARD2 -- The walkers here inspect thrown platform values (Effect defects and pg/pglite error objects), not a decoded boundary value.
 	if (depth > 6 || cause === null || typeof cause !== 'object') return undefined;
-	const code = Reflect.get(cause, 'code');
-	if (isString(code) && /^\d{5}$/.test(code)) return code;
+	if (Schema.is(DriverFailure)(cause)) return cause;
 	for (const key of ['cause', 'error', 'reason', 'originalError']) {
-		const nested = databaseSqlState(Reflect.get(cause, key), depth + 1);
+		const nested = databaseDriverFailure(Reflect.get(cause, key), depth + 1);
 		if (nested !== undefined) return nested;
 	}
 	return undefined;
 };
+
+/** Finds the SQLSTATE through the small wrapper shapes used by Effect and both Postgres drivers. */
+export const databaseSqlState = (cause: unknown): string | undefined =>
+	databaseDriverFailure(cause)?.code;
+
+const databaseFailureMessage = (cause: unknown): string =>
+	databaseDriverFailure(cause)?.message ?? getErrorMessage(cause);
 
 /** Serialization conflicts are safe to retry because their transaction committed nothing. */
 export const databaseFailureRetryable = (cause: unknown): boolean | undefined =>
@@ -159,8 +172,7 @@ export const makePostgresDatabase = ({
 			retryable: databaseFailureRetryable,
 			// A managed database fails for driver reasons only the driver knows. Keep that diagnostic so
 			// an unreachable host and a wrong password do not collapse into the same sentence.
-			message: (cause) =>
-				`PostgreSQL operation failed: ${getErrorMessage(cause)}`
+			message: (cause) => `PostgreSQL operation failed: ${databaseFailureMessage(cause)}`
 		},
 		checkCancellationAfterInvoke: true,
 		invoke: (_metadata, input, signal) =>
@@ -225,8 +237,7 @@ export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 				failed: {
 					code: 'database.failed',
 					retryable: databaseFailureRetryable,
-					message: (cause) =>
-						`Local database operation failed: ${getErrorMessage(cause)}`
+					message: (cause) => `Local database operation failed: ${databaseFailureMessage(cause)}`
 				},
 				checkCancellationAfterInvoke: true,
 				invoke: (_metadata, input, signal) =>

@@ -8,14 +8,23 @@ const source = (relativePath: string): string =>
 
 test('the workspace sidebar renders the ordered semantic section model', () => {
 	const sidebar = source('workspace-sidebar.svelte');
-	assert.match(sidebar, /\{#each model\.sections as section, index \(section\.key\)\}/u);
+	assert.match(sidebar, /\{#each model\.sections as section \(section\.key\)\}/u);
 	assert.match(sidebar, /label=\{section\.label\}/u);
 	assert.match(sidebar, /items=\{section\.items\}/u);
+	assert.match(sidebar, /section\.key === 'operations' \? agentNavigation : undefined/u);
+	assert.match(sidebar, /section\.key === 'workspace' \? 'mt-auto' : undefined/u);
 	assert.doesNotMatch(sidebar, /label=\{t\('misc\.platform'\)\}/u);
 });
 
-test('the section contract fixes the four job-oriented groups', () => {
+test('the section contract fixes the three job-oriented groups', () => {
 	const types = source('workspace-shell.types.ts');
-	assert.match(types, /'applications' \| 'operations' \| 'resources' \| 'administration'/u);
+	assert.match(types, /'applications' \| 'operations' \| 'workspace'/u);
 	assert.match(types, /sections: Schema\.Array\(WorkspaceNavigationSectionSchema\)/u);
+});
+
+test('notifications share the compact account heading row', () => {
+	const sidebar = source('workspace-sidebar.svelte');
+	assert.match(sidebar, /justify="between" align="center"/u);
+	assert.match(sidebar, /@render notifications\(\{ expanded: true \}\)/u);
+	assert.doesNotMatch(sidebar, /\{#if agent \|\| notifications\}/u);
 });

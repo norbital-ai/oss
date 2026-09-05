@@ -30,6 +30,42 @@ const runRow = (id: string, mode: 'agent' | 'plan' | 'compact') => ({
 });
 
 describe('agent model-view projection', () => {
+	it('keeps a planning revision visible until its replacement plan owns the transcript', () => {
+		const messages = projectAgentMessages(
+			canonicalAgentRows([
+				{ taskId, message: { role: 'user', content: 'Original objective' } },
+				{ taskId, runId: planRunId, message: { role: 'assistant', content: 'Complete plan one' } },
+				{ taskId, message: { role: 'user', content: 'Add validation' } },
+				{ taskId, runId: agentRunId, message: { role: 'assistant', content: 'Complete plan two' } }
+			])
+		);
+		const runs = projectAgentRuns([
+			runRow(planRunId, 'plan'),
+			{ ...runRow(agentRunId, 'plan'), status: 'running' }
+		]);
+		const plan = projectAgentPlans([
+			{
+				id: planId,
+				task_id: taskId,
+				revision: 1,
+				checkpoint_sequence: 1,
+				body: 'Complete plan one',
+				status: 'active',
+				created_at: '2026-09-01'
+			}
+		])[0]!;
+		const working = projectAgentContextView({ messages, runs, activePlan: plan });
+		expect(working.focusMessages.map((message) => message.sequence)).toEqual([2, 3]);
+		expect(working.historyMessages.map((message) => message.sequence)).toEqual([0, 1]);
+		const revised = projectAgentContextView({
+			messages,
+			runs,
+			activePlan: { ...plan, revision: 2, checkpoint_sequence: 3, body: 'Complete plan two' }
+		});
+		expect(revised.focusMessages).toEqual([]);
+		expect(revised.historyMessages).toEqual(messages);
+	});
+
 	it('separates the active Plan/Compact focus from durable transcript history', () => {
 		const messages = projectAgentMessages(
 			canonicalAgentRows([

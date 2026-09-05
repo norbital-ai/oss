@@ -3,6 +3,7 @@ import { ImageAsset, TaskId } from '@norbital-ai/bolt-protocol';
 import { taskAssetStorageKey } from '../src/runtime/agents/agents.js';
 import {
 	assertGuestImageDescriptorsOnly,
+	attachmentAssetsFromMessage,
 	guestImageCommandHasNoBytes,
 	imageAssetsFromMessage,
 	stripImageFileParts,
@@ -10,6 +11,19 @@ import {
 } from '../src/runtime/agents/image-descriptors.js';
 
 describe('Task image asset boundary', () => {
+	it('separates document descriptors from image inputs without putting document bytes on the wire', () => {
+		const file = {
+			key: 'agent-tasks/ZmlsZQ/ZG9j.pdf',
+			name: 'resin.pdf',
+			mimeType: 'application/pdf',
+			size: 1200
+		};
+		const message = userMessageWithImages('Inspect the datasheet', [file]);
+		expect(attachmentAssetsFromMessage(message)).toEqual([file]);
+		expect(imageAssetsFromMessage(message)).toEqual([]);
+		expect(guestImageCommandHasNoBytes({ message })).toBe(true);
+		assertGuestImageDescriptorsOnly(message);
+	});
 	it('derives an opaque, Task-scoped storage key without a document command surface', () => {
 		const first = TaskId.make('00000000-0000-4000-8000-000000000201');
 		const second = TaskId.make('00000000-0000-4000-8000-000000000202');

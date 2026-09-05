@@ -4,7 +4,6 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
-	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 
 	interface NotificationItem {
 		readonly id: string;
@@ -37,25 +36,20 @@
 			<Sidebar.MenuButton
 				{...props}
 				aria-label={unread.length > 0 ? `${unread.length} unread notifications` : 'Notifications'}
-				class="relative rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded
-					? 'h-8 px-2'
-					: 'size-8 justify-center p-0'}"
+				tooltipContent="Notifications"
+				class="relative justify-center rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent {expanded
+					? 'size-7'
+					: 'size-8'}"
 			>
-				<IconWrapper name="lucide:bell" class="size-4 shrink-0" />
-				{#if expanded}
-					<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
-						>Notifications</span
-					>
-				{/if}
+				<IconWrapper name="lucide:bell" class="size-3.5 shrink-0" />
 				{#if unread.length > 0}
 					<Inline
+						style="position: absolute; top: -0.125rem; right: -0.125rem /* repository-health:allow UI23 -- The unread count overlays the bell; no layout primitive owns anchored badge placement. */"
+						class="min-w-3.5 rounded-full bg-primary px-1 text-[0.5625rem] leading-3.5 font-medium text-primary-foreground"
 						as="span"
 						justify="center"
 						gap="none"
 						data-testid="notification-unread-badge"
-						class="min-w-4 rounded-full bg-primary px-1 text-micro leading-4 font-medium text-primary-foreground {expanded
-							? 'ml-auto'
-							: 'absolute -top-0.5 -right-0.5'}"
 					>
 						{badge}
 					</Inline>
@@ -63,11 +57,9 @@
 			</Sidebar.MenuButton>
 		{/snippet}
 	</Popover.Trigger>
-	<!-- The trigger moved from the account footer to the top of the navigation, so the list opens
-		downward from it. Anchored `top` it would have grown off the head of the sidebar. -->
 	<Popover.Content
-		side={expanded ? 'bottom' : 'right'}
-		align="start"
+		side={expanded ? 'top' : 'right'}
+		align={expanded ? 'end' : 'start'}
 		sideOffset={8}
 		class="w-80 p-0"
 	>

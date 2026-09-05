@@ -19,7 +19,7 @@ import * as Workspace from '../src/runtime/workspace.js';
 import * as InvocationBudget from '../src/runtime/budget.js';
 import * as TenantScope from '../src/runtime/tenant.js';
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
-import { automation } from '../src/authoring/automations-schema.js';
+import { automation, type AutomationApi } from '../src/authoring/automations-schema.js';
 import { makeBoltTestRuntime, testCallContext } from './support/bolt-test-layer.js';
 import {
 	afterMillisOf,
@@ -321,8 +321,9 @@ describe('Automations owner', () => {
 		expect(statements.filter((sql) => sql.includes('automation_run'))).toHaveLength(0);
 	});
 
-	it('runs a manual automation and its immediate child in the admitting request', async () => {
+	it('runs each same-name child independently in the admitting request', async () => {
 		const observedChildContexts: Array<unknown> = [];
+		const childRunIds: string[] = [];
 		const authored = {
 			...emptyAuthoredRuntime,
 			automations: {
@@ -335,14 +336,18 @@ describe('Automations owner', () => {
 							const child = yield* (api as RuntimeAuthoringApi).automations.run('child', {
 								from: 'parent'
 							});
-							return { parent: true, childTaskId: child.taskId };
+							const second = yield* (api as RuntimeAuthoringApi).automations.run('child', {
+								from: 'second profile'
+							});
+							return { parent: true, childTaskId: child.taskId, secondTaskId: second.taskId };
 						})
 				},
 				child: {
 					name: 'child',
 					policies: [],
 					trigger: { _tag: 'Manual' as const },
-					handler: (_api: unknown, context: unknown) => {
+					handler: (api: unknown, context: unknown) => {
+						childRunIds.push((api as AutomationApi).runId);
 						observedChildContexts.push(context);
 						return { child: true };
 					}
@@ -373,11 +378,16 @@ describe('Automations owner', () => {
 				taskId: 'manual-parent:start',
 				result: { parent: true, childTaskId: expect.any(String) }
 			});
-			expect(observedChildContexts).toEqual([{ args: { from: 'parent' }, scope: {} }]);
+			expect(observedChildContexts).toEqual([
+				{ args: { from: 'parent' }, scope: {} },
+				{ args: { from: 'second profile' }, scope: {} }
+			]);
 			// The request owns both bodies. The host only receives in-memory interruption handles for
 			// them; handing either run to the timer would add a Wake to this sequence.
 			expect(harness.tasks.requests.map((request) => request._tag)).toEqual([
 				'Active',
+				'Active',
+				'Settled',
 				'Active',
 				'Settled',
 				'Settled'
@@ -385,11 +395,15 @@ describe('Automations owner', () => {
 			expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
 
 			const runs = await harness.database.query(
-				`select name, status, result, error, row_version
+				`select task_id, name, status, result, error, row_version
 				 from automation_run where name in ('parent', 'child')
 				 order by name`
 			);
-			expect(runs).toHaveLength(2);
+			expect(runs).toHaveLength(3);
+			expect(new Set(childRunIds).size).toBe(2);
+			expect(
+				new Set(runs.filter((run) => run['name'] === 'child').map((run) => run['task_id']))
+			).toEqual(new Set(childRunIds));
 			expect(
 				runs.map((run) => ({
 					name: run['name'],
@@ -398,6 +412,7 @@ describe('Automations owner', () => {
 					rowVersion: run['row_version']
 				}))
 			).toEqual([
+				{ name: 'child', status: 'done', error: null, rowVersion: 2 },
 				{ name: 'child', status: 'done', error: null, rowVersion: 2 },
 				{ name: 'parent', status: 'done', error: null, rowVersion: 2 }
 			]);

@@ -49,7 +49,8 @@ describe('Bolt protocol schemas', () => {
 			'messages',
 			'maxOutputTokens',
 			'output',
-			'imageAssets'
+			'imageAssets',
+			'fileAssets'
 		]);
 		const response = Schema.decodeUnknownSync(AIResponse)({
 			_tag: 'Generated',

@@ -7,7 +7,11 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, scriptedTranscript } from './agents-canonical-ai-fixture.js';
+import {
+	assistantText,
+	assistantToolCall,
+	scriptedTranscript
+} from './agents-canonical-ai-fixture.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -16,7 +20,7 @@ afterEach(async () => {
 });
 
 describe('steering admitted during an active run', () => {
-	it('claims a mid-run steer ahead of an older queued normal directive and keeps the queue order', async () => {
+	it('delivers steering at the next model step in the same run without consuming a normal queued message', async () => {
 		let releaseGeneration!: () => void;
 		const generationHeld = new Promise<void>((resolve) => {
 			releaseGeneration = resolve;
@@ -29,7 +33,7 @@ describe('steering admitted during an active run', () => {
 			async () => {
 				announceGeneration();
 				await generationHeld;
-				return assistantText('First answer, ignorant of the steering.');
+				return assistantToolCall('describe_workspace', {}, 'inspect-workspace');
 			},
 			assistantText('Steered answer.'),
 			assistantText('Follow-up answer.')
@@ -68,17 +72,16 @@ describe('steering admitted during an active run', () => {
 				[`tasks.execute:${taskId}:settled:%`]
 			)
 		).toHaveLength(1);
-		// The active run never saw the steer: it was outside its input boundary.
+		// The first generation was already running; the next model step receives only the steer.
 		expect(requests[0] && JSON.stringify(requests[0])).not.toContain('steered thing');
 
-		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:steer'), adminSubject, taskId)
-		);
+		expect(requests).toHaveLength(2);
+		const steerTranscript = JSON.stringify(requests[1]);
+		expect(steerTranscript).toContain('Do the steered thing first.');
+		expect(steerTranscript).not.toContain('Include the newly queued detail.');
 		await harness.runtime.runPromise(
 			agents.execute(harness.effectId('execute:follow-up'), adminSubject, taskId)
 		);
-		const steerTranscript = JSON.stringify(requests[1]);
-		expect(steerTranscript).toContain('Do the steered thing first.');
 		const followUpTranscript = JSON.stringify(requests[2]);
 		expect(followUpTranscript).toContain('Include the newly queued detail.');
 		expect(followUpTranscript).toContain('Do the steered thing first.');
@@ -93,13 +96,11 @@ describe('steering admitted during an active run', () => {
 			{ sequence: 2, priority: 'normal', state: 'settled' },
 			{ sequence: 3, priority: 'steer', state: 'settled' }
 		]);
-		const claimOrder = await harness.database.query(
-			`select run.directive_id, inbox.sequence, inbox.priority
-			 from agent_run run join agent_inbox inbox on inbox.id = run.directive_id
-			 where run.task_id = $1 order by run.epoch`,
+		const claimed = await harness.database.query(
+			`select sequence, claimed_run_id from agent_inbox where task_id = $1 order by sequence`,
 			[taskId]
 		);
-		expect(claimOrder.map((row) => row['sequence'])).toEqual([1, 3, 2]);
-		expect(claimOrder.map((row) => row['priority'])).toEqual(['normal', 'steer', 'normal']);
+		expect(claimed[2]?.['claimed_run_id']).toBe(claimed[0]?.['claimed_run_id']);
+		expect(claimed[1]?.['claimed_run_id']).not.toBe(claimed[0]?.['claimed_run_id']);
 	});
 });

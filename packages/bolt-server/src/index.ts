@@ -1,4 +1,5 @@
 export { makeWebConnectorBinding } from './facilities/web.js';
+export { extractDocumentText } from './facilities/documents.js';
 
 export {
 	ApplicationStartError,

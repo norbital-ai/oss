@@ -49,7 +49,8 @@ export const invokeBinding = <Input, Output>(
 	binding: FacilityBinding<Input, Output> | undefined,
 	context: CallContext,
 	effectId: EffectId,
-	input: Input
+	input: Input,
+	onProgress?: (event: Schema.Json, signal: AbortSignal) => Promise<void>
 ): Effect.Effect<Output, FacilityError> =>
 	Effect.gen(function* () {
 		if (binding === undefined) {
@@ -81,7 +82,18 @@ export const invokeBinding = <Input, Output>(
 				: {})
 		};
 		const result = yield* Effect.tryPromise({
-			try: (signal) => binding.call(metadata, input, signal),
+			try: (signal) =>
+				binding.call(
+					metadata,
+					input,
+					signal,
+					onProgress === undefined
+						? undefined
+						: (event) => {
+								signal.throwIfAborted();
+								return onProgress(event, signal);
+							}
+				),
 			catch: (cause) =>
 				new FacilityError({
 					operation,

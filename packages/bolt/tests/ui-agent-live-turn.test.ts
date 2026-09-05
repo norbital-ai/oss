@@ -22,6 +22,7 @@ describe('Task client commands', () => {
 	it('submits and controls one client-minted Task through the canonical command pair', async () => {
 		const taskId = '00000000-0000-4000-8000-000000000211';
 		const directiveId = '00000000-0000-4000-8000-000000000212';
+		const submissionId = '00000000-0000-4000-8000-000000000213';
 		const calls: Array<{ readonly command: string; readonly input: Schema.Json }> = [];
 		const command = vi.fn((command: string, input: Schema.Json) => {
 			calls.push({ command, input });
@@ -46,6 +47,7 @@ describe('Task client commands', () => {
 			Effect.runPromise(
 				agent.submit({
 					taskId,
+					submissionId,
 					message: { role: 'user', content: 'Export payroll' },
 					mode: 'agent',
 					priority: 'steer'
@@ -61,6 +63,7 @@ describe('Task client commands', () => {
 				command: 'tasks.submit',
 				input: {
 					taskId,
+					submissionId,
 					agentId: 'payroll',
 					message: { role: 'user', content: 'Export payroll' },
 					mode: 'agent',

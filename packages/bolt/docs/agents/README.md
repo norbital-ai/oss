@@ -39,8 +39,13 @@ model, folds response parts into one complete assistant message, and commits tha
 executing any tool call. Calls run sequentially through the evaluated Effect `Toolkit`; each result
 is encoded as a typed tool-result part and committed before the next model iteration.
 
-Streaming response parts are temporary presentation data. Reconnection always resumes from the last
-complete committed message.
+Providers may deliver acknowledged part snapshots through `AIMessageProgress`. Part starts persist
+empty placeholders; part ends persist their content. Token deltas stay inside the provider adapter.
+One assistant row is updated under the active run fence, with a `generation` annotation containing
+the provider call, boundary sequence and active part indexes. Completed parts cannot change. The
+final response must match the completed snapshot before the annotation is cleared and tools execute.
+Reconnection reads the latest durable snapshot through ordinary live queries. Interrupted rows stay
+visible but are excluded from model prompts and tool execution.
 
 ---
 
@@ -53,6 +58,7 @@ tasks.models({ agentId }); // configured language models and default
 
 tasks.submit({
 	taskId,
+	submissionId, // unique per intentional message; retain for retries
 	agentId,
 	message,
 	mode: 'agent' | 'plan' | 'compact',
@@ -77,14 +83,21 @@ Agent directive that continues from it. The original row is not edited or delete
 names it in `supersedes_id`. Only the author may revise, and only the newest revision of a message
 may be revised again.
 
-`taskId` is the caller-minted idempotency key. Its first submission atomically creates the root
-Task, canonical message, and directive. A later submission must match the immutable Task subject,
-agent, and audience, then appends its message and directive atomically. Completed and failed Tasks
-do not accept more work.
+`taskId` identifies the conversation. Its first submission atomically creates the root, canonical
+message, and directive. A later submission must match its immutable subject, agent and audience.
+Human root conversations accept follow-ups after completion, failure, attention or stop; each gets
+a new run while preserving prior turns. Delegated tasks retain terminal result semantics. New
+clients mint `submissionId` once per send so identical text can be sent intentionally again; retries
+with that ID deduplicate, and reusing it for different content is refused. Older clients retain
+content-based retry identity.
 
-`steer` is directive priority, not a separate execution path. Completing one run leaves the Task
-ready while directives remain queued and schedules the next execution. Stop cancels queued and
-claimed executions at a safe boundary; their messages remain in the durable transcript.
+Ordinary queued inputs are excluded from the active run. Explicit `steer` inputs matching its mode
+are consumed before the next model step, including when they arrive during its final generation.
+They keep the active run's model and capability snapshot. Delivery and the inbox receipt commit
+together; the transcript marks them as steering. When no run is active, steering retains queue
+priority. Completing a run schedules remaining ordinary inputs as subsequent user turns.
+Stop cancels queued and claimed executions; their messages remain visible. Explicit resume recalls
+the stopped objective and cancelled inputs as context, while an ordinary follow-up does not.
 Resume is explicit and is admitted only for a stopped or attention Task after subject, agent,
 model, capability, and access checks run again; it creates a new directive and execution fence.
 
@@ -97,14 +110,14 @@ descendant in the root Task's workbench.
 
 These ordinary Bolt system collections are the complete logical agent store:
 
-| Collection      | Durable responsibility                                                                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence                                                    |
-| `agent_run`     | One claimed directive, mode, phase, input boundary, model, immutable capability snapshot, status, and matching epoch                                     |
-| `agent_message` | One complete encoded Effect `Prompt.Message`, ordered by Task sequence, with author, semantic hash, optional run, and Compact or Plan-verdict annotation |
-| `agent_inbox`   | The Task's only queue: ordered message directives with mode, selected model, priority, claim state, and claimed run                                      |
-| `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                           |
-| `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                              |
+| Collection      | Durable responsibility                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_task`    | Workbench, subject and agent ownership, audience, parent, lifecycle, active Plan/run, and epoch fence                                                       |
+| `agent_run`     | One primary directive plus steering deliveries, mode, phase, input boundary, model, capability snapshot, status, and epoch                                  |
+| `agent_message` | One encoded Effect `Prompt.Message`, ordered by Task sequence, with author, semantic hash, optional run, and generation, Compact or Plan-verdict annotation |
+| `agent_inbox`   | The Task's only queue: ordered message directives with mode, selected model, priority, claim state, and claimed run                                         |
+| `agent_plan`    | Immutable Plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                              |
+| `agent_usage`   | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                                 |
 
 `agent_task.epoch` and `agent_run.epoch` form the write fence. Claiming work increments the Task
 epoch and installs the active run atomically. Every later append, tool effect, usage observation, and
@@ -122,6 +135,14 @@ collections rather than being copied into Task rows.
 `agent_message.message` stores one encoded Effect `Prompt.Message`. Text, reasoning, file/image,
 tool-call, and tool-result parts remain inside Effect's typed part union and codec. There is no
 second parts store or provider-specific transcript shape.
+
+Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
+in the active context. Images travel in `imageAssets`; PDF and text documents travel in
+`fileAssets`. The host resolves tenant storage, verifies sizes, and passes extracted document text
+to the provider. Bytes never cross the guest invocation boundary. PDF extraction runs in a bounded
+worker, preserves page markers and the original SHA-256, and refuses unreadable pages rather than
+returning partial evidence. The standalone reader exports `extractDocumentText` for host adapters.
+The embedder supplies the workspace file store and download URLs through `WorkspaceFilesHost`.
 
 The ordering contract is strict:
 
@@ -146,6 +167,9 @@ Plan mode creates one `agent_plan` revision containing the objective, implementa
 verification criteria. It receives only the read-oriented planning capability set and does not
 perform implementation writes. A newer Plan atomically supersedes the active revision while prior
 revisions remain queryable.
+Every revision reproduces the complete plan. Only the final response text becomes the plan body;
+reasoning remains in its transcript. Queued inputs record when they were delivered, so a plan or
+compaction written while they waited cannot hide them from their eventual turn.
 
 After an Agent run implements an active Plan, the same Task runtime enters its `verify` phase and
 makes a separate tool-free structured-output call. A complete verdict verifies the Plan. An
@@ -252,9 +276,11 @@ across tabs and workspaces. Agent mutations enter the same committed change batc
 prefix deltas as any other collection. Field masks hide capability snapshots, provider details, and
 internal failures when the viewer lacks permission.
 
-The primary Task view renders the ordered durable messages. Plan state, Compact checkpoints, Todo
-progress, current run diagnostics, exact usage, and child Tasks are projections of these same live
-queries. A child view recursively renders that child's Task and transcript.
+The conversation renders the current context below a two-tab Plan/Summary and Prior transcript
+segment. Planning revisions stay visible while working, then join the saved prior transcript when
+the complete replacement plan arrives. Goal progress, usage and child work are projections of the
+same live queries. Child views use the same context segment. Composer uploads sit at the left;
+model, mode, steering and send controls sit at the right. Access follows the requestor's policies.
 
 ---
 

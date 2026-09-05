@@ -589,7 +589,7 @@ describe('workspace navigation sections', () => {
 		expectTypeOf<AgentRuntimeConfig['client']>().toMatchTypeOf<AutomationRunsClient>();
 	});
 
-	it('groups operations before administration and keeps Automations deep links stable', () => {
+	it('groups operations before workspace controls and keeps Automations deep links stable', () => {
 		const system = buildSystemNavigation({
 			isAdmin: true,
 			canAccessAutomations: true,
@@ -612,7 +612,7 @@ describe('workspace navigation sections', () => {
 			i18n: { has: () => true, t: (key) => `translated:${key}` }
 		});
 
-		expect(sections.map((section) => section.key)).toEqual(['operations', 'administration']);
+		expect(sections.map((section) => section.key)).toEqual(['operations', 'workspace']);
 		expect(sections[0]?.items.map((item) => item.key)).toEqual(['approvals', 'automations']);
 		expect(automationsHref('daily close')).toBe('/automations?automation=daily+close');
 	});

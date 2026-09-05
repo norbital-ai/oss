@@ -41,7 +41,7 @@ export type CollectionHookModule = Readonly<{
 
 type HookPhase = 'prepare' | 'before' | 'after' | 'delete.before' | 'delete.after';
 /** A hook-issued write is labelled by the boundary too, distinct from the phase that issued it. */
-type HookWritePhase = HookPhase | 'mutate';
+type HookWritePhase = HookPhase | 'mutate' | 'automation';
 
 const effectLabel = (value: string): string => encodeURIComponent(value).replaceAll('%', '_');
 
@@ -253,7 +253,7 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 		...buildReadOps(ports, effectId, subject),
 		runAutomation: (name, input, options) =>
 			ports.startAutomation(
-				effectId,
+				hookEffectIds.next({ phase: 'automation', collection: name }),
 				name,
 				input,
 				{},

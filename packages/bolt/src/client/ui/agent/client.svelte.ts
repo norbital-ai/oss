@@ -16,6 +16,7 @@ import { COMPOSER_COMMAND_DEADLINE_MILLIS } from './composer-send.js';
 
 type TaskSubmissionInput = Readonly<{
 	readonly taskId?: string;
+	readonly submissionId?: string;
 	readonly message: Prompt.MessageEncoded;
 	readonly mode: TaskSubmitRequest['mode'];
 	readonly priority?: TaskSubmitRequest['priority'];
@@ -88,7 +89,7 @@ type AgentClient = Readonly<{
 const AGENT_CLIENT_CONTEXT = Symbol('norbital.agent-client');
 
 /**
- * Submits one canonical Effect message. The client-minted Task ID is the admission idempotency key;
+ * Submits one canonical Effect message. The client-minted submission ID distinguishes a send from its retries;
  * durable reads remain ordinary Live Query collection reads.
  */
 function submitTask(
@@ -101,6 +102,7 @@ function submitTask(
 		'tasks.submit',
 		Schema.decodeUnknownEffect(TaskSubmitRequest)({
 			taskId,
+			submissionId: input.submissionId ?? randomId(),
 			agentId: active.agentId,
 			message: input.message,
 			mode: input.mode,

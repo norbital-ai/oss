@@ -17,7 +17,7 @@ const shellLabels: Readonly<Record<string, string>> = {
 	'bolt.shell.approvals': 'Approvals',
 	'bolt.shell.automations': 'Automations',
 	'bolt.shell.operations': 'Operations',
-	'bolt.shell.administration': 'Administration',
+	'bolt.shell.workspace': 'Workspace',
 	'bolt.shell.applications': 'Applications',
 	'bolt.shell.more': 'More',
 	'bolt.shell.documentation': 'Documentation',
@@ -163,7 +163,7 @@ describe('workspace navigation', () => {
 		expect(system.some((item) => item.key === 'workspace-studio')).toBe(false);
 	});
 
-	it('orders daily applications before operations and puts infrequent routes last', () => {
+	it('groups secondary routes under More beside Settings in a final Workspace section', () => {
 		const system = buildSystemNavigation({
 			isAdmin: true,
 			plugins: WORKSPACE_HOST_PLUGINS,
@@ -196,13 +196,15 @@ describe('workspace navigation', () => {
 		expect(sections.map((section) => section.key)).toEqual([
 			'applications',
 			'operations',
-			'resources',
-			'administration'
+			'workspace'
 		]);
-		expect(sections.find((section) => section.key === 'resources')?.label).toBe('More');
-		expect(
-			sections.find((section) => section.key === 'resources')?.items.map(({ key }) => key)
-		).toEqual(['documentation', 'kiosk']);
+		const workspace = sections.find((section) => section.key === 'workspace');
+		expect(workspace?.label).toBe('Workspace');
+		expect(workspace?.items.map(({ key }) => key)).toEqual(['more', 'settings']);
+		expect(workspace?.items[0]).toMatchObject({
+			label: 'More',
+			children: [{ key: 'documentation' }, { key: 'kiosk' }]
+		});
 	});
 
 	it('translates tenant app titles when the catalog has the key', () => {

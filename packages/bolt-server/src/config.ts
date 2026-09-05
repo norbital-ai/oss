@@ -119,7 +119,8 @@ type WireBindingOptions<
 	readonly invoke: (
 		metadata: FacilityCall,
 		input: RequestSchema['Type'],
-		signal: AbortSignal
+		signal: AbortSignal,
+		onProgress?: import('@norbital-ai/bolt-protocol').FacilityProgress
 		// repository-health:allow EFF2 -- FacilityBinding is a protocol-owned Promise boundary implemented by physical host providers.
 	) => Promise<unknown>;
 	/** A completed database operation can become unknown while its result crosses cancellation. */
@@ -133,7 +134,7 @@ export const makeWireBinding = <
 >(
 	options: WireBindingOptions<RequestSchema, ResponseSchema>
 ): FacilityBinding<RequestSchema['Type'], ResponseSchema['Type']> => ({
-	call: (unsafeMetadata, unsafeInput, signal) =>
+	call: (unsafeMetadata, unsafeInput, signal, onProgress) =>
 		Effect.runPromise(
 			Effect.gen(function* () {
 				const metadata = yield* Schema.decodeUnknownEffect(FacilityCall)(unsafeMetadata);
@@ -141,7 +142,9 @@ export const makeWireBinding = <
 				if (signal.aborted) {
 					return failure(makeWireError(options.cancelled.code, options.cancelled.message));
 				}
-				const output = yield* Effect.tryPromise(() => options.invoke(metadata, input, signal));
+				const output = yield* Effect.tryPromise(() =>
+					options.invoke(metadata, input, signal, onProgress)
+				);
 				if (options.checkCancellationAfterInvoke === true && signal.aborted) {
 					return failure(
 						makeWireError(options.cancelled.code, options.cancelled.message, {
@@ -243,9 +246,7 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			drainTimeoutMillis: values.drainTimeoutMillis,
 			invocationTimeoutMillis: values.invocationTimeoutMillis,
 			requestBodyLimitBytes: values.requestBodyLimitBytes,
-			...(Option.isSome(values.gatewaySecret)
-				? { gatewaySecret: values.gatewaySecret.value }
-				: {})
+			...(Option.isSome(values.gatewaySecret) ? { gatewaySecret: values.gatewaySecret.value } : {})
 		});
 	},
 	(effect) =>

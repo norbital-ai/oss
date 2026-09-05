@@ -85,9 +85,9 @@ describe('G5 guest image descriptors', () => {
 		expect(guestImageCommandHasNoBytes({ taskId: 'task-1', message })).toBe(true);
 		expect(JSON.stringify(message)).toContain(IMAGE_DESCRIPTOR_SCHEME);
 		expect(JSON.stringify(message)).not.toContain('base64');
-		expect(panelSource).toContain('encodeUserMessageWithImages');
+		expect(panelSource).toContain('encodeUserMessageWithAttachments');
 		expect(panelSource).toContain('onpaste={onComposerPaste}');
-		expect(panelSource).toContain('Attach image');
+		expect(panelSource).toContain('Attach media or files');
 		expect(panelSource).not.toContain('readAsDataURL');
 		expect(panelSource).not.toContain('btoa(');
 	});

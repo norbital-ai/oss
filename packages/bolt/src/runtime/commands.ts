@@ -360,9 +360,9 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 			ai,
 			files,
 			automations,
-			(nestedName, nestedInput, options) =>
+			(childEffectId, nestedName, nestedInput, options) =>
 				collections.runAutomation(
-					context.effectId,
+					childEffectId,
 					nestedName,
 					nestedInput,
 					{},
@@ -385,7 +385,8 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 					automations.progress(context.effectId, input.bolt_task_id, progression)
 				)
 			),
-		(url) => guard('web.read').pipe(Effect.andThen(readUrl(url)))
+		(url) => guard('web.read').pipe(Effect.andThen(readUrl(url))),
+		input.bolt_task_id
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
 	const output = yield* runAuthoredHandler(() =>

@@ -375,7 +375,8 @@ it.live('runs a due occurrence end to end from the armed timer', () =>
 
 				assert.deepStrictEqual(
 					entries.slice(0, 3).map((entry) => entry['kind']),
-					['discover', 'task', 'settle']
+					['discover', 'task', 'settle'],
+					JSON.stringify(entries)
 				);
 				const discovered = entries[0] ?? {};
 				// The host proved itself to its own bundle. Without this the runtime mints no system
@@ -395,6 +396,7 @@ it.live('runs a due occurrence end to end from the armed timer', () =>
 						.digest('hex')
 				);
 				assert.strictEqual(entries[1]?.['command'], 'automations.nightly');
+				assert.strictEqual(entries[1]?.['syncCommitted'], true);
 				assert.strictEqual(entries[1]?.['attempt'], occurrence.attempt);
 				assert.strictEqual(entries[2]?.['taskId'], occurrence.taskId);
 				assert.strictEqual(

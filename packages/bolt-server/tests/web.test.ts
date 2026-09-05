@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { FacilityCall } from '@norbital-ai/bolt-protocol';
 import { makeWebConnectorBinding, isPublicWebAddress } from '../src/facilities/web.js';
 import { WEB_PAGE_BYTE_LIMIT } from '@norbital-ai/bolt-protocol';
+import { createHash } from 'node:crypto';
+import { pdfFixture } from './helpers/pdf-fixture.js';
 
 const metadata = {} as FacilityCall;
 const signal = new AbortController().signal;
@@ -9,6 +11,46 @@ const read = (binding: ReturnType<typeof makeWebConnectorBinding>, url: string) 
 	binding.call(metadata, { connector: 'web', operation: 'web.read', input: { url } }, signal);
 
 describe('public web connector', () => {
+	it('extracts every PDF page with a digest of the original binary source', async () => {
+		const body = pdfFixture(['RESIN-42 Melt flow 12 g/10 min', 'Density 0.92 g/cm3']);
+		const binding = makeWebConnectorBinding({
+			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+			request: async () => ({ status: 200, contentType: 'application/pdf', body })
+		});
+		const result = await read(binding, 'https://supplier.example/resin.pdf');
+		expect(result._tag).toBe('Success');
+		if (result._tag !== 'Success') throw new Error('PDF extraction failed');
+		expect(result.value.output).toMatchObject({
+			url: 'https://supplier.example/resin.pdf',
+			contentType: 'application/pdf',
+			sha256: createHash('sha256').update(body).digest('hex'),
+			pageCount: 2
+		});
+		expect(result.value.output).toHaveProperty(
+			'body',
+			expect.stringContaining('RESIN-42 Melt flow 12 g/10 min')
+		);
+		expect(result.value.output).toHaveProperty(
+			'body',
+			expect.stringContaining('Density 0.92 g/cm3')
+		);
+	});
+
+	it('refuses blank, corrupt and overlong PDFs instead of returning partial evidence', async () => {
+		for (const body of [
+			pdfFixture(['']),
+			pdfFixture(['Valid first page', '']),
+			new Uint8Array(Buffer.from('%PDF-1.7 broken')),
+			pdfFixture(Array.from({ length: 201 }, () => 'text'))
+		]) {
+			const binding = makeWebConnectorBinding({
+				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+				request: async () => ({ status: 200, contentType: 'application/pdf', body })
+			});
+			expect((await read(binding, 'https://supplier.example/data.pdf'))._tag).toBe('Failure');
+		}
+	});
+
 	it('refuses local, private, mapped and reserved addresses', () => {
 		for (const address of [
 			'127.0.0.1',
@@ -48,7 +90,8 @@ describe('public web connector', () => {
 				output: {
 					url: 'https://official.example/law',
 					contentType: 'text/html',
-					body: '<h1>New law</h1>'
+					body: '<h1>New law</h1>',
+					sha256: createHash('sha256').update('<h1>New law</h1>').digest('hex')
 				}
 			}
 		});

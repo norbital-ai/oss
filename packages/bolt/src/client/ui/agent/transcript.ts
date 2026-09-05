@@ -35,7 +35,22 @@ const PlanVerdictAnnotation = Schema.Struct({
 	gaps: Schema.Array(Schema.String)
 });
 
-const MessageAnnotation = Schema.Union([CompactAnnotation, PlanVerdictAnnotation]);
+const MessageAnnotation = Schema.Union([
+	Schema.Struct({
+		tag: Schema.Literal('input'),
+		priority: Schema.Literals(['normal', 'steer']),
+		consumedAfterSequence: Schema.optionalKey(Schema.Natural),
+		cancelled: Schema.optionalKey(Schema.Boolean)
+	}),
+	CompactAnnotation,
+	PlanVerdictAnnotation,
+	Schema.Struct({
+		tag: Schema.Literal('generation'),
+		callId: ProviderCallId,
+		sequence: Schema.Natural,
+		activeParts: Schema.Array(Schema.Natural)
+	})
+]);
 export type MessageAnnotation = typeof MessageAnnotation.Type;
 
 const EncodedMessage = Schema.toEncoded(Prompt.Message);
@@ -156,10 +171,10 @@ const TodoItem = Schema.Struct({
 	status: Schema.Literals(['pending', 'doing', 'done'])
 });
 const TodoResult = Schema.Struct({ items: Schema.Array(TodoItem) });
-export type TodoResult = typeof TodoResult.Type;
+type TodoResult = typeof TodoResult.Type;
 const decodeTodoResult = Schema.decodeUnknownOption(TodoResult);
 
-/** Latest successful canonical `system/todo` result for the selected run scope. */
+/** Latest successful todo result for the selected run; legacy prefixed results remain readable. */
 export function latestTodo(
 	messages: readonly PanelMessage[],
 	activeRunId: string | null
@@ -169,7 +184,11 @@ export function latestTodo(
 		const content = entry.message.content;
 		if (isString(content)) continue;
 		for (const part of [...content].toReversed()) {
-			if (part.type !== 'tool-result' || part.name !== 'system/todo' || part.isFailure) {
+			if (
+				part.type !== 'tool-result' ||
+				!['todo', 'system/todo'].includes(part.name) ||
+				part.isFailure
+			) {
 				continue;
 			}
 			const decoded = decodeTodoResult(part.result);

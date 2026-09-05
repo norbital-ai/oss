@@ -91,11 +91,15 @@ export const RunStatus = Schema.Literals(['running', 'waiting', 'succeeded', 'st
 export type RunStatus = typeof RunStatus.Type;
 
 /** Descriptor-sized binary evidence. Only the trusted host resolves and verifies its bytes. */
-export const ImageAsset = Schema.Struct({
+export const FileAsset = Schema.Struct({
 	key: Schema.NonEmptyString,
 	name: Schema.NonEmptyString,
 	mimeType: Schema.NonEmptyString,
-	size: Schema.Natural,
+	size: Schema.Natural
+});
+export interface FileAsset extends Schema.Schema.Type<typeof FileAsset> {}
+export const ImageAsset = Schema.Struct({
+	...FileAsset.fields,
 	detail: Schema.optionalKey(Schema.Literals(['auto', 'low', 'high']))
 });
 export interface ImageAsset extends Schema.Schema.Type<typeof ImageAsset> {}
@@ -166,6 +170,18 @@ export const AIGenerationResult = Schema.TaggedUnion({
 });
 export type AIGenerationResult = typeof AIGenerationResult.Type;
 
+/** Part-boundary snapshots: start placeholders and completed parts, never token deltas. */
+export const AIMessageProgress = Schema.Struct({
+	callId: ProviderCallId,
+	sequence: Schema.Natural,
+	message: Schema.toEncoded(Prompt.Message),
+	activeParts: Schema.Array(Schema.Natural)
+});
+export type AIMessageProgress = typeof AIMessageProgress.Type;
+
+/** Awaiting the receiver provides backpressure and acknowledges durable progress delivery. */
+export type FacilityProgress = (event: Schema.Json) => Promise<void>;
+
 /** Thin Effect-message/model boundary. It owns no queue, provider dialect, or usage accumulator. */
 export const AIRequest = Schema.TaggedUnion({
 	Catalog: {},
@@ -175,7 +191,8 @@ export const AIRequest = Schema.TaggedUnion({
 		messages: Schema.Array(Schema.toEncoded(Prompt.Message)),
 		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
 		output: AIGenerationOutput,
-		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset))
+		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset)),
+		fileAssets: Schema.optionalKey(Schema.Array(FileAsset))
 	},
 	Embed: {
 		callId: ProviderCallId,
@@ -434,7 +451,8 @@ export type FacilityBinding<Input, Output> = Readonly<{
 	readonly call: (
 		metadata: FacilityCall,
 		input: Input,
-		signal: AbortSignal
+		signal: AbortSignal,
+		onProgress?: FacilityProgress
 		// repository-health:allow EFF2 -- Host facilities are transport adapters supplied by arbitrary runtimes; Bolt converts every call into Effect at invokeBinding.
 	) => Promise<FacilityResult<Output>>;
 }>;

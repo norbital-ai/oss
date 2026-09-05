@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import * as Sidebar from '#lib/sidebar';
 	import {
 		WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS,
@@ -11,6 +12,7 @@
 		items,
 		open,
 		href,
+		leading,
 		class: className,
 		onNavigate,
 		onPrefetch
@@ -19,6 +21,7 @@
 		items: readonly WorkspaceNavigationItem[];
 		open: boolean;
 		href?: string | undefined;
+		leading?: Snippet | undefined;
 		/** Padding override for a section that follows another group and needs no gap of its own. */
 		class?: string | undefined;
 		onNavigate?: (href: string) => void | undefined;
@@ -47,6 +50,7 @@
 		</Sidebar.GroupLabel>
 		<Sidebar.GroupContent>
 			<Sidebar.Menu>
+				{@render leading?.()}
 				{#each items as item (item.key)}
 					<WorkspaceSidebarNavigationItem {item} {open} {onNavigate} {onPrefetch} />
 				{/each}

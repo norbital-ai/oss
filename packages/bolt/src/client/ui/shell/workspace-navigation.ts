@@ -18,7 +18,7 @@ type ShellMessageKey =
 	| 'bolt.shell.approvals'
 	| 'bolt.shell.automations'
 	| 'bolt.shell.operations'
-	| 'bolt.shell.administration'
+	| 'bolt.shell.workspace'
 	| 'bolt.shell.applications'
 	| 'bolt.shell.more'
 	| 'bolt.shell.documentation'
@@ -490,29 +490,39 @@ export const buildWorkspaceNavigationSections = (input: {
 	readonly applications: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly applicationsHref?: string | undefined;
 	readonly i18n: NavigationLabelResolver;
-}): WorkspaceNavigationSection[] => [
-	...namedSection(
-		'applications',
-		resolveShellLabel(input.i18n, 'bolt.shell.applications'),
-		[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
-		input.applicationsHref
-	),
-	...namedSection(
-		'operations',
-		resolveShellLabel(input.i18n, 'bolt.shell.operations'),
-		input.system.filter((item) => item.section === 'operations')
-	),
-	...namedSection(
-		'resources',
-		resolveShellLabel(input.i18n, 'bolt.shell.more'),
-		input.system.filter((item) => item.section === 'resources')
-	),
-	...namedSection(
-		'administration',
-		resolveShellLabel(input.i18n, 'bolt.shell.administration'),
-		input.system.filter((item) => item.section === 'administration')
-	)
-];
+}): WorkspaceNavigationSection[] => {
+	const resources = input.system.filter((item) => item.section === 'resources');
+	const more: WorkspaceNavigationItem[] =
+		resources.length === 0
+			? []
+			: [
+					{
+						key: 'more',
+						label: resolveShellLabel(input.i18n, 'bolt.shell.more'),
+						icon: 'lucide:ellipsis',
+						href: resources[0]?.href ?? WORKSPACE_SETTINGS_PATH,
+						active: resources.some((item) => item.active),
+						children: resources
+					}
+				];
+	return [
+		...namedSection(
+			'applications',
+			resolveShellLabel(input.i18n, 'bolt.shell.applications'),
+			[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
+			input.applicationsHref
+		),
+		...namedSection(
+			'operations',
+			resolveShellLabel(input.i18n, 'bolt.shell.operations'),
+			input.system.filter((item) => item.section === 'operations')
+		),
+		...namedSection('workspace', resolveShellLabel(input.i18n, 'bolt.shell.workspace'), [
+			...more,
+			...input.system.filter((item) => item.section === 'administration')
+		])
+	];
+};
 
 export const resolveHostPluginSurface = (
 	currentPath: string,

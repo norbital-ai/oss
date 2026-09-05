@@ -125,7 +125,7 @@ export function buildTaskSelector(input: {
 			rows.push({
 				kind: 'task',
 				id: task.id,
-				title: `${task.status} · ${task.id.slice(0, 8)}`,
+				title: `${task.status === 'done' || task.status === 'ready' ? 'Conversation' : task.status} · ${task.id.slice(0, 8)}`,
 				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
 				searchText: `${task.id} ${task.status} ${task.agent_id}`,
 				audience: 'personal'
@@ -142,7 +142,7 @@ export function buildTaskSelector(input: {
 			rows.push({
 				kind: 'task',
 				id: task.id,
-				title: `${task.status} · ${task.id.slice(0, 8)}`,
+				title: `${task.status === 'done' || task.status === 'ready' ? 'Conversation' : task.status} · ${task.id.slice(0, 8)}`,
 				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
 				searchText: `${task.id} ${task.status} ${task.agent_id}`,
 				audience: 'workbench'
