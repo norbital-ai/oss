@@ -113,7 +113,9 @@
 					?.getAttribute('data-kanban-destination')
 			: null;
 		const recordId = event.item.getAttribute('data-sortable-id');
-		if (destination && recordId && destination !== lane) {
+		// A real cross-lane sort is committed by handleSort after this callback. The coordinate
+		// fallback is only for drops where Sortable left the card in its original list.
+		if (event.from === event.to && destination && recordId && destination !== lane) {
 			onMove({ recordId, fromLane: lane, toLane: destination });
 		}
 		onDragEnd();

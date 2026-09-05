@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [
@@ -101,6 +101,7 @@
 		"es-module-lexer": "2.3.2",
 		"mode-watcher": "^1.1.0",
 		"qrcode": "^1.5.4",
+		"runed": "catalog:",
 		"tailwindcss": "4.3.3",
 		"typescript": "catalog:",
 		"vite": "catalog:"

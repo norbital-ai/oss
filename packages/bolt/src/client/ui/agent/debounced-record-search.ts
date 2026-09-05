@@ -44,8 +44,8 @@ export function createDebouncedRecordSearch<T>(options: DebouncedRecordSearchOpt
 		parsed: DebouncedRecordSearchParsed | null,
 		shouldSearch: boolean
 	): void {
-		cancel();
 		if (identity === lastIdentity) return;
+		cancel();
 		lastIdentity = identity;
 		if (!shouldSearch || !parsed) {
 			version++;

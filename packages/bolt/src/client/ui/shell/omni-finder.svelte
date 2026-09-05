@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Schema } from 'effect';
+	import { watch } from 'runed';
 	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { humanize } from '@norbital-ai/std/string';
@@ -110,16 +111,23 @@
 	});
 
 	const parsed = $derived(parseCommandQuery(query, mentionSources.collections()));
+	// The policy-filtered catalogue can arrive after the user types. Search follows the resolved
+	// scope as well as the text, so that arrival starts the query without another keystroke.
+	watch(
+		() => (open ? recordSearchIdentity(parsed) : null),
+		(identity) => {
+			if (identity === null) {
+				recordSearch.invalidate();
+				return;
+			}
+			recordSearch.schedule(identity, parsed, shouldSearchRecords(parsed));
+		},
+		{ lazy: false }
+	);
 
-	/** Replace the finder query, kick record search, and optionally restore input focus. */
+	/** Replace the finder query and optionally restore input focus. */
 	function commitQuery(next: string, focus = false): void {
 		query = next;
-		const nextParsed = parseCommandQuery(next, mentionSources.collections());
-		recordSearch.schedule(
-			recordSearchIdentity(nextParsed),
-			nextParsed,
-			shouldSearchRecords(nextParsed)
-		);
 		if (focus) queueMicrotask(() => inputElement?.focus());
 	}
 

@@ -108,6 +108,9 @@ importers:
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
+      runed:
+        specifier: 'catalog:'
+        version: 0.37.1(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.10)(vite@8.2.2(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0)))(svelte@5.56.10)(typescript@6.0.3)(vite@8.2.2(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0)))(svelte@5.56.10)(zod@4.4.3)
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
