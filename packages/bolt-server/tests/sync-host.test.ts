@@ -46,10 +46,10 @@ const configuration = ServerConfiguration.make({
 	gatewaySecret: Redacted.make(GATEWAY_SECRET)
 });
 
-const scopedFrame = (
-	frame: SyncApplyFrame,
-	scope = configuration.scope
-): SyncScopedApplyFrame => ({ scope, frame });
+const scopedFrame = (frame: SyncApplyFrame, scope = configuration.scope): SyncScopedApplyFrame => ({
+	scope,
+	frame
+});
 
 const makeConnection = (id: string, credential: string) => {
 	const frames: Array<SyncScopedApplyFrame> = [];
@@ -130,7 +130,9 @@ const makeBridge = (hooks: {
 	advance: async ({ request }) => {
 		hooks.onAdvance?.(request);
 		const dataTouched = request.changes.some((change) =>
-			request.subscriptions.some((subscription) => subscription.input.collection === change.collection)
+			request.subscriptions.some(
+				(subscription) => subscription.input.collection === change.collection
+			)
 		);
 		if (!dataTouched && request.changes.length > 0) {
 			return {
@@ -736,165 +738,174 @@ const startTestApplication = (serverConfiguration: ServerConfiguration) =>
 	});
 
 describe('bolt-server Sync v2 wire', () => {
-	it.effect('opens with a browser id, registers separately, extends, and emits scoped apply first', () =>
-		Effect.acquireUseRelease(
-			startTestApplication(configuration),
-			(application) =>
-				Effect.gen(function* () {
-					const base = `http://${application.address.host}:${application.address.port}`;
-					const connectionId = 'browser-writer-1';
-					const stream = yield* Effect.tryPromise(() =>
-						fetch(`${base}/sync/stream?connectionId=${encodeURIComponent(connectionId)}`, {
-							headers: { authorization: 'Bearer writer-1' }
-						})
-					);
-					assert.strictEqual(stream.status, 200);
-					assert.strictEqual(
-						stream.headers.get('content-type'),
-						'text/event-stream; charset=utf-8'
-					);
-					const reader = stream.body?.getReader();
-					assert.ok(reader !== undefined);
+	for (const payloadBytes of [0, 128 * 1024]) {
+		it.effect(`keeps the SSE writer alive after an accepted ${payloadBytes}-byte frame`, () =>
+			Effect.acquireUseRelease(
+				startTestApplication(configuration),
+				(application) =>
+					Effect.gen(function* () {
+						const base = `http://${application.address.host}:${application.address.port}`;
+						const connectionId = 'browser-writer-1';
+						const stream = yield* Effect.tryPromise(() =>
+							fetch(`${base}/sync/stream?connectionId=${encodeURIComponent(connectionId)}`, {
+								headers: { authorization: 'Bearer writer-1' }
+							})
+						);
+						assert.strictEqual(stream.status, 200);
+						assert.strictEqual(
+							stream.headers.get('content-type'),
+							'text/event-stream; charset=utf-8'
+						);
+						const reader = stream.body?.getReader();
+						assert.ok(reader !== undefined);
 
-					const connected = yield* Effect.tryPromise(() =>
-						fetch(`${base}/sync/connect`, {
-							method: 'POST',
-							headers: {
-								'content-type': 'application/json',
-								authorization: 'Bearer writer-1',
-								'x-bolt-sync-connection': connectionId
-							},
-							body: JSON.stringify({
-								queries: [
+						const connected = yield* Effect.tryPromise(() =>
+							fetch(`${base}/sync/connect`, {
+								method: 'POST',
+								headers: {
+									'content-type': 'application/json',
+									authorization: 'Bearer writer-1',
+									'x-bolt-sync-connection': connectionId
+								},
+								body: JSON.stringify({
+									queries: [
+										{
+											queryKey: 'notes',
+											input: { kind: 'findMany', collection: 'fixture-notes' },
+											requestedPrefix: 1
+										}
+									],
+									detached: [],
+									pending: []
+								})
+							})
+						);
+						assert.strictEqual(connected.status, 200);
+						assert.deepStrictEqual(yield* Effect.tryPromise(() => connected.json()), {
+							queries: [
+								{
+									queryKey: 'notes',
+									version: 1,
+									rows: [{ id: 'note-1' }],
+									retainedBytes: 20
+								}
+							],
+							outcomes: []
+						});
+
+						const extended = yield* Effect.tryPromise(() =>
+							fetch(`${base}/sync/extend`, {
+								method: 'POST',
+								headers: {
+									'content-type': 'application/json',
+									authorization: 'Bearer writer-1',
+									'x-bolt-sync-connection': connectionId
+								},
+								body: JSON.stringify({
+									queryKey: 'notes',
+									version: 1,
+									loadedPrefix: 1,
+									requestedPrefix: 2
+								})
+							})
+						);
+						assert.strictEqual(extended.status, 200);
+						assert.deepStrictEqual(yield* Effect.tryPromise(() => extended.json()), {
+							queryKey: 'notes',
+							version: 1,
+							fromPrefix: 1,
+							toPrefix: 2,
+							rows: [{ id: 'note-2' }],
+							retainedBytes: 40
+						});
+
+						const mutation = yield* Effect.tryPromise(() =>
+							fetch(`${base}/_bolt/command/test.mutate`, {
+								method: 'POST',
+								headers: {
+									'content-type': 'application/json',
+									authorization: 'Bearer writer-1',
+									'x-bolt-sync-connection': connectionId
+								},
+								body: JSON.stringify({ idempotencyKey: 'write-wire-1', payloadBytes })
+							})
+						);
+						assert.strictEqual(mutation.status, 200);
+
+						const firstEvent = yield* Effect.tryPromise(() => readNextSseEvent(reader));
+						assert.strictEqual(firstEvent.event, 'apply');
+						const apply = yield* Schema.decodeUnknownEffect(SyncScopedApplyFrame)(firstEvent.data);
+						assert.deepStrictEqual(
+							apply,
+							scopedFrame({
+								updates: [
 									{
 										queryKey: 'notes',
-										input: { kind: 'findMany', collection: 'fixture-notes' },
-										requestedPrefix: 1
+										fromVersion: 1,
+										toVersion: 2,
+										delta: {
+											removeIds: [],
+											put: [
+												{
+													id: 'note-1',
+													index: 0,
+													row: {
+														id: 'note-1',
+														revised: true,
+														...(payloadBytes ? { payload: 'x'.repeat(payloadBytes) } : {})
+													}
+												}
+											]
+										}
 									}
 								],
-								detached: [],
-								pending: []
+								resets: [],
+								outcomes: [
+									{
+										id: CollectionMutationIdempotencyKey.make('write-wire-1'),
+										status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
+									}
+								]
 							})
-						})
-					);
-					assert.strictEqual(connected.status, 200);
-					assert.deepStrictEqual(yield* Effect.tryPromise(() => connected.json()), {
-						queries: [
-							{
-								queryKey: 'notes',
-								version: 1,
-								rows: [{ id: 'note-1' }],
-								retainedBytes: 20
-							}
-						],
-						outcomes: []
-					});
+						);
 
-					const extended = yield* Effect.tryPromise(() =>
-						fetch(`${base}/sync/extend`, {
-							method: 'POST',
-							headers: {
-								'content-type': 'application/json',
-								authorization: 'Bearer writer-1',
-								'x-bolt-sync-connection': connectionId
-							},
-							body: JSON.stringify({
-								queryKey: 'notes',
-								version: 1,
-								loadedPrefix: 1,
-								requestedPrefix: 2
+						const recorded = yield* Effect.tryPromise(() =>
+							fetch(`${base}/_bolt/command/test.lastAdvance`, {
+								method: 'POST',
+								headers: {
+									'content-type': 'application/json',
+									authorization: 'Bearer writer-1'
+								},
+								body: '{}'
 							})
-						})
-					);
-					assert.strictEqual(extended.status, 200);
-					assert.deepStrictEqual(yield* Effect.tryPromise(() => extended.json()), {
-						queryKey: 'notes',
-						version: 1,
-						fromPrefix: 1,
-						toPrefix: 2,
-						rows: [{ id: 'note-2' }],
-						retainedBytes: 40
-					});
-
-					const mutation = yield* Effect.tryPromise(() =>
-						fetch(`${base}/_bolt/command/test.mutate`, {
-							method: 'POST',
-							headers: {
-								'content-type': 'application/json',
-								authorization: 'Bearer writer-1',
-								'x-bolt-sync-connection': connectionId
-							},
-							body: JSON.stringify({ idempotencyKey: 'write-wire-1' })
-						})
-					);
-					assert.strictEqual(mutation.status, 200);
-
-					const firstEvent = yield* Effect.tryPromise(() => readNextSseEvent(reader));
-					assert.strictEqual(firstEvent.event, 'apply');
-					const apply = yield* Schema.decodeUnknownEffect(SyncScopedApplyFrame)(firstEvent.data);
-					assert.deepStrictEqual(apply, scopedFrame({
-						updates: [
-							{
-								queryKey: 'notes',
-								fromVersion: 1,
-								toVersion: 2,
-								delta: {
-									removeIds: [],
-									put: [
-										{
-											id: 'note-1',
-											index: 0,
-											row: { id: 'note-1', revised: true }
-										}
-									]
-								}
-							}
-						],
-						resets: [],
-						outcomes: [
-							{
-								id: CollectionMutationIdempotencyKey.make('write-wire-1'),
-								status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
-							}
-						]
-					}));
-
-					const recorded = yield* Effect.tryPromise(() =>
-						fetch(`${base}/_bolt/command/test.lastAdvance`, {
-							method: 'POST',
-							headers: {
-								'content-type': 'application/json',
-								authorization: 'Bearer writer-1'
-							},
-							body: '{}'
-						})
-					);
-					assert.strictEqual(recorded.status, 200);
-					const last = (yield* Effect.tryPromise(() => recorded.json())) as {
-						readonly signature: string | null;
-						readonly timestamp: string | null;
-						readonly input: unknown;
-					} | null;
-					assert.ok(last !== null);
-					assert.strictEqual(
-						last.signature,
-						createHmac('sha256', GATEWAY_SECRET)
-							.update(
-								systemSignaturePayload({
-									timestamp: Number(last.timestamp),
-									command: 'sync.advance',
-									tenantId: configuration.scope.tenantId,
-									input: last.input
-								}),
-								'utf8'
-							)
-							.digest('hex')
-					);
-					yield* Effect.tryPromise(() => reader.cancel());
-				}),
-			(application) => Effect.promise(() => application.stop())
-		)
-	);
+						);
+						assert.strictEqual(recorded.status, 200);
+						const last = (yield* Effect.tryPromise(() => recorded.json())) as {
+							readonly signature: string | null;
+							readonly timestamp: string | null;
+							readonly input: unknown;
+						} | null;
+						assert.ok(last !== null);
+						assert.strictEqual(
+							last.signature,
+							createHmac('sha256', GATEWAY_SECRET)
+								.update(
+									systemSignaturePayload({
+										timestamp: Number(last.timestamp),
+										command: 'sync.advance',
+										tenantId: configuration.scope.tenantId,
+										input: last.input
+									}),
+									'utf8'
+								)
+								.digest('hex')
+						);
+						yield* Effect.tryPromise(() => reader.cancel());
+					}),
+				(application) => Effect.promise(() => application.stop())
+			)
+		);
+	}
 
 	it.effect('refuses an unsigned sync.advance when no gateway secret is configured', () =>
 		Effect.acquireUseRelease(

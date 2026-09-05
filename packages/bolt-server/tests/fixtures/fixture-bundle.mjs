@@ -35,6 +35,7 @@ const ok = (response) => ({ _tag: 'Success', response });
 
 /** Last `sync.advance` this fixture saw, so the suite can prove the host signed it. */
 let lastAdvance = null;
+let notePayload = '';
 
 export const dispatch = async (invocation, _facilities, signal) => {
 	if (invocation._tag === 'Command') {
@@ -99,10 +100,7 @@ export const dispatch = async (invocation, _facilities, signal) => {
 					toPrefix: request.requestedPrefix,
 					rows: [{ id: 'note-2' }],
 					retainedBytes: 40,
-					prefixKeys: [
-						...state.prefixKeys,
-						{ id: 'note-2', order: ['note-2'] }
-					]
+					prefixKeys: [...state.prefixKeys, { id: 'note-2', order: ['note-2'] }]
 				}
 			});
 		}
@@ -140,12 +138,22 @@ export const dispatch = async (invocation, _facilities, signal) => {
 							{ id: 'note-1', order: ['note-1'] },
 							{ id: 'note-2', order: ['note-2'] }
 						],
-						prefixBytes: 40,
+						prefixBytes: 40 + notePayload.length,
 						deltas: subscription.viewerPrefixes.map((loadedPrefix) => ({
 							loadedPrefix,
 							delta: {
 								removeIds: [],
-								put: [{ id: 'note-1', index: 0, row: { id: 'note-1', revised: true } }]
+								put: [
+									{
+										id: 'note-1',
+										index: 0,
+										row: {
+											id: 'note-1',
+											revised: true,
+											...(notePayload ? { payload: notePayload } : {})
+										}
+									}
+								]
 							}
 						})),
 						authorityFingerprint: subscription.authorityFingerprint,
@@ -164,6 +172,7 @@ export const dispatch = async (invocation, _facilities, signal) => {
 		}
 		if (invocation.command === 'test.mutate') {
 			const idempotencyKey = invocation.input?.idempotencyKey;
+			notePayload = 'x'.repeat(invocation.input?.payloadBytes ?? 0);
 			return ok({
 				status: 200,
 				headers: {},

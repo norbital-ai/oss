@@ -489,7 +489,9 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				live && !response.destroyed && !response.writableEnded && !response.writableNeedDrain,
 			write: (frame) => {
 				if (!sink.writable()) return false;
-				return response.write(sseApplyBytes(frame));
+				// Node accepts the bytes even when write returns false; that signal gates the next write.
+				response.write(sseApplyBytes(frame));
+				return true;
 			},
 			close: () => {
 				if (!live) return;
