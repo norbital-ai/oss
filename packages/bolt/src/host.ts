@@ -6,6 +6,8 @@ import {
 	type LlmProviderEndpoint
 } from './llm_provider.js';
 
+export { compileHostModelSchema } from './compiler/schema-migrations.js';
+
 /** Computes the host-side HMAC without pulling Node's crypto module into runtime/browser bundles. */
 export const systemSignature = (secret: string, payload: string): string =>
 	createHmac('sha256', secret).update(payload, 'utf8').digest('hex');

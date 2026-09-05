@@ -18,7 +18,8 @@ import {
 	type PlanContext
 } from '../src/runtime/collections/read/relation-plan.js';
 import { orderingExpressions } from '../src/runtime/access/effective-plan.js';
-import { relationalComposer } from '../src/runtime/persistence.js';
+import { drizzle } from 'drizzle-orm/pg-proxy';
+import { refuseExecution } from '../src/runtime/persistence.js';
 
 /**
  * A `with` clause is one statement, and every level of it carries its own policy predicate.
@@ -100,7 +101,8 @@ const relations = relationalSchema(definition, {
 	table: collectionQueryTable,
 	resolveMany: resolveWritableManyRelation
 });
-const composer = relationalComposer(relations);
+// The same refusing composer as `persistence.ts`, told which relationships this workspace has.
+const composer = drizzle(refuseExecution, { relations });
 
 /**
  * Canonical policy expressions, the shape `predicateExpression` actually compiles.

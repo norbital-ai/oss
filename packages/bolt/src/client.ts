@@ -53,6 +53,12 @@ export const remote =
  * change exists to end. The *types* below are erased, so they cost nothing and keep both ends of the
  * dynamic import in agreement.
  */
+export type {
+	WorkspaceEntry,
+	WorkspaceHandle,
+	WorkspaceView
+} from './client/ui/shell/workspace-contract.js';
+export type { WorkspaceSession } from './client/session.js';
 export { workspaceSession } from './client/session.js';
 export { createHttpBoltTransport } from './client/ui/agent/browser-transport.js';
 export { AGENT_PATH, WORKSPACE_SETTINGS_PATH } from './client/ui/shell/workspace-navigation.js';
