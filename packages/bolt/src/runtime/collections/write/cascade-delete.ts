@@ -17,7 +17,8 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 	prepareDelete: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareDelete'],
 	collection: string,
 	id: string,
-	depth: number
+	depth: number,
+	trusted = false
 ): Effect.Effect<void, Error | AuthoredRefusal, Requirements> =>
 	Effect.gen(function* () {
 		for (const relation of ports.workspace.definition.relations) {
@@ -41,6 +42,6 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 				ports.stageHookWrites
 			);
 			for (const child of related.rows)
-				yield* prepareDelete(edge.childCollection, child, depth + 1, false, childPrepared);
+				yield* prepareDelete(edge.childCollection, child, depth + 1, false, childPrepared, trusted);
 		}
 	});

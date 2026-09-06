@@ -256,7 +256,8 @@ export type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 		row: Readonly<Record<string, unknown>>,
 		depth: number,
 		requiresBrowserBaseVersion: boolean,
-		wavePrepared?: unknown
+		wavePrepared?: unknown,
+		trusted?: boolean
 	) => Effect.Effect<void, E, R>;
 	readonly prepareNode: (
 		collection: string,
@@ -266,7 +267,9 @@ export type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 		identity?: GraphNodeIdentity,
 		requiresBrowserBaseVersion?: boolean,
 		preDecoded?: GraphDecodedInput,
-		wavePrepared?: unknown
+		wavePrepared?: unknown,
+		/** A `before` hook nested this row: authored, server-derived work, authorized like an after hook's writes. */
+		trusted?: boolean
 	) => Effect.Effect<string, E, R>;
 }>;
 
@@ -275,104 +278,109 @@ export const makeGraphPreparers = <Error, Requirements>(
 	ports: GraphPreparePorts<Error, Requirements>
 ): GraphPrepareFns<Error | AuthoredRefusal, Requirements> => {
 	const prepareDelete: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareDelete'] =
-		Effect.fn('Collections.prepareGraphDelete')(
-			function* (collection, row, depth, requiresBrowserBaseVersion, wavePrepared) {
-				const operationPosition = ports.operations.length;
-				const id = row['id'];
-				if (!isNonEmptyString(id))
-					return yield* ports.graphRefusal(
-						collection,
-						'delete',
-						`A stored ${collection} row selected for reconciliation has no identifier.`
-					);
-				if (depth > WRITE_DEPTH_LIMIT)
-					return yield* ports.graphRefusal(
-						collection,
-						'delete',
-						`A cascading relationship delete on ${collection} is more than ${WRITE_DEPTH_LIMIT} levels deep.`
-					);
-				const identity = `${collection}\u0000${id}`;
-				if (ports.preparedDeletes.has(identity)) return;
-				ports.preparedDeletes.add(identity);
-				const definition = yield* ports.workspace.collection(collection);
-				if (depth === 0 && collection === ports.rootCollection)
-					yield* ports.assertExpectedRootVersion(collection, id, row);
-				const snapshot = yield* ports.recordSnapshot(collection, id);
-				if (ports.browserMutation !== undefined && requiresBrowserBaseVersion)
-					yield* ports.assertBrowserBaseVersion(
-						EffectId.make(`${ports.effectId}:base-version:${collection}:${id}`),
-						ports.browserMutation,
-						collection,
-						id,
-						row
-					);
-				yield* ports.ensureGraphRowUnlocked(collection, id);
-				const accessPlan = yield* ports.policyWrite(
-					ports.subject,
-					'delete',
+		Effect.fn('Collections.prepareGraphDelete')(function* (
+			collection,
+			row,
+			depth,
+			requiresBrowserBaseVersion,
+			wavePrepared,
+			trusted = false
+		) {
+			const operationPosition = ports.operations.length;
+			const id = row['id'];
+			if (!isNonEmptyString(id))
+				return yield* ports.graphRefusal(
 					collection,
-					row,
-					ports.elevated ? 'after' : 'none'
-				);
-				const visibility = accessPlan.predicate;
-				ports.registerExecutionInvariant(collection, 'delete', visibility);
-				const module = ports.authoredHooks[collection];
-				if (module?.delete?.perRecord?.before !== undefined) {
-					const api = ports.buildApi(
-						ports.effectId,
-						ports.subject,
-						false,
-						ports.hookDepth + depth + 1,
-						ports.stageHookWrites
-					);
-					yield* ports.runHook(
-						module.delete.perRecord.before,
-						{ existing: row, prepared: wavePrepared, api },
-						{
-							collection,
-							action: 'delete.before'
-						}
-					);
-				}
-				const context = { record: row };
-				yield* ports.authorizePolicyWrite(
-					EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
-					ports.subject,
-					visibility,
 					'delete',
-					collection,
-					context
+					`A stored ${collection} row selected for reconciliation has no identifier.`
 				);
-				const approval = yield* ports.resolveApproval(
-					EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-					ports.subject,
-					visibility,
+			if (depth > WRITE_DEPTH_LIMIT)
+				return yield* ports.graphRefusal(
+					collection,
 					'delete',
-					collection,
-					context
+					`A cascading relationship delete on ${collection} is more than ${WRITE_DEPTH_LIMIT} levels deep.`
 				);
-				if (approval !== undefined)
-					ports.approvalRequirements.push({
-						collection,
-						action: 'delete',
-						approval
-					});
-				yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth);
-				ports.operations.splice(operationPosition, 0, {
-					action: 'delete',
+			const identity = `${collection}\u0000${id}`;
+			if (ports.preparedDeletes.has(identity)) return;
+			ports.preparedDeletes.add(identity);
+			const definition = yield* ports.workspace.collection(collection);
+			if (depth === 0 && collection === ports.rootCollection)
+				yield* ports.assertExpectedRootVersion(collection, id, row);
+			const snapshot = yield* ports.recordSnapshot(collection, id);
+			if (ports.browserMutation !== undefined && requiresBrowserBaseVersion)
+				yield* ports.assertBrowserBaseVersion(
+					EffectId.make(`${ports.effectId}:base-version:${collection}:${id}`),
+					ports.browserMutation,
 					collection,
 					id,
-					values: {},
-					definition,
-					visibility,
-					previous: row,
-					snapshot,
-					...(module === undefined ? {} : { module }),
-					depth,
-					taskScope: ports.scope()
-				});
+					row
+				);
+			yield* ports.ensureGraphRowUnlocked(collection, id);
+			const accessPlan = yield* ports.policyWrite(
+				ports.subject,
+				'delete',
+				collection,
+				row,
+				ports.elevated || trusted ? 'after' : 'none'
+			);
+			const visibility = accessPlan.predicate;
+			ports.registerExecutionInvariant(collection, 'delete', visibility);
+			const module = ports.authoredHooks[collection];
+			if (module?.delete?.perRecord?.before !== undefined) {
+				const api = ports.buildApi(
+					ports.effectId,
+					ports.subject,
+					false,
+					ports.hookDepth + depth + 1,
+					ports.stageHookWrites
+				);
+				yield* ports.runHook(
+					module.delete.perRecord.before,
+					{ existing: row, prepared: wavePrepared, api },
+					{
+						collection,
+						action: 'delete.before'
+					}
+				);
 			}
-		);
+			const context = { record: row };
+			yield* ports.authorizePolicyWrite(
+				EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
+				ports.subject,
+				visibility,
+				'delete',
+				collection,
+				context
+			);
+			const approval = yield* ports.resolveApproval(
+				EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+				ports.subject,
+				visibility,
+				'delete',
+				collection,
+				context
+			);
+			if (approval !== undefined)
+				ports.approvalRequirements.push({
+					collection,
+					action: 'delete',
+					approval
+				});
+			yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth, trusted);
+			ports.operations.splice(operationPosition, 0, {
+				action: 'delete',
+				collection,
+				id,
+				values: {},
+				definition,
+				visibility,
+				previous: row,
+				snapshot,
+				...(module === undefined ? {} : { module }),
+				depth,
+				taskScope: ports.scope()
+			});
+		});
 
 	const prepareNode: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareNode'] =
 		Effect.fn('Collections.prepareGraphNode')(
@@ -385,7 +393,8 @@ export const makeGraphPreparers = <Error, Requirements>(
 				identity,
 				requiresBrowserBaseVersion = true,
 				preDecoded,
-				wavePrepared
+				wavePrepared,
+				trusted = false
 			) {
 				const operationPosition = ports.operations.length;
 				if (depth > WRITE_DEPTH_LIMIT)
@@ -442,7 +451,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 					action,
 					collection,
 					own,
-					ports.elevated ? 'after' : 'none'
+					ports.elevated || trusted ? 'after' : 'none'
 				);
 				const visibility = accessPlan.predicate;
 				ports.registerExecutionInvariant(collection, action, visibility);
@@ -451,6 +460,10 @@ export const makeGraphPreparers = <Error, Requirements>(
 				// submitted field the matching grant does not name, for creates and updates alike, and
 				// for every node of the graph — always on the caller-owned shape, before input decoding
 				// and hooks, so server-derived fields a hook adds are never mistaken for forged ones.
+				// The rows a `before` hook nests are that same server-derived work, whole (an employment's
+				// leave accounts): authored code's answer, not the caller's claim, so they are authorized
+				// like an after hook's writes (`trusted`) while their own hooks still run.
+				const hookRelationNames = new Set<string>();
 
 				// Only an update has anything to read first: the row it lands on, the fence the browser
 				// declared against it, and the snapshot the ledger keeps. Everything after this — the
@@ -506,7 +519,10 @@ export const makeGraphPreparers = <Error, Requirements>(
 					]);
 					own = returned.own;
 					const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
-					for (const entry of returned.included) byName.set(entry.edge.name, entry);
+					for (const entry of returned.included) {
+						byName.set(entry.edge.name, entry);
+						hookRelationNames.add(entry.edge.name);
+					}
 					included = [...byName.values()];
 				}
 
@@ -582,6 +598,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 					readonly child: Readonly<Record<string, unknown>>;
 					readonly identity: PlannedGraphNodeIdentity | undefined;
 					readonly requiresBrowserBaseVersion: boolean;
+					readonly trusted: boolean;
 				}>;
 				const childWaves: Array<PlannedChild> = [];
 				const relationOmissions: Array<{
@@ -705,7 +722,8 @@ export const makeGraphPreparers = <Error, Requirements>(
 							relation: relation.edge,
 							child,
 							identity: childIdentity,
-							requiresBrowserBaseVersion: relationshipRequiresBrowserBaseVersion
+							requiresBrowserBaseVersion: relationshipRequiresBrowserBaseVersion,
+							trusted: trusted || hookRelationNames.has(relation.edge.name)
 						});
 					}
 					// Inclusion authorizes reconciliation of the children it names, but absence is
@@ -795,7 +813,8 @@ export const makeGraphPreparers = <Error, Requirements>(
 								: { submitted: match.submitted, decoded: match.decoded },
 							match === undefined
 								? undefined
-								: childWavePrepared.get(planned.relation.childCollection)
+								: childWavePrepared.get(planned.relation.childCollection),
+							planned.trusted
 						);
 					}
 					const omission = relationOmissions[relationIndex];
@@ -806,7 +825,9 @@ export const makeGraphPreparers = <Error, Requirements>(
 								relation.edge.childCollection,
 								childRow,
 								depth + 1,
-								requiresBrowserBaseVersion && browserRelationshipNames.has(relation.edge.name)
+								requiresBrowserBaseVersion && browserRelationshipNames.has(relation.edge.name),
+								undefined,
+								trusted || hookRelationNames.has(relation.edge.name)
 							);
 					}
 				}

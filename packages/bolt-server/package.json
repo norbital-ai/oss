@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.13",
+	"version": "0.0.14",
 	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
 	"type": "module",
 	"sideEffects": false,

@@ -468,6 +468,47 @@ describe('declarative relationship reconciliation', () => {
 		expect(await drainChanges(harness)).toEqual([]);
 	}, 60_000);
 
+	it("authorizes the rows a before hook nests as authored work, not as the caller's claim", async () => {
+		// The same writer, the same child the grant refuses when the writer submits it (the test
+		// above): when the budget's own `before` hook derives that child, the write lands whole.
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Derives the estimate every budget carries.',
+									handler: (context) => ({
+										...context.input,
+										budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
+									})
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).mutate(
+					EffectId.make('hook-derived-child-create'),
+					writerSubject,
+					'budgets',
+					[{ name: 'Writer-owned' }]
+				);
+			})
+		);
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'Writer-owned' }
+		]);
+		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
+			{ label: 'Derived child', amount: 10 }
+		]);
+	}, 60_000);
+
 	it('rolls back child reconciliation when the root update predicate rejects the row', async () => {
 		harness = await makeBoltTestRuntime(definition);
 		await mutateBudget(harness, 'denied-root-seed', {
