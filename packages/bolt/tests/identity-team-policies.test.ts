@@ -35,6 +35,7 @@ const accessFor = (definition: WorkspaceDefinition): AccessControl.Interface =>
 const definition = (teams: Readonly<Record<string, ReadonlyArray<string>>>): WorkspaceDefinition =>
 	({
 		collections: [],
+		envoys: [],
 		policies: ['employee', 'supervisor', 'hr_manager'].map((name) => ({
 			name,
 			capabilities: { apps: [name] }

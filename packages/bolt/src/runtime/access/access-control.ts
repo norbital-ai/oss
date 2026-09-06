@@ -578,6 +578,32 @@ export const layer = Layer.effect(
 			resource: string
 		): boolean =>
 			isAdministrator(subject) && (action === 'agent' || authoredCollections.has(resource));
+		/**
+		 * An envoy's declared policies authorize its own agent.
+		 *
+		 * The `agent` action otherwise asks whether a policy opens an app, because the web agent lives
+		 * inside one. An envoy is its own surface: a WhatsApp contractor policy that deliberately opens
+		 * no app and grants one collection still has to run the envoy it is declared on, or the
+		 * transport can receive a message and never answer it. Nothing else widens — the envoy's
+		 * turn still reaches only what those policies grant.
+		 */
+		const envoyPolicies = new Map(
+			workspace.definition.envoys.map((declared) => [
+				declared.name,
+				declared.policies.map((name) => name.toLocaleLowerCase())
+			])
+		);
+		const declaredEnvoyAgent = (
+			action: string,
+			resource: string,
+			subjectHeld: ReadonlySet<string>
+		): PolicyDecision | undefined => {
+			if (action !== 'agent') return undefined;
+			const declared = envoyPolicies.get(resource);
+			return declared !== undefined && declared.some((name) => subjectHeld.has(name))
+				? { allowed: true, reason: 'declared envoy policy' }
+				: undefined;
+		};
 		const administratorPredicate = (): RowPredicate => ({
 			allowed: true,
 			reason: 'workspace administrator bypass',
@@ -590,7 +616,8 @@ export const layer = Layer.effect(
 				decision: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
-						: decidePolicies(workspace.definition.policies, subject, action, resource, subjectHeld),
+						: (declaredEnvoyAgent(action, resource, subjectHeld) ??
+							decidePolicies(workspace.definition.policies, subject, action, resource, subjectHeld)),
 				predicate: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
@@ -747,7 +774,8 @@ export const layer = Layer.effect(
 			explain: (subject, action, resource) =>
 				administratorBypasses(subject, action, resource)
 					? administratorPredicate()
-					: decidePolicies(workspace.definition.policies, subject, action, resource, held(subject)),
+					: (declaredEnvoyAgent(action, resource, held(subject)) ??
+						decidePolicies(workspace.definition.policies, subject, action, resource, held(subject))),
 			capabilities: (subject) => {
 				if (isAdministrator(subject)) {
 					return {
