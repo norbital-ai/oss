@@ -1,6 +1,8 @@
 import { Schema } from 'effect';
 import { Prompt, Response } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
 import {
 	AgentId,
 	DirectiveMode,
@@ -93,6 +95,9 @@ const toolCall = (id: string) =>
 		})
 	);
 
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
+
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -122,18 +127,7 @@ const execute = async (ai: FacilityBinding<AIRequest, AIResponse>, name: string)
 
 describe('immutable provider observations', () => {
 	it('stores one exact pending settlement row for every provider attempt', async () => {
-		let round = 0;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				const message = round++ === 0 ? toolCall('describe-usage') : text('Recorded.');
-				return {
-					_tag: 'Success',
-					value: generated(request, message, observation(request, true))
-				};
-			}
-		};
+		const ai = cassetteAi(cassette('agents-usage-complete'));
 		const { result, taskId } = await execute(ai, 'complete');
 		expect(result).toMatchObject({ taskId, status: 'done' });
 		const runtime = harness;
@@ -149,8 +143,8 @@ describe('immutable provider observations', () => {
 			)
 		).toEqual([
 			expect.objectContaining({
-				provider: 'test',
-				model: languageModelId,
+				provider: 'openrouter',
+				model: 'openrouter/z-ai/glm-5.3-flash',
 				operation: 'language',
 				charge: { currency: 'USD', coefficient: '25', scale: 6 },
 				charge_source: 'provider',
@@ -159,8 +153,8 @@ describe('immutable provider observations', () => {
 				settlement_state: 'pending'
 			}),
 			expect.objectContaining({
-				provider: 'test',
-				model: languageModelId,
+				provider: 'openrouter',
+				model: 'openrouter/z-ai/glm-5.3-flash',
 				operation: 'language',
 				charge: { currency: 'USD', coefficient: '25', scale: 6 },
 				charge_source: 'provider',
@@ -172,16 +166,7 @@ describe('immutable provider observations', () => {
 	});
 
 	it('marks incomplete billing evidence for attention without inventing a charge', async () => {
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				return {
-					_tag: 'Success',
-					value: generated(request, text('Observed.'), observation(request, false))
-				};
-			}
-		};
+		const ai = cassetteAi(cassette('agents-usage-incomplete'));
 		const { result, taskId } = await execute(ai, 'incomplete');
 		expect(result.status).toBe('done');
 		const runtime = harness;

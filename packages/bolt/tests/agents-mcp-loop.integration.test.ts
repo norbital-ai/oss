@@ -11,12 +11,12 @@ import {
 	TEST_TENANT,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCall,
-	scriptedTranscript,
-	toolResultFor
-} from './agents-canonical-ai-fixture.js';
+import { toolResultFor } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const subject = {
 	userId: 'operator-1',
@@ -134,7 +134,7 @@ afterEach(async () => {
 });
 
 const runTurn = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	connector: FacilityBinding<ConnectorRequest, ConnectorResponse>,
 	name: string
 ) => {
@@ -161,18 +161,13 @@ describe('remote MCP tools inside the agent loop', () => {
 		const connector = scriptedMcpConnector((request) =>
 			request.method === 'server/discover' ? discoverOk : callOk
 		);
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantToolCall('search:lookup', { q: 'payroll' }, 'mcp-1'),
-			(request) => {
-				expect(toolResultFor(request, 'search:lookup')).toEqual({
-					content: [{ type: 'text', text: 'Two hits' }],
-					structuredContent: { hits: 2 }
-				});
-				return assistantText('The registry holds two hits.');
-			}
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-mcp-ok'));
 		const { result, taskId } = await runTurn(ai, connector, '01');
 		expect(result.status).toBe('done');
+		expect(toolResultFor(requests[1]!, 'search:lookup')).toEqual({
+			content: [{ type: 'text', text: 'Two hits' }],
+			structuredContent: { hits: 2 }
+		});
 		expect(connector.methods).toEqual(['server/discover', 'tools/call']);
 		expect(feed).toHaveLength(2);
 
@@ -196,10 +191,7 @@ describe('remote MCP tools inside the agent loop', () => {
 				? discoverOk
 				: { body: { error: { code: -32000, message: 'lookup exploded' } } }
 		);
-		const { ai, requests } = scriptedTranscript([
-			assistantToolCall('search:lookup', { q: 'payroll' }, 'mcp-1'),
-			assistantText('The lookup failed; I will report that.')
-		]);
+		const { ai, requests } = cassetteTranscript(cassette('agents-mcp-fail'));
 		const { result } = await runTurn(ai, connector, '02');
 		expect(result.status).toBe('done');
 		const failure = JSON.stringify(requests[1]!.messages.at(-1));
@@ -216,10 +208,7 @@ describe('remote MCP tools inside the agent loop', () => {
 				}
 			}
 		}));
-		const { ai, requests } = scriptedTranscript([
-			assistantToolCall('search:lookup', { q: 'payroll' }, 'mcp-1'),
-			assistantText('The lookup failed; I will report that.')
-		]);
+		const { ai, requests } = cassetteTranscript(cassette('agents-mcp-fail'));
 		const { result } = await runTurn(ai, connector, '03');
 		expect(result.status).toBe('done');
 		const failure = JSON.stringify(requests[1]!.messages.at(-1));
@@ -230,10 +219,7 @@ describe('remote MCP tools inside the agent loop', () => {
 		const connector = scriptedMcpConnector((request) =>
 			request.method === 'server/discover' ? discoverOk : { status: 500, body: { error: {} } }
 		);
-		const { ai, requests } = scriptedTranscript([
-			assistantToolCall('search:lookup', { q: 'payroll' }, 'mcp-1'),
-			assistantText('The lookup failed; I will report that.')
-		]);
+		const { ai, requests } = cassetteTranscript(cassette('agents-mcp-fail'));
 		const { result } = await runTurn(ai, connector, '04');
 		expect(result.status).toBe('done');
 		const failure = JSON.stringify(requests[1]!.messages.at(-1));

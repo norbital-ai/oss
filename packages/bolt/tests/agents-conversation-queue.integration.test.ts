@@ -7,7 +7,11 @@ import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, successfulAI } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import type { AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -33,13 +37,19 @@ describe('Task directive queue', () => {
 		const generationStarted = new Promise<void>((resolve) => {
 			announceGeneration = resolve;
 		});
-		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const ai = successfulAI(async (request) => {
-			generated.push(request);
-			announceGeneration();
-			await generationHeld;
-			return assistantText('First Task answer.');
-		});
+		const twin = cassetteTranscript(cassette('agents-queue-first'));
+		const generated = twin.requests;
+		let held = false;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag === 'Generate' && !held) {
+					held = true;
+					announceGeneration();
+					return generationHeld.then(() => twin.ai.call(metadata, request, signal, onProgress));
+				}
+				return twin.ai.call(metadata, request, signal, onProgress);
+			}
+		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000501');
@@ -95,13 +105,9 @@ describe('Task directive queue', () => {
 	});
 
 	it('claims a steering directive ahead of an older normal directive', async () => {
-		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI((request) => {
-				generated.push(request);
-				return assistantText('Steering applied.');
-			})
-		});
+		const twin = cassetteTranscript(cassette('agents-queue-steer'));
+		const generated = twin.requests;
+		harness = await makeBoltTestRuntime(undefined, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000502');
 		await harness.runtime.runPromise(

@@ -7,7 +7,8 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, scriptedTranscript } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 
 const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
@@ -18,8 +19,11 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
+
 const runAgentTask = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string,
 	mode: 'agent' | 'compact',
 	message: string
@@ -44,9 +48,7 @@ const runAgentTask = async (
 
 describe('auto-compaction degraded paths', () => {
 	it('records a degraded turn when the retained projection stays over the bound after one checkpoint', async () => {
-		const { ai, feed } = scriptedTranscript([
-			assistantText('Proceeding over the degraded projection.')
-		]);
+		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-01'));
 		const { taskId, result } = await runAgentTask(ai, '01', 'agent', LARGE_INSTRUCTION);
 		expect(result.status).toBe('done');
 		expect(feed[0]).toMatchObject({ automaticCompact: true, maxOutputTokens: 1_536 });
@@ -74,7 +76,7 @@ describe('auto-compaction degraded paths', () => {
 	});
 
 	it('meters the automatic compact generation as its own usage settlement', async () => {
-		const { ai, feed } = scriptedTranscript([assistantText('Continuing after the checkpoint.')]);
+		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-02'));
 		const { taskId } = await runAgentTask(ai, '02', 'agent', LARGE_INSTRUCTION);
 		const usage = await harness!.database.query(
 			`select usage.call_id, usage.settlement_id, usage.settlement_state, usage.operation
@@ -97,7 +99,7 @@ describe('auto-compaction degraded paths', () => {
 	});
 
 	it('annotates a manual compact turn with origin manual and no retained ids', async () => {
-		const { ai } = scriptedTranscript([assistantText('Retained: the open export decisions.')]);
+		const { ai } = cassetteTranscript(cassette('agents-compaction-03'));
 		const { taskId, result } = await runAgentTask(
 			ai,
 			'03',

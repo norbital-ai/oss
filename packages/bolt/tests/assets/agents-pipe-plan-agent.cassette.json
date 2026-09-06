@@ -1,0 +1,45 @@
+{
+  "meta": {
+    "name": "agents-pipe-plan-agent",
+    "recordedAt": "2026-09-06T19:11:07.975Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Objective: ship export. Approach: read first. Verify: describe_workspace returns."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Executing against the Active Plan."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

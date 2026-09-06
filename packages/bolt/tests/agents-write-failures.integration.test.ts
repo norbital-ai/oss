@@ -5,12 +5,12 @@ import { refuse } from '../src/authoring/refusal.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { adminSubject, makeBoltTestRuntime } from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCalls,
-	lastToolFailure,
-	scriptedTranscript
-} from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import { lastToolFailure } from './agents-canonical-ai-fixture.js';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 describe('agent mutation failures', () => {
 	for (const phase of ['prepare', 'settle'] as const)
@@ -19,26 +19,7 @@ describe('agent mutation failures', () => {
 			const taskId = TaskId.make('00000000-0000-4000-8000-000000000472');
 			const message =
 				phase === 'prepare' ? 'An account is required.' : 'Follow-up processing failed.';
-			const { ai } = scriptedTranscript([
-				assistantToolCalls([
-					{
-						name: 'write_collection',
-						input: {
-							collection: 'people',
-							operation: 'create',
-							id: personId,
-							values: { name: 'Ada' }
-						}
-					}
-				]),
-				(request) => {
-					const failure = lastToolFailure(request)?.failure;
-					expect(failure).toMatchObject({ phase, committed: phase === 'settle' ? [personId] : [] });
-					expect(String(failure?.message)).toContain(message);
-					if (phase === 'settle') expect(String(failure?.message)).toMatch(/do not retry/i);
-					return assistantText('Reported the failure without repeating the write.');
-				}
-			]);
+			const { ai, requests } = cassetteTranscript(cassette('agents-write-failure'));
 			const handler = () => refuse(message);
 			const harness = await makeBoltTestRuntime(undefined, {
 				ai,
@@ -70,6 +51,10 @@ describe('agent mutation failures', () => {
 				await harness.runtime.runPromise(
 					agents.execute(harness.effectId('execute'), adminSubject, taskId)
 				);
+				const failure = lastToolFailure(requests[1]!)?.failure;
+				expect(failure).toMatchObject({ phase, committed: phase === 'settle' ? [personId] : [] });
+				expect(String(failure?.message)).toContain(message);
+				if (phase === 'settle') expect(String(failure?.message)).toMatch(/do not retry/i);
 				expect(await harness.database.query('select id from people')).toEqual(
 					phase === 'settle' ? [{ id: personId }] : []
 				);

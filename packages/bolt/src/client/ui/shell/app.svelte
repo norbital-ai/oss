@@ -28,6 +28,7 @@
 		isAdmin = true,
 		deferredQueriesReady = false,
 		syncStatus,
+		environment,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -99,6 +100,11 @@
 		/** The Machine's one sync state — link, head and unsettled writes; absent is explicitly unverified. */
 		syncStatus?: ClientState | undefined;
 		/**
+		 * The host's deployment environment name, for the sidebar's non-production badge.
+		 * Forwarded verbatim to the shell.
+		 */
+		environment?: string | undefined;
+		/**
 		 * Admin team preview, forwarded verbatim to the shell.
 		 *
 		 * Only the host can build it — the teams are the tenant's compiled policies and whether this
@@ -169,6 +175,7 @@
 	{isAdmin}
 	{deferredQueriesReady}
 	{syncStatus}
+	{environment}
 	{impersonation}
 	{onImpersonate}
 	{onStopImpersonating}

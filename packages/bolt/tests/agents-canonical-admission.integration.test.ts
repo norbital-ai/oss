@@ -12,7 +12,12 @@ import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, successfulAI } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -24,17 +29,20 @@ describe('canonical Task admission vertical slice', () => {
 	it('retains messages queued while a provider is working and answers them in the same conversation', async () => {
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const prompts: unknown[] = [];
-		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI(async (request, index) => {
-				prompts.push(request.messages);
-				if (index === 0) {
+		const twin = cassetteTranscript(cassette('agents-admission-queue'));
+		const prompts: unknown[] = twin.requests as unknown[];
+		let held = false;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag === 'Generate' && !held) {
+					held = true;
 					started.resolve();
-					await release.promise;
+					return release.promise.then(() => twin.ai.call(metadata, request, signal, onProgress));
 				}
-				return assistantText(`Reply ${index}`);
-			})
-		});
+				return twin.ai.call(metadata, request, signal, onProgress);
+			}
+		};
+		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000120');
 		const submit = (text: string) =>
@@ -79,7 +87,7 @@ describe('canonical Task admission vertical slice', () => {
 
 	it('separates intentional repeated messages while retaining retry idempotency', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI(() => assistantText('Hello back.'))
+			ai: cassetteTranscript(cassette('agents-admission-hello')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000110');
@@ -129,13 +137,9 @@ describe('canonical Task admission vertical slice', () => {
 	});
 
 	it('continues a completed conversation with its previous transcript and queues further instructions', async () => {
-		const prompts: unknown[] = [];
-		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI((request) => {
-				prompts.push(request.messages);
-				return assistantText(`Reply ${prompts.length}`);
-			})
-		});
+		const twin3 = cassetteTranscript(cassette('agents-admission-continue'));
+		const prompts: unknown[] = twin3.requests as unknown[];
+		harness = await makeBoltTestRuntime(undefined, { ai: twin3.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000109');
 		const submit = (key: string, text: string) =>
@@ -189,7 +193,7 @@ describe('canonical Task admission vertical slice', () => {
 
 	it('atomically admits a Task message and directive before executing the Task', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI(() => assistantText('Hello back.'))
+			ai: cassetteTranscript(cassette('agents-admission-hello')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000101');
@@ -257,9 +261,7 @@ describe('canonical Task admission vertical slice', () => {
 
 	it('persists Plan mode as an active Plan revision and leaves the Task ready', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
-			ai: successfulAI(() =>
-				assistantText('Objective: finish the migration. Verify: all canonical gates pass.')
-			)
+			ai: cassetteTranscript(cassette('agents-admission-plan')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000102');

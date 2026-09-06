@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "name": "agents-plan-incomplete",
+    "recordedAt": "2026-09-06T19:09:19.980Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Objective: ship the export. Approach: read the registry first. Verify: describe_workspace returns the registry."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Implementing the export now."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Gap closed with new evidence."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-2"
+      }
+    }
+  ],
+  "verdicts": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "PlanVerdict",
+        "verdict": {
+          "complete": false,
+          "summary": "The export step is unevidenced.",
+          "gaps": [
+            "No durable evidence that the export ran"
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-3"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "PlanVerdict",
+        "verdict": {
+          "complete": true,
+          "summary": "Every criterion is evidenced.",
+          "gaps": []
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-4"
+      }
+    }
+  ]
+}

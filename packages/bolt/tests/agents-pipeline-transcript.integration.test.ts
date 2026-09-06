@@ -8,12 +8,12 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCalls,
-	lastToolResult,
-	scriptedTranscript
-} from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import { lastToolResult, toolResultFor } from './agents-canonical-ai-fixture.js';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const SYSTEM_TOOLS = systemToolSpecs.map(({ name }) => name);
 const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
@@ -22,37 +22,6 @@ const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTE
 const PERSON_ID = '00000000-0000-4000-8000-000000000401';
 const TOOL_TASK_ID = TaskId.make('00000000-0000-4000-8000-000000000401');
 const IMAGE_KEY = Agents.taskAssetStorageKey(TOOL_TASK_ID, 'badge', 'badge.png');
-
-const everySystemTool = assistantToolCalls([
-	{ name: 'describe_workspace', input: {} },
-	{ name: 'list_skills', input: {} },
-	{ name: 'read_skill', input: { name: 'payroll' } },
-	{
-		name: 'todo',
-		input: { items: [{ id: 'inspect', text: 'Inspect the workspace', status: 'doing' }] }
-	},
-	{ name: 'search_task_history', input: { scope: 'this_task', query: 'pipeline' } },
-	{ name: 'read_collection', input: { collection: 'people', limit: 10 } },
-	{
-		name: 'write_collection',
-		input: {
-			collection: 'people',
-			operation: 'create',
-			id: PERSON_ID,
-			values: { name: 'Ada' }
-		}
-	},
-	{
-		name: 'use_image',
-		input: {
-			key: IMAGE_KEY,
-			name: 'badge.png',
-			mimeType: 'image/png',
-			size: 128,
-			detail: 'auto'
-		}
-	}
-]);
 
 const workspace = testWorkspace({
 	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }]
@@ -65,7 +34,7 @@ afterEach(async () => {
 });
 
 const openTask = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string,
 	mode: 'agent' | 'plan' | 'compact',
 	message: string
@@ -86,7 +55,7 @@ const openTask = async (
 };
 
 const runTask = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string,
 	mode: 'agent' | 'plan' | 'compact',
 	message: string
@@ -126,20 +95,15 @@ describe('scripted agent pipeline transcript', () => {
 			'read_collection',
 			'write_collection'
 		]);
-		const { ai, feed, requests } = scriptedTranscript([
-			everySystemTool,
-			(request) => {
-				expect(toolNamesFrom(request).toSorted()).toEqual([...SYSTEM_TOOLS].toSorted());
-				expect(lastToolResult(request)).toMatchObject({
-					key: IMAGE_KEY,
-					name: 'badge.png',
-					mimeType: 'image/png'
-				});
-				return assistantText('All system tools settled.');
-			}
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-system'));
 		const { result, taskId } = await runTask(ai, '01', 'agent', 'Exercise every system tool.');
 		expect(result.status).toBe('done');
+		expect(toolNamesFrom(requests[1]!).toSorted()).toEqual([...SYSTEM_TOOLS].toSorted());
+		expect(lastToolResult(requests[1]!)).toMatchObject({
+			key: IMAGE_KEY,
+			name: 'badge.png',
+			mimeType: 'image/png'
+		});
 		expect(feed.every((step) => step.automaticCompact === false)).toBe(true);
 		expect(feed.every((step) => step.planMode === false)).toBe(true);
 		expect(feed).toHaveLength(2);
@@ -178,9 +142,7 @@ describe('scripted agent pipeline transcript', () => {
 	});
 
 	it('kicks in Automatic Compact in agent mode when the projection exceeds 64 KiB', async () => {
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantText('Continuing from the compacted context.')
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-compact'));
 		const { result, taskId } = await runTask(ai, '02', 'agent', LARGE_INSTRUCTION);
 		expect(result.status).toBe('done');
 		expect(feed[0]).toMatchObject({
@@ -204,9 +166,7 @@ describe('scripted agent pipeline transcript', () => {
 	});
 
 	it('does not auto-compact in Plan mode; the model is fed the Plan contract', async () => {
-		const { ai, feed } = scriptedTranscript([
-			assistantText('Objective: inspect. Approach: read first. Verify: describe_workspace returns.')
-		]);
+		const { ai, feed } = cassetteTranscript(cassette('agents-pipe-plan'));
 		const { result, taskId } = await runTask(ai, '03', 'plan', LARGE_INSTRUCTION);
 		expect(result.status).toBe('idle');
 		expect(feed).toHaveLength(1);
@@ -235,37 +195,17 @@ describe('scripted agent pipeline transcript', () => {
 	});
 
 	it('Plan mode refuses write_collection and still leaves an active Plan', async () => {
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantToolCalls([
-				{ name: 'describe_workspace', input: {} },
-				{
-					name: 'write_collection',
-					input: {
-						collection: 'people',
-						operation: 'create',
-						id: PERSON_ID,
-						values: { name: 'Ada' }
-					}
-				}
-			]),
-			(request) => {
-				expect(JSON.stringify(request.messages)).toContain('ToolNotAllowed');
-				return assistantText(
-					'Objective: do not write. Approach: describe only. Verify: write_collection is refused.'
-				);
-			}
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-plan-refuse'));
 		const { result } = await runTask(ai, '04', 'plan', 'Plan a people write.');
 		expect(result.status).toBe('idle');
+		expect(JSON.stringify(requests[1]?.messages)).toContain('ToolNotAllowed');
 		expect(feed[0]?.planMode).toBe(true);
 		expect(feed.every((step) => step.automaticCompact === false)).toBe(true);
 		expect(requests).toHaveLength(2);
 	});
 
 	it('does not auto-compact on stop; compact waits for the next execute after resume', async () => {
-		const { ai, feed } = scriptedTranscript([
-			assistantText('Resumed after stop, from the compacted context.')
-		]);
+		const { ai, feed } = cassetteTranscript(cassette('agents-pipe-stop'));
 		const { agents, taskId } = await openTask(ai, '05', 'agent', LARGE_INSTRUCTION);
 		const stopped = await harness!.runtime.runPromise(
 			agents.control(harness!.effectId('stop:05'), adminSubject, { taskId, action: 'stop' })
@@ -300,7 +240,7 @@ describe('scripted agent pipeline transcript', () => {
 	});
 
 	it('treats /goal as an ordinary agent message, not a Plan or Compact mode', async () => {
-		const { ai, feed } = scriptedTranscript([assistantText('Goal is just user text.')]);
+		const { ai, feed } = cassetteTranscript(cassette('agents-pipe-goal'));
 		const { result } = await runTask(ai, '06', 'agent', '/goal ship the payroll export');
 		expect(result.status).toBe('done');
 		expect(feed).toHaveLength(1);
@@ -314,12 +254,7 @@ describe('scripted agent pipeline transcript', () => {
 
 	it('Plan mode then Agent: the model loses the pre-checkpoint brief and is given the Active Plan', async () => {
 		const brief = 'UNIQUE_PLAN_BRIEF_MUST_LEAVE_THE_FEED';
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantText(
-				'Objective: ship export. Approach: read first. Verify: describe_workspace returns.'
-			),
-			assistantText('Executing against the Active Plan.')
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-plan-agent'));
 		const { agents, taskId } = await openTask(ai, '07', 'plan', brief);
 		const planned = await harness!.runtime.runPromise(
 			agents.execute(harness!.effectId('execute:07:plan'), adminSubject, taskId)
@@ -351,10 +286,7 @@ describe('scripted agent pipeline transcript', () => {
 
 	it('Compact mode then Agent: the model loses the compact instruction and keeps the checkpoint', async () => {
 		const instruction = 'UNIQUE_COMPACT_INSTRUCTION_MUST_LEAVE_THE_FEED';
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantText('Retained: open payroll decisions and the current export work.'),
-			assistantText('Continuing from the compacted checkpoint.')
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-compact-agent'));
 		const { agents, taskId } = await openTask(ai, '08', 'compact', instruction);
 		const compacted = await harness!.runtime.runPromise(
 			agents.execute(harness!.effectId('execute:08:compact'), adminSubject, taskId)

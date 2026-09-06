@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "name": "agents-skills-01",
+    "recordedAt": "2026-09-06T18:57:07.137Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-9cfb820a1799542c",
+              "name": "list_skills",
+              "params": {},
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-8febaa278fb48b92",
+              "name": "read_skill",
+              "params": {
+                "name": "payroll"
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-b366cb9a82a6b817",
+              "name": "read_skill",
+              "params": {
+                "name": "secret-handbook"
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Skills inventoried."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

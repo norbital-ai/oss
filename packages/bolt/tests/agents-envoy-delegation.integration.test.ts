@@ -1,24 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import {
-	AgentId,
-	DirectiveMode,
-	DirectivePriority,
-	TaskId
-} from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { subagentToolSpec } from '../src/runtime/agents/capability-catalog.js';
-import {
-	makeBoltTestRuntime,
-	type BoltTestRuntime
-} from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCall,
-	lastToolResult,
-	successfulAI
-} from './agents-canonical-ai-fixture.js';
+import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import { lastToolResult } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const definition = workspace({
 	name: 'field-operations',
@@ -91,23 +83,9 @@ const submit = (
 
 describe('envoy Task delegation boundary', () => {
 	it('fails a disabled subagent aperture closed and admits a child only for an enabled envoy', async () => {
-		const requests: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const ai = successfulAI((request, index) => {
-			requests.push(request);
-			if (index === 0 || index === 2) {
-				return assistantToolCall(
-					'subagent',
-					{
-						action: 'spawn',
-						agentId: 'ingress',
-						instruction: 'Record the bounded child update.'
-					},
-					index === 0 ? 'disabled-subagent' : 'enabled-subagent'
-				);
-			}
-			return assistantText('Delegation decision handled.');
-		});
-		harness = await makeBoltTestRuntime(definition, { ai });
+		const twin = cassetteTranscript(cassette('agents-envoy-delegation'));
+		const requests = twin.requests;
+		harness = await makeBoltTestRuntime(definition, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const disabledTask = TaskId.make('00000000-0000-4000-8000-000000000601');
 		await submit(agents, harness, disabledTask, 'ingress');

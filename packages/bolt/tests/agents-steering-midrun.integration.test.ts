@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -7,11 +9,10 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCall,
-	scriptedTranscript
-} from './agents-canonical-ai-fixture.js';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -29,15 +30,21 @@ describe('steering admitted during an active run', () => {
 		const generationStarted = new Promise<void>((resolve) => {
 			announceGeneration = resolve;
 		});
-		const { ai, requests } = scriptedTranscript([
-			async () => {
-				announceGeneration();
-				await generationHeld;
-				return assistantToolCall('describe_workspace', {}, 'inspect-workspace');
-			},
-			assistantText('Steered answer.'),
-			assistantText('Follow-up answer.')
-		]);
+		// Timing stays in the test (hold the first turn until steer + follow-up land);
+		// content replays from the cassette.
+		const twin = cassetteTranscript(cassette('agents-steering'));
+		const requests = twin.requests;
+		let held = false;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag === 'Generate' && !held) {
+					held = true;
+					announceGeneration();
+					return generationHeld.then(() => twin.ai.call(metadata, request, signal, onProgress));
+				}
+				return twin.ai.call(metadata, request, signal, onProgress);
+			}
+		};
 		harness = await makeBoltTestRuntime(testWorkspace(), { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000c01');

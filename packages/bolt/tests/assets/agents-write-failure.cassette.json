@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "name": "agents-write-failure",
+    "recordedAt": "2026-09-06T18:58:15.872Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-a869a6506a49532b",
+              "name": "write_collection",
+              "params": {
+                "collection": "people",
+                "operation": "create",
+                "id": "00000000-0000-4000-8000-000000000471",
+                "values": {
+                  "name": "Ada"
+                }
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Reported the failure without repeating the write."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

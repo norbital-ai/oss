@@ -1,17 +1,15 @@
 import { Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import { policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCalls,
-	lastToolFailure,
-	scriptedTranscript,
-	toolResultFor,
-	toolResultsFor
-} from './agents-canonical-ai-fixture.js';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import { lastToolFailure, toolResultFor, toolResultsFor } from './agents-canonical-ai-fixture.js';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const subject = {
 	userId: 'operator-1',
@@ -53,7 +51,7 @@ afterEach(async () => {
 });
 
 const runTurn = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string,
 	message: string
 ) => {
@@ -77,14 +75,7 @@ const runTurn = async (
 
 describe('distributed skills and the Todo surface in the loop', () => {
 	it('lists and reads only the skills the subject holds, and refuses an unheld skill', async () => {
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantToolCalls([
-				{ name: 'list_skills', input: {} },
-				{ name: 'read_skill', input: { name: 'payroll' } },
-				{ name: 'read_skill', input: { name: 'secret-handbook' } }
-			]),
-			assistantText('Skills inventoried.')
-		]);
+		const { ai, feed, requests } = cassetteTranscript(cassette('agents-skills-01'));
 		const { result, taskId } = await runTurn(ai, '01', 'Follow the payroll skill.');
 		expect(result.status).toBe('done');
 
@@ -118,48 +109,7 @@ describe('distributed skills and the Todo surface in the loop', () => {
 	});
 
 	it('reconciles the Todo list across calls and enforces done-is-terminal and single-doing', async () => {
-		const { ai, requests } = scriptedTranscript([
-			assistantToolCalls([
-				{
-					name: 'todo',
-					input: {
-						items: [
-							{ id: 'inspect', text: 'Inspect the registry', status: 'done' },
-							{ id: 'export', text: 'Export the payroll', status: 'pending' }
-						]
-					}
-				},
-				{
-					name: 'todo',
-					input: {
-						items: [
-							{ id: 'inspect', text: 'Inspect the registry', status: 'pending' },
-							{ id: 'export', text: 'Export the payroll', status: 'doing' }
-						]
-					}
-				},
-				{
-					name: 'todo',
-					input: {
-						items: [
-							{ id: 'inspect', text: 'Inspect the registry', status: 'done' },
-							{ id: 'export', text: 'Export the payroll', status: 'doing' },
-							{ id: 'notify', text: 'Notify finance', status: 'doing' }
-						]
-					}
-				},
-				{
-					name: 'todo',
-					input: {
-						items: [
-							{ id: 'inspect', text: 'Inspect the registry', status: 'done' },
-							{ id: 'export', text: 'Export the payroll', status: 'doing' }
-						]
-					}
-				}
-			]),
-			assistantText('Todo reconciled.')
-		]);
+		const { ai, requests } = cassetteTranscript(cassette('agents-skills-02'));
 		const { result } = await runTurn(ai, '02', 'Track the export work.');
 		expect(result.status).toBe('done');
 

@@ -16,6 +16,11 @@ import {
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
 import { assistantText, successfulAI } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const first = ModelId.make('openrouter/provider/first');
 const second = ModelId.make('openrouter/provider/second');
@@ -27,13 +32,10 @@ afterEach(async () => {
 });
 
 const fixture = async () => {
-	const requests: Array<Extract<AIRequest, { _tag: 'Generate' }>> = [];
 	let models = [first, second];
 	let defaultModel = first;
-	const generated = successfulAI((request) => {
-		requests.push(request);
-		return assistantText('Done.');
-	});
+	const generated = cassetteTranscript(cassette('agents-model-done'));
+	const requests = generated.requests;
 	const ai: FacilityBinding<AIRequest, AIResponse> = {
 		call: (metadata, request, signal) =>
 			request._tag === 'Catalog'
@@ -47,7 +49,7 @@ const fixture = async () => {
 							defaultEmbeddingModelId: first
 						}
 					})
-				: generated.call(metadata, request, signal)
+				: generated.ai.call(metadata, request, signal)
 	};
 	harness = await makeBoltTestRuntime(undefined, { ai });
 	const runtime = harness;

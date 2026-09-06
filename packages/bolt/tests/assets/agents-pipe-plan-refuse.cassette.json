@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "name": "agents-pipe-plan-refuse",
+    "recordedAt": "2026-09-06T19:10:56.673Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-8905061149a7aa34",
+              "name": "describe_workspace",
+              "params": {},
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-a107e40ca0063ce7",
+              "name": "write_collection",
+              "params": {
+                "collection": "people",
+                "operation": "create",
+                "id": "00000000-0000-4000-8000-000000000401",
+                "values": {
+                  "name": "Ada"
+                }
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Objective: do not write. Approach: describe only. Verify: write_collection is refused."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

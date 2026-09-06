@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import {
 	AgentId,
 	DirectiveMode,
@@ -18,6 +19,10 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { cassetteAi, cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -58,15 +63,9 @@ afterEach(async () => {
 
 describe('Task resume control', () => {
 	it('creates an explicit durable resume directive and executes it under a new run epoch', async () => {
-		const prompts: Array<ReadonlyArray<unknown>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				prompts.push(request.messages);
-				return { _tag: 'Success', value: generated(request, 'Resumed from durable history.') };
-			}
-		};
+		const twin = cassetteTranscript(cassette('agents-resume-explicit'));
+		const prompts = twin.requests;
+		const ai = twin.ai;
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make(recordId('task-explicit-resume'));
@@ -176,22 +175,7 @@ describe('Task resume control', () => {
 	});
 
 	it('refuses resume for a Task that is not stopped or awaiting attention', async () => {
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) =>
-				request._tag === 'Catalog'
-					? { _tag: 'Success', value: catalog }
-					: request._tag === 'Generate'
-						? { _tag: 'Success', value: generated(request, 'done') }
-						: {
-								_tag: 'Failure',
-								error: {
-									code: 'unsupported',
-									message: 'embedding is not bound',
-									retryable: false,
-									outcome: 'known'
-								}
-							}
-		};
+		const ai = cassetteAi(cassette('agents-resume-done'));
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make(recordId('task-invalid-resume'));

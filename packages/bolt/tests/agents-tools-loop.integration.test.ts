@@ -1,6 +1,11 @@
 import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 import {
 	AgentId,
 	DirectiveMode,
@@ -109,23 +114,7 @@ const executeTask = async (
 
 describe('canonical Effect Prompt tool loop', () => {
 	it('persists assistant tool calls and typed tool results as complete Prompt messages', async () => {
-		const requests: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				requests.push(request);
-				return {
-					_tag: 'Success',
-					value: generated(
-						request,
-						requests.length === 1
-							? assistantToolCall('describe-1', 'describe_workspace', {})
-							: assistantText('Workspace inspected.')
-					)
-				};
-			}
-		};
+		const { ai, requests } = cassetteTranscript(cassette('agents-tools-platform'));
 		const { result, taskId } = await executeTask(ai, 'platform-tool');
 		expect(result).toMatchObject({ taskId, status: 'done' });
 		expect(requests).toHaveLength(2);
@@ -149,25 +138,12 @@ describe('canonical Effect Prompt tool loop', () => {
 	});
 
 	it('executes an authored tool and exposes its JSON result to the next generation', async () => {
-		let observed: unknown;
-		let round = 0;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				if (round > 0) observed = lastToolResult(request);
-				const message =
-					round++ === 0
-						? assistantToolCall('summarize-1', 'summarize', { limit: 3 })
-						: assistantText('Summary ready.');
-				return { _tag: 'Success', value: generated(request, message) };
-			}
-		};
+		const { ai, requests } = cassetteTranscript(cassette('agents-tools-authored'));
 		const { result } = await executeTask(ai, 'authored-tool', {
 			remoteHandlers: { summarize: (() => () => ({ count: 3 }))() }
 		});
 		expect(result.status).toBe('done');
-		expect(observed).toEqual({ count: 3 });
+		expect(lastToolResult(requests[1]!)).toEqual({ count: 3 });
 	});
 
 	it('routes host-owned tools through the host facility', async () => {
@@ -180,40 +156,18 @@ describe('canonical Effect Prompt tool loop', () => {
 				return { _tag: 'Success', value: { output: { entries: ['src'] } } };
 			}
 		};
-		let round = 0;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				const message =
-					round++ === 0
-						? assistantToolCall('host-1', 'sandbox_files', { path: 'src' })
-						: assistantText('Inspected.');
-				return { _tag: 'Success', value: generated(request, message) };
-			}
-		};
+		const { ai } = cassetteTranscript(cassette('agents-tools-host'));
 		const { result } = await executeTask(ai, 'host-tool', { hostTools });
 		expect(result.status).toBe('done');
 		expect(calls).toEqual([{ tool: 'sandbox_files', input: { path: 'src' } }]);
 	});
 
 	it('returns an Effect tool failure for a provider-requested undeclared tool', async () => {
-		let observed: unknown;
-		let round = 0;
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				if (round > 0) observed = lastToolResult(request);
-				const message =
-					round++ === 0
-						? assistantToolCall('missing-1', 'search:delete', {})
-						: assistantText('Refused.');
-				return { _tag: 'Success', value: generated(request, message) };
-			}
-		};
+		const { ai, requests } = cassetteTranscript(cassette('agents-tools-undeclared'));
 		const { result } = await executeTask(ai, 'undeclared-tool');
 		expect(result.status).toBe('done');
-		expect(observed).toMatchObject({ code: 'Bolt.CapabilityCatalog.ToolNotAllowed' });
+		expect(lastToolResult(requests[1]!)).toMatchObject({
+			code: 'Bolt.CapabilityCatalog.ToolNotAllowed'
+		});
 	});
 });

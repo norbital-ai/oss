@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "name": "agents-envoy-delegation",
+    "recordedAt": "2026-09-06T18:59:33.666Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-aef6f7f55fd630b6",
+              "name": "subagent",
+              "params": {
+                "action": "spawn",
+                "agentId": "ingress",
+                "instruction": "Record the bounded child update."
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Delegation decision handled."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-9e807714faf4796a",
+              "name": "subagent",
+              "params": {
+                "action": "spawn",
+                "agentId": "ingress",
+                "instruction": "Record the bounded child update."
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-2"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Delegation decision handled."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-3"
+      }
+    }
+  ]
+}

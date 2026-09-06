@@ -29,6 +29,7 @@
 		searchLabel,
 		searchShortcut,
 		agent,
+		environmentLabel,
 		children
 	}: {
 		model: WorkspaceNavigationModel;
@@ -60,6 +61,11 @@
 		searchShortcut?: string | undefined;
 		/** The workspace agent's trigger, rendered at the top of the sidebar navigation. */
 		agent?: Snippet<[{ expanded: boolean }]> | undefined;
+		/**
+		 * Non-production environment label for the sidebar badge. `undefined` renders no badge,
+		 * which is what production passes.
+		 */
+		environmentLabel?: string | undefined;
 		children: Snippet;
 	} = $props();
 	setStorageScope(() => model.activeOrganization.id);
@@ -129,6 +135,7 @@
 				{searchLabel}
 				{searchShortcut}
 				{agent}
+				{environmentLabel}
 			/>
 		{/snippet}
 		{@render children()}

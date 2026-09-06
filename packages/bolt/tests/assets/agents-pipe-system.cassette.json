@@ -1,0 +1,139 @@
+{
+  "meta": {
+    "name": "agents-pipe-system",
+    "recordedAt": "2026-09-06T19:10:44.748Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "describe_workspace-1",
+              "name": "describe_workspace",
+              "params": {},
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "list_skills-2",
+              "name": "list_skills",
+              "params": {},
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "read_skill-3",
+              "name": "read_skill",
+              "params": {
+                "name": "payroll"
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "todo-4",
+              "name": "todo",
+              "params": {
+                "items": [
+                  {
+                    "id": "inspect",
+                    "text": "Inspect the workspace",
+                    "status": "doing"
+                  }
+                ]
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "search_task_history-5",
+              "name": "search_task_history",
+              "params": {
+                "scope": "this_task",
+                "query": "pipeline"
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "read_collection-6",
+              "name": "read_collection",
+              "params": {
+                "collection": "people",
+                "limit": 10
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "write_collection-7",
+              "name": "write_collection",
+              "params": {
+                "collection": "people",
+                "operation": "create",
+                "id": "00000000-0000-4000-8000-000000000401",
+                "values": {
+                  "name": "Ada"
+                }
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "use_image-8",
+              "name": "use_image",
+              "params": {
+                "key": "agent-tasks/MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwNDAx/YmFkZ2U.png",
+                "name": "badge.png",
+                "mimeType": "image/png",
+                "size": 128,
+                "detail": "auto"
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "All system tools settled."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

@@ -1,23 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import {
-	AgentId,
-	DirectiveMode,
-	DirectivePriority,
-	TaskId
-} from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
-import {
-	makeBoltTestRuntime,
-	type BoltTestRuntime
-} from './support/bolt-test-layer.js';
-import {
-	assistantText,
-	assistantToolCall,
-	lastToolResult,
-	successfulAI
-} from './agents-canonical-ai-fixture.js';
+import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import { lastToolResult } from './agents-canonical-ai-fixture.js';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const hiddenCollection = 'suspicious_activity_logs';
 const definition = workspace({
@@ -73,16 +65,9 @@ describe('Task collection discovery', () => {
 			teamPath: ['field-envoy'],
 			policies: []
 		};
-		const generated: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		let result: Readonly<Record<string, unknown>> | undefined;
-		const ai = successfulAI((request, index) => {
-			generated.push(request);
-			if (index > 0) result = lastToolResult(request);
-			return index === 0
-				? assistantToolCall('describe_workspace', {}, 'describe-authority')
-				: assistantText('I can work with job assignments.');
-		});
-		harness = await makeBoltTestRuntime(definition, { ai });
+		const twin = cassetteTranscript(cassette('agents-discovery'));
+		const generated = twin.requests;
+		harness = await makeBoltTestRuntime(definition, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const taskId = TaskId.make('00000000-0000-4000-8000-000000000301');
 		await harness.runtime.runPromise(
@@ -100,6 +85,7 @@ describe('Task collection discovery', () => {
 
 		expect(executed.status).toBe('done');
 		expect(generated).toHaveLength(2);
+		const result = lastToolResult(generated[1]!);
 		expect(result).toMatchObject({ collections: expect.arrayContaining(['job_assignments']) });
 		expect(JSON.stringify(result)).not.toContain(hiddenCollection);
 	});

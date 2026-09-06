@@ -1,0 +1,89 @@
+{
+  "verdicts": [],
+  "meta": {
+    "name": "agents-usage-complete",
+    "recordedAt": "2026-09-06T19:59:05.593Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "call_22b7cf94f5b24715a4fdebf8",
+              "name": "describe_workspace",
+              "params": {},
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0",
+        "usage": {
+          "inputTokens": {
+            "uncached": 10,
+            "total": 10
+          },
+          "outputTokens": {
+            "total": 4,
+            "text": 4
+          }
+        },
+        "charge": {
+          "currency": "USD",
+          "coefficient": "25",
+          "scale": 6
+        },
+        "chargeSource": "provider",
+        "pricingVersion": "provider-receipt-v1"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Recorded."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1",
+        "usage": {
+          "inputTokens": {
+            "uncached": 10,
+            "total": 10
+          },
+          "outputTokens": {
+            "total": 4,
+            "text": 4
+          }
+        },
+        "charge": {
+          "currency": "USD",
+          "coefficient": "25",
+          "scale": 6
+        },
+        "chargeSource": "provider",
+        "pricingVersion": "provider-receipt-v1"
+      }
+    }
+  ]
+}

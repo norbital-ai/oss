@@ -1,0 +1,135 @@
+{
+  "meta": {
+    "name": "agents-skills-02",
+    "recordedAt": "2026-09-06T18:57:15.134Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-b48c2e02e83cef16",
+              "name": "todo",
+              "params": {
+                "items": [
+                  {
+                    "id": "inspect",
+                    "text": "Inspect the registry",
+                    "status": "done"
+                  },
+                  {
+                    "id": "export",
+                    "text": "Export the payroll",
+                    "status": "pending"
+                  }
+                ]
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-a3b651127512dc11",
+              "name": "todo",
+              "params": {
+                "items": [
+                  {
+                    "id": "inspect",
+                    "text": "Inspect the registry",
+                    "status": "pending"
+                  },
+                  {
+                    "id": "export",
+                    "text": "Export the payroll",
+                    "status": "doing"
+                  }
+                ]
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-b6544844148cea13",
+              "name": "todo",
+              "params": {
+                "items": [
+                  {
+                    "id": "inspect",
+                    "text": "Inspect the registry",
+                    "status": "done"
+                  },
+                  {
+                    "id": "export",
+                    "text": "Export the payroll",
+                    "status": "doing"
+                  },
+                  {
+                    "id": "notify",
+                    "text": "Notify finance",
+                    "status": "doing"
+                  }
+                ]
+              },
+              "providerExecuted": false
+            },
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "chatcmpl-tool-bf67c93357dc3af1",
+              "name": "todo",
+              "params": {
+                "items": [
+                  {
+                    "id": "inspect",
+                    "text": "Inspect the registry",
+                    "status": "done"
+                  },
+                  {
+                    "id": "export",
+                    "text": "Export the payroll",
+                    "status": "doing"
+                  }
+                ]
+              },
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Todo reconciled."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

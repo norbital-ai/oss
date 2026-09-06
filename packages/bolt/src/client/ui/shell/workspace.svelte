@@ -584,6 +584,7 @@
 <BoltApp
 	title={workspace.title}
 	{syncStatus}
+	environment={session.environment}
 	search={view.search}
 	{apps}
 	{accessibleApps}

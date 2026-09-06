@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "name": "agent-tool-turn",
+    "recordedAt": "2026-09-06T17:05:39.229Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "One live tool turn replayed offline: tool call, tool result, final text. Pipeline only.",
+    "promptTokens": 61,
+    "completionTokens": 114
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": [
+            {
+              "options": {},
+              "type": "tool-call",
+              "id": "call_e2e54c2e9fe14ee9820bbe05",
+              "name": "describe_workspace",
+              "params": {},
+              "providerExecuted": false
+            }
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "I've inspected the workspace. Here's what I found:\n\n**Workspace Name:** `test-workspace`\n\nThe workspace inspection is complete. The tool returned the basic workspace metadata \u2014 it's named \"test-workspace\". If you'd like, I can dig deeper into specific aspects of the workspace, such as its files, structure, or contents. Just let me know what you'd like to explore next!"
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    }
+  ]
+}

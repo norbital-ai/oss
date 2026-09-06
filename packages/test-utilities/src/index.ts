@@ -22,6 +22,14 @@ export type { StartedPglite } from './start-pglite.js';
 export { catalogAi } from './catalog-ai.js';
 export { recordedAi } from './recorded-ai.js';
 export type { RecordedGenerated } from './recorded-ai.js';
+export {
+	cassetteAi,
+	cassetteMessage,
+	cassetteTranscript,
+	cassetteVerdict,
+	readCassetteFile
+} from './cassette-ai.js';
+export type { AgentCassette, CassetteInspection, CassetteTurn } from './cassette-ai.js';
 
 export { memoryFiles } from './memory-files.js';
 export type { MemoryFiles } from './memory-files.js';

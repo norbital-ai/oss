@@ -18,6 +18,11 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -72,13 +77,16 @@ describe('Task stop and run-fence boundaries', () => {
 		const providerHeld = new Promise<void>((resolve) => (releaseProvider = resolve));
 		let announceProvider!: () => void;
 		const providerStarted = new Promise<void>((resolve) => (announceProvider = resolve));
+		const inner = cassetteAi(cassette('agents-lifecycle-stale'));
+		let held = false;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: async (_metadata, request) => {
-				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
-				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				announceProvider();
-				await providerHeld;
-				return { _tag: 'Success', value: generated(request, 'stale provider answer') };
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag === 'Generate' && !held) {
+					held = true;
+					announceProvider();
+					return providerHeld.then(() => inner.call(metadata, request, signal, onProgress));
+				}
+				return inner.call(metadata, request, signal, onProgress);
 			}
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });

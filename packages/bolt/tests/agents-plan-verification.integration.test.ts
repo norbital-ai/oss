@@ -10,7 +10,12 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, scriptedTranscript } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteMessage, cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -22,7 +27,7 @@ const PLAN_BODY =
 	'Objective: ship the export. Approach: read the registry first. Verify: describe_workspace returns the registry.';
 
 const openPlanTask = async (
-	ai: ReturnType<typeof scriptedTranscript>['ai'],
+	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string
 ): Promise<{ agents: Agents.Interface; taskId: TaskId }> => {
 	harness = await makeBoltTestRuntime(testWorkspace(), { ai });
@@ -79,22 +84,23 @@ describe('Plan auto-verifier', () => {
 		const release = Promise.withResolvers<void>();
 		const revisedBody =
 			'Objective: ship the export. Approach: preserve the registry and add validation. Verify: both checks pass.';
-		const { ai, requests } = scriptedTranscript([
-			Schema.encodeSync(Prompt.Message)(
-				Prompt.assistantMessage({
-					content: [
-						Prompt.reasoningPart({ text: 'Draft deliberation, excluded from the saved plan.' }),
-						Prompt.textPart({ text: PLAN_BODY })
-					]
-				})
-			),
-			async () => {
-				started.resolve();
-				await release.promise;
-				return assistantText(revisedBody);
-			},
-			assistantText('The queued instruction was applied.')
-		]);
+		const planCassette = cassette('agents-plan-replace');
+		const twin = cassetteTranscript(planCassette);
+		const requests = twin.requests;
+		let held = false;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag === 'Generate' && !held) {
+					held = true;
+					return twin.ai.call(metadata, request, signal, onProgress);
+				}
+				if (request._tag === 'Generate' && twin.requests.length === 1) {
+					started.resolve();
+					return release.promise.then(() => twin.ai.call(metadata, request, signal, onProgress));
+				}
+				return twin.ai.call(metadata, request, signal, onProgress);
+			}
+		};
 		const { agents, taskId } = await openPlanTask(ai, '08');
 		await harness!.runtime.runPromise(
 			agents.submit(harness!.effectId('revise-plan'), adminSubject, {
@@ -151,23 +157,7 @@ describe('Plan auto-verifier', () => {
 	});
 
 	it('sends the model back on an incomplete verdict, then settles verified with the verdict annotations', async () => {
-		const { ai, feed, verdictRequests } = scriptedTranscript(
-			[
-				assistantText(PLAN_BODY),
-				assistantText('Implementing the export now.'),
-				assistantText('Gap closed with new evidence.')
-			],
-			{
-				verdicts: [
-					{
-						complete: false,
-						summary: 'The export step is unevidenced.',
-						gaps: ['No durable evidence that the export ran']
-					},
-					{ complete: true, summary: 'Every criterion is evidenced.', gaps: [] }
-				]
-			}
-		);
+		const { ai, feed, verdictRequests } = cassetteTranscript(cassette('agents-plan-incomplete'));
 		const { agents, taskId } = await openPlanTask(ai, '01');
 		await submitAgentTurn(agents, 'agent:01', taskId);
 
@@ -216,21 +206,7 @@ describe('Plan auto-verifier', () => {
 	});
 
 	it('stalls the Plan in attention after the third incomplete verdict and queues nothing further', async () => {
-		const { ai, verdictRequests } = scriptedTranscript(
-			[
-				assistantText(PLAN_BODY),
-				assistantText('Implementing the export now.'),
-				assistantText('Second implementation pass.'),
-				assistantText('Third implementation pass.')
-			],
-			{
-				verdicts: [1, 2, 3].map((attempt) => ({
-					complete: false,
-					summary: `Pass ${attempt} still lacks export evidence.`,
-					gaps: [`Gap ${attempt}`]
-				}))
-			}
-		);
+		const { ai, verdictRequests } = cassetteTranscript(cassette('agents-plan-stall'));
 		const { agents, taskId } = await openPlanTask(ai, '02');
 		await submitAgentTurn(agents, 'agent:02', taskId);
 

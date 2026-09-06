@@ -56,6 +56,7 @@
 		WORKSPACE_SETTINGS_PATH,
 		type HostPlugin
 	} from '#lib/client/ui/shell/workspace-navigation.js';
+	import { workspaceEnvironmentLabel } from '#lib/client/ui/shell/environment-label.js';
 	import type { ClientState } from '#lib/client/sync/machine.js';
 
 	let {
@@ -73,6 +74,7 @@
 		isAdmin,
 		deferredQueriesReady = false,
 		syncStatus,
+		environment,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -117,6 +119,13 @@
 					teamLabels: string[];
 			  }
 			| undefined;
+		/**
+		 * The host's deployment environment name, for the sidebar's non-production badge.
+		 *
+		 * The session already carries it; this prop is the shell's copy so the badge needs no
+		 * ambient read. `production` renders no badge, `development` reads as `local`.
+		 */
+		environment?: string | undefined;
 		apps?: ReadonlyArray<
 			| string
 			| {
@@ -602,6 +611,7 @@
 		{impersonation}
 		{onImpersonate}
 		{onStopImpersonating}
+		environmentLabel={workspaceEnvironmentLabel(environment)}
 	>
 		{#snippet agent({ expanded })}
 			<AgentTrigger

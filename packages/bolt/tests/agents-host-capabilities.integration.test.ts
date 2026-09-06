@@ -18,7 +18,11 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { assistantText, assistantToolCall, successfulAI } from './agents-canonical-ai-fixture.js';
+import { fileURLToPath } from 'node:url';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+
+const cassette = (name: string) =>
+	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const catalog: HostToolCatalog = {
 	tools: [
@@ -47,7 +51,7 @@ describe('host capability discovery and execution', () => {
 		'discovers authorized source tools and enforces %s mode',
 		async (mode) => {
 			const calls: Array<{ metadata: FacilityCall; request: HostToolRequest }> = [];
-			const requests: Array<Extract<AIRequest, { _tag: 'Generate' }>> = [];
+			const { ai: twinAi, requests } = cassetteTranscript(cassette('agents-host-agent'));
 			const hostTools: FacilityBinding<HostToolRequest, HostToolResponse> = {
 				call: async (metadata, request) => {
 					calls.push({ metadata, request });
@@ -64,14 +68,7 @@ describe('host capability discovery and execution', () => {
 			};
 			harness = await makeBoltTestRuntime(undefined, {
 				hostTools,
-				ai: successfulAI((request, index) => {
-					requests.push(request);
-					return index === 0
-						? assistantToolCall('workspace_read', {}, 'read-source')
-						: index === 1
-							? assistantToolCall('workspace_apply', {}, 'apply-source')
-							: assistantText('Inspected source.');
-				})
+				ai: twinAi
 			});
 			const runtime = harness;
 			const agents = await runtime.runtime.runPromise(Agents.Service);
@@ -116,15 +113,12 @@ describe('host capability discovery and execution', () => {
 	);
 
 	it('rejects a malformed bound catalogue before the provider runs', async () => {
-		let generated = false;
+		const twin = cassetteTranscript(cassette('agents-host-agent'));
 		harness = await makeBoltTestRuntime(undefined, {
 			hostTools: {
 				call: async () => ({ _tag: 'Success', value: { output: { unexpected: true } } })
 			},
-			ai: successfulAI(() => {
-				generated = true;
-				return assistantText('Unexpected.');
-			})
+			ai: twin.ai
 		});
 		const runtime = harness;
 		const agents = await runtime.runtime.runPromise(Agents.Service);
@@ -141,7 +135,7 @@ describe('host capability discovery and execution', () => {
 		await expect(
 			runtime.runtime.runPromise(agents.execute(runtime.effectId('execute'), adminSubject, taskId))
 		).rejects.toThrow();
-		expect(generated).toBe(false);
+		expect(twin.requests).toEqual([]);
 		expect(
 			await runtime.database.query('select id from agent_run where task_id = $1', [taskId])
 		).toEqual([]);

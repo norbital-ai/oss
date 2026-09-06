@@ -1,0 +1,138 @@
+{
+  "meta": {
+    "name": "agents-plan-stall",
+    "recordedAt": "2026-09-06T19:10:38.012Z",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+  },
+  "turns": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Objective: ship the export. Approach: read the registry first. Verify: describe_workspace returns the registry."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-0"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Implementing the export now."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-1"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Second implementation pass."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-2"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "Message",
+        "message": {
+          "options": {},
+          "role": "assistant",
+          "content": "Third implementation pass."
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-3"
+      }
+    }
+  ],
+  "verdicts": [
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "PlanVerdict",
+        "verdict": {
+          "complete": false,
+          "summary": "Pass 1 still lacks export evidence.",
+          "gaps": [
+            "Gap 1"
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-4"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "PlanVerdict",
+        "verdict": {
+          "complete": false,
+          "summary": "Pass 2 still lacks export evidence.",
+          "gaps": [
+            "Gap 2"
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-5"
+      }
+    },
+    {
+      "_tag": "Generated",
+      "result": {
+        "_tag": "PlanVerdict",
+        "verdict": {
+          "complete": false,
+          "summary": "Pass 3 still lacks export evidence.",
+          "gaps": [
+            "Gap 3"
+          ]
+        }
+      },
+      "observation": {
+        "provider": "openrouter",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "operation": "language",
+        "callId": "cassette/recorded-6"
+      }
+    }
+  ]
+}

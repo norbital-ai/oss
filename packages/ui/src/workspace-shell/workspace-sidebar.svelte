@@ -3,6 +3,7 @@
 	import { mode, toggleMode } from 'mode-watcher';
 	import { onMount, type Snippet } from 'svelte';
 	import * as Avatar from '#lib/avatar';
+	import { Badge } from '#lib/badge';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import * as DropdownMenu from '#lib/dropdown-menu';
@@ -38,7 +39,8 @@
 		onSearch,
 		searchLabel,
 		searchShortcut,
-		agent
+		agent,
+		environmentLabel
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void | undefined;
@@ -53,6 +55,13 @@
 		searchLabel?: string;
 		searchShortcut?: string;
 		agent?: Snippet<[{ expanded: boolean }]>;
+		/**
+		 * Non-production environment label for the sidebar badge (`local`, `staging`, …).
+		 *
+		 * `undefined` (the default) renders no badge, which is what production passes. The label
+		 * decision lives with the host's shell — this component only renders what it is given.
+		 */
+		environmentLabel?: string | undefined;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -278,6 +287,32 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-1.5 text-xs">
 	<Sidebar.Menu class="gap-1.5">
+		{#if environmentLabel !== undefined}
+			<Sidebar.MenuItem>
+				{#if displayExpanded}
+					<span
+						class="flex h-7 items-center px-1"
+						role="status"
+						data-testid="workspace-environment-badge"
+					>
+						<Badge variant={environmentLabel === 'staging' ? 'warning' : 'outline'}>
+							{environmentLabel}
+						</Badge>
+					</span>
+				{:else}
+					<span
+						class={cn(
+							'mx-auto size-2 rounded-full',
+							environmentLabel === 'staging' ? 'bg-warning' : 'bg-muted-foreground/50'
+						)}
+						title={environmentLabel}
+						role="img"
+						aria-label={environmentLabel}
+						data-testid="workspace-environment-badge"
+					></span>
+				{/if}
+			</Sidebar.MenuItem>
+		{/if}
 		{#if displayExpanded}
 			<Inline justify="between" align="center" gap="xs" class="h-7 px-1">
 				<div class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{t('misc.account')}</div>
