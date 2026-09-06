@@ -328,10 +328,12 @@ export const inferOp =
 				);
 			}
 			return yield* Schema.decodeUnknownEffect(input.schema)(response.result.value).pipe(
-				Effect.mapError(() =>
+				Effect.mapError((error) =>
+					// The path matters: "eligibility: null where an array or omission was expected" is
+					// actionable; "does not match the authored schema" sent a day into guesswork.
 					refusal(
 						'ai.response_invalid',
-						'The AI provider response does not match the authored schema.'
+						`The AI provider response does not match the authored schema: ${String(error).replace(/\s+/g, ' ').slice(0, 400)}`
 					)
 				)
 			);

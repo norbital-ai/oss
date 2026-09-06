@@ -260,3 +260,40 @@ describe('authored inference tool contract', () => {
 		expect(tools[0]?.name).toBe('read_page');
 	});
 });
+
+describe('authored inference decode refusal', () => {
+	it('names the field that failed to decode', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(EffectId.make('inference-decode'), {
+			catalog: () => Effect.die('unexpected catalog request'),
+			generate: (_effectId, request) => {
+				requests.push(request);
+				return Effect.succeed(
+					AIResponse.cases.Generated.make({
+						result: AIGenerationResult.cases.Object.make({
+							value: { leave: { eligibility: null } }
+						}),
+						observation: ProviderObservation.make({
+							callId: request.callId,
+							provider: 'test',
+							model: request.modelId,
+							operation: 'language'
+						})
+					})
+				);
+			},
+			embed: () => Effect.die('unexpected embedding request')
+		});
+		const exit = await Effect.runPromiseExit(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({
+					leave: Schema.Struct({ eligibility: Schema.optional(Schema.Array(Schema.String)) })
+				}),
+				prompt: 'x'
+			})
+		);
+		expect(exit._tag).toBe('Failure');
+		expect(JSON.stringify(exit)).toContain('eligibility');
+	});
+});
