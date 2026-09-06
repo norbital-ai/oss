@@ -1,15 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
 import { Context, Duration, Effect, Layer, Option, Result, Schema } from 'effect';
 import { decodeNumber } from '@norbital-ai/std/json';
-import { Prompt } from 'effect/unstable/ai';
-import {
-	AIRequest,
-	EffectId,
-	ImageAsset,
-	ModelId,
-	ProviderCallId,
-	type EffectId as EffectIdType
-} from '@norbital-ai/bolt-protocol';
+import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
@@ -35,6 +27,7 @@ import { DispatchError } from '#lib/runtime/workspace.js';
 import { readFileAsset, type FileAsset } from './file-assets.js';
 import { nearestQueryInput, queryInput } from './query-input.js';
 import { HookEffectIds } from './hooks/boundary.js';
+import { inferOp, type InferenceRequest } from '#lib/runtime/inference.js';
 
 const isNumber = Schema.is(Schema.Number);
 const isString = Schema.is(Schema.String);
@@ -300,27 +293,6 @@ export const guardAuthoringOps = <E, G>(
 	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file)))
 });
 
-/** One image an authored `api.infer` attached to its turn, taken straight from a `file()` column. */
-type AuthoredInferenceImage = Readonly<{
-	readonly file: FileRef;
-	readonly detail?: 'auto' | 'low' | 'high';
-}>;
-
-/**
- * One authored inference as the ops surface carries it: the schema the answer must decode to, and
- * the picture words to judge against.
- *
- * Named rather than inline because `AuthoringOps.infer` and the object literal behind the
- * authored `api.infer` must carry the same shape, and that shape is the contract between the
- * authoring surface and the AI facility.
- */
-type InferenceRequest = Readonly<{
-	readonly schema: Schema.Codec<unknown, unknown>;
-	readonly prompt: string;
-	readonly model: string;
-	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
-}>;
-
 /** The Effect-native capability object supplied to authored handlers after invocation binding. */
 export type RuntimeAuthoringApi<E = never> = Readonly<{
 	readonly db: object;
@@ -344,86 +316,6 @@ type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
 		readonly progress: (value: AutomationProgression) => Effect.Effect<void, E, never>;
 	}>;
-
-/**
- * How much of a turn an authored `api.infer` may spend on pictures.
- *
- * Both are refusals, not truncations: a bound that silently dropped an image would leave the model
- * answering about a scene it was never shown, which reads exactly like it answering correctly.
- */
-const MAX_INFERENCE_IMAGES = 8;
-const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
-
-/** Leaves schema-constrained inference enough room to finish one complete JSON value. */
-const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
-
-/**
- * The provider-neutral ImageAsset descriptors an authored `api.infer` sends beside its Effect
- * message. Bytes remain host-only and provider dialect remains Colony-only.
- *
- * Bytes must not be read or base64-expanded here: a 1 MiB JPEG becomes a request larger than the
- * facility bridge's 1 MiB ceiling, and encoding a review batch consumes the isolate's CPU budget.
- */
-const inferenceImageAssets = (
-	images: ReadonlyArray<AuthoredInferenceImage> | undefined
-): Effect.Effect<ReadonlyArray<ImageAsset>, Database.FacilityError> =>
-	Effect.gen(function* () {
-		if (images === undefined || images.length === 0) return [];
-		const refuse = (code: string, message: string) =>
-			new Database.FacilityError({
-				operation: 'ai.generate',
-				code,
-				message,
-				retryable: false,
-				outcome: 'known'
-			});
-		if (images.length > MAX_INFERENCE_IMAGES) {
-			return yield* refuse(
-				'ai.too_many_images',
-				`An inference turn carries at most ${MAX_INFERENCE_IMAGES} images; ${images.length} were passed.`
-			);
-		}
-		const assets: Array<ImageAsset> = [];
-		let total = 0;
-		for (const image of images) {
-			const file = image.file;
-			if (file.storage_key.trim() === '' || file.file_name.trim() === '') {
-				return yield* refuse(
-					'ai.asset_missing',
-					'This image value names no stored object, so there is nothing to send.'
-				);
-			}
-			if (!file.mime_type.startsWith('image/')) {
-				return yield* refuse(
-					'ai.not_an_image',
-					`${file.file_name} is ${file.mime_type || 'of unknown type'}, which is not an image.`
-				);
-			}
-			if (!Number.isInteger(file.file_size) || file.file_size < 0) {
-				return yield* refuse(
-					'ai.invalid_image_size',
-					`${file.file_name} has an invalid declared size.`
-				);
-			}
-			total += file.file_size;
-			if (total > MAX_INFERENCE_IMAGE_BYTES) {
-				return yield* refuse(
-					'ai.images_too_large',
-					`The images on one inference turn total more than ${MAX_INFERENCE_IMAGE_BYTES} bytes.`
-				);
-			}
-			assets.push(
-				ImageAsset.make({
-					key: file.storage_key,
-					name: file.file_name,
-					mimeType: file.mime_type,
-					size: file.file_size,
-					...(image.detail === undefined ? {} : { detail: image.detail })
-				})
-			);
-		}
-		return assets;
-	});
 
 /**
  * The delay `api.automations.run(..., { after })` asked for, in milliseconds, or `undefined` only
@@ -472,74 +364,6 @@ export const afterMillisOf = (after: string | number | undefined): number | unde
 	const decoded = Duration.fromInput(after);
 	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
 };
-
-/**
- * The `infer` member of the authoring api, owned in one place.
- *
- * The authored schema remains the local decode authority. The provider receives one encoded Effect
- * message and the host resolves any image descriptors before its provider call.
- */
-export const inferOp =
-	(effectId: EffectIdType, ai: AIInterface): AuthoringOps<Database.FacilityError>['infer'] =>
-	(input) =>
-		Effect.gen(function* () {
-			const refusal = (code: string, message: string) =>
-				new Database.FacilityError({
-					operation: 'ai.generate',
-					code,
-					message,
-					retryable: false,
-					outcome: 'known'
-				});
-			const unsupportedKeys = Object.keys(input).filter(
-				(key) => key !== 'schema' && key !== 'prompt' && key !== 'model' && key !== 'images'
-			);
-			if (unsupportedKeys.length > 0) {
-				return yield* refusal(
-					'ai.request_invalid',
-					'api.infer received unsupported request fields.'
-				);
-			}
-			const modelId = yield* Schema.decodeUnknownEffect(ModelId)(input.model).pipe(
-				Effect.mapError(() =>
-					refusal('ai.model_invalid', 'api.infer requires a non-empty model id.')
-				)
-			);
-			const imageAssets = yield* inferenceImageAssets(input.images);
-			const jsonSchema = Schema.toJsonSchemaDocument(input.schema).schema;
-			const message = yield* Schema.encodeEffect(Prompt.Message)(
-				Prompt.userMessage({ content: [Prompt.textPart({ text: input.prompt })] })
-			).pipe(
-				Effect.mapError(() =>
-					refusal('ai.message_invalid', 'The Effect prompt could not be encoded.')
-				)
-			);
-			const response = yield* ai.generate(
-				effectId,
-				AIRequest.cases.Generate.make({
-					callId: ProviderCallId.make(`${effectId}:infer`),
-					modelId,
-					messages: [message],
-					maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-					output: { _tag: 'Object', objectName: 'inference', jsonSchema },
-					...(imageAssets.length === 0 ? {} : { imageAssets })
-				})
-			);
-			if (response.result._tag !== 'Object') {
-				return yield* refusal(
-					'ai.response_invalid',
-					'The AI provider returned the wrong output kind.'
-				);
-			}
-			return yield* Schema.decodeUnknownEffect(input.schema)(response.result.value).pipe(
-				Effect.mapError(() =>
-					refusal(
-						'ai.response_invalid',
-						'The AI provider response does not match the authored schema.'
-					)
-				)
-			);
-		});
 
 /**
  * Builds the Effect-native api an authored handler receives.

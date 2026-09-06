@@ -31,6 +31,7 @@ export type {
 	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,
+	InferenceTool,
 	PolicyDecisionApi,
 	PolicyDefinition,
 	PredicateSubjectName,

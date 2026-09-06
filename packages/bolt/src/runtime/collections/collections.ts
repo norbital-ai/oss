@@ -203,7 +203,6 @@ import {
 	afterMillisOf,
 	AuthoredRuntimeService,
 	guardAuthoringOps,
-	inferOp,
 	makeAutomationApi,
 	makeAuthoringApi,
 	makePolicyDecisionApi,
@@ -4846,3 +4845,4 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 	);
 
 export const layer = layerWith();
+import { inferOp } from '#lib/runtime/inference.js';

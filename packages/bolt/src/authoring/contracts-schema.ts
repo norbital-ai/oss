@@ -754,6 +754,28 @@ interface ApprovalRequestQuery {
  * eight of them, or more than 20 MiB in total rather than dropping any silently.
  *
  */
+/**
+ * One tool `api.infer` lets the model call before it answers.
+ *
+ * `run` is an ordinary closure over the authored api — a page read through `api.readUrl`, a
+ * lookup through `api.db` — and its JSON result is what the model sees next. The model decides
+ * whether and how often to call it, within `maxSteps`; the result is still the structured value
+ * `schema` decodes. A failing `run` becomes a failed tool result the model can react to.
+ */
+export interface InferenceTool<Input = unknown> {
+	/** A unique snake_case identifier the model calls the tool by. */
+	readonly name: string;
+	/** What the tool does and when to use it, written for the model. */
+	readonly description: string;
+	readonly input: Schema.Schema<Input>;
+	run(input: Input): Effect.Effect<Schema.Json>;
+}
+
+/**
+ * A structured inference: one prompt, optionally some tools the model may use on the way, and a
+ * schema the answer must decode to. Without `tools` it is a single provider turn; with them the
+ * model researches for up to `maxSteps` tool turns (default 6, at most 16) and then answers.
+ */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
@@ -762,6 +784,8 @@ interface StructuredInferenceInput<Output> {
 		readonly file: FileRef;
 		readonly detail?: 'auto' | 'low' | 'high';
 	}>;
+	readonly tools?: ReadonlyArray<InferenceTool>;
+	readonly maxSteps?: number;
 }
 
 type AuthoredReadDatabase<S extends AnySchema> = {

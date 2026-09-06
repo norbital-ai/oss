@@ -70,6 +70,12 @@ export type WithSelfHostInput = {
 	readonly ai?: FacilityBindings['ai'];
 	/** Portable connector providers, including a fixture or the public HTTPS page reader. */
 	readonly connector?: FacilityBindings['connector'];
+	/**
+	 * The transport seam an envoy answers on. Absent, a workspace has no channel and an envoy's
+	 * reply refuses as facility_unavailable; a suite that drives the envoy pipeline passes a
+	 * recording double here and reads the `Send` requests back instead of talking to WhatsApp.
+	 */
+	readonly communication?: FacilityBindings['communication'];
 };
 
 export type SelfHostSession = {
@@ -310,6 +316,7 @@ export const startSelfHostSession = async (
 			database: database.binding,
 			ai: input.ai ?? catalogAi(),
 			connector: input.connector ?? makeWebConnectorBinding(),
+			...(input.communication !== undefined ? { communication: input.communication } : {}),
 			...(held.files !== undefined ? { files: held.files.binding } : {}),
 			config: makeConfigBinding({
 				[GATEWAY_SECRET_VARIABLE]: gatewaySecret,
