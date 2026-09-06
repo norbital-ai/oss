@@ -509,6 +509,54 @@ describe('declarative relationship reconciliation', () => {
 		]);
 	}, 60_000);
 
+	it("holds a hook-nested child under the root's one approval route and lands both on resume", async () => {
+		// The reviewed root routes to approval; the child the hook derives has no route of its own
+		// (the writer's grant would refuse it outright), so the graph is one approval, not a conflict.
+		harness = await makeBoltTestRuntime(approvalDefinition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Derives the estimate every budget carries.',
+									handler: (context) => ({
+										...context.input,
+										budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
+									})
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		const pending = await harness.runtime.runPromise(
+			Effect.flip(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).mutate(
+						EffectId.make('hook-derived-child-reviewed'),
+						writerSubject,
+						'budgets',
+						[{ name: 'Writer-owned' }]
+					);
+				})
+			)
+		);
+		expect(pending).toBeInstanceOf(Collections.PendingApproval);
+		if (!(pending instanceof Collections.PendingApproval)) return;
+		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
+		await approveRequest(harness, 'hook-derived-child-approve', pending.requestId);
+		await resumeRequest(harness, 'hook-derived-child-resume', pending.requestId);
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'Writer-owned' }
+		]);
+		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
+			{ label: 'Derived child', amount: 10 }
+		]);
+	}, 60_000);
+
 	it('rolls back child reconciliation when the root update predicate rejects the row', async () => {
 		harness = await makeBoltTestRuntime(definition);
 		await mutateBudget(harness, 'denied-root-seed', {

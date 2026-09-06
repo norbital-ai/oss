@@ -352,14 +352,16 @@ export const makeGraphPreparers = <Error, Requirements>(
 				collection,
 				context
 			);
-			const approval = yield* ports.resolveApproval(
-				EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-				ports.subject,
-				visibility,
-				'delete',
-				collection,
-				context
-			);
+			const approval = trusted
+				? undefined
+				: yield* ports.resolveApproval(
+						EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+						ports.subject,
+						visibility,
+						'delete',
+						collection,
+						context
+					);
 			if (approval !== undefined)
 				ports.approvalRequirements.push({
 					collection,
@@ -558,14 +560,17 @@ export const makeGraphPreparers = <Error, Requirements>(
 					collection,
 					context
 				);
-				const approval = yield* ports.resolveApproval(
-					EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-					ports.subject,
-					visibility,
-					action,
-					collection,
-					context
-				);
+				// A trusted row rides its root's route: the graph is one approval, decided once.
+				const approval = trusted
+					? undefined
+					: yield* ports.resolveApproval(
+							EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+							ports.subject,
+							visibility,
+							action,
+							collection,
+							context
+						);
 				if (approval !== undefined)
 					ports.approvalRequirements.push({
 						collection,

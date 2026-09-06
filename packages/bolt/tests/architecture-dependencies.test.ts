@@ -202,10 +202,10 @@ describe('Bolt architecture boundaries', () => {
 		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_848);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
-		// 820 ->      839 (2026-09-06): rows a `before` hook nests are authorized as authored work
+		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work
 		// (`trusted`), not against the caller's grants — the leave ledger an employment write carries.
 		// See RFC/toolchain.md §6.1.5.
-		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(839);
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(844);
 		// 837 -> 873 (2026-09-04): the root delete-prepare wave landed in oss 5210f8d9 (+51) over the
 		// ceiling; the duplicated owner/await Deferred pattern of both waves moved to `root-wave.ts`
 		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine
