@@ -759,7 +759,7 @@ interface ApprovalRequestQuery {
  *
  * `run` is an ordinary closure over the authored api — a page read through `api.readUrl`, a
  * lookup through `api.db` — and its JSON result is what the model sees next. The model decides
- * whether and how often to call it, within `maxSteps`; the result is still the structured value
+ * whether and how often to call it, with no step cap; the result is still the structured value
  * `schema` decodes. A failing `run` becomes a failed tool result the model can react to.
  */
 export interface InferenceTool<Input = unknown> {
@@ -774,7 +774,7 @@ export interface InferenceTool<Input = unknown> {
 /**
  * A structured inference: one prompt, optionally some tools the model may use on the way, and a
  * schema the answer must decode to. Without `tools` it is a single provider turn; with them the
- * model researches for up to `maxSteps` tool turns (default 6, at most 16) and then answers.
+ * model researches with tool turns for as long as it needs, then answers.
  */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
@@ -785,7 +785,6 @@ interface StructuredInferenceInput<Output> {
 		readonly detail?: 'auto' | 'low' | 'high';
 	}>;
 	readonly tools?: ReadonlyArray<InferenceTool>;
-	readonly maxSteps?: number;
 }
 
 type AuthoredReadDatabase<S extends AnySchema> = {

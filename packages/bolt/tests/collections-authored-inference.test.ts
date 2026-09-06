@@ -186,24 +186,25 @@ describe('authored inference tool loop', () => {
 		expect(JSON.stringify(closing.messages.at(-1))).toContain('Return the structured result now');
 	});
 
-	it('stops calling tools at maxSteps and still answers with the schema', async () => {
+	it('keeps calling tools for as long as the model asks, surfacing failures as results', async () => {
 		const requests: Array<AIRequest> = [];
 		let runs = 0;
 		const infer = inferOp(
 			EffectId.make('inference-steps'),
-			generateWith((request) =>
+			generateWith((request, turn) =>
 				request.output._tag === 'Object'
 					? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
-					: AIGenerationResult.cases.Message.make({
-							message: assistant([toolCall(`c${requests.length}`, 'again', {})])
-						}), requests)
+					: turn < 3
+						? AIGenerationResult.cases.Message.make({
+								message: assistant([toolCall(`c${requests.length}`, 'again', {})])
+							})
+						: AIGenerationResult.cases.Message.make({ message: assistant('Enough.') }), requests)
 		);
 		const output = await Effect.runPromise(
 			infer({
 				model: 'provider/research',
 				schema: Schema.Struct({ rate: Schema.Number }),
 				prompt: 'Loop.',
-				maxSteps: 2,
 				tools: [
 					{
 						name: 'again',
@@ -218,9 +219,9 @@ describe('authored inference tool loop', () => {
 			})
 		);
 		expect(output).toEqual({ rate: 1 });
-		expect(runs).toBe(2);
-		expect(requests).toHaveLength(3);
-		const closing = requests[2];
+		expect(runs).toBe(3);
+		expect(requests).toHaveLength(5);
+		const closing = requests[4];
 		if (closing?._tag !== 'Generate') throw new Error('closing');
 		const failed = closing.messages.find((m) => m.role === 'tool');
 		expect(JSON.stringify(failed)).toContain('page unavailable');

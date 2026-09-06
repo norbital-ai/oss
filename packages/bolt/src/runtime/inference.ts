@@ -43,13 +43,12 @@ export type InferenceRequest = Readonly<{
 	readonly model: string;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
 	readonly tools?: ReadonlyArray<AuthoredInferenceTool>;
-	readonly maxSteps?: number;
 }>;
 
 /**
  * One tool an authored `api.infer` lets the model call before it answers.
  *
- * The model decides whether and how often to call it; the author decides what it does. `run`
+ * The model decides whether and how often to call it, with no step cap; the author decides what it does. `run`
  * executes inside the authored invocation, so a tool is an ordinary closure over `api` (a page
  * read through `api.readUrl`, a lookup through `api.db`) and its result is what the model sees
  * next. A failure becomes a failed tool result the model can react to, never a dropped turn.
@@ -74,15 +73,13 @@ const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
 
 /**
- * Bounds on the tool loop an authored `api.infer` may run before its structured answer.
+ * Bounds on what one tool turn may carry. The loop itself has no step cap: the model calls tools
+ * until it is ready to answer, and only then is the structured turn asked for.
  *
- * Steps are provider turns that may call tools; the structured closing turn is not counted. A tool
- * result is clipped to a fixed size because the loop's whole history rides into every later turn
- * and one unbounded page would push the closing turn past the model's context, which surfaces as
- * an empty or invalid structured answer rather than as the page being too large.
+ * A tool result is clipped to a fixed size because the loop's whole history rides into every later
+ * turn and one unbounded page would push the closing turn past the model's context, which
+ * surfaces as an empty or invalid structured answer rather than as the page being too large.
  */
-const DEFAULT_INFERENCE_STEPS = 6;
-const MAX_INFERENCE_STEPS = 16;
 const MAX_INFERENCE_TOOL_RESULT_CHARS = 24_000;
 const MAX_INFERENCE_TOOLS = 16;
 const INFERENCE_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -197,8 +194,7 @@ export const inferOp =
 					key !== 'prompt' &&
 					key !== 'model' &&
 					key !== 'images' &&
-					key !== 'tools' &&
-					key !== 'maxSteps'
+					key !== 'tools'
 			);
 			if (unsupportedKeys.length > 0) {
 				return yield* refusal(
@@ -240,12 +236,6 @@ export const inferOp =
 					);
 				toolNames.add(tool.name);
 			}
-			const maxSteps = input.maxSteps ?? DEFAULT_INFERENCE_STEPS;
-			if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_INFERENCE_STEPS)
-				return yield* refusal(
-					'ai.request_invalid',
-					`api.infer maxSteps must be an integer from 1 to ${MAX_INFERENCE_STEPS}.`
-				);
 			const conversation: Array<Prompt.MessageEncoded> = [message];
 			const assets = imageAssets.length === 0 ? {} : { imageAssets };
 			if (tools.length > 0) {
@@ -254,7 +244,7 @@ export const inferOp =
 					description: tool.description,
 					inputSchema: Schema.toJsonSchemaDocument(tool.input).schema
 				}));
-				for (let step = 0; step < maxSteps; step += 1) {
+				for (let step = 0; ; step += 1) {
 					const turn = yield* ai.generate(
 						EffectId.make(`${effectId}:infer:step:${step}`),
 						AIRequest.cases.Generate.make({

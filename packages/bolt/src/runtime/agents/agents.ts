@@ -2594,7 +2594,7 @@ export const layer = Layer.effect(
 			yield* tasks.execute(EffectId.make(`${effectId}:active`), { _tag: 'Active', taskId });
 			let output: Prompt.MessageEncoded | undefined;
 			const runEffect = Effect.gen(function* () {
-				for (let iteration = 0; iteration < 8; iteration += 1) {
+				for (let iteration = 0; ; iteration += 1) {
 					task = yield* fencedTask(EffectId.make(`${effectId}:fence:${iteration}`), subject, run);
 					yield* consumeSteering(EffectId.make(`${effectId}:steer:${iteration}`), subject, run);
 					let messages = yield* messageRows(
@@ -2879,18 +2879,6 @@ export const layer = Layer.effect(
 						messages = yield* messageRows(effectId, subject, task.id);
 					}
 				}
-				yield* updateRun(effectId, subject, run, {
-					taskStatus: 'attention',
-					runStatus: 'failed',
-					phase: 'model',
-					active: false,
-					directiveState: 'settled'
-				});
-				return {
-					taskId,
-					status: 'attention',
-					...(output === undefined ? {} : { output })
-				} satisfies TaskExecutionResult;
 			});
 			return yield* runEffect.pipe(
 				Effect.tapError((cause) =>
