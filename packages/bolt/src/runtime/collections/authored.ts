@@ -464,6 +464,7 @@ export const makeBoundAuthoringOps = <RunE = never>(
 				| Schema.SchemaError
 				| Automations.AutomationStopped
 				| Automations.AutomationDeferredUnsupported
+				| Automations.AutomationContinuationUnchanged
 				| RunE
 			>['runAutomation']
 		>
@@ -474,6 +475,7 @@ export const makeBoundAuthoringOps = <RunE = never>(
 			| Schema.SchemaError
 			| Automations.AutomationStopped
 			| Automations.AutomationDeferredUnsupported
+			| Automations.AutomationContinuationUnchanged
 			| RunE
 		>['runAutomation']
 	>
@@ -483,6 +485,7 @@ export const makeBoundAuthoringOps = <RunE = never>(
 	| Schema.SchemaError
 	| Automations.AutomationStopped
 	| Automations.AutomationDeferredUnsupported
+	| Automations.AutomationContinuationUnchanged
 	| RunE
 > => {
 	const readAsset = (file: FileRef) => readFileAsset(effectId, files, file);
@@ -510,7 +513,6 @@ export const makeBoundAuthoringOps = <RunE = never>(
 					subject,
 					collection,
 					values,
-					false,
 					0
 				)
 				.pipe(Effect.asVoid),
@@ -559,6 +561,7 @@ export type RuntimeRemoteHandler = ReturnType<
 			| Schema.SchemaError
 			| Automations.AutomationStopped
 			| Automations.AutomationDeferredUnsupported
+			| Automations.AutomationContinuationUnchanged
 		>
 	) => unknown
 >;

@@ -194,8 +194,8 @@ describe('workspace navigation', () => {
 		});
 
 		expect(sections.map((section) => section.key)).toEqual([
-			'applications',
 			'operations',
+			'applications',
 			'workspace'
 		]);
 		const workspace = sections.find((section) => section.key === 'workspace');

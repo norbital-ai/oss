@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { workspace } from '../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../src/runtime/schema/schema-plan.js';
 import {
+	ENQUEUE_CLAIM_LEASE_MILLIS,
 	makeQueue,
 	recoverStatements,
 	slotEffectId,
@@ -97,6 +98,8 @@ describe('durable task queue over a host facility', () => {
 				Effect.runPromise(effects.fire(nowEpochMs, leaseForMillis)),
 			settle: (...args: Parameters<typeof effects.settle>) =>
 				Effect.runPromise(effects.settle(...args)),
+			enqueueClaimed: (...args: Parameters<typeof effects.enqueueClaimed>) =>
+				Effect.runPromise(effects.enqueueClaimed(...args)),
 			when: () => Effect.runPromise(effects.when())
 		};
 	};
@@ -254,6 +257,56 @@ describe('durable task queue over a host facility', () => {
 		const [left, right] = await Promise.all([queue().fire(Date.now()), queue().fire(Date.now())]);
 		expect([...left.occurrences, ...right.occurrences]).toHaveLength(1);
 		expect((await tasks())[0]).toMatchObject({ status: 'running', attempts: 1 });
+	});
+
+	it('enqueues a claimed row that discover leaves alone until its lease expires', async () => {
+		const now = Date.now();
+		const work = {
+			command: 'tasks.execute',
+			input: { taskId: 'task-1', bolt_run_as: { userId: 'u1' } },
+			effectId: 'tasks.execute:task-1:directive-1',
+			nowEpochMs: now
+		};
+		// The answer is exactly what discover would have handed the host for this row.
+		expect(await queue().enqueueClaimed(work, ENQUEUE_CLAIM_LEASE_MILLIS)).toEqual({
+			taskId: work.effectId,
+			scheduleKey: `task:${work.effectId}`,
+			scheduledForEpochMs: now,
+			command: 'tasks.execute',
+			input: work.input,
+			attempt: 1
+		});
+		const [row] = await tasks();
+		expect(row).toMatchObject({ status: 'running', attempts: 1 });
+		expect(row?.lease_expires_at).not.toBeNull();
+		// A live lease fences discover, and the wake instant the guest carries is that expiry.
+		expect((await queue().fire(Date.now())).occurrences).toEqual([]);
+		expect(await queue().when()).toBeGreaterThan(now + ENQUEUE_CLAIM_LEASE_MILLIS - 5_000);
+		// The same slot again changes nothing and answers nothing: the caller falls back to a wake.
+		expect(await queue().enqueueClaimed(work, ENQUEUE_CLAIM_LEASE_MILLIS)).toBeUndefined();
+		expect(await tasks()).toHaveLength(1);
+		// Settled by the host that ran it, under the attempt it was handed.
+		await queue().settle(work.effectId, 1, { _tag: 'Done', result: { status: 'done' } });
+		expect((await tasks())[0]).toMatchObject({ status: 'done', attempts: 1 });
+	});
+
+	it('recovers a claimed-at-enqueue row through discover once its lease has expired', async () => {
+		const work = {
+			command: 'tasks.execute',
+			input: { taskId: 'task-2' },
+			effectId: 'tasks.execute:task-2:directive-1',
+			nowEpochMs: Date.now()
+		};
+		await queue().enqueueClaimed(work, ENQUEUE_CLAIM_LEASE_MILLIS);
+		await database.exec(
+			`update bolt_task set lease_expires_at = now() - interval '1 second' where effect_id = '${work.effectId}'`
+		);
+		// The crash-between-write-and-wake case: nobody ran it, the lease lapsed, discover claims it
+		// as the second attempt and nothing was lost or doubled.
+		expect((await queue().fire(Date.now())).occurrences).toMatchObject([
+			{ taskId: work.effectId, scheduleKey: `task:${work.effectId}`, attempt: 2 }
+		]);
+		expect((await tasks())[0]).toMatchObject({ status: 'running', attempts: 2 });
 	});
 
 	it('does not double-claim a live lease and recovers it after expiry', async () => {

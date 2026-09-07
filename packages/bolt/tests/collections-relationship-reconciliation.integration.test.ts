@@ -214,6 +214,28 @@ const directManyInverseCascadeDefinition = {
 		return relation;
 	})
 };
+/**
+ * A subject that may create a budget and read its name, and holds nothing on `cost_estimates`.
+ * The kiosk shape: a device that enrols a worker and must never be granted the ledger the
+ * workspace derives for that worker.
+ */
+const enrollerDefinition = {
+	...definition,
+	teams: { ...definition.teams, enrollers: ['budget-enroller'] },
+	policies: [
+		...definition.policies,
+		describePolicy('budget-enroller', {
+			description: 'Creates budgets and reads their names; nothing else.',
+			grants: { budgets: { read: { fields: ['name'] }, mutate: { new: {} } } }
+		})
+	]
+};
+const enrollerSubject = {
+	userId: 'enroller-1',
+	tenantId: 'test-tenant',
+	teamPath: ['enrollers'],
+	policies: []
+};
 const writerSubject = {
 	userId: 'writer-1',
 	tenantId: 'test-tenant',
@@ -468,9 +490,281 @@ describe('declarative relationship reconciliation', () => {
 		expect(await drainChanges(harness)).toEqual([]);
 	}, 60_000);
 
-	it("authorizes the rows a before hook nests as authored work, not as the caller's claim", async () => {
-		// The same writer, the same child the grant refuses when the writer submits it (the test
-		// above): when the budget's own `before` hook derives that child, the write lands whole.
+	// RFC 0003 (hook authority): the caller is judged on what it submitted; everything a hook reads,
+	// returns or writes is the workspace's own work, with no grant check and no approval route.
+
+	it('HA1: a hook nests children the caller may not submit, and the caller is refused on its own claim', async () => {
+		const nestingHooks = {
+			...emptyAuthoredRuntime,
+			hooks: {
+				budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+					mutate: {
+						perRecord: {
+							before: {
+								description: 'Derives the estimate every budget carries.',
+								handler: (context) => ({
+									...context.input,
+									budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
+								})
+							}
+						}
+					}
+				})
+			}
+		};
+		// The enroller holds `mutate.new` on budgets and nothing on cost_estimates; the child the hook
+		// derives lands anyway, because it is the workspace's row and not the enroller's claim.
+		harness = await makeBoltTestRuntime(enrollerDefinition, { authored: nestingHooks });
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).mutate(
+					EffectId.make('ha1-hook-derived'),
+					enrollerSubject,
+					'budgets',
+					[{ name: 'Enrolled' }]
+				);
+			})
+		);
+		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
+			{ label: 'Derived child', amount: 10 }
+		]);
+		// The same enroller submitting that relation itself is refused on its own claim, with the
+		// hook still returning the relation: the submitted rows are judged before they are replaced.
+		const submitted = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('ha1-submitted-under-hook'),
+						enrollerSubject,
+						'budgets',
+						[{ name: 'Claimed', budget_cost_estimates: [{ label: 'Claimed child', amount: 99 }] }]
+					);
+				})
+			)
+		);
+		expect(submitted._tag).toBe('Failure');
+		if (submitted._tag === 'Failure')
+			expect(unwrapMutationPhase(submitted.failure)).toMatchObject({
+				action: 'create',
+				resource: 'cost_estimates'
+			});
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'Enrolled' }
+		]);
+		expect(await harness.database.query('select label from cost_estimates')).toEqual([
+			{ label: 'Derived child' }
+		]);
+		await harness.dispose();
+		// And without any hook: the direct claim is refused the same way, and nothing lands.
+		harness = await makeBoltTestRuntime(enrollerDefinition);
+		const direct = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('ha1-submitted-directly'),
+						enrollerSubject,
+						'budgets',
+						[{ name: 'Claimed', budget_cost_estimates: [{ label: 'Claimed child', amount: 99 }] }]
+					);
+				})
+			)
+		);
+		expect(direct._tag).toBe('Failure');
+		if (direct._tag === 'Failure')
+			expect(unwrapMutationPhase(direct.failure)).toMatchObject({
+				action: 'create',
+				resource: 'cost_estimates'
+			});
+		expect(await harness.database.query('select id from budgets')).toEqual([]);
+		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
+	}, 90_000);
+
+	it("HA2: a before hook reads a collection the caller cannot, unmasked; the caller's read-back is masked", async () => {
+		const seen: Array<Readonly<Record<string, unknown>>> = [];
+		harness = await makeBoltTestRuntime(enrollerDefinition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Reads every estimate in the workspace before naming the budget.',
+									handler: ({ input, api }) =>
+										Effect.gen(function* () {
+											const estimates = yield* api.db.cost_estimates.findMany({});
+											seen.push(...estimates);
+											return { ...input, name: `${input.name} after ${estimates.length}` };
+										})
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		await mutateBudget(harness, 'ha2-seed', {
+			name: 'Seeded',
+			budget_cost_estimates: [{ label: 'Seeded child', amount: 42 }]
+		});
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).mutate(
+					EffectId.make('ha2-enrol'),
+					enrollerSubject,
+					'budgets',
+					[{ name: 'Enrolled' }]
+				);
+			})
+		);
+		// The hook saw the estimate whole, including a column the enroller holds no grant for.
+		expect(seen.map((row) => ({ label: row['label'], amount: row['amount'] }))).toContainEqual({
+			label: 'Seeded child',
+			amount: 42
+		});
+		const readBack = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const budgets = yield* collections.findMany(EffectId.make('ha2-read-budgets'), enrollerSubject, {
+					collection: 'budgets'
+				});
+				const estimates = yield* Effect.result(
+					collections.findMany(EffectId.make('ha2-read-estimates'), enrollerSubject, {
+						collection: 'cost_estimates'
+					})
+				);
+				return { budgets, estimates };
+			})
+		);
+		expect(readBack.budgets.map((row) => row['name'])).toContain('Enrolled after 1');
+		for (const row of readBack.budgets)
+			expect(
+				Object.keys(row).every((key) => key === 'id' || key === 'row_version' || key === 'name')
+			).toBe(true);
+		expect(readBack.estimates._tag).toBe('Failure');
+	}, 60_000);
+
+	it('HA3: a reviewed root with a hook-nested child holds as one request, commits both on resume, discards both on rejection', async () => {
+		const nestingHooks = {
+			...emptyAuthoredRuntime,
+			hooks: {
+				budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+					mutate: {
+						perRecord: {
+							before: {
+								description: 'Derives the estimate every budget carries.',
+								handler: (context) => ({
+									...context.input,
+									budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
+								})
+							}
+						}
+					}
+				})
+			}
+		};
+		harness = await makeBoltTestRuntime(approvalDefinition, { authored: nestingHooks });
+		const hold = (effectId: string) =>
+			harness === undefined
+				? Promise.reject(new Error('no harness'))
+				: harness.runtime.runPromise(
+						Effect.flip(
+							Effect.gen(function* () {
+								yield* (yield* Collections.Service).mutate(
+									EffectId.make(effectId),
+									writerSubject,
+									'budgets',
+									[{ name: 'Writer-owned' }]
+								);
+							})
+						)
+					);
+		const approved = await hold('ha3-approved');
+		expect(approved).toBeInstanceOf(Collections.PendingApproval);
+		if (!(approved instanceof Collections.PendingApproval)) return;
+		// One request for the graph: the child has no route of its own.
+		expect((await harness.database.query('select id from approval_request')).length).toBe(1);
+		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
+		await approveRequest(harness, 'ha3-approve', approved.requestId);
+		await resumeRequest(harness, 'ha3-resume', approved.requestId);
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'Writer-owned' }
+		]);
+		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
+			{ label: 'Derived child', amount: 10 }
+		]);
+
+		const rejected = await hold('ha3-rejected');
+		expect(rejected).toBeInstanceOf(Collections.PendingApproval);
+		if (!(rejected instanceof Collections.PendingApproval)) return;
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const approvals = yield* Approvals.Service;
+				const requested = yield* approvals.status(EffectId.make('ha3-status'), rejected.requestId);
+				if (requested === undefined) throw new Error('approval request is missing');
+				const decided = yield* approvals.decide(
+					EffectId.make('ha3-reject'),
+					reviewerSubject,
+					requested,
+					'reject'
+				);
+				expect(decided._tag).toBe('Rejected');
+			})
+		);
+		expect(await harness.database.query('select name from budgets')).toEqual([
+			{ name: 'Writer-owned' }
+		]);
+		expect(await harness.database.query('select label from cost_estimates')).toEqual([
+			{ label: 'Derived child' }
+		]);
+	}, 90_000);
+
+	it('HA4: an after hook writing to an approval-gated collection lands the row and opens no request', async () => {
+		// `cost_estimates.mutate.new` routes to approval and refuses the writer's own claim; the
+		// after hook's write is the workspace's, so it lands at once and asks nobody.
+		harness = await makeBoltTestRuntime(childApprovalDefinition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
+						mutate: {
+							perRecord: {
+								after: {
+									description: 'Writes the estimate the committed budget implies.',
+									handler: ({ previous, record, api }) =>
+										Effect.gen(function* () {
+											if (previous !== undefined) return;
+											yield* api.db.cost_estimates.mutate([
+												{ budget_id: record.id, label: 'Derived after', amount: 5 }
+											]);
+										})
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('ha4-after-hook'),
+						writerSubject,
+						'budgets',
+						[{ name: 'Writer-owned' }]
+					);
+				})
+			)
+		);
+		expect(outcome._tag, 'the settled mutation must succeed').toBe('Success');
+		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
+			{ label: 'Derived after', amount: 5 }
+		]);
+		expect(await harness.database.query('select id from approval_request')).toEqual([]);
+	}, 60_000);
+
+	it("HA5: a before hook's staged write is in the root's transaction; a refusal on the second record leaves nothing", async () => {
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
 				...emptyAuthoredRuntime,
@@ -479,11 +773,16 @@ describe('declarative relationship reconciliation', () => {
 						mutate: {
 							perRecord: {
 								before: {
-									description: 'Derives the estimate every budget carries.',
-									handler: (context) => ({
-										...context.input,
-										budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
-									})
+									description: 'Stages an audit line for every budget and refuses the one named refuse.',
+									handler: ({ input, api }) =>
+										Effect.gen(function* () {
+											yield* api.db.mutation_audit.mutate([{ body: input.name ?? '' }]);
+											if (input.name === 'refuse')
+												return yield* Effect.fail(
+													new AuthoredRefusal({ message: 'the second record is refused' })
+												);
+											return input;
+										})
 								}
 							}
 						}
@@ -491,70 +790,22 @@ describe('declarative relationship reconciliation', () => {
 				}
 			}
 		});
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					EffectId.make('hook-derived-child-create'),
-					writerSubject,
-					'budgets',
-					[{ name: 'Writer-owned' }]
-				);
-			})
-		);
-		expect(await harness.database.query('select name from budgets')).toEqual([
-			{ name: 'Writer-owned' }
-		]);
-		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
-			{ label: 'Derived child', amount: 10 }
-		]);
-	}, 60_000);
-
-	it("holds a hook-nested child under the root's one approval route and lands both on resume", async () => {
-		// The reviewed root routes to approval; the child the hook derives has no route of its own
-		// (the writer's grant would refuse it outright), so the graph is one approval, not a conflict.
-		harness = await makeBoltTestRuntime(approvalDefinition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					budgets: authoredHooks<ReconciliationSchema, 'budgets'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Derives the estimate every budget carries.',
-									handler: (context) => ({
-										...context.input,
-										budget_cost_estimates: [{ label: 'Derived child', amount: 10 }]
-									})
-								}
-							}
-						}
-					})
-				}
-			}
-		});
-		const pending = await harness.runtime.runPromise(
-			Effect.flip(
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						EffectId.make('hook-derived-child-reviewed'),
-						writerSubject,
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('ha5-batch'),
+						policySubject,
 						'budgets',
-						[{ name: 'Writer-owned' }]
+						[{ name: 'first' }, { name: 'refuse' }]
 					);
 				})
 			)
 		);
-		expect(pending).toBeInstanceOf(Collections.PendingApproval);
-		if (!(pending instanceof Collections.PendingApproval)) return;
-		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
-		await approveRequest(harness, 'hook-derived-child-approve', pending.requestId);
-		await resumeRequest(harness, 'hook-derived-child-resume', pending.requestId);
-		expect(await harness.database.query('select name from budgets')).toEqual([
-			{ name: 'Writer-owned' }
-		]);
-		expect(await harness.database.query('select label, amount from cost_estimates')).toEqual([
-			{ label: 'Derived child', amount: 10 }
-		]);
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id from budgets')).toEqual([]);
+		expect(await harness.database.query('select id from mutation_audit')).toEqual([]);
+		expect(await drainChanges(harness)).toEqual([]);
 	}, 60_000);
 
 	it('rolls back child reconciliation when the root update predicate rejects the row', async () => {
@@ -718,7 +969,6 @@ describe('declarative relationship reconciliation', () => {
 						policySubject,
 						'budgets',
 						[{ name: 'Rejected by hook' }],
-						false,
 						0,
 						{}
 					);
@@ -1126,7 +1376,6 @@ describe('declarative relationship reconciliation', () => {
 							amount: 99
 						}
 					],
-					false,
 					0,
 					{
 						roots: [{ id: '00000000-0000-4000-8000-000000000099', action: 'create' }]
@@ -1217,7 +1466,6 @@ describe('declarative relationship reconciliation', () => {
 						policySubject,
 						'cost_estimates',
 						[{ id: childId, amount: 11 }],
-						false,
 						0,
 						{ roots: [{ id: childId, action: 'update' }] }
 					);

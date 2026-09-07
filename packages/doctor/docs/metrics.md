@@ -187,3 +187,13 @@ score. Baselines require matching report/analyzer versions and exact canonical r
 checks coupling, component scores, cycles, exact duplicate groups/occurrences, high-confidence
 overlap pairs, functionality clusters/occurrences, pillar spread, inline candidates, and scanner
 error/warning totals; it cannot prove behavior, performance, security, or semantic equivalence.
+
+## Genericity
+
+The health tier is hard-coded and generic to any codebase. Framework entry conventions, service
+heritage and generic call labels are `HealthProfile` configuration declared under
+`.norbital/config/doctor/` (`src/health-profile.ts`), defaulting to the language's own vocabulary.
+Two tests hold the line: `tests/genericity-gate.test.ts` proves a repository with no framework
+produces a complete receipt with zero anti-pattern findings, and `tests/vocabulary-gate.test.ts`
+forbids any product word inside `metrics/`, `analysis/`, `model.ts`, `frontend/`, `facts.ts`,
+`analyses/`, `matcher.ts`, `pattern.ts` and `runner.ts`.

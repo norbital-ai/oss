@@ -1,6 +1,5 @@
 import { Cause, Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { AuthoredRefusal, RefusalSite } from '#lib/authoring/refusal.js';
 import {
 	mutationPhaseFailure,
@@ -9,12 +8,8 @@ import {
 import type { AppliedDeclarativeGraph } from './engine.js';
 
 type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
-	readonly buildApi: (
-		effectId: EffectId,
-		subject: Identity.Subject,
-		elevated: boolean,
-		depth: number
-	) => unknown;
+	/** The hook api, bound to the workspace: an after hook's write lands and opens no request. */
+	readonly buildApi: (effectId: EffectId, depth: number) => unknown;
 	readonly runHook: (
 		hook: { readonly handler: (context: unknown) => unknown } | undefined,
 		context: unknown,
@@ -43,7 +38,6 @@ export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGr
 >(
 	ports: SettleDeclarativeGraphPorts<EmitE, EmbedE>,
 	effectId: EffectId,
-	subject: Identity.Subject,
 	applied: AppliedDeclarativeGraph,
 	hookDepth: number
 ) {
@@ -72,9 +66,7 @@ export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGr
 			operation.collection,
 			ports.runHook(
 				hook,
-				context(
-					ports.buildApi(operation.taskScope, subject, true, hookDepth + operation.depth + 1)
-				),
+				context(ports.buildApi(operation.taskScope, hookDepth + operation.depth + 1)),
 				{
 					collection: operation.collection,
 					...(action === undefined ? {} : { action })

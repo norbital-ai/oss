@@ -3,7 +3,7 @@ import type { AIRequest } from '@norbital-ai/bolt-protocol';
 import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
-import { subagentToolSpec } from '../src/runtime/agents/capability-catalog.js';
+import { SUBAGENT_TOOL_NAME } from '../src/runtime/agents/capability-catalog.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { lastToolResult } from './agents-canonical-ai-fixture.js';
 import { fileURLToPath } from 'node:url';
@@ -93,7 +93,7 @@ describe('envoy Task delegation boundary', () => {
 			agents.execute(harness.effectId('ingress:execute'), subject, disabledTask)
 		);
 		expect(disabled.status).toBe('done');
-		expect(subagentToolSpec.name).toBe('subagent');
+		expect(SUBAGENT_TOOL_NAME).toBe('subagent');
 		expect(JSON.stringify(lastToolResult(requests[1]!))).toContain('subagent');
 		expect(
 			await harness.database.query(

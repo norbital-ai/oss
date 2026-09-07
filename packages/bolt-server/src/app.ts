@@ -5,6 +5,8 @@ import {
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage, toError } from '@norbital-ai/std';
+import { writeSync } from 'node:fs';
+import { attributeEscapedFailure, guardBindings } from './facilities/boundary.js';
 import { Clock, Deferred, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
@@ -13,9 +15,21 @@ import {
 	makeTaskBinding,
 	makeTaskInvocationControl,
 	ScheduleTickError,
-	runScheduleTick
+	runScheduleOccurrence,
+	runScheduleTick,
+	type ScheduleTickOptions
 } from './schedules.js';
 import { makeTimekeeper } from './timekeeper.js';
+
+/**
+ * What one task occurrence (an agent turn, a scheduled automation slice) may take.
+ *
+ * It is not the HTTP invocation timeout: a browser request is answered in seconds, while an agent
+ * turn calling tools against a slow model runs for minutes and settles only at its end. Colony
+ * grants the same five minutes (`schedule-tick.ts` `TICK_DEADLINE`); the lease the guest wrote on
+ * the claimed row is the same number, so a host that dies mid-turn hands the row to the next tick.
+ */
+const TASK_DEADLINE_MILLIS = 5 * 60_000;
 import { waitUntilReady } from './ready.js';
 import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
@@ -39,6 +53,9 @@ export interface ApplicationOptions {
 
 export interface RunningApplication extends RunningServer {
 	readonly stop: RunningServer['close'];
+	/** Flips `/readyz` to 503 and refuses new bundle work, without closing anything yet. */
+	// repository-health:allow EFF2 -- Same host-side lifecycle edge as `stop`: the process policy calls it from a Node event handler.
+	readonly stopAdmission: () => Promise<void>;
 }
 
 export interface RunningLocalApplication extends RunningApplication {
@@ -63,12 +80,39 @@ export const startLocalApplication = (
 		);
 	}).pipe(Effect.runPromise);
 
-/** Installs one-shot Node process shutdown hooks and returns a hook disposer. */
+/** How long a crashing host may spend on its graceful stop before it is killed outright. */
+export const CRASH_STOP_MILLIS = 5_000;
+
+/**
+ * Ends the process without Node's exit path.
+ *
+ * `exit()` runs native teardown, and with worker threads and native thread pools alive that
+ * teardown has hung for hours with the listening socket still open: Docker saw a live PID 1, the
+ * proxy saw a dead backend. `SIGKILL` skips all of it. Inside a container this process is PID 1,
+ * where the kernel ignores a SIGKILL it sends itself, so `abort()` follows: a synchronous fault
+ * that even init cannot ignore.
+ */
+const terminateProcess = (): never => {
+	process.kill(process.pid, 'SIGKILL');
+	process.abort();
+};
+
+const describeEscaped = (cause: unknown): string =>
+	cause instanceof Error ? (cause.stack ?? cause.message) : String(cause);
+
+/**
+ * Installs the process policy: signals stop the application; a failure that escapes every boundary
+ * is logged, readiness flips to 503 at once, the graceful stop gets `CRASH_STOP_MILLIS`, and then
+ * the process is killed so the restart policy acts instead of a listening corpse. A failure raised
+ * inside a facility call's async scope is that call's failure and is contained. Returns a disposer.
+ */
 export const installProcessShutdown = (application: RunningApplication): (() => void) => {
-	/** Removes both one-shot process hooks without stopping an already running application. */
+	/** Removes every process hook without stopping an already running application. */
 	const dispose = () => {
 		process.off('SIGINT', shutdown);
 		process.off('SIGTERM', shutdown);
+		process.off('uncaughtException', escaped);
+		process.off('unhandledRejection', escaped);
 	};
 	/** Converts either supported process signal into the same idempotent application stop. */
 	const shutdown = () => {
@@ -79,8 +123,35 @@ export const installProcessShutdown = (application: RunningApplication): (() => 
 			)
 		);
 	};
+	let crashing = false;
+	const escaped = (cause: unknown) => {
+		const scope = attributeEscapedFailure(cause);
+		if (scope !== undefined) {
+			writeSync(
+				2,
+				`bolt-server: failure escaped facility ${scope.facility} (effect ${scope.effectId}) and was contained: ${describeEscaped(cause)}\n`
+			);
+			return;
+		}
+		writeSync(
+			2,
+			`bolt-server: failure escaped every boundary; stopping within ${CRASH_STOP_MILLIS}ms then killing the process: ${describeEscaped(cause)}\n`
+		);
+		if (crashing) return;
+		crashing = true;
+		process.exitCode = 1;
+		process.off('SIGINT', shutdown);
+		process.off('SIGTERM', shutdown);
+		setTimeout(terminateProcess, CRASH_STOP_MILLIS);
+		void application
+			.stopAdmission()
+			.then(() => application.stop())
+			.then(terminateProcess, terminateProcess);
+	};
 	process.once('SIGINT', shutdown);
 	process.once('SIGTERM', shutdown);
+	process.on('uncaughtException', escaped);
+	process.on('unhandledRejection', escaped);
 	return dispose;
 };
 
@@ -118,28 +189,35 @@ export const startApplication = async (
 	 * guest's protocol rather than this file's lifecycle. What is left here is which bundle it
 	 * talks to, which scope it talks about, and the deadline this host grants an invocation.
 	 */
+	const tickOptions = Effect.gen(function* () {
+		const loader = yield* BundleLoader;
+		const bundle = yield* loader.load();
+		return {
+			scope: configuration.scope,
+			deadlineMillis: TASK_DEADLINE_MILLIS,
+			gatewaySecret: configuration.gatewaySecret,
+			invocations: taskInvocations,
+			dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
+		} satisfies ScheduleTickOptions;
+	});
+	const tickFailure = (message: string) => (cause: unknown) =>
+		cause instanceof ApplicationStartError
+			? cause
+			: new ApplicationStartError({
+					operation: 'BoltServer.Application.tick',
+					message: cause instanceof ScheduleTickError ? cause.message : message,
+					cause
+				});
 	const tickOnce = () =>
-		Effect.gen(function* () {
-			const loader = yield* BundleLoader;
-			const bundle = yield* loader.load();
-			return yield* runScheduleTick({
-				scope: configuration.scope,
-				deadlineMillis: configuration.invocationTimeoutMillis,
-				gatewaySecret: configuration.gatewaySecret,
-				invocations: taskInvocations,
-				dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
-			});
-		}).pipe(
-			Effect.mapError((cause) =>
-				cause instanceof ApplicationStartError
-					? cause
-					: new ApplicationStartError({
-							operation: 'BoltServer.Application.tick',
-							message:
-								cause instanceof ScheduleTickError ? cause.message : 'Bolt scheduler tick failed',
-							cause
-						})
-			)
+		tickOptions.pipe(
+			Effect.flatMap(runScheduleTick),
+			Effect.mapError(tickFailure('Bolt scheduler tick failed'))
+		);
+	/** The immediate half of a `Wake` that carries a claimed occurrence: the same bundle, one run. */
+	const runOccurrenceOnce = (occurrence: Parameters<typeof runScheduleOccurrence>[1]) =>
+		tickOptions.pipe(
+			Effect.flatMap((options) => runScheduleOccurrence(options, occurrence)),
+			Effect.mapError(tickFailure('Bolt scheduled occurrence failed'))
 		);
 
 	/**
@@ -166,10 +244,26 @@ export const startApplication = async (
 			Effect.runFork(Effect.logError(`timekeeper.tick: ${getErrorMessage(cause)}`));
 		}
 	});
-	let bound: FacilityBindings = {
+	// Every binding the guest can reach answers with a facility result and nothing else; a failure
+	// that escapes one later is attributable to the call that started it.
+	let bound: FacilityBindings = guardBindings({
 		...facilities,
-		tasks: makeTaskBinding(timekeeper, () => {}, taskInvocations)
-	};
+		tasks: makeTaskBinding(
+			timekeeper,
+			() => {},
+			taskInvocations,
+			(occurrence) => {
+				// Started, never awaited: the guest's submit is inside a facility call right now. The
+				// timekeeper already holds the lease expiry as the fallback, so a failure here is logged
+				// and otherwise left to the ordinary tick.
+				void runScheduledTick(runOccurrenceOnce(occurrence)).catch((cause) => {
+					Effect.runFork(
+						Effect.logError(`tasks.wake: ${occurrence.taskId}: ${getErrorMessage(cause)}`)
+					);
+				});
+			}
+		)
+	});
 
 	const applicationLayer = Layer.mergeAll(
 		uuidGenerationLayer,
@@ -302,9 +396,18 @@ export const startApplication = async (
 	/** Stops the application once, converging concurrent callers on the same run. */
 	const stop = () => (stopping ??= Effect.runPromise(stopEffect));
 
+	const stopAdmission = () =>
+		runtime.runPromise(
+			Effect.gen(function* () {
+				const health = yield* ServerHealth;
+				yield* health.stopAdmission();
+			})
+		);
+
 	return {
 		address: server.address,
 		close: stop,
-		stop
+		stop,
+		stopAdmission
 	};
 };

@@ -1,34 +1,72 @@
 import { describe, expect, it } from 'vitest';
+import { Effect, Schema } from 'effect';
+import { createInvocationFactory } from '../src/runtime/access/invocation.js';
 import { predicateStatement, type RowPredicate } from '../src/runtime/access/predicate.js';
-import {
-	afterHookElevation,
-	policyHashSource
-} from '../src/runtime/access/policy-surface.js';
+import { policyHashSource } from '../src/runtime/access/policy-surface.js';
+import { Subject } from '../src/runtime/identity/subject.js';
+import { isWorkspaceSubject, workspaceSubject } from '../src/runtime/identity/static-identity.js';
+
+const caller = {
+	userId: 'user-1',
+	tenantId: 'tenant-1',
+	teamPath: ['writers'],
+	policies: [],
+	email: 'user-1@example.test'
+};
+
+/** An evaluator that grants nobody anything, so every allowance below is the workspace's. */
+const denyAll = createInvocationFactory(() => ({
+	decision: () => ({ allowed: false, reason: 'no matching allow policy' }),
+	predicate: () => ({
+		allowed: false,
+		reason: 'no matching allow policy',
+		expression: { kind: 'constant', value: false },
+		actorBound: false
+	})
+}));
 
 describe('invocation policy contracts', () => {
-	it('keeps approval while narrowing after-hook elevation', () => {
-		const source: RowPredicate = {
-			allowed: true,
-			reason: 'matching authored grant',
-			expression: {
-				kind: 'comparison',
-				column: 'owner_id',
-				operator: 'eq',
-				value: 'user-1'
-			},
-			actorBound: true,
-			fields: ['name'],
-			authorization: { id: 'authorize-write' },
-			approval: { id: 'approval-route' }
-		};
+	it('answers the workspace unrestricted, with no authorization and no approval route', async () => {
+		const invocation = denyAll();
+		const workspace = workspaceSubject(caller);
+		expect(isWorkspaceSubject(workspace)).toBe(true);
+		expect(isWorkspaceSubject(caller)).toBe(false);
+		expect(workspace.userId).toBe(caller.userId);
+		expect(workspace.policies).toEqual([]);
 
-		expect(afterHookElevation(source)).toEqual({
-			allowed: true,
-			reason: 'after-hook elevation',
-			expression: { kind: 'constant', value: true },
-			actorBound: false,
-			approval: { id: 'approval-route' }
+		const write = await Effect.runPromise(invocation.write(workspace, 'create', 'people', { any: 1 }));
+		expect(write).toEqual({
+			action: 'create',
+			resource: 'people',
+			predicate: {
+				allowed: true,
+				reason: 'workspace',
+				expression: { kind: 'constant', value: true },
+				actorBound: false
+			},
+			authorization: undefined,
+			approval: undefined
 		});
+		const read = await Effect.runPromise(invocation.read(workspace, 'people'));
+		expect(read.predicate.allowed).toBe(true);
+		expect(read.mask({ id: 'p1', secret: 'kept' })).toEqual({ id: 'p1', secret: 'kept' });
+		await Effect.runPromise(invocation.authorize(workspace, 'read', 'people'));
+		expect(invocation.mask(workspace, 'read', 'people', { secret: 'kept' })).toEqual({
+			secret: 'kept'
+		});
+
+		// The caller the workspace was minted for is still judged on its own grants.
+		const denied = await Effect.runPromise(Effect.flip(invocation.write(caller, 'create', 'people', {})));
+		expect(denied.reason).toBe('no matching allow policy');
+	});
+
+	it('cannot be minted from a payload and survives a spread', () => {
+		const workspace = workspaceSubject(caller);
+		expect(isWorkspaceSubject({ ...workspace })).toBe(true);
+		const decoded = Schema.decodeUnknownSync(Subject)(JSON.parse(JSON.stringify(workspace)));
+		expect(isWorkspaceSubject(decoded)).toBe(false);
+		expect(isWorkspaceSubject({ ...caller, policies: [], teamPath: [] })).toBe(false);
+		expect(workspaceSubject(workspace)).toBe(workspace);
 	});
 
 	it('produces stable policy-hash material from executed predicate and mask', () => {

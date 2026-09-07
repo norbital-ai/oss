@@ -1,10 +1,11 @@
 import { Effect, Schema } from 'effect';
 import type * as Identity from '#lib/runtime/identity/identity.js';
+import { isWorkspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import type { RowPredicate } from './predicate.js';
 import {
-	afterHookElevation,
 	maskWithPredicate,
 	policyHashSource,
+	unrestricted,
 	type PolicyHashSource
 } from './policy-surface.js';
 
@@ -44,7 +45,6 @@ type AuthorizedRead = Readonly<{
 }>;
 
 type WriteAction = 'create' | 'update' | 'delete';
-type WriteElevation = 'none' | 'after';
 
 /** AccessControl's part of the unconditional write authorization sequence. */
 type WriteAccessPlan = Readonly<{
@@ -77,8 +77,7 @@ export type Invocation = Readonly<{
 		subject: Identity.Subject,
 		action: WriteAction,
 		resource: string,
-		submitted: Readonly<Record<string, unknown>>,
-		elevation?: WriteElevation
+		submitted: Readonly<Record<string, unknown>>
 	) => Effect.Effect<WriteAccessPlan, AccessDenied>;
 	readonly policyHashSource: (
 		subject: Identity.Subject,
@@ -117,6 +116,16 @@ const freezeSubject = (subject: Identity.Subject): Identity.Subject =>
 		teamPath: Object.freeze([...subject.teamPath]),
 		policies: Object.freeze([...subject.policies])
 	});
+
+/**
+ * The workspace's read: every row, every field, hashed like any other grant so a hook's read set
+ * can still be checked at commit.
+ */
+const workspaceRead = (resource: string): AuthorizedRead => ({
+	predicate: unrestricted,
+	policyHashSource: policyHashSource('read', resource, unrestricted),
+	mask: (value) => value
+});
 
 /** Builds a fresh invocation memo around one service-owned policy evaluator. */
 export const createInvocationFactory = (
@@ -157,11 +166,14 @@ export const createInvocationFactory = (
 			cache.set(key, value);
 			return value;
 		};
+		// The workspace is answered before any policy is consulted: it holds no grant and needs
+		// none, because it only ever acts inside a write the caller was already judged on.
 		const authorize = (
 			subject: Identity.Subject,
 			action: string,
 			resource: string
 		): Effect.Effect<void, AccessDenied> => {
+			if (isWorkspaceSubject(subject)) return Effect.void;
 			const state = stateFor(subject);
 			const decision = evaluated(state.decisions, state.evaluator.decision, action, resource);
 			return decision.allowed
@@ -169,6 +181,7 @@ export const createInvocationFactory = (
 				: Effect.fail(new AccessDenied({ action, resource, reason: decision.reason }));
 		};
 		const predicate = (subject: Identity.Subject, action: string, resource: string) => {
+			if (isWorkspaceSubject(subject)) return unrestricted;
 			const state = stateFor(subject);
 			return evaluated(state.predicates, state.evaluator.predicate, action, resource);
 		};
@@ -182,6 +195,7 @@ export const createInvocationFactory = (
 			subject: Identity.Subject,
 			resource: string
 		): Effect.Effect<AuthorizedRead, AccessDenied> => {
+			if (isWorkspaceSubject(subject)) return Effect.succeed(workspaceRead(resource));
 			const state = stateFor(subject);
 			const key = coordinate('read', resource);
 			const cached = state.reads.get(key);
@@ -210,40 +224,44 @@ export const createInvocationFactory = (
 			subject: Identity.Subject,
 			action: WriteAction,
 			resource: string,
-			submitted: Readonly<Record<string, unknown>>,
-			elevation: WriteElevation = 'none'
+			submitted: Readonly<Record<string, unknown>>
 		): Effect.Effect<WriteAccessPlan, AccessDenied> => {
+			if (isWorkspaceSubject(subject))
+				return Effect.succeed({
+					action,
+					resource,
+					predicate: unrestricted,
+					authorization: undefined,
+					approval: undefined
+				});
 			const state = stateFor(subject);
 			const source = evaluated(state.predicates, state.evaluator.predicate, action, resource);
-			if (elevation === 'none') {
-				const decision = evaluated(state.decisions, state.evaluator.decision, action, resource);
-				if (!decision.allowed || !source.allowed)
-					return Effect.fail(
-						new AccessDenied({
-							action,
-							resource,
-							reason: decision.allowed ? source.reason : decision.reason
-						})
-					);
-				if (
-					action !== 'delete' &&
-					source.fields !== undefined &&
-					Object.keys(submitted).some((field) => !source.fields?.includes(field))
-				)
-					return Effect.fail(
-						new AccessDenied({
-							action,
-							resource,
-							reason: `${action} includes fields outside the matching policy grant`
-						})
-					);
-			}
-			const planned = elevation === 'after' ? afterHookElevation(source) : source;
+			const decision = evaluated(state.decisions, state.evaluator.decision, action, resource);
+			if (!decision.allowed || !source.allowed)
+				return Effect.fail(
+					new AccessDenied({
+						action,
+						resource,
+						reason: decision.allowed ? source.reason : decision.reason
+					})
+				);
+			if (
+				action !== 'delete' &&
+				source.fields !== undefined &&
+				Object.keys(submitted).some((field) => !source.fields?.includes(field))
+			)
+				return Effect.fail(
+					new AccessDenied({
+						action,
+						resource,
+						reason: `${action} includes fields outside the matching policy grant`
+					})
+				);
 			return Effect.succeed({
 				action,
 				resource,
-				predicate: planned,
-				authorization: elevation === 'after' ? undefined : source.authorization,
+				predicate: source,
+				authorization: source.authorization,
 				approval: source.approval
 			});
 		};

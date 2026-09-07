@@ -467,6 +467,10 @@
 				onAskAgent(entity.query ? { message: entity.query } : undefined);
 				open = false;
 				return;
+			case 'composer-command':
+				onAskAgent({ message: `/${entity.command} `, planMode: entity.command === 'plan' });
+				open = false;
+				return;
 			case 'collection':
 				commitQuery(`#${entity.collection} `, true);
 				return;

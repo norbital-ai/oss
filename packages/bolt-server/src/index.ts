@@ -1,8 +1,15 @@
-export { makeWebConnectorBinding } from './facilities/web.js';
+export { makeWebConnectorBinding, makeRequestPage } from './facilities/web.js';
+export {
+	attributeEscapedFailure,
+	guardBinding,
+	guardBindings,
+	type FacilityScope
+} from './facilities/boundary.js';
 export { extractDocumentText } from './facilities/documents.js';
 
 export {
 	ApplicationStartError,
+	CRASH_STOP_MILLIS,
 	installProcessShutdown,
 	startApplication,
 	startLocalApplication,
@@ -85,6 +92,7 @@ export {
 export {
 	makeTaskBinding,
 	ScheduleTickError,
+	runScheduleOccurrence,
 	runScheduleTick,
 	type ScheduleTickOptions
 } from './schedules.js';

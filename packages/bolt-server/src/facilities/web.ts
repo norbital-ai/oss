@@ -1,5 +1,5 @@
 import { lookup } from 'node:dns/promises';
-import { request } from 'node:https';
+import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Schema } from 'effect';
 import { getErrorMessage } from '@norbital-ai/std';
@@ -60,9 +60,56 @@ type PageResponse = Readonly<{
 	body: string | Uint8Array;
 }>;
 
-/** Bind the socket to the checked address, retaining the original hostname for TLS and Host. */
-const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<PageResponse> =>
+/**
+ * Failures raised while the socket is still being connected. One of these on an address means the
+ * next resolved address is tried; anything else (TLS, reset mid-response, the byte limit) is final.
+ */
+const CONNECT_PHASE_CODES: ReadonlySet<string> = new Set([
+	'ENETUNREACH',
+	'EHOSTUNREACH',
+	'EADDRNOTAVAIL',
+	'ECONNREFUSED',
+	'ETIMEDOUT'
+]);
+
+const errorCode = (cause: unknown): string | undefined => {
+	const code = cause instanceof Error ? Reflect.get(cause, 'code') : undefined;
+	return isString(code) ? code : undefined;
+};
+
+/** IPv4 first, then IPv6, each family in resolver order: the container may have no IPv6 route. */
+const orderAddresses = (addresses: readonly Address[]): readonly Address[] => [
+	...addresses.filter((entry) => entry.family === 4),
+	...addresses.filter((entry) => entry.family !== 4)
+];
+
+/** A connect-phase failure on one address; the next address is still worth trying. */
+class ConnectFailure extends Error {
+	readonly address: Address;
+	override readonly cause: Error;
+	constructor(address: Address, cause: Error) {
+		super(`${address.address}: ${cause.message}`);
+		this.address = address;
+		this.cause = cause;
+	}
+}
+
+/**
+ * One attempt against one pinned address, retaining the hostname for TLS and Host.
+ *
+ * `error` is attached before the request can fail, and the pinned `lookup` answers on a later
+ * macrotask rather than synchronously: `http` attaches its own socket listeners on the tick after
+ * `connect`, so a connect that fails inside a synchronous callback emitted `error` on a socket
+ * nobody was listening to yet, and that is a process-level uncaught exception, not a failed call.
+ */
+const attemptPage = (
+	request: typeof httpsRequest,
+	url: URL,
+	address: Address,
+	signal: AbortSignal
+): Promise<PageResponse> =>
 	new Promise((resolve, reject) => {
+		let connected = false;
 		const req = request(
 			url,
 			{
@@ -70,7 +117,9 @@ const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<P
 				signal,
 				family: address.family,
 				agent: false,
-				lookup: (_hostname, _options, callback) => callback(null, address.address, address.family),
+				lookup: (_hostname, _options, callback) => {
+					setImmediate(() => callback(null, address.address, address.family));
+				},
 				headers: {
 					accept: 'text/html,application/pdf,application/json,text/plain,application/xml',
 					'accept-encoding': 'identity',
@@ -78,6 +127,7 @@ const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<P
 				}
 			},
 			(response) => {
+				connected = true;
 				const status = response.statusCode ?? 0;
 				const location = response.headers.location;
 				if (status >= 300 && status < 400) {
@@ -103,9 +153,41 @@ const requestPage = (url: URL, address: Address, signal: AbortSignal): Promise<P
 				);
 			}
 		);
-		req.on('error', reject);
+		req.on('error', (cause: Error) => {
+			const code = errorCode(cause);
+			reject(
+				!connected && code !== undefined && CONNECT_PHASE_CODES.has(code)
+					? new ConnectFailure(address, cause)
+					: cause
+			);
+		});
+		req.on('socket', (socket) => socket.once('connect', () => (connected = true)));
 		req.end();
 	});
+
+/** Tries the checked addresses in order, IPv4 before IPv6, moving on after a connect-phase failure. */
+export const makeRequestPage =
+	(request: typeof httpsRequest = httpsRequest) =>
+	async (url: URL, addresses: readonly Address[], signal: AbortSignal): Promise<PageResponse> => {
+		let last: ConnectFailure | undefined;
+		for (const address of orderAddresses(addresses)) {
+			signal.throwIfAborted();
+			try {
+				// repository-health:allow A6 -- Addresses are fallbacks for one another; the second is tried only after the first fails to connect.
+				return await attemptPage(request, url, address, signal);
+			} catch (cause) {
+				if (!(cause instanceof ConnectFailure)) throw cause;
+				last = cause;
+			}
+		}
+		throw new Error(
+			last === undefined
+				? 'Public page has no address to connect to.'
+				: `Public page could not be reached on any address; last ${last.address.address}: ${last.cause.message}`
+		);
+	};
+
+const requestPage = makeRequestPage();
 
 /** Portable host binding: public HTTPS GET only, bounded bodies, pinned DNS and checked redirects. */
 export const makeWebConnectorBinding = (
@@ -139,7 +221,7 @@ export const makeWebConnectorBinding = (
 					throw new Error('Public-page retrieval cannot reach private or reserved networks.');
 				bounded.throwIfAborted();
 				// repository-health:allow A6 -- Redirect responses decide the next URL; requests must remain sequential to validate each destination.
-				const response = await (options.request ?? requestPage)(target, addresses[0]!, bounded);
+				const response = await (options.request ?? requestPage)(target, addresses, bounded);
 				if (response.status >= 300 && response.status < 400 && response.location) {
 					target = new URL(response.location, target);
 					continue;

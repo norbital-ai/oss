@@ -10,7 +10,7 @@ import {
 	type InputRequiredResult,
 	type StandardSchemaV1
 } from '@modelcontextprotocol/client';
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, SchemaIssue } from 'effect';
 import type { Context as EffectContext } from 'effect/Context';
 import { Prompt } from 'effect/unstable/ai';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
@@ -53,6 +53,42 @@ export class ToolNotAllowed extends Schema.TaggedError<ToolNotAllowed>()(
 	readonly retryable = false;
 	readonly message = `The tool "${this.tool}" is not allowed for the agent "${this.agent}".`;
 }
+
+/**
+ * A tool call whose input does not decode. Distinct from `ToolNotAllowed`: the tool exists and the
+ * agent may use it; the model sent the wrong shape. `path` names the offending field so the model
+ * can repair the call, and `detail` is the sentence it is shown.
+ */
+export class InvalidToolInput extends Schema.TaggedError<InvalidToolInput>()(
+	'Bolt.CapabilityCatalog.InvalidToolInput',
+	{ tool: Schema.NonEmptyString, path: Schema.String, message: Schema.String }
+) {
+	readonly category = 'tool-input' as const;
+	readonly retryable = false;
+	readonly detail = `Invalid input for tool "${this.tool}"${this.path === '' ? '' : ` at "${this.path}"`}: ${this.message}`;
+}
+
+const formatIssuePath = (
+	path: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>
+): string =>
+	path
+		.map((segment) => (segment instanceof Object ? segment.key : segment))
+		.map((key, index) =>
+			Number.isInteger(key) ? `[${String(key)}]` : `${index === 0 ? '' : '.'}${String(key)}`
+		)
+		.join('');
+
+const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1();
+
+export const invalidToolInput = (tool: string, error: Schema.SchemaError): InvalidToolInput => {
+	const issues = formatIssues(error.issue).issues;
+	const issue = issues.find(({ path }) => path !== undefined && path.length > 0) ?? issues[0];
+	return new InvalidToolInput({
+		tool,
+		path: formatIssuePath(issue?.path ?? []),
+		message: issue?.message ?? 'The input does not match the tool schema.'
+	});
+};
 
 export class AgentModelUnavailable extends Schema.TaggedError<AgentModelUnavailable>()(
 	'Bolt.ModelRegistry.ModelUnavailable',
@@ -283,9 +319,13 @@ export type ToolExecutionContext = Readonly<{
 	readonly previousTodo?: TodoList;
 }>;
 
-const decode = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, input: unknown) =>
+const decode = <S extends Schema.ConstraintDecoder<unknown>>(
+	tool: string,
+	schema: S,
+	input: unknown
+) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
-		Effect.mapError(() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' }))
+		Effect.mapError((error) => invalidToolInput(tool, error))
 	);
 
 export const READ_COLLECTION_RESULT_BYTE_LIMIT = 16 * 1024;
@@ -400,7 +440,7 @@ const validatedTodo = Effect.fn('CapabilityCatalog.validatedTodo')(function* (
 	input: unknown,
 	previous?: TodoList
 ) {
-	const next = yield* decode(TodoList, input);
+	const next = yield* decode('todo', TodoList, input);
 	if (next.items.length > 100) {
 		return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:item-limit' });
 	}
@@ -453,12 +493,12 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		case 'list_skills':
 			return { skills: context.skills.map(({ name: skill }) => skill) };
 		case 'read_skill': {
-			const parsed = yield* decode(SkillNameInput, input);
+			const parsed = yield* decode(name, SkillNameInput, input);
 			const body = yield* readSkillBody(context.skills, parsed.name);
 			return { name: parsed.name, body };
 		}
 		case 'search_task_history': {
-			const parsed = yield* decode(TaskHistoryInput, input);
+			const parsed = yield* decode(name, TaskHistoryInput, input);
 			const scope = parsed.scope ?? 'this_task';
 			let taskIds: ReadonlyArray<TaskId> = [context.taskId];
 			if (scope === 'workbench') taskIds = yield* taskIdsInWorkbench(context);
@@ -485,11 +525,11 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			return { scope, messages };
 		}
 		case 'use_image': {
-			const asset = yield* decode(ImageAsset, input);
+			const asset = yield* decode(name, ImageAsset, input);
 			return asset;
 		}
 		case 'read_collection': {
-			const parsed = yield* decode(CollectionReadInput, input);
+			const parsed = yield* decode(name, CollectionReadInput, input);
 			if (!context.readableCollectionNames.includes(parsed.collection)) {
 				return yield* new ToolNotAllowed({
 					agent: context.agentId,
@@ -505,7 +545,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			return boundedCollectionReadResult(rows, limit);
 		}
 		case 'write_collection': {
-			const parsed = yield* decode(CollectionWriteInput, input);
+			const parsed = yield* decode(name, CollectionWriteInput, input);
 			if (!context.writableCollectionNames.includes(parsed.collection)) {
 				return yield* new ToolNotAllowed({
 					agent: context.agentId,
@@ -522,7 +562,6 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 					context.subject,
 					parsed.collection,
 					[{ ...(parsed.values ?? {}), id: parsed.id }],
-					false,
 					0,
 					{ roots: [{ id: parsed.id, action: parsed.operation }] }
 				);
@@ -550,8 +589,15 @@ export const executeHostTool = Effect.fn('CapabilityCatalog.executeHostTool')(fu
 		: call).output;
 });
 
-export const subagentToolSpec: ToolDeclaration = {
-	name: 'subagent',
+export const SUBAGENT_TOOL_NAME = 'subagent';
+
+/**
+ * The `subagent` tool for one workspace. `spawnableAgentIds` is the closed set of agents a spawn
+ * may name (the workspace's envoys plus the web agent), so the model reads it off the schema and an
+ * invented name is a decode failure on `agentId` rather than an access refusal after the fact.
+ */
+export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
+	name: SUBAGENT_TOOL_NAME,
 	description:
 		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, steer, stop, and resume.',
 	command: 'platform:subagent',
@@ -561,7 +607,11 @@ export const subagentToolSpec: ToolDeclaration = {
 				type: 'string',
 				enum: ['spawn', 'read', 'message', 'await', 'steer', 'stop', 'resume']
 			},
-			agentId: { type: 'string', minLength: 1, description: 'Required for spawn.' },
+			agentId: {
+				type: 'string',
+				enum: [...spawnableAgentIds],
+				description: 'Required for spawn: one of the agents this workspace declares.'
+			},
 			instruction: { type: 'string', minLength: 1, description: 'Required for spawn.' },
 			taskId: {
 				type: 'string',
@@ -572,29 +622,30 @@ export const subagentToolSpec: ToolDeclaration = {
 		},
 		['action']
 	)
-};
+});
 
-const SubagentAction = Schema.Union([
-	Schema.Struct({
-		action: Schema.Literal('spawn'),
-		agentId: AgentId,
-		instruction: Schema.NonEmptyString
-	}),
-	Schema.Struct({ action: Schema.Literal('read'), taskId: TaskId }),
-	Schema.Struct({
-		action: Schema.Literal('message'),
-		taskId: TaskId,
-		message: Schema.NonEmptyString
-	}),
-	Schema.Struct({ action: Schema.Literal('await'), taskId: TaskId }),
-	Schema.Struct({
-		action: Schema.Literal('steer'),
-		taskId: TaskId,
-		message: Schema.NonEmptyString
-	}),
-	Schema.Struct({ action: Schema.Literal('stop'), taskId: TaskId }),
-	Schema.Struct({ action: Schema.Literal('resume'), taskId: TaskId })
-]);
+const subagentAction = (spawnableAgentIds: ReadonlyArray<string>) =>
+	Schema.Union([
+		Schema.Struct({
+			action: Schema.Literal('spawn'),
+			agentId: Schema.Literals(spawnableAgentIds),
+			instruction: Schema.NonEmptyString
+		}),
+		Schema.Struct({ action: Schema.Literal('read'), taskId: TaskId }),
+		Schema.Struct({
+			action: Schema.Literal('message'),
+			taskId: TaskId,
+			message: Schema.NonEmptyString
+		}),
+		Schema.Struct({ action: Schema.Literal('await'), taskId: TaskId }),
+		Schema.Struct({
+			action: Schema.Literal('steer'),
+			taskId: TaskId,
+			message: Schema.NonEmptyString
+		}),
+		Schema.Struct({ action: Schema.Literal('stop'), taskId: TaskId }),
+		Schema.Struct({ action: Schema.Literal('resume'), taskId: TaskId })
+	]);
 
 type SubagentFailure =
 	| Collections.QueryError
@@ -609,6 +660,8 @@ export type SubagentContext = Readonly<{
 	readonly workbenchId: WorkbenchId;
 	readonly agentId: AgentId;
 	readonly taskId: TaskId;
+	/** The agents a spawn may name; the same set the tool's schema advertised. */
+	readonly spawnableAgentIds: ReadonlyArray<string>;
 	readonly collections: Collections.Interface;
 	readonly budget: InvocationBudget.Interface;
 	readonly spawn: (
@@ -665,15 +718,15 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 	context: SubagentContext,
 	toolCallId: string
 ) {
-	const action = yield* Schema.decodeUnknownEffect(SubagentAction)(input).pipe(
-		Effect.mapError(() => new ToolNotAllowed({ agent: 'subagent', tool: 'invalid-input' }))
-	);
+	const action = yield* Schema.decodeUnknownEffect(subagentAction(context.spawnableAgentIds))(
+		input
+	).pipe(Effect.mapError((error) => invalidToolInput(SUBAGENT_TOOL_NAME, error)));
 	switch (action.action) {
 		case 'spawn': {
 			const depth = yield* context.budget.nest(`child of ${context.agentId}`);
 			return yield* context.spawn(
 				context.effectId,
-				action.agentId,
+				AgentId.make(action.agentId),
 				action.instruction,
 				depth,
 				toolCallId

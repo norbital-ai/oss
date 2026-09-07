@@ -125,6 +125,25 @@ Static envoys and automations name policy arrays in their declarations and are n
 
 ---
 
+### Hooks and the workspace
+
+Two subjects take part in one write. The caller is judged once on the shape it submitted, before
+any hook runs: allow decision, row predicate, field grant, `authorize`, and the one approval route
+of the root action, for the root's own columns and every nested row the caller submitted. Everything
+a hook does is the workspace's own work. What a hook reads, what it returns (including a
+relationship it replaced), what it writes through `api.db.*` in any phase, and the omission deletes
+of the relations it returned are authorized as the workspace: no decision, no predicate, no field
+mask, no `authorize`, no approval route of their own. They commit in the root's transaction, or on
+the root's resume when the root is held for review. Hooks declare nothing and see no subject; the
+hooks of the workspace's own rows still run, and the engine's validation, reference checks,
+ownership and omission refusals, locks, history and version fencing apply to them exactly as to a
+caller's row. An automation is a standalone principal with its declared `policies`; starting one
+from a hook is for work that cannot fit the root's transaction, never for privilege. A caller's
+cascade delete stays the caller's: a descendant deleted because the caller deleted its owner is
+authorized by the `cascade(...)` edge against the caller's delete grant on the root. In one
+sentence: inside a write the caller was allowed to make, a hook is the workspace; the caller is
+judged on what they sent, the workspace on nothing.
+
 ## Command admission
 
 `runtime/dispatch.ts` mints the subject, then `runtime/commands.ts` runs the binding. See

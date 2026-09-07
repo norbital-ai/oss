@@ -321,6 +321,96 @@ describe('Automations owner', () => {
 		expect(statements.filter((sql) => sql.includes('automation_run'))).toHaveLength(0);
 	});
 
+	it('lets an automation continue itself with moved args at its own depth, and refuses one that did not move', async () => {
+		const statements: Array<string> = [];
+		const tasks = Tasks.layer(
+			{ call: () => Promise.resolve({ _tag: 'Success', value: {} }) },
+			testCallContext('i1')
+		);
+		const database = Database.layer(
+			{
+				call: (_metadata, request) => {
+					// The run row is written inside a transaction; record every statement either way.
+					statements.push(JSON.stringify(request));
+					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+				}
+			},
+			testCallContext('i1')
+		);
+		const registry = Workspace.layer(
+			workspace({
+				name: 'x',
+				version: '1',
+				collections: [],
+				apps: [],
+				policies: [],
+				automations: [
+					automation({
+						name: 'walk',
+						trigger: { _tag: 'Schedule', cron: '* * * * *' },
+						command: 'walk',
+						policies: ['admin']
+					})
+				],
+				integrations: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
+				envoys: [],
+				requiredFacilities: []
+			})
+		);
+		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
+			Layer.provide(Layer.mergeAll(database, tasks))
+		);
+		// The host is already at the limit: a plain start would be refused as too deep.
+		const layer = Automations.layer.pipe(
+			Layer.provide(
+				Layer.mergeAll(
+					taskQueue,
+					database,
+					registry,
+					SyncCommit.layer(undefined, testCallContext('i1')),
+					InvocationBudget.layer(InvocationBudget.DEFAULT_NESTING_LIMIT),
+					TenantScope.layer('test-tenant')
+				)
+			)
+		);
+		const atLimit = {
+			name: 'walk',
+			args: { cursor: 'a' },
+			depth: InvocationBudget.DEFAULT_NESTING_LIMIT
+		};
+		// The reconciler moving its cursor: the same automation, from its own run, with new args.
+		const continued = await Effect.runPromiseExit(
+			Effect.gen(function* () {
+				return yield* (yield* Automations.Service).start(
+					EffectId.make('e-continue'),
+					'walk',
+					{ cursor: 'b' },
+					{ continuationOf: atLimit }
+				);
+			}).pipe(Effect.provide(layer))
+		);
+		expect(Exit.isSuccess(continued)).toBe(true);
+		expect(statements.filter((sql) => sql.includes('automation_run'))).toHaveLength(1);
+		// The same args again is a loop, not a walk, and is refused before any row is written.
+		const looped = await Effect.runPromiseExit(
+			Effect.gen(function* () {
+				return yield* (yield* Automations.Service).start(
+					EffectId.make('e-loop'),
+					'walk',
+					{ cursor: 'a' },
+					{ continuationOf: atLimit }
+				);
+			}).pipe(Effect.provide(layer))
+		);
+		expect(Option.getOrUndefined(Exit.findErrorOption(looped))).toBeInstanceOf(
+			Automations.AutomationContinuationUnchanged
+		);
+		expect(statements.filter((sql) => sql.includes('automation_run'))).toHaveLength(1);
+	});
+
 	it('runs each same-name child independently in the admitting request', async () => {
 		const observedChildContexts: Array<unknown> = [];
 		const childRunIds: string[] = [];
@@ -516,7 +606,6 @@ describe('Automations owner', () => {
 						adminSubject,
 						'notes',
 						[{ id: '10000000-0000-4000-8000-000000000001', body: 'direct trigger' }],
-						false,
 						0,
 						{
 							roots: [{ id: '10000000-0000-4000-8000-000000000001', action: 'create' }]

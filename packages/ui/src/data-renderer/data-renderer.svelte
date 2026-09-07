@@ -118,12 +118,26 @@
 				{t('dataRenderer.rendererLoading')}
 			</span>
 		{:else if customRendererState?.status === 'failed'}
-			<span
-				class="block min-w-0 truncate text-destructive"
-				role="alert"
-				title={customRendererState.error.message}
-			>
-				{t('dataRenderer.rendererFailed')}
+			<!-- The renderer did not load; the value is still the record's, so it is shown raw with the
+			     failure named beside it rather than hidden behind a placeholder. -->
+			<span class="flex min-w-0 flex-col gap-1">
+				<DataRendererBuiltin
+					field={{ ...field, kind: 'json' }}
+					{value}
+					{id}
+					mode="display"
+					disabled
+					{placeholder}
+					{row}
+					locale={localeEffective}
+					class="min-w-0 w-full"
+				/>
+				<span class="block min-w-0 text-xs text-destructive" role="alert">
+					{t('dataRenderer.rendererLoadFailed', {
+						datatype: field.kind,
+						cause: customRendererState.error.message
+					})}
+				</span>
 			</span>
 		{:else}
 			<DataRendererBuiltin

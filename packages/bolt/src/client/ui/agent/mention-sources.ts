@@ -6,6 +6,7 @@
 import { Effect, Result, Schema } from 'effect';
 import { resolveRecordLabel } from '@norbital-ai/std/collection';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+import type { ComposerCommand } from './composer-commands.js';
 export {
 	consumeTrigger,
 	findMentionTrigger,
@@ -27,6 +28,7 @@ const COMMAND_PREFIX: Readonly<Record<CommandScope, string>> = {
 	command: '>'
 };
 export type MentionCommand = Extract<CommandScope, 'record' | 'plan' | 'app'>;
+export type { ComposerCommand } from './composer-commands.js';
 
 const PREFIX_BY_CHAR: Readonly<Record<string, CommandScope>> = {
 	[COMMAND_PREFIX.record]: 'record',
@@ -127,7 +129,8 @@ export type MentionMenuItem =
 			readonly href?: string;
 			readonly description?: string | null;
 	  }
-	| { readonly kind: 'command'; readonly command: MentionCommand };
+	| { readonly kind: 'command'; readonly command: MentionCommand }
+	| { readonly kind: 'composer-command'; readonly command: ComposerCommand };
 
 /** One app as the menu row that mentions it. */
 const appMenuItem = (app: MentionAppHit): MentionMenuItem => ({

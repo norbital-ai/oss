@@ -111,7 +111,7 @@ const mutateRecord = (
 	action: 'create' | 'update',
 	values: Readonly<Record<string, unknown>>
 ) =>
-	service.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
+	service.mutate(effectId, subject, collection, [{ ...values, id }], 0, {
 		roots: [{ id, action }]
 	});
 

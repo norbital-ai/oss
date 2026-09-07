@@ -6,7 +6,7 @@ import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 
 export const WRITE_DEPTH_LIMIT = 8;
 /**
- * 10,000, raised from 1,000. RFC/sync-engine.md carries the amendment and the receipt.
+ * 10,000, raised from 1,000. The amendment is recorded in docs/pillars/04-sync-engine/README.md.
  *
  * The ceiling is here to stop an unbounded graph, not to make a bounded one illegal. One payroll
  * period for one company is a single declarative write of ~4,000 rows at 89 employees, and the

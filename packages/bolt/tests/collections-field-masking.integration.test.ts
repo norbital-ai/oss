@@ -101,7 +101,6 @@ describe('authored policy field masks', () => {
 					adminSubject,
 					'assignments',
 					[{ id, title: 'Inspect site', controller_note: 'Do not disclose' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'create' }] }
 				);
@@ -151,7 +150,6 @@ describe('authored policy field masks', () => {
 					adminSubject,
 					'assignments',
 					[{ id, title: 'Original', controller_note: 'Private' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'create' }] }
 				);
@@ -165,7 +163,6 @@ describe('authored policy field masks', () => {
 					fieldWorker,
 					'assignments',
 					[{ id, title: 'Changed' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'update' }] }
 				);
@@ -178,7 +175,6 @@ describe('authored policy field masks', () => {
 					fieldWorker,
 					'assignments',
 					[{ id, title: 'Changed through graph' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'update' }] }
 				);
@@ -230,7 +226,6 @@ describe('authored policy field masks', () => {
 					fieldWorker,
 					'assignments',
 					[{ id: forgedId, title: 'Forged', source: 'caller-forged' }],
-					false,
 					0,
 					{ roots: [{ id: forgedId, action: 'create' }] }
 				);
@@ -255,7 +250,6 @@ describe('authored policy field masks', () => {
 					fieldWorker,
 					'assignments',
 					[{ id: allowedId, title: 'Allowed' }],
-					false,
 					0,
 					{ roots: [{ id: allowedId, action: 'create' }] }
 				);

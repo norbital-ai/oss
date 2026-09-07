@@ -11,20 +11,19 @@ export type PolicyHashSource = Readonly<{
 	readonly fields: ReadonlyArray<string> | null;
 }>;
 
-/** The row predicate used by a write whose earlier authorization is already proven. */
+/**
+ * The workspace's own predicate: every row, every field, no live authorization, no approval route.
+ *
+ * It answers the workspace subject inside a write (what a hook reads, returns or writes) and the
+ * insert statements of a committed graph, whose rows were already judged when the graph was
+ * prepared.
+ */
 export const unrestricted: RowPredicate = {
 	allowed: true,
-	reason: 'elevated',
+	reason: 'workspace',
 	expression: { kind: 'constant', value: true },
 	actorBound: false
 };
-
-/** Preserves the approval route while clearing row and live-authorization gates for an after hook. */
-export const afterHookElevation = (source: RowPredicate): RowPredicate => ({
-	...unrestricted,
-	reason: 'after-hook elevation',
-	...(source.approval === undefined ? {} : { approval: source.approval })
-});
 
 /** The exact stable material a sync registration hashes for one policy coordinate. */
 export const policyHashSource = (

@@ -1,0 +1,80 @@
+{
+ "meta": {
+  "name": "agents-compaction-continue",
+  "recordedAt": "2026-09-07T05:20:00.000Z",
+  "model": "openrouter/z-ai/glm-5.3-flash",
+  "purpose": "A turn that auto-compacts and then keeps calling tools: two tool calls, two results, a final text. Pipeline only, never generation.",
+  "provenance": "Authored from the standalone hr-payroll host rows of 2026-09-07 (task ad43e032, run 53a635b3: checkpoint at sequence 14, then twelve more tool rounds on the same run). Tool calls reduced to describe_workspace so the test workspace answers them; texts dictated. The automatic Compact request is answered in-line by the harness and consumes no turn."
+ },
+ "turns": [
+  {
+   "_tag": "Generated",
+   "result": {
+    "_tag": "Message",
+    "message": {
+     "options": {},
+     "role": "assistant",
+     "content": [
+      {
+       "options": {},
+       "type": "tool-call",
+       "id": "call_after_checkpoint_1",
+       "name": "describe_workspace",
+       "params": {},
+       "providerExecuted": false
+      }
+     ]
+    }
+   },
+   "observation": {
+    "provider": "openrouter",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "operation": "language",
+    "callId": "cassette/recorded-0"
+   }
+  },
+  {
+   "_tag": "Generated",
+   "result": {
+    "_tag": "Message",
+    "message": {
+     "options": {},
+     "role": "assistant",
+     "content": [
+      {
+       "options": {},
+       "type": "tool-call",
+       "id": "call_after_checkpoint_2",
+       "name": "describe_workspace",
+       "params": {},
+       "providerExecuted": false
+      }
+     ]
+    }
+   },
+   "observation": {
+    "provider": "openrouter",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "operation": "language",
+    "callId": "cassette/recorded-1"
+   }
+  },
+  {
+   "_tag": "Generated",
+   "result": {
+    "_tag": "Message",
+    "message": {
+     "options": {},
+     "role": "assistant",
+     "content": "The workspace is `test-workspace`; both reads agree."
+    }
+   },
+   "observation": {
+    "provider": "openrouter",
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "operation": "language",
+    "callId": "cassette/recorded-2"
+   }
+  }
+ ]
+}

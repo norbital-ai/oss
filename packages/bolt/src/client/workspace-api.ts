@@ -81,8 +81,16 @@ export type WorkspaceApiVisibility = Readonly<{
 	readonly system?: boolean;
 }>;
 
-/** Nests a CollectionTable filter path into the declarative predicate grammar. */
-const filterToWhere = (filter: CollectionFilter): Schema.Json => {
+/**
+ * Nests a CollectionTable filter path into the declarative predicate grammar.
+ *
+ * Every segment before the leaf is a relationship, and a relationship condition is quantified:
+ * `employment_employee.effective_range contains_date` is "people with *some* employment whose range
+ * contains the day". Without the quantifier the protocol reads the relation's field as an operator
+ * and refuses the whole query, which is how an initial filter through a relation left a table on
+ * its skeleton.
+ */
+export const filterToWhere = (filter: CollectionFilter): Schema.Json => {
 	const leaf = filter.path[filter.path.length - 1];
 	if (leaf === undefined) return {};
 	let node: Record<string, Schema.Json> = {
@@ -94,7 +102,7 @@ const filterToWhere = (filter: CollectionFilter): Schema.Json => {
 	for (let index = filter.path.length - 2; index >= 0; index -= 1) {
 		const key = filter.path[index];
 		if (key === undefined) continue;
-		node = { [key]: node };
+		node = { [key]: { some: node } };
 	}
 	return node;
 };
@@ -159,7 +167,7 @@ const syncInputOf = (input: Record<string, Schema.Json>): SyncQueryInputType =>
 /** Authored remotes are a prefix, not a fixed catalogue entry. Everything else is. */
 type ClientCommandName = FixedCommandName | `invoke.${string}`;
 
-/** Live contiguous prefix, or one answered-only keyset page. RFC/sync-engine.md §paging. */
+/** Live contiguous prefix, or one answered-only keyset page. See docs/pillars/04-sync-engine/README.md. */
 type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
 
 const collectionReadMode = (after: Schema.Json | undefined): CollectionReadMode =>

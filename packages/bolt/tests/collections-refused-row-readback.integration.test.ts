@@ -209,7 +209,6 @@ describe('a batch the subject may write only part of', () => {
 					writer,
 					'notes',
 					[{ id: '10000000-0000-4000-8000-000000000001', body: 'one note' }],
-					false,
 					0,
 					{
 						roots: [{ id: '10000000-0000-4000-8000-000000000001', action: 'create' }]
@@ -326,20 +325,17 @@ describe('a batch the subject may write only part of', () => {
 });
 
 /**
- * The same refusal, for a create a hook issued.
+ * The same guard, for a create a hook issued: it does not apply.
  *
- * A `before` hook's write is planned into the graph that issued it — it does not reach the database
- * early — so the row a hook asks for is asserted by the same post-insert guard as every other row,
- * in the same transaction. When the predicate refuses it, the refusal is loud and the whole graph
- * rolls back: the hook's write did not happen, and neither did the write that issued it.
- *
- * Driven through a hook rather than through the service, because `api.db.notes.mutate` is the
- * authoring surface. An input without an id is its canonical create form. The hook issues one more
- * create than the quota admits, so the guard declines a row the graph carried — which is the way
- * this is actually reached, not a fault injected to reach it.
+ * A `before` hook's write is planned into the graph that issued it and commits with the root, and
+ * it is the workspace's row: the caller's grant, its live `authorize` included, judges what the
+ * caller submitted and nothing a hook derived. The writer's own `inner` create is refused by the
+ * quota; the one the hook issues inside the writer's allowed write lands beside the row that issued
+ * it. A refusal elsewhere in the same graph still takes the staged row down with it, which the
+ * relationship-reconciliation suite observes (HA5).
  */
-describe('an authored create the predicate refused', () => {
-	it('rolls the whole graph back loudly instead of storing the hook-issued row', async () => {
+describe('an authored create the caller could not have submitted', () => {
+	it('lands as the workspace beside the row that issued it, while the direct claim is refused', async () => {
 		const innerHooks: CollectionHooks<RefusedReadbackSchema, 'notes'> = {
 			mutate: {
 				perRecord: {
@@ -350,7 +346,7 @@ describe('an authored create the predicate refused', () => {
 								if (existing !== undefined) return input;
 								// Only the write that opened the graph issues the extra one. A staged create
 								// runs this hook too, so an unguarded issue enqueues itself until the host's
-								// nesting bound stops it and the guard under test is never reached.
+								// nesting bound stops it.
 								if (input.body === 'inner') return input;
 								yield* api.db.notes.mutate([{ body: 'inner' }]);
 								return input;
@@ -370,17 +366,25 @@ describe('an authored create the predicate refused', () => {
 		harness = await makeBoltTestRuntime(workspaceWith([]), { authored: authoredInner });
 		const collections = await harness.runtime.runPromise(Collections.Service);
 
-		// The outer row is admitted and the hook-issued `inner` row is not: the refusal takes the
-		// issuing write down with it.
+		const direct = await harness.runtime.runPromise(
+			collections
+				.mutate(EffectId.make('inner-direct'), writer, 'notes', [{ body: 'inner' }])
+				.pipe(Effect.result)
+		);
+		expect(direct._tag).toBe('Failure');
+		if (direct._tag === 'Failure') expect(refusalMessage(direct.failure)).toContain('authorization');
+		expect(await harness.database.query('select body from notes')).toEqual([]);
+
 		const outcome = await harness.runtime.runPromise(
 			collections
 				.mutate(EffectId.make('inner-1'), writer, 'notes', [{ body: 'outer' }])
 				.pipe(Effect.result)
 		);
-		expect(outcome._tag).toBe('Failure');
-		if (outcome._tag === 'Failure')
-			expect(refusalMessage(outcome.failure)).toContain('authorization');
-		expect(await harness.database.query('select body from notes')).toEqual([]);
+		expect(outcome._tag, 'the hook-issued row is the workspace\'s').toBe('Success');
+		expect(bodiesOf(await harness.database.query('select body from notes'))).toEqual([
+			'inner',
+			'outer'
+		]);
 	});
 });
 

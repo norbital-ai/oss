@@ -15,6 +15,9 @@ subject's read policy. Relation loading uses the same compiled relationship trut
 apply to the projected answer rather than changing predicate meaning.
 
 - Cursors encode the prior row's ordering tuple; there is no offset pagination.
+- Live ordering is typed: a live read's `orderBy` accepts only the collection's scalar columns
+  (`CollectionLiveOrderBy`); json, custom-typed and vector columns fail at authoring time and are
+  refused by the planner. A read continued with `after` is one-shot and may order by any column.
 - Lexical search is opt-in per field with `search: true`.
 - Semantic search performs one embedding request, then one policy-filtered nearest-neighbour query.
 - `findNearest` is a server operation. The browser does not accept arbitrary vectors.
@@ -47,7 +50,18 @@ cascading deletes are bounded to eight levels.
 Authored hooks have five explicit sites: `mutate.prepare`, `mutate.before`, `mutate.after`,
 `delete.before`, and `delete.after`. A before refusal commits no domain write. An after refusal names
 that the write already committed; it is never flattened into the same failure as a preparation
-refusal. Hook-triggered writes use the same service and have an eight-level nesting guard.
+refusal. Hook-triggered writes use the same service and have an eight-level nesting guard. Inside a
+write the caller was allowed to make, a hook is the workspace: the caller is judged on the shape it
+submitted (root columns and every nested row it sent), once, before any hook runs; what a hook
+reads, returns or writes is the workspace's own work, checked against nobody, with no approval
+route of its own, committing with the root (see [access](../access/README.md#hooks-and-the-workspace)).
+
+The nesting guard counts automations an automation starts, with one exception that is a rule of
+its own: an automation that starts **itself** with **different** args is continuing one walk (a
+reconciler moving its cursor to the next slice) and runs at the depth it already has; one that
+starts itself with the **same** args is refused as `Bolt.Automations.ContinuationUnchanged` before
+any row is written. A deferred start (`after`) is not supported on any host; a walk that needs to
+stop growing past its deadline continues itself instead.
 
 ## Approval and idempotency
 

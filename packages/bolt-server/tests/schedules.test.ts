@@ -1,8 +1,11 @@
 import { assert, it } from '@effect/vitest';
 import {
+	EffectId,
 	EnvironmentName,
+	InvocationId,
 	InvocationScope,
 	ReleaseId,
+	TaskRequest,
 	TenantId,
 	systemSignaturePayload,
 	type Invocation
@@ -12,8 +15,13 @@ import { createHmac } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startApplication } from '../src/app.js';
 import { ServerConfiguration } from '../src/config.js';
-import { runScheduleTick } from '../src/schedules.js';
-import { makeTaskInvocationControl } from '../src/schedules.js';
+import {
+	makeTaskBinding,
+	makeTaskInvocationControl,
+	runScheduleOccurrence,
+	runScheduleTick
+} from '../src/schedules.js';
+import { makeTimekeeper } from '../src/timekeeper.js';
 
 /**
  * The tick loop, driven the way the guest expects to be driven.
@@ -325,6 +333,109 @@ it.effect('aborts the exact occurrence dispatch an interrupt names', () =>
 		yield* runScheduleTick({ ...options(bundle.dispatch), invocations });
 
 		assert.strictEqual(occurrenceAborted, true);
+	})
+);
+
+/**
+ * The other way work reaches this host: the guest has already claimed it and hands the occurrence
+ * over on the `Wake`, so there is no discovery, only the invoke and the settle for exactly that one.
+ */
+const claimedOccurrence = {
+	taskId: 'tasks.execute:task-1:directive-1',
+	scheduleKey: 'task:tasks.execute:task-1:directive-1',
+	scheduledForEpochMs: 1,
+	command: 'tasks.execute',
+	input: { taskId: 'task-1', bolt_run_as: { userId: 'u1' } },
+	attempt: 1
+};
+
+it.effect('runs a carried occurrence at once: one task, one settle, no discovery', () =>
+	Effect.gen(function* () {
+		const bundle = guest({
+			'tasks.execute': () => answered({ taskId: 'task-1', status: 'done' }),
+			'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: 4_000 })
+		});
+
+		const next = yield* runScheduleOccurrence(options(bundle.dispatch), claimedOccurrence);
+
+		assert.strictEqual(next, 4_000);
+		assert.deepStrictEqual(commandsOf(bundle.seen), ['tasks.execute', 'host.schedules.settle']);
+		const task = bundle.seen[0];
+		assert.strictEqual(task?._tag, 'Task');
+		if (task?._tag === 'Task') {
+			assert.deepStrictEqual(task.input, claimedOccurrence.input);
+			assert.strictEqual(task.attempt, 1);
+		}
+		assert.deepStrictEqual(inputOf(bundle.seen, 'host.schedules.settle'), {
+			occurrence: claimedOccurrence,
+			outcome: { _tag: 'Done', result: { taskId: 'task-1', status: 'done' } }
+		});
+	})
+);
+
+it.effect('fails a carried occurrence whose settlement the guest refused', () =>
+	Effect.gen(function* () {
+		const bundle = guest({
+			'tasks.execute': () => answered(null),
+			'host.schedules.settle': () => refused('no such attempt')
+		});
+
+		const failure = yield* Effect.flip(
+			runScheduleOccurrence(options(bundle.dispatch), claimedOccurrence)
+		);
+
+		assert.strictEqual(failure.operation, 'host.schedules.settle');
+		assert.match(failure.message, /could not settle/u);
+		assert.deepStrictEqual(commandsOf(bundle.seen), ['tasks.execute', 'host.schedules.settle']);
+	})
+);
+
+it.effect('a Wake carrying an occurrence arms the timer and dispatches it; a bare Wake only arms', () =>
+	Effect.gen(function* () {
+		const dispatched: Array<string> = [];
+		const timekeeper = makeTimekeeper({
+			tick: () => Effect.succeed(null),
+			run: Effect.runPromise,
+			onFailure: () => {}
+		});
+		const tasks = makeTaskBinding(timekeeper, () => {}, makeTaskInvocationControl(), (occurrence) =>
+			dispatched.push(occurrence.taskId)
+		);
+		const metadata = {
+			invocationId: InvocationId.make('invocation-wake'),
+			effectId: EffectId.make('effect-wake'),
+			deadlineEpochMs: Number.MAX_SAFE_INTEGER,
+			idempotencyKey: 'wake-1'
+		};
+		const signal = new AbortController().signal;
+		const leaseExpiry = Date.now() + 300_000;
+
+		const carried = yield* Effect.promise(() =>
+			tasks.call(
+				metadata,
+				TaskRequest.cases.Wake.make({
+					notLaterThanEpochMs: leaseExpiry,
+					occurrence: claimedOccurrence
+				}),
+				signal
+			)
+		);
+		assert.strictEqual(carried._tag, 'Success');
+		assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
+		// The fallback: the lease expiry is what the timer holds, not "now".
+		assert.strictEqual(timekeeper.armedFor(), leaseExpiry);
+
+		const bare = yield* Effect.promise(() =>
+			tasks.call(
+				metadata,
+				TaskRequest.cases.Wake.make({ notLaterThanEpochMs: leaseExpiry - 1_000 }),
+				signal
+			)
+		);
+		assert.strictEqual(bare._tag, 'Success');
+		assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
+		assert.strictEqual(timekeeper.armedFor(), leaseExpiry - 1_000);
+		timekeeper.stop();
 	})
 );
 

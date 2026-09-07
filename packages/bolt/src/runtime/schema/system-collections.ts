@@ -356,6 +356,7 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 				'phase',
 				'input_through_sequence',
 				'model_id',
+				'reasoning_requested',
 				'status',
 				'created_at',
 				'updated_at',

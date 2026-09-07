@@ -253,7 +253,6 @@ describe('the subject a facility call carries', () => {
 						policySubject,
 						'people',
 						[{ id, name: 'Ada' }],
-						false,
 						0,
 						{ roots: [{ id, action: 'create' }] }
 					);

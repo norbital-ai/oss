@@ -131,6 +131,24 @@ type InsertForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> 
 	readonly [K in Exclude<keyof C, RequiredInsertKeys<C>>]?: BuilderData<C[K]>;
 };
 type ColumnsOf<M extends ModelDeclaration> = M['columns'];
+/**
+ * The columns a live prefix may order by, read off the builders the way `scalarOf` reads the
+ * executed column: a json/jsonb column (which is what `custom()`, `file()` and `geolocation()`
+ * build) and a vector are `json` and cannot key a prefix; a dimensioned column is the scalar
+ * `string` every array has always been there. `model-introspection.ts` and this type must keep
+ * answering alike, or the compiler admits an ordering the guest refuses at `sync.connect`.
+ */
+type NonScalarDataType = 'object json' | 'array vector';
+type ScalarColumnNames<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
+	[K in keyof C]: C[K] extends { readonly _: infer Config }
+		? Config extends { readonly dimensions: 1 | 2 | 3 | 4 | 5 }
+			? K
+			: Config extends { readonly dataType: NonScalarDataType }
+				? never
+				: K
+		: never;
+}[keyof C] &
+	string;
 type ReferencesForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
 	readonly [
 		K in keyof C as C[K] extends ReferenceBuilder ? K : never
@@ -146,14 +164,24 @@ interface TableShape<
 	readonly $inferInsert: Insert;
 	/** Type-only map used to infer discriminated polymorphic-reference hydration. */
 	readonly $references?: References;
+	/**
+	 * Type-only: the columns a live read may order by. Absent, every selected column qualifies. A
+	 * plain `string` rather than `keyof Select` so every generated table stays within `AnySchema`.
+	 */
+	readonly $scalarColumns?: string;
 }
+/** The live-orderable columns of one model: the platform's scalars plus the authored scalars. */
+type ScalarColumnsOfModel<C extends Readonly<Record<string, AnyModelFieldBuilder>>> =
+	| ScalarColumnNames<SystemRowColumns>
+	| Exclude<keyof RecordEmbeddingRow, 'record_embedding'>
+	| ScalarColumnNames<C>;
 
 export type TablesForModels<M extends Readonly<Record<string, ModelDeclaration>>> = {
 	readonly [K in keyof M]: TableShape<
 		SelectForColumns<ColumnsOf<M[K]>>,
 		InsertForColumns<ColumnsOf<M[K]>>,
 		ReferencesForColumns<ColumnsOf<M[K]>>
-	>;
+	> & { readonly $scalarColumns: ScalarColumnsOfModel<ColumnsOf<M[K]>> };
 };
 
 export interface AnySchema {
@@ -244,6 +272,13 @@ type DeclaredSkillName = DeclaredName<'skillName'>;
 export type Teams = Readonly<Record<string, ReadonlyArray<PolicyName>>>;
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];
+/** The columns a live read of `N` may order by; every row key when the schema declares no set. */
+export type SchemaScalarColumns<
+	S extends AnySchema,
+	N extends TableName<S>
+> = S['tables'][N] extends { readonly $scalarColumns: infer Scalar extends string }
+	? Scalar
+	: Extract<keyof SchemaRow<S, N>, string>;
 type SchemaReferences<S extends AnySchema, N extends TableName<S>> = NonNullable<
 	S['tables'][N]['$references']
 >;
@@ -926,9 +961,9 @@ type MutateInput<S extends AnySchema, N extends TableName<S>> =
  * How deep a nested write may go, as a countdown.
  *
  * Not decoration. `relations` is a graph with cycles in it — `payroll_runs → payslips →
- * payroll_runs` — and a naively recursive type over it never terminates. This also gives the
- * runtime's own graph bound a compile-time twin, so the two agree by construction rather than by
- * comment.
+ * payroll_runs` — and a naively recursive type over it never terminates. Five levels is the
+ * stricter of the two bounds a returned graph meets: the runtime refuses a graph deeper than
+ * `WRITE_DEPTH_LIMIT` (eight), so a hook that compiles can never reach the runtime's refusal.
  */
 type Depth = 0 | 1 | 2 | 3 | 4 | 5;
 type Prev = [never, 0, 1, 2, 3, 4];

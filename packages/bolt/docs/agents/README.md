@@ -17,6 +17,7 @@ returns the ordinary collection-mutation approval state: [approvals](../access/a
 ```text
 tasks.submit
      │  atomically admit Task + complete user message + inbox directive
+     │  enqueue tasks.execute already claimed; Wake the host with its occurrence
      ▼
 claim directive
      │  increment Task epoch + create fenced run + snapshot capabilities
@@ -70,6 +71,17 @@ tasks.editMessage({ taskId, messageId, message, modelId });
 
 tasks.control({ taskId, action: 'stop' | 'resume', modelId }); // model applies to resume
 ```
+
+A submission does not wait for the host's scheduler. `Agents.enqueueExecute` writes the
+`tasks.execute` row through `TaskQueue.enqueueClaimed`: the row is already `running` (attempt 1, a
+five-minute lease), and the `Wake` sent after it carries the `HostScheduleOccurrence` that
+`host.schedules.discover` would have produced, so the host invokes `tasks.execute` at once and
+settles it through `host.schedules.settle`. The instant on that wake is the lease expiry, the
+fallback: a host that drops the run loses only promptness, because discover recovers the row as
+attempt 2 when the lease lapses, and a live lease fences a second claim. The same shape carries the
+follow-up after a settled run with more queued and a parent resumed by its child. Scheduled and
+background work (automations, integrations, envoys, approvals) keeps the pending row and the
+wake-before-write discipline (`tests/tasks-enqueue-parity.test.ts`).
 
 The composer lists the host-configured language models. Selection is validated before admission,
 saved on the directive, and copied into the immutable run. Changing a queued turn's choice never
@@ -136,6 +148,13 @@ collections rather than being copied into Task rows.
 tool-call, and tool-result parts remain inside Effect's typed part union and codec. There is no
 second parts store or provider-specific transcript shape.
 
+Reasoning parts persist only when the run asked for them. `agent_run.reasoning_requested` records
+whether the provider request carried a reasoning option; no request does today, so the flag is
+`false` and every reasoning part is dropped before the assistant message is stored, including the
+literal a model emits when nothing was thought (`None.`). When reasoning is requested, a part with
+only whitespace is still dropped once complete. The panel reads the flag off the run row, so it
+renders reasoning only on runs that requested it.
+
 Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
 in the active context. Images travel in `imageAssets`; PDF and text documents travel in
 `fileAssets`. The host resolves tenant storage, verifies sizes, and passes extracted document text
@@ -178,7 +197,11 @@ runtime permits three verification attempts before marking the Plan stalled and 
 Plan and Compact runs do not enter this phase.
 
 Compact mode appends an annotated system message containing the summary, cutoff sequence, and
-explicitly retained message IDs. It never edits or deletes durable messages. Manual Compact uses a
+explicitly retained message IDs. The automatic checkpoint stores only the text parts of the summary
+generation (a reasoning part or a tool call the model emits are dropped, and a checkpoint with no
+prose carries a sentence saying so), and its summary instruction is the final user turn of that
+request rather than a trailing system message, so a model does not resume the tool loop it was
+asked to summarize. It never edits or deletes durable messages. Manual Compact uses a
 normal `tasks.submit` directive with `mode: "compact"`. Agent mode also performs one automatic
 Compact checkpoint when its projected prompt exceeds 64 KiB and no checkpoint has yet been written
 for that run. Both paths preserve the active Plan, current instruction, decisions, constraints,
@@ -206,8 +229,14 @@ completion authority.
 ## Child Tasks and barriers
 
 The `subagent` tool supports spawn, read, message, await, steer, stop, and resume inside one root
-workbench. Child depth uses the host-stamped invocation budget and is bounded by the platform limit.
-Cross-workbench and cross-tenant discovery or messaging are refused.
+workbench. Its input schema is built per workspace when the run's capability snapshot is taken:
+`agentId` is an enum of the spawnable agents, the web agent plus every declared envoy, so a spawn
+naming any other agent fails to decode before it reaches the runtime. A call that does not decode,
+for this tool or any platform tool, is answered with `InvalidToolInput { tool, path, message }`,
+rendered to the model as `Invalid input for tool "subagent" at "agentId": ...`; `ToolNotAllowed`
+is reserved for a tool or target the agent may not use. Child depth uses the host-stamped
+invocation budget and is bounded by the platform limit. Cross-workbench and cross-tenant discovery
+or messaging are refused.
 
 Every directly spawned child is a required join. Before a parent can settle, its child barrier is:
 
@@ -271,7 +300,7 @@ client.db.agent_plan.findMany({
 client.db.agent_task.findMany({ where: { parent_id: { eq: taskId } } });
 ```
 
-A browser client's one physical multiplexed Sync v2 connection keeps every admitted query live
+A browser client's one physical multiplexed sync connection keeps every admitted query live
 across tabs and workspaces. Agent mutations enter the same committed change batches and precise
 prefix deltas as any other collection. Field masks hide capability snapshots, provider details, and
 internal failures when the viewer lacks permission.
@@ -281,6 +310,22 @@ segment. Planning revisions stay visible while working, then join the saved prio
 the complete replacement plan arrives. Goal progress, usage and child work are projections of the
 same live queries. Child views use the same context segment. Composer uploads sit at the left;
 model, mode, steering and send controls sit at the right. Access follows the requestor's policies.
+
+Where a run's `model_id` differs from the previous run that persisted a message, the panel renders
+a divider naming the new model before that run's first message (`modelChangeDividers` in
+`src/client/ui/agent/transcript.ts`). It is read off the stored run rows, so it survives a reload;
+a run that persisted no message carries no divider.
+
+Typing `/` as the first character of the draft opens the command menu with `plan` and `compact`
+(`src/client/ui/agent/composer-commands.ts`); selecting an entry leaves `/plan ` in the composer
+and closes the menu. A `/` anywhere else in the draft is prose and opens nothing.
+
+The transcript follows its tail (`src/client/ui/agent/transcript-follow.ts`). A reader within 32 px
+of the end stays at the end as rows arrive, parts stream or the body resizes; a conversation switch
+or an own send pins the view to the end; a reader who scrolled up is left alone until they return.
+Rows persisted after an automatic checkpoint therefore appear without a reload. Every markdown
+surface in the panel (assistant text, reasoning, plan body, summary) renders with HTML disabled:
+the model's text is markdown, never HTML.
 
 ---
 

@@ -72,20 +72,26 @@ type GraphNodeIdentity = Readonly<{
 }>;
 type PlannedGraphNodeIdentity = GraphNodeIdentity &
 	Readonly<{ readonly ownerTransition: 'preserve' | 'claim' }>;
+type GraphSubmittedInput = Readonly<{
+	readonly own: Readonly<Record<string, Schema.Json>>;
+	readonly included: ReadonlyArray<GraphIncludedRelationship>;
+}>;
+/** A payload already split, and decoded through the collection's input when a `prepare` batch ran. */
 type GraphDecodedInput = Readonly<{
-	readonly submitted: Readonly<{
-		readonly own: Readonly<Record<string, Schema.Json>>;
-		readonly included: ReadonlyArray<GraphIncludedRelationship>;
-	}>;
-	readonly decoded: Readonly<Record<string, Schema.Json>>;
+	readonly submitted: GraphSubmittedInput;
+	readonly decoded?: Readonly<Record<string, Schema.Json>>;
 }>;
 
 export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<{
 	readonly effectId: EffectId;
-	readonly subject: Identity.Subject;
+	/**
+	 * The workspace: the author of every row a hook returns or writes, and of the omission deletes of
+	 * a relationship a hook returned. Every hook api is bound to it; `policyWrite` answers it
+	 * unrestricted with no approval route.
+	 */
+	readonly workspaceSubject: Identity.Subject;
 	readonly rootCollection: string;
 	readonly hookDepth: number;
-	readonly elevated: boolean;
 	readonly browserMutation?: BrowserMutationFence;
 	readonly operations: Array<GraphPreparedOperation>;
 	readonly graphCoordinates: Set<string>;
@@ -103,11 +109,10 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	};
 	readonly authoredHooks: Readonly<Record<string, CollectionHookModule | undefined>>;
 	readonly policyWrite: (
-		subject: Identity.Subject,
+		author: Identity.Subject,
 		action: 'create' | 'update' | 'delete',
 		collection: string,
-		row: Readonly<Record<string, unknown>>,
-		elevation: 'after' | 'none'
+		row: Readonly<Record<string, unknown>>
 	) => Effect.Effect<{ readonly predicate: AccessControl.RowPredicate }, Error, Requirements>;
 	readonly scope: () => EffectId;
 	readonly registerExecutionInvariant: (
@@ -160,13 +165,7 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 		id: string,
 		previous: Readonly<Record<string, unknown>> | undefined
 	) => Effect.Effect<void, Error, Requirements>;
-	readonly buildApi: (
-		effectId: EffectId,
-		subject: Identity.Subject,
-		elevated: boolean,
-		depth: number,
-		staged?: HookWriteOps<Error>
-	) => unknown;
+	readonly buildApi: (effectId: EffectId, depth: number, staged?: HookWriteOps<Error>) => unknown;
 	readonly runHook: (
 		hook: { readonly handler: (context: unknown) => unknown } | undefined,
 		context: unknown,
@@ -174,7 +173,7 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	) => Effect.Effect<unknown, AuthoredRefusal>;
 	readonly authorizePolicyWrite: (
 		effectId: EffectId,
-		subject: Identity.Subject,
+		author: Identity.Subject,
 		visibility: AccessControl.RowPredicate,
 		action: 'create' | 'update' | 'delete',
 		collection: string,
@@ -182,7 +181,7 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	) => Effect.Effect<void, Error, Requirements>;
 	readonly resolveApproval: (
 		effectId: EffectId,
-		subject: Identity.Subject,
+		author: Identity.Subject,
 		visibility: AccessControl.RowPredicate,
 		action: 'create' | 'update' | 'delete',
 		collection: string,
@@ -192,14 +191,7 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 		collection: string,
 		payload: Readonly<Record<string, unknown>>,
 		action: 'create' | 'update'
-	) => Effect.Effect<
-		{
-			readonly own: Readonly<Record<string, Schema.Json>>;
-			readonly included: ReadonlyArray<GraphIncludedRelationship>;
-		},
-		Error,
-		Requirements
-	>;
+	) => Effect.Effect<GraphSubmittedInput, Error, Requirements>;
 	readonly decodeMutateInput: (
 		collection: string,
 		values: Readonly<Record<string, Schema.Json>>,
@@ -216,7 +208,6 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	) => string | undefined;
 	readonly runMutateBefore: (
 		effectId: EffectId,
-		subject: Identity.Subject,
 		input: MutationInput,
 		existing: Readonly<Record<string, unknown>> | undefined,
 		module: CollectionHookModule | undefined,
@@ -227,7 +218,6 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	) => Effect.Effect<Readonly<Record<string, Schema.Json>>, Error, Requirements>;
 	readonly runMutatePrepare: (
 		effectId: EffectId,
-		subject: Identity.Subject,
 		collection: string,
 		inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 		module: CollectionHookModule | undefined,
@@ -236,7 +226,6 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	) => Effect.Effect<unknown, Error, Requirements>;
 	readonly runDeletePrepare: (
 		effectId: EffectId,
-		subject: Identity.Subject,
 		collection: string,
 		existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
 		module: CollectionHookModule | undefined,
@@ -250,41 +239,177 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 	readonly randomId: () => string;
 }>;
 
+/**
+ * Every node names its author: the caller, judged on the shape it submitted, or the workspace,
+ * whose hooks derived the row. A caller-initiated cascade descends as the caller's; a row under a
+ * relationship a hook returned, a staged hook write and their omissions are the workspace's.
+ */
 export type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 	readonly prepareDelete: (
 		collection: string,
 		row: Readonly<Record<string, unknown>>,
 		depth: number,
+		author: Identity.Subject,
 		requiresBrowserBaseVersion: boolean,
-		wavePrepared?: unknown,
-		trusted?: boolean
+		wavePrepared?: unknown
 	) => Effect.Effect<void, E, R>;
 	readonly prepareNode: (
 		collection: string,
 		payload: Readonly<Record<string, unknown>>,
 		depth: number,
+		author: Identity.Subject,
 		ownership?: Readonly<{ readonly column: string; readonly parentId: string }>,
 		identity?: GraphNodeIdentity,
 		requiresBrowserBaseVersion?: boolean,
 		preDecoded?: GraphDecodedInput,
-		wavePrepared?: unknown,
-		/** A `before` hook nested this row: authored, server-derived work, authorized like an after hook's writes. */
-		trusted?: boolean
+		wavePrepared?: unknown
 	) => Effect.Effect<string, E, R>;
+}>;
+
+/** One desired child of an included relationship, split once and classified against the store. */
+type PlannedChild = Readonly<{
+	readonly child: Readonly<Record<string, unknown>>;
+	readonly submitted: GraphSubmittedInput;
+	readonly identity: PlannedGraphNodeIdentity | undefined;
+}>;
+
+/** One included relationship: whose rows they are, and which stored children it omits. */
+type PlannedRelation = Readonly<{
+	readonly edge: WritableManyRelation;
+	readonly author: Identity.Subject;
+	readonly requiresBrowserBaseVersion: boolean;
+	readonly children: ReadonlyArray<PlannedChild>;
+	readonly omitted: ReadonlyArray<Readonly<Record<string, unknown>>>;
 }>;
 
 /** Prepares the authorized operations in one declarative graph. */
 export const makeGraphPreparers = <Error, Requirements>(
 	ports: GraphPreparePorts<Error, Requirements>
 ): GraphPrepareFns<Error | AuthoredRefusal, Requirements> => {
+	/**
+	 * Resolves an included relationship's stored membership and each desired child's identity.
+	 * No node is prepared here: the children of one node are one wave, so their `prepare` hook
+	 * runs once per (collection × wave) in `prepareNode` instead of once per node.
+	 */
+	const planRelation = Effect.fn('Collections.planGraphRelation')(function* (
+		collection: string,
+		id: string,
+		action: 'create' | 'update',
+		relation: GraphIncludedRelationship,
+		author: Identity.Subject,
+		requiresBrowserBaseVersion: boolean
+	) {
+		const { edge } = relation;
+		const related =
+			action === 'create' ? undefined : yield* ports.relatedRows(ports.scope(), edge, id);
+		if (related !== undefined)
+			ports.registerRelationshipSnapshot(edge, id, membershipIdentitySnapshot(related.rows));
+		const byId = new Map(
+			(related?.rows ?? []).flatMap((row) =>
+				isString(row['id']) ? [[row['id'], row] as const] : []
+			)
+		);
+		const desiredIds = new Set<string>();
+		const children: Array<PlannedChild> = [];
+		for (const child of relation.rows) {
+			const childId = child['id'];
+			let identity: PlannedGraphNodeIdentity | undefined;
+			if (childId !== undefined && !isNonEmptyString(childId))
+				return yield* ports.graphRefusal(
+					edge.childCollection,
+					'update',
+					`The id of a nested ${edge.childCollection} mutation must be a non-empty string.`
+				);
+			if (isString(childId)) {
+				if (desiredIds.has(childId))
+					return yield* ports.graphRefusal(
+						edge.childCollection,
+						'update',
+						`The desired ${edge.name} relationship contains ${childId} more than once.`
+					);
+				if (byId.has(childId)) {
+					identity = { id: childId, action: 'update', clearLock: false, ownerTransition: 'preserve' };
+				} else if (ports.browserMutation !== undefined) {
+					// Under a browser mutation the wave read a child id only when the browser declared that
+					// row existing, so an id it did not read is one nothing claims exists yet, whether the
+					// browser sent it or a `before` hook minted it. A hook that mints ids for the rows it
+					// creates must be able to write them: `payroll_runs` computes a whole run whose
+					// adjustments carry foreign keys naming junction rows in the same statement (learning 50).
+					const declaredExisting = ports.browserMutation.baseVersions.some(
+						(entry) =>
+							entry.row.collection === edge.childCollection && entry.row.recordId === childId
+					);
+					if (declaredExisting === true)
+						return yield* ports.graphRefusal(
+							edge.childCollection,
+							'update',
+							`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
+						);
+					identity = { id: childId, action: 'create', clearLock: false, ownerTransition: 'preserve' };
+				} else {
+					// A server-side graph. An unstored id is a nested create (agents mint message and
+					// directive ids on the same statement); a stored row owned by another parent cannot
+					// move; a null owner or this parent is claim / update.
+					const stored = yield* ports.storedGraphRow(
+						EffectId.make(`${ports.effectId}:claim-owner:${edge.childCollection}:${childId}`),
+						edge.childCollection,
+						childId
+					);
+					if (stored === undefined) {
+						identity = { id: childId, action: 'create', clearLock: false, ownerTransition: 'preserve' };
+					} else {
+						const storedOwner = stored.row[edge.childColumn];
+						if (storedOwner !== null && storedOwner !== id)
+							return yield* ports.graphRefusal(
+								edge.childCollection,
+								'update',
+								`${childId} is already owned by another ${collection} row, so this relationship mutation cannot move or overwrite it.`
+							);
+						identity = {
+							id: childId,
+							action: 'update',
+							clearLock: false,
+							ownerTransition: storedOwner === null ? 'claim' : 'preserve'
+						};
+					}
+				}
+				desiredIds.add(childId);
+			}
+			const submitted = yield* ports.splitGraphPayload(
+				edge.childCollection,
+				child,
+				identity?.action ?? 'create'
+			);
+			children.push({ child, submitted, identity });
+		}
+		// Inclusion authorizes reconciliation of the children it names, but absence is destructive
+		// only for an owned edge. A non-cascade `many` is a convenient write surface over
+		// independently-lived rows; treating its array as ownership would let a partial editor
+		// delete siblings it does not own.
+		const omitted = [...byId.entries()].filter(([childId]) => !desiredIds.has(childId));
+		if (!edge.cascade && omitted.length > 0)
+			return yield* ports.graphRefusal(
+				edge.childCollection,
+				'update',
+				`${edge.name} omitted existing rows (${omitted.map(([childId]) => childId).join(', ')}), but the relationship is not cascade-owned.`
+			);
+		return {
+			edge,
+			author,
+			requiresBrowserBaseVersion,
+			children,
+			omitted: ownsManyRelation(edge) ? omitted.map(([, row]) => row) : []
+		} satisfies PlannedRelation;
+	});
+
 	const prepareDelete: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareDelete'] =
 		Effect.fn('Collections.prepareGraphDelete')(function* (
 			collection,
 			row,
 			depth,
+			author,
 			requiresBrowserBaseVersion,
-			wavePrepared,
-			trusted = false
+			wavePrepared
 		) {
 			const operationPosition = ports.operations.length;
 			const id = row['id'];
@@ -316,21 +441,13 @@ export const makeGraphPreparers = <Error, Requirements>(
 					row
 				);
 			yield* ports.ensureGraphRowUnlocked(collection, id);
-			const accessPlan = yield* ports.policyWrite(
-				ports.subject,
-				'delete',
-				collection,
-				row,
-				ports.elevated || trusted ? 'after' : 'none'
-			);
+			const accessPlan = yield* ports.policyWrite(author, 'delete', collection, row);
 			const visibility = accessPlan.predicate;
 			ports.registerExecutionInvariant(collection, 'delete', visibility);
 			const module = ports.authoredHooks[collection];
 			if (module?.delete?.perRecord?.before !== undefined) {
 				const api = ports.buildApi(
 					ports.effectId,
-					ports.subject,
-					false,
 					ports.hookDepth + depth + 1,
 					ports.stageHookWrites
 				);
@@ -346,29 +463,27 @@ export const makeGraphPreparers = <Error, Requirements>(
 			const context = { record: row };
 			yield* ports.authorizePolicyWrite(
 				EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
-				ports.subject,
+				author,
 				visibility,
 				'delete',
 				collection,
 				context
 			);
-			const approval = trusted
-				? undefined
-				: yield* ports.resolveApproval(
-						EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-						ports.subject,
-						visibility,
-						'delete',
-						collection,
-						context
-					);
+			const approval = yield* ports.resolveApproval(
+				EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+				author,
+				visibility,
+				'delete',
+				collection,
+				context
+			);
 			if (approval !== undefined)
 				ports.approvalRequirements.push({
 					collection,
 					action: 'delete',
 					approval
 				});
-			yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth, trusted);
+			yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth, author);
 			ports.operations.splice(operationPosition, 0, {
 				action: 'delete',
 				collection,
@@ -391,12 +506,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 				collection,
 				payload,
 				depth,
+				author,
 				ownership,
 				identity,
 				requiresBrowserBaseVersion = true,
 				preDecoded,
-				wavePrepared,
-				trusted = false
+				wavePrepared
 			) {
 				const operationPosition = ports.operations.length;
 				if (depth > WRITE_DEPTH_LIMIT)
@@ -426,13 +541,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 				const module = ports.authoredHooks[collection];
 				const submitted =
 					preDecoded?.submitted ?? (yield* ports.splitGraphPayload(collection, payload, action));
-				// A before hook may add a relationship graph the browser never observed. Those rows are
-				// trusted server-derived work and cannot honestly be required to carry client base versions.
-				const browserRelationshipNames = new Set(
-					requiresBrowserBaseVersion ? submitted.included.map((entry) => entry.edge.name) : []
-				);
 				let own: Readonly<Record<string, Schema.Json>> = submitted.own;
-				let included = submitted.included;
 				let previous: Readonly<Record<string, unknown>> | undefined;
 				let snapshot: string | undefined;
 				if (action === 'create' && isString(submittedId) && requiresBrowserBaseVersion) {
@@ -448,30 +557,15 @@ export const makeGraphPreparers = <Error, Requirements>(
 							`The requested ${collection} identity is already in use.`
 						);
 				}
-				const accessPlan = yield* ports.policyWrite(
-					ports.subject,
-					action,
-					collection,
-					own,
-					ports.elevated || trusted ? 'after' : 'none'
-				);
+				// The author is judged on the shape it sent, before input decoding and before any hook:
+				// allow decision, row predicate, and every submitted field inside the matching grant, so
+				// the fields a hook adds are never mistaken for forged ones. For the caller that is the
+				// whole check; the workspace's plan is unrestricted with no approval route.
+				const accessPlan = yield* ports.policyWrite(author, action, collection, own);
 				const visibility = accessPlan.predicate;
 				ports.registerExecutionInvariant(collection, action, visibility);
-				if (action === 'update') yield* ports.ensureGraphRowUnlocked(collection, id);
-				// The field grant is `policy.write`'s decision, made directly above: it refuses any
-				// submitted field the matching grant does not name, for creates and updates alike, and
-				// for every node of the graph — always on the caller-owned shape, before input decoding
-				// and hooks, so server-derived fields a hook adds are never mistaken for forged ones.
-				// The rows a `before` hook nests are that same server-derived work, whole (an employment's
-				// leave accounts): authored code's answer, not the caller's claim, so they are authorized
-				// like an after hook's writes (`trusted`) while their own hooks still run.
-				const hookRelationNames = new Set<string>();
-
-				// Only an update has anything to read first: the row it lands on, the fence the browser
-				// declared against it, and the snapshot the ledger keeps. Everything after this — the
-				// decode, `prepare`, `before`, and the graph split of what `before` returned — is one
-				// path, because it is one write.
 				if (action === 'update') {
+					yield* ports.ensureGraphRowUnlocked(collection, id);
 					previous = (yield* ports.storedGraphRow(
 						EffectId.make(`${ports.effectId}:graph:row:${collection}:${id}`),
 						collection,
@@ -491,6 +585,28 @@ export const makeGraphPreparers = <Error, Requirements>(
 				}
 				own =
 					preDecoded?.decoded ?? (yield* ports.decodeMutateInput(collection, own, module, action));
+				// The relationships the author submitted are planned and judged now, before the hook.
+				// A row the author has no grant for is refused on the author's own claim, even when the
+				// hook would have replaced that relationship with its own complete set.
+				const relations = new Map<string, PlannedRelation>();
+				for (const relation of submitted.included) {
+					const planned = yield* planRelation(
+						collection,
+						id,
+						action,
+						relation,
+						author,
+						requiresBrowserBaseVersion
+					);
+					for (const child of planned.children)
+						yield* ports.policyWrite(
+							author,
+							child.identity?.action ?? 'create',
+							relation.edge.childCollection,
+							child.submitted.own
+						);
+					relations.set(relation.edge.name, planned);
+				}
 				if (module?.mutate?.perRecord?.before !== undefined) {
 					// The id rides the input on an update and only there. It is the one thing a
 					// `prepare` can read to tell a recalculation from a first build, because it sees a
@@ -498,14 +614,13 @@ export const makeGraphPreparers = <Error, Requirements>(
 					const hookInput = action === 'update' ? { ...own, id } : own;
 					const hooked = yield* ports.runMutateBefore(
 						ports.effectId,
-						ports.subject,
 						{ collection, id, values: hookInput },
 						previous,
 						module,
 						ports.hookDepth + depth,
 						wavePrepared,
 						ports.stageHookWrites,
-						submitted.included.map((entry) => entry.edge.name)
+						[...relations.keys()]
 					);
 					// Only a `before` hook can reshape the graph, so the one re-split below runs only
 					// when one ran: a payload the hook never saw is not split and decoded a second time.
@@ -520,18 +635,21 @@ export const makeGraphPreparers = <Error, Requirements>(
 						}
 					]);
 					own = returned.own;
-					const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
-					for (const entry of returned.included) {
-						byName.set(entry.edge.name, entry);
-						hookRelationNames.add(entry.edge.name);
-					}
-					included = [...byName.values()];
+					// A relationship the hook returned is the workspace's complete set for that edge. It
+					// replaces what the author submitted under the same name (judged above), its rows
+					// carry no browser base versions, and its omissions are the workspace's deletes.
+					for (const relation of returned.included)
+						relations.set(
+							relation.edge.name,
+							yield* planRelation(collection, id, action, relation, ports.workspaceSubject, false)
+						);
 				}
 
 				// Relationship ownership comes from the graph position, never from a writable payload.
-				// Existing children are proved to belong to this parent below. Their owner key is stripped
-				// rather than trusted. A trusted authored graph may additionally claim an unowned stored row;
-				// that one explicit transition writes null -> parent id through the ordinary update pipeline.
+				// Existing children are proved to belong to this parent in `planRelation`. Their owner
+				// key is stripped rather than trusted. A server-side graph may additionally claim an
+				// unowned stored row; that one explicit transition writes null -> parent id through the
+				// ordinary update pipeline.
 				if (ownership !== undefined) {
 					const owned = { ...own };
 					delete owned[ownership.column];
@@ -554,23 +672,22 @@ export const makeGraphPreparers = <Error, Requirements>(
 						: { record: { id, ...own } };
 				yield* ports.authorizePolicyWrite(
 					EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
-					ports.subject,
+					author,
 					visibility,
 					action,
 					collection,
 					context
 				);
-				// A trusted row rides its root's route: the graph is one approval, decided once.
-				const approval = trusted
-					? undefined
-					: yield* ports.resolveApproval(
-							EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-							ports.subject,
-							visibility,
-							action,
-							collection,
-							context
-						);
+				// The graph is one approval, decided from the caller's rows: the workspace's plan
+				// carries no route, so its rows ride the root's.
+				const approval = yield* ports.resolveApproval(
+					EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+					author,
+					visibility,
+					action,
+					collection,
+					context
+				);
 				if (approval !== undefined)
 					ports.approvalRequirements.push({
 						collection,
@@ -593,196 +710,42 @@ export const makeGraphPreparers = <Error, Requirements>(
 				});
 
 				/**
-				 * Pass one resolves every included relation's stored membership and each desired
-				 * child's identity. No node is prepared yet: the children of this node are one wave,
-				 * so their `prepare` hook runs once per (collection × wave) below instead of once
-				 * per node.
-				 */
-				type PlannedChild = Readonly<{
-					readonly relation: WritableManyRelation;
-					readonly child: Readonly<Record<string, unknown>>;
-					readonly identity: PlannedGraphNodeIdentity | undefined;
-					readonly requiresBrowserBaseVersion: boolean;
-					readonly trusted: boolean;
-				}>;
-				const childWaves: Array<PlannedChild> = [];
-				const relationOmissions: Array<{
-					readonly relation: WritableManyRelation;
-					readonly byId: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
-					readonly desiredIds: ReadonlySet<string>;
-				}> = [];
-				for (const relation of included) {
-					const relationshipRequiresBrowserBaseVersion =
-						requiresBrowserBaseVersion && browserRelationshipNames.has(relation.edge.name);
-					const related =
-						action === 'create'
-							? undefined
-							: yield* ports.relatedRows(ports.scope(), relation.edge, id);
-					if (related !== undefined)
-						ports.registerRelationshipSnapshot(
-							relation.edge,
-							id,
-							membershipIdentitySnapshot(related.rows)
-						);
-					const existing = related?.rows ?? [];
-					const byId = new Map(
-						existing.flatMap((row) => (isString(row['id']) ? [[row['id'], row] as const] : []))
-					);
-					const desiredIds = new Set<string>();
-					for (const child of relation.rows) {
-						const childId = child['id'];
-						let childIdentity: PlannedGraphNodeIdentity | undefined;
-						if (childId !== undefined && !isNonEmptyString(childId))
-							return yield* ports.graphRefusal(
-								relation.edge.childCollection,
-								'update',
-								`The id of a nested ${relation.edge.childCollection} mutation must be a non-empty string.`
-							);
-						if (isString(childId)) {
-							if (desiredIds.has(childId))
-								return yield* ports.graphRefusal(
-									relation.edge.childCollection,
-									'update',
-									`The desired ${relation.edge.name} relationship contains ${childId} more than once.`
-								);
-							if (byId.has(childId)) {
-								childIdentity = {
-									id: childId,
-									action: 'update',
-									clearLock: false,
-									ownerTransition: 'preserve'
-								};
-							} else if (ports.browserMutation !== undefined) {
-								// The wave's read planning has already classified this row. Under a browser
-								// mutation it reads a child id only when the browser declared that row existing,
-								// so an id it did not read is one nothing claims exists yet — whether the browser
-								// sent it or a `before` hook minted it.
-								//
-								// This condition used to be `relationshipRequiresBrowserBaseVersion`, which is
-								// false exactly for the edges a hook introduces. The one fact "the browser never
-								// declared this row" then made read planning skip the read and made the authored
-								// branch below demand it, so a hook that mints ids for the rows it creates could
-								// never write: `payroll_runs` create computed a whole run — 89 payslips, 2,784
-								// captured inputs — and was refused with "The write-wave read omitted
-								// payslip_work_day_inputs …". Minting those ids is not incidental; the run's
-								// adjustments carry foreign keys naming the junction rows in the same statement.
-								//
-								// Server-only mutations take the stored-row branch below. Do not fold that
-								// branch into this one: an undeclared browser id must stay a create so a
-								// hook-minted payroll graph can persist (learning 50 / 5ddd4c09).
-								const declaredExisting = ports.browserMutation.baseVersions.some(
-									(entry) =>
-										entry.row.collection === relation.edge.childCollection &&
-										entry.row.recordId === childId
-								);
-								if (declaredExisting === true)
-									return yield* ports.graphRefusal(
-										relation.edge.childCollection,
-										'update',
-										`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
-									);
-								childIdentity = {
-									id: childId,
-									action: 'create',
-									clearLock: false,
-									ownerTransition: 'preserve'
-								};
-							} else {
-								// Trusted authored code. An unstored id is a nested create — agents mint
-								// message and directive ids on the same statement. A stored row owned by
-								// another parent cannot move. Null owner or this parent is claim / update.
-								const stored = yield* ports.storedGraphRow(
-									EffectId.make(
-										`${ports.effectId}:claim-owner:${relation.edge.childCollection}:${childId}`
-									),
-									relation.edge.childCollection,
-									childId
-								);
-								if (stored === undefined) {
-									childIdentity = {
-										id: childId,
-										action: 'create',
-										clearLock: false,
-										ownerTransition: 'preserve'
-									};
-								} else {
-									const storedOwner = stored.row[relation.edge.childColumn];
-									if (storedOwner !== null && storedOwner !== id)
-										return yield* ports.graphRefusal(
-											relation.edge.childCollection,
-											'update',
-											`${childId} is already owned by another ${collection} row, so this relationship mutation cannot move or overwrite it.`
-										);
-									childIdentity = {
-										id: childId,
-										action: 'update',
-										clearLock: false,
-										ownerTransition: storedOwner === null ? 'claim' : 'preserve'
-									};
-								}
-							}
-							desiredIds.add(childId);
-						}
-						childWaves.push({
-							relation: relation.edge,
-							child,
-							identity: childIdentity,
-							requiresBrowserBaseVersion: relationshipRequiresBrowserBaseVersion,
-							trusted: trusted || hookRelationNames.has(relation.edge.name)
-						});
-					}
-					// Inclusion authorizes reconciliation of the children it names, but absence is
-					// destructive only for an owned edge. A non-cascade `many` is a convenient write
-					// surface over independently-lived rows; treating its array as ownership would let a
-					// partial editor delete siblings it does not own.
-					const omitted = [...byId.keys()].filter((childId) => !desiredIds.has(childId));
-					if (!relation.edge.cascade && omitted.length > 0)
-						return yield* ports.graphRefusal(
-							relation.edge.childCollection,
-							'update',
-							`${relation.edge.name} omitted existing rows (${omitted.join(', ')}), but the relationship is not cascade-owned.`
-						);
-					relationOmissions.push({ relation: relation.edge, byId, desiredIds });
-				}
-
-				/**
 				 * The wave's `prepare`, once per (collection × wave). Collections with no prepared
 				 * hook take the ordinary per-node decode; only a declared `prepare` earns a batch.
 				 */
-				type PreparedChildBatch = GraphDecodedInput & Readonly<{ readonly child: PlannedChild }>;
-				const childBatches = new Map<string, ReadonlyArray<PreparedChildBatch>>();
+				const decodedChildren = new Map<PlannedChild, Readonly<Record<string, Schema.Json>>>();
 				const childWavePrepared = new Map<string, unknown>();
 				{
-					const batchByCollection = new Map<string, Array<PreparedChildBatch>>();
-					for (const planned of childWaves) {
-						const childCollection = planned.relation.childCollection;
-						const childAction = planned.identity?.action ?? 'create';
-						const childModule = ports.authoredHooks[childCollection];
-						if (childModule?.mutate?.prepare === undefined) continue;
-						const submitted = yield* ports.splitGraphPayload(
-							childCollection,
-							planned.child,
-							childAction
-						);
-						const decoded = yield* ports.decodeMutateInput(
-							childCollection,
-							submitted.own,
-							childModule,
-							childAction
-						);
-						const bucket = batchByCollection.get(childCollection) ?? [];
-						bucket.push({ child: planned, submitted, decoded });
-						batchByCollection.set(childCollection, bucket);
-					}
+					const batchByCollection = new Map<string, Array<PlannedChild>>();
+					for (const planned of relations.values())
+						for (const child of planned.children) {
+							const childCollection = planned.edge.childCollection;
+							const childModule = ports.authoredHooks[childCollection];
+							if (childModule?.mutate?.prepare === undefined) continue;
+							decodedChildren.set(
+								child,
+								yield* ports.decodeMutateInput(
+									childCollection,
+									child.submitted.own,
+									childModule,
+									child.identity?.action ?? 'create'
+								)
+							);
+							const bucket = batchByCollection.get(childCollection) ?? [];
+							bucket.push(child);
+							batchByCollection.set(childCollection, bucket);
+						}
 					for (const [childCollection, batch] of batchByCollection) {
 						const childModule = ports.authoredHooks[childCollection];
 						if (childModule === undefined) continue;
-						const inputs = batch.map(({ child, decoded }) =>
-							child.identity?.action === 'update' ? { ...decoded, id: child.identity.id } : decoded
-						);
+						const inputs = batch.map((child) => {
+							const decoded = decodedChildren.get(child) ?? child.submitted.own;
+							return child.identity?.action === 'update'
+								? { ...decoded, id: child.identity.id }
+								: decoded;
+						});
 						const prepared = yield* ports.runMutatePrepare(
 							ports.effectId,
-							ports.subject,
 							childCollection,
 							inputs,
 							childModule,
@@ -790,51 +753,39 @@ export const makeGraphPreparers = <Error, Requirements>(
 							ports.stageHookWrites
 						);
 						childWavePrepared.set(childCollection, prepared);
-						childBatches.set(childCollection, batch);
 					}
 				}
 
 				/**
 				 * Pass two plans each relation's children in declaration order, then its omission
-				 * deletes — the order the per-node path produced, minus its per-node `prepare`.
+				 * deletes, each as its relation's author.
 				 */
-				for (const [relationIndex, relation] of included.entries()) {
-					for (const planned of childWaves) {
-						if (planned.relation !== relation.edge) continue;
-						const batch = childBatches.get(planned.relation.childCollection) ?? [];
-						const match = batch.find((entry) => entry.child === planned);
+				for (const planned of relations.values()) {
+					const childCollection = planned.edge.childCollection;
+					for (const child of planned.children) {
+						const decoded = decodedChildren.get(child);
 						yield* prepareNode(
-							planned.relation.childCollection,
-							planned.child,
+							childCollection,
+							child.child,
 							depth + 1,
-							{
-								column: planned.relation.childColumn,
-								parentId: id
-							},
-							planned.identity,
+							planned.author,
+							{ column: planned.edge.childColumn, parentId: id },
+							child.identity,
 							planned.requiresBrowserBaseVersion,
-							match === undefined
-								? undefined
-								: { submitted: match.submitted, decoded: match.decoded },
-							match === undefined
-								? undefined
-								: childWavePrepared.get(planned.relation.childCollection),
-							planned.trusted
+							decoded === undefined
+								? { submitted: child.submitted }
+								: { submitted: child.submitted, decoded },
+							childWavePrepared.get(childCollection)
 						);
 					}
-					const omission = relationOmissions[relationIndex];
-					if (omission === undefined) continue;
-					for (const [childId, childRow] of omission.byId) {
-						if (ownsManyRelation(relation.edge) && !omission.desiredIds.has(childId))
-							yield* prepareDelete(
-								relation.edge.childCollection,
-								childRow,
-								depth + 1,
-								requiresBrowserBaseVersion && browserRelationshipNames.has(relation.edge.name),
-								undefined,
-								trusted || hookRelationNames.has(relation.edge.name)
-							);
-					}
+					for (const childRow of planned.omitted)
+						yield* prepareDelete(
+							childCollection,
+							childRow,
+							depth + 1,
+							planned.author,
+							planned.requiresBrowserBaseVersion
+						);
 				}
 				return id;
 			}

@@ -13,7 +13,7 @@ const authoritative = (rows, limit) =>
 const isAfter = (row, boundary) => compareRows(row, boundary) > 0;
 
 /**
- * Pure model of RFC/sync-engine.md section 6:
+ * Pure model of the page-prefix transition (oss/packages/bolt/docs/pillars/04-sync-engine/README.md):
  * survivors + bounded rows after the old boundary + current probes, then sort/truncate.
  */
 const transition = ({ oldPrefix, currentRows, changedIds, limit }) => {

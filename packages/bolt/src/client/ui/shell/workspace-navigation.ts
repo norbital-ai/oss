@@ -507,15 +507,15 @@ export const buildWorkspaceNavigationSections = (input: {
 				];
 	return [
 		...namedSection(
+			'operations',
+			resolveShellLabel(input.i18n, 'bolt.shell.operations'),
+			input.system.filter((item) => item.section === 'operations')
+		),
+		...namedSection(
 			'applications',
 			resolveShellLabel(input.i18n, 'bolt.shell.applications'),
 			[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
 			input.applicationsHref
-		),
-		...namedSection(
-			'operations',
-			resolveShellLabel(input.i18n, 'bolt.shell.operations'),
-			input.system.filter((item) => item.section === 'operations')
 		),
 		...namedSection('workspace', resolveShellLabel(input.i18n, 'bolt.shell.workspace'), [
 			...more,

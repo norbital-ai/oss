@@ -4,20 +4,30 @@
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { compactOrigin, plainMessageText, projectAgentContextView } from './context-view.js';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
-	import type { AgentPlanRow, AgentRunRow, PanelMessage } from './transcript.js';
+	import type { SubagentTranscript, ToolPairing } from './tool-rows.js';
+	import {
+		reasoningRequestedFor,
+		type AgentPlanRow,
+		type AgentRunRow,
+		type PanelMessage
+	} from './transcript.js';
 
 	let {
 		plan,
 		runs,
 		messages,
 		status,
-		parentAttribution = false
+		parentAttribution = false,
+		tools = undefined,
+		subagent = undefined
 	}: {
 		plan?: AgentPlanRow | undefined;
 		runs: readonly AgentRunRow[];
 		messages: readonly PanelMessage[];
 		status?: string | undefined;
 		parentAttribution?: boolean;
+		tools?: ToolPairing | undefined;
+		subagent?: SubagentTranscript | undefined;
 	} = $props();
 	const view = $derived(projectAgentContextView({ messages, runs, activePlan: plan }));
 	const title = $derived(view.checkpoint === null ? 'Plan' : 'Summary');
@@ -30,11 +40,20 @@
 				<span>Plan {plan.revision}</span>
 				<span>{status ?? plan.status}</span>
 			</Inline>
-			<ReadonlyMarkdown scale="reading" content={plan.body} />
+			<ReadonlyMarkdown scale="reading" allowHtml={false} content={plan.body} />
 		{/if}
 		{#if view.checkpoint !== null}
 			{#if plan !== undefined}<p class="m-0 text-xs font-medium">Conversation summary</p>{/if}
-			<ReadonlyMarkdown scale="reading" content={plainMessageText(view.checkpoint)} />
+			<!--
+				The checkpoint is the model's own text. Rendered as markdown but never as HTML: a model
+				that answers the summary request with its native tool-call markup must show that markup,
+				not have the browser swallow the tags and leave the values run together (bolt.md B11).
+			-->
+			<ReadonlyMarkdown
+				scale="reading"
+				allowHtml={false}
+				content={plainMessageText(view.checkpoint)}
+			/>
 		{/if}
 	</Stack>
 {/snippet}
@@ -50,6 +69,9 @@
 				<AgentTranscriptItem
 					{message}
 					{parentAttribution}
+					{tools}
+					{subagent}
+					reasoningRequested={reasoningRequestedFor(runs, message.runId)}
 					outsideModelView={view.outsideMessageIds.has(message.id)}
 					checkpointOrigin={message.annotation?.tag === 'compact'
 						? compactOrigin(message, runs)

@@ -1,10 +1,11 @@
-import { Context, Effect, Layer, Option, Schema } from 'effect';
+import { Context, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import type {
 	DatabaseRequest,
 	DatabaseResponse,
 	EffectId,
 	FacilityBinding,
 	FacilityCall,
+	FacilityResult,
 	InvocationId,
 	ProviderOutcome
 } from '@norbital-ai/bolt-protocol';
@@ -103,11 +104,26 @@ export const invokeBinding = <Input, Output>(
 					outcome: 'unknown'
 				})
 		});
+		if (!isFacilityResult(result)) {
+			return yield* new FacilityError({
+				operation,
+				code: 'invalid_result',
+				message: `${operation} facility answered with something other than a facility result`,
+				retryable: false,
+				outcome: 'unknown'
+			});
+		}
 		if (result._tag === 'Failure') {
 			return yield* new FacilityError({ operation, ...result.error });
 		}
 		return result.value;
 	});
+
+/** The host's answer is data from another process; its shape is checked, not assumed. */
+const isFacilityResult = (value: unknown): value is FacilityResult<unknown> =>
+	Predicate.isObject(value) &&
+	(Reflect.get(value, '_tag') === 'Success' ||
+		(Reflect.get(value, '_tag') === 'Failure' && Predicate.isObject(Reflect.get(value, 'error'))));
 
 export type Interface = Readonly<{
 	readonly execute: (

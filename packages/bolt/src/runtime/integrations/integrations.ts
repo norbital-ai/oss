@@ -443,7 +443,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							),
 				write: (effectId, collection, id, values, mode) =>
 					collections
-						.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
+						.mutate(effectId, subject, collection, [{ ...values, id }], 0, {
 							roots: [{ id, action: mode }]
 						})
 						.pipe(

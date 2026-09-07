@@ -3,7 +3,7 @@
 	import { untrack, type Component } from 'svelte';
 	import { watch } from 'runed';
 	import { ModeWatcher } from 'mode-watcher';
-	import { getErrorMessage, toError } from '@norbital-ai/std';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { CollectionQuery, CollectionRecord } from '@norbital-ai/std/collection';
 	import {
@@ -12,10 +12,7 @@
 		setCollectionSurfaceRuntime,
 		type CollectionSurface
 	} from '@norbital-ai/ui/collection-runtime';
-	import {
-		setDataRendererRuntimeContext,
-		type CustomTypeRendererState
-	} from '@norbital-ai/ui/data-renderer';
+	import { setDataRendererRuntimeContext } from '@norbital-ai/ui/data-renderer';
 	import BoltApp from './app.svelte';
 	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
@@ -36,6 +33,7 @@
 	import WorkspaceDocumentationShell from '../studio/workspace-documentation-shell.svelte';
 	import StudioShell from '../studio/studio-shell.svelte';
 	import { provideAgentClient } from '../agent/client.svelte.js';
+	import { createCustomTypeRendererResolver } from './custom-type-renderers.svelte.js';
 	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -198,47 +196,7 @@
 	// svelte-ignore state_referenced_locally -- the compiled workspace is fixed for this mount.
 	setCollectionClientContext(() => workspace.client);
 
-	/**
-	 * A custom type's own renderer, keyed by the type name its columns declare and loaded when a
-	 * `DataRenderer` first reads that exact kind.
-	 *
-	 * `custom('leave_event')` is a jsonb column whose shape only its author knows, so the type ships
-	 * the component that reads it. Without these every custom field falls through to the JSON dump.
-	 */
-	const customTypeRendererStates = $state<Record<string, CustomTypeRendererState>>({});
-	const requestedCustomTypeRenderers = new Set<string>();
-	const customTypeRendererLoading = { status: 'loading' } as const;
-	function customTypeRenderer(kind: string): CustomTypeRendererState | undefined {
-		const current = customTypeRendererStates[kind];
-		if (current) return current;
-		const load = workspace.customTypeRendererLoaders[kind];
-		if (!load) return undefined;
-		if (!requestedCustomTypeRenderers.has(kind)) {
-			requestedCustomTypeRenderers.add(kind);
-			void Effect.runPromise(
-				Effect.tryPromise(load).pipe(
-					Effect.tap((renderer) =>
-						Effect.sync(() =>
-							Object.assign(customTypeRendererStates, {
-								[kind]: { status: 'ready', renderer }
-							})
-						)
-					),
-					Effect.catch((cause) =>
-						Effect.sync(() =>
-							Object.assign(customTypeRendererStates, {
-								[kind]: {
-									status: 'failed',
-									error: toError(cause)
-								}
-							})
-						)
-					)
-				)
-			);
-		}
-		return customTypeRendererStates[kind] ?? customTypeRendererLoading;
-	}
+	const customTypeRenderer = createCustomTypeRendererResolver(workspace.customTypeRendererLoaders);
 	setDataRendererRuntimeContext({
 		customTypeRenderer,
 		// File records persist storage keys, never routes. The host owns the route and declares it on

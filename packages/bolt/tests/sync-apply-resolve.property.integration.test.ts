@@ -84,7 +84,6 @@ const commitWrite = (
 						seq: integer(random, 20)
 					}
 				],
-				false,
 				0
 			);
 		if (operation.kind === 'update')
@@ -101,7 +100,6 @@ const commitWrite = (
 								team: pick(random, ['core', 'edge'])
 							}
 				],
-				false,
 				0
 			);
 		return yield* collections.delete(
@@ -174,7 +172,6 @@ describe('sync engine property: apply(delta) equals fresh query', () => {
 						team: index % 3 === 0 ? 'edge' : 'core',
 						seq: (index * 7) % 20
 					})),
-					false,
 					0
 				)
 			)

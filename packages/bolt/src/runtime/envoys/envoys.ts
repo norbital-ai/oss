@@ -1092,7 +1092,9 @@ export const layerWith = (
 								agentId: AgentId.make(envoyName),
 								message: batch,
 								mode: DirectiveMode.make('agent'),
-								priority
+								priority,
+								// The drain runs the turn itself, below; the host must not race it for the claim.
+								execution: 'inline'
 							})
 							.pipe(taskFailure(envoyName, 'Task submission'));
 						const executed = yield* agents

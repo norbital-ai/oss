@@ -103,7 +103,12 @@ export type ClientEvent = Readonly<
 >;
 
 export type ClientEffect = Readonly<
-	| { readonly kind: 'register'; readonly request: SyncConnectRequest }
+	| {
+			readonly kind: 'register';
+			readonly request: SyncConnectRequest;
+			/** Sent as its own request, never merged with registrations issued in the same turn. */
+			readonly alone?: true;
+	  }
 	| { readonly kind: 'extend'; readonly request: SyncExtendPrefixRequest }
 	| { readonly kind: 'push'; readonly writeId: CollectionMutationIdempotencyKey }
 	| { readonly kind: 'restart'; readonly message: string }
@@ -240,7 +245,10 @@ const registrationEffect = (
 	const selected = keys === undefined ? [...state.queries.keys()] : [...new Set(keys)];
 	const queries = selected.flatMap((queryKey): SyncConnectRequest['queries'] => {
 		const query = state.queries.get(queryKey);
-		if (query === undefined || query.subscribers === 0) return [];
+		// A failed query was refused with a sentence; asking again returns the same sentence. Only a
+		// new link clears the phase (`disconnected` resets every query to pending), so a refusal is
+		// retried at most once per link, never on a schedule.
+		if (query === undefined || query.subscribers === 0 || query.phase === 'failed') return [];
 		return [
 			{
 				queryKey,
@@ -543,6 +551,34 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			 */
 			const queries = new Map(state.queries);
 			const retry: string[] = [];
+			if (event.terminal && event.keys.length > 1) {
+				/**
+				 * A refusal is about one query's shape but arrives for the whole request.
+				 *
+				 * The request that opens a link carries every mounted query, and the host answers a
+				 * refusal with one sentence and no key. Failing them all would pin "leave_plans.effective_range
+				 * is instant_range" on every table of the page; ask again one key per request instead, so
+				 * the sentence lands on the query it names and the others open. A single-key refusal is
+				 * that query's terminal failure below.
+				 */
+				const effects: ClientEffect[] = [];
+				for (const key of event.keys) {
+					const query = queries.get(key);
+					if (query === undefined) continue;
+					queries.set(key, {
+						...withoutPrefix(query),
+						phase: 'pending',
+						validating: query.subscribers > 0,
+						extending: false
+					});
+				}
+				const next = { ...state, queries };
+				for (const key of event.keys) {
+					if (queries.get(key)?.validating)
+						effects.push({ ...registrationEffect(next, [key]), alone: true });
+				}
+				return [next, effects];
+			}
 			for (const key of event.keys) {
 				const query = queries.get(key);
 				if (query === undefined) continue;

@@ -61,6 +61,10 @@ type AutomationStartOptions = Readonly<{
 	readonly scope?: Readonly<Record<string, Schema.Json>> | undefined;
 	readonly taskId?: string | undefined;
 	readonly parentDepth?: number | undefined;
+	/** The automation making this start, when one is running: name, args and depth. */
+	readonly continuationOf?:
+		| Readonly<{ readonly name: string; readonly args: Schema.Json; readonly depth: number }>
+		| undefined;
 }>;
 
 type AutomationStartRequest = Readonly<{
@@ -70,11 +74,18 @@ type AutomationStartRequest = Readonly<{
 	readonly options?: AutomationStartOptions;
 }>;
 
+/** An automation started itself with the args it is already running with: a loop, not a walk. */
+export class AutomationContinuationUnchanged extends Schema.TaggedError<AutomationContinuationUnchanged>()(
+	'Bolt.Automations.ContinuationUnchanged',
+	{ name: Schema.NonEmptyString }
+) {}
+
 type StartFailure =
 	| Database.FacilityError
 	| Workspace.WorkspaceLookupError
 	| InvocationBudget.NestingLimitExceeded
-	| AutomationDeferredUnsupported;
+	| AutomationDeferredUnsupported
+	| AutomationContinuationUnchanged;
 
 export type Interface = Readonly<{
 	/** Host startup hook. Conductor calls this once for each loaded environment after a restart. */
@@ -247,10 +258,19 @@ export const layer = Layer.effect(
 				return yield* new AutomationDeferredUnsupported({ name, delayMillis });
 			}
 			const subject = automationSubject(declaration, tenant.tenantId);
-			const depth = yield* InvocationBudget.make(
-				options?.parentDepth ?? budget.depth,
-				budget.limit
-			).nest(`automation ${name}`);
+			// A walk continues itself: the same automation, started by its own run with moved args,
+			// is the next slice of one piece of work and runs at the depth it already has. The loop
+			// guard still applies to everything else, and to a self-start whose args did not move.
+			const continuation = options?.continuationOf;
+			const continues = continuation !== undefined && continuation.name === name;
+			if (continues && JSON.stringify(continuation.args) === JSON.stringify(input)) {
+				return yield* new AutomationContinuationUnchanged({ name });
+			}
+			const depth = continues
+				? InvocationBudget.make(continuation.depth, budget.limit).depth
+				: yield* InvocationBudget.make(options?.parentDepth ?? budget.depth, budget.limit).nest(
+						`automation ${name}`
+					);
 			const prepared: Schema.Json = InvocationBudget.stampDepth(
 				{
 					args: input,

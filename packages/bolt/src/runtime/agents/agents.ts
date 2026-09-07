@@ -44,11 +44,10 @@ import {
 	type TaskModelCatalog
 } from '@norbital-ai/bolt-protocol/system';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
-import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
+import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { RemoteRegistry } from '#lib/runtime/collections/authored.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
-import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import {
@@ -58,21 +57,24 @@ import {
 	Tasks,
 	type AIInterface
 } from '#lib/runtime/facilities/services.js';
-import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
+import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import {
 	AgentModelUnavailable,
+	InvalidToolInput,
 	McpToolError,
 	SkillError,
 	ToolNotAllowed,
+	SUBAGENT_TOOL_NAME,
 	callMcpTool,
 	executeHostTool,
 	executeSystemTool,
 	executeSubagentTool,
+	invalidToolInput,
 	isSystemTool,
 	systemToolSpecs,
 	subagentToolSpec,
@@ -84,12 +86,12 @@ import {
 
 export {
 	AgentModelUnavailable,
+	InvalidToolInput,
 	McpToolError,
 	SkillError,
 	ToolNotAllowed
 } from './capability-catalog.js';
 
-const { bolt_task: boltTaskTable } = SYSTEM_MODEL_TABLES;
 const encodeSubject = Schema.encodeSync(Identity.Subject);
 
 class TaskRuntimeError extends Schema.TaggedError<TaskRuntimeError>()('Bolt.TaskRuntime.Error', {
@@ -201,6 +203,8 @@ export const AgentRunRow = Schema.Struct({
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
+	/** Whether this run asked the provider for reasoning; unrequested reasoning parts are never persisted. */
+	reasoning_requested: Schema.Boolean,
 	status: RunStatus
 });
 type AgentRun = typeof AgentRunRow.Type;
@@ -631,6 +635,14 @@ type TaskExecutionResult = Readonly<{
 	output?: Prompt.MessageEncoded;
 }>;
 
+/**
+ * Who runs the admitted turn. `host` (the default, and the only shape the wire can express) hands
+ * the host a claimed occurrence to run at once. `inline` is for a runtime caller that executes the
+ * turn itself in the same invocation, the Envoy drain: no row, no wake, nothing for the host to race
+ * the caller's own `execute` for the run claim.
+ */
+type AgentExecution = Readonly<{ execution?: 'host' | 'inline' }>;
+
 export type Interface = Readonly<{
 	readonly models: (
 		effectId: EffectId,
@@ -643,7 +655,7 @@ export type Interface = Readonly<{
 	readonly submit: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		request: TaskSubmitRequest
+		request: TaskSubmitRequest & AgentExecution
 	) => Effect.Effect<
 		TaskSubmitResult,
 		| TaskRuntimeError
@@ -745,6 +757,7 @@ const describeFailure = (failure: unknown): ToolFailure => {
 					: underlying.message
 		};
 	}
+	if (failure instanceof InvalidToolInput) return { code: failure._tag, message: failure.detail };
 	if (failure instanceof Error) {
 		const tag = Reflect.get(failure, '_tag');
 		return {
@@ -761,6 +774,77 @@ const describeFailure = (failure: unknown): ToolFailure => {
 		};
 	}
 	return { code: 'tool_error', message: String(failure) };
+};
+
+/**
+ * No provider request asks for reasoning yet: `generateMessage` sends no reasoning or thinking
+ * option, so a run never requests it. A model that emits a literal reasoning part regardless (GLM
+ * and DeepSeek answer `None.` when nothing was thought) must not have it persisted or rendered.
+ * When per-model reasoning becomes a request option, this is the one place that reads it.
+ */
+const reasoningRequested = (_modelId: ModelId): boolean => false;
+
+/** The agents a `subagent` spawn may name in this workspace: the web agent plus every envoy. */
+export const spawnableAgentIds = (
+	definition: Pick<WorkspaceDefinition, 'envoys'>
+): ReadonlyArray<string> => [WEB_AGENT_NAME, ...definition.envoys.map(({ name }) => name)];
+
+/**
+ * The assistant parts a run keeps. A reasoning part survives only when the run requested reasoning
+ * and the part has text; an active (still streaming) part is kept while requested so its index is
+ * stable across snapshots. Dropped parts are removed from `activeParts` and the remaining indexes
+ * shift with the content, so `persistGeneration` sees one consistent message per snapshot.
+ */
+export const retainedGeneration = (
+	run: Pick<AgentRun, 'reasoning_requested'>,
+	message: Prompt.MessageEncoded,
+	activeParts: ReadonlyArray<number>
+): { readonly message: Prompt.MessageEncoded; readonly activeParts: ReadonlyArray<number> } => {
+	if (message.role !== 'assistant' || isString(message.content)) return { message, activeParts };
+	const kept: Array<number> = [];
+	const content = message.content.filter((part, index) => {
+		const retained =
+			part.type !== 'reasoning' ||
+			(run.reasoning_requested && (activeParts.includes(index) || part.text.trim() !== ''));
+		if (retained) kept.push(index);
+		return retained;
+	});
+	if (content.length === message.content.length) return { message, activeParts };
+	return {
+		message: { ...message, content },
+		activeParts: activeParts.flatMap((index) => {
+			const next = kept.indexOf(index);
+			return next === -1 ? [] : [next];
+		})
+	};
+};
+
+/**
+ * The content a Compact checkpoint stores: the model's prose and nothing else.
+ *
+ * The summary generation runs without tools and never asked for reasoning, yet a model answers it
+ * with whatever it likes: a reasoning part (B2 applies to this message as to any other), or a tool
+ * call it cannot make, in a part or as its native markup inside the text. Parts that are not text
+ * are dropped here so the checkpoint the panel's Summary tab shows is the summary, and a call the
+ * loop could otherwise pick up as unresolved work never enters the transcript. When no prose is
+ * left the checkpoint still has to exist (one per run, or the next iteration would compact again),
+ * so it carries a sentence saying so rather than an empty message.
+ */
+export const CHECKPOINT_WITHOUT_SUMMARY =
+	'Automatic Compact produced no summary for this checkpoint; the messages retained after it carry the context that continues this Task.';
+export const checkpointContent = (message: Prompt.MessageEncoded): Prompt.MessageEncoded => {
+	if (message.role !== 'assistant') return message;
+	if (isString(message.content)) {
+		return message.content.trim() === ''
+			? { ...message, content: CHECKPOINT_WITHOUT_SUMMARY }
+			: message;
+	}
+	const prose = message.content.filter(
+		(part): part is Prompt.TextPartEncoded => part.type === 'text' && part.text.trim() !== ''
+	);
+	return prose.length === 0
+		? { ...message, content: CHECKPOINT_WITHOUT_SUMMARY }
+		: { ...message, content: prose };
 };
 
 const EmptyToolInput: Schema.JsonObject = {
@@ -826,8 +910,11 @@ export const layer = Layer.effect(
 		const remotes = yield* RemoteRegistry;
 
 		/**
-		 * Durable execute: arm the host timer first, then write the `bolt_task` row.
-		 * A crash in between costs a false alarm, never a dropped turn.
+		 * Durable execute, claimed at enqueue: the `bolt_task` row is written already running and the
+		 * host is woken with its occurrence, so an agent turn reaches the provider in one host hop
+		 * rather than through a timer, a discover and a claim. Every caller here is a turn somebody is
+		 * waiting on (a submission, a settled run with more queued, a parent resumed by its child);
+		 * scheduled and background work keeps the ordinary pending-row shape.
 		 */
 		const enqueueExecute = Effect.fn('Agents.enqueueExecute')(function* (
 			effectId: EffectId,
@@ -836,33 +923,22 @@ export const layer = Layer.effect(
 			slot: string
 		) {
 			const now = yield* Clock.currentTimeMillis;
-			const rowEffectId = `tasks.execute:${taskId}:${slot}`;
-			yield* queue.wake(EffectId.make(`${effectId}:wake`), now);
-			yield* executeBuilt(
-				effectId,
-				database,
-				composer
-					.insert(boltTaskTable)
-					.values({
-						command: 'tasks.execute',
-						input: JSON.stringify({
-							taskId,
-							bolt_run_as: encodeSubject(subject)
-						}),
-						effect_id: rowEffectId,
-						run_at: new Date(now).toISOString(),
-						status: 'pending'
-					})
-					.onConflictDoNothing({ target: boltTaskTable.effect_id })
-			).pipe(
-				Effect.mapError(
-					(error) =>
-						new TaskRuntimeError({
-							operation: 'enqueue',
-							message: getErrorMessage(error)
-						})
-				)
-			);
+			yield* queue
+				.enqueueClaimed(effectId, {
+					command: 'tasks.execute',
+					input: { taskId, bolt_run_as: encodeSubject(subject) },
+					effectId: `tasks.execute:${taskId}:${slot}`,
+					nowEpochMs: now
+				})
+				.pipe(
+					Effect.mapError(
+						(error) =>
+							new TaskRuntimeError({
+								operation: 'enqueue',
+								message: getErrorMessage(error)
+							})
+					)
+				);
 		});
 
 		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentId: AgentId) {
@@ -945,15 +1021,15 @@ export const layer = Layer.effect(
 						!authoredNames.has(tool.name) &&
 						(tool.name !== 'write_collection' || writesForSubject(subject))
 				),
-				...(agent.delegation === 'enabled' && !authoredNames.has(subagentToolSpec.name)
-					? [subagentToolSpec]
+				...(agent.delegation === 'enabled' && !authoredNames.has(SUBAGENT_TOOL_NAME)
+					? [subagentToolSpec(spawnableAgentIds(workspace.definition))]
 					: []),
 				...host
 					.filter(
 						({ name }) =>
 							!authoredNames.has(name) &&
 							!systemToolSpecs.some((tool) => tool.name === name) &&
-							name !== subagentToolSpec.name
+							name !== SUBAGENT_TOOL_NAME
 					)
 					.map(({ readOnly, ...tool }) => ({
 						...tool,
@@ -973,7 +1049,7 @@ export const layer = Layer.effect(
 			const capabilities = [
 				...tools.map((tool) => ({
 					id: CapabilityId.make(
-						`${tool.command.startsWith('host:') ? 'host' : tool.mcp === undefined ? (systemToolSpecs.some(({ name }) => name === tool.name) || tool.name === subagentToolSpec.name ? 'system' : 'tenant') : 'tenant'}/${tool.name}`
+						`${tool.command.startsWith('host:') ? 'host' : tool.mcp === undefined ? (systemToolSpecs.some(({ name }) => name === tool.name) || tool.name === SUBAGENT_TOOL_NAME ? 'system' : 'tenant') : 'tenant'}/${tool.name}`
 					),
 					kind: tool.mcp === undefined ? ('tool' as const) : ('mcp' as const),
 					digest: semanticHash(tool)
@@ -1136,7 +1212,8 @@ export const layer = Layer.effect(
 			mutation: Readonly<Record<string, unknown>> & Readonly<{ id: TaskId }>,
 			action: 'create' | 'update' = 'update'
 		) =>
-			collections.mutate(effectId, subject, 'agent_task', [mutation], true, 0, {
+			// The task row is the runtime's own bookkeeping, written as the workspace: no grant, no route.
+			collections.mutate(effectId, workspaceSubject(subject), 'agent_task', [mutation], 0, {
 				roots: [{ id: mutation.id, action }]
 			});
 
@@ -1171,6 +1248,7 @@ export const layer = Layer.effect(
 			parent?: AgentTask;
 			resume?: boolean;
 			modelId?: ModelId;
+			execution?: 'host' | 'inline';
 		}>;
 
 		const admit = Effect.fn('Agents.admit')(function* (
@@ -1244,7 +1322,8 @@ export const layer = Layer.effect(
 					const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: DirectiveId }))(
 						directive
 					);
-					yield* enqueueExecute(effectId, subject, input.taskId, decoded.id);
+					if (input.execution !== 'inline')
+						yield* enqueueExecute(effectId, subject, input.taskId, decoded.id);
 					return { directiveId: decoded.id };
 				}
 			}
@@ -1328,17 +1407,19 @@ export const layer = Layer.effect(
 					directives: completeDirectives
 				});
 			}
-			yield* enqueueExecute(effectId, subject, input.taskId, directiveId);
+			if (input.execution !== 'inline')
+				yield* enqueueExecute(effectId, subject, input.taskId, directiveId);
 			return { directiveId } satisfies TaskSubmitResult;
 		});
 
 		const submit = Effect.fn('Agents.submit')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			request: TaskSubmitRequest
+			request: TaskSubmitRequest & AgentExecution
 		) {
 			return yield* admit(effectId, subject, {
 				taskId: request.taskId,
+				...(request.execution === undefined ? {} : { execution: request.execution }),
 				...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
 				agentId: request.agentId,
 				message: request.message,
@@ -1515,6 +1596,7 @@ export const layer = Layer.effect(
 				phase: 'model',
 				input_through_sequence: lastSequence(messages),
 				model_id: modelId,
+				reasoning_requested: reasoningRequested(modelId),
 				capability_snapshot: capabilitySnapshot(subject, agent, tools),
 				status: 'running'
 			};
@@ -2244,6 +2326,7 @@ export const layer = Layer.effect(
 					workbenchId: task.workbench_id,
 					agentId: agent.id,
 					taskId: task.id,
+					spawnableAgentIds: spawnableAgentIds(workspace.definition),
 					collections,
 					budget: InvocationBudget.make(depth, InvocationBudget.DEFAULT_NESTING_LIMIT),
 					spawn: (actionId, childAgentId, instruction, _depth, toolCallId) =>
@@ -2313,7 +2396,7 @@ export const layer = Layer.effect(
 				return yield* executeSubagentTool(params, subagent, callId);
 			}
 			const input = yield* Schema.decodeUnknownEffect(Schema.Json)(params).pipe(
-				Effect.mapError(() => new ToolNotAllowed({ agent: agent.id, tool: `${name}:invalid-json` }))
+				Effect.mapError((error) => invalidToolInput(name, error))
 			);
 			if (declaration.mcp !== undefined) {
 				const mcp = declaration.mcp;
@@ -2651,9 +2734,16 @@ export const layer = Layer.effect(
 								{
 									callId: providerCallIdFor(`${run.id}:auto-compact:${iteration}`),
 									modelId: run.model_id,
+									/**
+									 * The instruction is the final user turn, not a trailing system message. A
+									 * projection that ends in tool results followed by a system line reads to a
+									 * chat template as an interrupted tool loop, and the model resumes the loop:
+									 * the hr-payroll host recorded a checkpoint whose whole text was the model's
+									 * native tool-call markup. A user turn is a turn to answer.
+									 */
 									messages: [
 										...projected,
-										systemMessage(
+										userAgentInput(
 											'Automatic Compact: summarize the durable context needed to continue this Task. Preserve decisions, constraints, unresolved work, tool evidence, child outcomes, and the current user instruction. Do not perform new work.'
 										)
 									],
@@ -2672,7 +2762,7 @@ export const layer = Layer.effect(
 								subject,
 								run,
 								{ kind: 'agent', id: agent.id },
-								compacted.message,
+								checkpointContent(compacted.message),
 								{
 									tag: 'compact',
 									origin: 'automatic',
@@ -2729,7 +2819,7 @@ export const layer = Layer.effect(
 						}
 						const callId = providerCallIdFor(`${run.id}:${iteration}`);
 						let progressSequence = -1;
-						const generated = yield* generateMessage(
+						const provided = yield* generateMessage(
 							ai,
 							EffectId.make(`${effectId}:provider:${iteration}`),
 							{
@@ -2745,17 +2835,22 @@ export const layer = Layer.effect(
 												operation: 'generation',
 												message: 'Progress belongs to another provider call.'
 											});
+										const retained = retainedGeneration(
+											run,
+											progress.message,
+											progress.activeParts
+										);
 										yield* persistGeneration(
 											EffectId.make(`${effectId}:part:${iteration}:${progress.sequence}`),
 											subject,
 											run,
 											agent.id,
-											progress,
+											{ ...progress, ...retained },
 											{
 												tag: 'generation',
 												callId,
 												sequence: progress.sequence,
-												activeParts: progress.activeParts
+												activeParts: retained.activeParts
 											}
 										);
 										progressSequence = progress.sequence;
@@ -2767,8 +2862,11 @@ export const layer = Layer.effect(
 							EffectId.make(`${effectId}:usage:${iteration}`),
 							subject,
 							run,
-							generated.observation
+							provided.observation
 						);
+						const generated = {
+							message: retainedGeneration(run, provided.message, []).message
+						};
 						const annotation: MessageAnnotation | undefined =
 							run.mode === 'compact'
 								? {

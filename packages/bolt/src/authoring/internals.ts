@@ -100,6 +100,8 @@ export type CollectionRegistryFor<
 	readonly [N in TableName<S>]: {
 		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;
 		readonly mutation: import('./contracts-schema.js').MutationValuesFor<S, N, Inputs>;
+		/** Type-only: what a live `orderBy` may name (RFC/bolt.md B9b). */
+		readonly scalarColumns: import('./contracts-schema.js').SchemaScalarColumns<S, N>;
 	};
 };
 export type InvokeClientApi<

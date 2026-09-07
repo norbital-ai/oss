@@ -19,6 +19,9 @@ afterEach(async () => {
 it('commits each part boundary before the provider finishes, then retains one complete assistant message', async () => {
 	const taskId = TaskId.make('00000000-0000-4000-8000-000000000119');
 	const encode = Schema.encodeSync(Prompt.Message);
+	// The provider streams a reasoning part first. This run never requested reasoning (RFC bolt.md
+	// B2), so what persists at each boundary is the same snapshot with the reasoning part removed and
+	// the active-part indexes shifted with it; the text part boundaries are still committed one by one.
 	const snapshots = [
 		{
 			message: encode(Prompt.assistantMessage({ content: [Prompt.reasoningPart({ text: '' })] })),
@@ -55,6 +58,17 @@ it('commits each part boundary before the provider finishes, then retains one co
 			activeParts: []
 		}
 	];
+	const textOnly = (text: string): Prompt.MessageEncoded => ({
+		options: {},
+		role: 'assistant',
+		content: [{ options: {}, type: 'text', text }]
+	});
+	const persisted = [
+		{ message: encode(Prompt.assistantMessage({ content: [] })), activeParts: [] },
+		{ message: encode(Prompt.assistantMessage({ content: [] })), activeParts: [] },
+		{ message: textOnly(''), activeParts: [0] },
+		{ message: textOnly('Hello.'), activeParts: [] }
+	];
 	const observed: unknown[] = [];
 	harness = await makeBoltTestRuntime(undefined, {
 		ai: {
@@ -74,10 +88,10 @@ it('commits each part boundary before the provider finishes, then retains one co
 						[taskId]
 					);
 					expect(rows).toHaveLength(1);
-					expect(rows[0]?.message).toEqual(snapshot.message);
+					expect(rows[0]?.message).toEqual(persisted[sequence]!.message);
 					expect(rows[0]?.annotation).toMatchObject({
 						tag: 'generation',
-						activeParts: snapshot.activeParts,
+						activeParts: persisted[sequence]!.activeParts,
 						sequence
 					});
 					observed.push(rows[0]);
@@ -116,7 +130,8 @@ it('commits each part boundary before the provider finishes, then retains one co
 		"select message, annotation from agent_message where task_id = $1 and message->>'role' = 'assistant'",
 		[taskId]
 	);
-	expect(rows).toEqual([{ message: snapshots[3]!.message, annotation: null }]);
+	expect(rows).toEqual([{ message: persisted[3]!.message, annotation: null }]);
+	expect(JSON.stringify(rows)).not.toContain('Reasoning finished.');
 });
 
 it('keeps interrupted parts for display but excludes incomplete tool calls from the next conversation turn', async () => {

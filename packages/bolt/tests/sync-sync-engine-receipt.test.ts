@@ -14,7 +14,7 @@ const receipts = [
 	},
 	{
 		url: prefixModelProbes,
-		hash: '2d4f451897b3631892eb2db7148eaf28daf39cfa7fcbd7e7651f952a15da8ac2',
+		hash: '614953fb5e6c63e9b6a256c75fc5d4d9393d362647af14e64fe18c9d2906a144',
 		cases: 6
 	}
 ] as const;

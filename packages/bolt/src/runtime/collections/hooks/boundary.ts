@@ -155,7 +155,6 @@ type AuthoringWritePorts<
 			subject: Identity.Subject,
 			collection: string,
 			values: ReadonlyArray<Readonly<Record<string, unknown>>>,
-			elevated: boolean,
 			depth: number
 		) => Effect.Effect<unknown, MutateE>;
 		readonly delete: (
@@ -163,7 +162,6 @@ type AuthoringWritePorts<
 			subject: Identity.Subject,
 			collection: string,
 			ids: ReadonlyArray<string>,
-			elevated: boolean,
 			depth: number
 		) => Effect.Effect<unknown, MutateE>;
 		readonly startAutomation: (
@@ -175,6 +173,7 @@ type AuthoringWritePorts<
 				readonly after?: string | number;
 				readonly taskId?: string;
 				readonly parentDepth?: number;
+				readonly continuationOf?: AutomationContinuation;
 			}>
 		) => Effect.Effect<{ readonly taskId: string }, AutoE>;
 		readonly infer: AuthoringOps<InferE>['infer'];
@@ -184,9 +183,9 @@ type AuthoringWritePorts<
 /**
  * Builds the invocation-bound authoring api from explicit ports.
  *
- * After hooks use the same singular `db.<collection>.mutate` surface as every other context.
- * Their bound operation is elevated because the record already passed authorization; authority
- * changes, while vocabulary does not.
+ * The api carries the subject it was built for and nothing else decides authority: the workspace
+ * for a hook (unmasked reads, its own writes), the declared principal for an automation, the caller
+ * for a pipeline. The vocabulary is the same in every context.
  */
 export const buildReadOps = <E>(
 	ports: AuthoringReadPorts<E>,
@@ -204,11 +203,17 @@ export const buildReadOps = <E>(
 		ports.findNearest(effectId, subject, nearestQueryInput(collection, input))
 });
 
+/** The automation holding this api (name, args, depth): a self-start with moved args continues it. */
+export type AutomationContinuation = Readonly<{
+	readonly name: string;
+	readonly args: Schema.Json;
+	readonly depth: number;
+}>;
+
 export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 	ports: AuthoringWritePorts<ReadE, MutateE, AutoE, InferE>,
 	effectId: EffectIdType,
 	subject: Identity.Subject,
-	elevated = false,
 	/**
 	 * How many hooks deep the write that produced this api already is.
 	 *
@@ -220,7 +225,7 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 	 */
 	depth = 0,
 	staged?: HookWriteOps<StagedE>,
-	automationDepth?: number
+	automation?: AutomationContinuation
 ): AuthoringOps<ReadE | MutateE | AutoE | InferE | StagedE> => {
 	/**
 	 * One fresh child effect id per hook-issued write.
@@ -237,16 +242,14 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 	) => {
 		const childEffectId = hookEffectIds.next({ phase: 'mutate', collection });
 		return staged?.mutate === undefined
-			? ports
-					.mutate(childEffectId, subject, collection, values, elevated, depth)
-					.pipe(Effect.asVoid)
+			? ports.mutate(childEffectId, subject, collection, values, depth).pipe(Effect.asVoid)
 			: staged.mutate(collection, values);
 	};
 	const hookDelete = (collection: string, ids: ReadonlyArray<string>) => {
 		if (ids.length === 0) return Effect.void;
 		const childEffectId = hookEffectIds.next({ phase: 'delete.before', collection });
 		return staged?.delete === undefined
-			? ports.delete(childEffectId, subject, collection, ids, elevated, depth).pipe(Effect.asVoid)
+			? ports.delete(childEffectId, subject, collection, ids, depth).pipe(Effect.asVoid)
 			: staged.delete(collection, ids);
 	};
 	return {
@@ -259,7 +262,9 @@ export const buildOps = <ReadE, MutateE, AutoE, InferE, StagedE = never>(
 				{},
 				{
 					...options,
-					...(automationDepth === undefined ? {} : { parentDepth: automationDepth })
+					...(automation === undefined
+						? {}
+						: { parentDepth: automation.depth, continuationOf: automation })
 				}
 			),
 		mutate: hookWrite,

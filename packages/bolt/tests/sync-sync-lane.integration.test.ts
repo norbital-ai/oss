@@ -232,7 +232,6 @@ const boot = async (tokens: ReadonlyArray<string>) => {
 					{ name: 'Linus', team: 'edge' },
 					{ name: 'Mia', team: 'edge' }
 				],
-				false,
 				0
 			);
 			yield* collections.mutate(
@@ -240,7 +239,6 @@ const boot = async (tokens: ReadonlyArray<string>) => {
 				adminSubject,
 				'invoices',
 				[{ label: 'INV-1' }],
-				false,
 				0
 			);
 			// Setup writes are not the publication under test.
@@ -264,7 +262,6 @@ const mutateAndDrain = (
 				adminSubject,
 				collection,
 				payloads,
-				false,
 				0
 			);
 			return yield* (yield* SyncCommit.Service).drainChanges;

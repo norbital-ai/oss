@@ -287,35 +287,35 @@
 
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-1.5 text-xs">
 	<Sidebar.Menu class="gap-1.5">
-		{#if environmentLabel !== undefined}
+		{#if environmentLabel !== undefined && !displayExpanded}
 			<Sidebar.MenuItem>
-				{#if displayExpanded}
-					<span
-						class="flex h-7 items-center px-1"
-						role="status"
-						data-testid="workspace-environment-badge"
-					>
-						<Badge variant={environmentLabel === 'staging' ? 'warning' : 'outline'}>
-							{environmentLabel}
-						</Badge>
-					</span>
-				{:else}
-					<span
-						class={cn(
-							'mx-auto size-2 rounded-full',
-							environmentLabel === 'staging' ? 'bg-warning' : 'bg-muted-foreground/50'
-						)}
-						title={environmentLabel}
-						role="img"
-						aria-label={environmentLabel}
-						data-testid="workspace-environment-badge"
-					></span>
-				{/if}
+				<span
+					class={cn(
+						'mx-auto size-2 rounded-full',
+						environmentLabel === 'staging' ? 'bg-warning' : 'bg-muted-foreground/50'
+					)}
+					title={environmentLabel}
+					role="img"
+					aria-label={environmentLabel}
+					data-testid="workspace-environment-badge"
+				></span>
 			</Sidebar.MenuItem>
 		{/if}
 		{#if displayExpanded}
 			<Inline justify="between" align="center" gap="xs" class="h-7 px-1">
-				<div class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{t('misc.account')}</div>
+				<div class="flex min-w-0 items-center gap-1.5">
+					<div class={WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}>{t('misc.account')}</div>
+					{#if environmentLabel !== undefined}
+						<Badge
+							variant={environmentLabel === 'staging' ? 'warning' : 'outline'}
+							class="shrink-0 px-1.5 py-0 text-[10px] leading-4 font-semibold"
+							role="status"
+							data-testid="workspace-environment-badge"
+						>
+							{environmentLabel}
+						</Badge>
+					{/if}
+				</div>
 				{#if notifications}
 					<Sidebar.MenuItem class="-mr-1">
 						{@render notifications({ expanded: true })}

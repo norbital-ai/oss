@@ -1,0 +1,57 @@
+id: HOOK_REACH
+# Inventory, not debt (RFC 0003, hook authority). Inside a write the caller was allowed to make, a
+# hook is the workspace: what it reads, nests or writes is checked against nobody. Its reach is
+# therefore a review question, and the answer is lexical: every `api.db.<collection>` access and
+# every relationship it returns beside the row is named at the site. One finding per site; a hook
+# that reads nothing and nests nothing reports nothing.
+summary: a collection hook reads, writes or nests as the workspace
+severity: hint
+principles: [straightforwardness, modularity]
+files:
+  - '**/+hooks.ts'
+rule:
+  any:
+    # A read or write through the hook api. COLLECTION and METHOD are the evidence.
+    - all:
+        - pattern: '$API.db.$COLLECTION.$METHOD($...ARGS)'
+        - regex: '^(?:findMany|findFirst|findPending|count|findNearest|mutate|delete)$'
+          on: METHOD
+    # A relationship nested under the returned row: an array under a key beside the input spread.
+    - all:
+        - pattern:
+            context: '({ $RELATION: [$...ROWS] })'
+            selector: PropertyAssignment
+        - inside:
+            all:
+              - kind: ObjectLiteralExpression
+              - has:
+                  all:
+                    - kind: SpreadAssignment
+                    - regex: '^\.\.\.(?:context\.)?input$'
+    # Rows derived elsewhere and spread beside the input: the source is the evidence, and the
+    # reviewer follows the name to the relations it carries (`payroll_runs` builds its graph so).
+    - all:
+        - pattern:
+            context: '({ ...$SOURCE })'
+            selector: SpreadAssignment
+        - not:
+            regex: '^(?:context\.)?(?:input|existing)$'
+            on: SOURCE
+        - inside:
+            all:
+              - kind: ObjectLiteralExpression
+              - has:
+                  all:
+                    - kind: SpreadAssignment
+                    - regex: '^\.\.\.(?:context\.)?input$'
+examples:
+  file: src/collections/employments/+hooks.ts
+  bad:
+    - 'const plan = yield* api.db.leave_plans.findFirst({ where: { company_id: { eq: input.company_id } } });'
+    - 'yield* api.db.employments.mutate([{ id: employmentId, leave_account_employment: accounts }]);'
+    - 'return { ...input, leave_account_employment: [{ id: accountId, days: 12 }] };'
+    - 'return { ...input, ...(yield* buildGraph(facts, baseline)) };'
+  good:
+    - 'return { ...input, name: normalized };'
+    - 'const candidate = existing === undefined ? { ...input } : { ...existing, ...input };'
+    - "yield* api.automations.run('leave_ledger_refresh', { company_id: input.company_id });"

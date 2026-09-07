@@ -104,7 +104,7 @@ const mutate = (
 ) =>
 	h.runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.mutate(EffectId.make(name), adminSubject, target, payloads, false, 0)
+			collections.mutate(EffectId.make(name), adminSubject, target, payloads, 0)
 		)
 	);
 

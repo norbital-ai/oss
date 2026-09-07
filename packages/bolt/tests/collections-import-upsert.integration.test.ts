@@ -77,7 +77,6 @@ describe('collection import mutation rows', () => {
 					adminSubject,
 					'notes',
 					[{ id: existingId, body: 'old', source: 'seed' }],
-					false,
 					0,
 					{ roots: [{ id: existingId, action: 'create' }] }
 				);

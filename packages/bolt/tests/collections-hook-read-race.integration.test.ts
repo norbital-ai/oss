@@ -106,7 +106,6 @@ describe('hook read consistency at commit and approval reservation', () => {
 											{ ...adminSubject, userId: fixtureUserId('requestor'), admin: false },
 											'people',
 											[{ id, name, team: shared ? 'last-place' : name }],
-											false,
 											0,
 											{ roots: [{ id, action: 'create' }] }
 										);

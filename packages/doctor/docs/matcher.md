@@ -24,8 +24,13 @@ examples:
   good: ['const n = t as unknown as number;']
 ```
 
-`rule` is the matcher. `detect`/`prefer` names an overlap detector. Every pack rule is one of
-those two fields. TypeScript does not declare a second copy of the pack.
+`rule` is the matcher. A document accepts exactly `id`, `summary`, `severity`, `principles`,
+`confidence`, `files`, `ignore`, `dominates`, `rule`, `utils`, `constraints` and `examples`
+(`src/patterns-yaml.ts`); any other key is a load error naming the file. `examples` is mandatory
+and every `bad` and `good` example is executed by `tests/examples-execute.test.ts`, so a rule that
+cannot find its own bad example does not load. Overlap detectors are ordinary documents under
+`packs/overlaps/`; there is no `detect`/`prefer` form. A duplicate `id` across packs is a load
+error, never a silent shadow. TypeScript does not declare a second copy of the pack.
 
 `defineRule` compiles that document for the runner. It is not how a pack rule is written.
 
@@ -51,13 +56,39 @@ its `not: [c]` is `rule: { all: [<shape>, { not: c }] }`, both of which say what
 | `{ matches: 'name' }`                            | a rule named in `utils`                                         |
 | `{ atLeast, of }`                                | **extension** — N _distinct_ members match in the subtree       |
 | `{ count: { min, of } }`                         | **extension** — `of` matches at least `min` unwrapped times      |
-| `{ calls: { of, exactly } }`                     | **extension** — a bound name is used as a callee N times        |
-| `{ selfModule: true }`                           | **extension** — the specifier resolves to this file             |
-| `{ aliasCovered: true }`                         | **extension** — a declared path alias already covers this import |
-| `{ importsFrom: 'effect' }`                      | **extension** — the file imports that package or a subpath      |
+| `{ fact: { name, …params } }`                    | **extension** — a registered analysis answers for this node (see Facts) |
 
 Alongside the matcher, `defineMatcher` accepts `utils` (named rules `matches` resolves) and
 `constraints` (a rule per metavariable, narrowing what it may bind).
+
+## The node model
+
+A file is one tree. Every front-end produces the same `Node` record: `kind`, the `field` it occupies
+in its parent, its `fields` map, `children`, `parent`, `text` and a `range` into the original file.
+Kinds are namespaced by front-end: bare names are TypeScript syntax kinds (`CallExpression`),
+`svelte:Element`, `css:Declaration`, `trivia:JSDocTag` and `sql:` kinds come from the markup
+front-end (`src/frontend/markup.ts`). Because the record is one shape, `inside` and `has`
+compose across the language boundary: a rule may ask for a call inside a `svelte:Script`. A kind
+the front-ends do not produce is a load-time error naming the file, never a rule that silently
+matches nothing.
+
+## Field-addressed patterns
+
+A pattern constrains its own kind and the nodes in each field it names, and nothing else.
+`const  = ` says nothing about `modifiers`, so it matches `export const a = 1`,
+`declare const a: T` and a default export alike; `!` matches an `export`ed non-null assertion
+because the pattern is compared field by field, not child by child. A pattern that wants a modifier
+says so: `has: { field: modifiers, kind: AsyncKeyword }`. `strictness: cst` is the opt-out, where
+every field must correspond.
+
+## Facts
+
+A fact is a named, registered analysis over the file or the repository — `usesImportedRuntime`,
+`callSites`, `flowsInto`, `reaches`, `callGraphCycle` and the rest registered in
+`src/analyses/index.ts` — invoked from a rule as `{ fact: { name, …params } }`. Each fact declares
+its parameter schema (a misspelled parameter is a load error), is memoised per file, is tested on
+its own in `tests/facts.test.ts`, and carries no domain vocabulary: word lists, package names and
+thresholds are parameters in the rule document, never constants in the analysis.
 
 ## Two semantics worth stating
 

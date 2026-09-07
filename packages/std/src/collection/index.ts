@@ -52,6 +52,13 @@ export interface CollectionType<
 	readonly row: TRow;
 	/** Exact recursively generated graph accepted by the declarative browser mutation. */
 	readonly mutation: TMutation;
+	/**
+	 * The columns a live prefix may be ordered by: every column but json, custom-typed and vector
+	 * ones. Type-only, generated per collection by the compiler from the same classification the
+	 * runtime plans with; absent on an erased registry, where every column qualifies. A plain
+	 * `string` rather than `keyof TRow` so every registry stays assignable to the `object` bound.
+	 */
+	readonly scalarColumns?: string;
 }
 
 export type CollectionRegistry = Readonly<Record<string, CollectionType<CollectionRecord, object>>>;
@@ -62,6 +69,11 @@ export type CollectionFieldName<TCollection extends CollectionType<object, objec
 	keyof CollectionRow<TCollection>,
 	string
 >;
+/** The fields a live read may order by; every field when the registry declares no scalar set. */
+export type CollectionScalarFieldName<TCollection extends CollectionType<object, object>> =
+	TCollection extends { readonly scalarColumns: infer Scalar extends string }
+		? Scalar
+		: CollectionFieldName<TCollection>;
 
 export type NumericRendererVariant =
 	| { readonly type: 'number' }
@@ -173,6 +185,28 @@ export interface CollectionQuery<TRow extends object> extends CollectionBaseQuer
 	/** Opaque continuation returned by the previous page. */
 	readonly after?: string;
 }
+
+/**
+ * A read that registers a live prefix, which is keyed by its ordering values.
+ *
+ * A key is a scalar: the cursor that continues the prefix binds each value back into SQL, and a
+ * JSON object has no total order the engine can bind. The runtime refuses a live query ordered by
+ * a json, custom-typed or vector column with "Live ordering requires a scalar field"; this is the
+ * same rule stated as a type, so `orderBy: { effective_range: 'desc' }` on a range column fails
+ * where it is written. A page continued with `after` is one-shot and keeps the wider vocabulary.
+ */
+export type CollectionLiveOrderBy<TCollection extends CollectionType<object, object>> = Partial<
+	Readonly<Record<CollectionScalarFieldName<TCollection>, 'asc' | 'desc'>>
+>;
+export type CollectionLiveQuery<TCollection extends CollectionType<object, object>> = Omit<
+	CollectionQuery<CollectionRow<TCollection>>,
+	'orderBy' | 'after'
+> & {
+	readonly orderBy?: CollectionLiveOrderBy<TCollection>;
+	readonly after?: undefined;
+};
+export type CollectionAnchoredQuery<TCollection extends CollectionType<object, object>> =
+	CollectionQuery<CollectionRow<TCollection>> & { readonly after: string };
 
 export interface CollectionGroupedQuery<TRow extends object> extends CollectionBaseQuery<TRow> {
 	readonly limit?: number;
@@ -312,11 +346,13 @@ export interface MemoryCollectionMutationResult<TRow extends object> {
 
 export type CollectionOperations<TCollection extends CollectionType<object, object>> = Readonly<{
 	findMany(
-		query?: CollectionQuery<CollectionRow<TCollection>>,
+		query?: CollectionLiveQuery<TCollection> | CollectionAnchoredQuery<TCollection>,
 		options?: CollectionFilterOptions
 	): CollectionPageQuery<CollectionRow<TCollection>>;
 	findFirst(
-		query?: CollectionBaseQuery<CollectionRow<TCollection>>
+		query?: Omit<CollectionBaseQuery<CollectionRow<TCollection>>, 'orderBy'> & {
+			readonly orderBy?: CollectionLiveOrderBy<TCollection>;
+		}
 	): RemoteQuery<CollectionRow<TCollection> | undefined>;
 	findGrouped(
 		query: CollectionGroupedQuery<CollectionRow<TCollection>>,

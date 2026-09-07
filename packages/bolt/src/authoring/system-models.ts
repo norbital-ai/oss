@@ -457,6 +457,7 @@ const agentRunModel = defineModel(
 		phase: text().notNull(),
 		input_through_sequence: integer().notNull(),
 		model_id: text().notNull(),
+		reasoning_requested: boolean().notNull(),
 		capability_snapshot: jsonb().notNull(),
 		status: text().notNull()
 	},

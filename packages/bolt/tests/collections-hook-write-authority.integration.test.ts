@@ -14,7 +14,7 @@ import * as Collections from '../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
 
-/** A non-administrator who may create a run, but may only read its engine-owned output. */
+/** A non-administrator who may create a run, but may only read the output the workspace derives. */
 const operator = {
 	userId: 'operator-1',
 	tenantId: 'test-tenant',
@@ -23,7 +23,7 @@ const operator = {
 };
 
 const definition: WorkspaceDefinition = workspace({
-	name: 'elevated-mutate-access',
+	name: 'hook-write-authority',
 	version: '1.0.0',
 	collections: [
 		collection({ name: 'runs', fields: { label: field.string({ required: true }) } }),
@@ -62,7 +62,7 @@ const definition: WorkspaceDefinition = workspace({
  * `record` an after hook receives types the run id down, and `api.db.outputs.mutate` carries the
  * collection's own write shape instead of a reflected `Record`.
  */
-interface ElevatedAccessSchema {
+interface HookWriteSchema {
 	readonly tables: {
 		readonly runs: {
 			readonly $inferSelect: { readonly id: string; readonly label: string };
@@ -84,7 +84,7 @@ interface ElevatedAccessSchema {
 	readonly relations: Record<string, never>;
 }
 
-const runHooks: CollectionHooks<ElevatedAccessSchema, 'runs'> = {
+const runHooks: CollectionHooks<HookWriteSchema, 'runs'> = {
 	mutate: {
 		perRecord: {
 			after: {
@@ -111,7 +111,7 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('an elevated after-hook mutation', () => {
+describe("an after hook's write, as the workspace", () => {
 	it('writes derived rows under the authorized root without granting direct child creation', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 		const collections = await harness.runtime.runPromise(Collections.Service);

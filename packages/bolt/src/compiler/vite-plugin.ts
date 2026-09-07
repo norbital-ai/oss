@@ -207,24 +207,25 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 								`import { toError } from '@norbital-ai/std';`,
 								`import { Effect } from 'effect';`,
 								`const title = ${JSON.stringify(title)};`,
-								`const applicationStylesheet = ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER)};`,
-								`let applicationStylesheetReady;`,
+								`// Every stylesheet of the entry's static import graph, comma-separated, the shell's first.`,
+								`const applicationStylesheets = ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER)}.split(',').filter((name) => name.length > 0);`,
+								`let applicationStylesheetsReady;`,
+								`const linkStylesheet = (name) => new Promise((resolve, reject) => {`,
+								`\tconst href = new URL(name, import.meta.url).href;`,
+								`\tif (Array.from(document.styleSheets).some((sheet) => sheet.href === href)) {`,
+								`\t\tresolve();`,
+								`\t\treturn;`,
+								`\t}`,
+								`\tconst existing = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).find((link) => link.href === href);`,
+								`\tconst link = existing ?? Object.assign(document.createElement('link'), { rel: 'stylesheet', href });`,
+								`\tlink.addEventListener('load', () => resolve(), { once: true });`,
+								`\tlink.addEventListener('error', () => reject(new Error(\`Workspace framework stylesheet failed to load: \${href}\`)), { once: true });`,
+								`\tif (existing === undefined) document.head.append(link);`,
+								`});`,
 								`const loadApplicationStylesheet = () => {`,
-								`\tif (applicationStylesheet.length === 0) return Promise.resolve();`,
-								`\tif (applicationStylesheetReady !== undefined) return applicationStylesheetReady;`,
-								`\tapplicationStylesheetReady = new Promise((resolve, reject) => {`,
-								`\t\tconst href = new URL(applicationStylesheet, import.meta.url).href;`,
-								`\t\tif (Array.from(document.styleSheets).some((sheet) => sheet.href === href)) {`,
-								`\t\t\tresolve();`,
-								`\t\t\treturn;`,
-								`\t\t}`,
-								`\t\tconst existing = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).find((link) => link.href === href);`,
-								`\t\tconst link = existing ?? Object.assign(document.createElement('link'), { rel: 'stylesheet', href });`,
-								`\t\tlink.addEventListener('load', () => resolve(), { once: true });`,
-								`\t\tlink.addEventListener('error', () => reject(new Error(\`Workspace framework stylesheet failed to load: \${href}\`)), { once: true });`,
-								`\t\tif (existing === undefined) document.head.append(link);`,
-								`\t});`,
-								`\treturn applicationStylesheetReady;`,
+								`\tif (applicationStylesheetsReady === undefined)`,
+								`\t\tapplicationStylesheetsReady = Promise.all(applicationStylesheets.map(linkStylesheet));`,
+								`\treturn applicationStylesheetsReady;`,
 								`};`,
 								``,
 								`/**`,
@@ -235,10 +236,8 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 								` * importing it builds a browser runtime whose query cache is namespaced by tenant and`,
 								` * environment, and \`mountWorkspace\` declares the session before it calls that loader.`,
 								` *`,
-								` * The framework shell itself is part of this entry chunk. Its scoped CSS is emitted beside`,
-								` * the entry, but an artifact has no HTML document for Vite to add a link to. The compiler`,
-								` * fills the stylesheet placeholder above with the emitted asset and this await prevents the`,
-								` * shell from mounting before that sheet has applied.`,
+								` * The entry's own sheet and those of its static imports have no HTML document to link them;`,
+								` * the compiler fills the placeholder above and this await mounts nothing before they apply.`,
 								` */`,
 								`export const mountWorkspace = async (target, options) => {`,
 								`\tawait loadApplicationStylesheet();`,
@@ -288,21 +287,23 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 		 * appeared much later, in a browser, as a missing export on a module the host had just
 		 * fetched over the network.
 		 *
-		 * There are two stylesheets with different owners. The workspace's Tailwind sheet is imported
-		 * by the generated client, which Vite reaches dynamically and preloads itself. The framework
-		 * shell's scoped styles belong to this entry chunk. Because an artifact build generates no HTML,
-		 * nothing else can link that entry stylesheet; fill the stable placeholder in the entry's own
-		 * loader with the asset Vite emitted for it.
+		 * Vite's preload helper links the sheets of chunks reached *dynamically*; nothing links the
+		 * sheets of the entry's *static* import closure (the shell, `CollectionTable`, `DataRenderer`)
+		 * because an artifact build has no HTML document. The entry's loader links them itself: the
+		 * marked entry sheet first, then every sheet the static closure emitted, in import order.
+		 * Without the closure a system surface rendered before any app loaded painted both responsive
+		 * halves of a table, the rule choosing one being in the collection-table chunk's sheet.
 		 */
 		generateBundle: {
 			// Vite emits CSS assets in its own generate hook. Running after ordinary hooks makes the
 			// marker-bearing entry sheet observable here without depending on its content-hashed name.
 			order: 'post',
 			handler: (_output, bundle) => {
-				const entry = Object.values(bundle).find(
-					(output) => output.type === 'chunk' && output.isEntry
+				const entryOutput = Object.entries(bundle).find(
+					([, output]) => output.type === 'chunk' && output.isEntry
 				);
-				if (entry === undefined || entry.type !== 'chunk')
+				const entry = entryOutput?.[1];
+				if (entryOutput === undefined || entry === undefined || entry.type !== 'chunk')
 					throw new Error('Bolt client build did not emit an entry chunk');
 				// One pass: the marker test reads every asset's whole source, so it runs once per output
 				// rather than once per surviving link in a filter/map/sort chain.
@@ -320,7 +321,21 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 					);
 				if (!entry.code.includes(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER))
 					throw new Error('Bolt client entry lost its framework stylesheet placeholder');
-				entry.code = entry.code.replace(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER, stylesheet);
+				// The static import closure of the entry, chunk by chunk; `imports` is the static list,
+				// `dynamicImports` is deliberately not walked because the preload helper owns those.
+				const linked: Array<string> = [stylesheet];
+				const visited = new Set<string>();
+				const walk = (fileName: string): void => {
+					if (visited.has(fileName)) return;
+					visited.add(fileName);
+					const chunk = bundle[fileName];
+					if (chunk === undefined || chunk.type !== 'chunk') return;
+					for (const sheet of chunk.viteMetadata?.importedCss ?? [])
+						if (!linked.includes(sheet)) linked.push(sheet);
+					for (const imported of chunk.imports ?? []) walk(imported);
+				};
+				walk(entryOutput[0]);
+				entry.code = entry.code.replace(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER, linked.join(','));
 			}
 		},
 		/**

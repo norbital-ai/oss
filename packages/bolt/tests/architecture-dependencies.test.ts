@@ -150,7 +150,9 @@ describe('Bolt architecture boundaries', () => {
 		// this measured basket. The file-count ceiling and deleted-parser assertion stay in force.
 		// 8,969 -> 9,008: immutable public documentation and its standard thumbnail are packed
 		// with the browser artifact, with a generated client contract for member access.
-		expect(total).toBeLessThanOrEqual(9_008);
+		// 9,008 -> 9,015: the artifact entry links the stylesheets of its static import closure
+		// (an artifact has no HTML document; the shell's shared components painted unstyled).
+		expect(total).toBeLessThanOrEqual(9_015);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -190,7 +192,7 @@ describe('Bolt architecture boundaries', () => {
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
-		// write port that routes through the same `mutate` with delete roots. See RFC/toolchain.md §7.5a.
+		// write port that routes through the same `mutate` with delete roots. See the collection lifecycle budgets in docs/collections/README.md.
 		// 4,770 -> 4,823: target-policy reads of pending proposals and commit-time validation
 		// of hook read sets close the cross-user visibility and concurrent overbooking gaps.
 		// The read-consistency leaf is also counted in the unchanged aggregate ceiling above.
@@ -201,19 +203,22 @@ describe('Bolt architecture boundaries', () => {
 		// persistence.ts shrinks 17 lines net (`expression`+`fixed` → `frag`), this file absorbs one import.
 		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_848);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
-		// browser undeclared-create branch stays the payroll persist path. See RFC/toolchain.md §6.1.5.
+		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work
 		// (`trusted`), not against the caller's grants — the leave ledger an employment write carries.
-		// See RFC/toolchain.md §6.1.5.
-		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(844);
+		// See docs/collections/README.md (collection lifecycle).
+		// 844 -> 795 (2026-09-07, RFC 0003): every node names its author (the caller or the
+		// workspace) and `trusted`, `hookRelationNames`, the elevation split and the browser
+		// base-version exemption collapse into that one fact. A net deletion; the budget follows it.
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(795);
 		// 837 -> 873 (2026-09-04): the root delete-prepare wave landed in oss 5210f8d9 (+51) over the
 		// ceiling; the duplicated owner/await Deferred pattern of both waves moved to `root-wave.ts`
 		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine
 		// 844 -> 814, under its unchanged 820). The remaining +36 is the delete wave itself, which
-		// belongs here. Recorded in RFC/toolchain.md §7 (collection lifecycle budget).
+		// belongs here. The collection lifecycle budget; the reason for every move is recorded in this comment.
 		// 873 -> 910 (2026-09-04): hooks stage deletes as well as mutates (`api.db.X.delete`), so the
 		// staged wave drains a delete queue through `prepareDelete` before its writes, and staged
-		// mutate takes a batch. See RFC/toolchain.md §7.5a.
+		// mutate takes a batch. See the collection lifecycle budgets in docs/collections/README.md.
 		// 910 -> 923: before hooks receive relationship snapshots and approval reservations retain
 		// normalized values. 923 -> 940: each root primes and decodes its own input; only the batch
 		// preparation owner decodes the full batch, avoiding quadratic memory at 10,000 rows.
@@ -223,7 +228,7 @@ describe('Bolt architecture boundaries', () => {
 		);
 		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
 		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives
-		// 10k ids. Recorded in RFC/toolchain.md §7.
+		// 10k ids. The collection lifecycle budget.
 		// 322 -> 324: the numeric wire guard is now a hoisted Schema predicate (GUARD2).
 		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(324);
 		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);

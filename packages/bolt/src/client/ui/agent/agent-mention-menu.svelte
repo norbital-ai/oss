@@ -102,6 +102,19 @@
 					icon: commandIcon(item.command),
 					entity: { kind: 'prefix', scope: item.command }
 				};
+			case 'composer-command':
+				return {
+					value: `composer-command:${item.command}`,
+					kind: 'command',
+					label: `/${item.command}`,
+					description: t(
+						item.command === 'plan'
+							? 'bolt.agent.commandPlanDescription'
+							: 'bolt.agent.commandCompactDescription'
+					),
+					icon: item.command === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text',
+					entity: { kind: 'composer-command', command: item.command }
+				};
 			default: {
 				const _exhaustive: never = item;
 				return _exhaustive;
@@ -177,6 +190,8 @@
 				return right.kind === 'app' && left.key === right.key;
 			case 'prefix':
 				return right.kind === 'prefix' && left.scope === right.scope;
+			case 'composer-command':
+				return right.kind === 'composer-command' && left.command === right.command;
 			case 'plan':
 			case 'ask-agent':
 			case 'navigate':

@@ -33,7 +33,6 @@ const seedPeople = (h: BoltTestRuntime) =>
 					{ name: 'Grace', team: 'core' },
 					{ name: 'Linus', team: 'edge' }
 				],
-				false,
 				0
 			)
 		)
@@ -89,7 +88,6 @@ describe('clean-cut sync engine', () => {
 					adminSubject,
 					'people',
 					[{ name: 'Aaron', team: 'core' }],
-					false,
 					0
 				)
 			)

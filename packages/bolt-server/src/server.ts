@@ -42,6 +42,7 @@ import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoadError, BundleLoader } from './bundle-loader.js';
+import { guardBindings } from './facilities/boundary.js';
 import type { ServerConfiguration } from './config.js';
 import { AdmissionStopped, ServerHealth } from './health.js';
 import type { TaskInvocationControl } from './schedules.js';
@@ -573,6 +574,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				})
 			);
 		}
+		const connectStartedAt = yield* Clock.currentTimeMillis;
 		const connected = yield* Effect.tryPromise({
 			try: () =>
 				sync.connect({
@@ -604,6 +606,12 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			}
 			return;
 		}
+		// Host time for this registration, readable from the browser's network panel (RFC/bolt.md B6).
+		const connectFinishedAt = yield* Clock.currentTimeMillis;
+		response.setHeader(
+			'server-timing',
+			`sync-connect;dur=${connectFinishedAt - connectStartedAt};desc="queries=${registration.queries.length}"`
+		);
 		writeJson(response, 200, connected.success);
 		return;
 	}
@@ -1094,10 +1102,10 @@ const startServerEffect = <E>(
 			}
 		};
 		const sync = makeSyncHost(syncBridge);
-		liveFacilities = {
+		liveFacilities = guardBindings({
 			...facilities,
 			syncCommit: makeSyncCommitFacility(sync, configuration.scope)
-		};
+		});
 		onFacilitiesReady?.(liveFacilities);
 
 		const server = createServer((request, response) => {

@@ -1,0 +1,130 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
+import * as Agents from '../src/runtime/agents/agents.js';
+import { projectAgentContextView } from '../src/client/ui/agent/context-view.js';
+import { pairToolCalls } from '../src/client/ui/agent/tool-rows.js';
+import { projectAgentMessages, projectAgentRuns } from '../src/client/ui/agent/transcript.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	testWorkspace,
+	type BoltTestRuntime
+} from './support/bolt-test-layer.js';
+
+/**
+ * AGENT-UI5, runtime half. A turn over the context bound compacts once and then keeps working:
+ * every message it appends after the checkpoint is on the same task and run with a strictly
+ * increasing sequence, and the panel's own projection over those rows keeps all of them in focus.
+ * The hr-payroll host showed the rows existing but not being seen (the transcript never
+ * followed its tail); this pins the half that was never in doubt so the other half stays the
+ * only place to look.
+ */
+const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
+const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
+
+let harness: BoltTestRuntime | undefined;
+afterEach(async () => {
+	await harness?.dispose();
+	harness = undefined;
+});
+
+const cassette = readCassetteFile(
+	fileURLToPath(new URL('./assets/agents-compaction-continue.cassette.json', import.meta.url))
+);
+
+describe('automatic compaction mid-turn', () => {
+	it('continues the tool loop after the checkpoint with increasing sequences the panel keeps in focus', async () => {
+		const { ai, feed, requests } = cassetteTranscript(cassette);
+		harness = await makeBoltTestRuntime(testWorkspace(), { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const taskId = TaskId.make('00000000-0000-4000-8000-000000000811');
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('submit:continue'), adminSubject, {
+				taskId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput(LARGE_INSTRUCTION),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		const result = await harness.runtime.runPromise(
+			agents.execute(harness.effectId('execute:continue'), adminSubject, taskId)
+		);
+		expect(result.status).toBe('done');
+
+		// One checkpoint, then three ordinary generations: two tool calls and the reply.
+		expect(feed.map((step) => step.automaticCompact)).toEqual([true, false, false, false]);
+		// The summary instruction is the final user turn of the compact request, not a system line.
+		const compactRequest = requests[0]!;
+		const tailMessage = compactRequest.messages.at(-1)!;
+		expect(tailMessage.role).toBe('user');
+		expect(JSON.stringify(tailMessage.content)).toContain('Automatic Compact:');
+
+		const rows = await harness.database.query(
+			`select id, task_id, sequence, run_id, author, message, annotation
+			 from agent_message where task_id = $1 order by sequence`,
+			[taskId]
+		);
+		const runs = projectAgentRuns(
+			await harness.database.query(
+				`select id, task_id, directive_id, epoch, mode, phase, input_through_sequence,
+				        model_id, status, reasoning_requested
+				 from agent_run where task_id = $1`,
+				[taskId]
+			)
+		);
+		expect(runs).toHaveLength(1);
+		const messages = projectAgentMessages(rows);
+		// Nothing the runtime wrote is lost to the panel's row decoder.
+		expect(messages).toHaveLength(rows.length);
+
+		const checkpointIndex = messages.findIndex((message) => message.annotation?.tag === 'compact');
+		expect(checkpointIndex).toBeGreaterThan(0);
+		const checkpoint = messages[checkpointIndex]!;
+		// The panel's row decoder keeps only the keys it projects; provenance is read off the row.
+		expect(rows[checkpointIndex]).toMatchObject({
+			annotation: { tag: 'compact', origin: 'automatic' }
+		});
+		// The checkpoint stores the summary prose and nothing else.
+		expect(checkpoint.message.role).toBe('assistant');
+		expect(
+			typeof checkpoint.message.content === 'string'
+				? ['text']
+				: checkpoint.message.content.map((part) => part.type)
+		).toEqual(['text']);
+
+		// The retained projection stays over the bound for this fixture, as it did on the host, so
+		// the residual system line follows the checkpoint; then two tool rounds and the reply.
+		const after = messages.slice(checkpointIndex + 1);
+		expect(after.map((message) => message.author.kind)).toEqual([
+			'system',
+			'agent',
+			'tool',
+			'agent',
+			'tool',
+			'agent'
+		]);
+		expect(JSON.stringify(after[0]!.message.content)).toContain('without a second checkpoint');
+		for (const [index, message] of after.entries()) {
+			expect(message.taskId).toBe(taskId);
+			expect(message.runId).toBe(runs[0]!.id);
+			const previous = index === 0 ? checkpoint : after[index - 1]!;
+			expect(message.sequence).toBe(previous.sequence + 1);
+		}
+
+		// The panel's projection: the checkpoint moves to history, every later row stays in focus.
+		const view = projectAgentContextView({ messages, runs });
+		expect(view.checkpoint?.id).toBe(checkpoint.id);
+		expect(view.historyMessages.map((message) => message.id)).toEqual([checkpoint.id]);
+		const focusIds = new Set(view.focusMessages.map((message) => message.id));
+		for (const message of after) expect(focusIds.has(message.id)).toBe(true);
+		expect(view.focusMessages.map((message) => message.sequence)).toEqual(
+			[...view.focusMessages].map((message) => message.sequence).sort((left, right) => left - right)
+		);
+		const tools = pairToolCalls(messages);
+		expect(tools.resultsByCallId.has('call_after_checkpoint_1')).toBe(true);
+		expect(tools.resultsByCallId.has('call_after_checkpoint_2')).toBe(true);
+	});
+});

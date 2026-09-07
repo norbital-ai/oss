@@ -131,7 +131,6 @@ describe('declarative settlement under a later writer', () => {
 						adminSubject,
 						'notes',
 						[{ body: 'already committed' }],
-						false,
 						0,
 						{}
 					);
@@ -227,7 +226,6 @@ describe('declarative settlement under a later writer', () => {
 					adminSubject,
 					'notes',
 					[{ id, body: 'writer A' }],
-					false,
 					0,
 					{}
 				);

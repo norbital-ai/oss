@@ -5,9 +5,11 @@
 	import type {
 		CollectionDefinition,
 		CollectionField,
+		CollectionLiveOrderBy,
 		CollectionOperations,
 		CollectionQuery,
 		CollectionRegistry,
+		CollectionScalarFieldName,
 		CollectionType
 	} from '@norbital-ai/std/collection';
 	import { isSystemCollectionField, labelTermText } from '@norbital-ai/std/collection';
@@ -158,8 +160,13 @@
 			CollectionType<TRow, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
+	// The row override rides `TRow`; the live-orderable column set rides the registry entry, so the
+	// operations keep both and `orderBy` stays typed over the collection's scalar columns.
+	type TableCollection = CollectionType<TRow, object> & {
+		readonly scalarColumns: CollectionScalarFieldName<TCollections[TName]>;
+	};
 	const operations = $derived(
-		client.db[collection] as unknown as CollectionOperations<CollectionType<TRow, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row override; the client key remains constrained by TName.
+		client.db[collection] as unknown as CollectionOperations<TableCollection> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row override; the client key remains constrained by TName.
 	);
 	const resolvedDeletion = $derived(
 		deletion == null
@@ -319,12 +326,12 @@
 		{ lazy: false }
 	);
 
-	const orderBy = $derived.by((): CollectionQuery<TRow>['orderBy'] => {
+	const orderBy = $derived.by((): CollectionLiveOrderBy<TCollections[TName]> | undefined => {
 		if (tableApi.sort.current.length === 0) return undefined;
 		// Index the registered columns once per derived computation instead of re-searching the
 		// list for every entry in the sort array.
 		const columnsByKey = new Map(registeredColumns.map((column) => [String(column.key), column]));
-		return tableApi.sort.current.reduce<NonNullable<CollectionQuery<TRow>['orderBy']>>(
+		return tableApi.sort.current.reduce<CollectionLiveOrderBy<TCollections[TName]>>(
 			(result, entry) => {
 				const fieldName = entry.field.startsWith('default.')
 					? entry.field.slice('default.'.length)

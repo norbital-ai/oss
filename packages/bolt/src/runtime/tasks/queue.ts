@@ -48,6 +48,31 @@ type FireReport = Readonly<{
 	readonly nextDueAtEpochMs: number | undefined;
 }>;
 
+/**
+ * Work the runtime enqueues for itself and wants run at once, written already claimed.
+ *
+ * `effectId` is the row's stable identity, which is also the occurrence's `taskId` and the reason
+ * the same slot cannot be written twice: a second enqueue under one id is a no-op that answers
+ * nothing, and the caller falls back to the ordinary wake for a row that already exists.
+ */
+export type DirectWork = Readonly<{
+	readonly command: string;
+	readonly input: Schema.Json;
+	readonly effectId: string;
+	readonly nowEpochMs: number;
+}>;
+
+/**
+ * The lease a row claimed at enqueue carries.
+ *
+ * A host tick claims through `discover` with the lease it was handed, which is its own dispatch
+ * deadline. A guest claiming at enqueue has no host deadline to copy, so it uses the one Colony's
+ * tick uses (five minutes). A self-host with a shorter invocation deadline only means an interrupted
+ * run waits that much longer for the ordinary discover path to recover it; a live lease never fences
+ * anything but a doubled claim.
+ */
+export const ENQUEUE_CLAIM_LEASE_MILLIS = 5 * 60_000;
+
 const RETRY = {
 	baseSeconds: 10,
 	capSeconds: 3_600,
@@ -107,7 +132,8 @@ const occurrenceMetadata = (
 		: { scheduleKey, scheduledForEpochMs };
 };
 
-const decodeTaskRow = (row: unknown): HostScheduleOccurrence | undefined => {
+/** Reads one claimed row back as the inert occurrence a host is handed, or nothing for a row it cannot name. */
+export const occurrenceOf = (row: unknown): HostScheduleOccurrence | undefined => {
 	const decoded = decodeClaimedTaskRow(row);
 	if (Result.isFailure(decoded)) return undefined;
 	const metadata = occurrenceMetadata(decoded.success.effect_id, decoded.success.run_at);
@@ -272,6 +298,37 @@ const claimStatement = (leaseForMillis: number): Statement => {
 			.toSQL()
 	);
 };
+
+/**
+ * Writes one direct row in the state `claimStatement` would have left it in, returning the same
+ * columns, so what comes back decodes to exactly the occurrence `discover` would have produced:
+ * `task:<effectId>` as the schedule key, the enqueue instant as the slot, attempt 1. While the lease
+ * holds, `dueWork` does not match the row, so a concurrent discover cannot claim it a second time;
+ * once it expires, the row is an expired claim like any other and discover recovers it as attempt 2.
+ */
+const claimedInsertStatement = (work: DirectWork, leaseForMillis: number): Statement =>
+	toStatement(
+		composer
+			.insert(boltTask)
+			.values({
+				command: work.command,
+				input: storedJson(work.input),
+				effect_id: work.effectId,
+				run_at: storedInstant(work.nowEpochMs),
+				status: 'running',
+				attempts: 1,
+				lease_expires_at: dbNowPlusSeconds(leaseForMillis / 1_000)
+			})
+			.onConflictDoNothing({ target: boltTask.effect_id })
+			.returning({
+				command: boltTask.command,
+				input: boltTask.input,
+				effect_id: boltTask.effect_id,
+				run_at: boltTask.run_at,
+				attempts: boltTask.attempts
+			})
+			.toSQL()
+	);
 
 /** Earliest pending availability, running lease expiry, or cron declaration. */
 const whenStatement = (): Statement =>
@@ -480,7 +537,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 				claimStatement(leaseForMillis)
 			]);
 			const occurrences = claimed.flatMap((row) => {
-				const decoded = decodeTaskRow(row);
+				const decoded = occurrenceOf(row);
 				return decoded === undefined ? [] : [decoded];
 			});
 			const nextDueAtEpochMs = yield* execute([whenStatement()]).pipe(Effect.map(readWhen));
@@ -589,5 +646,18 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 	const when = (): Effect.Effect<number | undefined, E> =>
 		execute([whenStatement()]).pipe(Effect.map(readWhen));
 
-	return { declare, fire, settle, when };
+	/**
+	 * Enqueues direct work already claimed and answers the occurrence a host can run at once, or
+	 * nothing when a row under that id already exists and this enqueue changed nothing.
+	 */
+	const enqueueClaimed = (
+		work: DirectWork,
+		leaseForMillis: number
+	): Effect.Effect<HostScheduleOccurrence | undefined, E> =>
+		Effect.map(
+			execute([claimedInsertStatement(work, leaseForMillis)]),
+			(rows) => rows.flatMap((row) => occurrenceOf(row) ?? []).at(0)
+		);
+
+	return { declare, enqueueClaimed, fire, settle, when };
 };

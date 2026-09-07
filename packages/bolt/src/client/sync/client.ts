@@ -228,9 +228,53 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 			});
 	};
 
+	/**
+	 * Registrations issued in one turn of the event loop ride one request. A component tree mounts
+	 * its live queries synchronously; on a live link each mount used to send its own request, one
+	 * guest dispatch each, serialised on the host lane. The batch is flushed on a microtask, so a
+	 * query mounted in a later turn still registers on its own.
+	 */
+	let batched: RegisterEffect[] = [];
+	const mergeRegistrations = (effects: ReadonlyArray<RegisterEffect>): RegisterEffect => {
+		const queries = new Map<string, RegisterEffect['request']['queries'][number]>();
+		const detached = new Set<string>();
+		for (const effect of effects) {
+			for (const query of effect.request.queries) queries.set(query.queryKey, query);
+			for (const key of effect.request.detached) detached.add(key);
+		}
+		const last = effects[effects.length - 1]!;
+		return {
+			kind: 'register',
+			request: {
+				queries: [...queries.values()],
+				detached: [...detached],
+				pending: last.request.pending
+			}
+		};
+	};
+
 	const runRegister = (effect: RegisterEffect): void => {
+		if (activeAttachment === undefined) {
+			waitingRegistration = effect;
+			return;
+		}
+		if (effect.alone === true) {
+			sendRegistration(effect);
+			return;
+		}
+		batched.push(effect);
+		if (batched.length > 1) return;
+		queueMicrotask(() => {
+			const effects = batched;
+			batched = [];
+			if (effects.length === 0) return;
+			sendRegistration(mergeRegistrations(effects));
+		});
+	};
+
+	const sendRegistration = (effect: RegisterEffect): void => {
 		const attachment = activeAttachment;
-		if (attachment === undefined) {
+		if (attachment === undefined || shutDown) {
 			waitingRegistration = effect;
 			return;
 		}
@@ -247,10 +291,15 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 					disconnectAttachment(attachment, failure);
 					return;
 				}
-				// A 400 on a live link is an authored refusal for those keys — retrying it
-				// forever is learning 59. A 500/503/transport failure is not: the EventSource
-				// is still the live one, and the next register may succeed.
-				if (state.link === 'live' && httpStatusOf(failure) === 400) {
+				// A 400 is an authored refusal for the keys that were asked, on a live link and on
+				// the request that opens one alike. It used to be terminal only when live: an opening
+				// refusal fell through to the attachment's terminal disconnect, which closed the whole
+				// client, so one query ordered by a range column left every later page unable to
+				// mount anything ("Cannot mount a query on a closed Sync client"). The refusal is
+				// that query's failure, the link stays, and nothing asks again. A 500/503/transport
+				// failure is different: the EventSource is still the live one, and the next register
+				// may succeed.
+				if (httpStatusOf(failure) === 400) {
 					dispatch({
 						kind: 'registrationRejected',
 						keys: requestedKeys,
@@ -357,20 +406,18 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 			try {
 				attachment.unsubscribe = value.subscribe({
 					onFrame: (frame) => {
-						attachment.controlTail = attachment.controlTail
-							.catch(report)
-							.then(() => {
-								if (isActive(attachment)) {
-									const payload = ownedFrame(frame, state);
-									if (
-										payload.updates.length > 0 ||
-										payload.resets.length > 0 ||
-										payload.outcomes.length > 0
-									) {
-										dispatch({ kind: 'frame', payload, at: Date.now() });
-									}
+						attachment.controlTail = attachment.controlTail.catch(report).then(() => {
+							if (isActive(attachment)) {
+								const payload = ownedFrame(frame, state);
+								if (
+									payload.updates.length > 0 ||
+									payload.resets.length > 0 ||
+									payload.outcomes.length > 0
+								) {
+									dispatch({ kind: 'frame', payload, at: Date.now() });
 								}
-							});
+							}
+						});
 						return attachment.controlTail;
 					},
 					onDisconnect: (cause) => disconnectAttachment(attachment, cause)

@@ -195,7 +195,6 @@ describe('JSON columns holding a list', () => {
 						labels: ['night', 'weekend']
 					}
 				],
-				false,
 				0,
 				{ roots: [{ id: RECORD_ID, action: 'create' }] }
 			);
@@ -221,7 +220,6 @@ describe('JSON columns holding a list', () => {
 				subject,
 				'shifts',
 				[{ id: RECORD_ID, intervals }],
-				false,
 				0,
 				{ roots: [{ id: RECORD_ID, action: 'update' }] }
 			);

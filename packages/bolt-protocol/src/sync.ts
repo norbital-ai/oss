@@ -16,7 +16,7 @@ export const DEFAULT_SYNC_LOADED_KEYS = 100;
  * 10,000, raised from 1,000. Pagination across the platform maxes at 10,000, and a live query is
  * pagination that keeps itself current — a lower ceiling here made "the list you can page through"
  * and "the list you can watch" two different lists, which is not a distinction anybody asked for.
- * RFC/sync-engine.md carries the amendment.
+ * The amendment is recorded in bolt docs/pillars/04-sync-engine/README.md.
  */
 export const MAX_SYNC_LOADED_KEYS = 10_000;
 export const MAX_SYNC_INITIAL_ANSWER_BYTES = 2 * 1024 * 1024;

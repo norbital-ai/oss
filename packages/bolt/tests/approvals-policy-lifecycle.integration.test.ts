@@ -267,7 +267,6 @@ describe('policy and hook lifecycle', () => {
 				policySubject,
 				'records',
 				[{ id, title: 'Draft' }],
-				false,
 				0,
 				{ roots: [{ id, action: 'create' }] }
 			)
@@ -289,7 +288,6 @@ describe('policy and hook lifecycle', () => {
 				policySubject,
 				'records',
 				[{ id, title: 'Final' }],
-				false,
 				0,
 				{ roots: [{ id, action: 'update' }] }
 			)
@@ -339,7 +337,6 @@ describe('policy and hook lifecycle', () => {
 					writerSubject,
 					'records',
 					[{ id, status: 'forged' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'update' }] }
 				)
@@ -447,7 +444,6 @@ describe('policy and hook lifecycle', () => {
 						transitionSubject,
 						'versions',
 						[{ label: 'Successor', supersedes_id: predecessorId }],
-						false,
 						0,
 						{
 							roots: [{ id: successorId, action: 'create' }]

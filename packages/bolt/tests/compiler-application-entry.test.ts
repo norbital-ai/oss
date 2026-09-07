@@ -130,4 +130,86 @@ describe('workspace application entry', () => {
 		);
 		expect(source).toContain('documentationFiles: workspace.documentationFiles');
 	});
+
+	it("links every stylesheet of the entry's static import graph, and none reached only dynamically", async () => {
+		const plugin = compilerPlugin();
+		const load = plugin.load;
+		if (typeof load !== 'function')
+			throw new Error('The Bolt compiler plugin no longer has a loader');
+		const source = await (
+			load as (this: void, id: string) => string | null | Promise<string | null>
+		)(applicationId);
+		if (typeof source !== 'string')
+			throw new Error('The Bolt application loader returned no source');
+		const generateBundle = plugin.generateBundle;
+		const generate =
+			typeof generateBundle === 'function' ? generateBundle : generateBundle?.handler;
+		if (typeof generate !== 'function')
+			throw new Error('The Bolt compiler plugin no longer validates its output bundle');
+
+		const chunk = (
+			fileName: string,
+			imports: ReadonlyArray<string>,
+			importedCss: ReadonlyArray<string>,
+			extra: Readonly<Record<string, unknown>> = {}
+		) => ({
+			type: 'chunk',
+			fileName,
+			imports: [...imports],
+			dynamicImports: [],
+			viteMetadata: { importedCss: new Set(importedCss), importedAssets: new Set<string>() },
+			code: '',
+			...extra
+		});
+		const entry = chunk('workspace.js', ['assets/shell.js'], [], {
+			isEntry: true,
+			code: source,
+			dynamicImports: ['assets/_people.js']
+		});
+		const bundle = {
+			'workspace.js': entry,
+			// The shell reaches the table statically; the table reaches the renderer statically.
+			'assets/shell.js': chunk('assets/shell.js', ['assets/collection-table.js'], []),
+			'assets/collection-table.js': chunk(
+				'assets/collection-table.js',
+				['assets/data-renderer.js'],
+				['assets/collection-table.css']
+			),
+			'assets/data-renderer.js': chunk('assets/data-renderer.js', [], ['assets/data-renderer.css']),
+			// An app is reached only through `import()`; Vite's preload helper links its sheet.
+			'assets/_people.js': chunk(
+				'assets/_people.js',
+				['assets/collection-table.js'],
+				['assets/_people.css']
+			),
+			'assets/application.css': {
+				type: 'asset',
+				fileName: 'assets/application.css',
+				source: '.bolt-app{--bolt-framework-stylesheet:1}'
+			},
+			'assets/collection-table.css': {
+				type: 'asset',
+				fileName: 'assets/collection-table.css',
+				source: '.collection-table-narrow{display:none}'
+			},
+			'assets/data-renderer.css': {
+				type: 'asset',
+				fileName: 'assets/data-renderer.css',
+				source: '.cm-editor{height:100%}'
+			},
+			'assets/_people.css': {
+				type: 'asset',
+				fileName: 'assets/_people.css',
+				source: '.people{display:grid}'
+			}
+		};
+		generate.call({} as never, {} as never, bundle as never, false);
+
+		expect(entry.code).toContain(
+			'"assets/application.css,assets/collection-table.css,assets/data-renderer.css"'
+		);
+		expect(entry.code).not.toContain('_people.css');
+		expect(entry.code).not.toContain('__BOLT_ENTRY_STYLESHEET__');
+		expect(entry.code).toContain('Promise.all(applicationStylesheets.map(linkStylesheet))');
+	});
 });

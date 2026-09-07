@@ -74,7 +74,6 @@ type PreparedDeclarativeGraph = Readonly<{
 
 type DeclarativePreparationOptions<ReadError> = Readonly<{
 	readonly approved: boolean;
-	readonly elevated: boolean;
 	readonly rootId: string;
 	readonly rootAction: 'create' | 'update' | 'delete';
 	readonly clearRootLock: boolean;
@@ -90,10 +89,8 @@ type DeclarativePreparationOptions<ReadError> = Readonly<{
 type ActiveGraphEnginePorts<Error, Requirements> = Omit<
 	GraphPreparePorts<Error, Requirements>,
 	| 'effectId'
-	| 'subject'
 	| 'rootCollection'
 	| 'hookDepth'
-	| 'elevated'
 	| 'browserMutation'
 	| 'operations'
 	| 'graphCoordinates'
@@ -126,7 +123,6 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 		) => Effect.Effect<GraphWaveReadResult, ReadError, Requirements>;
 		readonly runMutatePrepare: (
 			effectId: EffectId,
-			subject: Identity.Subject,
 			collection: string,
 			inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
@@ -135,7 +131,6 @@ export type PrepareDeclarativeGraphPorts<Error, ReadError, Requirements> = Activ
 		) => Effect.Effect<unknown, AuthoredRefusal, Requirements>;
 		readonly runDeletePrepare: (
 			effectId: EffectId,
-			subject: Identity.Subject,
 			collection: string,
 			existing: ReadonlyArray<Readonly<Record<string, unknown>>>,
 			module: GraphPreparePorts<Error, Requirements>['authoredHooks'][string] | undefined,
@@ -211,7 +206,7 @@ export const isClientMintedRecordId = (value: unknown): value is string =>
  * Splitting remains responsible for turning fields and relationship rows into engine inputs. This
  * walk is the sole validation authority for the submitted graph: it follows exactly the writable
  * many edges the engine follows and refuses values which would otherwise be stripped or silently
- * ignored. Hook-derived writes are trusted server work and still pass through the structural split.
+ * ignored. The rows a hook derives are the workspace's and still pass through the structural split.
  */
 const validateSubmittedGraph = <Error, ReadError, Requirements>(
 	ports: PrepareDeclarativeGraphPorts<Error, ReadError, Requirements>,
@@ -349,6 +344,12 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			Effect.gen(function* () {
 				const initial = new Map<string, PrimedRelationshipRequest>();
 				const rows = new Map<string, Readonly<{ collection: string; id: string }>>();
+				// The caller's own payload is primed by what the browser declared: a nested id the
+				// browser did not declare is a row nothing claims exists yet, so its relations are not
+				// read. A workspace seed (the graph a hook returned, a staged hook write) restates stored
+				// rows the browser never saw, so every child it names by id is primed as a stored row,
+				// its own relations included; `planRelation` still decides create against update.
+				const workspaceSeeds = requestedSeeds !== undefined;
 				const collect = (
 					collection: string,
 					payload: Readonly<Record<string, unknown>>,
@@ -391,18 +392,14 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 							const childPayload = child as Readonly<Record<string, unknown>>;
 							const childId = childPayload['id'];
 							if (!isNonEmptyString(childId)) continue;
-							const browserExisting = options.browserMutation?.baseVersions.some(
-								(entry) =>
-									entry.row.collection === edge.childCollection && entry.row.recordId === childId
-							);
-							collect(
-								edge.childCollection,
-								childPayload,
-								childId,
-								options.browserMutation === undefined || browserExisting === true
-									? 'update'
-									: 'create'
-							);
+							const browserExisting =
+								workspaceSeeds ||
+								options.browserMutation === undefined ||
+								options.browserMutation.baseVersions.some(
+									(entry) =>
+										entry.row.collection === edge.childCollection && entry.row.recordId === childId
+								);
+							collect(edge.childCollection, childPayload, childId, browserExisting ? 'update' : 'create');
 						}
 					}
 				};
@@ -590,22 +587,10 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		};
 		const graphPreparers = makeGraphPreparers<Error | AuthoredRefusal, Requirements>({
 			...ports,
-			buildApi: (effectId, subject, elevated, depth) =>
-				ports.buildApi(effectId, subject, elevated, depth, stageHookWrites),
-			runMutateBefore: (
-				effectId,
-				subject,
-				input,
-				existing,
-				module,
-				depth,
-				prepared,
-				_staged,
-				relationships
-			) =>
+			buildApi: (effectId, depth) => ports.buildApi(effectId, depth, stageHookWrites),
+			runMutateBefore: (effectId, input, existing, module, depth, prepared, _staged, relationships) =>
 				ports.runMutateBefore(
 					effectId,
-					subject,
 					input,
 					existing,
 					module,
@@ -614,31 +599,13 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					stageHookWrites,
 					relationships
 				),
-			runMutatePrepare: (effectId, subject, collection, inputs, module, depth) =>
-				ports.runMutatePrepare(
-					effectId,
-					subject,
-					collection,
-					inputs,
-					module,
-					depth,
-					stageHookWrites
-				),
-			runDeletePrepare: (effectId, subject, collection, existing, module, depth) =>
-				ports.runDeletePrepare(
-					effectId,
-					subject,
-					collection,
-					existing,
-					module,
-					depth,
-					stageHookWrites
-				),
+			runMutatePrepare: (effectId, collection, inputs, module, depth) =>
+				ports.runMutatePrepare(effectId, collection, inputs, module, depth, stageHookWrites),
+			runDeletePrepare: (effectId, collection, existing, module, depth) =>
+				ports.runDeletePrepare(effectId, collection, existing, module, depth, stageHookWrites),
 			effectId,
-			subject,
 			rootCollection,
 			hookDepth,
-			elevated: options.elevated,
 			...(options.browserMutation === undefined
 				? {}
 				: { browserMutation: options.browserMutation }),
@@ -718,7 +685,6 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				preparationOwner?.id === options.rootId,
 				ports.runMutatePrepare(
 					effectId,
-					subject,
 					rootCollection,
 					rootInputs,
 					rootModule,
@@ -736,7 +702,6 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				Effect.suspend(() =>
 					ports.runDeletePrepare(
 						effectId,
-						subject,
 						rootCollection,
 						deleteSeeds.flatMap((seed) => {
 							const storedExisting = storedGraphRowsCache.get(
@@ -764,12 +729,13 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					`${rootCollection} ${rootId} no longer exists.`
 				);
 			}
-			yield* graphPreparers.prepareDelete(rootCollection, stored.row, 0, true, rootPrepared);
+			yield* graphPreparers.prepareDelete(rootCollection, stored.row, 0, subject, true, rootPrepared);
 		} else {
 			yield* graphPreparers.prepareNode(
 				rootCollection,
 				rootPayload,
 				0,
+				subject,
 				undefined,
 				{ id: rootId, action: options.rootAction, clearLock: options.clearRootLock },
 				true,
@@ -791,7 +757,13 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 						'delete',
 						`Staged delete of ${staged.collection} ${staged.id} found no stored row.`
 					);
-				yield* graphPreparers.prepareDelete(staged.collection, stored.row, 0, false);
+				yield* graphPreparers.prepareDelete(
+					staged.collection,
+					stored.row,
+					0,
+					ports.workspaceSubject,
+					false
+				);
 			}
 			if (stagedWrites.length === 0) continue;
 			const wave = stagedWrites.splice(0);
@@ -838,7 +810,6 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					stagedCollection,
 					yield* ports.runMutatePrepare(
 						effectId,
-						subject,
 						stagedCollection,
 						inputs,
 						stagedModule,
@@ -855,6 +826,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					staged.collection,
 					staged.payload,
 					0,
+					ports.workspaceSubject,
 					undefined,
 					{ id: staged.id, action: staged.action, clearLock: false },
 					false,

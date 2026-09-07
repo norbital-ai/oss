@@ -5,9 +5,14 @@
  * same authorization, approval, hooks, history, sync and event pipeline as its parent, before the
  * database's foreign-key cascade could make it disappear invisibly. The child collection's delete
  * hooks run once per wave over all related rows; each row is then prepared with that wave's result.
+ *
+ * A descendant is its owner's author's: a caller's delete cascades as the caller (authorized by the
+ * `cascade(...)` edge the author declared, against the caller's delete grant on the root), and a
+ * delete a hook staged cascades as the workspace.
  */
 import { Effect } from 'effect';
 import type { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { GraphPrepareFns, GraphPreparePorts } from './engine.js';
 import { membershipIdentitySnapshot } from './identity-snapshot.js';
 import { ownsManyRelation } from './plan.js';
@@ -18,7 +23,7 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 	collection: string,
 	id: string,
 	depth: number,
-	trusted = false
+	author: Identity.Subject
 ): Effect.Effect<void, Error | AuthoredRefusal, Requirements> =>
 	Effect.gen(function* () {
 		for (const relation of ports.workspace.definition.relations) {
@@ -34,7 +39,6 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 			const childModule = ports.authoredHooks[edge.childCollection];
 			const childPrepared = yield* ports.runDeletePrepare(
 				ports.effectId,
-				ports.subject,
 				edge.childCollection,
 				related.rows,
 				childModule,
@@ -42,6 +46,6 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 				ports.stageHookWrites
 			);
 			for (const child of related.rows)
-				yield* prepareDelete(edge.childCollection, child, depth + 1, false, childPrepared, trusted);
+				yield* prepareDelete(edge.childCollection, child, depth + 1, author, false, childPrepared);
 		}
 	});

@@ -96,6 +96,7 @@ describe('Effect AI durable contract', () => {
 			'phase',
 			'input_through_sequence',
 			'model_id',
+			'reasoning_requested',
 			'capability_snapshot',
 			'status'
 		]);
@@ -162,6 +163,7 @@ describe('Effect AI durable contract', () => {
 				phase: 'model',
 				input_through_sequence: 2,
 				model_id: 'effect-model',
+				reasoning_requested: false,
 				status: 'running'
 			}).model_id
 		).toBe('effect-model');

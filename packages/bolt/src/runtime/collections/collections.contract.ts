@@ -28,6 +28,7 @@ import type { NestingLimitExceeded } from '#lib/runtime/budget.js';
 import type { WhereCompileError } from '#lib/runtime/access/effective-plan.js';
 import type {
 	AutomationDeferredUnsupported,
+	AutomationContinuationUnchanged,
 	AutomationStopped
 } from '#lib/runtime/automations/automations.js';
 
@@ -443,6 +444,7 @@ export type Interface = Readonly<{
 		| Schema.SchemaError
 		| AutomationStopped
 		| AutomationDeferredUnsupported
+		| AutomationContinuationUnchanged
 	>;
 	readonly findMany: (
 		effectId: EffectId,
@@ -496,7 +498,6 @@ export type Interface = Readonly<{
 		subject: Subject,
 		collection: string,
 		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-		elevated?: boolean,
 		depth?: number,
 		options?: MutateOptions
 	) => Effect.Effect<CollectionMutationCommit, BatchMutationError>;

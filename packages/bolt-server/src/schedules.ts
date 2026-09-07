@@ -85,11 +85,20 @@ export const makeTaskInvocationControl = (): TaskInvocationControl => {
 	};
 };
 
-/** Binds guest task lifecycle messages to the host timer and active dispatch table. */
+/**
+ * Binds guest task lifecycle messages to the host timer and active dispatch table.
+ *
+ * A `Wake` that carries an occurrence is work the guest has already claimed and wants run now. The
+ * timer is still armed to the instant it names, which is that claim's lease expiry, so a host that
+ * drops the dispatch loses nothing but promptness: the ordinary tick recovers the row when the
+ * lease lapses. `dispatchOccurrence` is the immediate half, owned by the caller's runtime and never
+ * awaited here, because the guest's own facility call must return at once.
+ */
 export const makeTaskBinding = (
 	timekeeper: Timekeeper,
 	register: (command: string) => void = () => {},
-	invocations?: TaskInvocationControl
+	invocations?: TaskInvocationControl,
+	dispatchOccurrence?: (occurrence: ScheduleOccurrence) => void
 ): FacilityBinding<TaskRequest, TaskResponse> =>
 	makeWireBinding({
 		request: TaskRequest,
@@ -105,6 +114,7 @@ export const makeTaskBinding = (
 							break;
 						case 'Wake':
 							timekeeper.announce(input.notLaterThanEpochMs);
+							if (input.occurrence !== undefined) dispatchOccurrence?.(input.occurrence);
 							break;
 						case 'Active':
 							invocations?.active(input.taskId, metadata.invocationId);
@@ -310,6 +320,55 @@ const invokeOccurrence = (
 };
 
 /**
+ * Invokes one occurrence and settles it, answering the queue's next instant, or nothing when the
+ * settlement could not be recorded (the occurrence ran; the guest's own lease recovers the record).
+ */
+const invokeAndSettle = (
+	options: ScheduleTickOptions,
+	nowEpochMs: number,
+	occurrence: ScheduleOccurrence
+): Effect.Effect<Option.Option<number | null>, ScheduleTickError> =>
+	Effect.gen(function* () {
+		const outcome = yield* invokeOccurrence(options, nowEpochMs, occurrence);
+		return yield* systemCommand(
+			options,
+			HOST_SCHEDULE_SETTLE_COMMAND,
+			InvocationId.make(`${HOST_SCHEDULE_SETTLE_COMMAND}:${occurrence.taskId}:${nowEpochMs}`),
+			{ occurrence, outcome },
+			nowEpochMs
+		).pipe(
+			Effect.flatMap((value) => Schema.decodeUnknownEffect(HostScheduleSettleResponse)(value)),
+			Effect.map((settled) => settled.nextDueAtEpochMs),
+			Effect.option
+		);
+	});
+
+/**
+ * Runs one occurrence the guest handed over already claimed, outside any tick.
+ *
+ * This is the immediate half of a `Wake` that carries an occurrence: the same invoke and settle the
+ * tick makes for what it discovered, without the discovery, because the guest has already done the
+ * claiming. It answers the queue's next instant like a tick does, and fails the same way when the
+ * settlement could not be recorded, so a caller can log it; the timer itself is not touched here,
+ * since the wake that carried the occurrence already armed it to the claim's lease expiry.
+ */
+export const runScheduleOccurrence = (
+	options: ScheduleTickOptions,
+	occurrence: ScheduleOccurrence
+): Effect.Effect<number | null, ScheduleTickError> =>
+	Effect.gen(function* () {
+		const nowEpochMs = yield* Clock.currentTimeMillis;
+		const settled = yield* invokeAndSettle(options, nowEpochMs, occurrence);
+		if (Option.isNone(settled)) {
+			return yield* new ScheduleTickError({
+				operation: HOST_SCHEDULE_SETTLE_COMMAND,
+				message: `Bolt bundle ran ${occurrence.taskId} but could not settle it`
+			});
+		}
+		return settled.value;
+	});
+
+/**
  * Discovers what is due, runs it, records it, and answers when anything is next due.
  *
  * The answer is what the timekeeper arms its one timer to, so `null` genuinely means "nothing", and
@@ -356,21 +415,10 @@ export const runScheduleTick = (
 		let nextDueAtEpochMs: number | null = discovered.nextDueAtEpochMs;
 		let settledCount = 0;
 		for (const occurrence of discovered.occurrences) {
-			const outcome = yield* invokeOccurrence(options, nowEpochMs, occurrence);
-			const settled = yield* systemCommand(
-				options,
-				HOST_SCHEDULE_SETTLE_COMMAND,
-				InvocationId.make(`${HOST_SCHEDULE_SETTLE_COMMAND}:${occurrence.taskId}:${nowEpochMs}`),
-				{ occurrence, outcome },
-				nowEpochMs
-			).pipe(
-				Effect.flatMap((value) => Schema.decodeUnknownEffect(HostScheduleSettleResponse)(value)),
-				Effect.option
-			);
+			const settled = yield* invokeAndSettle(options, nowEpochMs, occurrence);
 			if (Option.isNone(settled)) continue;
 			settledCount += 1;
-			if (settled.value.nextDueAtEpochMs !== null)
-				nextDueAtEpochMs = settled.value.nextDueAtEpochMs;
+			if (settled.value !== null) nextDueAtEpochMs = settled.value;
 		}
 		if (settledCount !== discovered.occurrences.length) {
 			// The occurrences ran; what was lost is the record of how they ended, which the guest's own

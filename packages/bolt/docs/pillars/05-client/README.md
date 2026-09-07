@@ -67,6 +67,17 @@ The shell (`src/client/ui/shell/`) owns workspace navigation, the agent panel, s
 finder, and notifications. Colony's workspace shell (`workspace-shell.svelte`) opens the workspace
 in online mode at **5 s** (`continueOnline`) if bootstrap has not finished.
 
+A custom type's `+renderer.svelte` is loaded when a `DataRenderer` first meets that kind
+(`src/client/ui/shell/custom-type-renderers.svelte.ts`). A load that fails is a state, not a
+placeholder: the field shows its raw value with an inline error naming the datatype and the cause,
+and the failure is logged to the console. `Loading field…` is shown only while the load is in
+flight.
+
+Registrations issued in one turn of the event loop ride one `sync.connect` request, and a
+registration the host refuses with a 400 is terminal for the keys it carried: the query fails with
+the host's sentence, nothing retries it, and other queries and later pages are unaffected. See
+[P4](../04-sync-engine/README.md#browser-one-eventsource-per-profile).
+
 ---
 
 ## What this is not

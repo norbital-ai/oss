@@ -75,7 +75,6 @@ const seed = (harness: BoltTestRuntime) =>
 				adminSubject,
 				'people',
 				[{ id: rid('a'), name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }],
-				false,
 				0,
 				{ roots: [{ id: rid('a'), action: 'create' }] }
 			);
@@ -84,7 +83,6 @@ const seed = (harness: BoltTestRuntime) =>
 				adminSubject,
 				'people',
 				[{ id: rid('b'), name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }],
-				false,
 				0,
 				{ roots: [{ id: rid('b'), action: 'create' }] }
 			);
@@ -152,7 +150,6 @@ describe('collection search', () => {
 					adminSubject,
 					'people',
 					[{ id: rid('x'), name: 'Ada Lovelace' }],
-					false,
 					0,
 					{ roots: [{ id: rid('x'), action: 'create' }] }
 				);

@@ -291,7 +291,6 @@ describe('invocation provenance', () => {
 						policySubject,
 						'people',
 						[{ id, name: 'Ada' }],
-						false,
 						0,
 						{ roots: [{ id, action: 'create' }] }
 					);

@@ -23,6 +23,7 @@ import {
 	type HostToolResponse,
 	type IdentityHookRequest,
 	type IdentityHookResponse,
+	type HostScheduleOccurrence,
 	type TaskRequest,
 	type TaskResponse,
 	TransportRequest,
@@ -726,32 +727,54 @@ export const adminSubject: Identity.Subject = {
 /**
  * Binds the host's tasks facility to a sink, recording what it was asked to hold.
  *
- * The runtime's only message to this facility is `Wake` — "come back no later than this instant" —
+ * The runtime's message to this facility is `Wake` — "come back no later than this instant" —
  * so the sink's job is to accept it and remember it, never to act on it: a test runtime has no host
  * timer, and a write that queued work must succeed whether or not one is listening. Recording is
  * what lets a test assert that the host was told, which is the observable half of the contract.
+ *
+ * A `Wake` may also carry an occurrence, already claimed, that a real host runs at once. A test that
+ * wants that half of the contract binds a runner with `bind`, late, exactly as bolt-server and Colony
+ * do: the runner is started on the `Wake` and never awaited by the facility call, so the guest's own
+ * submit returns as it would on a host. Unbound, the occurrence is recorded and nothing runs.
  */
 export const makeTestTasks = (): {
 	readonly binding: FacilityBinding<TaskRequest, TaskResponse>;
 	readonly requests: ReadonlyArray<TaskRequest>;
 	readonly effectIds: ReadonlyArray<string>;
+	/** Every occurrence handed to a bound runner, in order, with the promise that runs it. */
+	readonly dispatched: ReadonlyArray<{
+		readonly occurrence: HostScheduleOccurrence;
+		readonly done: Promise<void>;
+	}>;
+	readonly bind: (run: (occurrence: HostScheduleOccurrence) => Promise<void>) => void;
 	readonly forget: () => void;
 } => {
 	const requests: Array<TaskRequest> = [];
 	const effectIds: Array<string> = [];
+	const dispatched: Array<{ readonly occurrence: HostScheduleOccurrence; readonly done: Promise<void> }> =
+		[];
+	let runner: ((occurrence: HostScheduleOccurrence) => Promise<void>) | undefined;
 	return {
 		binding: {
 			call: async (metadata, input) => {
 				requests.push(input);
 				effectIds.push(String(metadata.effectId));
+				if (input._tag === 'Wake' && input.occurrence !== undefined && runner !== undefined) {
+					dispatched.push({ occurrence: input.occurrence, done: runner(input.occurrence) });
+				}
 				return { _tag: 'Success', value: {} };
 			}
 		},
 		requests,
 		effectIds,
+		dispatched,
+		bind: (run) => {
+			runner = run;
+		},
 		forget: () => {
 			requests.length = 0;
 			effectIds.length = 0;
+			dispatched.length = 0;
 		}
 	};
 };

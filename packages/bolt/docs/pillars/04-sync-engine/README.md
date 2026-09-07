@@ -19,8 +19,14 @@ lane.
 
 `compileEffectiveQueryPlan` is the query and read-policy compiler. A plan is either `live-prefix`
 or `one-shot`. Live admission is `findMany` / `findFirst` with a contiguous limit (default 100,
-max 1 000). `count`, `findGrouped`, an `after` cursor, and semantic search are one-shot and are
-never filed live. An opaque policy predicate cannot be a live plan. Lexical search may be live;
+max 10 000). `count`, `findGrouped`, an `after` cursor, and semantic search are one-shot and are
+never filed live. An opaque policy predicate cannot be a live plan. A live prefix is keyed by
+scalar columns only: json, custom-typed and vector columns cannot key a prefix, and the planner
+refuses such a plan (`Live ordering requires a scalar field: …`, `effective-plan.ts`). The generated
+per-collection types carry the same scalar set (`scalarColumns`), and a live `orderBy` is typed over
+it (`CollectionLiveOrderBy` in `@norbital-ai/std`), so ordering a live query by a range or custom
+column is a type error where it is written. A page continued with `after` is one-shot and keeps the
+full `orderBy` vocabulary. Lexical search may be live;
 prefix continuation then needs an ordering cursor the search planner owns, or the wake resets.
 
 | Command              | Who calls it                         | Role                                                                                          |
@@ -79,9 +85,10 @@ disconnect mapping. Filing, invalidation, ordering, and emission live in the sha
 The host hashes and files opaque guest facts. It does not resolve a subject, evaluate a predicate,
 or construct a delta — evaluation belongs to the guest and the database.
 
-The Live Query Sync v2 RFC still wants a refused lane to fail the mutation response. Both hosts
+A refused lane still returns the mutation response: both hosts
 await the lane and close on uncertainty; Colony then logs a delivery failure and still returns the
-HTTP write.
+HTTP write. Failing the mutation response on a refused lane is an open gate, tracked in
+[`RFC/residual-gates.md`](../../../../../../RFC/residual-gates.md).
 
 ---
 
@@ -90,7 +97,15 @@ HTTP write.
 The browser Machine (`src/client/sync/machine.ts`) holds versioned prefixes, pending writes, and
 link state (`live` / `reconnecting` / `closed`). `step()` is the only place that state changes.
 `applyPrefixDelta` (`src/client/live-query/project.ts`) is the sole applier. A frame that does not
-continue every retained `fromVersion` is a protocol error and restarts the link.
+continue every retained `fromVersion` is a protocol error and restarts the link. A registration the
+host refuses with a 400 is terminal for the keys it carried, on the request that opens the link as
+much as on a live one: the query fails with the host's sentence, the link stays up for every other
+query, and nothing asks for that key again on the same link (a batched refusal is re-asked one key
+per request first, so the sentence lands on the query it names). Registrations issued in one turn
+of the event loop ride one `sync.connect` request (`src/client/sync/client.ts` flushes them on a
+microtask): a page that mounts twelve live queries makes one host hop, not twelve. The request that
+opens the link is sent even when it carries no queries, because that request is what moves the
+link to `live`. Both hosts answer `Server-Timing: sync-connect;dur=…;desc="queries=N"` on it.
 
 `createBrowserSyncBroker` (`src/client/sync/sse-driver.ts`) elects one owner tab with Web Locks
 and shares frames over BroadcastChannel. **One EventSource per browser profile** is shared across
@@ -106,8 +121,10 @@ Control posts send `x-bolt-sync-connection`. Writes go over `collections.mutate`
 header. A released query's prefix is retained for `DETACH_GRACE_MS` (30 s); a sent write
 unacknowledged for `STALE_WRITE_MS` (15 s) is retried.
 
-Ceilings: `MAX_SYNC_LOADED_KEYS` = 1 000, `MAX_SYNC_INITIAL_ANSWER_BYTES` = 2 MiB,
-`MAX_SYNC_OUTBOUND_FRAME_BYTES` = 2 MiB, `MAX_SYNC_RETAINED_PREFIX_BYTES` = 8 MiB.
+Ceilings (`bolt-protocol/src/sync.ts`, `runtime/sync/delta-engine.ts`): `MAX_SYNC_LOADED_KEYS` = 10 000,
+`MAX_SYNC_INITIAL_ANSWER_BYTES` = 2 MiB, `MAX_SYNC_OUTBOUND_FRAME_BYTES` = 2 MiB,
+`MAX_SYNC_RETAINED_PREFIX_BYTES` = 8 MiB, `MAX_IDS_PER_QUERY` = 500, `MAX_SQL_CALLS_PER_PLAN` = 32,
+`MAX_REVERSE_ROOTS` = 10 000.
 
 ---
 

@@ -10,12 +10,14 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import type { CallContext } from '#lib/runtime/facilities/database.js';
 import { Tasks } from '#lib/runtime/facilities/services.js';
 import {
+	ENQUEUE_CLAIM_LEASE_MILLIS,
 	makeQueue,
 	progressStatement,
 	recoverStatements,
 	statusStatement,
 	stopStatement,
 	type Declaration,
+	type DirectWork,
 	type Rejection,
 	type Statement
 } from '#lib/runtime/tasks/queue.js';
@@ -30,6 +32,18 @@ export type Interface = Readonly<{
 	readonly wake: (
 		effectId: EffectIdType,
 		notLaterThanEpochMs: number
+	) => Effect.Effect<void, Database.FacilityError>;
+	/**
+	 * Enqueues work the runtime wants run now: the row is written already claimed and the host is
+	 * woken with its occurrence, so the host invokes it in one hop instead of arming a timer,
+	 * discovering and claiming across three. The claimed row is written *first* and the wake sent
+	 * after, the reverse of `wake`'s discipline, and for the same reason: a crash between the two
+	 * costs a delayed pickup when the lease expires, never a lost run and never a doubled one. A row
+	 * that already exists under the id is left alone and the ordinary wake is sent instead.
+	 */
+	readonly enqueueClaimed: (
+		effectId: EffectIdType,
+		work: DirectWork
 	) => Effect.Effect<void, Database.FacilityError>;
 	readonly declare: (
 		effectId: EffectIdType,
@@ -126,6 +140,25 @@ export const layer = (_context: CallContext) =>
 			) {
 				yield* tasks.execute(effectId, { _tag: 'Wake', notLaterThanEpochMs });
 			});
+			const enqueueClaimed = Effect.fn('TaskQueue.enqueueClaimed')(function* (
+				effectId: EffectIdType,
+				work: DirectWork
+			) {
+				const occurrence = yield* makeQueue(executeUnder(effectId, 'enqueue')).enqueueClaimed(
+					work,
+					ENQUEUE_CLAIM_LEASE_MILLIS
+				);
+				const wakeId = EffectId.make(`${effectId}:wake`);
+				if (occurrence === undefined) return yield* wake(wakeId, work.nowEpochMs);
+				// The instant is the fallback, not the plan: if the host runs the occurrence it carries,
+				// nothing is due before this lease expires, and if it does not, discover recovers the row
+				// then.
+				yield* tasks.execute(wakeId, {
+					_tag: 'Wake',
+					notLaterThanEpochMs: work.nowEpochMs + ENQUEUE_CLAIM_LEASE_MILLIS,
+					occurrence
+				});
+			});
 			return Service.of({
 				recover: Effect.fn('TaskQueue.recover')(function* (effectId) {
 					yield* database.execute(effectId, asRequest(recoverStatements()));
@@ -137,6 +170,7 @@ export const layer = (_context: CallContext) =>
 				interruptActive: (effectId, taskId) =>
 					Effect.ignore(tasks.execute(effectId, { _tag: 'Interrupt', taskId })),
 				wake,
+				enqueueClaimed,
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					makeQueue(executeUnder(effectId, 'declare')).declare(declarations, nowEpochMs)
 				),

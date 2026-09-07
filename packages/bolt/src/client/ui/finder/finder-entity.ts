@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- finder-entity consumes CommandScope over the #lib alias
 // (#lib/client/ui/agent/mention-sources.js), so the pair is linked, not parallel.
 import type { CommandItemData } from '@norbital-ai/ui/command';
-import type { CommandScope } from '#lib/client/ui/agent/mention-sources.js';
+import type { CommandScope, ComposerCommand } from '#lib/client/ui/agent/mention-sources.js';
 
 type FinderRowKind = 'group' | 'app' | 'record' | 'command' | 'loading' | 'empty' | 'scope';
 
@@ -63,6 +63,11 @@ export type FinderEntity =
 	| {
 			readonly kind: 'navigate';
 			readonly href: string;
+	  }
+	| {
+			/** A `/plan` or `/compact` the composer's command menu inserts at the draft's start. */
+			readonly kind: 'composer-command';
+			readonly command: ComposerCommand;
 	  };
 
 type FinderPromptInsert = {
@@ -96,6 +101,8 @@ function formatFinderEntityForPrompt(entity: FinderEntity): FinderPromptInsert |
 		}
 		case 'collection':
 			return { text: `collection:${entity.collection}` };
+		case 'composer-command':
+			return { text: `/${entity.command} ` };
 		case 'scope':
 		case 'prefix':
 		case 'plan':

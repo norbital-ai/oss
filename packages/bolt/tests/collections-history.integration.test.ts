@@ -26,7 +26,6 @@ describe('collection history', () => {
 					adminSubject,
 					'people',
 					[{ id: recordId, name: 'Ada', team: 'Research' }],
-					false,
 					0,
 					{ roots: [{ id: recordId, action: 'create' }] }
 				);
@@ -35,7 +34,6 @@ describe('collection history', () => {
 					adminSubject,
 					'people',
 					[{ id: recordId, team: 'Platform' }],
-					false,
 					0,
 					{ roots: [{ id: recordId, action: 'update' }] }
 				);

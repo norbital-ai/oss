@@ -97,3 +97,42 @@ export const seedSubject = (tenantId: string): Identity.Subject => ({
 	policies: [],
 	admin: false
 });
+
+/**
+ * The workspace, acting inside a write the caller was allowed to make.
+ *
+ * Two subjects take part in one write. The caller is judged once on the shape it submitted: allow
+ * decision, row predicate, field grant, `authorize`, and the one approval route of the root
+ * action. Everything a hook does is the workspace's own work: what it reads, what it returns
+ * (including a relationship it replaced), what it writes through `api.db.*` in any phase, and the
+ * omission deletes of the relations it returned are authorized as the workspace, with no decision,
+ * no predicate, no field mask, no `authorize` and no approval route of their own, and commit in
+ * the root's transaction. Every hook api is bound to this subject, and `AccessControl.Invocation`
+ * answers it unrestricted at the top of each function.
+ *
+ * The mark is a symbol-keyed own property, not a schema field: a decoded payload cannot carry it,
+ * so there is no route from a request to holding it, and an object spread keeps it, so the
+ * invocation memo's frozen copy still answers. The caller's identity rides along so history and
+ * audit still name the person whose write the hook ran inside.
+ */
+const WORKSPACE = Symbol('@norbital-ai/bolt/workspace-subject');
+
+type WorkspaceSubject = Identity.Subject & Readonly<{ readonly [WORKSPACE]: true }>;
+
+export const isWorkspaceSubject = (subject: Identity.Subject): subject is WorkspaceSubject =>
+	Reflect.get(subject, WORKSPACE) === true;
+
+export const workspaceSubject = (caller: Identity.Subject): Identity.Subject => {
+	if (isWorkspaceSubject(caller)) return caller;
+	const subject: WorkspaceSubject = {
+		userId: caller.userId,
+		tenantId: caller.tenantId,
+		teamPath: [],
+		policies: [],
+		admin: false,
+		...(caller.email === undefined ? {} : { email: caller.email }),
+		...(caller.impersonatedBy === undefined ? {} : { impersonatedBy: caller.impersonatedBy }),
+		[WORKSPACE]: true
+	};
+	return Object.freeze(subject);
+};

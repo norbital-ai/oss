@@ -111,7 +111,6 @@ describe('approval gate over SQL', () => {
 						policySubject,
 						'people',
 						[{ id: rid('person-1'), name: 'Ada' }],
-						false,
 						0,
 						{ roots: [{ id: rid('person-1'), action: 'create' }] }
 					);
@@ -137,7 +136,6 @@ describe('approval gate over SQL', () => {
 						policySubject,
 						'people',
 						[{ id: rid('person-2'), name: 'Grace' }],
-						false,
 						0,
 						{ roots: [{ id: rid('person-2'), action: 'create' }] }
 					);
@@ -178,7 +176,6 @@ describe('approval gate over SQL', () => {
 						policySubject,
 						'people',
 						[{ id: rid('person-decided'), name: 'Margaret' }],
-						false,
 						0,
 						{ roots: [{ id: rid('person-decided'), action: 'create' }] }
 					);
@@ -255,7 +252,6 @@ describe('approval gate over SQL', () => {
 						policySubject,
 						'people',
 						[{ id: rid('person-admin-superseded'), name: 'Katherine' }],
-						false,
 						0,
 						{
 							roots: [{ id: rid('person-admin-superseded'), action: 'create' }]
@@ -314,7 +310,6 @@ describe('approval gate over SQL', () => {
 					adminSubject,
 					'people',
 					[{ id: rid('person-3'), name: 'Ada' }],
-					false,
 					0,
 					{ roots: [{ id: rid('person-3'), action: 'create' }] }
 				);
@@ -341,7 +336,6 @@ describe('approval gate over SQL', () => {
 							policySubject,
 							'people',
 							[person],
-							false,
 							0,
 							{ roots: [{ id: person.id, action: 'create' }] }
 						);
@@ -366,7 +360,6 @@ describe('approval gate over SQL', () => {
 						policySubject,
 						'people',
 						[{ id: rid('person-6'), name: 'Ada' }],
-						false,
 						0,
 						{ roots: [{ id: rid('person-6'), action: 'create' }] }
 					);

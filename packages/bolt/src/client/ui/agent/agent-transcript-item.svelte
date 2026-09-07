@@ -3,13 +3,23 @@
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
-	import { Result, Schema } from 'effect';
+	import { Schema } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import { workspaceSession } from '#lib/client/session.js';
 	import { decodeAttachmentDescriptor } from '#lib/runtime/agents/image-descriptors.js';
+	import AgentChildConversation from './agent-child-conversation.svelte';
 	import type { CompactOrigin } from './context-view.js';
 	import { plainMessageText } from './context-view.js';
 	import type { PanelMessage } from './transcript.js';
+	import {
+		diagnostic,
+		diagnosticLanguage,
+		subagentLink,
+		type SubagentTranscript,
+		type ToolCallPart,
+		type ToolPairing,
+		type ToolResultPart
+	} from './tool-rows.js';
 
 	let {
 		message,
@@ -19,6 +29,9 @@
 		checkpointOrigin = null,
 		generating = false,
 		hideTodo = false,
+		tools = undefined,
+		reasoningRequested = false,
+		subagent = undefined,
 		onedit
 	}: {
 		message: PanelMessage;
@@ -28,6 +41,12 @@
 		checkpointOrigin?: CompactOrigin | null;
 		generating?: boolean;
 		hideTodo?: boolean;
+		/** Call/result pairing over the loaded transcript; without it every part renders alone. */
+		tools?: ToolPairing | undefined;
+		/** Whether this message's run asked for reasoning; a provider's filler is never shown. */
+		reasoningRequested?: boolean;
+		/** The loaded transcript, so a `subagent` spawn row can render its child's conversation. */
+		subagent?: SubagentTranscript | undefined;
 		onedit?: ((message: PanelMessage) => void) | undefined;
 	} = $props();
 
@@ -49,8 +68,12 @@
 			!cancelled
 	);
 	const humanBubble = $derived(message.author.kind === 'human' && !parentAttribution && !steering);
+	/** Tool messages carry no speaker: their results render on the row of the call they answer. */
+	const showSpeaker = $derived(
+		parentAttribution || !['human', 'agent', 'tool'].includes(message.author.kind)
+	);
 
-	function speaker(entry: PanelMessage): string {
+	function speaker(entry: PanelMessage): string | undefined {
 		switch (entry.author.kind) {
 			case 'human':
 				return parentAttribution ? 'Parent agent' : 'You';
@@ -59,30 +82,53 @@
 			case 'agent':
 				return 'Agent';
 			case 'tool':
-				return 'Tool';
+				return undefined;
 			case 'system':
 				return 'System';
 		}
 	}
 
 	const isString = Schema.is(Schema.String);
-	const isProgressPart = (part: Exclude<Prompt.MessageEncoded['content'], string>[number]) =>
+	type Part = Exclude<Prompt.MessageEncoded['content'], string>[number];
+	const isProgressPart = (part: Part) =>
 		(part.type === 'tool-call' || part.type === 'tool-result') &&
 		['todo', 'system/todo'].includes(part.name) &&
 		(part.type !== 'tool-result' || !part.isFailure);
 
-	function diagnostic(value: unknown): string {
-		if (isString(value)) return value;
-		return Result.getOrElse(
-			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
-			() => String(value)
-		);
+	const isActivePart = (index: number) =>
+		message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(index);
+
+	/**
+	 * Reasoning shows only when the run asked for it and there is something to read. An empty part
+	 * still being written is a live status rather than content, so it stays while generating.
+	 */
+	function reasoningVisible(part: Prompt.ReasoningPartEncoded, index: number): boolean {
+		if (!reasoningRequested) return false;
+		if (part.text.trim().length > 0) return true;
+		return generating && isActivePart(index);
 	}
 
-	function diagnosticLanguage(value: unknown): 'json' | 'plaintext' {
-		const text = diagnostic(value).trimStart();
-		return text.startsWith('{') || text.startsWith('[') ? 'json' : 'plaintext';
+	function partVisible(part: Part, index: number): boolean {
+		if (hideTodo && isProgressPart(part)) return false;
+		if (part.type === 'tool-result') return tools === undefined || !tools.callIds.has(part.id);
+		if (part.type === 'reasoning') return reasoningVisible(part, index);
+		return true;
 	}
+
+	const visibleParts = $derived(
+		isString(message.message.content)
+			? []
+			: message.message.content.flatMap((part, index) =>
+					partVisible(part, index) ? [{ part, index }] : []
+				)
+	);
+	const renders = $derived(
+		failureText !== null ||
+			isString(message.message.content) ||
+			visibleParts.length > 0 ||
+			message.annotation?.tag === 'compact' ||
+			message.annotation?.tag === 'plan-verdict'
+	);
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {
 		const descriptor = decodeAttachmentDescriptor(part.data);
@@ -111,7 +157,58 @@
 	}
 </script>
 
-{#if !hideTodo || isString(message.message.content) || message.message.content.some((part) => !isProgressPart(part))}
+{#snippet payload(label: string, value: unknown)}
+	<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
+	<div class="max-h-56 overflow-hidden rounded-md border bg-background">
+		<CodeEditor
+			value={diagnostic(value)}
+			language={diagnosticLanguage(value)}
+			readonly
+			ariaLabel={label}
+			minHeight="7rem"
+			class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
+		/>
+	</div>
+{/snippet}
+
+<!--
+	One row per tool call: a wrench while the result is outstanding, a check or an alert once it
+	settled, the name, and one body holding the call and its result. No horizontal padding, so the
+	row's left edge is the text parts' left edge.
+-->
+{#snippet toolRow(call: ToolCallPart | null, result: ToolResultPart | null, pendingPart: boolean)}
+	{@const name = call?.name ?? result?.name ?? ''}
+	<details
+		class="group/tool w-full rounded-lg py-1.5 text-xs"
+		data-tool-row={name}
+		data-tool-state={result === null ? 'pending' : result.isFailure ? 'failed' : 'done'}
+	>
+		<summary class="cursor-pointer list-none">
+			<Inline as="span" gap="sm">
+				<Icon
+					icon={result === null
+						? 'lucide:wrench'
+						: result.isFailure
+							? 'lucide:circle-alert'
+							: 'lucide:circle-check'}
+					class={result?.isFailure === true
+						? 'size-3.5 text-destructive'
+						: 'size-3.5 text-muted-foreground'}
+				/>
+				<span class="font-medium">{name}</span>
+				{#if pendingPart}<span role="status" class="text-muted-foreground"
+						>{generating ? 'Preparing…' : 'Interrupted'}</span
+					>{/if}
+			</Inline>
+		</summary>
+		<Stack gap="xs" class="mt-1">
+			{#if call !== null}{@render payload('Tool call', call.params)}{/if}
+			{#if result !== null}{@render payload('Tool result', result.result)}{/if}
+		</Stack>
+	</details>
+{/snippet}
+
+{#if renders}
 	<li
 		class="group/message my-4 min-w-0"
 		data-mode={mode ?? undefined}
@@ -121,9 +218,9 @@
 		aria-busy={generating && message.annotation?.tag === 'generation'}
 	>
 		<Stack gap="xs" align={humanBubble ? 'end' : 'stretch'}>
-			{#if parentAttribution || !['human', 'agent'].includes(message.author.kind) || cancelled || steering || queued || outsideModelView}
+			{#if showSpeaker || cancelled || steering || queued || outsideModelView}
 				<Inline align="center" gap="xs" justify={humanBubble ? 'end' : 'start'} class="min-w-0">
-					{#if parentAttribution || !['human', 'agent'].includes(message.author.kind)}
+					{#if showSpeaker}
 						<span class="text-tiny font-medium text-muted-foreground">{speaker(message)}</span>
 					{/if}
 					{#if cancelled}
@@ -171,137 +268,93 @@
 								>{generating ? 'Writing…' : 'Response interrupted'}</span
 							>
 						{/if}
-						<ReadonlyMarkdown scale="reading" content={message.message.content} />
+						<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
 					{:else}
 						<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
 					{/if}
 				</div>
 			{:else}
-				{#each message.message.content as part, index (`${message.id}:${index}`)}
-					{#if !hideTodo || !isProgressPart(part)}
-						{@const pendingPart =
-							message.annotation?.tag === 'generation' &&
-							message.annotation.activeParts.includes(index)}
-						{#if part.type === 'text'}
-							<div
-								class={humanBubble
-									? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-									: 'w-full text-sm leading-6 text-foreground'}
-							>
-								{#if message.message.role === 'assistant'}
-									{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
-											>{generating ? 'Writing…' : 'Response interrupted'}</span
-										>{/if}
-									<ReadonlyMarkdown scale="reading" content={part.text} />
-								{:else}
-									<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
-								{/if}
-							</div>
-						{:else if part.type === 'reasoning'}
-							<details class="group/reasoning rounded-lg py-1.5 text-xs">
-								<summary class="cursor-pointer list-none text-muted-foreground">
-									<Inline as="span" gap="sm">
-										<Icon icon="lucide:brain" class="size-3.5" />
-										<span
-											>{pendingPart
-												? generating
-													? 'Reasoning…'
-													: 'Reasoning interrupted'
-												: 'Reasoning'}</span
-										>
-									</Inline>
-								</summary>
-								<div class="mt-1 border-l border-border pl-3 text-foreground/85">
-									<ReadonlyMarkdown scale="reading" content={part.text} />
-								</div>
-							</details>
-						{:else if part.type === 'file'}
-							{@const href = fileHref(part)}
-							{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
-								<img
-									src={href}
-									alt={part.fileName ?? 'Agent image'}
-									class="max-h-96 max-w-full rounded-lg object-contain"
-								/>
+				{#each visibleParts as { part, index } (index)}
+					{@const pendingPart = isActivePart(index)}
+					{#if part.type === 'text'}
+						<div
+							class={humanBubble
+								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
+								: 'w-full text-sm leading-6 text-foreground'}
+							data-text-part
+						>
+							{#if message.message.role === 'assistant'}
+								{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
+										>{generating ? 'Writing…' : 'Response interrupted'}</span
+									>{/if}
+								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+							{:else}
+								<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
 							{/if}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
-									{#if href === null}
-										<span>{part.fileName ?? part.mediaType}</span>
-									{:else}
-										<a {href} target="_blank" rel="noreferrer" class="underline">
-											{part.fileName ?? part.mediaType}
-										</a>
-									{/if}
+						</div>
+					{:else if part.type === 'reasoning'}
+						<details class="group/reasoning w-full rounded-lg py-1.5 text-xs" data-reasoning-part>
+							<summary class="cursor-pointer list-none text-muted-foreground">
+								<Inline as="span" gap="sm">
+									<Icon icon="lucide:brain" class="size-3.5" />
+									<span
+										>{pendingPart
+											? generating
+												? 'Reasoning…'
+												: 'Reasoning interrupted'
+											: 'Reasoning'}</span
+									>
 								</Inline>
+							</summary>
+							<div class="mt-1 border-l border-border pl-3 text-foreground/85">
+								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
 							</div>
-						{:else if part.type === 'tool-call'}
-							<details class="group/tool rounded-lg px-2 py-1.5 text-xs">
-								<summary class="cursor-pointer list-none">
-									<Inline as="span" gap="sm">
-										<Icon
-											icon={part.name === 'system/subagent' ? 'lucide:bot' : 'lucide:wrench'}
-											class="size-3.5 text-muted-foreground"
-										/>
-										<span class="font-medium">{part.name}</span>
-										{#if pendingPart}<span role="status" class="text-muted-foreground"
-												>{generating ? 'Preparing…' : 'Interrupted'}</span
-											>{/if}
-									</Inline>
-								</summary>
-								<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-								<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
-									<CodeEditor
-										value={diagnostic(part.params)}
-										language={diagnosticLanguage(part.params)}
-										readonly
-										ariaLabel="Tool call"
-										minHeight="7rem"
-										class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
-									/>
-								</div>
-							</details>
-						{:else if part.type === 'tool-result'}
-							<details class="group/tool-result rounded-lg px-2 py-1.5 text-xs">
-								<summary class="cursor-pointer list-none">
-									<Inline as="span" gap="sm">
-										<Icon
-											icon={part.isFailure ? 'lucide:circle-alert' : 'lucide:circle-check'}
-											class={part.isFailure
-												? 'size-3.5 text-destructive'
-												: 'size-3.5 text-muted-foreground'}
-										/>
-										<span class="font-medium">{part.name}</span>
-									</Inline>
-								</summary>
-								<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-								<div class="mt-1 max-h-56 overflow-hidden rounded-md border bg-background">
-									<CodeEditor
-										value={diagnostic(part.result)}
-										language={diagnosticLanguage(part.result)}
-										readonly
-										ariaLabel="Tool result"
-										minHeight="7rem"
-										class="h-full w-full min-h-0 rounded-none border-0 shadow-none"
-									/>
-								</div>
-							</details>
-						{:else if part.type === 'tool-approval-request'}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:shield-question" class="size-3.5" />
-									<span>Approval requested for tool call {part.toolCallId}</span>
-								</Inline>
-							</div>
-						{:else if part.type === 'tool-approval-response'}
-							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-								<Inline gap="sm">
-									<Icon icon="lucide:shield-check" class="size-3.5" />
-									<span>Approval response recorded</span>
-								</Inline>
-							</div>
+						</details>
+					{:else if part.type === 'file'}
+						{@const href = fileHref(part)}
+						{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
+							<img
+								src={href}
+								alt={part.fileName ?? 'Agent image'}
+								class="max-h-96 max-w-full rounded-lg object-contain"
+							/>
 						{/if}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
+								{#if href === null}
+									<span>{part.fileName ?? part.mediaType}</span>
+								{:else}
+									<a {href} target="_blank" rel="noreferrer" class="underline">
+										{part.fileName ?? part.mediaType}
+									</a>
+								{/if}
+							</Inline>
+						</div>
+					{:else if part.type === 'tool-call'}
+						{@const result = tools?.resultsByCallId.get(part.id)}
+						{@const link = subagent === undefined ? null : subagentLink(part, result)}
+						{#if link !== null && subagent !== undefined}
+							<AgentChildConversation {link} transcript={subagent} />
+						{:else}
+							{@render toolRow(part, result ?? null, pendingPart)}
+						{/if}
+					{:else if part.type === 'tool-result'}
+						{@render toolRow(null, part, false)}
+					{:else if part.type === 'tool-approval-request'}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:shield-question" class="size-3.5" />
+								<span>Approval requested for tool call {part.toolCallId}</span>
+							</Inline>
+						</div>
+					{:else if part.type === 'tool-approval-response'}
+						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+							<Inline gap="sm">
+								<Icon icon="lucide:shield-check" class="size-3.5" />
+								<span>Approval response recorded</span>
+							</Inline>
+						</div>
 					{/if}
 				{/each}
 			{/if}

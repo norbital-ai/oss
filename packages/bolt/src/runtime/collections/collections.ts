@@ -58,6 +58,7 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { Subject } from '#lib/runtime/identity/identity.js';
+import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { describeCause } from '#lib/runtime/workspace.js';
@@ -104,6 +105,7 @@ import {
 import { compileCollectionCursorSeek } from '#lib/runtime/collections/read/cursor.js';
 import {
 	buildOps as buildOpsService,
+	type AutomationContinuation,
 	buildReadOps as buildReadOpsService,
 	refuseRunawayHooks as refuseRunawayHooksService,
 	type HookWriteOps
@@ -1725,7 +1727,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					deleteSubject: Identity.Subject,
 					collection: string,
 					ids: ReadonlyArray<string>,
-					elevated: boolean,
 					depth: number
 				) =>
 					mutate(
@@ -1733,7 +1734,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						deleteSubject,
 						collection,
 						ids.map((recordId) => ({ id: recordId })),
-						elevated,
 						depth,
 						{
 							roots: ids.map((recordId) => ({
@@ -1752,12 +1752,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const authoringApi = <StagedE = never>(
 				effectId: EffectId,
 				subject: Identity.Subject,
-				elevated = false,
 				depth = 0,
 				staged?: HookWriteOps<StagedE>
 			) =>
 				makeAuthoringApi(
-					buildOpsService(authoringWritePorts(effectId), effectId, subject, elevated, depth, staged)
+					buildOpsService(authoringWritePorts(effectId), effectId, subject, depth, staged)
 				);
 			const authoringReadOps = (effectId: EffectId, subject: Identity.Subject) =>
 				buildReadOpsService(authoringReadPorts, effectId, subject);
@@ -1782,6 +1781,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				| Schema.SchemaError
 				| Automations.AutomationStopped
 				| Automations.AutomationDeferredUnsupported
+				| Automations.AutomationContinuationUnchanged
 			> = Effect.fn('Collections.runAutomationBody')(
 				function* (name, taskId, raw, attemptEffectId) {
 					const declaration = authored.automations[name];
@@ -1799,10 +1799,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									authoringWritePorts(turnEffectId),
 									turnEffectId,
 									admitted.bolt_run_as,
-									false,
 									0,
 									undefined,
-									admitted.bolt_depth
+									{ name, args: admitted.args, depth: admitted.bolt_depth ?? 0 }
 								),
 								guard
 							)
@@ -1841,6 +1840,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					readonly after?: string | number;
 					readonly taskId?: string;
 					readonly parentDepth?: number;
+					readonly continuationOf?: AutomationContinuation;
 				}>
 			) => Effect.Effect<
 				{ readonly taskId: string },
@@ -1849,6 +1849,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				| Schema.SchemaError
 				| Automations.AutomationStopped
 				| Automations.AutomationDeferredUnsupported
+				| Automations.AutomationContinuationUnchanged
 			> = Effect.fn('Collections.startAutomation')(
 				function* (effectId, name, input, scope, options) {
 					const afterMillis = afterMillisOf(options?.after);
@@ -1861,7 +1862,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						afterMillis,
 						scope,
 						...(options?.taskId === undefined ? {} : { taskId: options.taskId }),
-						...(options?.parentDepth === undefined ? {} : { parentDepth: options.parentDepth })
+						...(options?.parentDepth === undefined ? {} : { parentDepth: options.parentDepth }),
+						...(options?.continuationOf === undefined
+							? {}
+							: { continuationOf: options.continuationOf })
 					});
 					if (afterMillis > 0) return { taskId };
 					yield* automations.execute(
@@ -1941,7 +1945,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			) {
 				const prepare = module?.mutate?.prepare;
 				if (prepare === undefined) return undefined;
-				const api = authoringApi(effectId, subject, false, depth + 1, staged);
+				const api = authoringApi(effectId, subject, depth + 1, staged);
 				return yield* runAuthoredHandler(() => prepare({ inputs, api })).pipe(
 					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'mutate.prepare' }))
 				);
@@ -1957,7 +1961,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			) {
 				const prepare = module?.delete?.prepare;
 				if (prepare === undefined) return undefined;
-				const api = authoringApi(effectId, subject, false, depth + 1, staged);
+				const api = authoringApi(effectId, subject, depth + 1, staged);
 				return yield* runAuthoredHandler(() => prepare({ existing, api })).pipe(
 					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'delete.prepare' }))
 				);
@@ -1982,7 +1986,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				staged?: HookWriteOps<Error>,
 				relationships: ReadonlyArray<string> = []
 			) {
-				const api = authoringApi(effectId, subject, false, depth + 1, staged);
+				const api = authoringApi(effectId, subject, depth + 1, staged);
 				// Already decoded by the caller. `prepare` sees the batch's inputs and the handler sees one
 				// of them, and they must be the same shape — a collection declaring two fields where the
 				// table has twenty would otherwise hand its batch read the raw payload and its handler the
@@ -2505,7 +2509,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						parameters: columnValues.map(([name, value]) =>
 							boundParameter(definition, name, value)
 						),
-						// A predicate that is literally `true` — an elevated write, an administrator, a grant
+						// A predicate that is literally `true` — the workspace's write, an administrator, a grant
 						// with no `where` — filters nothing, so the row is written unconditionally and can
 						// share a statement. Anything else keeps the `select … where` it has today, alone.
 						...(unconditional ? {} : { where: predicate })
@@ -2534,7 +2538,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					 */
 					// A guarded row is a group of one, like the record it follows, so a predicated batch
 					// writes its bookkeeping per row instead of merged. That is the price of the guard and
-					// it is paid only where a predicate exists: an elevated or unrestricted write carries
+					// it is paid only where a predicate exists: the workspace's unrestricted write carries
 					// no `where` at all and its bookkeeping merges exactly as it did.
 					//
 					// The placeholder is numbered per row, because a `where` is appended after the row's
@@ -2971,7 +2975,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				statementPlan: WriteStatementPlan,
 				readSnapshots: ReadonlyArray<ReadSnapshot>,
 				relationshipSnapshots: ReadonlyArray<RelationshipSnapshot>,
-				elevated: boolean,
 				browserMutation?: BrowserMutationFence,
 				approvalRequestId?: string,
 				approvalRoot?: Readonly<{
@@ -2981,9 +2984,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				}>
 			) {
 				const operations = statementPlan.operations;
-				const effectiveVisibility = (operation: GraphPreparedOperation) =>
-					elevated ? AccessControl.unrestricted : operation.visibility;
-
 				const creates = operations.filter((operation) => operation.action === 'create');
 				const existingOperations = operations.filter(
 					(operation) => operation.action === 'update' || operation.action === 'delete'
@@ -3029,7 +3029,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				>();
 				const assertionStatement = (expectation: PredicateAssertionExpectation) => {
 					const operation = expectation.operation;
-					const predicate = AccessControl.predicateStatement(effectiveVisibility(operation), {
+					const predicate = AccessControl.predicateStatement(operation.visibility, {
 						parameterOffset: 1
 					});
 					const messageIndex = predicate.parameters.length + 2;
@@ -3049,7 +3049,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 				};
 				// Approval review rows are masked for storage/display. Concurrency assertions must use the
-				// freshly prepared elevated snapshots, never those deliberately narrowed review values.
+				// freshly prepared unmasked snapshots, never those deliberately narrowed review values.
 				const reviewedRows = existingOperations.flatMap((operation) =>
 					operation.snapshot === undefined
 						? []
@@ -3134,7 +3134,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								operation.collection,
 								operation.id,
 								operation.definition,
-								effectiveVisibility(operation),
+								operation.visibility,
 								operation.previous
 							)
 						);
@@ -3152,7 +3152,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									values: operation.values
 								},
 								operation.definition,
-								effectiveVisibility(operation),
+								operation.visibility,
 								operation.clearLock === true,
 								operation.previous
 							)
@@ -3169,8 +3169,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					// them is what made the ordinary-mutation ceiling unusable (PGlite's unnamed
 					// prepared statement dies; Neon would spend minutes). A restricted predicate still
 					// needs the per-row proof: that is the write-authorization seam, not existence.
-					if (AccessControl.predicateIsUnrestricted(effectiveVisibility(expectation.operation)))
-						continue;
+					if (AccessControl.predicateIsUnrestricted(expectation.operation.visibility)) continue;
 					statements.push(assertionStatement(expectation));
 				}
 				statements.push(...historyPrunes);
@@ -3422,7 +3421,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				subject: Identity.Subject,
 				collection: string,
 				payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-				elevated: boolean,
 				depth: number,
 				options?: MutationOptions
 			) => Effect.Effect<CollectionMutationCommit, BatchMutationError | BrowserMutationReplay> =
@@ -3431,11 +3429,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					subject: Identity.Subject,
 					collection: string,
 					payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-					elevated: boolean,
 					depth: number,
 					options?: MutationOptions
 				) {
 					yield* refuseRunawayHooksService('mutate', collection, depth);
+					// Every hook this write runs is the workspace: its reads are unmasked, its rows and its
+					// staged writes carry no grant check and no approval route, and it commits with the root.
+					const workspaceActor = workspaceSubject(subject);
 					yield* workspace.collection(collection);
 					const explicitRoots =
 						options?.roots?.length === payloads.length ? options.roots : undefined;
@@ -3585,13 +3585,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 												>(
 													{
 														workspace,
+														workspaceSubject: workspaceActor,
 														authoredHooks: authored.hooks,
-														policyWrite: (writeSubject, action, writeCollection, row, elevation) =>
-															policy.write(writeSubject, action, writeCollection, row, elevation),
+														policyWrite: (author, action, writeCollection, row) =>
+															policy.write(author, action, writeCollection, row),
 														resolveWritableManyRelation,
 														graphRefusal,
 														assertBrowserBaseVersion,
-														buildApi: authoringApi,
+														buildApi: (apiEffectId, apiDepth, staged) =>
+															authoringApi(apiEffectId, workspaceActor, apiDepth, staged),
 														runHook,
 														authorizePolicyWrite,
 														resolveApproval,
@@ -3600,9 +3602,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 														decodeMutateInput,
 														encodeMutationValues,
 														referenceValueProblem,
-														runMutateBefore,
-														runMutatePrepare,
-														runDeletePrepare,
+														runMutateBefore: (hookEffectId, ...rest) =>
+															runMutateBefore(hookEffectId, workspaceActor, ...rest),
+														runMutatePrepare: (hookEffectId, ...rest) =>
+															runMutatePrepare(hookEffectId, workspaceActor, ...rest),
+														runDeletePrepare: (hookEffectId, ...rest) =>
+															runDeletePrepare(hookEffectId, workspaceActor, ...rest),
 														randomId,
 														refuseRunawayHooks: refuseRunawayHooksService,
 														deriveRecordId,
@@ -3642,7 +3647,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 													depth,
 													{
 														approved: options?.approval?.approved === true,
-														elevated,
 														rootId: root.rootId,
 														rootAction: root.rootAction,
 														clearRootLock: options?.approval?.clearRootLock === true,
@@ -3822,7 +3826,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										compiled,
 										readSnapshots,
 										preparedGraphs.flatMap((graph) => graph.relationshipSnapshots),
-										elevated,
 										browserMutation,
 										options?.approval?.approvalRequestId,
 										approvedRoot === undefined
@@ -3899,7 +3902,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										);
 									settled = yield* settleDeclarativeGraphService(
 										{
-											buildApi: authoringApi,
+											buildApi: (apiEffectId, apiDepth) =>
+												authoringApi(apiEffectId, workspaceActor, apiDepth),
 											runHook,
 											emitChangeEventsMany: (eventEffectId, eventCollection, records, event) =>
 												emitChangeEventsManyService(
@@ -3913,7 +3917,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 												embedRecordsService(embeddingPorts, embeddingEffectId, limit, targets)
 										},
 										effectId,
-										subject,
 										applied,
 										depth
 									);
@@ -4237,7 +4240,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					engineResume.subject,
 					stored.collection,
 					[{ ...stored.payload, id: stored.id }],
-					false,
 					0,
 					{
 						roots: [{ id: stored.id, action: stored.action }],
@@ -4472,7 +4474,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								subject,
 								graph.collection,
 								deleteIds.map((id) => ({ id })),
-								false,
 								0,
 								{
 									roots: deleteIds.map((id) => ({
@@ -4489,7 +4490,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								subject,
 								graph.collection,
 								writeRows.map((row) => row.values),
-								false,
 								0,
 								{
 									roots: writeRows.map((row) => ({
@@ -4562,8 +4562,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				embedRecords: (effectId, limit = RECORD_EMBEDDING_BACKFILL_LIMIT) =>
 					embedRecordsService(embeddingPorts, effectId, limit),
 				findGrouped,
-				mutate: (effectId, subject, collection, payloads, elevated = false, depth = 0, options) =>
-					mutate(effectId, subject, collection, payloads, elevated, depth, options).pipe(
+				mutate: (effectId, subject, collection, payloads, depth = 0, options) =>
+					mutate(effectId, subject, collection, payloads, depth, options).pipe(
 						Effect.catchIf(isBrowserMutationReplay, (cause) =>
 							cause.outcome._tag === 'Committed'
 								? Effect.succeed({
@@ -4583,7 +4583,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						subject,
 						collection,
 						ids.map((recordId) => ({ id: recordId })),
-						false,
 						0,
 						{
 							// A caller's `baseVersion` is the whole-row version it read each named row at.
@@ -4637,7 +4636,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							subject,
 							first.collection,
 							chunk.map((root) => root.payload),
-							false,
 							0,
 							{
 								roots: chunk.map(({ collection, id, action }) => ({ collection, id, action }))

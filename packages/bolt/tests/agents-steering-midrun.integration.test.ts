@@ -75,7 +75,8 @@ describe('steering admitted during an active run', () => {
 		).toEqual([{ status: 'ready' }]);
 		expect(
 			await harness.database.query(
-				"select id from bolt_task where effect_id like $1 and status = 'pending'",
+				// The settled run's follow-up is enqueued already claimed, like every agent turn.
+				"select id from bolt_task where effect_id like $1 and status = 'running'",
 				[`tasks.execute:${taskId}:settled:%`]
 			)
 		).toHaveLength(1);

@@ -1,6 +1,7 @@
 import type {
 	CollectionDbClient,
 	CollectionField,
+	CollectionLiveOrderBy,
 	CollectionQuery,
 	CollectionRelationOptions,
 	CollectionRegistry,
@@ -155,7 +156,13 @@ interface CollectionTableBaseProps<
 	client: CollectionDbClient<TCollections, TName>;
 	collection: TName;
 	view?: string;
-	query?: CollectionQuery<NoInfer<TRow>>;
+	/**
+	 * The table's rows are one live prefix, so `orderBy` is typed over the collection's scalar
+	 * columns: a custom-typed, json or vector column cannot key a prefix and is refused by the host.
+	 */
+	query?: Omit<CollectionQuery<NoInfer<TRow>>, 'orderBy' | 'after'> & {
+		readonly orderBy?: CollectionLiveOrderBy<TCollections[TName]>;
+	};
 	/**
 	 * Conditions the view opens with, shown in the filter UI as removable chips.
 	 *

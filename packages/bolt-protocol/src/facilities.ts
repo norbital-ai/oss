@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 import { Prompt, Response } from 'effect/unstable/ai';
+import { HostScheduleOccurrence } from './host.js';
 import { InvocationScope } from './invocation.js';
 import { ChangeBatch } from './sync.js';
 import { EffectId, FacilityCall, FacilityResult, ReleaseId } from './wire.js';
@@ -293,8 +294,21 @@ export const TaskRequest = Schema.TaggedUnion({
 	 * the work, never after: a crash between the message and the commit costs a false alarm — the host
 	 * wakes, finds nothing due, re-arms — while a crash the other way round costs a committed job
 	 * nobody ever comes back for.
+	 *
+	 * With an `occurrence` the message also says "this work is already claimed; run it now". The
+	 * guest has written the `bolt_task` row in the claimed state (`running`, attempt 1, a lease as
+	 * long as a host tick's own deadline) and hands the host exactly what `host.schedules.discover`
+	 * would have returned for it, so the host invokes the command and settles the occurrence at once
+	 * instead of arming a timer, discovering, and claiming across three more guest hops. The ordering
+	 * note inverts for this shape, and for the same reason: the guest writes the claimed row first
+	 * and wakes after, so a crash between the two costs a delayed pickup when the lease expires and
+	 * the ordinary discover path claims the row, never a lost run and never a doubled one. The
+	 * instant carried beside it is that lease expiry, which is the fallback the host arms.
 	 */
-	Wake: { notLaterThanEpochMs: Schema.Number },
+	Wake: {
+		notLaterThanEpochMs: Schema.Number,
+		occurrence: Schema.optionalKey(HostScheduleOccurrence)
+	},
 	/** Associates the current guest invocation with one exact durable task while it is executing. */
 	Active: { taskId: Schema.NonEmptyString },
 	/** Releases the host's ephemeral task-to-invocation association after the attempt settles. */

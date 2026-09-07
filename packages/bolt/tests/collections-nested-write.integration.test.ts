@@ -482,7 +482,6 @@ describe('a nested write', () => {
 							order_line_order: [{ id: lineId, sku: 'nested-1' }]
 						}
 					],
-					true,
 					0,
 					{ roots: [{ id: orderId, action: 'create' }] }
 				);
@@ -513,7 +512,6 @@ describe('a nested write', () => {
 							order_line_order: [{ id: lineId, sku: 'added-1' }]
 						}
 					],
-					true,
 					0,
 					{ roots: [{ id: orderId, action: 'update' }] }
 				);

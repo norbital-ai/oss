@@ -13,6 +13,10 @@ vi.mock('@norbital-ai/ui/layout', async () => {
 	const { default: Fragment } = await import('./support/finder-test-fragment.svelte');
 	return { Inline: Fragment, Stack: Fragment };
 });
+// The prior-transcript tabs never mount in these fixtures; the ui build's tabs entry is not resolvable here.
+vi.mock('@norbital-ai/ui/tabs', async () => ({
+	Tabs: (await import('./support/finder-test-fragment.svelte')).default
+}));
 
 it('renders reasoning immediately, fills completed parts without replacing the row, and marks interrupted work', async () => {
 	const message = (reasoning: string, text: string | null, activeParts: number[], sequence: number) => projectAgentMessages(canonicalAgentRows([{

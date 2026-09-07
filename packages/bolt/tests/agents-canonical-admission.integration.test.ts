@@ -226,7 +226,9 @@ describe('canonical Task admission vertical slice', () => {
 				 where effect_id = $1`,
 				[`tasks.execute:${taskId}:${admitted.directiveId}`]
 			)
-		).toEqual([{ command: 'tasks.execute', status: 'pending', task_id: taskId }]);
+			// Claimed at enqueue: the row is already running under the wake that carried it, so the
+			// host runs it now and discover leaves it alone until the lease lapses.
+		).toEqual([{ command: 'tasks.execute', status: 'running', task_id: taskId }]);
 		expect(
 			await harness.database.query(
 				`select task.status, message.message->>'role' as role,

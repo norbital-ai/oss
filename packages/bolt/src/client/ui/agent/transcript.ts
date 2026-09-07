@@ -86,7 +86,9 @@ const AgentRunRow = Schema.Struct({
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
-	status: RunStatus
+	status: RunStatus,
+	/** Whether the run asked its provider for reasoning; absent until the runtime records it. */
+	reasoning_requested: Schema.optionalKey(Schema.NullOr(Schema.Boolean))
 });
 export type AgentRunRow = typeof AgentRunRow.Type;
 
@@ -162,6 +164,42 @@ export function projectAgentUsage(rows: readonly unknown[]): AgentUsageRow[] {
 		const decoded = decodeAgentUsageRow(row);
 		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
+}
+
+/** True only when the run row says reasoning was requested; an unknown run never shows any. */
+export function reasoningRequestedFor(
+	runs: readonly AgentRunRow[],
+	runId: string | null
+): boolean {
+	if (runId === null) return false;
+	return runs.find((run) => run.id === runId)?.reasoning_requested === true;
+}
+
+/**
+ * Where the model changed between consecutive runs, keyed by the first message of the run that
+ * changed it and valued with that run's `model_id`.
+ *
+ * Runs are ordered by the transcript, not the run table: a run that persisted no message has no
+ * place to carry a divider and is skipped, so two same-model runs around an empty one produce
+ * nothing. Everything is read off stored rows, which is what lets the divider survive a reload.
+ */
+export function modelChangeDividers(
+	runs: readonly AgentRunRow[],
+	messages: readonly PanelMessage[]
+): ReadonlyMap<string, string> {
+	const modelByRunId = new Map<string, string>(runs.map((run) => [run.id, run.model_id]));
+	const dividers = new Map<string, string>();
+	const seenRuns = new Set<string>();
+	let previousModel: string | null = null;
+	for (const message of [...messages].sort((left, right) => left.sequence - right.sequence)) {
+		if (message.runId === null || seenRuns.has(message.runId)) continue;
+		const model = modelByRunId.get(message.runId);
+		if (model === undefined) continue;
+		seenRuns.add(message.runId);
+		if (previousModel !== null && previousModel !== model) dividers.set(message.id, model);
+		previousModel = model;
+	}
+	return dividers;
 }
 
 const isString = Schema.is(Schema.String);

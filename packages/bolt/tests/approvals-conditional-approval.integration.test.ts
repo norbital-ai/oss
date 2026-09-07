@@ -123,7 +123,6 @@ const mutate = (runtime: BoltTestRuntime, effectId: string, label: string) =>
 				writer,
 				'entries',
 				[{ label }],
-				false,
 				0,
 				{}
 			);
@@ -207,7 +206,6 @@ describe('routed policy approvals', () => {
 						{ id: committedId, label: ' Ordinary ' },
 						{ id: heldId, label: ' REVIEW ' }
 					],
-					false,
 					0,
 					{
 						roots: [

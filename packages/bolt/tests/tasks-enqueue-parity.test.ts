@@ -18,12 +18,15 @@ import { describe, expect, it } from 'vitest';
  * a diff: a second write path added without its announcement would be a second entry on one side
  * only.
  *
- * **Instance 3 — task rows that never announce.** The queue has one enqueue shape: a `bolt_task` row
- * written by the runtime itself, plus a `Wake` that arms the host timer. A wake sent *before* the
- * write commits costs a false alarm on a crash — the host wakes, finds nothing due, re-arms — while
- * a wake the other way round, or none at all, costs durable work nobody comes back for. Miss the
- * wake and the task is durable, correct, and simply *late* until something unrelated wakes the
- * tenant, which presents as "the scheduler is a bit slow" rather than as a defect.
+ * **Instance 3 — task rows that never announce.** The queue has two enqueue shapes. The ordinary
+ * one is a pending `bolt_task` row written by the runtime itself, plus a `Wake` that arms the host
+ * timer. A wake sent *before* the write commits costs a false alarm on a crash — the host wakes,
+ * finds nothing due, re-arms — while a wake the other way round, or none at all, costs durable work
+ * nobody comes back for. Miss the wake and the task is durable, correct, and simply *late* until
+ * something unrelated wakes the tenant, which presents as "the scheduler is a bit slow" rather than
+ * as a defect. The other shape is the claimed enqueue (`TaskQueue.enqueueClaimed`): the row is
+ * written already running and the `Wake` carries its occurrence for the host to run at once, so
+ * there the write comes *first*, and a crash between costs a delayed pickup at lease expiry.
  *
  * Both are checked by enumerating call sites out of the source and diffing the sets, rather than by
  * reading the two paths and concluding they agree.
@@ -137,8 +140,9 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			.filter((file) => TASK_ROW_WRITE.test(readFileSync(file, 'utf8')))
 			.map((file) => file.slice(RUNTIME.length + 1))
 			.toSorted();
+		// Agents no longer write the row themselves: every agent turn goes through the queue's
+		// claimed enqueue, which is the other reason it is not in this list.
 		expect(writers).toEqual([
-			'agents/agents.ts',
 			'approvals/approvals.ts',
 			'collections/collections.ts',
 			'envoys/envoys.ts',
@@ -164,6 +168,23 @@ describe('instance 3 — every task row written is announced to the host', () =>
 				.map(([name]) => `${file.slice(RUNTIME.length + 1)}:${name}`);
 		});
 		expect(offenders).toEqual([]);
+	});
+
+	it('the claimed enqueue writes the row first and wakes with its occurrence after', () => {
+		// The inverse discipline, asserted as order for the same reason the ordinary one is: the row
+		// is what a host recovers from at lease expiry, so it must exist before anything is told to
+		// run it, and the wake must carry the occurrence rather than only an instant.
+		const blocks = blocksOf(readFileSync(join(RUNTIME, 'tasks/tasks.ts'), 'utf8'));
+		const body = blocks.get('TaskQueue.enqueueClaimed');
+		expect(body).toBeDefined();
+		const writeAt = body?.search(/\.enqueueClaimed\(/u) ?? -1;
+		const wakeAt = body?.search(/_tag: 'Wake'/u) ?? -1;
+		expect(writeAt).toBeGreaterThan(-1);
+		expect(wakeAt).toBeGreaterThan(writeAt);
+		expect(body).toMatch(/occurrence\s*\n?\s*\}\)/u);
+		// And the agent turn is the one path that uses it.
+		const agents = blocksOf(readFileSync(join(RUNTIME, 'agents/agents.ts'), 'utf8'));
+		expect(agents.get('Agents.enqueueExecute')).toMatch(/queue\s*\.enqueueClaimed\(/u);
 	});
 
 	it('statement-joining task writers are covered by an announcing flow', () => {

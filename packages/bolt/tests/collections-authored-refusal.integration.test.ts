@@ -190,7 +190,6 @@ describe('a refusal raised from a real hook', () => {
 					adminSubject,
 					'people',
 					[{ id, name: 'Ada' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'create' }] }
 				);
@@ -232,7 +231,6 @@ describe('a refusal raised from a real hook', () => {
 					adminSubject,
 					'people',
 					[{ id, name: 'Grace', team: 'payroll' }],
-					false,
 					0,
 					{ roots: [{ id, action: 'create' }] }
 				);
