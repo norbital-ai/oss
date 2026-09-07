@@ -606,7 +606,11 @@
 		no shell shortcuts. CollectionNavigationSurface stays so record sheets keep working.
 	-->
 	<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-		{@render children?.()}
+		<!-- The viewport frame the workspace shell would otherwise provide: without a definite
+				height here every `h-full` in the kiosk collapses and its chrome sits under a void. -->
+		<div class="h-dvh min-h-0 overflow-clip">
+			{@render children?.()}
+		</div>
 	</CollectionNavigationSurface>
 {:else}
 	<WorkspaceShell
