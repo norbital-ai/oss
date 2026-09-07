@@ -21,7 +21,7 @@
 	import { cn, renderSnippet } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
 	import { DataRenderer, formatDataValue, type FieldRendererComponent } from '#lib/data-renderer';
-	import { Cover, Stack, Bound } from '#lib/layout';
+	import { Cover, Scroll, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
 		CollectionActionToolbar,
@@ -811,7 +811,12 @@
 				{t('table.createFormDescription', { label: createLabel })}
 			</Sheet.Description>
 		</Sheet.Header>
-		<div class="min-h-0 flex-1 p-5">
+		<!--
+			The create sheet owns the vertical axis, exactly as the record detail's tabs do.
+			A block box here gave the representation no height to size against, so a form taller than
+			the sheet grew past it and `Sheet.Content` clipped the tail — the submit button among it.
+		-->
+		<Scroll name={createLabel} class="p-5">
 			{#if collectionSurface?.representation}
 				{@const Representation = collectionSurface.representation}
 				<Representation
@@ -829,7 +834,7 @@
 					Collection "{String(collection)}" requires an explicit representation to create records.
 				</p>
 			{/if}
-		</div>
+		</Scroll>
 	</Sheet.Content>
 </Sheet.Root>
 
