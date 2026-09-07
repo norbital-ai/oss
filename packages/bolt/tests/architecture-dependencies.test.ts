@@ -152,7 +152,10 @@ describe('Bolt architecture boundaries', () => {
 		// with the browser artifact, with a generated client contract for member access.
 		// 9,008 -> 9,015: the artifact entry links the stylesheets of its static import closure
 		// (an artifact has no HTML document; the shell's shared components painted unstyled).
-		expect(total).toBeLessThanOrEqual(9_015);
+		// 9,015 -> 9,038: app identity reads `<AppShell>` literal props (icon, banner,
+		// thumbnail) because translated titles/descriptions are runtime-only; the legacy
+		// head-tag path stays for shell-less apps.
+		expect(total).toBeLessThanOrEqual(9_038);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

@@ -46,15 +46,38 @@ const metaContent = (source: string, metaName: string): string | null => {
 const taggedMeta = (source: string, name: string): string | null =>
 	metaContent(source, `bolt:${name}`);
 
+/** The opening `<AppShell …>` tag when the app renders its identity through the shell. */
+const appShellTag = (source: string): string | null =>
+	source.match(/<AppShell\b([\s\S]*?)(?:\/>|>)/i)?.[1] ?? null;
+
+/** A double-quoted literal prop on the tag (`icon="lucide:x"`); `{…}` expressions are runtime. */
+const literalProp = (tag: string | null, name: string): string | null =>
+	tag?.match(new RegExp(`${name}\\s*=\\s*"([^"]+)"`))?.[1]?.trim() ?? null;
+
 /** Reads static app identity from `<svelte:head>`. */
-export const extractAppMetadata = (source: string): AppMetadata => ({
-	title: decodeHtmlEntities(source.match(/<title>([^<]*)<\/title>/i)?.[1]?.trim() ?? null),
-	description: metaContent(source, 'description'),
-	icon: taggedMeta(source, 'icon'),
-	thumbnail: taggedMeta(source, 'thumbnail'),
-	banner: taggedMeta(source, 'banner'),
-	kiosk: taggedMeta(source, 'kiosk') === 'true'
-});
+export const extractAppMetadata = (source: string): AppMetadata => {
+	const shell = appShellTag(source);
+	// A shelled app declares its identity on `<AppShell>` (translated titles and descriptions
+	// stay runtime-only via the identity slot); anything else keeps the legacy head tags.
+	if (shell !== null) {
+		return {
+			title: decodeHtmlEntities(literalProp(shell, 'title')),
+			description: literalProp(shell, 'description'),
+			icon: literalProp(shell, 'icon'),
+			thumbnail: literalProp(shell, 'thumbnail'),
+			banner: literalProp(shell, 'banner'),
+			kiosk: taggedMeta(source, 'kiosk') === 'true'
+		};
+	}
+	return {
+		title: decodeHtmlEntities(source.match(/<title>([^<]*)<\/title>/i)?.[1]?.trim() ?? null),
+		description: metaContent(source, 'description'),
+		icon: taggedMeta(source, 'icon'),
+		thumbnail: taggedMeta(source, 'thumbnail'),
+		banner: taggedMeta(source, 'banner'),
+		kiosk: taggedMeta(source, 'kiosk') === 'true'
+	};
+};
 
 type GroupMetadata = Readonly<{
 	readonly label: string | null;

@@ -28,6 +28,7 @@
 		setAppHeaderActionsSlot,
 		type AppHeaderActionsSlot
 	} from './app-header-actions.svelte.js';
+	import { setAppIdentitySlot, type AppIdentitySlot } from '@norbital-ai/ui/app-shell';
 	import { setPlatformStateContext, type PlatformState } from '#lib/client/ui/state/platform.js';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import {
@@ -200,6 +201,10 @@
 	// The running app registers its trailing header controls here; the banner renders them.
 	const appHeaderActionsSlot = $state<AppHeaderActionsSlot>({ current: null });
 	const appHeaderActions = setAppHeaderActionsSlot(appHeaderActionsSlot);
+	// A running AppShell publishes its (possibly translated) identity here; the hero in
+	// app.svelte prefers it over the statically compiled registry.
+	const appIdentitySlot = $state<AppIdentitySlot>({ current: null });
+	setAppIdentitySlot(appIdentitySlot);
 
 	/**
 	 * Who the workspace is being used by, for authored pages that ask.
@@ -502,11 +507,15 @@
 
 {#snippet activeAppBanner()}
 	{@const resolvedHeaderActions = headerActions ?? appHeaderActions.current}
+	<!-- A mounted AppShell publishes its (possibly translated) identity into the slot;
+			the hero prefers it over the statically compiled props, which cannot see
+			`t('...')` values. The slot lives here — beside the header that reads it —
+			because context only flows downward. -->
 	<AppMediaHeader
-		src={headerBanner ?? null}
-		icon={headerIcon ?? 'lucide:layout-grid'}
-		title={resolvedHeaderTitle ?? ''}
-		description={resolvedHeaderDescription ?? null}
+		src={appIdentitySlot.current?.banner ?? headerBanner ?? null}
+		icon={appIdentitySlot.current?.icon ?? headerIcon ?? 'lucide:layout-grid'}
+		title={appIdentitySlot.current?.title ?? resolvedHeaderTitle ?? ''}
+		description={appIdentitySlot.current?.description ?? resolvedHeaderDescription ?? null}
 		{...resolvedHeaderActions == null ? {} : { actions: resolvedHeaderActions }}
 	/>
 {/snippet}

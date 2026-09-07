@@ -1,9 +1,7 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 
-	export type AppShellVariant =
-		| 'page'
-		| 'full';
+	export type AppShellVariant = 'page' | 'full';
 
 	export interface AppShellProps {
 		/** Icon name rendered in the workspace hero (for example `lucide:cpu`). */
@@ -27,7 +25,9 @@
 </script>
 
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { Bound, Cover } from '#lib/layout';
+	import { getAppIdentitySlot } from './app-identity.svelte.js';
 
 	let {
 		icon,
@@ -39,6 +39,17 @@
 		children
 	}: AppShellProps = $props();
 	const artwork = $derived(thumbnail ?? banner);
+	// Publish identity to the shell hero above: translated titles and descriptions are not
+	// statically readable, so without this the hero falls back to filename labels and icons.
+	// An effect (not init assignment) so locale switches re-publish; the slot is absent when
+	// the shell renders standalone in a test or story.
+	const identitySlot = getAppIdentitySlot();
+	$effect(() => {
+		if (identitySlot) identitySlot.current = { title, description, icon, banner, thumbnail };
+	});
+	onDestroy(() => {
+		if (identitySlot?.current?.title === title) identitySlot.current = null;
+	});
 </script>
 
 <svelte:head>

@@ -65,9 +65,12 @@ export type ScrollAxis = 'x' | 'y' | 'both';
  * that cannot pad itself still keep the app inset.
  */
 export const SCROLL_AXIS_CLASSES: Record<ScrollAxis, string> = {
-	x: 'overflow-x-auto overflow-y-clip overscroll-x-contain',
-	y: 'overflow-x-clip overflow-y-auto overscroll-y-contain',
-	both: 'overflow-auto overscroll-contain'
+	// No static `overscroll-contain` here: Chrome halts scroll chaining at any contain'ed scroll
+	// container, overflowing or not, so an inert region would eat the wheel meant for its ancestor.
+	// `base.css` applies contain from `data-overflow`, only where the affordance measured overflow.
+	x: 'overflow-x-auto overflow-y-clip',
+	y: 'overflow-x-clip overflow-y-auto',
+	both: 'overflow-auto'
 };
 
 export const PAD_CLASSES: Record<LayoutPad, string> = {

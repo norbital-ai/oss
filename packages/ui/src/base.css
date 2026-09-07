@@ -888,10 +888,21 @@
 .dark [data-overflow] {
 	--overflow-fade: 1.75rem;
 }
+/* Contain scroll chaining only where there is content to scroll into: Chrome stops the
+	chain at every scroll container carrying `contain`, scrollable or not, so a region that
+	fits would otherwise swallow the wheel meant for the scrollport above it. */
 [data-overflow~='block-start'],
-[data-overflow~='block-end'],
+[data-overflow~='block-end'] {
+	overscroll-behavior-y: contain;
+}
 [data-overflow~='inline-start'],
 [data-overflow~='inline-end'] {
+	overscroll-behavior-x: contain;
+}
+[data-overflow~='block-start']:not([data-fade='false']),
+[data-overflow~='block-end']:not([data-fade='false']),
+[data-overflow~='inline-start']:not([data-fade='false']),
+[data-overflow~='inline-end']:not([data-fade='false']) {
 	-webkit-mask-image:
 		linear-gradient(
 			to bottom,

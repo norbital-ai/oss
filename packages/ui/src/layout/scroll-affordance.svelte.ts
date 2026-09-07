@@ -40,15 +40,20 @@ function overflowEdges(node: HTMLElement): string {
  * `<Scroll>` applies it already; reach for it directly only on a scrollport that cannot
  * be one, such as a component's internal rail.
  *
- * `fade: false` drops the edge attribute for a region whose content must stay opaque to
- * its own edge. Its scrollbar still follows the global hover-only rule.
+ * The edges also decide `overscroll-behavior`: `base.css` contains chaining only on an edge
+ * with content past it, because Chrome stops the chain at every contain'ed scroll container,
+ * scrollable or not, and an inert region would otherwise trap the wheel meant for its ancestor.
+ *
+ * `fade: false` keeps the edges but stamps `data-fade="false"` so the mask stays off for a
+ * region whose content must stay opaque to its own edge. Its scrollbar still follows the
+ * global hover-only rule.
  */
 export function scrollAffordance(options?: { fade?: boolean }) {
 	const fade = options?.fade ?? true;
 
 	return (node: HTMLElement) => {
+		if (!fade) node.setAttribute('data-fade', 'false');
 		const syncOverflow = () => {
-			if (!fade) return;
 			const edges = overflowEdges(node);
 			if (node.getAttribute('data-overflow') !== edges) {
 				node.setAttribute('data-overflow', edges);

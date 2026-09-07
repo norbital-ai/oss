@@ -329,7 +329,7 @@
 	</div>
 	<div class="matrix-renderer-narrow flex min-h-0 min-w-0 flex-1 flex-col">
 		{#if bounded}
-			<Scroll axis="y" name={t('dataRenderer.matrixRows')} grow class="overscroll-y-contain">
+			<Scroll axis="y" name={t('dataRenderer.matrixRows')} grow>
 				{@render narrowRows()}
 			</Scroll>
 		{:else}

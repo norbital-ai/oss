@@ -43,6 +43,29 @@ describe('app metadata', () => {
 		expect(meta.title).toBe('Time & Attendance');
 	});
 
+	it('reads AppShell literal props, leaving translated props runtime-only', () => {
+		const shelled = extractAppMetadata(`
+			<AppShell
+				icon="lucide:settings-2"
+				title={t('app.settings.header_title')}
+				description={t('app.settings.header_description')}
+				banner="/assets/settings.webp"
+				variant="full"
+			>
+		`);
+		expect(shelled).toEqual({
+			title: null,
+			description: null,
+			icon: 'lucide:settings-2',
+			thumbnail: null,
+			banner: '/assets/settings.webp',
+			kiosk: false
+		});
+		const literal = extractAppMetadata('<AppShell icon="lucide:cpu" title="Catalogue" />');
+		expect(literal.title).toBe('Catalogue');
+		expect(literal.icon).toBe('lucide:cpu');
+	});
+
 	it('reads label, description, icon and defaultChild from an authored +group.ts', () => {
 		const group = extractGroupMetadata(`
 			export default group({
