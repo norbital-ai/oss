@@ -1,13 +1,28 @@
 import { Duration, Effect } from 'effect';
 
 /** Wall the composer will wait for admit before painting sendFailure. */
-export const COMPOSER_COMMAND_DEADLINE_MILLIS = 5_000;
+/**
+ * How long the composer waits for a send, which is now a whole turn.
+ *
+ * Five seconds, when `conversations.send` only admitted a message and a separate durable
+ * occurrence ran the turn. It admits *and answers* in one invocation now, so the response does not
+ * arrive until the model has finished — and a five-second wall aborted the request mid-turn on
+ * every real reply, painting a failure over a conversation that was still running.
+ *
+ * The wall is not what tells the operator their message landed: the pending bubble is cleared when
+ * the durable row arrives over live sync, independently of this response (`visibleUnsettledAdmission`).
+ * So this only has to be longer than a turn the host is willing to run, and short enough that a
+ * genuinely lost request does not hang the composer forever. The host's own invocation deadline
+ * settles the turn before this fires.
+ */
+export const COMPOSER_COMMAND_DEADLINE_MILLIS = 300_000;
 
 /** Effect duration for the same wall. */
-export const COMPOSER_COMMAND_DEADLINE = '5 seconds' as const satisfies Duration.Input;
+export const COMPOSER_COMMAND_DEADLINE = '300 seconds' as const satisfies Duration.Input;
 
-/** Operator-visible sentence when admit does not return before the wall. */
-export const COMPOSER_ADMISSION_TIMEOUT_MESSAGE = 'The Task did not admit within 5 seconds.';
+/** Operator-visible sentence when the send does not return before the wall. */
+export const COMPOSER_ADMISSION_TIMEOUT_MESSAGE =
+	'The agent did not answer within 5 minutes. Your message was saved; reopen the conversation to see the reply.';
 
 type ComposerSendHandlers<A> = Readonly<{
 	readonly onSuccess: (result: A) => void;

@@ -808,6 +808,159 @@ describe('collections.mutate over the wire', () => {
 		});
 	});
 
+	it.each([false, true])(
+		'replays concurrent approved resumes once without masking after-hook failure (%s)',
+		async (failAfterHook) => {
+			let resuming = false;
+			let prepareRuns = 0;
+			let afterRuns = 0;
+			const prepared = Promise.withResolvers<void>();
+			const approvalPolicy = describePolicy('admin-data', {
+				description: 'Orders require review.',
+				grants: {
+					orders: {
+						read: {},
+						mutate: {
+							new: { approval: { flow: () => approveBy('Reviewers'), superceded_by: [] } }
+						}
+					}
+				}
+			});
+			const policyFunctions = policyRuntimeFunctionsFor([approvalPolicy]);
+			harness = await open(
+				{
+					...emptyAuthoredRuntime,
+					approvalFlows: policyFunctions.approvalFlows,
+					policyAuthorizations: policyFunctions.authorizations,
+					hooks: {
+						orders: authoredHooks<WireCreateSchema, 'orders'>({
+							mutate: {
+								perRecord: {
+									before: {
+										description: 'Both resumes prepare before either commits.',
+										handler: ({ input }) =>
+											Effect.gen(function* () {
+												if (resuming) {
+													prepareRuns += 1;
+													if (prepareRuns === 2) prepared.resolve();
+													yield* Effect.promise(() => prepared.promise);
+												}
+												return input;
+											})
+									},
+									after: {
+										description: 'Records settlement and optionally fails after the commit.',
+										handler: () => {
+											afterRuns += 1;
+											if (failAfterHook) throw new Error('approved settlement exploded');
+										}
+									}
+								}
+							}
+						})
+					}
+				},
+				{
+					...definition,
+					policies: [approvalPolicy],
+					teams: { admin: ['admin-data'], Reviewers: [] }
+				}
+			);
+			const runtime = harness;
+			const first = await post(
+				runtime,
+				'collections.mutate',
+				mutationPush(await schemaFingerprint(runtime), {
+					idempotencyKey: 'approved-concurrent-resume',
+					seed: 65,
+					graph: {
+						action: 'mutate',
+						collection: 'orders',
+						rows: [{ action: 'create', values: { reference: 'CONCURRENT' } }]
+					}
+				})
+			);
+			const pendingApproval = Reflect.get(first.value as object, 'pendingApproval');
+			const requestId =
+				typeof pendingApproval === 'object' && pendingApproval !== null
+					? Reflect.get(pendingApproval, 'requestId')
+					: undefined;
+			if (typeof requestId !== 'string')
+				throw new TypeError('pending settlement has no request id');
+			const collections = await runtime.runtime.runPromise(Collections.Service);
+			const unapproved = await runtime.runtime.runPromise(
+				collections
+					.resume(runtime.effectId('approval-resume-pending'), requestId)
+					.pipe(Effect.result)
+			);
+			expect(unapproved).toMatchObject({
+				_tag: 'Failure',
+				failure: { reason: 'approval has not been approved' }
+			});
+			await runtime.runtime.runPromise(
+				Effect.gen(function* () {
+					const approvals = yield* Approvals.Service;
+					const state = yield* approvals.status(runtime.effectId('approval-status'), requestId);
+					if (state?._tag !== 'Pending') throw new TypeError('approval is not pending');
+					yield* approvals.decide(
+						runtime.effectId('approval-approve'),
+						{ ...adminSubject, admin: false, teamPath: ['Reviewers'] },
+						state,
+						'approve'
+					);
+				})
+			);
+			resuming = true;
+			const outcomes = await runtime.runtime.runPromise(
+				Effect.all(
+					['first', 'second'].map((name) =>
+						collections
+							.resume(runtime.effectId(`approval-resume-${name}`), requestId)
+							.pipe(Effect.result)
+					),
+					{ concurrency: 'unbounded' }
+				)
+			);
+			const failures = outcomes.flatMap((outcome) =>
+				outcome._tag === 'Failure' ? [outcome.failure] : []
+			);
+			expect(failures).toHaveLength(failAfterHook ? 1 : 0);
+			if (failAfterHook) {
+				expect(failures[0]).toMatchObject({ phase: 'settle', step: 'after-hook' });
+				expect(unwrapMutationPhase(failures[0])).toMatchObject({
+					message: 'approved settlement exploded'
+				});
+			}
+			expect(prepareRuns).toBe(2);
+			expect(afterRuns).toBe(1);
+			expect(await runtime.database.query('select reference, row_version from orders')).toEqual([
+				{ reference: 'CONCURRENT', row_version: 1 }
+			]);
+			const [approval] = await runtime.database.query(
+				'select status, applied_at, row_version from approval_request where id = $1',
+				[requestId]
+			);
+			expect(approval).toMatchObject({ status: 'APPROVED', applied_at: expect.anything() });
+			expect(
+				await runtime.database.query(
+					'select outcome from bolt_browser_mutation where idempotency_key = $1',
+					['approved-concurrent-resume']
+				)
+			).toEqual([{ outcome: expect.objectContaining({ _tag: 'Committed' }) }]);
+			await runtime.runtime.runPromise(
+				collections.resume(runtime.effectId('approval-resume-later'), requestId)
+			);
+			expect(prepareRuns).toBe(2);
+			expect(afterRuns).toBe(1);
+			expect(
+				await runtime.database.query(
+					'select status, applied_at, row_version from approval_request where id = $1',
+					[requestId]
+				)
+			).toEqual([approval]);
+		}
+	);
+
 	it('durably rejects a mutation stated against a retired schema, and replays the refusal', async () => {
 		harness = await open(authored);
 		await schemaFingerprint(harness);

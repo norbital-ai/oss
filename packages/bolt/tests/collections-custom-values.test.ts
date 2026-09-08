@@ -101,11 +101,51 @@ describe('custom value validation', () => {
 		).toBeUndefined();
 	});
 
-	it('lets the schema decide about null rather than skipping the check', () => {
+	it('validates null against the schema of a required column', () => {
 		expect(
 			describeInvalidCustomValue(leaveRequests.fields, { event: null }, customTypes)
 		).toContain('event');
 	});
+
+	it.each([
+		{ required: false, multiple: false },
+		{ required: false, multiple: true },
+		{ required: true, multiple: false },
+		{ required: true, multiple: true }
+	])(
+		'honors column nullability with required=$required, multiple=$multiple',
+		({ required, multiple }) => {
+			const fields = {
+				range: {
+					type: 'json',
+					required,
+					indexed: false,
+					customType: 'instant_range',
+					customTypeOptions: { multiple }
+				}
+			} as const;
+			const nullFailure = describeInvalidCustomValue(fields, { range: null }, platformCustomTypes);
+			if (required) expect(nullFailure).toMatch(/^range is not a valid instant_range:/);
+			else expect(nullFailure).toBeUndefined();
+
+			const invalid = { start: 'not-an-instant', end: null };
+			expect(
+				describeInvalidCustomValue(
+					fields,
+					{ range: multiple ? [invalid] : invalid },
+					platformCustomTypes
+				)
+			).toContain('not a valid instant_range');
+			if (multiple) {
+				expect(
+					describeInvalidCustomValue(fields, { range: [] }, platformCustomTypes)
+				).toBeUndefined();
+				expect(describeInvalidCustomValue(fields, { range: [null] }, platformCustomTypes)).toMatch(
+					/^range\[0\] is not a valid instant_range:/
+				);
+			}
+		}
+	);
 
 	it('applies platform datatype options through the same factory-validation path', () => {
 		const invoices = collection({

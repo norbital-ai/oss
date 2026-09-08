@@ -82,8 +82,8 @@ const describe = (
  * Returns why a write is invalid, or `undefined` when every custom value it carries is fine.
  *
  * Only columns the write actually sets are checked — a partial update names a subset, and requiring
- * absent columns to validate would reject an update for a field it never touched. A `null` is passed
- * to the schema rather than skipped, because whether null is allowed is the schema's decision.
+ * absent columns to validate would reject an update for a field it never touched. Nullable columns
+ * accept SQL null; non-null values and array elements still obey the datatype's schema.
  */
 export const describeInvalidCustomValue = (
 	fields: Readonly<Record<string, FieldDefinition>>,
@@ -100,6 +100,7 @@ export const describeInvalidCustomValue = (
 		if (validate === undefined) continue;
 
 		const value = values[field] ?? null;
+		if (value === null && !definition.required) continue;
 		const multiple = definition.customTypeOptions?.['multiple'] === true;
 		if (multiple && !Array.isArray(value))
 			return `${field} is not a valid ${customType}: expected an array because multiple is enabled`;

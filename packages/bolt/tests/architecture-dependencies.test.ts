@@ -191,7 +191,11 @@ describe('Bolt architecture boundaries', () => {
 			])) +
 			accessLines;
 
-		expect(amendedAggregate).toBeLessThanOrEqual(17_900);
+		// 17,900 -> 17,946: ordinary-relation result typing and exact approved-mutation replay
+		// close reproduced contract-query and concurrent-resume failures. Both owners remain in
+		// this measured basket; no files or validation paths are moved outside the budget.
+		// 17,946 -> 17,947: nullable custom column null must not undergo element-schema validation.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_947);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -207,7 +211,10 @@ describe('Bolt architecture boundaries', () => {
 		// 4,848 -> 4,897: managed automation connections use the existing vault and stoppage guard;
 		// explicit exported layer types preserve declaration emission. Mutation hooks now receive
 		// authoritative parent facts and submitted relation sizes. The aggregate ceiling is unchanged.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_897);
+		// 4,897 -> 4,930: concurrent approved resumes replay the exact committed browser ledger
+		// before a losing invocation can conflict the request; settlement failures remain visible.
+		// The shared replay check also avoids rerunning hooks on later delivery.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_930);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work

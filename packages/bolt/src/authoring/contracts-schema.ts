@@ -480,6 +480,10 @@ export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> 
 				? ReferenceQueryConfig<S, SchemaReferences<S, N>[K]>
 				: never;
 		}> &
+			Partial<{
+				readonly [K in keyof SchemaRelations<S, N>]:
+					boolean | SchemaQueryConfig<S, RelationTarget<S, SchemaRelations<S, N>[K]>>;
+			}> &
 			Record<string, boolean | Readonly<Record<string, unknown>>>
 	>;
 	readonly limit?: number;
@@ -558,18 +562,39 @@ type HydratedReference<S extends AnySchema, Targets extends ReferenceTargets, Sp
 		> | null;
 	}>;
 }[keyof Targets & string];
+type HydratedRelation<S extends AnySchema, Relation, Spec> = Relation extends {
+	readonly target: TableName<S>;
+	readonly cardinality: 'one' | 'many';
+}
+	? SchemaQueryRow<
+			S,
+			RelationTarget<S, Relation>,
+			Extract<
+				Spec extends true ? undefined : Spec,
+				SchemaQueryConfig<S, RelationTarget<S, Relation>> | undefined
+			>
+		> extends infer Row
+		? Relation extends { readonly cardinality: 'many' }
+			? ReadonlyArray<Row>
+			: Row | null
+		: never
+	: Readonly<Record<string, unknown>> | ReadonlyArray<Readonly<Record<string, unknown>>> | null;
 type WithRows<S extends AnySchema, N extends TableName<S>, Config> = Config extends {
 	readonly with: infer W;
 }
 	? {
-			readonly [K in keyof W]: K extends keyof SchemaReferences<S, N>
+			readonly [
+				K in keyof W as W[K] extends false | undefined ? never : K
+			]: K extends keyof SchemaReferences<S, N>
 				? SchemaReferences<S, N>[K] extends ReferenceTargets
 					? | HydratedReference<S, SchemaReferences<S, N>[K], W[K]>
 						| (null extends SchemaRow<S, N>[K & keyof SchemaRow<S, N>] ? null : never)
 					: never
-				: | Readonly<Record<string, unknown>>
-					| ReadonlyArray<Readonly<Record<string, unknown>>>
-					| null;
+				: HydratedRelation<
+						S,
+						K extends keyof SchemaRelations<S, N> ? SchemaRelations<S, N>[K] : unknown,
+						W[K]
+					>;
 		}
 	: Readonly<Record<never, never>>;
 export type SchemaQueryRow<

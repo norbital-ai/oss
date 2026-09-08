@@ -3986,14 +3986,28 @@ export const layerWith = (
 					yield* lifecycle.pipe(
 						Effect.catchCause((cause) =>
 							Effect.gen(function* () {
-								// Approval is a suspended transaction, not a best-effort replay. Any drift or
-								// preparation/gate failure before COMMIT permanently conflicts the request.
 								if (
 									applied === undefined &&
 									options?.approval?.approved === true &&
 									options.approval.approvalRequestId !== undefined &&
 									!Cause.hasInterruptsOnly(cause)
-								)
+								) {
+									// A concurrent resume may have committed this exact approved mutation while
+									// this invocation was preparing or waiting for its transaction guard.
+									const failure = Cause.squash(cause);
+									if (
+										browserMutation !== undefined &&
+										failure instanceof MutationPhaseFailure &&
+										(failure.phase === 'prepare' || failure.phase === 'commit')
+									) {
+										const replay = yield* committedBrowserApprovalOutcome(
+											EffectId.make(`${effectId}:approved-concurrent-replay`),
+											options.approval.approvalRequestId,
+											browserMutation
+										);
+										if (replay !== undefined) return yield* replayBrowserMutationOutcome(replay);
+									}
+									// Genuine drift or preparation/gate failure before COMMIT conflicts the request.
 									yield* approvals
 										.conflict(
 											EffectId.make(`${effectId}:review-conflict`),
@@ -4001,6 +4015,7 @@ export const layerWith = (
 											'the reviewed mutation graph changed while approval was pending'
 										)
 										.pipe(Effect.ignore);
+								}
 								return yield* Effect.failCause(cause);
 							})
 						)
@@ -4168,6 +4183,15 @@ export const layerWith = (
 					)
 				);
 			});
+			const committedBrowserApprovalOutcome = Effect.fn(
+				'Collections.committedBrowserApprovalOutcome'
+			)(function* (effectId: EffectId, requestId: string, fence: BrowserMutationFence) {
+				const durable = yield* approvalBrowserMutationOutcome(effectId, requestId, fence);
+				return durable?._tag === 'Committed' &&
+					Schema.toEquivalence(BrowserMutationOutcome)(durable, fence.outcome)
+					? durable
+					: undefined;
+			});
 
 			/**
 			 * Closes the durable hold behind a refused request.
@@ -4286,6 +4310,15 @@ export const layerWith = (
 							})
 					)
 				);
+				if (
+					stored.browserMutation !== undefined &&
+					(yield* committedBrowserApprovalOutcome(
+						EffectId.make(`${effectId}:approved-replay`),
+						requestId,
+						stored.browserMutation
+					)) !== undefined
+				)
+					return;
 				yield* mutate(
 					effectId,
 					engineResume.subject,

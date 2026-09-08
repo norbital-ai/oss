@@ -182,7 +182,16 @@ describe('G1 Task composer submit', () => {
 		expect(command).toHaveBeenCalledTimes(1);
 	});
 
-	it.effect('does not fail at 4s and paints sendFailure at the 5s admit wall', () =>
+	/**
+	 * The wall is a turn, not an admission.
+	 *
+	 * It was five seconds when `conversations.send` only admitted a message and something else ran
+	 * the turn. It admits and answers in one invocation now, so a five-second wall aborted the
+	 * request mid-reply on every real send and painted a failure over a running conversation. What
+	 * tells the operator their message landed is the durable row arriving over live sync, not this
+	 * response — so this only bounds a request that is genuinely lost.
+	 */
+	it.effect('waits for the whole turn and paints sendFailure only at the wall', () =>
 		Effect.gen(function* () {
 			const draft = { text: HEADED_TEXT, cleared: false };
 			let sendFailure: string | null = null;
@@ -198,11 +207,12 @@ describe('G1 Task composer submit', () => {
 					pending = false;
 				}
 			}).pipe(Effect.forkChild);
-			yield* TestClock.adjust('4 seconds');
+			// A real turn takes far longer than the old five-second wall; nothing fails here.
+			yield* TestClock.adjust('120 seconds');
 			expect(sendFailure).toBeNull();
 			expect(pending).toBe(true);
 			expect(draft.cleared).toBe(false);
-			yield* TestClock.adjust('1 second');
+			yield* TestClock.adjust(COMPOSER_COMMAND_DEADLINE);
 			const exit = yield* Fiber.await(fiber);
 			expect(Exit.isFailure(exit)).toBe(true);
 			expect(sendFailure).toBe(COMPOSER_ADMISSION_TIMEOUT_MESSAGE);
