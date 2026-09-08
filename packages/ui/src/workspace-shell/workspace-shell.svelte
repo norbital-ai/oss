@@ -30,13 +30,14 @@
 		searchShortcut,
 		agent,
 		environmentLabel,
+		versionLabel,
+		versionDetail,
 		children
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: ((href: string) => void) | undefined;
 		onPrefetch?: ((href: string) => void) | undefined;
-		onOrganizationChange?:
-			((organizationId: string) => void | Effect.Effect<void>) | undefined;
+		onOrganizationChange?: ((organizationId: string) => void | Effect.Effect<void>) | undefined;
 		onSignOut?: (() => void | Effect.Effect<void>) | undefined;
 		/**
 		 * The account area's notification surface, rendered above the user menu.
@@ -66,6 +67,9 @@
 		 * which is what production passes.
 		 */
 		environmentLabel?: string | undefined;
+		/** The account menu's version line and its fuller `title`; `undefined` renders no line. */
+		versionLabel?: string | undefined;
+		versionDetail?: string | undefined;
 		children: Snippet;
 	} = $props();
 	setStorageScope(() => model.activeOrganization.id);
@@ -136,6 +140,8 @@
 				{searchShortcut}
 				{agent}
 				{environmentLabel}
+				{versionLabel}
+				{versionDetail}
 			/>
 		{/snippet}
 		{@render children()}

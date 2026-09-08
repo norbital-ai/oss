@@ -106,9 +106,22 @@ export type AppMeta = Readonly<{
  * whole point of the bundle owning the UI: there is no registry keyed by tenant to look the wrong
  * organization up in.
  */
+/**
+ * What a bundle was compiled from and with — the release manifest's `artifactVersion` and toolchain,
+ * as the entry baked them. `release` is the session's id for the artifact the host is serving.
+ */
+export type WorkspaceBuild = Readonly<{
+	readonly workspace: string;
+	readonly bolt: string;
+	readonly node: string;
+	readonly release?: string;
+}>;
+
 export type CompiledWorkspace = Readonly<{
 	readonly title: string;
 	readonly name: string;
+	/** Optional only for an entry generated without it; Bolt's own entry always carries one. */
+	readonly build?: WorkspaceBuild;
 	readonly appLoaders: Readonly<Record<string, () => Promise<Component>>>; // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	readonly appGroups: Readonly<Record<string, AppGroup>>;
 	readonly appMeta: Readonly<Record<string, AppMeta>>;

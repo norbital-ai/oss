@@ -549,6 +549,9 @@
 	title={workspace.title}
 	{syncStatus}
 	environment={session.environment}
+	build={workspace.build === undefined
+		? undefined
+		: { ...workspace.build, release: session.releaseId }}
 	search={view.search}
 	{apps}
 	{accessibleApps}

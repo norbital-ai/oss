@@ -41,7 +41,9 @@
 		searchLabel,
 		searchShortcut,
 		agent,
-		environmentLabel
+		environmentLabel,
+		versionLabel,
+		versionDetail
 	}: {
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void | undefined;
@@ -63,6 +65,9 @@
 		 * decision lives with the host's shell — this component only renders what it is given.
 		 */
 		environmentLabel?: string | undefined;
+		/** The account menu's version line and its fuller `title`; `undefined` renders no line. */
+		versionLabel?: string | undefined;
+		versionDetail?: string | undefined;
 	} = $props();
 
 	let switchingOrganizationId = $state<string | null>(null);
@@ -378,6 +383,9 @@
 								? ` · ${model.user.teamLabels.join(', ')}`
 								: ''}
 						</p>
+						{#if versionLabel !== undefined}
+							<p class="text-tiny text-muted-foreground" title={versionDetail}>{versionLabel}</p>
+						{/if}
 					</div>
 					<DropdownMenu.Separator />
 					<Button

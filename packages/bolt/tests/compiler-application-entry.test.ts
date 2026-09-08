@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Plugin } from 'vite';
 import { describe, expect, it } from 'vitest';
 import { boltPlugin } from '../src/compiler/vite-plugin.js';
@@ -129,6 +132,32 @@ describe('workspace application entry', () => {
 			entry.code.indexOf('return mountBoltWorkspace')
 		);
 		expect(source).toContain('appMeta: workspace.appMeta');
+	});
+	it('bakes the workspace, Bolt and Node versions the account menu shows into the entry', async () => {
+		const plugin = compilerPlugin();
+		const configure = typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
+		if (typeof configure !== 'function') throw new Error('Missing compiler config hook');
+		const root = await mkdtemp(join(tmpdir(), 'bolt-entry-'));
+		await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'acme', version: '1.2.3' }));
+		configure.call({} as never, { root } as never, {} as never);
+		const load = plugin.load;
+		if (typeof load !== 'function')
+			throw new Error('The Bolt compiler plugin no longer has a loader');
+		const source = await (
+			load as (this: void, id: string) => string | null | Promise<string | null>
+		)(applicationId);
+		if (typeof source !== 'string')
+			throw new Error('The Bolt application loader returned no source');
+		const bolt = JSON.parse(
+			await readFile(new URL('../package.json', import.meta.url), 'utf8')
+		) as {
+			version: string;
+		};
+		expect(source).toContain(
+			`const build = ${JSON.stringify({ workspace: '1.2.3', bolt: bolt.version, node: process.versions.node })};`
+		);
+		// The same object reaches `CompiledWorkspace.build`, which the shell renders in the account menu.
+		expect(source).toContain('\t\t\t\tbuild,');
 	});
 
 	it("links every stylesheet of the entry's static import graph, and none reached only dynamically", async () => {

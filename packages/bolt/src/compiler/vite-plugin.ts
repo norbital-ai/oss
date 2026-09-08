@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import type { Plugin, PluginOption } from 'vite';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Effect, Result, Schema } from 'effect';
 import {
 	auditAuthoredClientWrappers,
@@ -18,11 +19,24 @@ export type BoltPluginOptions = Readonly<{
 	readonly serverAssets?: ReadonlyArray<{ readonly source: string; readonly target: string }>;
 }>;
 
-const WorkspaceNameFileSchema = Schema.Struct({ name: Schema.optional(Schema.String) });
+const WorkspaceNameFileSchema = Schema.Struct({
+	name: Schema.optional(Schema.String),
+	version: Schema.optional(Schema.String)
+});
 /** Built once: a decoder is compiled where it is constructed, and this one runs per manifest read. */
 const decodeWorkspaceNameFile = Schema.decodeUnknownEffect(
 	Schema.fromJsonString(WorkspaceNameFileSchema)
 );
+const boltPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+const NO_MANIFEST: typeof WorkspaceNameFileSchema.Type = {};
+/** One manifest's `name` and `version`; both absent when the file is missing or unreadable. */
+const manifestOf = (root: string, file: string) =>
+	Effect.tryPromise(() => readFile(join(root, file), 'utf8')).pipe(
+		Effect.flatMap(decodeWorkspaceNameFile),
+		Effect.result,
+		Effect.map((result) => (Result.isSuccess(result) ? result.success : NO_MANIFEST))
+	);
 const WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER = '__BOLT_ENTRY_STYLESHEET__';
 const WORKSPACE_ENTRY_STYLESHEET_REFERENCE = 'virtual:bolt/application-stylesheet.css';
 const WORKSPACE_ENTRY_STYLESHEET_ID = `\0${WORKSPACE_ENTRY_STYLESHEET_REFERENCE}`;
@@ -39,17 +53,32 @@ const WORKSPACE_ENTRY_STYLESHEET_MARKER = '--bolt-framework-stylesheet';
 const workspaceTitleOf = (root: string): Effect.Effect<string> => {
 	/** The `name` one manifest carries, or the empty string when it is missing or unreadable. */
 	const named = (file: string): Effect.Effect<string> =>
-		Effect.tryPromise(() => readFile(join(root, file), 'utf8')).pipe(
-			Effect.flatMap(decodeWorkspaceNameFile),
-			Effect.map(({ name }) => name ?? ''),
-			Effect.result,
-			Effect.map((title) => (Result.isSuccess(title) ? title.success : ''))
-		);
+		Effect.map(manifestOf(root, file), ({ name }) => name ?? '');
 	return named('norbital.template.json').pipe(
 		Effect.flatMap((title) => (title.length > 0 ? Effect.succeed(title) : named('package.json'))),
 		Effect.map((title) => (title.length > 0 ? title : 'Bolt'))
 	);
 };
+
+/**
+ * What this bundle was compiled from and with, for the account menu's version line.
+ *
+ * The same facts the release manifest records as `artifactVersion` and `provenance.toolchain`
+ * (`writeTenantRelease`), read from the same two `package.json` files. Baked into the entry so they
+ * travel with the client: a host serving an artifact has no other way to say which one it is.
+ */
+const workspaceBuildOf = (root: string) =>
+	Effect.map(
+		Effect.all({
+			workspace: manifestOf(root, 'package.json'),
+			bolt: manifestOf(boltPackageRoot, 'package.json')
+		}),
+		({ workspace, bolt }) => ({
+			workspace: workspace.version ?? '0.0.0-local',
+			bolt: bolt.version ?? '0.0.0-local',
+			node: process.versions.node
+		})
+	);
 
 /** Owns the virtual client runtime/application modules and the emitted workspace client. */
 export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
@@ -199,14 +228,18 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 				return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy } from '@norbital-ai/bolt/client-runtime';`;
 			if (id === applicationId) {
 				return Effect.runPromise(
-					workspaceTitleOf(workspaceRoot).pipe(
-						Effect.map((title) =>
+					Effect.all({
+						title: workspaceTitleOf(workspaceRoot),
+						build: workspaceBuildOf(workspaceRoot)
+					}).pipe(
+						Effect.map(({ title, build }) =>
 							[
 								`import ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_REFERENCE)};`,
 								`import { mountWorkspace as mountBoltWorkspace } from '@norbital-ai/bolt/client/workspace';`,
 								`import { toError } from '@norbital-ai/std';`,
 								`import { Effect } from 'effect';`,
 								`const title = ${JSON.stringify(title)};`,
+								`const build = ${JSON.stringify(build)};`,
 								`// Every stylesheet of the entry's static import graph, comma-separated, the shell's first.`,
 								`const applicationStylesheets = ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER)}.split(',').filter((name) => name.length > 0);`,
 								`let applicationStylesheetsReady;`,
@@ -252,6 +285,7 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 								`\t\t\t\tEffect.map(({ workspace, framework, messages }) => ({`,
 								`\t\t\t\ttitle,`,
 								`\t\t\t\tname: title,`,
+								`\t\t\t\tbuild,`,
 								`\t\t\t\tappLoaders: workspace.appLoaders,`,
 								`\t\t\t\tappGroups: workspace.appGroups,`,
 								`\t\t\t\tappMeta: workspace.appMeta,`,

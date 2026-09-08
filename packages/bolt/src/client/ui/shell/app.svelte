@@ -9,6 +9,7 @@
 	import type { HostPlugin } from '#lib/client/ui/shell/workspace-navigation.js';
 	import { type Effect, Schema } from 'effect';
 	import type { ClientState } from '#lib/client/sync/machine.js';
+	import type { WorkspaceBuild } from '#lib/client/ui/shell/workspace-contract.js';
 
 	const isString = Schema.is(Schema.String);
 
@@ -29,6 +30,7 @@
 		deferredQueriesReady = false,
 		syncStatus,
 		environment,
+		build,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -104,6 +106,8 @@
 		 * Forwarded verbatim to the shell.
 		 */
 		environment?: string | undefined;
+		/** The bundle's own versions for the account menu, forwarded verbatim to the shell. */
+		build?: WorkspaceBuild | undefined;
 		/**
 		 * Admin team preview, forwarded verbatim to the shell.
 		 *
@@ -176,6 +180,7 @@
 	{deferredQueriesReady}
 	{syncStatus}
 	{environment}
+	{build}
 	{impersonation}
 	{onImpersonate}
 	{onStopImpersonating}

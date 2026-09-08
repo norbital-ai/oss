@@ -23,7 +23,10 @@
 	} from '#lib/client/ui/agent/composer-chrome.js';
 	import { useAgentClient } from '../agent/client.svelte.js';
 	import { agentOrbState, agentOrbStatusKey } from '#lib/client/ui/agent/agent-orb-state.js';
-	import { mergeBoltConversationMessages, type TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
+	import {
+		mergeBoltConversationMessages,
+		type TenantMessageCatalogs
+	} from '#lib/client/ui/agent/i18n.js';
 	import {
 		setAppHeaderActionsSlot,
 		type AppHeaderActionsSlot
@@ -60,6 +63,7 @@
 	} from '#lib/client/ui/shell/workspace-navigation.js';
 	import { workspaceEnvironmentLabel } from '#lib/client/ui/shell/environment-label.js';
 	import type { ClientState } from '#lib/client/sync/machine.js';
+	import type { WorkspaceBuild } from '#lib/client/ui/shell/workspace-contract.js';
 
 	let {
 		app = 'Bolt',
@@ -77,6 +81,7 @@
 		deferredQueriesReady = false,
 		syncStatus,
 		environment,
+		build,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -128,6 +133,8 @@
 		 * ambient read. `production` renders no badge, `development` reads as `local`.
 		 */
 		environment?: string | undefined;
+		/** The bundle's own versions, for the account menu; the entry bakes them at compile time. */
+		build?: WorkspaceBuild | undefined;
 		apps?: ReadonlyArray<
 			| string
 			| {
@@ -627,6 +634,12 @@
 		{onImpersonate}
 		{onStopImpersonating}
 		environmentLabel={workspaceEnvironmentLabel(environment)}
+		versionLabel={build === undefined
+			? undefined
+			: t('bolt.shell.versionLabel', { workspace: build.workspace, bolt: build.bolt })}
+		versionDetail={build === undefined
+			? undefined
+			: t('bolt.shell.versionDetail', { node: build.node, release: build.release ?? '' })}
 	>
 		{#snippet agent({ expanded })}
 			<AgentTrigger
