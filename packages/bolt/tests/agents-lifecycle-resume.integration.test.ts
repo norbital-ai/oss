@@ -104,7 +104,9 @@ describe('Task stop and run-fence boundaries', () => {
 			)
 		).toEqual({ conversationId, status: 'stopped' });
 		releaseProvider();
-		await expect(running).rejects.toMatchObject({ _tag: 'Bolt.TaskRuntime.Error' });
+		// A deliberate stop is not a fault: the turn meets the fence and settles, and the caller's
+		// send answers instead of failing dispatch with a 500 the host logs as an error.
+		await expect(running).resolves.toEqual({ conversationId, status: 'done' });
 
 		expect(
 			await harness.database.query(

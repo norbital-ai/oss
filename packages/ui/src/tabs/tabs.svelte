@@ -117,7 +117,13 @@
 <TabsPrimitive.Root
 	class={cn(
 		showContent
-			? 'grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-clip'
+			? cn(
+					'grid h-full min-h-0 min-w-0 gap-2 overflow-clip',
+					// A vertical strip is a rail beside the panel, not a stack above it.
+					resolvedLayout === 'vertical'
+						? 'grid-cols-[auto_minmax(0,1fr)]'
+						: 'grid-rows-[auto_minmax(0,1fr)]'
+				)
 			: 'min-w-0 shrink-0',
 		className
 	)}

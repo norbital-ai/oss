@@ -3008,6 +3008,20 @@ export const layer = Layer.effect(
 			 * A stop that already wrote `stopped` refuses both writes at the fence, which is the right answer.
 			 */
 			return yield* runEffect.pipe(
+				/**
+				 * A turn that lost the fence is over, not broken. `control stop` writes `stopped` and
+				 * the turn in flight meets it at its next boundary; reporting that meeting as a failure
+				 * made every deliberate Stop a `dispatch_failed` 500 in the host's error log. The
+				 * conversation row already says what happened, so the caller is told it settled.
+				 */
+				Effect.catchIf(
+					(error): error is TaskRuntimeError =>
+						error instanceof TaskRuntimeError && error.operation === 'fence',
+					() =>
+						Effect.logInfo(`Turn ${run.id} ended at the fence: the conversation was stopped.`).pipe(
+							Effect.as({ conversationId, status: 'done' } satisfies TurnResult)
+						)
+				),
 				Effect.onExit((exit) => {
 					if (Exit.isSuccess(exit)) return Effect.void;
 					const sentence = Cause.hasInterruptsOnly(exit.cause)

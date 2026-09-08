@@ -395,6 +395,9 @@ export class TreeState<TMetadata> {
 		const newState = !node.isSelected;
 
 		if (newState) {
+			// Single selection is one id: the previous pick leaves before the new one lands, or a
+			// caller reading `selected[0]` keeps getting the old one.
+			if (!this.multiple) this.selectedNodeIds.clear();
 			this.selectedNodeIds.add(node.id);
 			this.#enforceRequiredClosureUpward(node.parentNode);
 		} else {
@@ -411,6 +414,7 @@ export class TreeState<TMetadata> {
 		const newState = !node.isSelected;
 
 		if (newState) {
+			if (!this.multiple) this.selectedNodeIds.clear();
 			this.selectedNodeIds.add(node.id);
 			this.#enforceRequiredClosureUpward(node.parentNode);
 		} else {
