@@ -89,7 +89,8 @@ const TurnRow = Schema.Struct({
 	model_id: ModelId,
 	/** The model's context window as the catalog stated it when this turn was claimed. */
 	context_window_tokens: Schema.Natural,
-	status: RunStatus
+	status: RunStatus,
+	created_at: Schema.optionalKey(Schema.Unknown)
 });
 export type TurnRow = typeof TurnRow.Type;
 
@@ -163,6 +164,23 @@ export function projectTurns(rows: readonly unknown[]): TurnRow[] {
 		const decoded = decodeTurnRow(row);
 		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
+}
+
+/**
+ * Seconds a running turn has been working with nothing to show, or `null` once its first agent
+ * row exists (or the turn is not running). The first token can take up to half a minute to
+ * arrive; a clock is what keeps that window from looking stuck.
+ */
+export function turnWaitingSeconds(
+	run: TurnRow | undefined,
+	messages: readonly PanelMessage[],
+	now: number
+): number | null {
+	if (run === undefined || run.status !== 'running') return null;
+	if (messages.some((message) => message.runId === run.id && message.author.kind === 'agent'))
+		return null;
+	const startedAt = new Date(String(run.created_at ?? '')).getTime();
+	return Number.isFinite(startedAt) ? Math.max(0, Math.floor((now - startedAt) / 1_000)) : 0;
 }
 
 export function projectAgentUsage(rows: readonly unknown[]): TurnUsageRow[] {

@@ -126,6 +126,49 @@ describe('Task stop and run-fence boundaries', () => {
 		).toEqual([{ count: 0 }]);
 	});
 
+	it('settles an interrupted turn as failed with a sentence, instead of leaving it running', async () => {
+		let announceProvider!: () => void;
+		const providerStarted = new Promise<void>((resolve) => (announceProvider = resolve));
+		const inner = cassetteAi(cassette('agents-lifecycle-stale'));
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (metadata, request, signal, onProgress) => {
+				if (request._tag !== 'Generate') return inner.call(metadata, request, signal, onProgress);
+				announceProvider();
+				// A provider that never answers; the interruption is what ends this call.
+				return new Promise(() => undefined);
+			}
+		};
+		harness = await makeBoltTestRuntime(undefined, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const conversationId = ConversationId.make(recordId('task-interrupted-turn'));
+		await harness.runtime.runPromise(submit(agents, harness, conversationId, 'Start the work.'));
+
+		const controller = new AbortController();
+		const running = harness.runtime.runPromise(
+			agents.execute(harness.effectId('execute'), adminSubject, conversationId),
+			{ signal: controller.signal }
+		);
+		await providerStarted;
+		controller.abort();
+		await expect(running).rejects.toBeDefined();
+
+		expect(
+			await harness.database.query(
+				`select task.status as task_status, task.active_turn_id, run.status as run_status
+				 from conversation task join turn run on run.conversation_id = task.id
+				 where task.id = $1`,
+				[conversationId]
+			)
+		).toEqual([{ task_status: 'failed', active_turn_id: null, run_status: 'failed' }]);
+		expect(
+			await harness.database.query(
+				`select message->>'content' as content from conversation_message
+				 where conversation_id = $1 and author->>'kind' = 'system'`,
+				[conversationId]
+			)
+		).toEqual([{ content: 'Task failed: The turn was interrupted.' }]);
+	});
+
 	it('accepts a follow-up in a stopped conversation without reviving cancelled instructions', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) =>

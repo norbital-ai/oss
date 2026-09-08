@@ -39,6 +39,7 @@
 		projectConversationMessages,
 		projectPlans,
 		projectTurns,
+		turnWaitingSeconds,
 		projectAgentUsage,
 	} from './transcript.js';
 	import { agentOrbBusyStatusKey, agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
@@ -227,6 +228,17 @@
 		})
 	);
 	const taskWorking = $derived(activeTask?.status === 'running');
+	/** A second hand for the window between `running` and the first part; it only ticks while working. */
+	let now = $state(Date.now());
+	$effect(() => {
+		if (!taskWorking) return;
+		now = Date.now();
+		const timer = setInterval(() => (now = Date.now()), 1_000);
+		return () => clearInterval(timer);
+	});
+	const waitingSeconds = $derived(
+		taskWorking ? turnWaitingSeconds(activeRun, rootMessages, now) : null
+	);
 	const canStop = $derived(taskWorking && !controlPending);
 	const canResume = $derived(
 		!controlPending &&
@@ -915,6 +927,13 @@
 									: reviseMessage}
 							/>
 						{/each}
+						{#if waitingSeconds !== null}
+							<li class="my-1.5 min-w-0" role="status" data-turn-waiting>
+								<span class="text-xs text-muted-foreground"
+									>{t('bolt.agent.thinkingFor', { seconds: waitingSeconds })}</span
+								>
+							</li>
+						{/if}
 						{#if visibleAdmission !== null}
 							<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
 								<Stack gap="xs" align="end">

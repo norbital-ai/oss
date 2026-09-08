@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
+import { Cause, Clock, Context, Effect, ExecutionPlan, Exit, Layer, Schema, Stream } from 'effect';
 import { AiError, Prompt, Tool, Toolkit } from 'effect/unstable/ai';
 import { EffectId, ReleaseId, type AIMessageProgress } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
@@ -3000,13 +3000,30 @@ export const layer = Layer.effect(
 					}
 				}
 			});
+			/**
+			 * The turn settles whichever way it ends. An interruption is not an error, so a `tapError`
+			 * finaliser skipped it and the conversation stayed `running` with nothing left to move it;
+			 * `onExit` sees every exit and runs uninterruptibly. Each write is logged rather than ignored,
+			 * because a status write that fails here is exactly a panel showing work that is not happening.
+			 * A stop that already wrote `stopped` refuses both writes at the fence, which is the right answer.
+			 */
 			return yield* runEffect.pipe(
-				Effect.tapError((cause) =>
+				Effect.onExit((exit) => {
+					if (Exit.isSuccess(exit)) return Effect.void;
+					const sentence = Cause.hasInterruptsOnly(exit.cause)
+						? 'The turn was interrupted.'
+						: describeFailure(Cause.squash(exit.cause)).message;
+					const logged = <A, E>(write: Effect.Effect<A, E>, what: string) =>
+						write.pipe(
+							Effect.catchCause((cause) =>
+								Effect.logWarning(`Turn ${run.id} could not ${what}: ${Cause.pretty(cause)}`)
+							)
+						);
 					// The turn is over and its ledger is out of scope; a failing turn pays one read for
 					// the one message it still has to write.
-					messageRows(EffectId.make(`${effectId}:failed-messages`), subject, conversationId)
-						.pipe(Effect.map(makeTranscript))
-						.pipe(
+					return logged(
+						messageRows(EffectId.make(`${effectId}:failed-messages`), subject, conversationId).pipe(
+							Effect.map(makeTranscript),
 							Effect.flatMap((failedTranscript) =>
 								appendMessage(
 									EffectId.make(`${effectId}:failed-message`),
@@ -3014,23 +3031,25 @@ export const layer = Layer.effect(
 									run,
 									failedTranscript,
 									{ kind: 'system' },
-									systemMessage(`Task failed: ${describeFailure(cause).message.slice(0, 500)}`)
+									systemMessage(`Task failed: ${sentence.slice(0, 500)}`)
 								)
 							)
-						)
-						.pipe(
-						Effect.ignore,
-						Effect.andThen(
-							updateRun(EffectId.make(`${effectId}:failed`), subject, run, {
-								taskStatus: 'failed',
-								runStatus: 'failed',
-								phase: 'model',
-								active: false
-							})
 						),
-						Effect.ignore
-					)
-				),
+						'record its failure'
+					).pipe(
+						Effect.andThen(
+							logged(
+								updateRun(EffectId.make(`${effectId}:failed`), subject, run, {
+									taskStatus: 'failed',
+									runStatus: 'failed',
+									phase: 'model',
+									active: false
+								}),
+								'leave running'
+							)
+						)
+					);
+				})
 			);
 		});
 
