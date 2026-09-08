@@ -351,13 +351,20 @@
 			})
 		]);
 		return [
-			...[...parents].map((name) => ({
-				name,
-				label: workspace.appGroups[name]?.label ?? humanize(name.split('/').at(-1) ?? name),
-				description: workspace.appGroups[name]?.description,
-				icon: workspace.appGroups[name]?.icon ?? 'lucide:layout-grid',
-				defaultChild: workspace.appGroups[name]?.defaultChild
-			})),
+			...[...parents].map((name) => {
+				const index = name.lastIndexOf('/');
+				return {
+					name,
+					label: workspace.appGroups[name]?.label ?? humanize(name.split('/').at(-1) ?? name),
+					description: workspace.appGroups[name]?.description,
+					icon: workspace.appGroups[name]?.icon ?? 'lucide:layout-grid',
+					defaultChild: workspace.appGroups[name]?.defaultChild,
+					// A group directory inside a group directory is a group inside a group. The navigation
+					// tree already recurses; without this, `hr_controller/events` floated up as a sibling
+					// of `hr_controller`.
+					parent: index < 0 ? undefined : name.slice(0, index)
+				};
+			}),
 			...names.map((name) => {
 				const index = name.lastIndexOf('/');
 				const meta = workspace.appMeta[name];

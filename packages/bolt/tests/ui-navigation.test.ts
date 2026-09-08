@@ -31,6 +31,23 @@ const shellI18n = {
 };
 
 describe('workspace navigation', () => {
+	it('nests a group under its parent group, and the leaves under that', () => {
+		const applications = buildApplicationNavigation({
+			apps: [
+				{ name: 'hr_controller', label: 'HR Controller', defaultChild: 'people' },
+				{ name: 'hr_controller/people', label: 'People', parent: 'hr_controller' },
+				{ name: 'hr_controller/events', label: 'Events', parent: 'hr_controller' },
+				{ name: 'hr_controller/events/leave', label: 'Leave', parent: 'hr_controller/events' }
+			],
+			currentPath: '/app/hr_controller/events/leave'
+		});
+		expect(applications.map((item) => item.label)).toEqual(['HR Controller']);
+		const events = applications[0]?.children?.find((child) => child.label === 'Events');
+		expect(events?.children?.map((child) => child.label)).toEqual(['Leave']);
+		expect(events?.active).toBe(true);
+		expect(applications[0]?.active).toBe(true);
+	});
+
 	it('marks the current app active and places host plugins by their declared placement', () => {
 		const applications = buildApplicationNavigation({
 			apps: [
