@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { writeFileSync } from 'node:fs';
 import { makeBoltTestRuntime, adminSubject, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import * as Agents from '../src/runtime/agents/agents.js';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { policy, workspace } from '../src/authoring/workspace-schema.js';
 
 const definition = workspace({
@@ -28,11 +28,11 @@ it('dumps agent and plan prompts', async () => {
 		);
 		harness = await makeBoltTestRuntime(definition, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000991');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000991');
 		await harness.runtime.runPromise(agents.submit(harness.effectId('submit'), adminSubject, {
-			taskId, agentId: AgentId.make('web'), message: Agents.userAgentInput('Follow the payroll skill.'),
+			conversationId, agentId: AgentId.make('web'), message: Agents.userAgentInput('Follow the payroll skill.'),
 			mode: DirectiveMode.make('agent'), priority: DirectivePriority.make('normal') }));
-		await harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, taskId));
+		await harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, conversationId));
 		const req = twin.requests[0] as unknown as { messages: Array<{ role: string; content: unknown }>; output: unknown; maxOutputTokens: number };
 		const dump = JSON.stringify(req.messages);
 		out.push('NMSG:' + req.messages.length);

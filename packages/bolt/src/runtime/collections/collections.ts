@@ -1,3 +1,5 @@
+import { Secrets } from '#lib/runtime/secrets/secrets.js';
+import { connectionReader } from '#lib/runtime/automations/connection.js';
 import { webReader } from '#lib/runtime/automations/web.js';
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import {
@@ -21,7 +23,17 @@ import {
 	type SQL
 } from 'drizzle-orm';
 import { type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { Cause, Clock, Deferred, Effect, Layer, Result, Schema, SchemaAST } from 'effect';
+import {
+	Cause,
+	Clock,
+	Deferred,
+	Effect,
+	Layer,
+	Result,
+	Schema,
+	SchemaAST,
+	type Context
+} from 'effect';
 import {
 	AIRequest,
 	CollectionMutationBaseVersion,
@@ -113,6 +125,7 @@ import {
 import {
 	type AppliedDeclarativeGraph,
 	type GraphIncludedRelationship,
+	type GraphMutationParent,
 	type GraphPreparedOperation
 } from '#lib/runtime/collections/write/engine.js';
 import { canonicalJson } from '#lib/canonical-json.js';
@@ -872,7 +885,25 @@ const effectivePlanCaptureManifest = (definition: WorkspaceDefinition): Declared
 	);
 };
 
-export const layerWith = (randomId: () => string = () => globalThis.crypto.randomUUID()) =>
+type LayerServices = Context.Service.Identifier<
+	| typeof Workspace.Service
+	| typeof TenantScope.Service
+	| typeof AccessControl.Service
+	| typeof Database.Service
+	| typeof Approvals.Service
+	| typeof AI.Service
+	| typeof Files.Service
+	| typeof Connector.Service
+	| typeof Secrets.Service
+	| typeof TaskQueue.Service
+	| typeof Automations.Service
+	| typeof SyncCommit.Service
+	| typeof AuthoredRuntimeService
+>;
+
+export const layerWith = (
+	randomId: () => string = () => globalThis.crypto.randomUUID()
+): Layer.Layer<Interface, never, LayerServices> =>
 	Layer.effect(
 		Service,
 		Effect.gen(function* () {
@@ -888,6 +919,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const ai = yield* AI.Service;
 			const files = yield* Files.Service;
 			const connector = yield* Connector.Service;
+			const secrets = yield* Secrets.Service;
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const syncCommit = yield* SyncCommit.Service;
@@ -1792,6 +1824,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const turnEffectId = EffectId.make(attemptEffectId);
 					const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
 					const readUrl = webReader(turnEffectId, connector);
+					const get = connectionReader(turnEffectId, declaration.connection, connector);
 					const api = makeAutomationApi(
 						makeAuthoringApi(
 							guardAuthoringOps(
@@ -1814,7 +1847,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								)
 							),
 						(url) => guard('web.read').pipe(Effect.andThen(readUrl(url))),
-						taskId
+						taskId,
+						{
+							get: (input) =>
+								guard('connection.get').pipe(
+									Effect.andThen(get(input)),
+									Effect.provideService(Secrets.Service, secrets)
+								)
+						}
 					);
 					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
 						admitted.args
@@ -1984,7 +2024,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				depth = 0,
 				prepared: unknown = undefined,
 				staged?: HookWriteOps<Error>,
-				relationships: ReadonlyArray<string> = []
+				relationships: ReadonlyArray<string> = [],
+				parent?: GraphMutationParent,
+				relationshipSizes: Readonly<Partial<Record<string, number>>> = {}
 			) {
 				const api = authoringApi(effectId, subject, depth + 1, staged);
 				// Already decoded by the caller. `prepare` sees the batch's inputs and the handler sees one
@@ -1994,7 +2036,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const values = input.values;
 				const before = yield* runHook(
 					module?.mutate?.perRecord?.before,
-					{ input: values, existing, recordId: input.id, prepared, api, relationships },
+					{
+						input: values,
+						existing,
+						recordId: input.id,
+						prepared,
+						api,
+						relationships,
+						relationshipSizes,
+						...(parent === undefined ? {} : { parent })
+					},
 					{
 						collection: input.collection,
 						action: 'mutate.before'
@@ -4842,5 +4893,5 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 		})
 	);
 
-export const layer = layerWith();
+export const layer: Layer.Layer<Interface, never, LayerServices> = layerWith();
 import { inferOp } from '#lib/runtime/inference.js';

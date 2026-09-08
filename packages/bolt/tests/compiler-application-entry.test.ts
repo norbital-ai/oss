@@ -128,7 +128,7 @@ describe('workspace application entry', () => {
 		expect(entry.code.indexOf('await loadApplicationStylesheet()')).toBeLessThan(
 			entry.code.indexOf('return mountBoltWorkspace')
 		);
-		expect(source).toContain('documentationFiles: workspace.documentationFiles');
+		expect(source).toContain('appMeta: workspace.appMeta');
 	});
 
 	it("links every stylesheet of the entry's static import graph, and none reached only dynamically", async () => {

@@ -1027,6 +1027,18 @@ export type MutateGraph<S extends AnySchema, N extends TableName<S>, D extends D
  * decodes hook inputs to the declared shape, so a hook reading past it fails loud at runtime
  * rather than silently.
  */
+/** The authoritative enclosing record on a nested write, after its own before hook. */
+type MutationParent<S extends AnySchema> = {
+	[P in TableName<S>]: Readonly<{
+		readonly collection: P;
+		readonly id: string;
+		/** The child's ownership column; its value comes from this graph position. */
+		readonly column: string;
+		/** Proposed own fields, including stored fields on updates; generated fields may be absent. */
+		readonly values: Partial<SchemaRow<S, P>>;
+	}>;
+}[TableName<S>];
+
 type MutateBeforePhaseContext<S extends AnySchema, N extends TableName<S>, Prepared> =
 	| Readonly<{
 			readonly input: MutateCreateInput<S, N>;
@@ -1035,6 +1047,9 @@ type MutateBeforePhaseContext<S extends AnySchema, N extends TableName<S>, Prepa
 			readonly recordId: string;
 			/** Caller-supplied relationship names, before hooks derive any children. */
 			readonly relationships: ReadonlyArray<MutationManyRelation<S, N>>;
+			/** Submitted desired-state sizes; an absent key is untouched, zero is explicitly empty. */
+			readonly relationshipSizes: Readonly<Partial<Record<MutationManyRelation<S, N>, number>>>;
+			readonly parent?: MutationParent<S>;
 			readonly prepared: Prepared;
 			readonly api: Api<S, unknown>;
 	  }>
@@ -1043,6 +1058,8 @@ type MutateBeforePhaseContext<S extends AnySchema, N extends TableName<S>, Prepa
 			readonly existing: SchemaRow<S, N>;
 			readonly recordId: string;
 			readonly relationships: ReadonlyArray<MutationManyRelation<S, N>>;
+			readonly relationshipSizes: Readonly<Partial<Record<MutationManyRelation<S, N>, number>>>;
+			readonly parent?: MutationParent<S>;
 			readonly prepared: Prepared;
 			readonly api: Api<S, unknown>;
 	  }>;
@@ -1241,6 +1258,8 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 			readonly before?: DescribedHook<
 				(context: {
 					readonly existing: SchemaRow<S, N>;
+					/** Immediate owner for reconciliation or cascade; absent on standalone deletes. */
+					readonly parent?: MutationParent<S> & { readonly action: 'update' | 'delete' };
 					readonly prepared: Prepared;
 					readonly api: Api<S>;
 				}) => Effect.Effect<void, AuthoredRefusal, never> | void

@@ -76,14 +76,14 @@ const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Sch
 });
 
 export interface WorkspaceNavigationSection {
-	readonly key: 'applications' | 'operations' | 'workspace';
+	readonly key: 'applications' | 'operations';
 	readonly label: string;
 	readonly items: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly href?: string;
 }
 
 const WorkspaceNavigationSectionSchema = Schema.Struct({
-	key: Schema.Literals(['applications', 'operations', 'workspace']),
+	key: Schema.Literals(['applications', 'operations']),
 	label: Schema.String,
 	items: Schema.Array(WorkspaceNavigationItemSchema),
 	href: Schema.optional(Schema.String)
@@ -127,6 +127,10 @@ const WorkspaceNavigationModelSchema = Schema.Struct({
 	system: Schema.Array(WorkspaceNavigationItemSchema),
 	applications: Schema.Array(WorkspaceNavigationItemSchema),
 	applicationsHref: Schema.optional(Schema.String),
+	/**
+	 * Secondary branches rendered as one popover beside the notification bell — each entry is a
+	 * segment (its label heads the group, its children are the rows). Absent renders no trigger.
+	 */
 	utilities: Schema.optional(Schema.Array(WorkspaceNavigationItemSchema))
 });
 export type WorkspaceNavigationModel = typeof WorkspaceNavigationModelSchema.Type;

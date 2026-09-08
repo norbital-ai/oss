@@ -230,7 +230,7 @@ type ReleaseEvidence = HostSnapshot['releases'][number];
 
 type MergeRequestState = MergeRequest['state'];
 
-const STUDIO_ROOT_TABS = ['documentation', 'workbench', 'changes', 'live'] as const;
+const STUDIO_ROOT_TABS = ['workbench', 'changes', 'live'] as const;
 export type StudioRootTab = (typeof STUDIO_ROOT_TABS)[number];
 
 const CHANGES_VIEWS = ['manifest', 'files', 'data', 'conversation', 'logs'] as const;
@@ -240,7 +240,6 @@ type StudioOwnedSurface = 'manifest' | 'logs' | 'lifecycle' | 'diagnosis';
 
 export const isStudioRootTab = (value: string): value is StudioRootTab => {
 	switch (value) {
-		case 'documentation':
 		case 'workbench':
 		case 'changes':
 		case 'live':
@@ -265,8 +264,6 @@ export const isChangesView = (value: string): value is ChangesView => {
 
 export const studioTabOwns = (tab: StudioRootTab, surface: StudioOwnedSurface): boolean => {
 	switch (tab) {
-		case 'documentation':
-			return false;
 		case 'workbench':
 			return surface === 'diagnosis';
 		case 'changes':

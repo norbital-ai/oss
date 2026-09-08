@@ -487,9 +487,9 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		const ai = makeAiBinding({
 			call: async () => ({
 				_tag: 'Catalog',
-				languageModels: [{ id: 'test/language' }],
+				languageModels: [{ id: 'test/language', contextWindowTokens: 32_000 }],
 				defaultLanguageModelId: 'test/language',
-				embeddingModels: [{ id: 'test/embedding' }],
+				embeddingModels: [{ id: 'test/embedding', contextWindowTokens: 8_192 }],
 				defaultEmbeddingModelId: 'test/embedding'
 			})
 		});

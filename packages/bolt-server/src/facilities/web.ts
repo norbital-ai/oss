@@ -57,6 +57,7 @@ type PageResponse = Readonly<{
 	status: number;
 	location?: string;
 	contentType: string;
+	headers?: Readonly<Record<string, string>>;
 	body: string | Uint8Array;
 }>;
 
@@ -106,7 +107,8 @@ const attemptPage = (
 	request: typeof httpsRequest,
 	url: URL,
 	address: Address,
-	signal: AbortSignal
+	signal: AbortSignal,
+	headers: Readonly<Record<string, string>>
 ): Promise<PageResponse> =>
 	new Promise((resolve, reject) => {
 		let connected = false;
@@ -123,16 +125,29 @@ const attemptPage = (
 				headers: {
 					accept: 'text/html,application/pdf,application/json,text/plain,application/xml',
 					'accept-encoding': 'identity',
-					'user-agent': 'Norbital-Public-Page-Reader/1.0'
+					'user-agent': 'Norbital-Public-Page-Reader/1.0',
+					...headers
 				}
 			},
 			(response) => {
 				connected = true;
 				const status = response.statusCode ?? 0;
 				const location = response.headers.location;
+				const responseHeaders = Object.fromEntries(
+					Object.entries(response.headers).map(([name, value]) => [
+						name.toLowerCase(),
+						Array.isArray(value) ? value.join(', ') : (value ?? '')
+					])
+				);
 				if (status >= 300 && status < 400) {
 					response.destroy();
-					resolve({ status, ...(location ? { location } : {}), contentType: '', body: '' });
+					resolve({
+						status,
+						...(location ? { location } : {}),
+						headers: responseHeaders,
+						contentType: '',
+						body: ''
+					});
 					return;
 				}
 				const chunks: Buffer[] = [];
@@ -147,6 +162,7 @@ const attemptPage = (
 				response.on('end', () =>
 					resolve({
 						status,
+						headers: responseHeaders,
 						contentType: response.headers['content-type'] ?? '',
 						body: Buffer.concat(chunks)
 					})
@@ -168,13 +184,18 @@ const attemptPage = (
 /** Tries the checked addresses in order, IPv4 before IPv6, moving on after a connect-phase failure. */
 export const makeRequestPage =
 	(request: typeof httpsRequest = httpsRequest) =>
-	async (url: URL, addresses: readonly Address[], signal: AbortSignal): Promise<PageResponse> => {
+	async (
+		url: URL,
+		addresses: readonly Address[],
+		signal: AbortSignal,
+		headers: Readonly<Record<string, string>> = {}
+	): Promise<PageResponse> => {
 		let last: ConnectFailure | undefined;
 		for (const address of orderAddresses(addresses)) {
 			signal.throwIfAborted();
 			try {
 				// repository-health:allow A6 -- Addresses are fallbacks for one another; the second is tried only after the first fails to connect.
-				return await attemptPage(request, url, address, signal);
+				return await attemptPage(request, url, address, signal, headers);
 			} catch (cause) {
 				if (!(cause instanceof ConnectFailure)) throw cause;
 				last = cause;

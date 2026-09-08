@@ -49,6 +49,7 @@
 		buildKioskNavigation,
 		buildSystemNavigation,
 		buildWorkspaceNavigationSections,
+		buildWorkspaceUtilities,
 		resolveAppHeaderDescription,
 		resolveAppHeaderTitle,
 		filterAccessibleApps,
@@ -315,8 +316,8 @@
 	});
 	const canAccessAutomations = $derived(isAdmin === true && !(impersonation?.isActive ?? false));
 	/**
-	 * Kiosk leaves under the secondary More section. Every entry carries the enter-kiosk confirm
-	 * copy: the mounted app is chromeless, so the sidebar that offered the click is what the kiosk takes
+	 * Kiosk leaves under the header's utilities menu. Every entry carries the enter-kiosk confirm
+	 * copy: the mounted app is chromeless, so the shell that offered the click is what the kiosk takes
 	 * away — the way out is the URL bar, and the confirm says so before the fact.
 	 */
 	const kioskNavigation = $derived(
@@ -375,6 +376,7 @@
 			teamLabels: []
 		},
 		sections: navigationSections,
+		utilities: buildWorkspaceUtilities(systemNavigation),
 		// Compatibility views for the current command finder. System navigation retains the Kiosk
 		// branch even though the sidebar keeps it out of daily applications.
 		system: systemNavigation,

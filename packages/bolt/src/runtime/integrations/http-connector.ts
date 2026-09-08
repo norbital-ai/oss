@@ -7,7 +7,7 @@ import {
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { Effect, Schema } from 'effect';
-import { INTEGRATION_HTTP_OPERATION, IntegrationHttpRequest } from './http.js';
+import { INTEGRATION_HTTP_OPERATION, IntegrationHttpRequest } from '@norbital-ai/bolt-protocol';
 
 /**
  * A host-side connector binding that performs `http.request`, and nothing else.

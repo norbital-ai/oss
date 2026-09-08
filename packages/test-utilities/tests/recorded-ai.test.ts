@@ -45,7 +45,9 @@ describe('recordedAi', () => {
 		assert.equal(catalog._tag, 'Success');
 		if (catalog._tag !== 'Success') throw new Error('expected Catalog success');
 		assert.equal(catalog.value._tag, 'Catalog');
-		assert.deepEqual(catalog.value.languageModels, [{ id: 'test/language' }]);
+		assert.deepEqual(catalog.value.languageModels, [
+			{ id: 'test/language', contextWindowTokens: 1_000_000 }
+		]);
 		assert.equal(catalog.value.defaultLanguageModelId, 'test/language');
 
 		const generated = await ai.call(metadata, generateRequest, signal);

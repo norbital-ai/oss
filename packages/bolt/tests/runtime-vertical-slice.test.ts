@@ -367,9 +367,9 @@ const ai: FacilityBinding<AIRequest, AIResponse> = {
 			switch (request._tag) {
 				case 'Catalog':
 					return AIResponse.cases.Catalog.make({
-						languageModels: [{ id: languageModelId }],
+						languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 						defaultLanguageModelId: languageModelId,
-						embeddingModels: [{ id: embeddingModelId }],
+						embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 						defaultEmbeddingModelId: embeddingModelId
 					});
 				case 'Generate':
@@ -539,11 +539,20 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
+	/**
+	 * The drain: one `conversations.send` answers everything waiting, not only the message it carried.
+	 *
+	 * This is what replaced the durable work occurrence. `execute` deliberately answers one message —
+	 * an envoy or a schedule runs exactly the turn it came for — so the loop that keeps going while
+	 * the conversation still has a queued message lives in this command, and only a call *through the
+	 * command* can see it. Every other agent suite calls `agents.execute` directly and would stay
+	 * green if this regressed, while a queued follow-up sat unanswered until somebody called again.
+	 */
 	it('refuses an unknown agent name', async () => {
 		expect(
-			await invoke('tasks.submit', {
+			await invoke('conversations.send', {
 				subject,
-				taskId: '00000000-0000-4000-8000-000000000404',
+				conversationId: '00000000-0000-4000-8000-000000000404',
 				agentId: 'workspace',
 				message: { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
 				mode: 'agent',
@@ -764,13 +773,12 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
 				{ command: 'notifications.drain' },
-				{ command: 'tasks.execute' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(8);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
 	});
 });

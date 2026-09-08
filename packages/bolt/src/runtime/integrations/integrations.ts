@@ -1,3 +1,4 @@
+import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from '@norbital-ai/bolt-protocol';
 import { Clock, Context, Effect, Layer, Result, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { and, asc, count, eq, inArray, isNull, lt, lte, min, or } from 'drizzle-orm';
@@ -39,10 +40,6 @@ import {
 	type ClaimedDelivery,
 	type DeliverDependencies
 } from '#lib/runtime/integrations/deliver.js';
-import {
-	INTEGRATION_HTTP_OPERATION,
-	IntegrationHttpResponse
-} from '#lib/runtime/integrations/http.js';
 import {
 	runPullBinding,
 	type BindingReport,

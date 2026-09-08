@@ -453,7 +453,7 @@ describe('typed browser client', () => {
 		expect(Reflect.get(proxy.db, 'user')).toBeUndefined();
 		expect(proxy.collections['user']).toBeUndefined();
 		expect(() => proxy.records.findMany('user')).toThrow(/private to the Bolt runtime/);
-		expect(() => proxy.history.findMany('agent_task', 'task-1')).toThrow(
+		expect(() => proxy.history.findMany('conversation', 'task-1')).toThrow(
 			/private to the Bolt runtime/
 		);
 		expect(Reflect.get(proxy.db, 'employees')).toBeDefined();

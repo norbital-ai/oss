@@ -22,6 +22,7 @@
 		type WorkspaceOrganizationOption
 	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
+	import WorkspaceUtilitiesMenu from './workspace-utilities-menu.svelte';
 
 	const i18n = useI18n<UiKeys>();
 	const { t } = i18n;
@@ -278,7 +279,6 @@
 			open={displayExpanded}
 			href={section.href}
 			leading={section.key === 'operations' ? agentNavigation : undefined}
-			class={section.key === 'workspace' ? 'mt-auto' : undefined}
 			{onNavigate}
 			{onPrefetch}
 		/>
@@ -316,14 +316,22 @@
 						</Badge>
 					{/if}
 				</div>
-				{#if notifications}
-					<Sidebar.MenuItem class="-mr-1">
-						{@render notifications({ expanded: true })}
+				<Inline gap="none" align="center" class="-mr-1">
+					{#if notifications}
+						<Sidebar.MenuItem>{@render notifications({ expanded: true })}</Sidebar.MenuItem>
+					{/if}
+					<Sidebar.MenuItem>
+						<WorkspaceUtilitiesMenu items={model.utilities ?? []} expanded {onNavigate} />
 					</Sidebar.MenuItem>
-				{/if}
+				</Inline>
 			</Inline>
-		{:else if notifications}
-			<Sidebar.MenuItem>{@render notifications({ expanded: false })}</Sidebar.MenuItem>
+		{:else}
+			{#if notifications}
+				<Sidebar.MenuItem>{@render notifications({ expanded: false })}</Sidebar.MenuItem>
+			{/if}
+			<Sidebar.MenuItem>
+				<WorkspaceUtilitiesMenu items={model.utilities ?? []} expanded={false} {onNavigate} />
+			</Sidebar.MenuItem>
 		{/if}
 		<Sidebar.MenuItem>
 			<DropdownMenu.Root>

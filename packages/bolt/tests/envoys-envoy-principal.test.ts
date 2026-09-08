@@ -291,7 +291,7 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 	 */
 	it('creates Task ownership and keeps transport progress in Envoy projections', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		const task = steps.find(({ id }) => id === 'collection:agent_task')?.sql ?? '';
+		const task = steps.find(({ id }) => id === 'collection:conversation')?.sql ?? '';
 		for (const field of [
 			'"workbench_id" text not null',
 			'"subject_id" text not null',
@@ -299,7 +299,6 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 			'"audience" text not null',
 			'"parent_id" uuid',
 			'"status" text not null',
-			'"epoch" integer not null'
 		])
 			expect(task).toContain(field);
 		expect(task).not.toContain('"transport_conversation_id"');

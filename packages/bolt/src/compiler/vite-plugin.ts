@@ -255,7 +255,6 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 								`\t\t\t\tappLoaders: workspace.appLoaders,`,
 								`\t\t\t\tappGroups: workspace.appGroups,`,
 								`\t\t\t\tappMeta: workspace.appMeta,`,
-								`\t\t\t\tdocumentationFiles: workspace.documentationFiles,`,
 								`\t\t\t\trepresentationLoaders: workspace.representationLoaders,`,
 								`\t\t\t\tcustomTypeRendererLoaders: workspace.customTypeRendererLoaders,`,
 								`\t\t\t\tpolicyNames: workspace.policyNames,`,

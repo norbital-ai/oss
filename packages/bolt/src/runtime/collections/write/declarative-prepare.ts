@@ -399,7 +399,12 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 									(entry) =>
 										entry.row.collection === edge.childCollection && entry.row.recordId === childId
 								);
-							collect(edge.childCollection, childPayload, childId, browserExisting ? 'update' : 'create');
+							collect(
+								edge.childCollection,
+								childPayload,
+								childId,
+								browserExisting ? 'update' : 'create'
+							);
 						}
 					}
 				};
@@ -588,7 +593,18 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 		const graphPreparers = makeGraphPreparers<Error | AuthoredRefusal, Requirements>({
 			...ports,
 			buildApi: (effectId, depth) => ports.buildApi(effectId, depth, stageHookWrites),
-			runMutateBefore: (effectId, input, existing, module, depth, prepared, _staged, relationships) =>
+			runMutateBefore: (
+				effectId,
+				input,
+				existing,
+				module,
+				depth,
+				prepared,
+				_staged,
+				relationships,
+				parent,
+				relationshipSizes
+			) =>
 				ports.runMutateBefore(
 					effectId,
 					input,
@@ -597,7 +613,9 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					depth,
 					prepared,
 					stageHookWrites,
-					relationships
+					relationships,
+					parent,
+					relationshipSizes
 				),
 			runMutatePrepare: (effectId, collection, inputs, module, depth) =>
 				ports.runMutatePrepare(effectId, collection, inputs, module, depth, stageHookWrites),
@@ -729,7 +747,14 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 					`${rootCollection} ${rootId} no longer exists.`
 				);
 			}
-			yield* graphPreparers.prepareDelete(rootCollection, stored.row, 0, subject, true, rootPrepared);
+			yield* graphPreparers.prepareDelete(
+				rootCollection,
+				stored.row,
+				0,
+				subject,
+				true,
+				rootPrepared
+			);
 		} else {
 			yield* graphPreparers.prepareNode(
 				rootCollection,

@@ -184,7 +184,6 @@ export {
 	TransportResponse,
 	ConfigRequest,
 	ConfigResponse,
-	DirectiveId,
 	DirectiveMode,
 	DirectivePriority,
 	DirectiveState,
@@ -200,13 +199,13 @@ export {
 	ProviderCallId,
 	ProviderObservation,
 	ProviderUsageEncoded,
-	RunId,
+	TurnId,
 	RunPhase,
 	RunStatus,
 	SubjectId,
-	TaskAudience,
-	TaskId,
-	TaskStatus,
+	ConversationAudience,
+	ConversationId,
+	ConversationStatus,
 	UsageObservation,
 	WorkbenchId
 } from './facilities.js';
@@ -220,15 +219,13 @@ export {
 	EnvoyStatus,
 	SecretsStatus,
 	SystemCommandContracts,
-	TaskControlRequest,
-	TaskControlResult,
-	TaskEditMessageRequest,
-	TaskEditMessageResult,
-	TaskExecuteRequest,
-	TaskExecuteResult,
+	ConversationControlRequest,
+	ConversationControlResult,
+	ConversationEditMessageRequest,
+	ConversationEditMessageResult,
 	TaskModelCatalog,
-	TaskSubmitRequest,
-	TaskSubmitResult,
+	ConversationSendRequest,
+	ConversationSendResult,
 	WorkspaceAccess,
 	WorkspaceAutomationContract,
 	WorkspaceInvokeContract
@@ -272,3 +269,9 @@ export {
 	systemSignaturePayload,
 	type SystemSignaturePayload
 } from './system-signature.js';
+
+export {
+	INTEGRATION_HTTP_OPERATION,
+	IntegrationHttpRequest,
+	IntegrationHttpResponse
+} from './integration-http.js';

@@ -20,9 +20,9 @@ const embeddingModelId = ModelId.make('test:embedding');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -236,7 +236,7 @@ describe('Envoy Task-scoped attachments', () => {
 				[conversationId]
 			)
 		).toEqual([{ status: 'pending' }]);
-		expect(await harness.database.query(`select count(*)::int as count from agent_task`)).toEqual([
+		expect(await harness.database.query(`select count(*)::int as count from conversation`)).toEqual([
 			{ count: 0 }
 		]);
 	});

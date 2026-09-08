@@ -4,8 +4,6 @@
 	import { getErrorMessage, toError } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
 	import DiagnosisPane from './diagnosis-pane.svelte';
-	import DocumentationPane from './documentation-pane.svelte';
-	import DocumentationTree from './documentation-tree.svelte';
 	import LivePane from './live-pane.svelte';
 	import LiveSidebar from './live-sidebar.svelte';
 	import ReviewPane from './review-pane.svelte';
@@ -53,10 +51,6 @@
 		openAuthoringLiveStream,
 		type AuthoringLiveState
 	} from '#lib/client/ui/studio/authoring-live.js';
-	import {
-		selectedWorkspaceDocumentationPath,
-		workspaceDocumentationPages
-	} from './workspace-documentation.js';
 
 	let {
 		client,
@@ -75,13 +69,11 @@
 	let snapshot = $state<HostSnapshot | undefined>();
 	let view = $state<{
 		rootTab: StudioRootTab;
-		documentation: string;
 		changes: ChangesView;
 		file: string;
 		manifestSection: string;
 	}>({
-		rootTab: 'documentation',
-		documentation: '',
+		rootTab: 'workbench',
 		changes: 'manifest',
 		file: '',
 		manifestSection: 'collections'
@@ -109,7 +101,6 @@
 
 	const session = workspaceSession();
 	const rootTabs = $derived([
-		{ name: 'documentation', label: t('bolt.studio.documentation'), content: '' },
 		{ name: 'workbench', label: t('bolt.studio.workbench'), content: '' },
 		{ name: 'changes', label: t('bolt.studio.changes'), content: '' },
 		{ name: 'live', label: t('bolt.studio.live'), content: '' }
@@ -117,13 +108,6 @@
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
 	const files = $derived(Object.keys(sourceFiles).sort());
-	const documentationPages = $derived(workspaceDocumentationPages(sourceFiles, i18n.locale));
-	const documentationPath = $derived(
-		selectedWorkspaceDocumentationPath(documentationPages, view.documentation)
-	);
-	const documentationContent = $derived(
-		documentationPath === '' ? '' : sourceDraftValue(sourceDrafts, sourceFiles, documentationPath)
-	);
 	const fileSizes = $derived(
 		Object.fromEntries(
 			Object.entries(sourceFiles).map(([path, contents]) => [path, contents.length])
@@ -137,7 +121,6 @@
 			hasRelease: currentRelease !== undefined
 		})
 	);
-	const isDocumentation = $derived(view.rootTab === 'documentation');
 	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isChanges = $derived(view.rootTab === 'changes');
 	const isLive = $derived(view.rootTab === 'live');
@@ -195,7 +178,6 @@
 		return status;
 	});
 	const navigatorDescriptionKey = $derived.by(() => {
-		if (isDocumentation) return 'bolt.studio.navigatorDocumentationDescription' as const;
 		if (isWorkbench) return 'bolt.studio.navigatorWorkbenchDescription' as const;
 		if (isChanges) return 'bolt.studio.navigatorChangesDescription' as const;
 		return 'bolt.studio.navigatorLiveDescription' as const;
@@ -207,11 +189,6 @@
 		view.rootTab = 'workbench';
 		view.file = path;
 		editor = { path, value: sourceDraftValue(sourceDrafts, sourceFiles, path) };
-	};
-
-	const openDocumentation = (path: string): void => {
-		view.rootTab = 'documentation';
-		view.documentation = path;
 	};
 
 	const updateEditor = (value: string): void => {
@@ -430,14 +407,7 @@
 </script>
 
 {#snippet navigator()}
-	{#if isDocumentation}
-		<DocumentationTree
-			pages={documentationPages}
-			{sourceFiles}
-			selectedPath={documentationPath}
-			onselect={openDocumentation}
-		/>
-	{:else if isWorkbench}
+	{#if isWorkbench}
 		<SourceTree
 			{files}
 			{fileSizes}
@@ -569,16 +539,7 @@
 			class="relative min-w-0 bg-background font-sans"
 			data-testid="studio-viewport"
 		>
-			{#if isDocumentation}
-				<DocumentationPane
-					selectedPath={documentationPath}
-					content={documentationContent}
-					pages={documentationPages}
-					{sourceFiles}
-					onselect={openDocumentation}
-					onopenSource={openSource}
-				/>
-			{:else if isChanges}
+			{#if isChanges}
 				<ReviewPane
 					releaseRequests={snapshot?.mergeRequests ?? []}
 					{selectedRequestId}

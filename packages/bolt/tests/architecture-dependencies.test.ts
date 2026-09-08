@@ -204,7 +204,10 @@ describe('Bolt architecture boundaries', () => {
 		// The aggregate ceiling remains unchanged.
 		// 4,847 -> 4,848: zero-shim — `relationalComposer` factory folded into its single call site;
 		// persistence.ts shrinks 17 lines net (`expression`+`fixed` → `frag`), this file absorbs one import.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_848);
+		// 4,848 -> 4,897: managed automation connections use the existing vault and stoppage guard;
+		// explicit exported layer types preserve declaration emission. Mutation hooks now receive
+		// authoritative parent facts and submitted relation sizes. The aggregate ceiling is unchanged.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_897);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work
@@ -213,7 +216,10 @@ describe('Bolt architecture boundaries', () => {
 		// 844 -> 795 (2026-09-07, RFC 0003): every node names its author (the caller or the
 		// workspace) and `trusted`, `hookRelationNames`, the elevation split and the browser
 		// base-version exemption collapse into that one fact. A net deletion; the budget follows it.
-		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(795);
+		// 795 -> 835: the graph owner supplies unforgeable parent values and desired-set sizes to
+		// mutation hooks, and distinguishes replacement omissions from parent deletion. Nested-write
+		// integration tests exercise each path; no second graph reader or ownership model is added.
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(835);
 		// 837 -> 873 (2026-09-04): the root delete-prepare wave landed in oss 5210f8d9 (+51) over the
 		// ceiling; the duplicated owner/await Deferred pattern of both waves moved to `root-wave.ts`
 		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine

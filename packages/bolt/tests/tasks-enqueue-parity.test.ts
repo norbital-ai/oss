@@ -182,9 +182,10 @@ describe('instance 3 — every task row written is announced to the host', () =>
 		expect(writeAt).toBeGreaterThan(-1);
 		expect(wakeAt).toBeGreaterThan(writeAt);
 		expect(body).toMatch(/occurrence\s*\n?\s*\}\)/u);
-		// And the agent turn is the one path that uses it.
-		const agents = blocksOf(readFileSync(join(RUNTIME, 'agents/agents.ts'), 'utf8'));
-		expect(agents.get('Agents.enqueueExecute')).toMatch(/queue\s*\.enqueueClaimed\(/u);
+		// The agent turn no longer uses it: a conversation answers its own queued messages inside the
+		// invocation that admitted them, so nothing about a turn is a durable work occurrence.
+		const agents = readFileSync(join(RUNTIME, 'agents/agents.ts'), 'utf8');
+		expect(agents).not.toMatch(/enqueueClaimed/u);
 	});
 
 	it('statement-joining task writers are covered by an announcing flow', () => {

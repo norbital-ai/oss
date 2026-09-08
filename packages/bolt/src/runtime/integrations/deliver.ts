@@ -1,3 +1,4 @@
+import { IntegrationHttpRequest } from '@norbital-ai/bolt-protocol';
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type {
@@ -5,11 +6,7 @@ import type {
 	IntegrationDeclaration,
 	IntegrationSendDeclaration
 } from '#lib/authoring/workspace-schema.js';
-import {
-	IntegrationHttpRequest,
-	isRetryableStatus,
-	retryDelayMs
-} from '#lib/runtime/integrations/http.js';
+import { isRetryableStatus, retryDelayMs } from '#lib/runtime/integrations/http.js';
 import { authenticationHeaders } from '#lib/runtime/integrations/pull.js';
 
 /**

@@ -19,9 +19,9 @@ const embeddingModelId = ModelId.make('test:embedding');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 

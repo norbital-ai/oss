@@ -413,7 +413,7 @@ describe('Automations owner', () => {
 
 	it('runs each same-name child independently in the admitting request', async () => {
 		const observedChildContexts: Array<unknown> = [];
-		const childRunIds: string[] = [];
+		const childTurnIds: string[] = [];
 		const authored = {
 			...emptyAuthoredRuntime,
 			automations: {
@@ -429,7 +429,7 @@ describe('Automations owner', () => {
 							const second = yield* (api as RuntimeAuthoringApi).automations.run('child', {
 								from: 'second profile'
 							});
-							return { parent: true, childTaskId: child.taskId, secondTaskId: second.taskId };
+							return { parent: true, childConversationId: child.taskId, secondConversationId: second.taskId };
 						})
 				},
 				child: {
@@ -437,7 +437,7 @@ describe('Automations owner', () => {
 					policies: [],
 					trigger: { _tag: 'Manual' as const },
 					handler: (api: unknown, context: unknown) => {
-						childRunIds.push((api as AutomationApi).runId);
+						childTurnIds.push((api as AutomationApi).runId);
 						observedChildContexts.push(context);
 						return { child: true };
 					}
@@ -466,7 +466,7 @@ describe('Automations owner', () => {
 
 			expect(response.value).toMatchObject({
 				taskId: 'manual-parent:start',
-				result: { parent: true, childTaskId: expect.any(String) }
+				result: { parent: true, childConversationId: expect.any(String) }
 			});
 			expect(observedChildContexts).toEqual([
 				{ args: { from: 'parent' }, scope: {} },
@@ -490,10 +490,10 @@ describe('Automations owner', () => {
 				 order by name`
 			);
 			expect(runs).toHaveLength(3);
-			expect(new Set(childRunIds).size).toBe(2);
+			expect(new Set(childTurnIds).size).toBe(2);
 			expect(
 				new Set(runs.filter((run) => run['name'] === 'child').map((run) => run['task_id']))
-			).toEqual(new Set(childRunIds));
+			).toEqual(new Set(childTurnIds));
 			expect(
 				runs.map((run) => ({
 					name: run['name'],

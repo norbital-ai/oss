@@ -90,12 +90,11 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':zz-'))).toBe(false);
 		expect(first.steps.map(({ id }) => id).some((id) => id.includes(':column:'))).toBe(false);
 		for (const collection of [
-			'agent_task',
-			'agent_plan',
-			'agent_message',
-			'agent_inbox',
-			'agent_run',
-			'agent_usage'
+			'conversation',
+			'plan',
+			'conversation_message',
+			'turn',
+			'turn_usage'
 		]) {
 			expect(first.steps.map(({ id }) => id)).toContain(`collection:${collection}`);
 		}

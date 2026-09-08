@@ -638,23 +638,6 @@ export const makeBoltTestRuntime = async (
 		Approvals.layer,
 		Layer.mergeAll(foundation, taskQueue, facilities)
 	);
-	const collections = Layer.provideMerge(
-		Collections.layer,
-		Layer.mergeAll(data, authoredLayer, taskQueue, facilities, automations, tenantScope)
-	);
-	// Dispatch resolves authored remotes through this registry, and the registry resolves them
-	// through Collections — so it layers over them, not alongside the facilities. No handlers are
-	// registered: a test that calls one should fail on the missing name, not a missing service.
-	const remotes = Layer.provideMerge(
-		remoteRegistryLayer(bindings.remoteHandlers ?? {}),
-		collections
-	);
-	// Dispatch routes agent commands too, so the service has to be present for the command surface to
-	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
-	const agents = Layer.provideMerge(
-		Agents.layer,
-		Layer.mergeAll(remotes, taskQueue, facilities, budget)
-	);
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
 	// Secrets sits under the rest rather than beside it: `Integrations` resolves a connection's
@@ -674,7 +657,24 @@ export const makeBoltTestRuntime = async (
 	);
 	const vault = Layer.provideMerge(
 		Layer.merge(Secrets.layer, PersonalSecrets.layer),
-		Layer.merge(agents, cipher)
+		Layer.mergeAll(workspaceLayer, facilities, cipher)
+	);
+	const collections = Layer.provideMerge(
+		Collections.layer,
+		Layer.mergeAll(data, authoredLayer, taskQueue, facilities, automations, tenantScope, vault)
+	);
+	// Dispatch resolves authored remotes through this registry, and the registry resolves them
+	// through Collections — so it layers over them, not alongside the facilities. No handlers are
+	// registered: a test that calls one should fail on the missing name, not a missing service.
+	const remotes = Layer.provideMerge(
+		remoteRegistryLayer(bindings.remoteHandlers ?? {}),
+		collections
+	);
+	// Dispatch routes agent commands too, so the service has to be present for the command surface to
+	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
+	const agents = Layer.provideMerge(
+		Agents.layer,
+		Layer.mergeAll(remotes, taskQueue, facilities, budget)
 	);
 	const surfaces = Layer.provideMerge(
 		Layer.mergeAll(
@@ -685,6 +685,7 @@ export const makeBoltTestRuntime = async (
 		),
 		Layer.mergeAll(
 			vault,
+			agents,
 			authoredLayer,
 			budget,
 			taskQueue,
@@ -751,8 +752,10 @@ export const makeTestTasks = (): {
 } => {
 	const requests: Array<TaskRequest> = [];
 	const effectIds: Array<string> = [];
-	const dispatched: Array<{ readonly occurrence: HostScheduleOccurrence; readonly done: Promise<void> }> =
-		[];
+	const dispatched: Array<{
+		readonly occurrence: HostScheduleOccurrence;
+		readonly done: Promise<void>;
+	}> = [];
 	let runner: ((occurrence: HostScheduleOccurrence) => Promise<void>) | undefined;
 	return {
 		binding: {

@@ -5,6 +5,7 @@ import {
 	buildApplicationNavigation,
 	buildSystemNavigation,
 	buildWorkspaceNavigationSections,
+	buildWorkspaceUtilities,
 	studioSourceFromSearch,
 	studioSourceHref,
 	WORKSPACE_HOST_PLUGINS,
@@ -17,10 +18,7 @@ const shellLabels: Readonly<Record<string, string>> = {
 	'bolt.shell.approvals': 'Approvals',
 	'bolt.shell.automations': 'Automations',
 	'bolt.shell.operations': 'Operations',
-	'bolt.shell.workspace': 'Workspace',
 	'bolt.shell.applications': 'Applications',
-	'bolt.shell.more': 'More',
-	'bolt.shell.documentation': 'Documentation',
 	'bolt.shell.kiosk': 'Kiosk',
 	'bolt.shell.workspaceStudio': 'Workspace Studio',
 	'bolt.shell.organization': 'Organization',
@@ -119,7 +117,7 @@ describe('workspace navigation', () => {
 		]);
 	});
 
-	it('keeps kiosk apps in the secondary More section', () => {
+	it('keeps kiosk apps out of the sidebar and in their own utilities segment', () => {
 		const kiosk = {
 			key: 'hr_controller/kiosk',
 			label: 'Attendance Kiosk',
@@ -146,24 +144,20 @@ describe('workspace navigation', () => {
 		expect(settings?.children?.some((item) => item.key === 'kiosk')).toBe(false);
 	});
 
-	it('shows workspace documentation to members and keeps authoring surfaces administrative', () => {
+	it('keeps every authoring surface administrative', () => {
 		const system = buildSystemNavigation({
 			isAdmin: false,
 			plugins: WORKSPACE_HOST_PLUGINS,
-			currentPath: '/__host/documentation',
+			currentPath: '/',
 			i18n: shellI18n
 		});
 
-		expect(system.find((item) => item.key === 'documentation')).toMatchObject({
-			label: 'Documentation',
-			active: true,
-			section: 'resources'
-		});
 		expect(system.some((item) => item.key === 'settings')).toBe(false);
 		expect(system.some((item) => item.key === 'workspace-studio')).toBe(false);
+		expect(buildWorkspaceUtilities(system)).toEqual([]);
 	});
 
-	it('groups secondary routes under More beside Settings in a final Workspace section', () => {
+	it('hands the kiosk and settings branches to the utilities menu, leaving the sidebar two sections', () => {
 		const system = buildSystemNavigation({
 			isAdmin: true,
 			plugins: WORKSPACE_HOST_PLUGINS,
@@ -193,18 +187,18 @@ describe('workspace navigation', () => {
 			i18n: shellI18n
 		});
 
-		expect(sections.map((section) => section.key)).toEqual([
-			'operations',
-			'applications',
-			'workspace'
+		expect(sections.map((section) => section.key)).toEqual(['operations', 'applications']);
+		// Kiosk first, Settings second: each is one segment of the popover beside the notification bell.
+		const utilities = buildWorkspaceUtilities(system);
+		expect(utilities.map(({ key }) => key)).toEqual(['kiosk', 'settings']);
+		expect(utilities[0]?.children?.map(({ key }) => key)).toEqual(['attendance-kiosk']);
+		expect(utilities[1]?.children?.map(({ key }) => key)).toEqual([
+			'workspace-people',
+			'organization',
+			'envoys',
+			'environment_secrets',
+			'workspace-studio'
 		]);
-		const workspace = sections.find((section) => section.key === 'workspace');
-		expect(workspace?.label).toBe('Workspace');
-		expect(workspace?.items.map(({ key }) => key)).toEqual(['more', 'settings']);
-		expect(workspace?.items[0]).toMatchObject({
-			label: 'More',
-			children: [{ key: 'documentation' }, { key: 'kiosk' }]
-		});
 	});
 
 	it('translates tenant app titles when the catalog has the key', () => {

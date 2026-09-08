@@ -18,10 +18,7 @@ type ShellMessageKey =
 	| 'bolt.shell.approvals'
 	| 'bolt.shell.automations'
 	| 'bolt.shell.operations'
-	| 'bolt.shell.workspace'
 	| 'bolt.shell.applications'
-	| 'bolt.shell.more'
-	| 'bolt.shell.documentation'
 	| 'bolt.shell.kiosk'
 	| 'bolt.shell.workspaceStudio'
 	| 'bolt.shell.organization'
@@ -92,13 +89,6 @@ export const hostPluginKeyFromPath = (pathname: string): string | null => {
 };
 
 export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
-	{
-		key: 'documentation',
-		label: 'Documentation',
-		icon: 'lucide:book-open',
-		entry: hostPluginSurfaceHref('documentation'),
-		placement: 'resources'
-	},
 	{
 		key: 'organization',
 		label: 'Organization',
@@ -317,7 +307,7 @@ export const buildApplicationNavigation = (
 	input: ApplicationNavigationInput
 ): WorkspaceNavigationItem[] => {
 	// Kiosk apps never appear among ordinary applications: they are device surfaces, not daily
-	// tools, and they live in one collapsed Kiosk branch (`buildKioskNavigation`).
+	// tools, and they live in one Kiosk segment of the utilities menu (`buildKioskNavigation`).
 	const declared = filterAccessibleApps(
 		input.apps.filter((app) => app.kiosk !== true),
 		input.accessibleAppNames
@@ -346,10 +336,10 @@ export const buildApplicationNavigation = (
  *
  * A kiosk app is chromeless by declaration — no sidebar, finder or agent once mounted — so it is
  * not a thing a person uses from the LHS bar day to day. Grouping them under their parent app
- * buried them among the tools, and a bottom-level section of their own crowded the bar for a
- * surface most people never open; nesting them as one collapsed application branch keeps the bar
- * clean while keeping them findable, and each click is confirmed (the shell attaches the confirm copy)
- * because entering kiosk mode takes the whole window.
+ * buried them among the tools, and a section of their own crowded the bar for a surface most people
+ * never open; one Kiosk segment in the utilities menu keeps them findable off the bar entirely, and
+ * each click is confirmed (the shell attaches the confirm copy) because entering kiosk mode takes
+ * the whole window.
  */
 export const buildKioskNavigation = (
 	input: ApplicationNavigationInput
@@ -385,17 +375,15 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 	const pluginItem = (plugin: HostPlugin): WorkspaceNavigationItem => {
 		const href = hostPluginSurfaceHref(plugin.key);
 		const labelKey: ShellMessageKey | undefined =
-			plugin.key === 'documentation'
-				? 'bolt.shell.documentation'
-				: plugin.key === 'workspace-studio'
-					? 'bolt.shell.workspaceStudio'
-					: plugin.key === 'organization'
-						? 'bolt.shell.organization'
-						: plugin.key === 'envoys'
-							? 'bolt.shell.agents'
-							: plugin.key === 'environment_secrets'
-								? 'bolt.shell.secrets'
-								: undefined;
+			plugin.key === 'workspace-studio'
+				? 'bolt.shell.workspaceStudio'
+				: plugin.key === 'organization'
+					? 'bolt.shell.organization'
+					: plugin.key === 'envoys'
+						? 'bolt.shell.agents'
+						: plugin.key === 'environment_secrets'
+							? 'bolt.shell.secrets'
+							: undefined;
 		return {
 			key: plugin.key,
 			label: labelKey === undefined ? plugin.label : resolveShellLabel(input.i18n, labelKey),
@@ -490,39 +478,33 @@ export const buildWorkspaceNavigationSections = (input: {
 	readonly applications: ReadonlyArray<WorkspaceNavigationItem>;
 	readonly applicationsHref?: string | undefined;
 	readonly i18n: NavigationLabelResolver;
-}): WorkspaceNavigationSection[] => {
-	const resources = input.system.filter((item) => item.section === 'resources');
-	const more: WorkspaceNavigationItem[] =
-		resources.length === 0
-			? []
-			: [
-					{
-						key: 'more',
-						label: resolveShellLabel(input.i18n, 'bolt.shell.more'),
-						icon: 'lucide:ellipsis',
-						href: resources[0]?.href ?? WORKSPACE_SETTINGS_PATH,
-						active: resources.some((item) => item.active),
-						children: resources
-					}
-				];
-	return [
-		...namedSection(
-			'operations',
-			resolveShellLabel(input.i18n, 'bolt.shell.operations'),
-			input.system.filter((item) => item.section === 'operations')
-		),
-		...namedSection(
-			'applications',
-			resolveShellLabel(input.i18n, 'bolt.shell.applications'),
-			[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
-			input.applicationsHref
-		),
-		...namedSection('workspace', resolveShellLabel(input.i18n, 'bolt.shell.workspace'), [
-			...more,
-			...input.system.filter((item) => item.section === 'administration')
-		])
-	];
-};
+}): WorkspaceNavigationSection[] => [
+	...namedSection(
+		'operations',
+		resolveShellLabel(input.i18n, 'bolt.shell.operations'),
+		input.system.filter((item) => item.section === 'operations')
+	),
+	...namedSection(
+		'applications',
+		resolveShellLabel(input.i18n, 'bolt.shell.applications'),
+		[...input.applications, ...input.system.filter((item) => item.section === 'applications')],
+		input.applicationsHref
+	)
+];
+
+/**
+ * The secondary branches — Kiosk, then Settings — the shell hands to the header's utilities menu.
+ *
+ * They used to be a bottom "Workspace" section in the sidebar, reached through a `More` branch that
+ * existed only to hold them. Nothing in either is a daily destination, so they moved beside the
+ * notification bell as one popover of segments and the sidebar lost a whole section.
+ */
+export const buildWorkspaceUtilities = (
+	system: ReadonlyArray<WorkspaceNavigationItem>
+): WorkspaceNavigationItem[] => [
+	...system.filter((item) => item.section === 'resources'),
+	...system.filter((item) => item.section === 'administration')
+];
 
 export const resolveHostPluginSurface = (
 	currentPath: string,

@@ -3,7 +3,8 @@ import { Context, Duration, Effect, Layer, Option, Result, Schema } from 'effect
 import { decodeNumber } from '@norbital-ai/std/json';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
-import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
+import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
+import type { AutomationProgression, AutomationApi } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
@@ -90,6 +91,7 @@ type AuthoredPipelineModule = Readonly<{
 type AuthoredAutomationModule = Readonly<{
 	readonly name: string;
 	readonly description?: string;
+	readonly connection?: HttpConnection;
 	/** The automation's immutable authority, compiled from its own declaration. */
 	readonly policies: ReadonlyArray<string>;
 	readonly trigger: Readonly<
@@ -311,6 +313,11 @@ export type RuntimeAuthoringApi<E = never> = Readonly<{
 type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 	Readonly<{
 		readonly runId: string;
+		readonly connection: {
+			readonly get: (
+				input: Parameters<AutomationApi['connection']['get']>[0]
+			) => Effect.Effect<import('@norbital-ai/bolt-protocol').IntegrationHttpResponse, E>;
+		};
 		readonly readUrl: (
 			url: string
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
@@ -440,12 +447,17 @@ export const makePolicyDecisionApi = <E>(ops: AuthoringReadOps<E>, subject: Subj
 	});
 
 /** Adds the current durable run's progression capability without widening the ordinary API. */
-export const makeAutomationApi = <E, P, W>(
+export const makeAutomationApi = <E, P, W, C>(
 	api: RuntimeAuthoringApi<E>,
 	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>,
 	readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, W, never>,
-	runId: string
-): RuntimeAutomationApi<E | P | W> => ({ ...api, progress, readUrl, runId });
+	runId: string,
+	connection: {
+		readonly get: (
+			input: Parameters<AutomationApi['connection']['get']>[0]
+		) => Effect.Effect<import('@norbital-ai/bolt-protocol').IntegrationHttpResponse, C>;
+	}
+): RuntimeAutomationApi<E | P | W | C> => ({ ...api, progress, readUrl, runId, connection });
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = <RunE = never>(

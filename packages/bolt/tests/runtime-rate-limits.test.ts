@@ -193,7 +193,7 @@ describe('the workspace rate limiter', () => {
 	 */
 	it('keeps the pre-sign-in file and a policy from declaring each other’s rules', () => {
 		expect(() =>
-			anonymousLimits({ 'tasks.submit': { window: '1 hour', limit: 5, key: 'subject' } })
+			anonymousLimits({ 'conversations.send': { window: '1 hour', limit: 5, key: 'subject' } })
 		).toThrow(/has not signed in/);
 		expect(() =>
 			validatePolicyLimits(

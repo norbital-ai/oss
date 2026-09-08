@@ -12,14 +12,22 @@ test('the workspace sidebar renders the ordered semantic section model', () => {
 	assert.match(sidebar, /label=\{section\.label\}/u);
 	assert.match(sidebar, /items=\{section\.items\}/u);
 	assert.match(sidebar, /section\.key === 'operations' \? agentNavigation : undefined/u);
-	assert.match(sidebar, /section\.key === 'workspace' \? 'mt-auto' : undefined/u);
 	assert.doesNotMatch(sidebar, /label=\{t\('misc\.platform'\)\}/u);
 });
 
-test('the section contract fixes the three job-oriented groups', () => {
+test('the section contract fixes the two job-oriented groups', () => {
 	const types = source('workspace-shell.types.ts');
-	assert.match(types, /'applications' \| 'operations' \| 'workspace'/u);
+	assert.match(types, /'applications' \| 'operations'/u);
 	assert.match(types, /sections: Schema\.Array\(WorkspaceNavigationSectionSchema\)/u);
+});
+
+// Kiosk and Settings left the bar for a popover beside the bell; the bar keeps only what is daily.
+test('the utilities menu carries the secondary branches beside notifications', () => {
+	const sidebar = source('workspace-sidebar.svelte');
+	assert.match(sidebar, /<WorkspaceUtilitiesMenu items=\{model\.utilities \?\? \[\]\}/u);
+	const menu = source('workspace-utilities-menu.svelte');
+	assert.match(menu, /item\.children\?\.length \? item\.children : \[item\]/u);
+	assert.match(menu, /t\('misc\.moreDestinations'\)/u);
 });
 
 test('notifications share the compact account heading row', () => {

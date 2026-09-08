@@ -260,7 +260,7 @@ describe('invocation provenance', () => {
 		]) {
 			const failure = await failureOf(
 				harness,
-				task(name, { name: 'nightly', input: {}, taskId: 'task-1' })
+				task(name, { name: 'nightly', input: {}, conversationId: 'task-1' })
 			);
 			expect(failure, name).toBeInstanceOf(AccessControl.AccessDenied);
 		}

@@ -122,6 +122,33 @@ interface NestedWriteSchema {
 	};
 }
 
+interface NestedDeleteSchema extends NestedWriteSchema {
+	readonly tables: NestedWriteSchema['tables'] & {
+		readonly line_notes: {
+			readonly $inferSelect: {
+				readonly id: string;
+				readonly line_id: string;
+				readonly body: string;
+			};
+			readonly $inferInsert: {
+				readonly id?: string;
+				readonly line_id: string;
+				readonly body: string;
+			};
+		};
+	};
+	readonly relations: NestedWriteSchema['relations'] & {
+		readonly order_lines: {
+			readonly line_note_line: {
+				readonly cardinality: 'many';
+				readonly target: 'line_notes';
+				readonly column: 'line_id';
+				readonly parentColumn: 'id';
+			};
+		};
+	};
+}
+
 /** The hook returns a graph, which is the case the whole design exists for. */
 const orderHooks: CollectionHooks<NestedWriteSchema, 'orders'> = {
 	mutate: {
@@ -221,6 +248,287 @@ const claimLinesAuthored = (lineIds: ReadonlyArray<string>, refuseSku?: string) 
 });
 
 describe('a nested write', () => {
+	it('gives deletion hooks their immediate prepared or deleted parent, and no parent for direct deletion', async () => {
+		const observed: Array<
+			Readonly<{ collection: string; parent?: Readonly<Record<string, unknown>> }>
+		> = [];
+		const deepDefinition = workspace({
+			...definition,
+			collections: [
+				...definition.collections,
+				collection({
+					name: 'line_notes',
+					fields: {
+						line_id: field.string({ required: true }),
+						body: field.string({ required: true })
+					}
+				})
+			],
+			relations: [
+				...definition.relations,
+				{
+					name: 'line_note_line',
+					source: 'order_lines',
+					target: 'line_notes',
+					cardinality: 'many',
+					from: { collection: 'order_lines', column: 'id' },
+					to: { collection: 'line_notes', column: 'line_id' },
+					cascade: true
+				}
+			],
+			policies: [
+				...definition.policies,
+				policy({
+					name: 'notes-data',
+					effect: 'allow',
+					grants: [
+						{ collection: 'line_notes', action: 'read' },
+						{ collection: 'line_notes', action: 'create' },
+						{ collection: 'line_notes', action: 'update' },
+						{ collection: 'line_notes', action: 'delete' }
+					]
+				})
+			],
+			teams: { admin: ['admin-data', 'notes-data'] }
+		});
+		harness = await makeBoltTestRuntime(deepDefinition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					order_lines: authoredHooks<NestedDeleteSchema, 'order_lines'>({
+						delete: {
+							perRecord: {
+								before: {
+									description: 'Record the enclosing order for each removed line.',
+									handler: ({ parent }) => {
+										observed.push({
+											collection: 'order_lines',
+											...(parent === undefined ? {} : { parent })
+										});
+									}
+								}
+							}
+						}
+					}),
+					line_notes: authoredHooks<NestedDeleteSchema, 'line_notes'>({
+						delete: {
+							perRecord: {
+								before: {
+									description: 'Record the immediate line owner when its note cascades.',
+									handler: ({ parent }) => {
+										observed.push({
+											collection: 'line_notes',
+											...(parent === undefined ? {} : { parent })
+										});
+									}
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		const orderId = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const created = yield* collections.mutate(
+					EffectId.make('delete-parent-create'),
+					adminSubject,
+					'orders',
+					[
+						{
+							reference: 'INITIAL',
+							order_line_order: [
+								{ sku: 'keep', line_note_line: [{ body: 'retained' }] },
+								{ sku: 'drop', line_note_line: [{ body: 'removed' }] }
+							]
+						}
+					]
+				);
+				return String(created.records[0]?.['id']);
+			})
+		);
+		const lines = await harness.database.query('select id, sku from order_lines');
+		const keepId = String(lines.find((row) => row['sku'] === 'keep')!['id']);
+		const dropId = String(lines.find((row) => row['sku'] === 'drop')!['id']);
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.mutate(
+					EffectId.make('delete-parent-reconcile'),
+					adminSubject,
+					'orders',
+					[
+						{
+							id: orderId,
+							reference: 'AMENDED',
+							order_line_order: [{ id: keepId }]
+						}
+					]
+				);
+			})
+		);
+		expect(observed[0]).toMatchObject({
+			collection: 'order_lines',
+			parent: {
+				collection: 'orders',
+				id: orderId,
+				column: 'order_id',
+				action: 'update',
+				values: { reference: 'AMENDED' }
+			}
+		});
+		expect(observed[1]).toMatchObject({
+			collection: 'line_notes',
+			parent: {
+				collection: 'order_lines',
+				id: dropId,
+				column: 'line_id',
+				action: 'delete',
+				values: { sku: 'drop' }
+			}
+		});
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.delete(EffectId.make('delete-parent-cascade'), adminSubject, 'orders', [
+					orderId
+				]);
+			})
+		);
+		expect(observed[2]).toMatchObject({
+			collection: 'order_lines',
+			parent: {
+				collection: 'orders',
+				id: orderId,
+				action: 'delete',
+				values: { reference: 'AMENDED' }
+			}
+		});
+		expect(observed[3]).toMatchObject({
+			collection: 'line_notes',
+			parent: { collection: 'order_lines', id: keepId, action: 'delete' }
+		});
+		const directId = await createLine(harness, 'delete-direct-create', { sku: 'standalone' });
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).delete(
+					EffectId.make('delete-direct-line'),
+					adminSubject,
+					'order_lines',
+					[directId]
+				);
+			})
+		);
+		expect(observed.at(-1)).toEqual({ collection: 'order_lines' });
+	}, 60_000);
+
+	it('gives child hooks the prepared parent own fields on create and update, and no parent on direct writes', async () => {
+		const observed: Array<Readonly<Record<string, unknown>> | undefined> = [];
+		const sizes: Array<Readonly<Partial<Record<string, number>>>> = [];
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					orders: authoredHooks<NestedWriteSchema, 'orders'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Canonicalize the parent reference before preparing children.',
+									handler: ({ input, relationshipSizes }) => {
+										sizes.push(relationshipSizes);
+										return {
+											...input,
+											...(input.reference === undefined
+												? {}
+												: { reference: input.reference.toUpperCase() })
+										};
+									}
+								}
+							}
+						}
+					}),
+					order_lines: authoredHooks<NestedWriteSchema, 'order_lines'>({
+						mutate: {
+							perRecord: {
+								before: {
+									description: 'Resolve the enclosing order before it has been stored.',
+									handler: ({ input, parent }) => {
+										observed.push(parent);
+										if (parent?.collection !== 'orders') return input;
+										return { ...input, sku: `${parent.values.reference}:${input.sku}` };
+									}
+								}
+							}
+						}
+					})
+				}
+			}
+		});
+		const orderId = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const created = yield* collections.mutate(
+					EffectId.make('parent-create'),
+					adminSubject,
+					'orders',
+					[{ reference: 'new', order_line_order: [{ sku: 'first' }] }]
+				);
+				return String(created.records[0]?.['id']);
+			})
+		);
+		const [line] = await harness.database.query('select id, order_id, sku from order_lines');
+		expect(line?.['sku']).toBe('NEW:first');
+		expect(observed[0]).toEqual({
+			collection: 'orders',
+			id: orderId,
+			column: 'order_id',
+			values: { id: orderId, reference: 'NEW' }
+		});
+		expect(sizes[0]).toEqual({ order_line_order: 1 });
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.mutate(EffectId.make('parent-update'), adminSubject, 'orders', [
+					{
+						id: orderId,
+						reference: 'amended',
+						order_line_order: [{ id: line!['id'], sku: 'second' }]
+					}
+				]);
+				yield* collections.mutate(EffectId.make('parent-preserved'), adminSubject, 'orders', [
+					{ id: orderId, order_line_order: [{ id: line!['id'], sku: 'third' }] }
+				]);
+			})
+		);
+		expect(observed[1]?.['values']).toMatchObject({ id: orderId, reference: 'AMENDED' });
+		expect(observed[2]?.['values']).toMatchObject({ id: orderId, reference: 'AMENDED' });
+		expect(observed[1]?.['values']).not.toHaveProperty('order_line_order');
+		await createLine(harness, 'direct-child', { order_id: orderId, sku: 'direct' });
+		expect(observed.at(-1)).toBeUndefined();
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.mutate(EffectId.make('parent-no-relationship'), adminSubject, 'orders', [
+					{ id: orderId, reference: 'kept' }
+				]);
+				yield* collections.mutate(
+					EffectId.make('parent-empty-relationship'),
+					adminSubject,
+					'orders',
+					[{ id: orderId, order_line_order: [] }]
+				);
+				const forged = yield* Effect.result(
+					collections.mutate(EffectId.make('parent-forged-count'), adminSubject, 'orders', [
+						{ id: orderId, relationshipSizes: { order_line_order: 1 }, order_line_order: [] }
+					])
+				);
+				expect(forged._tag).toBe('Failure');
+			})
+		);
+		expect(sizes.slice(-2)).toEqual([{}, { order_line_order: 0 }]);
+	}, 60_000);
+
 	it('commits the parent and its children in one transaction', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 		harness.database.forget();

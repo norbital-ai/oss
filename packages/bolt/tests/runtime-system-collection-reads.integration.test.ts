@@ -287,12 +287,11 @@ const RUNTIME_OWNED = [
 	'requestor',
 	'user',
 	'team',
-	'agent_task',
-	'agent_plan',
-	'agent_message',
-	'agent_inbox',
-	'agent_run',
-	'agent_usage',
+	'conversation',
+	'plan',
+	'conversation_message',
+	'turn',
+	'turn_usage',
 	'automation_run',
 	'bolt_notifications'
 ];

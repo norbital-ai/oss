@@ -8,12 +8,11 @@ import { systemCollectionCatalog } from '../src/compiler/workspace-build.js';
  * Effect cutover retired.
  */
 const DURABLE_AGENT_COLLECTIONS = [
-	'agent_task',
-	'agent_plan',
-	'agent_message',
-	'agent_inbox',
-	'agent_run',
-	'agent_usage'
+	'conversation',
+	'plan',
+	'conversation_message',
+	'turn',
+	'turn_usage'
 ] as const;
 
 const RETIRED_AGENT_COLLECTIONS = [

@@ -5,7 +5,8 @@ import type {
 	PolicyName,
 	DefaultWorkspaceSchema,
 	SchemaRow,
-	TableName
+	TableName,
+	HttpConnection
 } from './contracts-schema.js';
 
 const isString = Schema.is(Schema.String);
@@ -85,6 +86,13 @@ export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S>
 	readonly runId: string;
 	/** Retrieves a bounded public HTTPS page through the host connector, without stored sign-ins. */
 	readonly readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage>;
+	/** Bounded GET through this automation's declared connection and managed credential. */
+	readonly connection: {
+		readonly get: (input: {
+			readonly path: string;
+			readonly query?: Readonly<Record<string, string | number | boolean>>;
+		}) => Effect.Effect<import('@norbital-ai/bolt-protocol').IntegrationHttpResponse>;
+	};
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
 	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
 };
@@ -119,6 +127,7 @@ export interface AutomationDefinition<
 	readonly trigger: T;
 	readonly spec: Readonly<{
 		readonly description: string;
+		readonly connection?: HttpConnection;
 		/**
 		 * The policies this automation runs under — its authority *and* its toolset.
 		 *

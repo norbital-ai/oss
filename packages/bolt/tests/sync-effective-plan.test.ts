@@ -37,7 +37,7 @@ const definition = {
 				source: field('reference', {
 					reference: {
 						targets: [
-							{ tag: 'TASK', collection: 'tasks', storageColumn: 'source_task_id' },
+							{ tag: 'TASK', collection: 'tasks', storageColumn: 'source_conversation_id' },
 							{ tag: 'NOTE', collection: 'notes', storageColumn: 'source_note_id' }
 						],
 						onDelete: 'restrict'

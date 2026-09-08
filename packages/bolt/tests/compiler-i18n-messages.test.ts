@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mergeBoltAgentMessages } from '../src/client/ui/agent/i18n.js';
+import { mergeBoltConversationMessages } from '../src/client/ui/agent/i18n.js';
 
 describe('tenant i18n catalogs', () => {
 	it('spreads tenant catalogs over ui and bolt without dropping English copy', () => {
-		const merged = mergeBoltAgentMessages(
+		const merged = mergeBoltConversationMessages(
 			{ en: { 'ui.ok': 'OK' }, zh: { 'ui.ok': '好' } },
 			{ en: { 'app.people.workforce': 'Workforce' }, zh: {} }
 		);

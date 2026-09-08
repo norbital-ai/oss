@@ -1,15 +1,14 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mergeBoltAgentMessages } from '../src/client/ui/agent/i18n.js';
+import { mergeBoltConversationMessages } from '../src/client/ui/agent/i18n.js';
 
-const catalogs = mergeBoltAgentMessages({ en: {}, zh: {} });
+const catalogs = mergeBoltConversationMessages({ en: {}, zh: {} });
 const scopedKeys = (catalog: Readonly<Record<string, string>>): string[] =>
 	Object.keys(catalog)
 		.filter(
 			(key) =>
 				key.startsWith('bolt.studio.') ||
-				key.startsWith('bolt.documentation.') ||
 				key.startsWith('bolt.automations.') ||
 				key.startsWith('bolt.shell.')
 		)
@@ -22,7 +21,7 @@ const SURFACE_ROOTS = [
 	new URL('../src/client/ui/shell/workspace.svelte', import.meta.url).pathname
 ];
 
-const MESSAGE_KEY = /['`](bolt\.(?:studio|documentation|automations|shell)\.[A-Za-z0-9.]+)['`]/g;
+const MESSAGE_KEY = /['`](bolt\.(?:studio|automations|shell)\.[A-Za-z0-9.]+)['`]/g;
 
 const collectFiles = async (root: string): Promise<string[]> => {
 	const info = await stat(root);
@@ -57,7 +56,7 @@ const extractUsedKeys = (source: string): string[] => {
 };
 
 describe('Workspace Studio and system-surface localization', () => {
-	it('keeps every Documentation, Studio, Automation, and shell key present in both catalogs', () => {
+	it('keeps every Studio, Automation, and shell key present in both catalogs', () => {
 		expect(scopedKeys(catalogs.zh)).toEqual(scopedKeys(catalogs.en));
 	});
 

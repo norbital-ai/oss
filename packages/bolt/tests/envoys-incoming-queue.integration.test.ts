@@ -18,9 +18,9 @@ const embeddingModelId = ModelId.make('test:embedding');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -168,7 +168,7 @@ describe('Envoy inbound Task queue', () => {
 		]);
 		expect(
 			await harness.database.query(
-				`select status, agent_id, audience from agent_task`
+				`select status, agent_id, audience from conversation`
 			)
 		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
 	});
@@ -207,7 +207,7 @@ describe('Envoy inbound Task queue', () => {
 		expect(JSON.stringify(generations[0]?.messages)).toContain('Handle the safety alarm first.');
 		expect(JSON.stringify(generations[0]?.messages)).not.toContain('/steer');
 		expect(
-			await harness.database.query(`select priority from agent_inbox`)
+			await harness.database.query(`select priority from conversation_message where state is not null`)
 		).toEqual([{ priority: 'steer' }]);
 	});
 });

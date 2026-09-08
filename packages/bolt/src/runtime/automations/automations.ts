@@ -29,7 +29,7 @@ const automationRunPublication = {
 	name: automationRun.name,
 	status: automationRun.status
 } as const;
-const StoppedTaskStatus = Schema.Struct({ status: Schema.Literal('stopped') });
+const StoppedConversationStatus = Schema.Struct({ status: Schema.Literal('stopped') });
 
 export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 	'Bolt.Automations.Stopped',
@@ -173,7 +173,7 @@ export const stoppageGuard = (
 			EffectId.make(`${turnEffectId}:stoppage:${sequence}`),
 			taskId
 		);
-		if (Schema.is(StoppedTaskStatus)(status)) {
+		if (Schema.is(StoppedConversationStatus)(status)) {
 			return yield* AutomationStopped.before(taskId, operation);
 		}
 	});
@@ -427,10 +427,10 @@ export const layer = Layer.effect(
 			});
 
 		const execute: Interface['execute'] = (effectId, name, taskId, run) =>
-			executeSettlingWith(effectId, name, taskId, run, (settledTaskId, outcome) =>
+			executeSettlingWith(effectId, name, taskId, run, (settledConversationId, outcome) =>
 				settleDirect(
 					EffectId.make(`${effectId}:${outcome.status === 'done' ? 'done' : 'failed'}`),
-					settledTaskId,
+					settledConversationId,
 					outcome
 				)
 			);
@@ -449,9 +449,9 @@ export const layer = Layer.effect(
 								name,
 								taskId,
 								(input, runEffectId) => run(name, taskId, input, runEffectId),
-								(settledTaskId, outcome) =>
+								(settledConversationId, outcome) =>
 									Effect.sync(() => {
-										settlements.push({ taskId: settledTaskId, outcome });
+										settlements.push({ taskId: settledConversationId, outcome });
 									})
 							).pipe(
 								Effect.flatMap((result) =>

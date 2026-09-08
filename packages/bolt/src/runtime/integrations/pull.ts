@@ -1,3 +1,4 @@
+import { IntegrationHttpRequest } from '@norbital-ai/bolt-protocol';
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';
@@ -8,12 +9,7 @@ import type {
 } from '#lib/authoring/workspace-schema.js';
 import { absorbRecords, type AbsorbDependencies } from '#lib/runtime/integrations/absorb.js';
 import { isNumber, isObjectLike, isRecord as isObject, isString } from '#lib/schema-decode.js';
-import {
-	IntegrationHttpRequest,
-	isRetryableStatus,
-	nextLink,
-	retryDelayMs
-} from '#lib/runtime/integrations/http.js';
+import { isRetryableStatus, nextLink, retryDelayMs } from '#lib/runtime/integrations/http.js';
 
 /**
  * One binding's run, from request to rows.

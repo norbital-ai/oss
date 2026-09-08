@@ -1,3 +1,4 @@
+export { makeManagedHttpConnectorBinding, makeDefaultConnectorBinding } from './facilities/http.js';
 export { makeWebConnectorBinding, makeRequestPage } from './facilities/web.js';
 export {
 	attributeEscapedFailure,

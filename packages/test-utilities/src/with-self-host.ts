@@ -12,7 +12,7 @@ import {
 	startLocalApplication,
 	startLocalDatabase,
 	startLocalFiles,
-	makeWebConnectorBinding,
+	makeDefaultConnectorBinding,
 	type RunningApplication,
 	type StartedLocalDatabase,
 	type StartedLocalFiles
@@ -315,7 +315,7 @@ export const startSelfHostSession = async (
 			scope,
 			database: database.binding,
 			ai: input.ai ?? catalogAi(),
-			connector: input.connector ?? makeWebConnectorBinding(),
+			connector: input.connector ?? makeDefaultConnectorBinding(),
 			...(input.communication !== undefined ? { communication: input.communication } : {}),
 			...(held.files !== undefined ? { files: held.files.binding } : {}),
 			config: makeConfigBinding({

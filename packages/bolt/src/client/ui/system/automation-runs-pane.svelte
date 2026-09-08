@@ -59,11 +59,11 @@
 	const activeRun = $derived(activeQuery?.current?.[0]);
 	const latestManual = $derived(execution?.latest?.current);
 	const latestManualStatus = $derived(presentAutomationStatus(latestManual?.status));
-	const activeTaskId = $derived(
+	const activeConversationId = $derived(
 		activeRun?.task_id ??
 			(latestManual !== undefined && latestManualStatus.canStop ? execution?.latest?.id : undefined)
 	);
-	const running = $derived(activeTaskId !== undefined || (execution?.pending ?? 0) > 0);
+	const running = $derived(activeConversationId !== undefined || (execution?.pending ?? 0) > 0);
 
 	const AutomationRunStatusValue = Schema.Literals(['pending', 'running', 'done', 'failed']);
 	const automationRunStatus = (value: unknown): AutomationRunStatus | undefined =>
@@ -93,8 +93,8 @@
 	};
 
 	const stop = (): Effect.Effect<void> => {
-		if (execution === undefined || activeTaskId === undefined) return Effect.void;
-		return Effect.tryPromise(() => execution.stop(activeTaskId)).pipe(
+		if (execution === undefined || activeConversationId === undefined) return Effect.void;
+		return Effect.tryPromise(() => execution.stop(activeConversationId)).pipe(
 			Effect.match({
 				onFailure: (cause) => {
 					actionFailure = getErrorMessage(cause);

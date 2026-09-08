@@ -290,71 +290,60 @@ const matrix: ReadonlyArray<MatrixRow> = [
 	},
 	{
 		id: 'system.task-owner',
-		root: 'agent_task',
+		root: 'conversation',
 		where: { subject_id: { eq: SUBJECT_ID } },
-		dependencies: ['agent_task'],
+		dependencies: ['conversation'],
 		reverse: [],
-		indexes: indexes('agent_task.subject_id:routing'),
+		indexes: indexes('conversation.subject_id:routing'),
 		sql: ['is not distinct from'],
 		allow: ['task-owned'],
 		deny: ['task-other']
 	},
 	{
 		id: 'system.plan-owner',
-		root: 'agent_plan',
+		root: 'plan',
 		where: { task: { some: { subject_id: { eq: SUBJECT_ID } } } },
-		dependencies: ['agent_plan', 'agent_task'],
-		reverse: reverse('agent_task:agent_plan.task'),
-		indexes: indexes('agent_plan.task_id:relationship'),
+		dependencies: ['conversation', 'plan'],
+		reverse: reverse('conversation:plan.task'),
+		indexes: indexes('plan.conversation_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['plan-owned'],
 		deny: ['plan-other']
 	},
 	{
 		id: 'system.message-owner',
-		root: 'agent_message',
+		root: 'conversation_message',
 		where: { task: { some: { subject_id: { eq: SUBJECT_ID } } } },
-		dependencies: ['agent_message', 'agent_task'],
-		reverse: reverse('agent_task:agent_message.task'),
-		indexes: indexes('agent_message.task_id:relationship'),
+		dependencies: ['conversation', 'conversation_message'],
+		reverse: reverse('conversation:conversation_message.task'),
+		indexes: indexes('conversation_message.conversation_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['message-owned'],
 		deny: ['message-other']
 	},
 	{
-		id: 'system.inbox-owner',
-		root: 'agent_inbox',
-		where: { task: { some: { subject_id: { eq: SUBJECT_ID } } } },
-		dependencies: ['agent_inbox', 'agent_task'],
-		reverse: reverse('agent_task:agent_inbox.task'),
-		indexes: indexes('agent_inbox.task_id:relationship'),
-		sql: ['exists', 'is not distinct from'],
-		allow: ['inbox-owned'],
-		deny: ['inbox-other']
-	},
-	{
 		id: 'system.run-owner',
-		root: 'agent_run',
+		root: 'turn',
 		where: { task: { some: { subject_id: { eq: SUBJECT_ID } } } },
-		dependencies: ['agent_run', 'agent_task'],
-		reverse: reverse('agent_task:agent_run.task'),
-		indexes: indexes('agent_run.task_id:relationship'),
+		dependencies: ['conversation', 'turn'],
+		reverse: reverse('conversation:turn.task'),
+		indexes: indexes('turn.conversation_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['run-owned'],
 		deny: ['run-other']
 	},
 	{
 		id: 'system.usage-owner',
-		root: 'agent_usage',
+		root: 'turn_usage',
 		where: { run: { some: { task: { some: { subject_id: { eq: SUBJECT_ID } } } } } },
-		dependencies: ['agent_run', 'agent_task', 'agent_usage'],
+		dependencies: ['conversation', 'turn', 'turn_usage'],
 		reverse: reverse(
-			'agent_run:agent_usage.run',
-			'agent_task:agent_run.task>agent_usage.run'
+			'turn:turn_usage.run',
+			'conversation:turn.task>turn_usage.run'
 		),
 		indexes: indexes(
-			'agent_run.task_id:relationship',
-			'agent_usage.run_id:relationship'
+			'turn.conversation_id:relationship',
+			'turn_usage.turn_id:relationship'
 		),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['usage-owned'],
@@ -624,12 +613,11 @@ beforeAll(async () => {
 	await database.exec(`
 		create table approval_request (id text primary key, approver_teams jsonb, superseder_teams jsonb);
 		create table requestor (id text primary key, approval_request_id text, user_id text);
-		create table agent_task (id text primary key, subject_id text);
-		create table agent_plan (id text primary key, task_id text);
-		create table agent_message (id text primary key, task_id text, message jsonb);
-		create table agent_inbox (id text primary key, task_id text, message_id text);
-		create table agent_run (id text primary key, task_id text);
-		create table agent_usage (id text primary key, run_id text);
+		create table conversation (id text primary key, subject_id text);
+		create table plan (id text primary key, conversation_id text);
+		create table conversation_message (id text primary key, conversation_id text, message jsonb);
+		create table turn (id text primary key, conversation_id text);
+		create table turn_usage (id text primary key, turn_id text);
 		create table bolt_notifications (id text primary key, recipient text);
 		create table sites (id text primary key);
 		create table jobs (id text primary key, site_id text);
@@ -662,19 +650,16 @@ beforeAll(async () => {
 			('requestor-superseder', 'approval-superseder', 'u2'),
 			('requestor-denied', 'approval-denied', 'u2'),
 			('requestor-malformed', 'approval-malformed', 'u2');
-		insert into agent_task values
+		insert into conversation values
 			('task-owned', 'u1'),
 			('task-other', 'u2');
-		insert into agent_plan values
+		insert into plan values
 			('plan-owned', 'task-owned'),
 			('plan-other', 'task-other');
-		insert into agent_inbox values
-			('inbox-owned', 'task-owned', 'message-owned'),
-			('inbox-other', 'task-other', 'message-other');
-		insert into agent_run values
+		insert into turn values
 			('run-owned', 'task-owned'),
 			('run-other', 'task-other');
-		insert into agent_usage values
+		insert into turn_usage values
 			('usage-owned', 'run-owned'),
 			('usage-other', 'run-other');
 		insert into bolt_notifications values
@@ -718,7 +703,7 @@ beforeAll(async () => {
 			('payslip-other', 'employment-other');
 	`);
 	await database.query(
-		'insert into agent_message (id, task_id, message) values ' +
+		'insert into conversation_message (id, conversation_id, message) values ' +
 			"('message-owned', 'task-owned', $1::jsonb), " +
 			"('message-other', 'task-other', $2::jsonb)",
 		[JSON.stringify(userPrompt('Owned task')), JSON.stringify(userPrompt('Other task'))]
@@ -730,9 +715,9 @@ afterAll(async () => {
 });
 
 describe('sync engine production read-policy matrix', () => {
-	it('has exactly 24 named structured policies with exact derived plan receipts', () => {
-		expect(matrix).toHaveLength(24);
-		expect(new Set(matrix.map(({ id }) => id)).size).toBe(24);
+	it('has exactly 23 named structured policies with exact derived plan receipts', () => {
+		expect(matrix).toHaveLength(23);
+		expect(new Set(matrix.map(({ id }) => id)).size).toBe(23);
 		for (const row of matrix) {
 			const compiled = compile(row);
 			expect(compiled.semantics.dependencies, row.id).toEqual(row.dependencies);

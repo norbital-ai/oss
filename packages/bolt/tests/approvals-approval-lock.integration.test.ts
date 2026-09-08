@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Layer, Ref, Schema } from 'effect';
+import { ConfigProvider, Effect, Layer, Ref, Schema } from 'effect';
+import { SecretCipher } from '@norbital-ai/std/secret';
+import { Secrets } from '../src/runtime/secrets/secrets.js';
 import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
 import { approveBy } from '../src/authoring/approval-flow.js';
 import {
@@ -669,6 +671,17 @@ const testLayer = (recorded: Array<string> = []) => {
 			)
 		)
 	);
+	const secrets = Secrets.layer.pipe(
+		Layer.provide(
+			Layer.mergeAll(
+				workspaceLayer,
+				database,
+				SecretCipher.layer.pipe(
+					Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({})))
+				)
+			)
+		)
+	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(
 		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncCommit))
@@ -689,6 +702,7 @@ const testLayer = (recorded: Array<string> = []) => {
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
 				Connector.layer(undefined, context),
+				secrets,
 				taskQueue,
 				automations,
 				authoredLayer,

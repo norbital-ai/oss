@@ -1,7 +1,7 @@
 <script lang="ts">
 	import AgentTranscriptItem from '../../src/client/ui/agent/agent-transcript-item.svelte';
 	import { pairToolCalls, type SubagentTranscript } from '../../src/client/ui/agent/tool-rows.js';
-	import { reasoningRequestedFor, type PanelMessage } from '../../src/client/ui/agent/transcript.js';
+	import { type PanelMessage } from '../../src/client/ui/agent/transcript.js';
 
 	/** The panel's root transcript list, reduced to what the row tests observe. */
 	let {
@@ -17,7 +17,6 @@
 			{message}
 			{tools}
 			subagent={transcript}
-			reasoningRequested={reasoningRequestedFor(transcript.runs, message.runId)}
 		/>
 	{/each}
 </ol>

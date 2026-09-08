@@ -163,9 +163,9 @@ it.effect(
 							ai: makeAiBinding({
 								call: async () => ({
 									_tag: 'Catalog',
-									languageModels: [{ id: 'ollama/llama' }],
+									languageModels: [{ id: 'ollama/llama', contextWindowTokens: 32_000 }],
 									defaultLanguageModelId: 'ollama/llama',
-									embeddingModels: [{ id: 'ollama/nomic' }],
+									embeddingModels: [{ id: 'ollama/nomic', contextWindowTokens: 8_192 }],
 									defaultEmbeddingModelId: 'ollama/nomic'
 								})
 							}),

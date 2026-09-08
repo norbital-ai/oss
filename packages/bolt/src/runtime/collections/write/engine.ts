@@ -20,6 +20,16 @@ import { WRITE_DEPTH_LIMIT, ownsManyRelation, type WritableManyRelation } from '
 const isString = Schema.is(Schema.String);
 const isNonEmptyString = Schema.is(Schema.NonEmptyString);
 
+/** Prepared own fields of the enclosing graph node; callers cannot supply this context. */
+export type GraphMutationParent = Readonly<{
+	readonly collection: string;
+	readonly id: string;
+	readonly column: string;
+	readonly values: Readonly<Record<string, unknown>>;
+}>;
+
+type GraphDeleteParent = GraphMutationParent & Readonly<{ readonly action: 'update' | 'delete' }>;
+
 export type GraphPreparedOperation = Readonly<{
 	readonly action: 'create' | 'update' | 'delete';
 	readonly collection: string;
@@ -214,7 +224,9 @@ export type GraphPreparePorts<Error = unknown, Requirements = never> = Readonly<
 		depth: number,
 		prepared: unknown,
 		staged?: HookWriteOps<Error>,
-		relationships?: ReadonlyArray<string>
+		relationships?: ReadonlyArray<string>,
+		parent?: GraphMutationParent,
+		relationshipSizes?: Readonly<Partial<Record<string, number>>>
 	) => Effect.Effect<Readonly<Record<string, Schema.Json>>, Error, Requirements>;
 	readonly runMutatePrepare: (
 		effectId: EffectId,
@@ -251,14 +263,15 @@ export type GraphPrepareFns<E = unknown, R = never> = Readonly<{
 		depth: number,
 		author: Identity.Subject,
 		requiresBrowserBaseVersion: boolean,
-		wavePrepared?: unknown
+		wavePrepared?: unknown,
+		parent?: GraphDeleteParent
 	) => Effect.Effect<void, E, R>;
 	readonly prepareNode: (
 		collection: string,
 		payload: Readonly<Record<string, unknown>>,
 		depth: number,
 		author: Identity.Subject,
-		ownership?: Readonly<{ readonly column: string; readonly parentId: string }>,
+		ownership?: GraphMutationParent,
 		identity?: GraphNodeIdentity,
 		requiresBrowserBaseVersion?: boolean,
 		preDecoded?: GraphDecodedInput,
@@ -328,7 +341,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 						`The desired ${edge.name} relationship contains ${childId} more than once.`
 					);
 				if (byId.has(childId)) {
-					identity = { id: childId, action: 'update', clearLock: false, ownerTransition: 'preserve' };
+					identity = {
+						id: childId,
+						action: 'update',
+						clearLock: false,
+						ownerTransition: 'preserve'
+					};
 				} else if (ports.browserMutation !== undefined) {
 					// Under a browser mutation the wave read a child id only when the browser declared that
 					// row existing, so an id it did not read is one nothing claims exists yet, whether the
@@ -345,7 +363,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 							'update',
 							`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
 						);
-					identity = { id: childId, action: 'create', clearLock: false, ownerTransition: 'preserve' };
+					identity = {
+						id: childId,
+						action: 'create',
+						clearLock: false,
+						ownerTransition: 'preserve'
+					};
 				} else {
 					// A server-side graph. An unstored id is a nested create (agents mint message and
 					// directive ids on the same statement); a stored row owned by another parent cannot
@@ -356,7 +379,12 @@ export const makeGraphPreparers = <Error, Requirements>(
 						childId
 					);
 					if (stored === undefined) {
-						identity = { id: childId, action: 'create', clearLock: false, ownerTransition: 'preserve' };
+						identity = {
+							id: childId,
+							action: 'create',
+							clearLock: false,
+							ownerTransition: 'preserve'
+						};
 					} else {
 						const storedOwner = stored.row[edge.childColumn];
 						if (storedOwner !== null && storedOwner !== id)
@@ -403,101 +431,101 @@ export const makeGraphPreparers = <Error, Requirements>(
 	});
 
 	const prepareDelete: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareDelete'] =
-		Effect.fn('Collections.prepareGraphDelete')(function* (
-			collection,
-			row,
-			depth,
-			author,
-			requiresBrowserBaseVersion,
-			wavePrepared
-		) {
-			const operationPosition = ports.operations.length;
-			const id = row['id'];
-			if (!isNonEmptyString(id))
-				return yield* ports.graphRefusal(
-					collection,
+		Effect.fn('Collections.prepareGraphDelete')(
+			function* (collection, row, depth, author, requiresBrowserBaseVersion, wavePrepared, parent) {
+				const operationPosition = ports.operations.length;
+				const id = row['id'];
+				if (!isNonEmptyString(id))
+					return yield* ports.graphRefusal(
+						collection,
+						'delete',
+						`A stored ${collection} row selected for reconciliation has no identifier.`
+					);
+				if (depth > WRITE_DEPTH_LIMIT)
+					return yield* ports.graphRefusal(
+						collection,
+						'delete',
+						`A cascading relationship delete on ${collection} is more than ${WRITE_DEPTH_LIMIT} levels deep.`
+					);
+				const identity = `${collection}\u0000${id}`;
+				if (ports.preparedDeletes.has(identity)) return;
+				ports.preparedDeletes.add(identity);
+				const definition = yield* ports.workspace.collection(collection);
+				if (depth === 0 && collection === ports.rootCollection)
+					yield* ports.assertExpectedRootVersion(collection, id, row);
+				const snapshot = yield* ports.recordSnapshot(collection, id);
+				if (ports.browserMutation !== undefined && requiresBrowserBaseVersion)
+					yield* ports.assertBrowserBaseVersion(
+						EffectId.make(`${ports.effectId}:base-version:${collection}:${id}`),
+						ports.browserMutation,
+						collection,
+						id,
+						row
+					);
+				yield* ports.ensureGraphRowUnlocked(collection, id);
+				const accessPlan = yield* ports.policyWrite(author, 'delete', collection, row);
+				const visibility = accessPlan.predicate;
+				ports.registerExecutionInvariant(collection, 'delete', visibility);
+				const module = ports.authoredHooks[collection];
+				if (module?.delete?.perRecord?.before !== undefined) {
+					const api = ports.buildApi(
+						ports.effectId,
+						ports.hookDepth + depth + 1,
+						ports.stageHookWrites
+					);
+					yield* ports.runHook(
+						module.delete.perRecord.before,
+						{
+							existing: row,
+							prepared: wavePrepared,
+							api,
+							...(parent === undefined ? {} : { parent })
+						},
+						{
+							collection,
+							action: 'delete.before'
+						}
+					);
+				}
+				const context = { record: row };
+				yield* ports.authorizePolicyWrite(
+					EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
+					author,
+					visibility,
 					'delete',
-					`A stored ${collection} row selected for reconciliation has no identifier.`
-				);
-			if (depth > WRITE_DEPTH_LIMIT)
-				return yield* ports.graphRefusal(
 					collection,
-					'delete',
-					`A cascading relationship delete on ${collection} is more than ${WRITE_DEPTH_LIMIT} levels deep.`
+					context
 				);
-			const identity = `${collection}\u0000${id}`;
-			if (ports.preparedDeletes.has(identity)) return;
-			ports.preparedDeletes.add(identity);
-			const definition = yield* ports.workspace.collection(collection);
-			if (depth === 0 && collection === ports.rootCollection)
-				yield* ports.assertExpectedRootVersion(collection, id, row);
-			const snapshot = yield* ports.recordSnapshot(collection, id);
-			if (ports.browserMutation !== undefined && requiresBrowserBaseVersion)
-				yield* ports.assertBrowserBaseVersion(
-					EffectId.make(`${ports.effectId}:base-version:${collection}:${id}`),
-					ports.browserMutation,
+				const approval = yield* ports.resolveApproval(
+					EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
+					author,
+					visibility,
+					'delete',
+					collection,
+					context
+				);
+				if (approval !== undefined)
+					ports.approvalRequirements.push({
+						collection,
+						action: 'delete',
+						approval
+					});
+				yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth, author, row);
+				ports.operations.splice(operationPosition, 0, {
+					action: 'delete',
 					collection,
 					id,
-					row
-				);
-			yield* ports.ensureGraphRowUnlocked(collection, id);
-			const accessPlan = yield* ports.policyWrite(author, 'delete', collection, row);
-			const visibility = accessPlan.predicate;
-			ports.registerExecutionInvariant(collection, 'delete', visibility);
-			const module = ports.authoredHooks[collection];
-			if (module?.delete?.perRecord?.before !== undefined) {
-				const api = ports.buildApi(
-					ports.effectId,
-					ports.hookDepth + depth + 1,
-					ports.stageHookWrites
-				);
-				yield* ports.runHook(
-					module.delete.perRecord.before,
-					{ existing: row, prepared: wavePrepared, api },
-					{
-						collection,
-						action: 'delete.before'
-					}
-				);
-			}
-			const context = { record: row };
-			yield* ports.authorizePolicyWrite(
-				EffectId.make(`${ports.effectId}:graph:policy-authorization:${collection}:${id}`),
-				author,
-				visibility,
-				'delete',
-				collection,
-				context
-			);
-			const approval = yield* ports.resolveApproval(
-				EffectId.make(`${ports.effectId}:graph:approval-flow:${collection}:${id}`),
-				author,
-				visibility,
-				'delete',
-				collection,
-				context
-			);
-			if (approval !== undefined)
-				ports.approvalRequirements.push({
-					collection,
-					action: 'delete',
-					approval
+					values: {},
+					definition,
+					visibility,
+					previous: row,
+					snapshot,
+					...(module === undefined ? {} : { module }),
+					depth,
+					taskScope: ports.scope()
 				});
-			yield* prepareOwnedDescendants(ports, prepareDelete, collection, id, depth, author);
-			ports.operations.splice(operationPosition, 0, {
-				action: 'delete',
-				collection,
-				id,
-				values: {},
-				definition,
-				visibility,
-				previous: row,
-				snapshot,
-				...(module === undefined ? {} : { module }),
-				depth,
-				taskScope: ports.scope()
-			});
-		});
+			}
+		);
 
 	const prepareNode: GraphPrepareFns<Error | AuthoredRefusal, Requirements>['prepareNode'] =
 		Effect.fn('Collections.prepareGraphNode')(
@@ -620,7 +648,11 @@ export const makeGraphPreparers = <Error, Requirements>(
 						ports.hookDepth + depth,
 						wavePrepared,
 						ports.stageHookWrites,
-						[...relations.keys()]
+						[...relations.keys()],
+						ownership,
+						Object.fromEntries(
+							[...relations].map(([name, relation]) => [name, relation.children.length])
+						)
 					);
 					// Only a `before` hook can reshape the graph, so the one re-split below runs only
 					// when one ran: a payload the hook never saw is not split and decoded a second time.
@@ -655,7 +687,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 					delete owned[ownership.column];
 					own =
 						action === 'create' || identity?.ownerTransition === 'claim'
-							? { ...owned, [ownership.column]: ownership.parentId }
+							? { ...owned, [ownership.column]: ownership.id }
 							: owned;
 				}
 				own = ports.encodeMutationValues(own, definition.fields);
@@ -769,7 +801,7 @@ export const makeGraphPreparers = <Error, Requirements>(
 							child.child,
 							depth + 1,
 							planned.author,
-							{ column: planned.edge.childColumn, parentId: id },
+							{ collection, id, column: planned.edge.childColumn, values: context.record },
 							child.identity,
 							planned.requiresBrowserBaseVersion,
 							decoded === undefined
@@ -784,7 +816,15 @@ export const makeGraphPreparers = <Error, Requirements>(
 							childRow,
 							depth + 1,
 							planned.author,
-							planned.requiresBrowserBaseVersion
+							planned.requiresBrowserBaseVersion,
+							undefined,
+							{
+								collection,
+								id,
+								column: planned.edge.childColumn,
+								values: context.record,
+								action: 'update'
+							}
 						);
 				}
 				return id;

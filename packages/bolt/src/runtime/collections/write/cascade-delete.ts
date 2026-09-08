@@ -23,7 +23,8 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 	collection: string,
 	id: string,
 	depth: number,
-	author: Identity.Subject
+	author: Identity.Subject,
+	parentValues: Readonly<Record<string, unknown>>
 ): Effect.Effect<void, Error | AuthoredRefusal, Requirements> =>
 	Effect.gen(function* () {
 		for (const relation of ports.workspace.definition.relations) {
@@ -46,6 +47,12 @@ export const prepareOwnedDescendants = <Error, Requirements>(
 				ports.stageHookWrites
 			);
 			for (const child of related.rows)
-				yield* prepareDelete(edge.childCollection, child, depth + 1, author, false, childPrepared);
+				yield* prepareDelete(edge.childCollection, child, depth + 1, author, false, childPrepared, {
+					collection,
+					id,
+					column: edge.childColumn,
+					values: parentValues,
+					action: 'delete'
+				});
 		}
 	});

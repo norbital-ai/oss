@@ -56,6 +56,18 @@ submitted (root columns and every nested row it sent), once, before any hook run
 reads, returns or writes is the workspace's own work, checked against nobody, with no approval
 route of its own, committing with the root (see [access](../access/README.md#hooks-and-the-workspace)).
 
+Before mutation hooks receive submitted relationship names and `relationshipSizes`: an absent key
+leaves the relationship untouched; zero explicitly empties it. Counts describe the policy-checked
+submitted graph before the hook derives children, so a parent can reject an empty required set.
+Nested hooks also receive an optional, read-only `parent` containing the immediate enclosing
+collection, record id, child ownership column, and prepared own values. Values include the parent
+hook's changes and stored fields on updates; generated fields may be absent. Child payloads cannot
+supply this context, and it contains no descendant graph.
+
+Before deletion hooks receive the immediate `parent` with `action: 'update'` for omission from a
+prepared replacement, or `action: 'delete'` for an owned cascade. Replacement uses the proposed
+parent values; cascade uses the stored values. Standalone mutations and deletions have no parent.
+
 The nesting guard counts automations an automation starts, with one exception that is a rule of
 its own: an automation that starts **itself** with **different** args is continuing one walk (a
 reconciler moving its cursor to the next slice) and runs at the depth it already has; one that

@@ -30,7 +30,6 @@
 	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
-	import WorkspaceDocumentationShell from '../studio/workspace-documentation-shell.svelte';
 	import StudioShell from '../studio/studio-shell.svelte';
 	import { provideAgentClient } from '../agent/client.svelte.js';
 	import { createCustomTypeRendererResolver } from './custom-type-renderers.svelte.js';
@@ -480,7 +479,7 @@
 	 *
 	 * Hiding navigation is not enough in either case — a mounted app keeps issuing reads the preview
 	 * refuses, and a privileged component must unmount the moment a preview or role change revokes it.
-	 * Documentation and approvals stay outside the gate because members use them.
+	 * Approvals stays outside the gate because members use it.
 	 */
 	watch(
 		[
@@ -579,8 +578,6 @@
 			loading={memberAccessQuery.loading}
 			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
 		/>
-	{:else if hostPlugin === 'documentation'}
-		<WorkspaceDocumentationShell sourceFiles={workspace.documentationFiles} />
 	{:else if hostPlugin === 'workspace-studio'}
 		<StudioShell
 			client={workspace.frameworkClient}

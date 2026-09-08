@@ -160,6 +160,20 @@ const InvocationLayers = {
 				Layer.mergeAll(workspaceLayer, database, taskQueue, syncCommit, budget, tenantScope)
 			)
 		);
+		// Both vaults seal through the same cipher, so there is one key, one envelope format and one
+		// fail-closed refusal rather than two of each. The key comes from the host's configuration,
+		// deliberately not from the tenant database it is protecting — and it comes through the same
+		// `HostConfig` seam every other host-provided value does.
+		//
+		// It used to read `ConfigProvider` directly, which is unreachable from where this actually
+		// runs. A tenant runtime executes in a `vm` context with no `process` global, so inside an
+		// isolate that read returned nothing, silently, and every write to either vault refused with
+		// "BOLT_SECRETS_KEY is not set" on a host that had set it. `hostConfigFromProcessEnv` keeps the
+		// plain-process route identical for bolt-server and for tests.
+		const secretCipher = SecretCipher.layerFrom(hostConfigShape);
+		const secrets = Secrets.layer.pipe(
+			Layer.provide(Layer.mergeAll(workspaceLayer, database, secretCipher))
+		);
 		// The wake sits between Collections and the host's transport: Collections announces, the host fans
 		// out. It is its own layer rather than part of Sync because Sync depends on Collections, and the
 		// announcement has to be available to the thing doing the writing.
@@ -167,6 +181,7 @@ const InvocationLayers = {
 			Layer.provide(
 				Layer.mergeAll(
 					connector,
+					secrets,
 					workspaceLayer,
 					tenantScope,
 					access,
@@ -213,20 +228,6 @@ const InvocationLayers = {
 		);
 		const schema = WorkspaceSchema.layer(schemaPlan).pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, database))
-		);
-		// Both vaults seal through the same cipher, so there is one key, one envelope format and one
-		// fail-closed refusal rather than two of each. The key comes from the host's configuration,
-		// deliberately not from the tenant database it is protecting — and it comes through the same
-		// `HostConfig` seam every other host-provided value does.
-		//
-		// It used to read `ConfigProvider` directly, which is unreachable from where this actually
-		// runs. A tenant runtime executes in a `vm` context with no `process` global, so inside an
-		// isolate that read returned nothing, silently, and every write to either vault refused with
-		// "BOLT_SECRETS_KEY is not set" on a host that had set it. `hostConfigFromProcessEnv` keeps the
-		// plain-process route identical for bolt-server and for tests.
-		const secretCipher = SecretCipher.layerFrom(hostConfigShape);
-		const secrets = Secrets.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, database, secretCipher))
 		);
 		// No workspace layer: a personal secret has no `+env.ts` declaration to be checked against, because
 		// the workspace cannot know in advance which sites a given person will sign in to.
@@ -355,7 +356,6 @@ export const ActivationCommands = {
 			'integrations.flush',
 			'envoys.receive',
 			'envoys.complete',
-			'tasks.execute',
 			...workspace.automations.map(({ name }) => `automations.${name}`)
 		]
 			.filter((command, index, commands) => commands.indexOf(command) === index)

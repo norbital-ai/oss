@@ -50,3 +50,17 @@ every collection, file, and approval check inside the function is the caller's p
 
 A Data Browser call with a session may then impersonate inside the same tenant. System HMAC is also
 accepted.
+
+## Managed automation connections
+
+An automation may declare one `connection: defineConnection({ baseUrl, authentication })` in its spec.
+`api.connection.get({ path, query })` resolves a relative path inside that API prefix and reads the
+credential through the workspace vault. Hooks and functions do not receive this capability. Each GET
+uses a distinct invocation effect identity; stoppage is checked before the credential or provider call.
+The response carries `status`, lower-case `headers`, and a JSON body (or text when the provider returns
+non-JSON). The automation owns pagination and non-success status handling.
+
+The default host connector accepts HTTPS GET against public DNS addresses only, pins the checked
+address, refuses transport-header overrides, and never follows redirects. The complete request has a
+30-second deadline and a two-MiB body limit. Credentials and raw transport errors are not exposed in
+errors. Existing integration delivery providers remain independently configured.
