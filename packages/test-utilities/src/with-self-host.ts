@@ -17,6 +17,7 @@ import {
 	type StartedLocalDatabase,
 	type StartedLocalFiles
 } from '@norbital-ai/bolt-server';
+import { randomBytes } from 'node:crypto';
 import { Redacted, Schema } from 'effect';
 import { asRecord, systemHeaders } from './guest-http.js';
 import { catalogAi } from './catalog-ai.js';
@@ -274,7 +275,9 @@ export const startSelfHostSession = async (
 	const releaseId = input.releaseId ?? tenantId;
 	const environment = input.environment ?? DEFAULT_ENVIRONMENT;
 	const gatewaySecret = input.gatewaySecret ?? `${tenantId}-gateway`;
-	const secretsKey = input.secretsKey ?? `${tenantId}-secrets`;
+	// The runtime checks this as 32 bytes of base64 and refuses to coerce anything else, so the
+	// harness generates a real key rather than a readable label. A caller's own key is left alone.
+	const secretsKey = input.secretsKey ?? randomBytes(32).toString('base64');
 	const scope = {
 		tenantId: TenantId.make(tenantId),
 		environment: EnvironmentName.make(environment),
