@@ -92,9 +92,10 @@
 		);
 	};
 
-	const stop = (): Effect.Effect<void> => {
-		if (execution === undefined || activeConversationId === undefined) return Effect.void;
-		return Effect.tryPromise(() => execution.stop(activeConversationId)).pipe(
+	/** Stops one run, from its own row. A run is the thing that stops, not the automation. */
+	const stop = (taskId: string): Effect.Effect<void> => {
+		if (execution === undefined) return Effect.void;
+		return Effect.tryPromise(() => execution.stop(taskId)).pipe(
 			Effect.match({
 				onFailure: (cause) => {
 					actionFailure = getErrorMessage(cause);
@@ -110,6 +111,21 @@
 		browserReady = true;
 	});
 </script>
+
+{#snippet stopAction({ row }: { row: { status?: unknown; task_id?: unknown } })}
+	{#if (row.status === 'pending' || row.status === 'running') && typeof row.task_id === 'string'}
+		{@const taskId = row.task_id}
+		<Button
+			size="sm"
+			variant="outline"
+			aria-label={t('bolt.automations.stop')}
+			onclick={() => void Effect.runPromise(stop(taskId))}
+		>
+			<Icon icon="lucide:square" class="size-3.5" />
+			{t('bolt.automations.stop')}
+		</Button>
+	{/if}
+{/snippet}
 
 <Cover gap="none" class="bg-background">
 	{#snippet top()}
@@ -166,10 +182,7 @@
 							</p>
 						{/if}
 					</Stack>
-					{#if canShowAutomationSource({
-						canEnterStudio,
-						sourcePath: automation.sourcePath
-					})}
+					{#if canShowAutomationSource({ canEnterStudio, sourcePath: automation.sourcePath })}
 						<button
 							type="button"
 							class="shrink-0 text-micro text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -186,25 +199,18 @@
 							</Inline>
 						</button>
 					{/if}
-					{#if running}
-						<Button size="sm" variant="outline" onclick={() => void Effect.runPromise(stop())}>
-							<Icon icon="lucide:square" class="size-3.5" />
-							{t('bolt.automations.stop')}
-						</Button>
-					{:else}
-						<Button
-							size="sm"
-							disabled={execution === undefined}
-							onclick={() => void Effect.runPromise(run())}
-						>
-							<Icon icon="lucide:play" class="size-3.5" />
-							{t(
-								latestManual?.status === 'failed'
-									? 'bolt.automations.retry'
-									: 'bolt.automations.runNow'
-							)}
-						</Button>
-					{/if}
+					<Button
+						size="sm"
+						disabled={execution === undefined || running}
+						onclick={() => void Effect.runPromise(run())}
+					>
+						<Icon icon="lucide:play" class="size-3.5" />
+						{t(
+							latestManual?.status === 'failed'
+								? 'bolt.automations.retry'
+								: 'bolt.automations.runNow'
+						)}
+					</Button>
 				</Inline>
 			{/if}
 		</Stack>
@@ -229,6 +235,7 @@
 					orderBy: { created_at: 'desc' }
 				}}
 				class="min-h-0"
+				rowActions={[stopAction]}
 			>
 				{#snippet columns({ Column })}
 					<Column name="name" label={t('bolt.automations.column.automation')} card="title" />
