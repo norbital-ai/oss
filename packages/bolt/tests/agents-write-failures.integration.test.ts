@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { authoredHooks } from '../src/authoring/contracts-schema.js';
 import { refuse } from '../src/authoring/refusal.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
@@ -16,7 +16,7 @@ describe('agent mutation failures', () => {
 	for (const phase of ['prepare', 'settle'] as const)
 		it(`preserves the ${phase} refusal and whether the write committed`, async () => {
 			const personId = '00000000-0000-4000-8000-000000000471';
-			const taskId = TaskId.make('00000000-0000-4000-8000-000000000472');
+			const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000472');
 			const message =
 				phase === 'prepare' ? 'An account is required.' : 'Follow-up processing failed.';
 			const { ai, requests } = cassetteTranscript(cassette('agents-write-failure'));
@@ -41,7 +41,7 @@ describe('agent mutation failures', () => {
 				const agents = await harness.runtime.runPromise(Agents.Service);
 				await harness.runtime.runPromise(
 					agents.submit(harness.effectId('submit'), adminSubject, {
-						taskId,
+						conversationId,
 						agentId: AgentId.make('web'),
 						message: Agents.userAgentInput('Create Ada.'),
 						mode: DirectiveMode.make('agent'),
@@ -49,7 +49,7 @@ describe('agent mutation failures', () => {
 					})
 				);
 				await harness.runtime.runPromise(
-					agents.execute(harness.effectId('execute'), adminSubject, taskId)
+					agents.execute(harness.effectId('execute'), adminSubject, conversationId)
 				);
 				const failure = lastToolFailure(requests[1]!)?.failure;
 				expect(failure).toMatchObject({ phase, committed: phase === 'settle' ? [personId] : [] });

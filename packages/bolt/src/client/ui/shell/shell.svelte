@@ -23,7 +23,7 @@
 	} from '#lib/client/ui/agent/composer-chrome.js';
 	import { useAgentClient } from '../agent/client.svelte.js';
 	import { agentOrbState, agentOrbStatusKey } from '#lib/client/ui/agent/agent-orb-state.js';
-	import { mergeBoltAgentMessages, type TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
+	import { mergeBoltConversationMessages, type TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 	import {
 		setAppHeaderActionsSlot,
 		type AppHeaderActionsSlot
@@ -196,7 +196,7 @@
 		onOpenRecord?: ((target: { collectionName: string; recordId: string }) => void) | undefined;
 	} = $props();
 
-	provideI18n(untrack(() => mergeBoltAgentMessages(uiMessages, tenantMessages)));
+	provideI18n(untrack(() => mergeBoltConversationMessages(uiMessages, tenantMessages)));
 
 	// The running app registers its trailing header controls here; the banner renders them.
 	const appHeaderActionsSlot = $state<AppHeaderActionsSlot>({ current: null });

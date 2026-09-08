@@ -6,7 +6,7 @@ import {
 } from '../src/client/ui/agent/admission-reconciliation.js';
 
 const unsettled: UnsettledTaskAdmission = {
-	taskId: 'task-1',
+	conversationId: 'task-1',
 	agentId: 'payroll',
 	message: 'Run payroll',
 	mode: 'agent',

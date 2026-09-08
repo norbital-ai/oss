@@ -9,7 +9,7 @@ import {
 	DirectivePriority,
 	ModelId,
 	ProviderCallId,
-	TaskId,
+	ConversationId,
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding,
@@ -29,9 +29,9 @@ const encodeMessage = Schema.encodeSync(Prompt.Message);
 const encodeUsage = Schema.encodeSync(Response.Usage);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -107,10 +107,10 @@ afterEach(async () => {
 const execute = async (ai: FacilityBinding<AIRequest, AIResponse>, name: string) => {
 	harness = await makeBoltTestRuntime(undefined, { ai });
 	const agents = await harness.runtime.runPromise(Agents.Service);
-	const taskId = TaskId.make(recordId(`usage-${name}`));
+	const conversationId = ConversationId.make(recordId(`usage-${name}`));
 	await harness.runtime.runPromise(
 		agents.submit(harness.effectId(`submit:${name}`), adminSubject, {
-			taskId,
+			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput('Record provider evidence.'),
 			mode: DirectiveMode.make('agent'),
@@ -118,9 +118,9 @@ const execute = async (ai: FacilityBinding<AIRequest, AIResponse>, name: string)
 		})
 	);
 	return {
-		taskId,
+		conversationId,
 		result: await harness.runtime.runPromise(
-			agents.execute(harness.effectId(`execute:${name}`), adminSubject, taskId)
+			agents.execute(harness.effectId(`execute:${name}`), adminSubject, conversationId)
 		)
 	};
 };
@@ -128,18 +128,18 @@ const execute = async (ai: FacilityBinding<AIRequest, AIResponse>, name: string)
 describe('immutable provider observations', () => {
 	it('stores one exact pending settlement row for every provider attempt', async () => {
 		const ai = cassetteAi(cassette('agents-usage-complete'));
-		const { result, taskId } = await execute(ai, 'complete');
-		expect(result).toMatchObject({ taskId, status: 'done' });
+		const { result, conversationId } = await execute(ai, 'complete');
+		expect(result).toMatchObject({ conversationId, status: 'done' });
 		const runtime = harness;
 		if (runtime === undefined) throw new Error('test runtime was not created');
 		expect(
 			await runtime.database.query(
 				`select provider, model, operation, charge, charge_source, pricing_version,
 				 settlement_id, settlement_state
-				 from agent_usage where run_id in
-				 (select id from agent_run where task_id = $1)
+				 from turn_usage where turn_id in
+				 (select id from turn where conversation_id = $1)
 				 order by call_id`,
-				[taskId]
+				[conversationId]
 			)
 		).toEqual([
 			expect.objectContaining({
@@ -167,16 +167,16 @@ describe('immutable provider observations', () => {
 
 	it('marks incomplete billing evidence for attention without inventing a charge', async () => {
 		const ai = cassetteAi(cassette('agents-usage-incomplete'));
-		const { result, taskId } = await execute(ai, 'incomplete');
+		const { result, conversationId } = await execute(ai, 'incomplete');
 		expect(result.status).toBe('done');
 		const runtime = harness;
 		if (runtime === undefined) throw new Error('test runtime was not created');
 		expect(
 			await runtime.database.query(
 				`select charge, charge_source, pricing_version, settlement_state
-				 from agent_usage where run_id in
-				 (select id from agent_run where task_id = $1)`,
-				[taskId]
+				 from turn_usage where turn_id in
+				 (select id from turn where conversation_id = $1)`,
+				[conversationId]
 			)
 		).toEqual([
 			{ charge: null, charge_source: null, pricing_version: null, settlement_state: 'attention' }

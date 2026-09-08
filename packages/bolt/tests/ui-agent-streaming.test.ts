@@ -2,7 +2,7 @@
 import './ui-setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
 import { expect, it, vi } from 'vitest';
-import { projectAgentMessages } from '../src/client/ui/agent/transcript.js';
+import { projectConversationMessages } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 import AgentStreamingView from './support/agent-streaming-view.svelte';
 
@@ -19,8 +19,8 @@ vi.mock('@norbital-ai/ui/tabs', async () => ({
 }));
 
 it('renders reasoning immediately, fills completed parts without replacing the row, and marks interrupted work', async () => {
-	const message = (reasoning: string, text: string | null, activeParts: number[], sequence: number) => projectAgentMessages(canonicalAgentRows([{
-		taskId: '00000000-0000-4000-8000-000000000101', runId: '00000000-0000-4000-8000-000000000102',
+	const message = (reasoning: string, text: string | null, activeParts: number[], sequence: number) => projectConversationMessages(canonicalAgentRows([{
+		conversationId: '00000000-0000-4000-8000-000000000101', runId: '00000000-0000-4000-8000-000000000102',
 		message: { role: 'assistant', content: [{ type: 'reasoning', text: reasoning }, ...(text === null ? [] : [{ type: 'text' as const, text }])] },
 		annotation: { tag: 'generation', callId: 'fixture', sequence, activeParts }
 	}]))[0]!;

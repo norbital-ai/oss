@@ -14,7 +14,12 @@ import { Effect, Schema, SchemaIssue } from 'effect';
 import type { Context as EffectContext } from 'effect/Context';
 import { Prompt } from 'effect/unstable/ai';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
-import { AgentId, ImageAsset, TaskId, WorkbenchId } from '@norbital-ai/bolt-protocol/facilities';
+import {
+	AgentId,
+	ImageAsset,
+	ConversationId,
+	WorkbenchId
+} from '@norbital-ai/bolt-protocol/facilities';
 import { getErrorMessage, toError } from '@norbital-ai/std';
 import {
 	SkillDeclaration,
@@ -28,10 +33,7 @@ import type { ConnectorInterface, HostToolsInterface } from '#lib/runtime/facili
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
-import {
-	INTEGRATION_HTTP_OPERATION,
-	IntegrationHttpResponse
-} from '#lib/runtime/integrations/http.js';
+import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from '@norbital-ai/bolt-protocol';
 
 export class SkillError extends Schema.TaggedError<SkillError>()(
 	'Bolt.CapabilityCatalog.SkillError',
@@ -116,14 +118,14 @@ export class McpToolError extends Schema.TaggedError<McpToolError>()(
 }
 
 const TaskProjection = Schema.Struct({
-	id: TaskId,
+	id: ConversationId,
 	workbench_id: WorkbenchId,
 	agent_id: AgentId,
-	parent_id: Schema.optionalKey(Schema.NullOr(TaskId)),
+	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
 	status: Schema.NonEmptyString
 });
 const MessageProjection = Schema.Struct({
-	task_id: TaskId,
+	conversation_id: ConversationId,
 	sequence: Schema.Natural,
 	author: Schema.Struct({
 		kind: Schema.NonEmptyString,
@@ -144,6 +146,7 @@ const messageText = (message: Prompt.MessageEncoded): string =>
 
 const SystemToolNames = Schema.Literals([
 	'todo',
+	'compact',
 	'describe_workspace',
 	'list_skills',
 	'read_skill',
@@ -171,10 +174,11 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'todo',
 		description:
-			'Replace the current ordered Todo checklist. Stable IDs reconcile progress; Todo is evidence, not completion authority.',
+			"Read or replace this conversation's ordered Todo checklist. `read` takes no items. `set` replaces the whole list; stable IDs reconcile progress, and a done item cannot be reopened or reworded. Todo is evidence, not completion authority.",
 		command: 'platform:todo',
 		inputSchema: objectInput(
 			{
+				operation: { type: 'string', enum: ['set', 'read'] },
 				items: {
 					type: 'array',
 					maxItems: 100,
@@ -188,7 +192,23 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 					)
 				}
 			},
-			['items']
+			['operation']
+		)
+	},
+	{
+		name: 'compact',
+		description:
+			'Checkpoint this conversation: summarize the durable context you still need and continue from it. Use it when the transcript has grown long enough that older detail is getting in the way, or after finishing a phase of work whose intermediate steps no longer matter. The checkpoint is written at your next step, not inside this call, and the current instruction plus everything from this turn is always retained. The runtime also does this on its own when the context approaches the model window; calling it yourself is for reorganizing, not for staying under a limit.',
+		command: 'platform:compact',
+		inputSchema: objectInput(
+			{
+				reason: {
+					type: 'string',
+					minLength: 1,
+					description: 'Why a checkpoint helps here. Recorded with it.'
+				}
+			},
+			['reason']
 		)
 	},
 	{
@@ -273,6 +293,7 @@ export const TodoList = Schema.Struct({ items: Schema.Array(TodoItem) });
 export interface TodoList extends Schema.Schema.Type<typeof TodoList> {}
 
 const SkillNameInput = Schema.Struct({ name: Schema.NonEmptyString });
+const CompactInput = Schema.Struct({ reason: Schema.NonEmptyString });
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	limit: Schema.optionalKey(
@@ -306,7 +327,7 @@ export type ToolExecutionContext = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
 	readonly agentId: string;
-	readonly taskId: TaskId;
+	readonly conversationId: ConversationId;
 	readonly workbenchId: string;
 	readonly skills: ReadonlyArray<SkillDeclaration>;
 	readonly toolNames: ReadonlyArray<string>;
@@ -436,11 +457,25 @@ const declaredSurface = (
 	integrations: definition.integrations.map((integration) => integration.name)
 });
 
+const TodoInput = Schema.Union([
+	Schema.Struct({ operation: Schema.Literal('read') }),
+	Schema.Struct({ operation: Schema.Literal('set'), items: Schema.Array(TodoItem) })
+]);
+
+/**
+ * `read` answers the stored list; `set` validates a replacement against it.
+ *
+ * The previous list comes from the conversation row, not from walking the transcript for the newest
+ * successful `todo` result. Same answer, one source, and the done-is-terminal rule below is checked
+ * against what is actually stored rather than against whatever the scan happened to find.
+ */
 const validatedTodo = Effect.fn('CapabilityCatalog.validatedTodo')(function* (
 	input: unknown,
 	previous?: TodoList
 ) {
-	const next = yield* decode('todo', TodoList, input);
+	const request = yield* decode('todo', TodoInput, input);
+	if (request.operation === 'read') return previous ?? { items: [] };
+	const next: TodoList = { items: request.items };
 	if (next.items.length > 100) {
 		return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:item-limit' });
 	}
@@ -467,7 +502,7 @@ const taskIdsInWorkbench = Effect.fn('CapabilityCatalog.taskIdsInWorkbench')(fun
 	context: ToolExecutionContext
 ) {
 	const rows = yield* context.collections.findMany(context.effectId, context.subject, {
-		collection: 'agent_task',
+		collection: 'conversation',
 		where: { workbench_id: { eq: context.workbenchId } },
 		limit: 50
 	});
@@ -483,6 +518,22 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 	switch (name) {
 		case 'todo':
 			return yield* validatedTodo(input, context.previousTodo);
+		/**
+		 * The tool records the intent; the turn's own loop performs the checkpoint.
+		 *
+		 * Compaction rewrites the projection the loop is about to send and needs the transcript, the
+		 * active Plan and the retained-message set — all of which live in the loop, not in a tool
+		 * handler. Deferring by one step also means the agent's remaining tool calls in this step
+		 * still run and are summarized *into* the checkpoint rather than stranded after it.
+		 *
+		 * Nothing is signalled back through this context. The loop reads the calls it just executed
+		 * and sees the `compact` among them, which is one fewer thing to keep in agreement than a
+		 * callback threaded through three signatures to set a flag.
+		 */
+		case 'compact': {
+			const parsed = yield* decode(name, CompactInput, input);
+			return { checkpoint: 'scheduled', reason: parsed.reason };
+		}
 		case 'describe_workspace':
 			return {
 				...declaredSurface(context.workspace.definition),
@@ -500,11 +551,11 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		case 'search_task_history': {
 			const parsed = yield* decode(name, TaskHistoryInput, input);
 			const scope = parsed.scope ?? 'this_task';
-			let taskIds: ReadonlyArray<TaskId> = [context.taskId];
+			let taskIds: ReadonlyArray<ConversationId> = [context.conversationId];
 			if (scope === 'workbench') taskIds = yield* taskIdsInWorkbench(context);
 			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
-				collection: 'agent_message',
-				where: { task_id: { in: taskIds } },
+				collection: 'conversation_message',
+				where: { conversation_id: { in: taskIds } },
 				orderBy: { sequence: 'desc' },
 				limit: 200
 			});
@@ -516,8 +567,8 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 						query === undefined || messageText(message).toLocaleLowerCase().includes(query)
 				)
 				.slice(0, limit)
-				.map(({ task_id, sequence, author, message }) => ({
-					taskId: task_id,
+				.map(({ conversation_id, sequence, author, message }) => ({
+					conversationId: conversation_id,
 					sequence,
 					author,
 					message
@@ -599,13 +650,13 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, steer, stop, and resume.',
+		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. A message reaches a running child at its next step, not after its current one.',
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{
 			action: {
 				type: 'string',
-				enum: ['spawn', 'read', 'message', 'await', 'steer', 'stop', 'resume']
+				enum: ['spawn', 'read', 'message', 'await', 'stop', 'resume']
 			},
 			agentId: {
 				type: 'string',
@@ -613,12 +664,12 @@ export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): Tool
 				description: 'Required for spawn: one of the agents this workspace declares.'
 			},
 			instruction: { type: 'string', minLength: 1, description: 'Required for spawn.' },
-			taskId: {
+			conversationId: {
 				type: 'string',
 				format: 'uuid',
 				description: 'Required for every action except spawn.'
 			},
-			message: { type: 'string', minLength: 1, description: 'Required for message and steer.' }
+			message: { type: 'string', minLength: 1, description: 'Required for message.' }
 		},
 		['action']
 	)
@@ -631,35 +682,43 @@ const subagentAction = (spawnableAgentIds: ReadonlyArray<string>) =>
 			agentId: Schema.Literals(spawnableAgentIds),
 			instruction: Schema.NonEmptyString
 		}),
-		Schema.Struct({ action: Schema.Literal('read'), taskId: TaskId }),
+		Schema.Struct({ action: Schema.Literal('read'), conversationId: ConversationId }),
 		Schema.Struct({
 			action: Schema.Literal('message'),
-			taskId: TaskId,
+			conversationId: ConversationId,
 			message: Schema.NonEmptyString
 		}),
-		Schema.Struct({ action: Schema.Literal('await'), taskId: TaskId }),
-		Schema.Struct({
-			action: Schema.Literal('steer'),
-			taskId: TaskId,
-			message: Schema.NonEmptyString
-		}),
-		Schema.Struct({ action: Schema.Literal('stop'), taskId: TaskId }),
-		Schema.Struct({ action: Schema.Literal('resume'), taskId: TaskId })
+		Schema.Struct({ action: Schema.Literal('await'), conversationId: ConversationId }),
+		Schema.Struct({ action: Schema.Literal('stop'), conversationId: ConversationId }),
+		Schema.Struct({ action: Schema.Literal('resume'), conversationId: ConversationId })
 	]);
 
+/**
+ * What this file can fail with on its own: a malformed call, a target the caller may not reach.
+ *
+ * It used to be a five-member union ending in `| unknown`, which is `unknown` — the members were
+ * decorative and every caller of a subagent action inherited an unresolvable error channel. That
+ * is not a cosmetic problem: it made `execute → childBarrier → runChild → answerQueued → execute`
+ * uninferable once the parent started running its own children, because the cycle had no base case.
+ */
 type SubagentFailure =
 	| Collections.QueryError
-	| Collections.MutationError
-	| Collections.BatchMutationError
 	| ToolNotAllowed
-	| InvocationBudget.NestingLimitExceeded
-	| unknown;
-export type SubagentContext = Readonly<{
+	| InvalidToolInput
+	| InvocationBudget.NestingLimitExceeded;
+
+/**
+ * The runtime hooks a subagent action calls, parameterised by what the runtime can fail with.
+ *
+ * Generic rather than fixed, because these are implemented in `agents.ts` and fail with everything
+ * a turn does — a set this file cannot name without importing the module that imports it.
+ */
+export type SubagentContext<E = never> = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
 	readonly workbenchId: WorkbenchId;
 	readonly agentId: AgentId;
-	readonly taskId: TaskId;
+	readonly conversationId: ConversationId;
 	/** The agents a spawn may name; the same set the tool's schema advertised. */
 	readonly spawnableAgentIds: ReadonlyArray<string>;
 	readonly collections: Collections.Interface;
@@ -670,52 +729,51 @@ export type SubagentContext = Readonly<{
 		instruction: string,
 		depth: number,
 		toolCallId: string
-	) => Effect.Effect<Schema.Json, SubagentFailure>;
+	) => Effect.Effect<Schema.Json, E>;
 	readonly admit: (
 		effectId: EffectId,
-		taskId: TaskId,
-		message: string,
-		priority: 'normal' | 'steer'
-	) => Effect.Effect<Schema.Json, SubagentFailure>;
+		conversationId: ConversationId,
+		message: string
+	) => Effect.Effect<Schema.Json, E>;
 	readonly awaitTarget: (
 		effectId: EffectId,
-		taskId: TaskId
-	) => Effect.Effect<Schema.Json, SubagentFailure>;
+		conversationId: ConversationId
+	) => Effect.Effect<Schema.Json, E>;
 	readonly control: (
 		effectId: EffectId,
-		taskId: TaskId,
+		conversationId: ConversationId,
 		action: 'stop' | 'resume'
-	) => Effect.Effect<Schema.Json, SubagentFailure>;
+	) => Effect.Effect<Schema.Json, E>;
 }>;
 
 const workbenchTask = Effect.fn('CapabilityCatalog.workbenchTask')(function* (
-	context: SubagentContext,
-	targetId: TaskId,
+	context: SubagentContext<unknown>,
+	targetId: ConversationId,
 	requireDirectChild: boolean
 ) {
 	const rows = yield* context.collections.findMany(context.effectId, context.subject, {
-		collection: 'agent_task',
-		where: { id: { in: [context.taskId, targetId] } },
+		collection: 'conversation',
+		where: { id: { in: [context.conversationId, targetId] } },
 		limit: 2
 	});
 	const tasks = yield* decodeRows(TaskProjection, rows);
-	const current = tasks.find(({ id }) => id === context.taskId);
+	const current = tasks.find(({ id }) => id === context.conversationId);
 	const target = tasks.find(({ id }) => id === targetId);
 	if (
 		current === undefined ||
 		target === undefined ||
 		current.workbench_id !== context.workbenchId ||
 		target.workbench_id !== context.workbenchId ||
-		(requireDirectChild && target.parent_id !== context.taskId)
+		(requireDirectChild && target.parent_id !== context.conversationId)
 	) {
 		return yield* new ToolNotAllowed({ agent: context.agentId, tool: 'subagent:aperture' });
 	}
 	return target;
 });
 
-export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentTool')(function* (
+export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentTool')(function* <E>(
 	input: unknown,
-	context: SubagentContext,
+	context: SubagentContext<E>,
 	toolCallId: string
 ) {
 	const action = yield* Schema.decodeUnknownEffect(subagentAction(context.spawnableAgentIds))(
@@ -733,37 +791,31 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 			);
 		}
 		case 'read': {
-			const target = yield* workbenchTask(context, action.taskId, false);
+			const target = yield* workbenchTask(context, action.conversationId, false);
 			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
-				collection: 'agent_message',
-				where: { task_id: { eq: target.id } },
+				collection: 'conversation_message',
+				where: { conversation_id: { eq: target.id } },
 				orderBy: { sequence: 'asc' },
 				limit: 200
 			});
 			const messages = yield* decodeRows(MessageProjection, rows);
 			return {
-				taskId: target.id,
+				conversationId: target.id,
 				agentId: target.agent_id,
 				status: target.status,
 				messages: messages.map(({ sequence, author, message }) => ({ sequence, author, message }))
 			};
 		}
 		case 'message':
-		case 'steer':
-			yield* workbenchTask(context, action.taskId, false);
-			return yield* context.admit(
-				context.effectId,
-				action.taskId,
-				action.message,
-				action.action === 'steer' ? 'steer' : 'normal'
-			);
+			yield* workbenchTask(context, action.conversationId, false);
+			return yield* context.admit(context.effectId, action.conversationId, action.message);
 		case 'await':
-			yield* workbenchTask(context, action.taskId, false);
-			return yield* context.awaitTarget(context.effectId, action.taskId);
+			yield* workbenchTask(context, action.conversationId, false);
+			return yield* context.awaitTarget(context.effectId, action.conversationId);
 		case 'stop':
 		case 'resume':
-			yield* workbenchTask(context, action.taskId, true);
-			return yield* context.control(context.effectId, action.taskId, action.action);
+			yield* workbenchTask(context, action.conversationId, true);
+			return yield* context.control(context.effectId, action.conversationId, action.action);
 	}
 });
 

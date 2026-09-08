@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -10,6 +10,8 @@ import {
 import { fileURLToPath } from 'node:url';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 
+/** Small enough that one large instruction fills it; see `agents-pipeline-transcript` for why. */
+const SMALL_CONTEXT_WINDOW_TOKENS = 20_000;
 const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
 
@@ -22,7 +24,7 @@ afterEach(async () => {
 const cassette = (name: string) =>
 	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
-const runAgentTask = async (
+const runConversation = async (
 	ai: ReturnType<typeof cassetteTranscript>['ai'],
 	name: string,
 	mode: 'agent' | 'compact',
@@ -30,10 +32,10 @@ const runAgentTask = async (
 ) => {
 	harness = await makeBoltTestRuntime(testWorkspace(), { ai });
 	const agents = await harness.runtime.runPromise(Agents.Service);
-	const taskId = TaskId.make(`00000000-0000-4000-8000-0000000008${name}`);
+	const conversationId = ConversationId.make(`00000000-0000-4000-8000-0000000008${name}`);
 	await harness.runtime.runPromise(
 		agents.submit(harness.effectId(`submit:${name}`), adminSubject, {
-			taskId,
+			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput(message),
 			mode: DirectiveMode.make(mode),
@@ -41,15 +43,15 @@ const runAgentTask = async (
 		})
 	);
 	const result = await harness.runtime.runPromise(
-		agents.execute(harness.effectId(`execute:${name}`), adminSubject, taskId)
+		agents.execute(harness.effectId(`execute:${name}`), adminSubject, conversationId)
 	);
-	return { agents, taskId, result };
+	return { agents, conversationId, result };
 };
 
 describe('auto-compaction degraded paths', () => {
 	it('records a degraded turn when the retained projection stays over the bound after one checkpoint', async () => {
-		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-01'));
-		const { taskId, result } = await runAgentTask(ai, '01', 'agent', LARGE_INSTRUCTION);
+		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-01'), SMALL_CONTEXT_WINDOW_TOKENS);
+		const { conversationId, result } = await runConversation(ai, '01', 'agent', LARGE_INSTRUCTION);
 		expect(result.status).toBe('done');
 		expect(feed[0]).toMatchObject({ automaticCompact: true, maxOutputTokens: 1_536 });
 		// One checkpoint per run: the second Generate is the turn itself, not a second summary.
@@ -58,33 +60,33 @@ describe('auto-compaction degraded paths', () => {
 		expect(feed).toHaveLength(2);
 		expect(
 			await harness!.database.query(
-				`select count(*)::int as n from agent_message
-				 where task_id = $1 and annotation->>'tag' = 'compact'`,
-				[taskId]
+				`select count(*)::int as n from conversation_message
+				 where conversation_id = $1 and annotation->>'tag' = 'compact'`,
+				[conversationId]
 			)
 		).toEqual([{ n: 1 }]);
 		const system = await harness!.database.query(
-			`select message from agent_message
-			 where task_id = $1 and author->>'kind' = 'system'
+			`select message from conversation_message
+			 where conversation_id = $1 and author->>'kind' = 'system'
 			 order by sequence`,
-			[taskId]
+			[conversationId]
 		);
 		expect(JSON.stringify(system)).toContain(
-			'Automatic Compact left the projection above the context bound'
+			'Automatic Compact left the context at'
 		);
 		expect(JSON.stringify(system)).toContain('without a second checkpoint');
 	});
 
 	it('meters the automatic compact generation as its own usage settlement', async () => {
-		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-02'));
-		const { taskId } = await runAgentTask(ai, '02', 'agent', LARGE_INSTRUCTION);
+		const { ai, feed } = cassetteTranscript(cassette('agents-compaction-02'), SMALL_CONTEXT_WINDOW_TOKENS);
+		const { conversationId } = await runConversation(ai, '02', 'agent', LARGE_INSTRUCTION);
 		const usage = await harness!.database.query(
 			`select usage.call_id, usage.settlement_id, usage.settlement_state, usage.operation
-			 from agent_usage usage
-			 join agent_run run on run.id = usage.run_id
-			 where run.task_id = $1
+			 from turn_usage usage
+			 join turn run on run.id = usage.turn_id
+			 where run.conversation_id = $1
 			 order by usage.call_id`,
-			[taskId]
+			[conversationId]
 		);
 		expect(usage).toHaveLength(2);
 		// feed[0] is the auto-compact Generate, feed[1] the turn itself.
@@ -99,8 +101,8 @@ describe('auto-compaction degraded paths', () => {
 	});
 
 	it('annotates a manual compact turn with origin manual and no retained ids', async () => {
-		const { ai } = cassetteTranscript(cassette('agents-compaction-03'));
-		const { taskId, result } = await runAgentTask(
+		const { ai } = cassetteTranscript(cassette('agents-compaction-03'), SMALL_CONTEXT_WINDOW_TOKENS);
+		const { conversationId, result } = await runConversation(
 			ai,
 			'03',
 			'compact',
@@ -110,9 +112,9 @@ describe('auto-compaction degraded paths', () => {
 		expect(
 			await harness!.database.query(
 				`select annotation->>'origin' as origin, annotation->'retainedMessageIds' as retained
-				 from agent_message
-				 where task_id = $1 and annotation->>'tag' = 'compact'`,
-				[taskId]
+				 from conversation_message
+				 where conversation_id = $1 and annotation->>'tag' = 'compact'`,
+				[conversationId]
 			)
 		).toEqual([{ origin: 'manual', retained: [] }]);
 	});

@@ -6,7 +6,7 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	ModelId,
-	TaskId,
+	ConversationId,
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding
@@ -30,9 +30,9 @@ const encodeMessage = Schema.encodeSync(Prompt.Message);
 
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -56,9 +56,9 @@ const generated = (
 	};
 };
 
-const submit = (agents: Agents.Interface, runtime: BoltTestRuntime, taskId: TaskId, text: string) =>
-	agents.submit(runtime.effectId(`submit:${taskId}`), adminSubject, {
-		taskId,
+const submit = (agents: Agents.Interface, runtime: BoltTestRuntime, conversationId: ConversationId, text: string) =>
+	agents.submit(runtime.effectId(`submit:${conversationId}`), adminSubject, {
+		conversationId,
 		agentId: AgentId.make('web'),
 		message: Agents.userAgentInput(text),
 		mode: DirectiveMode.make('agent'),
@@ -91,37 +91,37 @@ describe('Task stop and run-fence boundaries', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-stop-provider-boundary'));
-		await harness.runtime.runPromise(submit(agents, harness, taskId, 'Start the work.'));
+		const conversationId = ConversationId.make(recordId('task-stop-provider-boundary'));
+		await harness.runtime.runPromise(submit(agents, harness, conversationId, 'Start the work.'));
 
 		const running = harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute'), adminSubject, conversationId)
 		);
 		await providerStarted;
 		expect(
 			await harness.runtime.runPromise(
-				agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
+				agents.control(harness.effectId('stop'), adminSubject, { conversationId, action: 'stop' })
 			)
-		).toEqual({ taskId, status: 'stopped' });
+		).toEqual({ conversationId, status: 'stopped' });
 		releaseProvider();
 		await expect(running).rejects.toMatchObject({ _tag: 'Bolt.TaskRuntime.Error' });
 
 		expect(
 			await harness.database.query(
 				`select task.status as task_status, run.status as run_status
-				 from agent_task task join agent_run run on run.task_id = task.id
+				 from conversation task join turn run on run.conversation_id = task.id
 				 where task.id = $1`,
-				[taskId]
+				[conversationId]
 			)
 		).toEqual([{ task_status: 'stopped', run_status: 'stopped' }]);
 		expect(
-			await harness.database.query('select state from agent_inbox where task_id = $1', [taskId])
+			await harness.database.query('select state from conversation_message where conversation_id = $1 and state is not null', [conversationId])
 		).toEqual([{ state: 'cancelled' }]);
 		expect(
 			await harness.database.query(
-				`select count(*)::int as count from agent_message
-				 where task_id = $1 and author->>'kind' = 'agent'`,
-				[taskId]
+				`select count(*)::int as count from conversation_message
+				 where conversation_id = $1 and author->>'kind' = 'agent'`,
+				[conversationId]
 			)
 		).toEqual([{ count: 0 }]);
 	});
@@ -145,24 +145,24 @@ describe('Task stop and run-fence boundaries', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-stopped-admission'));
-		await harness.runtime.runPromise(submit(agents, harness, taskId, 'Initial work.'));
+		const conversationId = ConversationId.make(recordId('task-stopped-admission'));
+		await harness.runtime.runPromise(submit(agents, harness, conversationId, 'Initial work.'));
 		await harness.runtime.runPromise(
-			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
+			agents.control(harness.effectId('stop'), adminSubject, { conversationId, action: 'stop' })
 		);
 
 		await harness.runtime.runPromise(
-			submit(agents, harness, taskId, 'Continue with this message.')
+			submit(agents, harness, conversationId, 'Continue with this message.')
 		);
 		expect(
 			await harness.database.query(
-				'select state from agent_inbox where task_id = $1 order by sequence',
-				[taskId]
+				'select state from conversation_message where conversation_id = $1 and state is not null order by sequence',
+				[conversationId]
 			)
 		).toEqual([{ state: 'cancelled' }, { state: 'queued' }]);
 		expect(
 			await harness.runtime.runPromise(
-				agents.execute(harness.effectId('follow-up'), adminSubject, taskId)
+				agents.execute(harness.effectId('follow-up'), adminSubject, conversationId)
 			)
 		).toMatchObject({ status: 'done' });
 	});

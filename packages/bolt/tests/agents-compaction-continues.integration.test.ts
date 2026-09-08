@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { projectAgentContextView } from '../src/client/ui/agent/context-view.js';
 import { pairToolCalls } from '../src/client/ui/agent/tool-rows.js';
-import { projectAgentMessages, projectAgentRuns } from '../src/client/ui/agent/transcript.js';
+import { projectConversationMessages, projectTurns } from '../src/client/ui/agent/transcript.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -21,6 +21,8 @@ import {
  * followed its tail); this pins the half that was never in doubt so the other half stays the
  * only place to look.
  */
+/** Small enough that one large instruction fills it; see `agents-pipeline-transcript` for why. */
+const SMALL_CONTEXT_WINDOW_TOKENS = 20_000;
 const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
 
@@ -36,13 +38,13 @@ const cassette = readCassetteFile(
 
 describe('automatic compaction mid-turn', () => {
 	it('continues the tool loop after the checkpoint with increasing sequences the panel keeps in focus', async () => {
-		const { ai, feed, requests } = cassetteTranscript(cassette);
+		const { ai, feed, requests } = cassetteTranscript(cassette, SMALL_CONTEXT_WINDOW_TOKENS);
 		harness = await makeBoltTestRuntime(testWorkspace(), { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000811');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000811');
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit:continue'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput(LARGE_INSTRUCTION),
 				mode: DirectiveMode.make('agent'),
@@ -50,7 +52,7 @@ describe('automatic compaction mid-turn', () => {
 			})
 		);
 		const result = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:continue'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:continue'), adminSubject, conversationId)
 		);
 		expect(result.status).toBe('done');
 
@@ -63,20 +65,20 @@ describe('automatic compaction mid-turn', () => {
 		expect(JSON.stringify(tailMessage.content)).toContain('Automatic Compact:');
 
 		const rows = await harness.database.query(
-			`select id, task_id, sequence, run_id, author, message, annotation
-			 from agent_message where task_id = $1 order by sequence`,
-			[taskId]
+			`select id, conversation_id, sequence, turn_id, author, message, annotation
+			 from conversation_message where conversation_id = $1 order by sequence`,
+			[conversationId]
 		);
-		const runs = projectAgentRuns(
+		const runs = projectTurns(
 			await harness.database.query(
-				`select id, task_id, directive_id, epoch, mode, phase, input_through_sequence,
-				        model_id, status, reasoning_requested
-				 from agent_run where task_id = $1`,
-				[taskId]
+				`select id, conversation_id, input_message_id, mode, phase, input_through_sequence,
+				        model_id, context_window_tokens, status
+				 from turn where conversation_id = $1`,
+				[conversationId]
 			)
 		);
 		expect(runs).toHaveLength(1);
-		const messages = projectAgentMessages(rows);
+		const messages = projectConversationMessages(rows);
 		// Nothing the runtime wrote is lost to the panel's row decoder.
 		expect(messages).toHaveLength(rows.length);
 
@@ -108,7 +110,7 @@ describe('automatic compaction mid-turn', () => {
 		]);
 		expect(JSON.stringify(after[0]!.message.content)).toContain('without a second checkpoint');
 		for (const [index, message] of after.entries()) {
-			expect(message.taskId).toBe(taskId);
+			expect(message.conversationId).toBe(conversationId);
 			expect(message.runId).toBe(runs[0]!.id);
 			const previous = index === 0 ? checkpoint : after[index - 1]!;
 			expect(message.sequence).toBe(previous.sequence + 1);

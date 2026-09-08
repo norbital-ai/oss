@@ -1,3 +1,4 @@
+import { connectionReader } from '#lib/runtime/automations/connection.js';
 import { webReader } from '#lib/runtime/automations/web.js';
 import { Clock, Effect, Number as ENumber, Option, Result, Schema } from 'effect';
 import {
@@ -13,6 +14,7 @@ import {
 	type DispatchResponse,
 	type FixedCommandContract,
 	type FixedCommandName,
+	type ConversationId,
 	type TenantId
 } from '@norbital-ai/bolt-protocol';
 import { compileOrderTerms } from '#lib/runtime/access/effective-plan.js';
@@ -374,6 +376,8 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	);
 	const connector = yield* Connector.Service;
 	const readUrl = webReader(context.effectId, connector);
+	const secrets = yield* Secrets.Service;
+	const get = connectionReader(context.effectId, automation.connection, connector);
 	const api = makeAutomationApi(
 		makeAuthoringApi(ops),
 		(value) =>
@@ -384,7 +388,14 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 				)
 			),
 		(url) => guard('web.read').pipe(Effect.andThen(readUrl(url))),
-		input.bolt_task_id
+		input.bolt_task_id,
+		{
+			get: (input) =>
+				guard('connection.get').pipe(
+					Effect.andThen(get(input)),
+					Effect.provideService(Secrets.Service, secrets)
+				)
+		}
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
 	const output = yield* runAuthoredHandler(() =>
@@ -801,23 +812,42 @@ const BINDINGS = [
 		)
 	),
 	binding(
-		'tasks.models',
+		'conversations.models',
 		{ Command: session('agent-authorized language model catalogue') },
 		(context, input) =>
 			Effect.flatMap(Agents.Service, (agents) =>
 				Effect.map(agents.models(context.effectId, principal(context), input.agentId), json)
 			)
 	),
+	/**
+	 * One command, one invocation, straight to generation.
+	 *
+	 * Admission and the turn were two guest invocations with a durable work occurrence between them,
+	 * and the occurrence existed only so the second could find the first. It does not need to: the
+	 * caller that admits the message is present for the whole turn, so it runs it. The response
+	 * returns when the turn settles, which is why this command carries the `agents.turn` budget.
+	 *
+	 * A message admitted while a turn is already running stays queued and is answered by the turn in
+	 * flight; `execute` then finds nothing to claim and returns idle, which is the honest answer.
+	 */
 	binding(
-		'tasks.submit',
+		'conversations.send',
 		{ Command: session('TaskService.submit exact task object') },
 		(context, input) =>
-			Effect.flatMap(Agents.Service, (agents) =>
-				Effect.map(agents.submit(context.effectId, principal(context), input), json)
-			)
+			Effect.gen(function* () {
+				const agents = yield* Agents.Service;
+				const subject = principal(context);
+				const admitted = yield* agents.submit(context.effectId, subject, input);
+				yield* agents.answerQueued(
+					EffectId.make(`${context.effectId}:answer`),
+					subject,
+					input.conversationId
+				);
+				return json(admitted);
+			})
 	),
 	binding(
-		'tasks.editMessage',
+		'conversations.editMessage',
 		{ Command: session('TaskService.editMessage exact task object') },
 		(context, input) =>
 			Effect.flatMap(Agents.Service, (agents) =>
@@ -825,28 +855,12 @@ const BINDINGS = [
 			)
 	),
 	binding(
-		'tasks.control',
+		'conversations.control',
 		{ Command: session('TaskService.control exact task object') },
 		(context, input) =>
 			Effect.flatMap(Agents.Service, (agents) =>
 				Effect.map(agents.control(context.effectId, principal(context), input), json)
 			)
-	),
-	binding('tasks.execute', { Task: task('Agent Task execution') }, (context, input) =>
-		Effect.gen(function* () {
-			const runAs = yield* Schema.decodeUnknownEffect(Subject)(input.bolt_run_as).pipe(
-				Effect.mapError(
-					() =>
-						new AccessControl.AccessDenied({
-							action: 'invoke',
-							resource: 'tasks.execute',
-							reason: 'The runtime task carries no valid declared subject'
-						})
-				)
-			);
-			const result = yield* (yield* Agents.Service).execute(context.effectId, runAs, input.taskId);
-			return json({ taskId: result.taskId, status: result.status });
-		})
 	),
 	binding('workspace.manifest', { Command: session('visible workspace manifest') }, (context) =>
 		Effect.map(workspaceManifest(context, false), json)

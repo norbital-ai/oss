@@ -6,9 +6,8 @@
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import type { SubagentTranscript, ToolPairing } from './tool-rows.js';
 	import {
-		reasoningRequestedFor,
-		type AgentPlanRow,
-		type AgentRunRow,
+		type PlanRow,
+		type TurnRow,
 		type PanelMessage
 	} from './transcript.js';
 
@@ -21,8 +20,8 @@
 		tools = undefined,
 		subagent = undefined
 	}: {
-		plan?: AgentPlanRow | undefined;
-		runs: readonly AgentRunRow[];
+		plan?: PlanRow | undefined;
+		runs: readonly TurnRow[];
 		messages: readonly PanelMessage[];
 		status?: string | undefined;
 		parentAttribution?: boolean;
@@ -71,10 +70,9 @@
 					{parentAttribution}
 					{tools}
 					{subagent}
-					reasoningRequested={reasoningRequestedFor(runs, message.runId)}
 					outsideModelView={view.outsideMessageIds.has(message.id)}
 					checkpointOrigin={message.annotation?.tag === 'compact'
-						? compactOrigin(message, runs)
+						? compactOrigin(message)
 						: null}
 				/>
 			{/each}

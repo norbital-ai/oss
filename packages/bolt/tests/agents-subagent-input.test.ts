@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { AgentId, EffectId, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, EffectId, ConversationId } from '@norbital-ai/bolt-protocol';
 import { WorkbenchId } from '@norbital-ai/bolt-protocol/facilities';
 import { envoy } from '../src/authoring/workspace-schema.js';
 import { spawnableAgentIds } from '../src/runtime/agents/agents.js';
@@ -59,13 +59,13 @@ const subagentContext = (
 	subject,
 	workbenchId: WorkbenchId.make('00000000-0000-4000-8000-000000000010'),
 	agentId: AgentId.make('web'),
-	taskId: TaskId.make('00000000-0000-4000-8000-000000000011'),
+	conversationId: ConversationId.make('00000000-0000-4000-8000-000000000011'),
 	spawnableAgentIds: spawnable,
 	collections: { findMany: untouched } as unknown as Collections.Interface,
 	budget: InvocationBudget.make(0),
 	spawn: (_effectId, agentId, instruction) => {
 		spawned.push({ agentId, instruction });
-		return Effect.succeed({ taskId: 'child', state: 'running' });
+		return Effect.succeed({ conversationId: 'child', state: 'running' });
 	},
 	admit: untouched,
 	awaitTarget: untouched,
@@ -77,7 +77,7 @@ const systemContext = (): ToolExecutionContext =>
 		effectId: EffectId.make('system-input'),
 		subject,
 		agentId: 'web',
-		taskId: TaskId.make('00000000-0000-4000-8000-000000000011'),
+		conversationId: ConversationId.make('00000000-0000-4000-8000-000000000011'),
 		workbenchId: '00000000-0000-4000-8000-000000000010',
 		skills: [],
 		toolNames: [],
@@ -131,7 +131,7 @@ describe('subagent tool input (RFC bolt.md B7, AGENT-SUB1)', () => {
 		const context = subagentContext(['web', 'worker']);
 		const missingTask = await failureOf(executeSubagentTool({ action: 'read' }, context, 'read-1'));
 		expect(missingTask).toBeInstanceOf(InvalidToolInput);
-		expect((missingTask as InvalidToolInput).path).toBe('taskId');
+		expect((missingTask as InvalidToolInput).path).toBe('conversationId');
 
 		const missingInstruction = await failureOf(
 			executeSubagentTool({ action: 'spawn', agentId: 'worker' }, context, 'spawn-2')
@@ -161,7 +161,7 @@ describe('subagent tool input (RFC bolt.md B7, AGENT-SUB1)', () => {
 				'spawn-3'
 			)
 		);
-		expect(result).toEqual({ taskId: 'child', state: 'running' });
+		expect(result).toEqual({ conversationId: 'child', state: 'running' });
 		expect(spawned).toEqual([{ agentId: 'worker', instruction: 'Report the field status.' }]);
 	});
 
@@ -172,7 +172,11 @@ describe('subagent tool input (RFC bolt.md B7, AGENT-SUB1)', () => {
 		expect(missingName as InvalidToolInput).toMatchObject({ tool: 'read_skill', path: 'name' });
 
 		const badItem = await failureOf(
-			executeSystemTool('todo', { items: [{ id: 'a', status: 'pending' }] }, systemContext())
+			executeSystemTool(
+				'todo',
+				{ operation: 'set', items: [{ id: 'a', status: 'pending' }] },
+				systemContext()
+			)
 		);
 		expect(badItem).toBeInstanceOf(InvalidToolInput);
 		expect(badItem as InvalidToolInput).toMatchObject({ tool: 'todo', path: 'items[0].text' });

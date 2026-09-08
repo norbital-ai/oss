@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { envoy } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -51,7 +51,7 @@ const advertisedAgentIds = (
 
 describe('subagent spawn errors through the agent loop (RFC bolt.md B7)', () => {
 	it('advertises the spawnable ids and answers a bad spawn or a malformed call with a field error', async () => {
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000911');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000911');
 		const { ai, requests } = scriptedTranscript([
 			(request) => {
 				expect(
@@ -79,7 +79,7 @@ describe('subagent spawn errors through the agent loop (RFC bolt.md B7)', () => 
 				const failed = lastToolFailure(request);
 				expect(failed?.name).toBe('subagent');
 				expect(failed?.failure.code).toBe('Bolt.CapabilityCatalog.InvalidToolInput');
-				expect(String(failed?.failure.message)).toContain('at "taskId"');
+				expect(String(failed?.failure.message)).toContain('at "conversationId"');
 				return assistantText('Nothing to delegate.');
 			}
 		]);
@@ -87,7 +87,7 @@ describe('subagent spawn errors through the agent loop (RFC bolt.md B7)', () => 
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit:911'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Delegate the statute lookup.'),
 				mode: DirectiveMode.make('agent'),
@@ -95,15 +95,15 @@ describe('subagent spawn errors through the agent loop (RFC bolt.md B7)', () => 
 			})
 		);
 		const settled = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:911'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:911'), adminSubject, conversationId)
 		);
 		expect(settled.status).toBe('done');
 		expect(requests).toHaveLength(3);
 
 		const transcript = JSON.stringify(
 			await harness.database.query(
-				'select message from agent_message where task_id = $1 order by sequence',
-				[taskId]
+				'select message from conversation_message where conversation_id = $1 order by sequence',
+				[conversationId]
 			)
 		);
 		expect(transcript).toContain('Bolt.CapabilityCatalog.InvalidToolInput');
@@ -112,8 +112,8 @@ describe('subagent spawn errors through the agent loop (RFC bolt.md B7)', () => 
 		expect(transcript).not.toContain('invalid-input');
 		expect(
 			await harness.database.query(
-				'select count(*)::int as count from agent_task where parent_id = $1',
-				[taskId]
+				'select count(*)::int as count from conversation where parent_id = $1',
+				[conversationId]
 			)
 		).toEqual([{ count: 0 }]);
 	});

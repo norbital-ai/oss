@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
 import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { tool } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -42,7 +42,7 @@ const assistantTexts = async (
 	id: string
 ): Promise<ReadonlyArray<{ at: number; text: string }>> => {
 	const rows = (await runtime.database.query(
-		`select message from agent_message where task_id = $1 and message->>'role' = 'assistant' order by sequence`,
+		`select message from conversation_message where conversation_id = $1 and message->>'role' = 'assistant' order by sequence`,
 		[id]
 	)) as ReadonlyArray<{ message: { content: unknown } }>;
 	const at = Date.now();
@@ -71,10 +71,10 @@ describe('cassette sync flow (throttled replay, measured persistence)', () => {
 		});
 		harness = await makeBoltTestRuntime(workspace, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-cassette-sync'));
+		const conversationId = ConversationId.make(recordId('task-cassette-sync'));
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit:sync'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Complete the task.'),
 				mode: DirectiveMode.make('agent'),
@@ -83,12 +83,12 @@ describe('cassette sync flow (throttled replay, measured persistence)', () => {
 		);
 		const started = Date.now();
 		const executing = harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:sync'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:sync'), adminSubject, conversationId)
 		);
 		const progression: Array<{ at: number; text: string }> = [];
 		let lastLength = -1;
 		for (;;) {
-			const snapshots = await assistantTexts(harness, taskId);
+			const snapshots = await assistantTexts(harness, conversationId);
 			const latest = snapshots[snapshots.length - 1];
 			if (latest !== undefined && latest.text.length !== lastLength) {
 				lastLength = latest.text.length;
@@ -100,7 +100,7 @@ describe('cassette sync flow (throttled replay, measured persistence)', () => {
 				new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25))
 			]);
 			if (settled) {
-				const final = await assistantTexts(harness, taskId);
+				const final = await assistantTexts(harness, conversationId);
 				const finalLatest = final[final.length - 1];
 				if (finalLatest !== undefined && finalLatest.text.length !== lastLength) {
 					progression.push({ at: finalLatest.at - started, text: finalLatest.text });

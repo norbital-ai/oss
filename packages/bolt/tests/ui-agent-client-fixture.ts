@@ -8,7 +8,7 @@ import type {
 import { Effect } from 'effect';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import type { CollectionRegistryFor, PlatformSchema } from '../src/authoring/internals.js';
-import type { AgentRuntimeConfig } from '../src/client/ui/agent/client.svelte.js';
+import type { TurntimeConfig } from '../src/client/ui/agent/client.svelte.js';
 import { createBoltClient } from '../src/client.js';
 import type { BoltTransport } from '../src/client/contracts.js';
 import type {
@@ -30,12 +30,11 @@ type AgentCollections = Pick<
 	| 'verification'
 	| 'auth_config'
 	| 'team'
-	| 'agent_task'
-	| 'agent_plan'
-	| 'agent_message'
-	| 'agent_inbox'
-	| 'agent_run'
-	| 'agent_usage'
+	| 'conversation'
+	| 'plan'
+	| 'conversation_message'
+	| 'turn'
+	| 'turn_usage'
 	| 'automation_run'
 	| 'user'
 	| 'bolt_notifications'
@@ -98,7 +97,7 @@ const emptySettlements: MutationSettlements = {
 };
 
 /** A real query surface over settled rows, for action tests that do not read it. */
-export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['client'] => {
+export const emptyAgentClient = (transport: BoltTransport): TurntimeConfig['client'] => {
 	const runtime: WorkspaceClientRuntime = {
 		db: {},
 		bolt: createBoltClient(
@@ -127,12 +126,11 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 			verification: emptyOperations<AgentCollections['verification']>(),
 			auth_config: emptyOperations<AgentCollections['auth_config']>(),
 			team: emptyOperations<AgentCollections['team']>(),
-			agent_task: emptyOperations<AgentCollections['agent_task']>(),
-			agent_plan: emptyOperations<AgentCollections['agent_plan']>(),
-			agent_message: emptyOperations<AgentCollections['agent_message']>(),
-			agent_inbox: emptyOperations<AgentCollections['agent_inbox']>(),
-			agent_run: emptyOperations<AgentCollections['agent_run']>(),
-			agent_usage: emptyOperations<AgentCollections['agent_usage']>(),
+			conversation: emptyOperations<AgentCollections['conversation']>(),
+			plan: emptyOperations<AgentCollections['plan']>(),
+			conversation_message: emptyOperations<AgentCollections['conversation_message']>(),
+			turn: emptyOperations<AgentCollections['turn']>(),
+			turn_usage: emptyOperations<AgentCollections['turn_usage']>(),
 			automation_run: emptyOperations<AgentCollections['automation_run']>(),
 			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()

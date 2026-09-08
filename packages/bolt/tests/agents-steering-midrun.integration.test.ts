@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -47,11 +47,11 @@ describe('steering admitted during an active run', () => {
 		};
 		harness = await makeBoltTestRuntime(testWorkspace(), { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000c01');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000c01');
 		const submit = (name: string, text: string, priority: 'normal' | 'steer' = 'normal') =>
 			harness!.runtime.runPromise(
 				agents.submit(harness!.effectId(`submit:${name}`), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput(text),
 					mode: DirectiveMode.make('agent'),
@@ -60,7 +60,7 @@ describe('steering admitted during an active run', () => {
 			);
 		await submit('first', 'Start the work.');
 		const execution = harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:first'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:first'), adminSubject, conversationId)
 		);
 		await generationStarted;
 		try {
@@ -69,17 +69,17 @@ describe('steering admitted during an active run', () => {
 		} finally {
 			releaseGeneration();
 		}
+		// The steer was taken mid-run; the normal follow-up is still waiting for a turn of its own,
+		// and no work occurrence was minted to remember that — the queue is the transcript.
 		expect((await execution).status).toBe('idle');
 		expect(
-			await harness.database.query('select status from agent_task where id = $1', [taskId])
+			await harness.database.query('select status from conversation where id = $1', [conversationId])
 		).toEqual([{ status: 'ready' }]);
 		expect(
-			await harness.database.query(
-				// The settled run's follow-up is enqueued already claimed, like every agent turn.
-				"select id from bolt_task where effect_id like $1 and status = 'running'",
-				[`tasks.execute:${taskId}:settled:%`]
-			)
-		).toHaveLength(1);
+			await harness.database.query('select command from bolt_task where input->>\'conversationId\' = $1', [
+				conversationId
+			])
+		).toEqual([]);
 		// The first generation was already running; the next model step receives only the steer.
 		expect(requests[0] && JSON.stringify(requests[0])).not.toContain('steered thing');
 
@@ -88,7 +88,7 @@ describe('steering admitted during an active run', () => {
 		expect(steerTranscript).toContain('Do the steered thing first.');
 		expect(steerTranscript).not.toContain('Include the newly queued detail.');
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:follow-up'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:follow-up'), adminSubject, conversationId)
 		);
 		const followUpTranscript = JSON.stringify(requests[2]);
 		expect(followUpTranscript).toContain('Include the newly queued detail.');
@@ -96,19 +96,19 @@ describe('steering admitted during an active run', () => {
 
 		expect(
 			await harness.database.query(
-				`select sequence, priority, state from agent_inbox where task_id = $1 order by sequence`,
-				[taskId]
+				`select sequence, priority, state from conversation_message where conversation_id = $1 and state is not null order by sequence`,
+				[conversationId]
 			)
 		).toEqual([
-			{ sequence: 1, priority: 'normal', state: 'settled' },
-			{ sequence: 2, priority: 'normal', state: 'settled' },
-			{ sequence: 3, priority: 'steer', state: 'settled' }
+			{ sequence: 1, priority: 'normal', state: 'consumed' },
+			{ sequence: 2, priority: 'normal', state: 'consumed' },
+			{ sequence: 3, priority: 'steer', state: 'consumed' }
 		]);
 		const claimed = await harness.database.query(
-			`select sequence, claimed_run_id from agent_inbox where task_id = $1 order by sequence`,
-			[taskId]
+			`select sequence, turn_id from conversation_message where conversation_id = $1 and state is not null order by sequence`,
+			[conversationId]
 		);
-		expect(claimed[2]?.['claimed_run_id']).toBe(claimed[0]?.['claimed_run_id']);
-		expect(claimed[1]?.['claimed_run_id']).not.toBe(claimed[0]?.['claimed_run_id']);
+		expect(claimed[2]?.['turn_id']).toBe(claimed[0]?.['turn_id']);
+		expect(claimed[1]?.['turn_id']).not.toBe(claimed[0]?.['turn_id']);
 	});
 });

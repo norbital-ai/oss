@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { projectAgentMessages } from '../src/client/ui/agent/transcript.js';
+import { projectConversationMessages } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 
-const taskId = '00000000-0000-4000-8000-000000000101';
+const conversationId = '00000000-0000-4000-8000-000000000101';
 const runId = '00000000-0000-4000-8000-000000000102';
 
 describe('parent-agent messages in a Task transcript', () => {
 	it('preserves parent-agent authorship without rewriting the Effect message', () => {
-		const [message] = projectAgentMessages(
+		const [message] = projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId,
+					conversationId,
 					runId,
 					author: { kind: 'parent-agent', id: 'migration-coordinator' },
 					message: {
@@ -23,7 +23,7 @@ describe('parent-agent messages in a Task transcript', () => {
 
 		expect(message).toMatchObject({
 			kind: 'message',
-			taskId,
+			conversationId,
 			runId,
 			author: { kind: 'parent-agent', id: 'migration-coordinator' },
 			message: {
@@ -34,10 +34,10 @@ describe('parent-agent messages in a Task transcript', () => {
 	});
 
 	it('keeps a tool result inside one complete canonical Prompt message', () => {
-		const [message] = projectAgentMessages(
+		const [message] = projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId,
+					conversationId,
 					runId,
 					message: {
 						role: 'tool',

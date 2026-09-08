@@ -69,6 +69,26 @@ const CASES: ReadonlyArray<Case> = [
 
 	// --- Effect ownership -------------------------------------------------------------------
 	{
+		// The conversation model's own guard: the names it replaced cannot come back by accident.
+		rule: 'CONV1',
+		bad: "export const rows = read('agent_task');",
+		good: "export const rows = read('conversation');"
+	},
+	{
+		// The rule's other half. `bolt_task` is the automation queue and stays, so the good side
+		// has to be a queue row rather than merely the absence of an agent one.
+		rule: 'CONV1',
+		bad: "export const sent = call('tasks.execute', body);",
+		good: "export const sent = call('conversations.send', body);"
+	},
+	{
+		// The identifier branch, which the literal cases never reach: a long name list is exactly
+		// what rots silently, and `task_id` on a queue row must stay allowed.
+		rule: 'CONV1',
+		bad: 'export const of = (id: TaskId) => id;',
+		good: 'export const of = (row: { task_id: string }, id: ConversationId) => [row.task_id, id];'
+	},
+	{
 		rule: 'A1',
 		bad: 'export const f = () => { setInterval(tick, 10); };',
 		good: 'export const f = () => { const t = setInterval(tick, 10); return () => clearInterval(t); };'

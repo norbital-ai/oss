@@ -45,16 +45,14 @@ export interface FileResponse extends Schema.Schema.Type<typeof FileResponse> {}
 
 const UUID = Schema.String.check(Schema.isUUID());
 
-export const TaskId = UUID.pipe(Schema.brand('AgentTaskId'));
-export type TaskId = typeof TaskId.Type;
-export const PlanId = UUID.pipe(Schema.brand('AgentPlanId'));
+export const ConversationId = UUID.pipe(Schema.brand('ConversationId'));
+export type ConversationId = typeof ConversationId.Type;
+export const PlanId = UUID.pipe(Schema.brand('PlanId'));
 export type PlanId = typeof PlanId.Type;
-export const MessageId = UUID.pipe(Schema.brand('AgentMessageId'));
+export const MessageId = UUID.pipe(Schema.brand('ConversationMessageId'));
 export type MessageId = typeof MessageId.Type;
-export const DirectiveId = UUID.pipe(Schema.brand('AgentDirectiveId'));
-export type DirectiveId = typeof DirectiveId.Type;
-export const RunId = UUID.pipe(Schema.brand('AgentRunId'));
-export type RunId = typeof RunId.Type;
+export const TurnId = UUID.pipe(Schema.brand('TurnId'));
+export type TurnId = typeof TurnId.Type;
 export const WorkbenchId = Schema.NonEmptyString.pipe(Schema.brand('AgentWorkbenchId'));
 export type WorkbenchId = typeof WorkbenchId.Type;
 export const SubjectId = Schema.NonEmptyString.pipe(Schema.brand('AgentSubjectId'));
@@ -66,18 +64,22 @@ export type ModelId = typeof ModelId.Type;
 export const ProviderCallId = Schema.NonEmptyString.pipe(Schema.brand('AgentProviderCallId'));
 export type ProviderCallId = typeof ProviderCallId.Type;
 
-export const TaskAudience = Schema.Literals(['personal', 'workbench']);
-export type TaskAudience = typeof TaskAudience.Type;
-export const TaskStatus = Schema.Literals([
+export const ConversationAudience = Schema.Literals(['personal', 'workbench']);
+export type ConversationAudience = typeof ConversationAudience.Type;
+/**
+ * There is no `waiting`. A parent parked on a subagent was the only thing that produced it, and a
+ * parent runs its children itself now: the child is a frame on the parent's own stack, so there is
+ * no state in which a conversation is stopped and expecting something else to restart it.
+ */
+export const ConversationStatus = Schema.Literals([
 	'ready',
 	'running',
-	'waiting',
 	'stopped',
 	'attention',
 	'done',
 	'failed'
 ]);
-export type TaskStatus = typeof TaskStatus.Type;
+export type ConversationStatus = typeof ConversationStatus.Type;
 export const PlanStatus = Schema.Literals(['active', 'verified', 'stalled', 'superseded']);
 export type PlanStatus = typeof PlanStatus.Type;
 export const DirectiveMode = Schema.Literals(['agent', 'plan', 'compact']);
@@ -88,7 +90,7 @@ export const DirectiveState = Schema.Literals(['queued', 'claimed', 'settled', '
 export type DirectiveState = typeof DirectiveState.Type;
 export const RunPhase = Schema.Literals(['model', 'tool', 'children', 'verify']);
 export type RunPhase = typeof RunPhase.Type;
-export const RunStatus = Schema.Literals(['running', 'waiting', 'succeeded', 'stopped', 'failed']);
+export const RunStatus = Schema.Literals(['running', 'succeeded', 'stopped', 'failed']);
 export type RunStatus = typeof RunStatus.Type;
 
 /** Descriptor-sized binary evidence. Only the trusted host resolves and verifies its bytes. */
@@ -137,7 +139,19 @@ export const ProviderObservation = Schema.Struct({
 });
 export interface ProviderObservation extends Schema.Schema.Type<typeof ProviderObservation> {}
 
-export const ModelCatalogEntry = Schema.Struct({ id: ModelId });
+/**
+ * One model a host will run, and how much it can be given.
+ *
+ * `contextWindowTokens` is required, not optional. A host that registers a model knows its window —
+ * it is the first thing any provider states about one — and the alternative is the runtime guessing.
+ * It used to guess: compaction fired at a fixed 64 KB of projected prompt bytes, the same number for
+ * every model, which is both wrong for a 32k model and wasteful for a 1M one, and bytes are not
+ * tokens in any case. The catalog is the only place that can answer this, so it must.
+ */
+export const ModelCatalogEntry = Schema.Struct({
+	id: ModelId,
+	contextWindowTokens: Schema.Natural.check(Schema.isGreaterThan(0))
+});
 export interface ModelCatalogEntry extends Schema.Schema.Type<typeof ModelCatalogEntry> {}
 
 export const PlanVerdict = Schema.Struct({

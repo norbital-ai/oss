@@ -1,5 +1,5 @@
 import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
-import type { TaskStatus } from '@norbital-ai/bolt-protocol';
+import type { ConversationStatus } from '@norbital-ai/bolt-protocol';
 
 type AgentOrbStatusKey =
 	| 'bolt.shell.workspaceAgentDescription'
@@ -26,7 +26,7 @@ export function agentOrbBusyStatusKey(
 type AgentOrbStateInput = Readonly<{
 	readonly pending?: boolean;
 	readonly failed?: boolean;
-	readonly status?: TaskStatus;
+	readonly status?: ConversationStatus;
 }>;
 
 /** Projects the canonical Task lifecycle into the product-wide three-state orb. */
@@ -34,7 +34,7 @@ export function agentOrbState(input: AgentOrbStateInput): ThinkingOrbState {
 	if (input.failed === true || input.status === 'failed' || input.status === 'attention') {
 		return 'error';
 	}
-	if (input.pending === true || input.status === 'running' || input.status === 'waiting') {
+	if (input.pending === true || input.status === 'running') {
 		return 'working';
 	}
 	return 'ready';

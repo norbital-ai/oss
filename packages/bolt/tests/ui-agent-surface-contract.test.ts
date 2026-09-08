@@ -24,7 +24,7 @@ const intentSource = readFileSync(
 describe('G1 immediate user text', () => {
 	it('keeps the operator text visible until a durable human message is a live fact', () => {
 		const admission = {
-			taskId: 'task-1',
+			conversationId: 'task-1',
 			agentId: 'web',
 			message: 'Export payroll',
 			mode: 'agent' as const,
@@ -43,9 +43,9 @@ describe('G1 immediate user text', () => {
 
 describe('G2 live conversation', () => {
 	it('reads Tasks and messages through ordinary live findMany queries', () => {
-		expect(panelSource).toContain('runtime.client.db.agent_task.findMany');
-		expect(panelSource).toContain('runtime.client.db.agent_message.findMany');
-		expect(panelSource).toContain('where: { task_id: { in: activeTaskIds } }');
+		expect(panelSource).toContain('runtime.client.db.conversation.findMany');
+		expect(panelSource).toContain('runtime.client.db.conversation_message.findMany');
+		expect(panelSource).toContain('where: { conversation_id: { in: activeConversationIds } }');
 	});
 });
 
@@ -82,7 +82,7 @@ describe('G5 guest image descriptors', () => {
 		});
 		const message = userMessageWithImages('Look at this', [asset]);
 		assertGuestImageDescriptorsOnly(message);
-		expect(guestImageCommandHasNoBytes({ taskId: 'task-1', message })).toBe(true);
+		expect(guestImageCommandHasNoBytes({ conversationId: 'task-1', message })).toBe(true);
 		expect(JSON.stringify(message)).toContain(IMAGE_DESCRIPTOR_SCHEME);
 		expect(JSON.stringify(message)).not.toContain('base64');
 		expect(panelSource).toContain('encodeUserMessageWithAttachments');

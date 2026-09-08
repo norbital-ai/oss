@@ -11,7 +11,7 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	ModelId,
-	TaskId,
+	ConversationId,
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding,
@@ -33,9 +33,9 @@ const embeddingModelId = ModelId.make('test:embedding');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -96,10 +96,10 @@ const executeTask = async (
 ) => {
 	harness = await makeBoltTestRuntime(workspace, { ...bindings, ai });
 	const agents = await harness.runtime.runPromise(Agents.Service);
-	const taskId = TaskId.make(recordId(`task-${name}`));
+	const conversationId = ConversationId.make(recordId(`task-${name}`));
 	await harness.runtime.runPromise(
 		agents.submit(harness.effectId(`submit:${name}`), adminSubject, {
-			taskId,
+			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput('Complete the task.'),
 			mode: DirectiveMode.make('agent'),
@@ -107,16 +107,16 @@ const executeTask = async (
 		})
 	);
 	const result = await harness.runtime.runPromise(
-		agents.execute(harness.effectId(`execute:${name}`), adminSubject, taskId)
+		agents.execute(harness.effectId(`execute:${name}`), adminSubject, conversationId)
 	);
-	return { result, taskId };
+	return { result, conversationId };
 };
 
 describe('canonical Effect Prompt tool loop', () => {
 	it('persists assistant tool calls and typed tool results as complete Prompt messages', async () => {
 		const { ai, requests } = cassetteTranscript(cassette('agents-tools-platform'));
-		const { result, taskId } = await executeTask(ai, 'platform-tool');
-		expect(result).toMatchObject({ taskId, status: 'done' });
+		const { result, conversationId } = await executeTask(ai, 'platform-tool');
+		expect(result).toMatchObject({ conversationId, status: 'done' });
 		expect(requests).toHaveLength(2);
 		const secondRequest = requests[1];
 		if (secondRequest === undefined) throw new Error('expected the post-tool generation');
@@ -126,8 +126,8 @@ describe('canonical Effect Prompt tool loop', () => {
 		expect(
 			await runtime.database.query(
 				`select author->>'kind' as author_kind, message->>'role' as role
-				 from agent_message where task_id = $1 order by sequence`,
-				[taskId]
+				 from conversation_message where conversation_id = $1 order by sequence`,
+				[conversationId]
 			)
 		).toEqual([
 			{ author_kind: 'human', role: 'user' },

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { SUBAGENT_TOOL_NAME } from '../src/runtime/agents/capability-catalog.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
-import { lastToolResult } from './agents-canonical-ai-fixture.js';
+import { assistantText, assistantToolCall, lastToolResult, scriptedTranscript } from './agents-canonical-ai-fixture.js';
 import { fileURLToPath } from 'node:url';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 
@@ -68,12 +68,12 @@ afterEach(async () => {
 const submit = (
 	agents: Agents.Interface,
 	runtime: BoltTestRuntime,
-	taskId: TaskId,
+	conversationId: ConversationId,
 	agentId: 'ingress' | 'desk'
 ) =>
 	runtime.runtime.runPromise(
 		agents.submit(runtime.effectId(`${agentId}:submit`), subject, {
-			taskId,
+			conversationId,
 			agentId: AgentId.make(agentId),
 			message: Agents.userAgentInput('Handle this Task.'),
 			mode: DirectiveMode.make('agent'),
@@ -87,7 +87,7 @@ describe('envoy Task delegation boundary', () => {
 		const requests = twin.requests;
 		harness = await makeBoltTestRuntime(definition, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const disabledTask = TaskId.make('00000000-0000-4000-8000-000000000601');
+		const disabledTask = ConversationId.make('00000000-0000-4000-8000-000000000601');
 		await submit(agents, harness, disabledTask, 'ingress');
 		const disabled = await harness.runtime.runPromise(
 			agents.execute(harness.effectId('ingress:execute'), subject, disabledTask)
@@ -97,23 +97,50 @@ describe('envoy Task delegation boundary', () => {
 		expect(JSON.stringify(lastToolResult(requests[1]!))).toContain('subagent');
 		expect(
 			await harness.database.query(
-				'select count(*)::int as count from agent_task where parent_id = $1',
+				'select count(*)::int as count from conversation where parent_id = $1',
 				[disabledTask]
 			)
 		).toEqual([{ count: 0 }]);
 
-		const enabledTask = TaskId.make('00000000-0000-4000-8000-000000000602');
+	});
+
+	/**
+	 * The open half of the aperture, on an authored transcript rather than the recording.
+	 *
+	 * The recorded turns are still a truthful account of what the model said, but they are no longer
+	 * enough turns: a parent runs its child inside its own turn now, so the loop asks the provider
+	 * for the child's answer and then for the parent's consumption of it. Adding those to the
+	 * cassette would be inventing model responses. What this row asserts is ours — that `desk` may
+	 * spawn `ingress` at all, and that the child it spawns is a real conversation that runs.
+	 */
+	it('lets an enabled envoy spawn a child, and runs it in the same turn', async () => {
+		const { ai } = scriptedTranscript([
+			assistantToolCall(
+				'subagent',
+				{ action: 'spawn', agentId: 'ingress', instruction: 'Record the field update.' },
+				'spawn-1'
+			),
+			assistantText('Child dispatched.'),
+			// The child's turn, run by the parent's barrier.
+			assistantText('Field update recorded.'),
+			// Twice told to consume the child, twice ignoring it. The nudge is bounded, so the turn
+			// finishes rather than spinning: the child's answer is durable either way.
+			assistantText('Child result noted.'),
+			assistantText('Still not consuming it.')
+		]);
+		harness = await makeBoltTestRuntime(definition, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const enabledTask = ConversationId.make('00000000-0000-4000-8000-000000000602');
 		await submit(agents, harness, enabledTask, 'desk');
 		const enabled = await harness.runtime.runPromise(
 			agents.execute(harness.effectId('desk:execute'), subject, enabledTask)
 		);
-		expect(enabled.status).toBe('waiting');
+		expect(enabled.status).toBe('done');
 		expect(
 			await harness.database.query(
-				`select parent_id, agent_id, status
-				 from agent_task where parent_id = $1`,
+				`select parent_id, agent_id, status from conversation where parent_id = $1`,
 				[enabledTask]
 			)
-		).toEqual([{ parent_id: enabledTask, agent_id: 'ingress', status: 'ready' }]);
+		).toEqual([{ parent_id: enabledTask, agent_id: 'ingress', status: 'done' }]);
 	});
 });

@@ -15,7 +15,7 @@
 	import { workspaceSession } from '#lib/client/session.js';
 	import {
 		encodeUserMessageWithAttachments,
-		taskAssetStorageKey
+		conversationAssetStorageKey
 	} from '#lib/runtime/agents/image-descriptors.js';
 	import { useAgentClient } from './client.svelte.js';
 	import { runComposerCommand } from './composer-send.js';
@@ -23,7 +23,7 @@
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import AgentContextSegment from './agent-context-segment.svelte';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
-	import { buildTaskSelector, projectAgentTasks } from './conversation-selector.js';
+	import { buildTaskSelector, projectConversations } from './conversation-selector.js';
 	import { commandMenuItems, findCommandTrigger, insertCommand } from './composer-commands.js';
 	import { pairToolCalls, type SubagentTranscript } from './tool-rows.js';
 	import {
@@ -34,13 +34,12 @@
 	import {
 		aggregateTaskCharges,
 		formatTaskCharge,
-		latestTodo,
+		conversationTodos,
 		modelChangeDividers,
-		projectAgentMessages,
-		projectAgentPlans,
-		projectAgentRuns,
+		projectConversationMessages,
+		projectPlans,
+		projectTurns,
 		projectAgentUsage,
-		reasoningRequestedFor
 	} from './transcript.js';
 	import { agentOrbBusyStatusKey, agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
 	import { createTailFollower, transcriptTailSignature } from './transcript-follow.js';
@@ -68,9 +67,9 @@
 	let planMode = $state(false);
 	let selectedModelId = $state<string | undefined>(undefined);
 	const modelQuery = $derived(
-		runtime.client.system.tasks.models({ agentId: AgentId.make(runtime.agentId) })
+		runtime.client.system.conversations.models({ agentId: AgentId.make(runtime.agentId) })
 	);
-	let selectedTaskId = $state<string | undefined>(undefined);
+	let selectedConversationId = $state<string | undefined>(undefined);
 	let composingNew = $state(false);
 	let pending = $state(false);
 	let sendFailure = $state<string | null>(null);
@@ -87,17 +86,17 @@
 	>([]);
 
 	const taskQuery = $derived(
-		runtime.client.db.agent_task.findMany({ orderBy: { updated_at: 'desc' }, limit: 500 })
+		runtime.client.db.conversation.findMany({ orderBy: { updated_at: 'desc' }, limit: 500 })
 	);
-	const allTasks = $derived(projectAgentTasks(taskQuery.current ?? []));
+	const allTasks = $derived(projectConversations(taskQuery.current ?? []));
 	const rootTasks = $derived(
 		allTasks.filter((task) => task.parent_id === null && task.agent_id === runtime.agentId)
 	);
 	const defaultTask = $derived(rootTasks[0]);
-	const activeTaskId = $derived(composingNew ? undefined : (selectedTaskId ?? defaultTask?.id));
-	const activeTask = $derived(allTasks.find((task) => task.id === activeTaskId));
+	const activeConversationId = $derived(composingNew ? undefined : (selectedConversationId ?? defaultTask?.id));
+	const activeTask = $derived(allTasks.find((task) => task.id === activeConversationId));
 
-	function treeTaskIds(
+	function treeConversationIds(
 		tasks: readonly { readonly id: string; readonly parent_id: string | null }[],
 		rootId: string | undefined
 	): string[] {
@@ -115,31 +114,31 @@
 		return [...ids];
 	}
 
-	const activeTaskIds = $derived(treeTaskIds(allTasks, activeTaskId));
+	const activeConversationIds = $derived(treeConversationIds(allTasks, activeConversationId));
 
 	const messagesQuery = $derived(
-		activeTaskIds.length === 0
+		activeConversationIds.length === 0
 			? undefined
-			: runtime.client.db.agent_message.findMany({
-					where: { task_id: { in: activeTaskIds } },
+			: runtime.client.db.conversation_message.findMany({
+					where: { conversation_id: { in: activeConversationIds } },
 					orderBy: { sequence: 'asc' },
 					limit: 2_000
 				})
 	);
-	const panelMessages = $derived(projectAgentMessages(messagesQuery?.current ?? []));
-	const rootMessages = $derived(panelMessages.filter((message) => message.taskId === activeTaskId));
+	const panelMessages = $derived(projectConversationMessages(messagesQuery?.current ?? []));
+	const rootMessages = $derived(panelMessages.filter((message) => message.conversationId === activeConversationId));
 	const tools = $derived(pairToolCalls(panelMessages));
 
 	const plansQuery = $derived(
-		activeTaskIds.length === 0
+		activeConversationIds.length === 0
 			? undefined
-			: runtime.client.db.agent_plan.findMany({
-					where: { task_id: { in: activeTaskIds } },
+			: runtime.client.db.plan.findMany({
+					where: { conversation_id: { in: activeConversationIds } },
 					orderBy: { revision: 'desc' },
 					limit: 500
 				})
 	);
-	const plans = $derived(projectAgentPlans(plansQuery?.current ?? []));
+	const plans = $derived(projectPlans(plansQuery?.current ?? []));
 	const activePlan = $derived(
 		activeTask === undefined || activeTask.active_plan_id === null
 			? undefined
@@ -147,19 +146,19 @@
 	);
 
 	const runsQuery = $derived(
-		activeTaskIds.length === 0
+		activeConversationIds.length === 0
 			? undefined
-			: runtime.client.db.agent_run.findMany({
-					where: { task_id: { in: activeTaskIds } },
+			: runtime.client.db.turn.findMany({
+					where: { conversation_id: { in: activeConversationIds } },
 					orderBy: { created_at: 'desc' },
 					limit: 1_000
 				})
 	);
-	const runs = $derived(projectAgentRuns(runsQuery?.current ?? []));
-	const modeByRunId: Map<string, 'agent' | 'plan' | 'compact'> = $derived(
+	const runs = $derived(projectTurns(runsQuery?.current ?? []));
+	const modeByTurnId: Map<string, 'agent' | 'plan' | 'compact'> = $derived(
 		new Map(runs.map((run) => [run.id, run.mode] as const))
 	);
-	const rootRuns = $derived(runs.filter((run) => run.task_id === activeTaskId));
+	const rootRuns = $derived(runs.filter((run) => run.conversation_id === activeConversationId));
 	/** Read off stored run rows, so the seam between models is still there after a reload. */
 	const modelDividers = $derived(modelChangeDividers(rootRuns, rootMessages));
 	const subagentTranscript: SubagentTranscript = $derived({
@@ -181,9 +180,9 @@
 		modelId !== undefined && modelOptions.some(({ value }) => value === modelId)
 	);
 	const activeRun = $derived(
-		activeTask === undefined || activeTask.active_run_id === null
+		activeTask === undefined || activeTask.active_turn_id === null
 			? undefined
-			: rootRuns.find((run) => run.id === activeTask.active_run_id)
+			: rootRuns.find((run) => run.id === activeTask.active_turn_id)
 	);
 	const contextView = $derived(
 		projectAgentContextView({
@@ -201,8 +200,8 @@
 	const usageQuery = $derived(
 		runIds.length === 0
 			? undefined
-			: runtime.client.db.agent_usage.findMany({
-					where: { run_id: { in: runIds } },
+			: runtime.client.db.turn_usage.findMany({
+					where: { turn_id: { in: runIds } },
 					orderBy: { created_at: 'asc' },
 					limit: 2_000
 				})
@@ -211,7 +210,7 @@
 		aggregateTaskCharges(projectAgentUsage(usageQuery?.current ?? []), new Set(runIds))
 	);
 	const costLabel = $derived(taskCharges.map(formatTaskCharge).join(' · '));
-	const todo = $derived(latestTodo(contextView.focusMessages, activeRun?.id ?? null));
+	const todo = $derived(conversationTodos(activeTask ?? null));
 
 	const taskSelector = $derived(
 		buildTaskSelector({
@@ -227,9 +226,7 @@
 			...(activeTask === undefined ? {} : { status: activeTask.status })
 		})
 	);
-	const taskWorking = $derived(
-		activeTask?.status === 'running' || activeTask?.status === 'waiting'
-	);
+	const taskWorking = $derived(activeTask?.status === 'running');
 	const canStop = $derived(taskWorking && !controlPending);
 	const canResume = $derived(
 		!controlPending &&
@@ -241,7 +238,6 @@
 		activeTask === undefined ||
 			activeTask.status === 'ready' ||
 			activeTask.status === 'running' ||
-			activeTask.status === 'waiting' ||
 			activeTask.status === 'done' ||
 			activeTask.status === 'failed' ||
 			activeTask.status === 'stopped' ||
@@ -308,7 +304,7 @@
 	}
 
 	function beginNewTask(): void {
-		selectedTaskId = undefined;
+		selectedConversationId = undefined;
 		composingNew = true;
 		tail.pin();
 		unsettledAdmission = null;
@@ -317,8 +313,8 @@
 		queueMicrotask(() => composer?.focus());
 	}
 
-	function selectTask(taskId: string): void {
-		selectedTaskId = taskId;
+	function selectTask(conversationId: string): void {
+		selectedConversationId = conversationId;
 		selectedModelId = undefined;
 		composingNew = false;
 		tail.pin();
@@ -385,7 +381,7 @@
 		pendingAttachments = [];
 	}
 
-	function storePendingAttachments(taskId: string) {
+	function storePendingAttachments(conversationId: string) {
 		const images = pendingAttachments;
 		return Effect.tryPromise({
 			try: () => {
@@ -395,7 +391,7 @@
 					Effect.forEach(
 						images,
 						(image) => {
-							const key = taskAssetStorageKey(taskId, image.id, image.file.name);
+							const key = conversationAssetStorageKey(conversationId, image.id, image.file.name);
 							return Effect.tryPromise(() => session.files.store(key, image.file)).pipe(
 								Effect.map(() =>
 									FileAsset.make({
@@ -441,7 +437,7 @@
 			if (
 				(message.length === 0 && pendingAttachments.length === 0) ||
 				revision === null ||
-				activeTaskId === undefined ||
+				activeConversationId === undefined ||
 				revisionModelId === undefined
 			) {
 				return Effect.void;
@@ -449,12 +445,12 @@
 			pending = true;
 			sendFailure = null;
 			return runComposerCommand(
-				storePendingAttachments(activeTaskId).pipe(
+				storePendingAttachments(activeConversationId).pipe(
 					Effect.flatMap((assets) =>
 						encodeUserMessageWithAttachments(message, assets).pipe(
 							Effect.flatMap((encoded) =>
 								agentClient.editMessage({
-									taskId: activeTaskId,
+									conversationId: activeConversationId,
 									messageId: revision.id,
 									message: encoded,
 									modelId: revisionModelId
@@ -499,12 +495,12 @@
 				priority,
 				modelId: submittedModelId
 			});
-			const taskId =
-				retry?.taskId ??
+			const conversationId =
+				retry?.conversationId ??
 				(composingNew ? undefined : activeTask?.id) ??
 				globalThis.crypto.randomUUID();
 			const admission = {
-				taskId,
+				conversationId,
 				submissionId: retry?.submissionId ?? globalThis.crypto.randomUUID(),
 				agentId: runtime.agentId,
 				message,
@@ -518,12 +514,12 @@
 			sendFailure = null;
 			tail.pin();
 			return runComposerCommand(
-				storePendingAttachments(taskId).pipe(
+				storePendingAttachments(conversationId).pipe(
 					Effect.flatMap((assets) =>
 						encodeUserMessageWithAttachments(message, assets).pipe(
 							Effect.flatMap((encoded) =>
 								agentClient.submit({
-									taskId,
+									conversationId,
 									submissionId: admission.submissionId,
 									message: encoded,
 									mode,
@@ -536,7 +532,7 @@
 				),
 				{
 					onSuccess: (result) => {
-						selectedTaskId = result.taskId;
+						selectedConversationId = result.conversationId;
 						composingNew = false;
 						draft = '';
 						revisedMessage = null;
@@ -554,11 +550,11 @@
 	}
 
 	function control(action: 'stop' | 'resume'): void {
-		if (activeTaskId === undefined || controlPending) return;
+		if (activeConversationId === undefined || controlPending) return;
 		controlPending = true;
 		sendFailure = null;
 		Effect.runFork(
-			agentClient.control(activeTaskId, action, modelId).pipe(
+			agentClient.control(activeConversationId, action, modelId).pipe(
 				Effect.tapError((error) =>
 					Effect.sync(() => {
 						sendFailure = error.message;
@@ -692,7 +688,7 @@
 	});
 
 	const surface = $derived({
-		taskId: activeTaskId,
+		conversationId: activeConversationId,
 		composingNew,
 		pending,
 		failed: sendFailure !== null
@@ -708,15 +704,15 @@
 		new Set(
 			panelMessages
 				.filter((message) => message.author.kind === 'human')
-				.map((message) => message.taskId)
+				.map((message) => message.conversationId)
 		)
 	);
-	const admissionTaskId = $derived(unsettledAdmission?.taskId);
+	const admissionConversationId = $derived(unsettledAdmission?.conversationId);
 	const visibleAdmission = $derived(
 		visibleUnsettledAdmission(
 			unsettledAdmission,
 			tasksWithHumanMessage,
-			admissionTaskId === undefined || allTasks.some((task) => task.id === admissionTaskId),
+			admissionConversationId === undefined || allTasks.some((task) => task.id === admissionConversationId),
 			new Set(panelMessages.map((message) => message.id))
 		)
 	);
@@ -756,7 +752,7 @@
 		<div class="min-w-0 flex-1">
 			<TaskSelector
 				model={taskSelector}
-				value={activeTaskId}
+				value={activeConversationId}
 				placeholder="No conversations yet"
 				searchPlaceholder="Search conversations…"
 				ariaLabel="Select conversation"
@@ -906,14 +902,13 @@
 								{message}
 								{tools}
 								subagent={subagentTranscript}
-								reasoningRequested={reasoningRequestedFor(rootRuns, message.runId)}
 								generating={runs.some(
 									(run) => run.id === message.runId && run.status === 'running'
 								)}
-								mode={message.runId === null ? null : (modeByRunId.get(message.runId) ?? null)}
+								mode={message.runId === null ? null : (modeByTurnId.get(message.runId) ?? null)}
 								outsideModelView={contextView.outsideMessageIds.has(message.id)}
 								checkpointOrigin={message.annotation?.tag === 'compact'
-									? compactOrigin(message, rootRuns)
+									? compactOrigin(message)
 									: null}
 								onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
 									? undefined

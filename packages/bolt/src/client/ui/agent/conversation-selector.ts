@@ -2,40 +2,43 @@ import { Option, Schema } from 'effect';
 import {
 	AgentId,
 	PlanId,
-	RunId,
-	TaskAudience,
-	TaskId,
-	TaskStatus
+	TurnId,
+	ConversationAudience,
+	ConversationId,
+	ConversationStatus
 } from '@norbital-ai/bolt-protocol';
 
 /** Stable ID of the browser-owned system agent. */
 export const WEB_AGENT_ID = 'web';
 
-const AgentTask = Schema.Struct({
-	id: TaskId,
+const Conversation = Schema.Struct({
+	id: ConversationId,
 	agent_id: AgentId,
-	audience: TaskAudience,
-	parent_id: Schema.optionalKey(Schema.NullOr(TaskId)),
-	status: TaskStatus,
+	audience: ConversationAudience,
+	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
+	status: ConversationStatus,
 	active_plan_id: Schema.optionalKey(Schema.NullOr(PlanId)),
-	active_run_id: Schema.optionalKey(Schema.NullOr(RunId))
+	active_turn_id: Schema.optionalKey(Schema.NullOr(TurnId)),
+	/** The checklist the `todo` tool writes; the panel reads it from here. */
+	todos: Schema.optionalKey(Schema.NullOr(Schema.Json))
 });
-export type AgentTask = Readonly<{
-	id: typeof TaskId.Type;
+export type Conversation = Readonly<{
+	id: typeof ConversationId.Type;
 	agent_id: typeof AgentId.Type;
-	audience: typeof TaskAudience.Type;
-	parent_id: typeof TaskId.Type | null;
-	status: typeof TaskStatus.Type;
+	audience: typeof ConversationAudience.Type;
+	parent_id: typeof ConversationId.Type | null;
+	status: typeof ConversationStatus.Type;
 	active_plan_id: typeof PlanId.Type | null;
-	active_run_id: typeof RunId.Type | null;
+	active_turn_id: typeof TurnId.Type | null;
+	todos?: unknown;
 }>;
 
-const decodeAgentTask = Schema.decodeUnknownOption(AgentTask);
+const decodeConversation = Schema.decodeUnknownOption(Conversation);
 
 /** Rejects rows that do not satisfy the one canonical durable Task shape. */
-export function projectAgentTasks(rows: readonly unknown[]): AgentTask[] {
+export function projectConversations(rows: readonly unknown[]): Conversation[] {
 	return rows.flatMap((row) => {
-		const decoded = decodeAgentTask(row);
+		const decoded = decodeConversation(row);
 		if (Option.isNone(decoded)) return [];
 		const task = decoded.value;
 		return [
@@ -46,7 +49,7 @@ export function projectAgentTasks(rows: readonly unknown[]): AgentTask[] {
 				parent_id: task.parent_id ?? null,
 				status: task.status,
 				active_plan_id: task.active_plan_id ?? null,
-				active_run_id: task.active_run_id ?? null
+				active_turn_id: task.active_turn_id ?? null
 			}
 		];
 	});
@@ -87,10 +90,10 @@ export type TaskSelectorModel = Readonly<{
 
 /** Groups policy-filtered root Tasks by canonical agent and audience. */
 export function buildTaskSelector(input: {
-	readonly tasks: readonly AgentTask[];
+	readonly tasks: readonly Conversation[];
 	readonly labels: TaskSelectorLabels;
 }): TaskSelectorModel {
-	const byAgent = new Map<string, AgentTask[]>();
+	const byAgent = new Map<string, Conversation[]>();
 	for (const task of input.tasks) {
 		byAgent.set(task.agent_id, [...(byAgent.get(task.agent_id) ?? []), task]);
 	}

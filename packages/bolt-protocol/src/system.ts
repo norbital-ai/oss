@@ -10,14 +10,13 @@ import {
 import { CommandHeaders, commandContract } from './host.js';
 import {
 	AgentId,
-	DirectiveId,
 	DirectiveMode,
 	DirectivePriority,
 	MessageId,
 	ModelCatalogEntry,
 	ModelId,
-	TaskId,
-	TaskStatus
+	ConversationId,
+	ConversationStatus
 } from './facilities.js';
 
 export {
@@ -28,8 +27,8 @@ export {
 } from './host.js';
 
 /** The only public admission contract. A first submit atomically creates Task, message, and directive. */
-export const TaskSubmitRequest = Schema.Struct({
-	taskId: TaskId,
+export const ConversationSendRequest = Schema.Struct({
+	conversationId: ConversationId,
 	/** Stable across retries of one send, distinct for intentional repeated messages. */
 	submissionId: Schema.optionalKey(MessageId),
 	agentId: AgentId,
@@ -38,10 +37,10 @@ export const TaskSubmitRequest = Schema.Struct({
 	priority: DirectivePriority,
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface TaskSubmitRequest extends Schema.Schema.Type<typeof TaskSubmitRequest> {}
+export interface ConversationSendRequest extends Schema.Schema.Type<typeof ConversationSendRequest> {}
 
-export const TaskSubmitResult = Schema.Struct({ directiveId: DirectiveId });
-export interface TaskSubmitResult extends Schema.Schema.Type<typeof TaskSubmitResult> {}
+export const ConversationSendResult = Schema.Struct({ messageId: MessageId });
+export interface ConversationSendResult extends Schema.Schema.Type<typeof ConversationSendResult> {}
 
 /** Host-configured language models available to an authorized agent caller. */
 export const TaskModelCatalog = Schema.Struct({
@@ -55,47 +54,33 @@ export interface TaskModelCatalog extends Schema.Schema.Type<typeof TaskModelCat
  * user messages: the original row is never edited or deleted, the revision is appended as the newest
  * message of the Task, and the same admission queues the Agent directive that continues from it.
  */
-export const TaskEditMessageRequest = Schema.Struct({
-	taskId: TaskId,
+export const ConversationEditMessageRequest = Schema.Struct({
+	conversationId: ConversationId,
 	messageId: MessageId,
 	message: Schema.toEncoded(Prompt.Message),
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface TaskEditMessageRequest extends Schema.Schema.Type<typeof TaskEditMessageRequest> {}
+export interface ConversationEditMessageRequest extends Schema.Schema.Type<typeof ConversationEditMessageRequest> {}
 
-export const TaskEditMessageResult = Schema.Struct({
-	directiveId: DirectiveId,
+export const ConversationEditMessageResult = Schema.Struct({
 	messageId: MessageId,
 	supersedesId: MessageId
 });
-export interface TaskEditMessageResult extends Schema.Schema.Type<typeof TaskEditMessageResult> {}
+export interface ConversationEditMessageResult extends Schema.Schema.Type<typeof ConversationEditMessageResult> {}
 
-export const TaskControlRequest = Schema.Struct({
-	taskId: TaskId,
+export const ConversationControlRequest = Schema.Struct({
+	conversationId: ConversationId,
 	action: Schema.Literals(['stop', 'resume']),
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface TaskControlRequest extends Schema.Schema.Type<typeof TaskControlRequest> {}
+export interface ConversationControlRequest extends Schema.Schema.Type<typeof ConversationControlRequest> {}
 
-export const TaskControlResult = Schema.Struct({ taskId: TaskId, status: TaskStatus });
-export interface TaskControlResult extends Schema.Schema.Type<typeof TaskControlResult> {}
-
-/**
- * Host Task-origin execution. The browser never calls this; admit writes a `bolt_task` row
- * that the schedule tick dispatches. `bolt_run_as` is the minted subject — do not add a
- * top-level `subject` key; Task dispatch refuses minted identity fields.
- */
-export const TaskExecuteRequest = Schema.Struct({
-	taskId: TaskId,
-	bolt_run_as: Schema.Json
+export const ConversationControlResult = Schema.Struct({
+	conversationId: ConversationId,
+	status: ConversationStatus
 });
-export interface TaskExecuteRequest extends Schema.Schema.Type<typeof TaskExecuteRequest> {}
+export interface ConversationControlResult extends Schema.Schema.Type<typeof ConversationControlResult> {}
 
-export const TaskExecuteResult = Schema.Struct({
-	taskId: TaskId,
-	status: Schema.Literals(['idle', 'running', 'waiting', 'done', 'failed', 'attention'])
-});
-export interface TaskExecuteResult extends Schema.Schema.Type<typeof TaskExecuteResult> {}
 
 /** The approval state exchanged by the browser approval commands and their runtime handler. */
 export const ApprovalState = Schema.TaggedUnion({
@@ -431,40 +416,34 @@ export const SystemCommandContracts = [
 	}),
 	commandContract({ name: 'collections.embed', input: EmptyInput, responses: [ok(Schema.Json)] }),
 	commandContract({
-		name: 'tasks.models',
+		name: 'conversations.models',
 		input: Schema.Struct({ agentId: AgentId }),
 		responses: [ok(TaskModelCatalog)],
-		clientPath: ['tasks', 'models'],
+		clientPath: ['conversations', 'models'],
 		clientMode: 'query'
 	}),
 	commandContract({
-		name: 'tasks.submit',
-		input: TaskSubmitRequest,
-		responses: [ok(TaskSubmitResult)],
-		clientPath: ['tasks', 'submit'],
+		name: 'conversations.send',
+		input: ConversationSendRequest,
+		responses: [ok(ConversationSendResult)],
+		clientPath: ['conversations', 'send'],
 		clientMode: 'operation',
 		budgetKey: 'agents.turn'
 	}),
 	commandContract({
-		name: 'tasks.editMessage',
-		input: TaskEditMessageRequest,
-		responses: [ok(TaskEditMessageResult)],
-		clientPath: ['tasks', 'editMessage'],
+		name: 'conversations.editMessage',
+		input: ConversationEditMessageRequest,
+		responses: [ok(ConversationEditMessageResult)],
+		clientPath: ['conversations', 'editMessage'],
 		clientMode: 'operation',
 		budgetKey: 'agents.turn'
 	}),
 	commandContract({
-		name: 'tasks.control',
-		input: TaskControlRequest,
-		responses: [ok(TaskControlResult)],
-		clientPath: ['tasks', 'control'],
+		name: 'conversations.control',
+		input: ConversationControlRequest,
+		responses: [ok(ConversationControlResult)],
+		clientPath: ['conversations', 'control'],
 		clientMode: 'operation'
-	}),
-	commandContract({
-		name: 'tasks.execute',
-		input: TaskExecuteRequest,
-		responses: [ok(TaskExecuteResult)],
-		budgetKey: 'agents.turn'
 	}),
 	commandContract({
 		name: 'workspace.manifest',

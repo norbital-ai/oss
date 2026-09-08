@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -12,10 +12,18 @@ import {
 import { scriptedTranscript } from './agents-canonical-ai-fixture.js';
 
 /**
- * RFC bolt.md B2 / AGENT-UI2, the runtime half. The loop sends no reasoning request, so the run
- * records `reasoning_requested = false` and a provider reasoning part (the literal `None.` GLM and
- * DeepSeek emit when nothing was thought) is dropped before the assistant message is persisted.
- * The client reads the flag off the run row and the transcript never carries the part.
+ * Reasoning is captured, always.
+ *
+ * The provider reasons whether or not anybody asked — GLM 5.3 Flash refuses to disable it
+ * (`400 Reasoning is mandatory for this endpoint`) — so the workspace pays for reasoning on every
+ * turn. It used to throw all of it away: a hardcoded flag said reasoning was never requested, and
+ * every reasoning part was filtered out before the assistant message was persisted. Now the part
+ * the provider already sent is stored in the column that already accepts it, because
+ * `ReasoningPart` is a member of Effect's `AssistantMessagePart`.
+ *
+ * The literal `None.` that GLM and DeepSeek emit when nothing was thought is kept too. It is what
+ * the model said, and a transcript that silently edits what the model said is not a transcript.
+ * Whether an empty one is *shown* is the renderer's decision, and it is asserted there.
  */
 const encode = Schema.encodeSync(Prompt.Message);
 const reply = (reasoning: string, text: string): Prompt.MessageEncoded =>
@@ -32,11 +40,11 @@ afterEach(async () => {
 });
 
 type StoredMessage = Readonly<{ role: string; content: unknown }>;
-const storedMessages = async (taskId: TaskId): Promise<ReadonlyArray<StoredMessage>> =>
+const storedMessages = async (conversationId: ConversationId): Promise<ReadonlyArray<StoredMessage>> =>
 	(
 		await harness!.database.query(
-			'select message from agent_message where task_id = $1 order by sequence',
-			[taskId]
+			'select message from conversation_message where conversation_id = $1 order by sequence',
+			[conversationId]
 		)
 	).map(({ message }) =>
 		typeof message === 'string'
@@ -49,23 +57,23 @@ const partTypes = (message: StoredMessage): ReadonlyArray<string> =>
 		? message.content.map((part: { type: string }) => part.type)
 		: ['string'];
 
-describe('reasoning parts through the agent loop (RFC bolt.md B2)', () => {
-	it('records that reasoning was not requested and persists no reasoning part', async () => {
-		const literal = TaskId.make('00000000-0000-4000-8000-000000000921');
-		const worded = TaskId.make('00000000-0000-4000-8000-000000000922');
+describe('reasoning parts through the agent loop', () => {
+	it('persists the reasoning the provider sent, alongside the text', async () => {
+		const literal = ConversationId.make('00000000-0000-4000-8000-000000000921');
+		const worded = ConversationId.make('00000000-0000-4000-8000-000000000922');
 		const { ai } = scriptedTranscript([
 			reply('None.', 'Payroll is balanced.'),
 			reply('Considering the ledger before answering.', 'The ledger reconciles.')
 		]);
 		harness = await makeBoltTestRuntime(testWorkspace(), { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		for (const [name, taskId] of [
+		for (const [name, conversationId] of [
 			['literal', literal],
 			['worded', worded]
 		] as const) {
 			await harness.runtime.runPromise(
 				agents.submit(harness.effectId(`submit:${name}`), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput('Check the payroll.'),
 					mode: DirectiveMode.make('agent'),
@@ -73,28 +81,23 @@ describe('reasoning parts through the agent loop (RFC bolt.md B2)', () => {
 				})
 			);
 			const settled = await harness.runtime.runPromise(
-				agents.execute(harness.effectId(`execute:${name}`), adminSubject, taskId)
+				agents.execute(harness.effectId(`execute:${name}`), adminSubject, conversationId)
 			);
 			expect(settled.status).toBe('done');
-			expect(
-				await harness.database.query(
-					'select reasoning_requested from agent_run where task_id = $1',
-					[taskId]
-				)
-			).toEqual([{ reasoning_requested: false }]);
+
 		}
 
 		const literalMessages = await storedMessages(literal);
 		const literalReplies = literalMessages.filter(({ role }) => role === 'assistant');
 		expect(literalReplies).toHaveLength(1);
-		expect(partTypes(literalReplies[0]!)).toEqual(['text']);
-		expect(JSON.stringify(literalMessages)).not.toContain('None.');
+		expect(partTypes(literalReplies[0]!)).toEqual(['reasoning', 'text']);
+		expect(JSON.stringify(literalMessages)).toContain('None.');
 		expect(JSON.stringify(literalMessages)).toContain('Payroll is balanced.');
 
 		const wordedMessages = await storedMessages(worded);
 		const wordedReplies = wordedMessages.filter(({ role }) => role === 'assistant');
 		expect(wordedReplies).toHaveLength(1);
-		expect(partTypes(wordedReplies[0]!)).toEqual(['text']);
-		expect(JSON.stringify(wordedMessages)).not.toContain('Considering the ledger');
+		expect(partTypes(wordedReplies[0]!)).toEqual(['reasoning', 'text']);
+		expect(JSON.stringify(wordedMessages)).toContain('Considering the ledger');
 	});
 });

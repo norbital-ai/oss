@@ -320,7 +320,7 @@ const taskModel = defineModel(
 );
 
 /** One durable Task. Lifecycle and its sole active-run fence live together on this row. */
-const agentTaskModel = defineModel(
+const conversationModel = defineModel(
 	{
 		workbench_id: text().notNull(),
 		subject_id: text().notNull(),
@@ -329,25 +329,34 @@ const agentTaskModel = defineModel(
 		parent_id: uuid(),
 		status: text().notNull(),
 		active_plan_id: uuid(),
-		active_run_id: uuid(),
-		epoch: integer().notNull()
+		active_turn_id: uuid(),
+		/**
+		 * The agent's checklist for this conversation, set and read through the `todo` tool.
+		 *
+		 * It lives here because it is one current list, not a history: the agent replaces it, reads it
+		 * back, and every reader wants the same latest value. Recovering it by walking the transcript
+		 * for the newest successful `todo` tool-result — which is what this replaced — made a
+		 * *derived* fact out of a stored one, and left two scanners (runtime and panel) to agree by
+		 * hand.
+		 */
+		todos: jsonb()
 	},
 	{
 		history: false,
 		indexes: [
 			{
-				name: 'agent_task_subject_route',
+				name: 'conversation_subject_route',
 				columns: ['workbench_id', 'subject_id', 'status', 'created_at']
 			},
 			{
-				name: 'agent_task_workbench_route',
+				name: 'conversation_workbench_route',
 				columns: ['workbench_id', 'audience', 'status', 'created_at']
 			},
 			systemIndex('parent_id'),
 			systemIndex('active_plan_id'),
 			{
-				name: 'agent_task_active_run',
-				columns: ['active_run_id'],
+				name: 'conversation_active_run',
+				columns: ['active_turn_id'],
 				unique: true
 			}
 		]
@@ -355,9 +364,9 @@ const agentTaskModel = defineModel(
 );
 
 /** One immutable revision of the Task objective and verification contract. */
-const agentPlanModel = defineModel(
+const planModel = defineModel(
 	{
-		task_id: uuid().notNull(),
+		conversation_id: uuid().notNull(),
 		revision: integer().notNull(),
 		checkpoint_sequence: integer().notNull(),
 		body: text().notNull(),
@@ -367,11 +376,11 @@ const agentPlanModel = defineModel(
 		history: false,
 		indexes: [
 			{
-				name: 'agent_plan_task_revision',
-				columns: ['task_id', 'revision'],
+				name: 'plan_task_revision',
+				columns: ['conversation_id', 'revision'],
 				unique: true
 			},
-			{ name: 'agent_plan_task_status', columns: ['task_id', 'status', 'revision'] }
+			{ name: 'plan_task_status', columns: ['conversation_id', 'status', 'revision'] }
 		]
 	}
 );
@@ -385,97 +394,94 @@ const agentPlanModel = defineModel(
  * that feeds the model skips it. The route is unique so one revision can never fork a message into
  * two live heads.
  */
-const agentMessageModel = defineModel(
+const conversationMessageModel = defineModel(
 	{
-		task_id: uuid().notNull(),
+		conversation_id: uuid().notNull(),
 		sequence: integer().notNull(),
-		run_id: uuid(),
+		turn_id: uuid(),
 		author: jsonb().notNull(),
 		message: jsonb().notNull(),
 		semantic_hash: text().notNull(),
 		annotation: jsonb(),
-		supersedes_id: uuid()
+		supersedes_id: uuid(),
+		/**
+		 * The message queue, which is the transcript.
+		 *
+		 * A message somebody sent and no turn has answered is `queued`; the turn that answers it marks
+		 * it `consumed`. What that turn needs in order to answer — the mode it runs in, the model it
+		 * runs on, and how it orders against other waiting messages — rides here, because those
+		 * describe this message rather than a separate work item about it. `null` is a message nobody
+		 * is waiting on an answer to: an assistant reply, a tool result, a system note.
+		 */
+		state: text(),
+		mode: text(),
+		priority: text(),
+		model_id: text()
 	},
 	{
 		history: false,
 		indexes: [
 			{
-				name: 'agent_message_task_sequence',
-				columns: ['task_id', 'sequence'],
+				name: 'conversation_message_sequence',
+				columns: ['conversation_id', 'sequence'],
 				unique: true
 			},
-			{ name: 'agent_message_run_sequence', columns: ['run_id', 'sequence'] },
-			{ name: 'agent_message_supersedes', columns: ['supersedes_id'], unique: true },
+			{ name: 'conversation_message_turn', columns: ['turn_id', 'sequence'] },
+			// What a turn asks for at every boundary: this conversation's waiting messages, in the
+			// order it should answer them.
+			{ name: 'conversation_message_queue', columns: ['conversation_id', 'state', 'priority', 'sequence'] },
+			{ name: 'conversation_message_supersedes', columns: ['supersedes_id'], unique: true },
 			{
-				name: 'agent_message_semantic_identity',
-				columns: ['task_id', 'semantic_hash'],
+				name: 'conversation_message_identity',
+				columns: ['conversation_id', 'semantic_hash'],
 				unique: true
 			},
-			{ name: 'agent_message_content_route', columns: ['message'], method: 'gin' },
-			{ name: 'agent_message_annotation_route', columns: ['annotation'], method: 'gin' }
+			{ name: 'conversation_message_content_route', columns: ['message'], method: 'gin' },
+			{ name: 'conversation_message_annotation_route', columns: ['annotation'], method: 'gin' }
 		]
 	}
 );
 
-/** The Task's only durable queue and the immutable receipt of its claim. */
-const agentInboxModel = defineModel(
-	{
-		task_id: uuid().notNull(),
-		sequence: integer().notNull(),
-		message_id: uuid().notNull(),
-		mode: text().notNull(),
-		model_id: text(),
-		priority: text().notNull(),
-		state: text().notNull(),
-		claimed_run_id: uuid()
-	},
-	{
-		history: false,
-		indexes: [
-			{
-				name: 'agent_inbox_task_sequence',
-				columns: ['task_id', 'sequence'],
-				unique: true
-			},
-			{
-				name: 'agent_inbox_claim_route',
-				columns: ['task_id', 'state', 'priority', 'sequence']
-			},
-			{ name: 'agent_inbox_message', columns: ['message_id'], unique: true },
-			systemIndex('claimed_run_id')
-		]
-	}
-);
 
 /** One fenced execution attempt with one immutable authority snapshot. */
-const agentRunModel = defineModel(
+const turnModel = defineModel(
 	{
-		task_id: uuid().notNull(),
-		directive_id: uuid().notNull(),
-		epoch: integer().notNull(),
+		conversation_id: uuid().notNull(),
+		/** The queued message this turn was started to answer. */
+		input_message_id: uuid().notNull(),
 		mode: text().notNull(),
 		phase: text().notNull(),
 		input_through_sequence: integer().notNull(),
 		model_id: text().notNull(),
-		reasoning_requested: boolean().notNull(),
+		/**
+		 * The model's context window, in tokens, as the catalog stated it when this turn was claimed.
+		 *
+		 * Stored rather than looked up, for the reason `capability_snapshot` is: a turn is judged by
+		 * what was true when it started. Compaction fires against this number, so a turn that
+		 * compacted has to be able to say what bound it was compacting to — a host that later
+		 * re-registers the same model with a different window must not change the reading of a turn
+		 * that already ran.
+		 */
+		context_window_tokens: integer().notNull(),
 		capability_snapshot: jsonb().notNull(),
 		status: text().notNull()
 	},
 	{
 		history: false,
 		indexes: [
-			{ name: 'agent_run_task_epoch', columns: ['task_id', 'epoch'], unique: true },
-			{ name: 'agent_run_task_status', columns: ['task_id', 'status', 'created_at'] },
-			systemIndex('directive_id')
+			{ name: 'turn_conversation_status', columns: ['conversation_id', 'status', 'created_at'] },
+			// One turn per queued message: the turn that answers a message is the only turn that
+			// answers it, and this is what says so.
+			{ name: 'turn_input_message', columns: ['input_message_id'], unique: true }
 		]
 	}
 );
 
 /** One immutable exact observation and settlement record per provider attempt. */
-const agentUsageModel = defineModel(
+const turnUsageModel = defineModel(
 	{
 		call_id: text().notNull().unique(),
-		run_id: uuid().notNull(),
+		turn_id: uuid().notNull(),
 		provider: text().notNull(),
 		model: text().notNull(),
 		operation: text().notNull(),
@@ -489,7 +495,7 @@ const agentUsageModel = defineModel(
 	{
 		history: false,
 		indexes: [
-			{ name: 'agent_usage_run_route', columns: ['run_id', 'created_at'] },
+			{ name: 'turn_usage_run_route', columns: ['turn_id', 'created_at'] },
 			systemIndex('settlement_state')
 		]
 	}
@@ -501,8 +507,7 @@ const agentUsageModel = defineModel(
  * `bolt_task.input` can contain secrets and arbitrary command payloads, so the record itself must
  * never replicate. Direct invocations write this row themselves; a database trigger projects cron
  * occurrences from `bolt_task`. Clients receive only lifecycle, progress, error and typed result.
- */
-const automationRunModel = defineModel(
+ */const automationRunModel = defineModel(
 	{
 		task_id: text().notNull().unique(),
 		name: text().notNull(),
@@ -850,12 +855,11 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	verification: authVerificationModel,
 	auth_config: authConfigModel,
 	team: teamModel,
-	agent_task: agentTaskModel,
-	agent_plan: agentPlanModel,
-	agent_message: agentMessageModel,
-	agent_inbox: agentInboxModel,
-	agent_run: agentRunModel,
-	agent_usage: agentUsageModel,
+	conversation: conversationModel,
+	plan: planModel,
+	conversation_message: conversationMessageModel,
+	turn: turnModel,
+	turn_usage: turnUsageModel,
 	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });

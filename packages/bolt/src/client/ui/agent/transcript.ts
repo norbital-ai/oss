@@ -1,7 +1,6 @@
 import { Option, Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import {
-	DirectiveId,
 	DirectiveMode,
 	ExactCharge,
 	MessageId,
@@ -9,10 +8,10 @@ import {
 	PlanId,
 	PlanStatus,
 	ProviderCallId,
-	RunId,
+	TurnId,
 	RunPhase,
 	RunStatus,
-	TaskId,
+	ConversationId,
 	UsageObservation
 } from '@norbital-ai/bolt-protocol';
 
@@ -24,6 +23,8 @@ type MessageAuthor = typeof MessageAuthor.Type;
 
 const CompactAnnotation = Schema.Struct({
 	tag: Schema.Literal('compact'),
+	/** Who asked: a person's `/compact`, the runtime's own bound, or the agent calling `compact`. */
+	origin: Schema.Literals(['manual', 'automatic', 'requested']),
 	cutoff: Schema.Natural,
 	retainedMessageIds: Schema.Array(MessageId)
 });
@@ -38,9 +39,7 @@ const PlanVerdictAnnotation = Schema.Struct({
 const MessageAnnotation = Schema.Union([
 	Schema.Struct({
 		tag: Schema.Literal('input'),
-		priority: Schema.Literals(['normal', 'steer']),
-		consumedAfterSequence: Schema.optionalKey(Schema.Natural),
-		cancelled: Schema.optionalKey(Schema.Boolean)
+		consumedAfterSequence: Schema.optionalKey(Schema.Natural)
 	}),
 	CompactAnnotation,
 	PlanVerdictAnnotation,
@@ -55,46 +54,48 @@ export type MessageAnnotation = typeof MessageAnnotation.Type;
 
 const EncodedMessage = Schema.toEncoded(Prompt.Message);
 
-const AgentMessageRow = Schema.Struct({
+const ConversationMessageRow = Schema.Struct({
 	id: MessageId,
-	task_id: TaskId,
+	conversation_id: ConversationId,
 	sequence: Schema.Natural,
-	run_id: Schema.NullOr(RunId),
+	turn_id: Schema.NullOr(TurnId),
 	author: MessageAuthor,
 	message: EncodedMessage,
-	annotation: Schema.NullOr(MessageAnnotation)
+	annotation: Schema.NullOr(MessageAnnotation),
+	/** The queue, on the message: `queued` until answered, then `consumed` or `cancelled`. */
+	state: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString)),
+	priority: Schema.optionalKey(Schema.NullOr(Schema.Literals(['normal', 'steer'])))
 });
-export type AgentMessageRow = typeof AgentMessageRow.Type;
+export type ConversationMessageRow = typeof ConversationMessageRow.Type;
 
-const AgentPlanRow = Schema.Struct({
+const PlanRow = Schema.Struct({
 	id: PlanId,
-	task_id: TaskId,
+	conversation_id: ConversationId,
 	revision: Schema.Natural,
 	checkpoint_sequence: Schema.Natural,
 	body: Schema.NonEmptyString,
 	status: PlanStatus,
 	created_at: Schema.Unknown
 });
-export type AgentPlanRow = typeof AgentPlanRow.Type;
+export type PlanRow = typeof PlanRow.Type;
 
-const AgentRunRow = Schema.Struct({
-	id: RunId,
-	task_id: TaskId,
-	directive_id: DirectiveId,
-	epoch: Schema.Natural,
+const TurnRow = Schema.Struct({
+	id: TurnId,
+	conversation_id: ConversationId,
+	input_message_id: MessageId,
 	mode: DirectiveMode,
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
-	status: RunStatus,
-	/** Whether the run asked its provider for reasoning; absent until the runtime records it. */
-	reasoning_requested: Schema.optionalKey(Schema.NullOr(Schema.Boolean))
+	/** The model's context window as the catalog stated it when this turn was claimed. */
+	context_window_tokens: Schema.Natural,
+	status: RunStatus
 });
-export type AgentRunRow = typeof AgentRunRow.Type;
+export type TurnRow = typeof TurnRow.Type;
 
-const AgentUsageRow = Schema.Struct({
+const TurnUsageRow = Schema.Struct({
 	call_id: ProviderCallId,
-	run_id: RunId,
+	turn_id: TurnId,
 	provider: Schema.NonEmptyString,
 	model: Schema.NonEmptyString,
 	operation: Schema.Literals(['language', 'embedding']),
@@ -105,30 +106,33 @@ const AgentUsageRow = Schema.Struct({
 	settlement_id: Schema.NonEmptyString,
 	settlement_state: Schema.Literals(['pending', 'settled', 'attention'])
 });
-export type AgentUsageRow = typeof AgentUsageRow.Type;
+export type TurnUsageRow = typeof TurnUsageRow.Type;
 
 export type PanelMessage = Readonly<{
 	kind: 'message';
 	key: string;
 	id: string;
-	taskId: string;
+	conversationId: string;
 	sequence: number;
 	runId: string | null;
 	author: MessageAuthor;
 	message: Prompt.MessageEncoded;
 	annotation: MessageAnnotation | null;
+	/** The queue columns, read from the row rather than from a second copy in the annotation. */
+	state: string | null;
+	priority: 'normal' | 'steer' | null;
 }>;
 
-const decodeAgentMessageRow = Schema.decodeUnknownOption(AgentMessageRow);
-const decodeAgentPlanRow = Schema.decodeUnknownOption(AgentPlanRow);
-const decodeAgentRunRow = Schema.decodeUnknownOption(AgentRunRow);
-const decodeAgentUsageRow = Schema.decodeUnknownOption(AgentUsageRow);
+const decodeConversationMessageRow = Schema.decodeUnknownOption(ConversationMessageRow);
+const decodePlanRow = Schema.decodeUnknownOption(PlanRow);
+const decodeTurnRow = Schema.decodeUnknownOption(TurnRow);
+const decodeTurnUsageRow = Schema.decodeUnknownOption(TurnUsageRow);
 
 /** Decodes each durable row directly as the one canonical Effect message representation. */
-export function projectAgentMessages(rows: readonly unknown[]): PanelMessage[] {
-	const decoded: Array<typeof AgentMessageRow.Type> = [];
+export function projectConversationMessages(rows: readonly unknown[]): PanelMessage[] {
+	const decoded: Array<typeof ConversationMessageRow.Type> = [];
 	for (const row of rows) {
-		const parsed = decodeAgentMessageRow(row);
+		const parsed = decodeConversationMessageRow(row);
 		if (Option.isSome(parsed)) decoded.push(parsed.value);
 	}
 	decoded.sort((left, right) => left.sequence - right.sequence);
@@ -136,43 +140,36 @@ export function projectAgentMessages(rows: readonly unknown[]): PanelMessage[] {
 		kind: 'message',
 		key: row.id,
 		id: row.id,
-		taskId: row.task_id,
+		conversationId: row.conversation_id,
 		sequence: row.sequence,
-		runId: row.run_id,
+		runId: row.turn_id,
 		author: row.author,
 		message: row.message,
-		annotation: row.annotation
+		annotation: row.annotation,
+		state: row.state ?? null,
+		priority: row.priority ?? null
 	}));
 }
 
-export function projectAgentPlans(rows: readonly unknown[]): AgentPlanRow[] {
+export function projectPlans(rows: readonly unknown[]): PlanRow[] {
 	return rows.flatMap((row) => {
-		const decoded = decodeAgentPlanRow(row);
+		const decoded = decodePlanRow(row);
 		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
 }
 
-export function projectAgentRuns(rows: readonly unknown[]): AgentRunRow[] {
+export function projectTurns(rows: readonly unknown[]): TurnRow[] {
 	return rows.flatMap((row) => {
-		const decoded = decodeAgentRunRow(row);
+		const decoded = decodeTurnRow(row);
 		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
 }
 
-export function projectAgentUsage(rows: readonly unknown[]): AgentUsageRow[] {
+export function projectAgentUsage(rows: readonly unknown[]): TurnUsageRow[] {
 	return rows.flatMap((row) => {
-		const decoded = decodeAgentUsageRow(row);
+		const decoded = decodeTurnUsageRow(row);
 		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
-}
-
-/** True only when the run row says reasoning was requested; an unknown run never shows any. */
-export function reasoningRequestedFor(
-	runs: readonly AgentRunRow[],
-	runId: string | null
-): boolean {
-	if (runId === null) return false;
-	return runs.find((run) => run.id === runId)?.reasoning_requested === true;
 }
 
 /**
@@ -184,16 +181,16 @@ export function reasoningRequestedFor(
  * nothing. Everything is read off stored rows, which is what lets the divider survive a reload.
  */
 export function modelChangeDividers(
-	runs: readonly AgentRunRow[],
+	runs: readonly TurnRow[],
 	messages: readonly PanelMessage[]
 ): ReadonlyMap<string, string> {
-	const modelByRunId = new Map<string, string>(runs.map((run) => [run.id, run.model_id]));
+	const modelByTurnId = new Map<string, string>(runs.map((run) => [run.id, run.model_id]));
 	const dividers = new Map<string, string>();
 	const seenRuns = new Set<string>();
 	let previousModel: string | null = null;
 	for (const message of [...messages].sort((left, right) => left.sequence - right.sequence)) {
 		if (message.runId === null || seenRuns.has(message.runId)) continue;
-		const model = modelByRunId.get(message.runId);
+		const model = modelByTurnId.get(message.runId);
 		if (model === undefined) continue;
 		seenRuns.add(message.runId);
 		if (previousModel !== null && previousModel !== model) dividers.set(message.id, model);
@@ -212,28 +209,17 @@ const TodoResult = Schema.Struct({ items: Schema.Array(TodoItem) });
 type TodoResult = typeof TodoResult.Type;
 const decodeTodoResult = Schema.decodeUnknownOption(TodoResult);
 
-/** Latest successful todo result for the selected run; legacy prefixed results remain readable. */
-export function latestTodo(
-	messages: readonly PanelMessage[],
-	activeRunId: string | null
-): TodoResult | null {
-	for (const entry of [...messages].toReversed()) {
-		if (activeRunId !== null && entry.runId !== activeRunId) continue;
-		const content = entry.message.content;
-		if (isString(content)) continue;
-		for (const part of [...content].toReversed()) {
-			if (
-				part.type !== 'tool-result' ||
-				!['todo', 'system/todo'].includes(part.name) ||
-				part.isFailure
-			) {
-				continue;
-			}
-			const decoded = decodeTodoResult(part.result);
-			if (Option.isSome(decoded)) return decoded.value;
-		}
-	}
-	return null;
+/**
+ * This conversation's checklist, read from the row the `todo` tool writes.
+ *
+ * It used to be recovered by walking the transcript backwards for the newest successful `todo`
+ * tool-result — a second scanner that had to agree with the runtime's by hand, and that carried a
+ * `system/todo` alias for a name nothing has ever emitted. One stored list, one reader.
+ */
+export function conversationTodos(conversation: { readonly todos?: unknown } | null): TodoResult | null {
+	if (conversation == null) return null;
+	const decoded = decodeTodoResult(conversation.todos);
+	return Option.isSome(decoded) ? decoded.value : null;
 }
 
 type ExactTaskCharge = Readonly<{
@@ -244,12 +230,12 @@ type ExactTaskCharge = Readonly<{
 
 /** Aggregates settled provider charges with integer arithmetic only. */
 export function aggregateTaskCharges(
-	rows: readonly AgentUsageRow[],
+	rows: readonly TurnUsageRow[],
 	runIds: ReadonlySet<string>
 ): ExactTaskCharge[] {
 	const totals = new Map<string, ExactTaskCharge>();
 	for (const row of rows) {
-		if (!runIds.has(row.run_id) || row.settlement_state !== 'settled' || row.charge === null) {
+		if (!runIds.has(row.turn_id) || row.settlement_state !== 'settled' || row.charge === null) {
 			continue;
 		}
 		const charge = row.charge;

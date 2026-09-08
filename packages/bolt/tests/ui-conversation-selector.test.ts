@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectAgentTasks } from '../src/client/ui/agent/conversation-selector.js';
+import { projectConversations } from '../src/client/ui/agent/conversation-selector.js';
 
 const root = {
 	id: '00000000-0000-4000-8000-000000000101',
@@ -8,26 +8,26 @@ const root = {
 	status: 'ready'
 };
 
-describe('projectAgentTasks', () => {
+describe('projectConversations', () => {
 	it('keeps a Task when live sync omits null parent and run keys', () => {
-		expect(projectAgentTasks([root])).toEqual([
+		expect(projectConversations([root])).toEqual([
 			{
 				...root,
 				parent_id: null,
 				active_plan_id: null,
-				active_run_id: null
+				active_turn_id: null
 			}
 		]);
 	});
 
 	it('keeps a Task when those keys arrive as null', () => {
 		expect(
-			projectAgentTasks([
+			projectConversations([
 				{
 					...root,
 					parent_id: null,
 					active_plan_id: null,
-					active_run_id: null
+					active_turn_id: null
 				}
 			])
 		).toHaveLength(1);

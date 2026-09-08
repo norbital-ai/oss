@@ -4,12 +4,12 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { ExactCharge } from '@norbital-ai/bolt-protocol/facilities';
 import { SYSTEM_COLLECTION_MODELS } from '../src/authoring/system-models.js';
 import {
-	AgentMessageRow,
-	AgentPlanRow,
-	AgentRunRow,
-	AgentTaskRow,
-	AgentUsageRow,
-	type AgentMessage
+	ConversationMessageRow,
+	PlanRow,
+	TurnRow,
+	ConversationRow,
+	TurnUsageRow,
+	type ConversationMessage
 } from '../src/runtime/agents/agents.js';
 import { SYSTEM_RELATIONSHIPS } from '../src/runtime/schema/system-collections.js';
 
@@ -37,20 +37,19 @@ const encodedMessage: Prompt.MessageEncoded = {
 };
 
 describe('Effect AI durable contract', () => {
-	it('declares exactly the six RFC agent collections and fields', () => {
+	it('declares exactly the five conversation collections and fields', () => {
 		expect(
 			Object.keys(SYSTEM_COLLECTION_MODELS)
-				.filter((name) => name.startsWith('agent_'))
+				.filter((name) =>
+					['conversation', 'conversation_message', 'turn', 'turn_usage', 'plan'].includes(name)
+				)
 				.toSorted()
-		).toEqual([
-			'agent_inbox',
-			'agent_message',
-			'agent_plan',
-			'agent_run',
-			'agent_task',
-			'agent_usage'
-		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_task.columns)).toEqual([
+		).toEqual(['conversation', 'conversation_message', 'plan', 'turn', 'turn_usage']);
+		// Nothing is called a task any more; the durable work queue keeps that name for itself.
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS).filter((name) => name.startsWith('agent_'))).toEqual(
+			[]
+		);
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS.conversation.columns)).toEqual([
 			'workbench_id',
 			'subject_id',
 			'agent_id',
@@ -58,51 +57,46 @@ describe('Effect AI durable contract', () => {
 			'parent_id',
 			'status',
 			'active_plan_id',
-			'active_run_id',
-			'epoch'
+			'active_turn_id',
+			// The agent's checklist, stored rather than scanned out of the transcript.
+			'todos'
 		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_plan.columns)).toEqual([
-			'task_id',
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS.plan.columns)).toEqual([
+			'conversation_id',
 			'revision',
 			'checkpoint_sequence',
 			'body',
 			'status'
 		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_message.columns)).toEqual([
-			'task_id',
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS.conversation_message.columns)).toEqual([
+			'conversation_id',
 			'sequence',
-			'run_id',
+			'turn_id',
 			'author',
 			'message',
 			'semantic_hash',
 			'annotation',
-			'supersedes_id'
-		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_inbox.columns)).toEqual([
-			'task_id',
-			'sequence',
-			'message_id',
-			'mode',
-			'model_id',
-			'priority',
+			'supersedes_id',
+			// The message queue, folded onto the message it is about.
 			'state',
-			'claimed_run_id'
+			'mode',
+			'priority',
+			'model_id'
 		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_run.columns)).toEqual([
-			'task_id',
-			'directive_id',
-			'epoch',
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS.turn.columns)).toEqual([
+			'conversation_id',
+			'input_message_id',
 			'mode',
 			'phase',
 			'input_through_sequence',
 			'model_id',
-			'reasoning_requested',
+			'context_window_tokens',
 			'capability_snapshot',
 			'status'
 		]);
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS.agent_usage.columns)).toEqual([
+		expect(Object.keys(SYSTEM_COLLECTION_MODELS.turn_usage.columns)).toEqual([
 			'call_id',
-			'run_id',
+			'turn_id',
 			'provider',
 			'model',
 			'operation',
@@ -116,11 +110,11 @@ describe('Effect AI durable contract', () => {
 	});
 
 	it('stores one complete Effect message row', () => {
-		const row = Schema.decodeUnknownSync(AgentMessageRow)({
+		const row = Schema.decodeUnknownSync(ConversationMessageRow)({
 			id: durableIds.message,
-			task_id: durableIds.task,
+			conversation_id: durableIds.task,
 			sequence: 1,
-			run_id: durableIds.run,
+			turn_id: durableIds.run,
 			author: { kind: 'agent', id: 'assistant' },
 			message: encodedMessage,
 			semantic_hash: 'sha256:message'
@@ -128,25 +122,24 @@ describe('Effect AI durable contract', () => {
 		const decoded = Schema.decodeUnknownSync(Prompt.Message)(row.message);
 
 		expect(Schema.encodeSync(Prompt.Message)(decoded)).toEqual(encodedMessage);
-		expectTypeOf<AgentMessage['message']>().toEqualTypeOf<Prompt.MessageEncoded>();
+		expectTypeOf<ConversationMessage['message']>().toEqualTypeOf<Prompt.MessageEncoded>();
 	});
 
 	it('decodes Task, Plan, directive, and public run metadata boundaries', () => {
 		expect(
-			Schema.decodeUnknownSync(AgentTaskRow)({
+			Schema.decodeUnknownSync(ConversationRow)({
 				id: durableIds.task,
 				workbench_id: 'workbench-1',
 				subject_id: 'subject-1',
 				agent_id: 'agent-1',
 				audience: 'personal',
 				status: 'ready',
-				epoch: 0
 			}).status
 		).toBe('ready');
 		expect(
-			Schema.decodeUnknownSync(AgentPlanRow)({
+			Schema.decodeUnknownSync(PlanRow)({
 				id: durableIds.plan,
-				task_id: durableIds.task,
+				conversation_id: durableIds.task,
 				revision: 1,
 				checkpoint_sequence: 0,
 				body: 'Objective, approach, and verification contract.',
@@ -154,16 +147,15 @@ describe('Effect AI durable contract', () => {
 			}).revision
 		).toBe(1);
 		expect(
-			Schema.decodeUnknownSync(AgentRunRow)({
+			Schema.decodeUnknownSync(TurnRow)({
 				id: durableIds.run,
-				task_id: durableIds.task,
-				directive_id: durableIds.directive,
-				epoch: 1,
+				conversation_id: durableIds.task,
+				input_message_id: durableIds.directive,
 				mode: 'agent',
 				phase: 'model',
 				input_through_sequence: 2,
+				context_window_tokens: 1_000_000,
 				model_id: 'effect-model',
-				reasoning_requested: false,
 				status: 'running'
 			}).model_id
 		).toBe('effect-model');
@@ -175,10 +167,10 @@ describe('Effect AI durable contract', () => {
 			coefficient: '125',
 			scale: 6
 		});
-		const usage = Schema.decodeUnknownSync(AgentUsageRow)({
+		const usage = Schema.decodeUnknownSync(TurnUsageRow)({
 			id: durableIds.message,
 			call_id: 'provider-call-1',
-			run_id: durableIds.run,
+			turn_id: durableIds.run,
 			provider: 'provider',
 			model: 'model',
 			operation: 'language',
@@ -203,17 +195,16 @@ describe('Effect AI durable contract', () => {
 		);
 		expect(routes).toEqual(
 			expect.arrayContaining([
-				'agent_task.parentTask->agent_task',
-				'agent_task.children->agent_task',
-				'agent_task.activePlan->agent_plan',
-				'agent_task.activeRun->agent_run',
-				'agent_message.task->agent_task',
-				'agent_message.supersedes->agent_message',
-				'agent_inbox.message->agent_message',
-				'agent_run.directive->agent_inbox',
-				'agent_run.messages->agent_message',
-				'agent_run.usage->agent_usage',
-				'agent_usage.run->agent_run'
+				'conversation.parentTask->conversation',
+				'conversation.children->conversation',
+				'conversation.activePlan->plan',
+				'conversation.activeRun->turn',
+				'conversation_message.task->conversation',
+				'conversation_message.supersedes->conversation_message',
+				'turn.input->conversation_message',
+				'turn.messages->conversation_message',
+				'turn.usage->turn_usage',
+				'turn_usage.run->turn'
 			])
 		);
 	});

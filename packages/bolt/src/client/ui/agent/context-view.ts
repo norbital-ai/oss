@@ -1,9 +1,9 @@
 import { Schema } from 'effect';
-import type { AgentPlanRow, AgentRunRow, PanelMessage } from './transcript.js';
+import type { PlanRow, TurnRow, PanelMessage } from './transcript.js';
 
 const isString = Schema.is(Schema.String);
 
-export type CompactOrigin = 'automatic' | 'manual' | 'unresolved';
+export type CompactOrigin = 'automatic' | 'manual' | 'requested' | 'unresolved';
 
 type AgentContextView = Readonly<{
 	checkpoint: PanelMessage | null;
@@ -17,18 +17,16 @@ type AgentContextView = Readonly<{
 const compactCheckpoint = (messages: readonly PanelMessage[]): PanelMessage | null =>
 	messages.findLast((message) => message.annotation?.tag === 'compact') ?? null;
 
-/** Derives manual/automatic Compact provenance from the canonical owning run. */
-export function compactOrigin(
-	checkpoint: PanelMessage,
-	runs: readonly AgentRunRow[]
-): CompactOrigin {
-	if (checkpoint.annotation?.tag !== 'compact' || checkpoint.runId === null) {
-		return 'unresolved';
-	}
-	const run = runs.find((candidate) => candidate.id === checkpoint.runId);
-	if (run?.mode === 'compact') return 'manual';
-	if (run?.mode === 'agent') return 'automatic';
-	return 'unresolved';
+/**
+ * Who asked for this checkpoint, read from the checkpoint.
+ *
+ * It used to be inferred from the owning run's `mode` — `compact` meant a person, `agent` meant the
+ * runtime — which was a second scanner that had to agree with the runtime's by hand, and could not
+ * express the third case at all: an agent calling `compact` on itself runs in `agent` mode and would
+ * have read as automatic. The annotation has always carried `origin`; now it is what is read.
+ */
+export function compactOrigin(checkpoint: PanelMessage): CompactOrigin {
+	return checkpoint.annotation?.tag === 'compact' ? checkpoint.annotation.origin : 'unresolved';
 }
 
 /**
@@ -38,8 +36,8 @@ export function compactOrigin(
 export function projectAgentContextView(
 	input: Readonly<{
 		messages: readonly PanelMessage[];
-		runs: readonly AgentRunRow[];
-		activePlan?: AgentPlanRow | undefined;
+		runs: readonly TurnRow[];
+		activePlan?: PlanRow | undefined;
 	}>
 ): AgentContextView {
 	const latestCheckpoint = compactCheckpoint(input.messages);
@@ -81,7 +79,7 @@ export function projectAgentContextView(
 
 	return {
 		checkpoint,
-		checkpointOrigin: checkpoint === null ? null : compactOrigin(checkpoint, input.runs),
+		checkpointOrigin: checkpoint === null ? null : compactOrigin(checkpoint),
 		focusMessages: input.messages.filter(
 			(message) => !outsideMessageIds.has(message.id) && message.id !== checkpoint?.id
 		),

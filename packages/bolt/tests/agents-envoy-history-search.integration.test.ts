@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { TaskId } from '@norbital-ai/bolt-protocol';
+import { ConversationId } from '@norbital-ai/bolt-protocol';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { HostTools } from '../src/runtime/facilities/services.js';
 import * as Agents from '../src/runtime/agents/agents.js';
@@ -20,33 +20,33 @@ afterEach(async () => {
 
 const insertTask = async (
 	runtime: BoltTestRuntime,
-	taskId: TaskId,
+	conversationId: ConversationId,
 	workbenchId: string,
 	agentId: string,
 	audience: 'personal' | 'workbench'
 ) => {
 	await runtime.database.query(
-		`insert into agent_task
-		 (id, workbench_id, subject_id, agent_id, audience, status, epoch)
-		 values ($1, $2, $3, $4, $5, 'ready', 0)`,
-		[taskId, workbenchId, adminSubject.userId, agentId, audience]
+		`insert into conversation
+		 (id, workbench_id, subject_id, agent_id, audience, status)
+		 values ($1, $2, $3, $4, $5, 'ready')`,
+		[conversationId, workbenchId, adminSubject.userId, agentId, audience]
 	);
 };
 
 const insertMessage = async (
 	runtime: BoltTestRuntime,
 	messageId: string,
-	taskId: TaskId,
+	conversationId: ConversationId,
 	sequence: number,
 	text: string
 ) => {
 	await runtime.database.query(
-		`insert into agent_message
-		 (id, task_id, sequence, author, message, semantic_hash)
+		`insert into conversation_message
+		 (id, conversation_id, sequence, author, message, semantic_hash)
 		 values ($1, $2, $3, $4, $5, $6)`,
 		[
 			messageId,
-			taskId,
+			conversationId,
 			sequence,
 			{ kind: 'human', id: adminSubject.userId },
 			Agents.userAgentInput(text),
@@ -58,8 +58,8 @@ const insertMessage = async (
 describe('Task history search scope', () => {
 	it('defaults to one Task and expands only to Tasks in the same workbench', async () => {
 		harness = await makeBoltTestRuntime();
-		const firstTask = TaskId.make('00000000-0000-4000-8000-000000000701');
-		const secondTask = TaskId.make('00000000-0000-4000-8000-000000000702');
+		const firstTask = ConversationId.make('00000000-0000-4000-8000-000000000701');
+		const secondTask = ConversationId.make('00000000-0000-4000-8000-000000000702');
 		await insertTask(harness, firstTask, 'field-workbench', 'desk', 'workbench');
 		await insertTask(harness, secondTask, 'field-workbench', 'desk', 'workbench');
 		await insertMessage(
@@ -87,7 +87,7 @@ describe('Task history search scope', () => {
 						effectId: harness!.effectId('history:search'),
 						subject: adminSubject,
 						agentId: 'desk',
-						taskId: firstTask,
+						conversationId: firstTask,
 						workbenchId: 'field-workbench',
 						skills: [],
 						toolNames: ['search_task_history'],
@@ -116,19 +116,19 @@ describe('Task history search scope', () => {
 
 	it('searches every complete Effect message persisted for one Task', async () => {
 		harness = await makeBoltTestRuntime();
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000703');
-		await insertTask(harness, taskId, taskId, 'web', 'personal');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000703');
+		await insertTask(harness, conversationId, conversationId, 'web', 'personal');
 		await insertMessage(
 			harness,
 			'00000000-0000-4000-8000-000000000713',
-			taskId,
+			conversationId,
 			1,
 			'older searchable marker'
 		);
 		await insertMessage(
 			harness,
 			'00000000-0000-4000-8000-000000000714',
-			taskId,
+			conversationId,
 			2,
 			'incoming queued marker'
 		);
@@ -145,8 +145,8 @@ describe('Task history search scope', () => {
 						effectId: harness!.effectId('history:web'),
 						subject: adminSubject,
 						agentId: 'web',
-						taskId,
-						workbenchId: taskId,
+						conversationId,
+						workbenchId: conversationId,
 						skills: [],
 						toolNames: ['search_task_history'],
 						collectionNames: [],

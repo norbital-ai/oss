@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
@@ -69,10 +69,10 @@ describe('Task collection discovery', () => {
 		const generated = twin.requests;
 		harness = await makeBoltTestRuntime(definition, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000301');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000301');
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('collection-discovery:submit'), subject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('whatsapp-field'),
 				message: Agents.userAgentInput('Describe reachable collections'),
 				mode: DirectiveMode.make('agent'),
@@ -80,7 +80,7 @@ describe('Task collection discovery', () => {
 			})
 		);
 		const executed = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('collection-discovery:execute'), subject, taskId)
+			agents.execute(harness.effectId('collection-discovery:execute'), subject, conversationId)
 		);
 
 		expect(executed.status).toBe('done');

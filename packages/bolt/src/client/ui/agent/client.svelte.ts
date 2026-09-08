@@ -1,12 +1,12 @@
 import { Effect, Schema } from 'effect';
 import type { Prompt } from 'effect/unstable/ai';
 import {
-	TaskControlRequest,
-	type TaskControlResult,
-	TaskEditMessageRequest,
-	type TaskEditMessageResult,
-	TaskSubmitRequest,
-	type TaskSubmitResult
+	ConversationControlRequest,
+	type ConversationControlResult,
+	ConversationEditMessageRequest,
+	type ConversationEditMessageResult,
+	ConversationSendRequest,
+	type ConversationSendResult
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
 import { getContext, setContext } from 'svelte';
@@ -15,31 +15,31 @@ import type { Subject } from '#lib/runtime/identity/identity.js';
 import { COMPOSER_COMMAND_DEADLINE_MILLIS } from './composer-send.js';
 
 type TaskSubmissionInput = Readonly<{
-	readonly taskId?: string;
+	readonly conversationId?: string;
 	readonly submissionId?: string;
 	readonly message: Prompt.MessageEncoded;
-	readonly mode: TaskSubmitRequest['mode'];
-	readonly priority?: TaskSubmitRequest['priority'];
+	readonly mode: ConversationSendRequest['mode'];
+	readonly priority?: ConversationSendRequest['priority'];
 	readonly modelId?: string;
 }>;
 
 type TaskSubmission = Readonly<{
-	readonly taskId: TaskSubmitRequest['taskId'];
-	readonly directiveId: TaskSubmitResult['directiveId'];
+	readonly conversationId: ConversationSendRequest['conversationId'];
+	readonly messageId: ConversationSendResult['messageId'];
 }>;
 
 type TaskRevisionInput = Readonly<{
-	readonly taskId: string;
+	readonly conversationId: string;
 	readonly messageId: string;
 	readonly message: Prompt.MessageEncoded;
 	readonly modelId?: string;
 }>;
 
 type TaskRevision = Readonly<{
-	readonly taskId: TaskEditMessageRequest['taskId'];
-	readonly directiveId: TaskEditMessageResult['directiveId'];
-	readonly messageId: TaskEditMessageResult['messageId'];
-	readonly supersedesId: TaskEditMessageResult['supersedesId'];
+	readonly conversationId: ConversationEditMessageRequest['conversationId'];
+
+	readonly messageId: ConversationEditMessageResult['messageId'];
+	readonly supersedesId: ConversationEditMessageResult['supersedesId'];
 }>;
 
 class AgentClientFailure extends Schema.TaggedError<AgentClientFailure>()(
@@ -60,30 +60,30 @@ const agentRequest = <A, E>(operation: string, request: Effect.Effect<A, E>) =>
 	);
 
 /** Runtime capabilities shared by the workspace shell and its Task surfaces. */
-export type AgentRuntimeConfig = Readonly<{
+export type TurntimeConfig = Readonly<{
 	readonly client: WorkspaceClient;
 	readonly subject: Subject;
 	readonly agentId: string;
 }>;
 
 type AgentSurface = {
-	taskId: string | undefined;
+	conversationId: string | undefined;
 	composingNew: boolean;
 	pending: boolean;
 	failed: boolean;
 };
 
 type AgentClient = Readonly<{
-	runtime: AgentRuntimeConfig;
+	runtime: TurntimeConfig;
 	surface: AgentSurface;
 	writeSurface: (next: AgentSurface) => void;
 	submit: (input: TaskSubmissionInput) => Effect.Effect<TaskSubmission, AgentClientFailure>;
 	editMessage: (input: TaskRevisionInput) => Effect.Effect<TaskRevision, AgentClientFailure>;
 	control: (
-		taskId: string,
-		action: TaskControlRequest['action'],
+		conversationId: string,
+		action: ConversationControlRequest['action'],
 		modelId?: string
-	) => Effect.Effect<TaskControlResult, AgentClientFailure>;
+	) => Effect.Effect<ConversationControlResult, AgentClientFailure>;
 }>;
 
 const AGENT_CLIENT_CONTEXT = Symbol('norbital.agent-client');
@@ -93,15 +93,15 @@ const AGENT_CLIENT_CONTEXT = Symbol('norbital.agent-client');
  * durable reads remain ordinary Live Query collection reads.
  */
 function submitTask(
-	active: AgentRuntimeConfig,
+	active: TurntimeConfig,
 	input: TaskSubmissionInput,
 	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): Effect.Effect<TaskSubmission, AgentClientFailure> {
-	const taskId = input.taskId ?? randomId();
+	const conversationId = input.conversationId ?? randomId();
 	return agentRequest(
-		'tasks.submit',
-		Schema.decodeUnknownEffect(TaskSubmitRequest)({
-			taskId,
+		'conversations.send',
+		Schema.decodeUnknownEffect(ConversationSendRequest)({
+			conversationId,
 			submissionId: input.submissionId ?? randomId(),
 			agentId: active.agentId,
 			message: input.message,
@@ -110,10 +110,10 @@ function submitTask(
 			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
-				active.client.system.tasks
-					.submit(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
+				active.client.system.conversations
+					.send(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
 					.pipe(
-						Effect.map((result) => ({ taskId: request.taskId, directiveId: result.directiveId }))
+						Effect.map((result) => ({ conversationId: request.conversationId, messageId: result.messageId }))
 					)
 			)
 		)
@@ -121,24 +121,23 @@ function submitTask(
 }
 
 function editTask(
-	active: AgentRuntimeConfig,
+	active: TurntimeConfig,
 	input: TaskRevisionInput
 ): Effect.Effect<TaskRevision, AgentClientFailure> {
 	return agentRequest(
-		'tasks.editMessage',
-		Schema.decodeUnknownEffect(TaskEditMessageRequest)({
-			taskId: input.taskId,
+		'conversations.editMessage',
+		Schema.decodeUnknownEffect(ConversationEditMessageRequest)({
+			conversationId: input.conversationId,
 			messageId: input.messageId,
 			message: input.message,
 			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
-				active.client.system.tasks
+				active.client.system.conversations
 					.editMessage(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
 					.pipe(
 						Effect.map((result) => ({
-							taskId: request.taskId,
-							directiveId: result.directiveId,
+							conversationId: request.conversationId,
 							messageId: result.messageId,
 							supersedesId: result.supersedesId
 						}))
@@ -148,21 +147,21 @@ function editTask(
 	);
 }
 
-function controlTask(
-	active: AgentRuntimeConfig,
-	taskId: string,
-	action: TaskControlRequest['action'],
+function controlConversation(
+	active: TurntimeConfig,
+	conversationId: string,
+	action: ConversationControlRequest['action'],
 	modelId?: string
-): Effect.Effect<TaskControlResult, AgentClientFailure> {
+): Effect.Effect<ConversationControlResult, AgentClientFailure> {
 	return agentRequest(
-		'tasks.control',
-		Schema.decodeUnknownEffect(TaskControlRequest)({
-			taskId,
+		'conversations.control',
+		Schema.decodeUnknownEffect(ConversationControlRequest)({
+			conversationId,
 			action,
 			...(modelId === undefined || action === 'stop' ? {} : { modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
-				active.client.system.tasks.control(
+				active.client.system.conversations.control(
 					request,
 					AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS)
 				)
@@ -172,9 +171,9 @@ function controlTask(
 }
 
 /** Builds one mounted workspace's Task state and actions. */
-export function createAgentClient(runtime: AgentRuntimeConfig): AgentClient {
+export function createAgentClient(runtime: TurntimeConfig): AgentClient {
 	const surface = $state<AgentSurface>({
-		taskId: undefined,
+		conversationId: undefined,
 		composingNew: false,
 		pending: false,
 		failed: false
@@ -183,19 +182,19 @@ export function createAgentClient(runtime: AgentRuntimeConfig): AgentClient {
 		runtime,
 		surface,
 		writeSurface: (next) => {
-			surface.taskId = next.taskId;
+			surface.conversationId = next.conversationId;
 			surface.composingNew = next.composingNew;
 			surface.pending = next.pending;
 			surface.failed = next.failed;
 		},
 		submit: (input) => submitTask(runtime, input),
 		editMessage: (input) => editTask(runtime, input),
-		control: (taskId, action, modelId) => controlTask(runtime, taskId, action, modelId)
+		control: (conversationId, action, modelId) => controlConversation(runtime, conversationId, action, modelId)
 	};
 }
 
 /** Publishes one workspace-owned Task client to descendant surfaces. */
-export function provideAgentClient(runtime: AgentRuntimeConfig): AgentClient {
+export function provideAgentClient(runtime: TurntimeConfig): AgentClient {
 	const client = createAgentClient(runtime);
 	setContext(AGENT_CLIENT_CONTEXT, client);
 	return client;

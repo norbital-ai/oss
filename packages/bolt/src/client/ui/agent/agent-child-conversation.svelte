@@ -5,7 +5,6 @@
 	import AgentContextSegment from './agent-context-segment.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import { projectAgentContextView } from './context-view.js';
-	import { reasoningRequestedFor } from './transcript.js';
 	import {
 		diagnostic,
 		diagnosticLanguage,
@@ -23,13 +22,13 @@
 	let { link, transcript }: { link: SubagentLink; transcript: SubagentTranscript } = $props();
 
 	const task = $derived(
-		link.taskId === null ? undefined : transcript.tasks.find((task) => task.id === link.taskId)
+		link.conversationId === null ? undefined : transcript.tasks.find((task) => task.id === link.conversationId)
 	);
 	const messages = $derived(
-		task === undefined ? [] : transcript.messages.filter((message) => message.taskId === task.id)
+		task === undefined ? [] : transcript.messages.filter((message) => message.conversationId === task.id)
 	);
 	const runs = $derived(
-		task === undefined ? [] : transcript.runs.filter((run) => run.task_id === task.id)
+		task === undefined ? [] : transcript.runs.filter((run) => run.conversation_id === task.id)
 	);
 	const plan = $derived(
 		task === undefined || task.active_plan_id === null
@@ -40,9 +39,7 @@
 		projectAgentContextView({ messages, runs, ...(plan === undefined ? {} : { activePlan: plan }) })
 	);
 	const tools = $derived(pairToolCalls(messages));
-	const running = $derived(
-		link.pending || task?.status === 'running' || task?.status === 'waiting'
-	);
+	const running = $derived(link.pending || task?.status === 'running');
 	const state = $derived(
 		link.failure !== null ? 'failed' : link.pending ? 'starting' : (task?.status ?? 'missing')
 	);
@@ -53,7 +50,7 @@
 				? 'Starting child'
 				: task.status === 'done'
 					? 'Required result ready'
-					: task.status === 'running' || task.status === 'waiting'
+					: task.status === 'running'
 						? 'Required child in progress'
 						: `Required child · ${task.status}`
 	);
@@ -101,7 +98,6 @@
 						mode={message.runId === null
 							? null
 							: (runs.find((run) => run.id === message.runId)?.mode ?? null)}
-						reasoningRequested={reasoningRequestedFor(runs, message.runId)}
 						parentAttribution={true}
 					/>
 				{/each}

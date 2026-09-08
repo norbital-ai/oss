@@ -4,7 +4,7 @@ import { Prompt } from 'effect/unstable/ai';
 import { AIRequest, AIResponse } from '@norbital-ai/bolt-protocol';
 import type { AIGenerationResult, FacilityBinding } from '@norbital-ai/bolt-protocol';
 import { makeAiBinding } from '@norbital-ai/bolt-server';
-import { testAiCatalog } from './catalog-ai.js';
+import { testAiCatalog, TEST_CONTEXT_WINDOW_TOKENS } from './catalog-ai.js';
 
 /**
  * A recorded model turn file. Only provider OUTPUTS are captured — the `Generated`
@@ -279,7 +279,9 @@ const inspectRequest = (request: GenerateRequest): CassetteInspection => {
 		callId: request.callId,
 		maxOutputTokens: request.maxOutputTokens,
 		promptBytes: new TextEncoder().encode(encoded).byteLength,
-		automaticCompact: texts.some((text) => text.includes('Automatic Compact:')),
+		automaticCompact: texts.some(
+			(text) => text.includes('Automatic Compact:') || text.includes('Requested Compact:')
+		),
 		planMode: texts.some((text) => text.startsWith('Plan mode:')),
 		compactMode: texts.some((text) =>
 			text.includes(
@@ -295,14 +297,35 @@ const inspectRequest = (request: GenerateRequest): CassetteInspection => {
  * with the same feed semantics (every Generate inspected, auto-compact answered canned).
  * Tests that scripted fixed reply arrays swap by replacing the array with a cassette file.
  */
-export const cassetteTranscript = (cassette: AgentCassette) => {
+export const cassetteTranscript = (
+	cassette: AgentCassette,
+	/**
+	 * The window every model in this twin's catalog claims.
+	 *
+	 * Compaction fires at a fraction of the model's own context window, so a suite that wants to see
+	 * it states a window small enough for its fixture to exceed. Everything else takes the default,
+	 * which is large enough that no suite compacts by accident.
+	 */
+	contextWindowTokens: number = TEST_CONTEXT_WINDOW_TOKENS
+) => {
+	const catalog = {
+		...testAiCatalog,
+		languageModels: testAiCatalog.languageModels.map((model) => ({
+			...model,
+			contextWindowTokens
+		})),
+		embeddingModels: testAiCatalog.embeddingModels.map((model) => ({
+			...model,
+			contextWindowTokens
+		}))
+	};
 	const feed: Array<CassetteInspection> = [];
 	const requests: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 	const verdictRequests: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 	const state: PlayState = { next: 0, verdictNext: 0 };
 	const ai = makeAiBinding({
 		call: async (_metadata, request) => {
-			if (request._tag === 'Catalog') return testAiCatalog;
+			if (request._tag === 'Catalog') return catalog;
 			if (request._tag !== 'Generate') throw new Error('cassetteAi: Generate required');
 			if (request.output._tag === 'PlanVerdict') {
 				verdictRequests.push(request);

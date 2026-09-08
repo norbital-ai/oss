@@ -5,7 +5,7 @@ import {
 	createTailFollower,
 	transcriptTailSignature
 } from '../src/client/ui/agent/transcript-follow.js';
-import { projectAgentMessages } from '../src/client/ui/agent/transcript.js';
+import { projectConversationMessages } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 
 /** A scrollport with geometry only; the test grows it the way arriving rows would. */
@@ -16,7 +16,7 @@ const port = (scrollTop: number, scrollHeight: number, clientHeight = 600): Grow
 	clientHeight
 });
 
-const taskId = '00000000-0000-4000-8000-000000000611';
+const conversationId = '00000000-0000-4000-8000-000000000611';
 
 describe('AGENT-UI5 the transcript follows its tail', () => {
 	it('counts a reader within the slack of the end as at the end', () => {
@@ -80,8 +80,8 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 
 	it('changes its signature for every arrival a reader would want to see', () => {
 		const rows = (extra: ReadonlyArray<Parameters<typeof canonicalAgentRows>[0][number]>) =>
-			projectAgentMessages(
-				canonicalAgentRows([{ taskId, message: { role: 'user', content: 'Count them' } }, ...extra])
+			projectConversationMessages(
+				canonicalAgentRows([{ conversationId, message: { role: 'user', content: 'Count them' } }, ...extra])
 			);
 		const empty = transcriptTailSignature([], false);
 		const userOnly = transcriptTailSignature(rows([]), false);
@@ -89,7 +89,7 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 		const streaming = transcriptTailSignature(
 			rows([
 				{
-					taskId,
+					conversationId,
 					message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty' }] },
 					annotation: { tag: 'generation', callId: 'call', sequence: 0, activeParts: [0] }
 				}
@@ -99,7 +99,7 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 		const moreText = transcriptTailSignature(
 			rows([
 				{
-					taskId,
+					conversationId,
 					message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty-nine' }] },
 					annotation: { tag: 'generation', callId: 'call', sequence: 1, activeParts: [0] }
 				}
@@ -108,14 +108,14 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 		);
 		const settled = transcriptTailSignature(
 			rows([
-				{ taskId, message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty-nine' }] } }
+				{ conversationId, message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty-nine' }] } }
 			]),
 			false
 		);
 		const toolRow = transcriptTailSignature(
 			rows([
 				{
-					taskId,
+					conversationId,
 					message: {
 						role: 'assistant',
 						content: [{ type: 'tool-call', id: 'c1', name: 'read_collection', params: {} }]

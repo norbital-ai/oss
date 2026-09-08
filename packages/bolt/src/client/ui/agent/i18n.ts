@@ -1,6 +1,6 @@
 import { defineMessages, type LocaleCatalogs } from '@norbital-ai/std/i18n';
 
-const boltAgentMessages = defineMessages({
+const boltConversationMessages = defineMessages({
 	en: {
 		'bolt.agent.adminConversationReadOnly':
 			'Read-only administrator view. Only the conversation owner can reply.',
@@ -1126,7 +1126,7 @@ export type TenantMessageCatalogs = {
  * thing this function exists to do, carry workspace-authored keys a package cannot know, did not
  * typecheck at the call site.
  */
-export function mergeBoltAgentMessages(
+export function mergeBoltConversationMessages(
 	uiMessages: LocaleCatalogs,
 	tenantMessages?: TenantMessageCatalogs
 ): {
@@ -1134,8 +1134,8 @@ export function mergeBoltAgentMessages(
 	readonly zh: Readonly<Record<string, string>>;
 } {
 	const defined = defineMessages({
-		en: { ...uiMessages.en, ...boltAgentMessages.en },
-		zh: { ...uiMessages.zh, ...boltAgentMessages.zh }
+		en: { ...uiMessages.en, ...boltConversationMessages.en },
+		zh: { ...uiMessages.zh, ...boltConversationMessages.zh }
 	});
 	// Annotated rather than inferred: `?? {}` widens to a union with the empty object literal, and
 	// spreading that union drops the index signature — so the merged catalog typed as a closed set

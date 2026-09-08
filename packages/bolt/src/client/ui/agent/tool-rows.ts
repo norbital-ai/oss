@@ -7,8 +7,8 @@
  */
 import { Option, Result, Schema } from 'effect';
 import type { Prompt } from 'effect/unstable/ai';
-import type { AgentTask } from './conversation-selector.js';
-import type { AgentPlanRow, AgentRunRow, PanelMessage } from './transcript.js';
+import type { Conversation } from './conversation-selector.js';
+import type { PlanRow, TurnRow, PanelMessage } from './transcript.js';
 
 export type ToolCallPart = Prompt.ToolCallPartEncoded;
 export type ToolResultPart = Prompt.ToolResultPartEncoded;
@@ -45,7 +45,7 @@ const SpawnParams = Schema.Struct({
 });
 const decodeSpawnParams = Schema.decodeUnknownOption(SpawnParams);
 
-const SpawnResult = Schema.Struct({ taskId: Schema.NonEmptyString });
+const SpawnResult = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const decodeSpawnResult = Schema.decodeUnknownOption(SpawnResult);
 
 /** A `subagent` spawn call resolved against its result: the child it started, or why it did not. */
@@ -53,7 +53,7 @@ export type SubagentLink = Readonly<{
 	toolCallId: string;
 	agentId: string;
 	/** The child task the spawn created; `null` while pending or after a failed spawn. */
-	taskId: string | null;
+	conversationId: string | null;
 	/** The spawn's error text, rendered as the block's only line; `null` unless the spawn failed. */
 	failure: string | null;
 	/** True until the runtime has answered the call. */
@@ -70,7 +70,7 @@ export function subagentLink(call: ToolCallPart, result: ToolResultPart | undefi
 	return {
 		toolCallId: call.id,
 		agentId: params.value.agentId ?? call.name,
-		taskId: Option.isSome(spawned) ? spawned.value.taskId : null,
+		conversationId: Option.isSome(spawned) ? spawned.value.conversationId : null,
 		failure: result?.isFailure === true ? diagnostic(result.result) : null,
 		pending: result === undefined,
 		raw: { params: call.params, result: result?.result }
@@ -79,10 +79,10 @@ export function subagentLink(call: ToolCallPart, result: ToolResultPart | undefi
 
 /** Everything a nested child conversation reads, handed down unchanged through every level. */
 export type SubagentTranscript = Readonly<{
-	tasks: readonly AgentTask[];
+	tasks: readonly Conversation[];
 	messages: readonly PanelMessage[];
-	runs: readonly AgentRunRow[];
-	plans: readonly AgentPlanRow[];
+	runs: readonly TurnRow[];
+	plans: readonly PlanRow[];
 }>;
 
 /** Text for a payload: strings verbatim, everything else pretty JSON. */

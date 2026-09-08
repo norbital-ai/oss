@@ -144,7 +144,7 @@ It is the tenant id and the string typed at `/login`. It is not the directory na
 ## Guest runtime
 
 `src/runtime/app.ts` builds Effect layers from the artifact. `src/runtime/dispatch.ts` routes
-commands (`collections.mutate`, `sync.connect`, `sync.advance`, `tasks.submit`, …).
+commands (`collections.mutate`, `sync.connect`, `sync.advance`, `conversations.send`, …).
 
 The guest has no Node builtins. Every I/O port is a facility the host binds per invocation
 (`packages/bolt-protocol/src/facilities.ts`). On Colony that binding happens inside a fresh

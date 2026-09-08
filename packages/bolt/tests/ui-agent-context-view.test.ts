@@ -5,48 +5,48 @@ import {
 	projectAgentContextView
 } from '../src/client/ui/agent/context-view.js';
 import {
-	projectAgentMessages,
-	projectAgentPlans,
-	projectAgentRuns
+	projectConversationMessages,
+	projectPlans,
+	projectTurns
 } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 
-const taskId = '00000000-0000-4000-8000-000000000401';
-const agentRunId = '00000000-0000-4000-8000-000000000402';
-const planRunId = '00000000-0000-4000-8000-000000000403';
-const compactRunId = '00000000-0000-4000-8000-000000000404';
+const conversationId = '00000000-0000-4000-8000-000000000401';
+const agentTurnId = '00000000-0000-4000-8000-000000000402';
+const planTurnId = '00000000-0000-4000-8000-000000000403';
+const compactTurnId = '00000000-0000-4000-8000-000000000404';
 const planId = '00000000-0000-4000-8000-000000000405';
 
 const runRow = (id: string, mode: 'agent' | 'plan' | 'compact') => ({
 	id,
-	task_id: taskId,
-	directive_id: '00000000-0000-4000-8000-000000000406',
-	epoch: 1,
+	conversation_id: conversationId,
+	input_message_id: '00000000-0000-4000-8000-000000000406',
 	mode,
 	phase: 'model',
 	input_through_sequence: 8,
+	context_window_tokens: 1_000_000,
 	model_id: 'openrouter/test-model',
 	status: 'succeeded'
 });
 
 describe('agent model-view projection', () => {
 	it('keeps a planning revision visible until its replacement plan owns the transcript', () => {
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
-				{ taskId, message: { role: 'user', content: 'Original objective' } },
-				{ taskId, runId: planRunId, message: { role: 'assistant', content: 'Complete plan one' } },
-				{ taskId, message: { role: 'user', content: 'Add validation' } },
-				{ taskId, runId: agentRunId, message: { role: 'assistant', content: 'Complete plan two' } }
+				{ conversationId, message: { role: 'user', content: 'Original objective' } },
+				{ conversationId, runId: planTurnId, message: { role: 'assistant', content: 'Complete plan one' } },
+				{ conversationId, message: { role: 'user', content: 'Add validation' } },
+				{ conversationId, runId: agentTurnId, message: { role: 'assistant', content: 'Complete plan two' } }
 			])
 		);
-		const runs = projectAgentRuns([
-			runRow(planRunId, 'plan'),
-			{ ...runRow(agentRunId, 'plan'), status: 'running' }
+		const runs = projectTurns([
+			runRow(planTurnId, 'plan'),
+			{ ...runRow(agentTurnId, 'plan'), status: 'running' }
 		]);
-		const plan = projectAgentPlans([
+		const plan = projectPlans([
 			{
 				id: planId,
-				task_id: taskId,
+				conversation_id: conversationId,
 				revision: 1,
 				checkpoint_sequence: 1,
 				body: 'Complete plan one',
@@ -67,47 +67,48 @@ describe('agent model-view projection', () => {
 	});
 
 	it('separates the active Plan/Compact focus from durable transcript history', () => {
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
-				{ taskId, message: { role: 'user', content: 'Old requirement' } },
-				{ taskId, message: { role: 'assistant', content: 'Old answer' } },
+				{ conversationId, message: { role: 'user', content: 'Old requirement' } },
+				{ conversationId, message: { role: 'assistant', content: 'Old answer' } },
 				{
-					taskId,
-					runId: planRunId,
+					conversationId,
+					runId: planTurnId,
 					message: { role: 'user', content: 'Plan the replacement' }
 				},
 				{
-					taskId,
-					runId: planRunId,
+					conversationId,
+					runId: planTurnId,
 					message: { role: 'assistant', content: 'Detailed planning turn' }
 				},
 				{
-					taskId,
-					runId: agentRunId,
+					conversationId,
+					runId: agentTurnId,
 					message: { role: 'assistant', content: 'Decisions and unresolved work' },
 					annotation: {
 						tag: 'compact',
+						origin: 'automatic',
 						cutoff: 3,
 						retainedMessageIds: ['00000000-0000-4000-8000-000000000001']
 					}
 				},
 				{
-					taskId,
-					runId: agentRunId,
+					conversationId,
+					runId: agentTurnId,
 					message: { role: 'user', content: 'Continue from the checkpoint' }
 				},
 				{
-					taskId,
-					runId: agentRunId,
+					conversationId,
+					runId: agentTurnId,
 					message: { role: 'assistant', content: 'Continuing' }
 				}
 			])
 		);
-		const runs = projectAgentRuns([runRow(agentRunId, 'agent'), runRow(planRunId, 'plan')]);
-		const [activePlan] = projectAgentPlans([
+		const runs = projectTurns([runRow(agentTurnId, 'agent'), runRow(planTurnId, 'plan')]);
+		const [activePlan] = projectPlans([
 			{
 				id: planId,
-				task_id: taskId,
+				conversation_id: conversationId,
 				revision: 2,
 				checkpoint_sequence: 1,
 				body: 'Replace the runtime and verify it.',
@@ -136,31 +137,44 @@ describe('agent model-view projection', () => {
 		);
 	});
 
-	it('distinguishes manual and automatic Compact checkpoints from canonical run mode', () => {
-		const [checkpoint] = projectAgentMessages(
-			canonicalAgentRows([
-				{
-					taskId,
-					runId: compactRunId,
-					message: { role: 'assistant', content: 'Manual summary' },
-					annotation: { tag: 'compact', cutoff: 0, retainedMessageIds: [] }
-				}
-			])
-		);
-		const compactRuns = projectAgentRuns([runRow(compactRunId, 'compact')]);
-		const automaticRuns = projectAgentRuns([runRow(compactRunId, 'agent')]);
+	/**
+	 * Provenance is read from the checkpoint, not inferred from the run that wrote it.
+	 *
+	 * It used to be derived from `run.mode` — `compact` meant a person, `agent` meant the runtime —
+	 * a second scanner that had to agree with the runtime's by hand and could not express the third
+	 * case at all: an agent calling the `compact` tool on itself runs in `agent` mode and would have
+	 * read as automatic. The annotation has always carried `origin`.
+	 */
+	it('reads Compact provenance from the checkpoint, including an agent asking for one', () => {
+		const checkpoint = (origin: 'manual' | 'automatic' | 'requested') =>
+			projectConversationMessages(
+				canonicalAgentRows([
+					{
+						conversationId,
+						runId: compactTurnId,
+						message: { role: 'assistant', content: 'Summary' },
+						annotation: { tag: 'compact', origin, cutoff: 0, retainedMessageIds: [] }
+					}
+				])
+			)[0]!;
 
-		expect(compactOrigin(checkpoint!, compactRuns)).toBe('manual');
-		expect(compactOrigin(checkpoint!, automaticRuns)).toBe('automatic');
-		expect(compactOrigin(checkpoint!, [])).toBe('unresolved');
+		expect(compactOrigin(checkpoint('manual'))).toBe('manual');
+		expect(compactOrigin(checkpoint('automatic'))).toBe('automatic');
+		expect(compactOrigin(checkpoint('requested'))).toBe('requested');
+
+		// A message that is not a checkpoint has no provenance to read.
+		const [plain] = projectConversationMessages(
+			canonicalAgentRows([{ conversationId, message: { role: 'user', content: 'Hello' } }])
+		);
+		expect(compactOrigin(plain!)).toBe('unresolved');
 	});
 
 	it('allows revision only when canonical user content can be preserved as plain text', () => {
-		const [plain, multipart, agent] = projectAgentMessages(
+		const [plain, multipart, agent] = projectConversationMessages(
 			canonicalAgentRows([
-				{ taskId, message: { role: 'user', content: 'Correct the date' } },
+				{ conversationId, message: { role: 'user', content: 'Correct the date' } },
 				{
-					taskId,
+					conversationId,
 					message: {
 						role: 'user',
 						content: [
@@ -174,7 +188,7 @@ describe('agent model-view projection', () => {
 						]
 					}
 				},
-				{ taskId, message: { role: 'assistant', content: 'Done' } }
+				{ conversationId, message: { role: 'assistant', content: 'Done' } }
 			])
 		);
 

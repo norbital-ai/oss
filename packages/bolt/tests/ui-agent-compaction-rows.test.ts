@@ -2,13 +2,13 @@
 import './ui-setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
-import { projectAgentTasks } from '../src/client/ui/agent/conversation-selector.js';
+import { projectConversations } from '../src/client/ui/agent/conversation-selector.js';
 import { projectAgentContextView } from '../src/client/ui/agent/context-view.js';
 import { pairToolCalls } from '../src/client/ui/agent/tool-rows.js';
 import {
-	projectAgentMessages,
-	projectAgentRuns,
-	type AgentRunRow,
+	projectConversationMessages,
+	projectTurns,
+	type TurnRow,
 	type PanelMessage
 } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
@@ -32,19 +32,19 @@ vi.mock('@norbital-ai/ui/tabs', async () => ({
 	Tabs: (await import('./support/agent-tabs-double.svelte')).default
 }));
 
-const taskId = '00000000-0000-4000-8000-000000000601';
+const conversationId = '00000000-0000-4000-8000-000000000601';
 const runId = '00000000-0000-4000-8000-000000000602';
 
-const runRow = (): AgentRunRow =>
-	projectAgentRuns([
+const runRow = (): TurnRow =>
+	projectTurns([
 		{
 			id: runId,
-			task_id: taskId,
-			directive_id: '00000000-0000-4000-8000-000000000603',
-			epoch: 1,
+			conversation_id: conversationId,
+			input_message_id: '00000000-0000-4000-8000-000000000603',
 			mode: 'agent',
 			phase: 'model',
 			input_through_sequence: 1,
+			context_window_tokens: 1_000_000,
 			model_id: 'openrouter/test-model',
 			status: 'running'
 		}
@@ -65,7 +65,7 @@ const GLM_TOOL_MARKUP =
 
 function fixtureRows(before: number, after: number, checkpointText: string) {
 	const call = (index: number) => ({
-		taskId,
+		conversationId,
 		runId,
 		message: {
 			role: 'assistant' as const,
@@ -73,7 +73,7 @@ function fixtureRows(before: number, after: number, checkpointText: string) {
 		}
 	});
 	const result = (index: number) => ({
-		taskId,
+		conversationId,
 		runId,
 		message: {
 			role: 'tool' as const,
@@ -82,7 +82,7 @@ function fixtureRows(before: number, after: number, checkpointText: string) {
 	});
 	const rows: Array<Parameters<typeof canonicalAgentRows>[0][number]> = [
 		{
-			taskId,
+			conversationId,
 			runId,
 			message: { role: 'user', content: 'How many employees does Nihon Pigment have?' },
 			annotation: { tag: 'input', priority: 'normal', consumedAfterSequence: 0 }
@@ -93,13 +93,13 @@ function fixtureRows(before: number, after: number, checkpointText: string) {
 	// As on the host: the run's own messages are retained, so the checkpoint hides nothing.
 	const retainedMessageIds = rows.map((_row, sequence) => fixtureMessageId(sequence));
 	rows.push({
-		taskId,
+		conversationId,
 		runId,
 		message: { role: 'assistant', content: checkpointText },
 		annotation: { tag: 'compact', origin: 'automatic', cutoff, retainedMessageIds }
 	});
 	rows.push({
-		taskId,
+		conversationId,
 		runId,
 		message: {
 			role: 'system',
@@ -109,7 +109,7 @@ function fixtureRows(before: number, after: number, checkpointText: string) {
 	});
 	for (let index = before; index < before + after; index += 1) rows.push(call(index), result(index));
 	rows.push({
-		taskId,
+		conversationId,
 		runId,
 		message: {
 			role: 'assistant',
@@ -119,12 +119,12 @@ function fixtureRows(before: number, after: number, checkpointText: string) {
 	return rows;
 }
 
-function mountList(messages: readonly PanelMessage[], all: readonly PanelMessage[], runs: readonly AgentRunRow[]) {
+function mountList(messages: readonly PanelMessage[], all: readonly PanelMessage[], runs: readonly TurnRow[]) {
 	const target = document.createElement('div');
 	document.body.append(target);
 	const component = mount(AgentTranscriptList, {
 		target,
-		props: { messages, transcript: { tasks: projectAgentTasks([]), messages: all, runs, plans: [] } }
+		props: { messages, transcript: { tasks: projectConversations([]), messages: all, runs, plans: [] } }
 	});
 	flushSync();
 	return {
@@ -140,7 +140,7 @@ describe('AGENT-UI5 rows after an automatic checkpoint', () => {
 	it('renders every tool row and the reply that follow the checkpoint, in sequence order', async () => {
 		const before = 6;
 		const after = 12;
-		const messages = projectAgentMessages(canonicalAgentRows(fixtureRows(before, after, 'Summary so far.')));
+		const messages = projectConversationMessages(canonicalAgentRows(fixtureRows(before, after, 'Summary so far.')));
 		const runs = [runRow()];
 		const view = projectAgentContextView({ messages, runs });
 		// The checkpoint itself moves to the history tab; everything else stays in focus.
@@ -177,7 +177,7 @@ describe('AGENT-UI5 rows after an automatic checkpoint', () => {
 	});
 
 	it('shows the checkpoint text as markdown without HTML, so tool-call markup stays legible', async () => {
-		const messages = projectAgentMessages(canonicalAgentRows(fixtureRows(2, 1, GLM_TOOL_MARKUP)));
+		const messages = projectConversationMessages(canonicalAgentRows(fixtureRows(2, 1, GLM_TOOL_MARKUP)));
 		const runs = [runRow()];
 		const target = document.createElement('div');
 		document.body.append(target);

@@ -1,19 +1,14 @@
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Schema } from 'effect';
 import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
 import type {
 	AIRequest,
 	AIResponse,
-	FacilityBinding,
-	HostScheduleOccurrence,
-	HostScheduleOutcome
+	FacilityBinding
 } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, TaskId } from '@norbital-ai/bolt-protocol';
+import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { tool } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
-import * as Identity from '../src/runtime/identity/identity.js';
-import * as TaskQueue from '../src/runtime/tasks/tasks.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -35,15 +30,15 @@ const cassettePath = fileURLToPath(
 /** Host-overhead budget: with an instant provider, the first part must persist within 100 ms of execute. */
 const FIRST_PART_BUDGET_MILLIS = 100;
 /**
- * AGENT-LAT (RFC `bolt.md` B5): the provider is asked within 100 ms of the user pressing send.
+ * The provider is asked within 100 ms of the user pressing send.
  *
- * Measured here from `agents.submit` starting to the AI binding receiving the turn's first
- * `Generate`, in-process, over ten turns of one conversation, at p95. The host's own contribution
- * on Colony is one warm isolate hop (~86 ms p50 in `profile-guest-hop`) on top of this number; it
- * is one hop because the submit's `Wake` carries the claimed occurrence and the host runs it at
- * once, instead of arming a timer, discovering and claiming across three more.
+ * Measured from `agents.submit` starting to the AI binding receiving the turn's first `Generate`,
+ * in-process, over ten turns of one conversation, at p95. Admission and the turn are one call:
+ * `conversations.send` admits the message and answers it without a durable row in between, so the
+ * host's own contribution on Colony is the one warm isolate hop (~86 ms p50 in `profile-guest-hop`)
+ * that carried the send in, and nothing after it.
  */
-const SUBMIT_TO_PROVIDER_P95_BUDGET_MILLIS = 100;
+const SEND_TO_PROVIDER_P95_BUDGET_MILLIS = 100;
 const LATENCY_TURNS = 10;
 
 const workspace = testWorkspace({
@@ -53,9 +48,6 @@ const workspace = testWorkspace({
 	],
 	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }]
 });
-
-const ExecuteInput = Schema.Struct({ taskId: TaskId, bolt_run_as: Identity.Subject });
-const decodeExecuteInput = Schema.decodeUnknownSync(ExecuteInput);
 
 const percentile = (values: ReadonlyArray<number>, fraction: number): number => {
 	const sorted = values.toSorted((left, right) => left - right);
@@ -83,10 +75,10 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 		};
 		harness = await makeBoltTestRuntime(workspace, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-cassette-turn'));
+		const conversationId = ConversationId.make(recordId('task-cassette-turn'));
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit:cassette'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Complete the task.'),
 				mode: DirectiveMode.make('agent'),
@@ -95,13 +87,13 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 		);
 		const started = Date.now();
 		const executing = harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:cassette'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:cassette'), adminSubject, conversationId)
 		);
 		let firstPartAt = 0;
 		for (;;) {
 			const rows = (await harness.database.query(
-				`select message->>'role' as role from agent_message where task_id = $1 order by sequence`,
-				[taskId]
+				`select message->>'role' as role from conversation_message where conversation_id = $1 order by sequence`,
+				[conversationId]
 			)) as ReadonlyArray<{ role: string }>;
 			if (rows.some((row) => row.role === 'assistant')) {
 				firstPartAt = Date.now();
@@ -113,7 +105,7 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 		const result = await executing;
 		expect(firstPartAt).toBeGreaterThan(0);
 		expect(firstPartAt - started).toBeLessThanOrEqual(FIRST_PART_BUDGET_MILLIS);
-		expect(result).toMatchObject({ taskId, status: 'done' });
+		expect(result).toMatchObject({ conversationId, status: 'done' });
 		// No overhead round trips: one tool turn + one final text, exactly as recorded.
 		expect(generates).toBe(2);
 		const runtime = harness;
@@ -121,8 +113,8 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 		expect(
 			await runtime.database.query(
 				`select author->>'kind' as author_kind, message->>'role' as role
-				 from agent_message where task_id = $1 order by sequence`,
-				[taskId]
+				 from conversation_message where conversation_id = $1 order by sequence`,
+				[conversationId]
 			)
 		).toEqual([
 			{ author_kind: 'human', role: 'user' },
@@ -131,8 +123,8 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 			{ author_kind: 'agent', role: 'assistant' }
 		]);
 		const finals = (await runtime.database.query(
-			`select message from agent_message where task_id = $1 order by sequence desc limit 1`,
-			[taskId]
+			`select message from conversation_message where conversation_id = $1 order by sequence desc limit 1`,
+			[conversationId]
 		)) as ReadonlyArray<{ message: unknown }>;
 		expect(JSON.stringify(finals[0]?.message)).toMatch(/test-workspace/);
 	});
@@ -140,24 +132,20 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 	// A wall-clock budget: this file is the `latency` suite (vitest.config.ts), one fork, run after
 	// the parallel integration pass, because the same turns measured 77 ms p95 alone and 116 to
 	// 130 ms with three other forks on the CPU. The printed per-turn numbers are the evidence.
-	it('reaches the provider within 100 ms of submit at p95 over ten turns, in one host hop', async () => {
+	it('reaches the provider within 100 ms of send at p95 over ten turns, in one invocation', async () => {
 		const cassette = readCassetteFile(cassettePath);
 		// One replay per turn: the cassette carries outputs only, and every turn of the conversation
 		// replays the same tool call and final text against a transcript one turn longer.
 		let inner = cassetteAi(cassette);
-		let submitStartedAt = 0;
-		let wakeAt = 0;
+		let sendStartedAt = 0;
 		let awaitingProvider = false;
-		/** Per turn: submit start → the host is woken with the occurrence → the provider is asked. */
-		const phases: Array<{ readonly toWake: number; readonly toProvider: number }> = [];
+		/** Per turn: the send starting → the provider being asked, with nothing in between. */
+		const latencies: Array<number> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: (...args) => {
 				if (args[1]._tag === 'Generate' && awaitingProvider) {
 					awaitingProvider = false;
-					phases.push({
-						toWake: wakeAt - submitStartedAt,
-						toProvider: performance.now() - submitStartedAt
-					});
+					latencies.push(performance.now() - sendStartedAt);
 				}
 				return inner.call(...args);
 			}
@@ -165,96 +153,48 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 		harness = await makeBoltTestRuntime(workspace, { ai });
 		const runtime = harness;
 		const agents = await runtime.runtime.runPromise(Agents.Service);
-		const queue = await runtime.runtime.runPromise(TaskQueue.Service);
-		// What a host does with a `Wake` that carries a claimed occurrence: invoke its command now,
-		// then settle it. This is bolt-server's `makeTaskBinding` and Colony's tasks facility, minus
-		// the isolate; no timer is armed and `host.schedules.discover` is never asked.
-		runtime.tasks.bind(async (occurrence: HostScheduleOccurrence) => {
-			wakeAt = performance.now();
-			expect(occurrence.command).toBe('tasks.execute');
-			const input = decodeExecuteInput(occurrence.input);
-			const outcome: HostScheduleOutcome = await runtime.runtime
-				.runPromise(
-					agents.execute(
-						runtime.effectId(`execute:${occurrence.taskId}`),
-						input.bolt_run_as,
-						input.taskId
-					)
-				)
-				.then(
-					(result): HostScheduleOutcome => ({
-						_tag: 'Done',
-						result: { taskId: result.taskId, status: result.status }
-					}),
-					(cause): HostScheduleOutcome => ({
-						_tag: 'Failed',
-						error: String(cause),
-						retryable: false
-					})
-				);
-			await runtime.runtime.runPromise(
-				queue.settle(
-					runtime.effectId(`settle:${occurrence.taskId}`),
-					occurrence.taskId,
-					occurrence.attempt,
-					outcome
-				)
-			);
-		});
-		const taskId = TaskId.make(recordId('task-cassette-latency'));
+		const conversationId = ConversationId.make(recordId('task-cassette-latency'));
 		for (let turn = 0; turn < LATENCY_TURNS; turn += 1) {
 			inner = cassetteAi(cassette);
-			const dispatchedBefore = runtime.tasks.dispatched.length;
 			awaitingProvider = true;
-			submitStartedAt = performance.now();
+			sendStartedAt = performance.now();
+			/**
+			 * The send, whole: admit the message and answer it, in this call.
+			 *
+			 * This is what `conversations.send` binds to, and the two lines are the measurement. There
+			 * is no durable occurrence between them any more — no row to write, no wake to carry it, no
+			 * claim for a host to win — so the number below is the runtime's own overhead and nothing
+			 * else's.
+			 */
 			await runtime.runtime.runPromise(
 				agents.submit(runtime.effectId(`submit:latency:${turn}`), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput(`Turn ${turn + 1}: complete the task.`),
 					mode: DirectiveMode.make('agent'),
 					priority: DirectivePriority.make('normal')
 				})
 			);
-			// The submit itself handed the host exactly one claimed occurrence and returned; the run
-			// is already under way on the host's side of the seam.
-			const dispatched = runtime.tasks.dispatched[dispatchedBefore];
-			expect(runtime.tasks.dispatched).toHaveLength(dispatchedBefore + 1);
-			expect(dispatched?.occurrence).toMatchObject({
-				command: 'tasks.execute',
-				scheduleKey: `task:${dispatched?.occurrence.taskId}`,
-				attempt: 1
-			});
-			await dispatched?.done;
+			await runtime.runtime.runPromise(
+				agents.answerQueued(runtime.effectId(`answer:latency:${turn}`), adminSubject, conversationId)
+			);
 		}
-		expect(phases).toHaveLength(LATENCY_TURNS);
-		const latencies = phases.map(({ toProvider }) => toProvider);
-		const wakes = phases.map(({ toWake }) => toWake);
+		expect(latencies).toHaveLength(LATENCY_TURNS);
 		const p95 = percentile(latencies, 0.95);
-		// Printed so a run leaves the numbers behind, not only a verdict: the whole, its two halves
-		// (the guest's own admission up to the wake, then the host's run up to the provider), and the
-		// first and last turn, because the transcript the runtime reads back grows by four messages
-		// a turn and the cost follows it.
+		// Printed so a run leaves the numbers behind, not only a verdict, and per turn because the
+		// transcript the runtime reads back grows by four messages a turn and the cost follows it.
 		console.info(
-			`AGENT-LAT submit→provider over ${LATENCY_TURNS} turns: p50 ${percentile(latencies, 0.5).toFixed(1)} ms, p95 ${p95.toFixed(1)} ms, max ${Math.max(...latencies).toFixed(1)} ms; submit→wake p50 ${percentile(wakes, 0.5).toFixed(1)} ms, p95 ${percentile(wakes, 0.95).toFixed(1)} ms; per turn ${latencies.map((value) => value.toFixed(0)).join(' ')} ms`
+			`AGENT-LAT send→provider over ${LATENCY_TURNS} turns: p50 ${percentile(latencies, 0.5).toFixed(1)} ms, p95 ${p95.toFixed(1)} ms, max ${Math.max(...latencies).toFixed(1)} ms; per turn ${latencies.map((value) => value.toFixed(0)).join(' ')} ms`
 		);
-		expect(p95).toBeLessThanOrEqual(SUBMIT_TO_PROVIDER_P95_BUDGET_MILLIS);
-		// Every wake the runtime sent for these turns carried its occurrence: nothing waited on a
-		// timer, and every claimed row was settled by the host that ran it, on its first attempt.
-		const wakeRequests = runtime.tasks.requests.filter((request) => request._tag === 'Wake');
-		expect(wakeRequests.length).toBeGreaterThanOrEqual(LATENCY_TURNS);
+		expect(p95).toBeLessThanOrEqual(SEND_TO_PROVIDER_P95_BUDGET_MILLIS);
+		// Nothing was queued behind the agent: a turn is not a task, and no row was written for one.
 		expect(
-			wakeRequests.every((wake) => wake._tag === 'Wake' && wake.occurrence !== undefined)
-		).toBe(true);
-		expect(
-			await runtime.database.query(
-				`select status, attempts from bolt_task where command = 'tasks.execute' order by created_at`
-			)
-		).toEqual(Array.from({ length: LATENCY_TURNS }, () => ({ status: 'done', attempts: 1 })));
+			await runtime.database.query(`select command from bolt_task where command = 'tasks.execute'`)
+		).toEqual([]);
 		expect(
 			(await runtime.database.query(
-				`select count(*)::int as count from agent_message where task_id = $1 and message->>'role' = 'user'`,
-				[taskId]
+				`select count(*)::int as count from conversation_message where conversation_id = $1 and message->>'role' = 'user'`,
+				[conversationId]
 			)) as ReadonlyArray<{ count: number }>
 		).toEqual([{ count: LATENCY_TURNS }]);
 	});

@@ -11,7 +11,7 @@ const childRun = '00000000-0000-4000-8000-000000000302';
 const usageRows = [
 	{
 		call_id: 'call-1',
-		run_id: rootRun,
+		turn_id: rootRun,
 		provider: 'openrouter',
 		model: 'openrouter/model-a',
 		operation: 'language',
@@ -24,7 +24,7 @@ const usageRows = [
 	},
 	{
 		call_id: 'call-2',
-		run_id: rootRun,
+		turn_id: rootRun,
 		provider: 'openrouter',
 		model: 'openrouter/model-a',
 		operation: 'language',
@@ -37,7 +37,7 @@ const usageRows = [
 	},
 	{
 		call_id: 'call-attention',
-		run_id: rootRun,
+		turn_id: rootRun,
 		provider: 'openrouter',
 		model: 'openrouter/model-a',
 		operation: 'language',
@@ -50,7 +50,7 @@ const usageRows = [
 	},
 	{
 		call_id: 'call-child',
-		run_id: childRun,
+		turn_id: childRun,
 		provider: 'openrouter',
 		model: 'openrouter/model-a',
 		operation: 'language',

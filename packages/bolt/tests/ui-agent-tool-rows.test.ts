@@ -2,12 +2,12 @@
 import './ui-setup-happy-dom.js';
 import { flushSync, mount, unmount } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
-import { projectAgentTasks } from '../src/client/ui/agent/conversation-selector.js';
+import { projectConversations } from '../src/client/ui/agent/conversation-selector.js';
 import { pairToolCalls, subagentLink } from '../src/client/ui/agent/tool-rows.js';
 import {
-	projectAgentMessages,
-	projectAgentRuns,
-	type AgentRunRow,
+	projectConversationMessages,
+	projectTurns,
+	type TurnRow,
 	type PanelMessage
 } from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
@@ -36,14 +36,14 @@ const parentRun = '00000000-0000-4000-8000-000000000511';
 const childRun = '00000000-0000-4000-8000-000000000512';
 const grandchildRun = '00000000-0000-4000-8000-000000000513';
 
-const runRow = (id: string, taskId: string, extra: Record<string, unknown> = {}) => ({
+const runRow = (id: string, conversationId: string, extra: Record<string, unknown> = {}) => ({
 	id,
-	task_id: taskId,
-	directive_id: '00000000-0000-4000-8000-000000000520',
-	epoch: 1,
+	conversation_id: conversationId,
+	input_message_id: '00000000-0000-4000-8000-000000000520',
 	mode: 'agent',
 	phase: 'model',
 	input_through_sequence: 0,
+	context_window_tokens: 1_000_000,
 	model_id: 'openrouter/test-model',
 	status: 'succeeded',
 	...extra
@@ -56,7 +56,7 @@ const taskRow = (id: string, agentId: string, parentId: string | null) => ({
 	parent_id: parentId,
 	status: 'done',
 	active_plan_id: null,
-	active_run_id: null
+	active_turn_id: null
 });
 
 const toolCall = (id: string, name: string, params: unknown) =>
@@ -64,14 +64,14 @@ const toolCall = (id: string, name: string, params: unknown) =>
 const toolResult = (id: string, name: string, result: unknown, isFailure = false) =>
 	({ type: 'tool-result', id, name, isFailure, result }) as const;
 
-function mountList(messages: readonly PanelMessage[], runs: readonly AgentRunRow[], tasks: unknown[] = []) {
+function mountList(messages: readonly PanelMessage[], runs: readonly TurnRow[], tasks: unknown[] = []) {
 	const target = document.createElement('div');
 	document.body.append(target);
 	const component = mount(AgentTranscriptList, {
 		target,
 		props: {
-			messages: messages.filter((message) => message.taskId === (messages[0]?.taskId ?? '')),
-			transcript: { tasks: projectAgentTasks(tasks), messages, runs, plans: [] }
+			messages: messages.filter((message) => message.conversationId === (messages[0]?.conversationId ?? '')),
+			transcript: { tasks: projectConversations(tasks), messages, runs, plans: [] }
 		}
 	});
 	flushSync();
@@ -86,11 +86,11 @@ function mountList(messages: readonly PanelMessage[], runs: readonly AgentRunRow
 
 describe('AGENT-UI1 one row per tool call', () => {
 	it('renders one row named after the tool, no "Tool" speaker, at the text parts left edge', async () => {
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
-				{ taskId: parentTask, message: { role: 'user', content: 'Which skills exist?' } },
+				{ conversationId: parentTask, message: { role: 'user', content: 'Which skills exist?' } },
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: {
 						role: 'assistant',
@@ -101,7 +101,7 @@ describe('AGENT-UI1 one row per tool call', () => {
 					}
 				},
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: {
 						role: 'tool',
@@ -109,13 +109,13 @@ describe('AGENT-UI1 one row per tool call', () => {
 					}
 				},
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'assistant', content: [{ type: 'text', text: 'One skill: payroll.' }] }
 				}
 			])
 		);
-		const view = mountList(messages, projectAgentRuns([runRow(parentRun, parentTask)]));
+		const view = mountList(messages, projectTurns([runRow(parentRun, parentTask)]));
 		try {
 			const rows = [...view.target.querySelectorAll('[data-tool-row]')];
 			expect(rows.map((row) => row.getAttribute('data-tool-row'))).toEqual(['list_skills']);
@@ -142,10 +142,10 @@ describe('AGENT-UI1 one row per tool call', () => {
 	});
 
 	it('keeps a wrench on a call whose result has not arrived, and an alert on a failed one', async () => {
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: {
 						role: 'assistant',
@@ -153,13 +153,13 @@ describe('AGENT-UI1 one row per tool call', () => {
 					}
 				},
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'tool', content: [toolResult('call-2', 'todo', 'boom', true)] }
 				}
 			])
 		);
-		const view = mountList(messages, projectAgentRuns([runRow(parentRun, parentTask)]));
+		const view = mountList(messages, projectTurns([runRow(parentRun, parentTask)]));
 		try {
 			const states = [...view.target.querySelectorAll('[data-tool-row]')].map((row) => [
 				row.getAttribute('data-tool-row'),
@@ -177,10 +177,10 @@ describe('AGENT-UI1 one row per tool call', () => {
 
 describe('AGENT-UI2 reasoning only when requested', () => {
 	const reasoningTurn = (text: string) =>
-		projectAgentMessages(
+		projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: {
 						role: 'assistant',
@@ -193,21 +193,26 @@ describe('AGENT-UI2 reasoning only when requested', () => {
 			])
 		);
 
-	it('renders nothing for a provider filler part when the run did not request reasoning', async () => {
-		const view = mountList(reasoningTurn('None.'), projectAgentRuns([runRow(parentRun, parentTask)]));
+	/**
+	 * Reasoning is captured and shown, always. There is no longer a run flag deciding it, so the only
+	 * question left is whether the part has anything to read — which is the renderer's alone.
+	 */
+	it('renders the provider filler the old flag existed to hide', async () => {
+		const view = mountList(reasoningTurn('None.'), projectTurns([runRow(parentRun, parentTask)]));
 		try {
-			expect(view.target.querySelectorAll('[data-reasoning-part]')).toHaveLength(0);
-			expect(view.target.textContent).not.toContain('None.');
+			expect(view.target.querySelectorAll('[data-reasoning-part]')).toHaveLength(1);
+			expect(view.target.textContent).toContain('None.');
 			expect(view.target.textContent).toContain('Done.');
 		} finally {
 			await view.dispose();
 		}
 	});
 
-	it('renders one reasoning element when the run requested it and the text is not blank', async () => {
-		const runs = projectAgentRuns([runRow(parentRun, parentTask, { reasoning_requested: true })]);
-		expect(runs[0]?.reasoning_requested).toBe(true);
-		const view = mountList(reasoningTurn('Checked the roster first.'), runs);
+	it('renders one reasoning element whenever the text is not blank', async () => {
+		const view = mountList(
+			reasoningTurn('Checked the roster first.'),
+			projectTurns([runRow(parentRun, parentTask)])
+		);
 		try {
 			expect(view.target.querySelectorAll('[data-reasoning-part]')).toHaveLength(1);
 			expect(view.target.textContent).toContain('Checked the roster first.');
@@ -216,8 +221,8 @@ describe('AGENT-UI2 reasoning only when requested', () => {
 		}
 	});
 
-	it('never renders a whitespace-only part even when reasoning was requested', async () => {
-		const runs = projectAgentRuns([runRow(parentRun, parentTask, { reasoning_requested: true })]);
+	it('never renders a whitespace-only part, which is a status and not content', async () => {
+		const runs = projectTurns([runRow(parentRun, parentTask)]);
 		const view = mountList(reasoningTurn('  \n'), runs);
 		try {
 			expect(view.target.querySelectorAll('[data-reasoning-part]')).toHaveLength(0);
@@ -230,15 +235,15 @@ describe('AGENT-UI2 reasoning only when requested', () => {
 describe('AGENT-SUB2 nested child conversation', () => {
 	const spawnCall = (id: string, agentId: string) =>
 		toolCall(id, 'subagent', { action: 'spawn', agentId, instruction: 'Look it up.' });
-	const spawned = (id: string, taskId: string) =>
-		toolResult(id, 'subagent', { taskId, directiveId: 'd', state: 'running' });
+	const spawned = (id: string, conversationId: string) =>
+		toolResult(id, 'subagent', { conversationId, messageId: 'd', state: 'running' });
 
 	const fixture = () =>
-		projectAgentMessages(
+		projectConversationMessages(
 			canonicalAgentRows([
-				{ taskId: parentTask, message: { role: 'user', content: 'Research the statute.' } },
+				{ conversationId: parentTask, message: { role: 'user', content: 'Research the statute.' } },
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: {
 						role: 'assistant',
@@ -246,17 +251,17 @@ describe('AGENT-SUB2 nested child conversation', () => {
 					}
 				},
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'tool', content: [spawned('call-1', childTask)] }
 				},
 				{
-					taskId: childTask,
+					conversationId: childTask,
 					author: { kind: 'parent-agent', id: parentTask },
 					message: { role: 'user', content: 'Look it up.' }
 				},
 				{
-					taskId: childTask,
+					conversationId: childTask,
 					runId: childRun,
 					message: {
 						role: 'assistant',
@@ -268,7 +273,7 @@ describe('AGENT-SUB2 nested child conversation', () => {
 					}
 				},
 				{
-					taskId: childTask,
+					conversationId: childTask,
 					runId: childRun,
 					message: {
 						role: 'tool',
@@ -276,12 +281,12 @@ describe('AGENT-SUB2 nested child conversation', () => {
 					}
 				},
 				{
-					taskId: grandchildTask,
+					conversationId: grandchildTask,
 					author: { kind: 'parent-agent', id: childTask },
 					message: { role: 'user', content: 'Fetch section 4.' }
 				},
 				{
-					taskId: grandchildTask,
+					conversationId: grandchildTask,
 					runId: grandchildRun,
 					message: {
 						role: 'assistant',
@@ -292,14 +297,14 @@ describe('AGENT-SUB2 nested child conversation', () => {
 					}
 				},
 				{
-					taskId: grandchildTask,
+					conversationId: grandchildTask,
 					runId: grandchildRun,
 					message: { role: 'tool', content: [toolResult('call-4', 'read_skill', 'Section 4 text')] }
 				}
 			])
 		);
 	const fixtureRuns = () =>
-		projectAgentRuns([
+		projectTurns([
 			runRow(parentRun, parentTask),
 			runRow(childRun, childTask),
 			runRow(grandchildRun, grandchildTask)
@@ -318,7 +323,7 @@ describe('AGENT-SUB2 nested child conversation', () => {
 		expect(call?.type).toBe('tool-call');
 		const link =
 			call?.type === 'tool-call' ? subagentLink(call, tools.resultsByCallId.get(call.id)) : null;
-		expect(link).toMatchObject({ toolCallId: 'call-1', agentId: 'researcher', taskId: childTask, failure: null, pending: false });
+		expect(link).toMatchObject({ toolCallId: 'call-1', agentId: 'researcher', conversationId: childTask, failure: null, pending: false });
 		expect(subagentLink(toolCall('x', 'list_skills', {}), undefined)).toBeNull();
 	});
 
@@ -354,21 +359,21 @@ describe('AGENT-SUB2 nested child conversation', () => {
 
 	it('renders a failed spawn as a nested block whose only line is the error', async () => {
 		const error = 'Bolt.AccessControl.AccessDenied: unknown agent (agent on sg-statutory-law-query)';
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'assistant', content: [spawnCall('call-9', 'sg-statutory-law-query')] }
 				},
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'tool', content: [toolResult('call-9', 'subagent', error, true)] }
 				}
 			])
 		);
-		const view = mountList(messages, projectAgentRuns([runRow(parentRun, parentTask)]));
+		const view = mountList(messages, projectTurns([runRow(parentRun, parentTask)]));
 		try {
 			const block = view.target.querySelector('[data-subagent-conversation]') as HTMLDetailsElement;
 			expect(block.getAttribute('data-subagent-conversation')).toBe('sg-statutory-law-query');
@@ -384,16 +389,16 @@ describe('AGENT-SUB2 nested child conversation', () => {
 	});
 
 	it('keeps a spawn without a result open as a starting child', async () => {
-		const messages = projectAgentMessages(
+		const messages = projectConversationMessages(
 			canonicalAgentRows([
 				{
-					taskId: parentTask,
+					conversationId: parentTask,
 					runId: parentRun,
 					message: { role: 'assistant', content: [spawnCall('call-5', 'researcher')] }
 				}
 			])
 		);
-		const view = mountList(messages, projectAgentRuns([runRow(parentRun, parentTask, { status: 'running' })]));
+		const view = mountList(messages, projectTurns([runRow(parentRun, parentTask, { status: 'running' })]));
 		try {
 			const block = view.target.querySelector('[data-subagent-conversation]') as HTMLDetailsElement;
 			expect(block.getAttribute('data-subagent-state')).toBe('starting');

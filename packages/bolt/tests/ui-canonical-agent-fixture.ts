@@ -6,7 +6,7 @@ type FixtureAuthor = Readonly<{
 }>;
 
 type FixtureMessage = Readonly<{
-	readonly taskId: string;
+	readonly conversationId: string;
 	readonly message: Prompt.MessageEncoded;
 	readonly runId?: string;
 	readonly author?: FixtureAuthor;
@@ -29,13 +29,13 @@ const defaultAuthor = (message: Prompt.MessageEncoded): FixtureAuthor => {
 	}
 };
 
-/** Builds canonical durable agent_message rows containing complete encoded Effect messages. */
+/** Builds canonical durable conversation_message rows containing complete encoded Effect messages. */
 export const canonicalAgentRows = (source: ReadonlyArray<FixtureMessage>) =>
-	source.map(({ taskId, message, runId, author, annotation }, sequence) => ({
+	source.map(({ conversationId, message, runId, author, annotation }, sequence) => ({
 		id: messageId(sequence),
-		task_id: taskId,
+		conversation_id: conversationId,
 		sequence,
-		run_id: runId ?? null,
+		turn_id: runId ?? null,
 		author: author ?? defaultAuthor(message),
 		message,
 		annotation: annotation ?? null

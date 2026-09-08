@@ -20,9 +20,9 @@ export const modelCatalogResponse = (): Promise<FacilityResult<AIResponse>> =>
 		_tag: 'Success',
 		value: {
 			_tag: 'Catalog',
-			languageModels: [{ id: TEST_MODEL }],
+			languageModels: [{ id: TEST_MODEL, contextWindowTokens: 1_000_000 }],
 			defaultLanguageModelId: TEST_MODEL,
-			embeddingModels: [{ id: TEST_EMBEDDING_MODEL }],
+			embeddingModels: [{ id: TEST_EMBEDDING_MODEL, contextWindowTokens: 1_000_000 }],
 			defaultEmbeddingModelId: TEST_EMBEDDING_MODEL
 		}
 	});
@@ -196,7 +196,9 @@ export const inspectGenerate = (request: GenerateRequest): GenerateInspection =>
 		callId: request.callId,
 		maxOutputTokens: request.maxOutputTokens,
 		promptBytes: new TextEncoder().encode(encoded).byteLength,
-		automaticCompact: texts.some((text) => text.includes('Automatic Compact:')),
+		automaticCompact: texts.some(
+			(text) => text.includes('Automatic Compact:') || text.includes('Requested Compact:')
+		),
 		planMode: texts.some((text) => text.startsWith('Plan mode:')),
 		compactMode: texts.some((text) =>
 			text.includes(

@@ -1,6 +1,6 @@
 /** One client-minted idempotency key retained only while its command outcome is unknown. */
 export type UnsettledTaskAdmission = Readonly<{
-	taskId: string;
+	conversationId: string;
 	submissionId?: string;
 	agentId: string;
 	message: string;
@@ -12,20 +12,20 @@ export type UnsettledTaskAdmission = Readonly<{
 
 /**
  * Paints the operator's text immediately. Drop it only when the Task row AND a durable
- * human `agent_message` for that Task are both live findMany facts — the row and its
+ * human `conversation_message` for that Task are both live findMany facts — the row and its
  * messages arrive over independent live queries, and clearing on the message alone
  * leaves the composer empty with a blank transcript while the row is still in flight.
  */
 export const visibleUnsettledAdmission = (
 	admission: UnsettledTaskAdmission | null,
-	tasksWithHumanMessage: ReadonlySet<string>,
+	conversationsWithHumanMessage: ReadonlySet<string>,
 	taskPresent: boolean,
 	persistedMessageIds: ReadonlySet<string> = new Set()
 ): UnsettledTaskAdmission | null =>
 	admission !== null &&
 	taskPresent &&
 	(admission.submissionId === undefined
-		? tasksWithHumanMessage.has(admission.taskId)
+		? conversationsWithHumanMessage.has(admission.conversationId)
 		: persistedMessageIds.has(admission.submissionId))
 		? null
 		: admission;

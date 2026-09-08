@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
 	AgentId,
 	ModelId,
-	TaskSubmitRequest,
-	TaskControlRequest,
+	ConversationSendRequest,
+	ConversationControlRequest,
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding
@@ -24,7 +24,7 @@ const cassette = (name: string) =>
 
 const first = ModelId.make('openrouter/provider/first');
 const second = ModelId.make('openrouter/provider/second');
-const taskId = '00000000-0000-4000-8000-000000000d01';
+const conversationId = '00000000-0000-4000-8000-000000000d01';
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -43,9 +43,9 @@ const fixture = async () => {
 						_tag: 'Success',
 						value: {
 							_tag: 'Catalog',
-							languageModels: models.map((id) => ({ id })),
+							languageModels: models.map((id) => ({ id, contextWindowTokens: 1_000_000 })),
 							defaultLanguageModelId: defaultModel,
-							embeddingModels: [{ id: first }],
+							embeddingModels: [{ id: first, contextWindowTokens: 1_000_000 }],
 							defaultEmbeddingModelId: first
 						}
 					})
@@ -59,8 +59,8 @@ const fixture = async () => {
 			agents.submit(
 				runtime.effectId(label),
 				adminSubject,
-				Schema.decodeUnknownSync(TaskSubmitRequest)({
-					taskId,
+				Schema.decodeUnknownSync(ConversationSendRequest)({
+					conversationId,
 					agentId: 'web',
 					message: Agents.userAgentInput(label),
 					mode: 'agent',
@@ -74,13 +74,13 @@ const fixture = async () => {
 			agents.execute(
 				runtime.effectId(label),
 				adminSubject,
-				Schema.decodeUnknownSync(TaskSubmitRequest)({
-					taskId,
+				Schema.decodeUnknownSync(ConversationSendRequest)({
+					conversationId,
 					agentId: 'web',
 					message: Agents.userAgentInput('unused'),
 					mode: 'agent',
 					priority: 'normal'
-				}).taskId
+				}).conversationId
 			)
 		);
 	return {
@@ -100,7 +100,7 @@ describe('per-directive agent model selection', () => {
 	it('pins each queued choice and preserves it when the host default changes', async () => {
 		const { runtime, requests, submit, execute, catalog } = await fixture();
 		const admitted = await submit('use second', second);
-		expect((await submit('use second', second)).directiveId).toBe(admitted.directiveId);
+		expect((await submit('use second', second)).messageId).toBe(admitted.messageId);
 		await submit('then use first', first);
 		catalog([first, second], second);
 		await execute('execute second');
@@ -108,14 +108,14 @@ describe('per-directive agent model selection', () => {
 		expect(requests.map((request) => request.modelId)).toEqual([second, first]);
 		expect(
 			await runtime.database.query(
-				'select model_id from agent_inbox where task_id = $1 order by sequence',
-				[taskId]
+				'select model_id from conversation_message where conversation_id = $1 and state is not null order by sequence',
+				[conversationId]
 			)
 		).toEqual([{ model_id: second }, { model_id: first }]);
 		expect(
 			await runtime.database.query(
-				'select model_id from agent_run where task_id = $1 order by epoch',
-				[taskId]
+				'select model_id from turn where conversation_id = $1 order by created_at',
+				[conversationId]
 			)
 		).toEqual([{ model_id: second }, { model_id: first }]);
 	});
@@ -123,8 +123,10 @@ describe('per-directive agent model selection', () => {
 	it('rejects an unregistered choice before writing a task or directive', async () => {
 		const { runtime, submit } = await fixture();
 		await expect(submit('bad model', 'openrouter/provider/unknown')).rejects.toThrow(/unavailable/);
-		expect(await runtime.database.query('select id from agent_task')).toEqual([]);
-		expect(await runtime.database.query('select id from agent_inbox')).toEqual([]);
+		expect(await runtime.database.query('select id from conversation')).toEqual([]);
+		expect(
+			await runtime.database.query("select id from conversation_message where state = 'queued'")
+		).toEqual([]);
 	});
 
 	it('does not silently switch a queued turn when its selected model is removed', async () => {
@@ -134,7 +136,7 @@ describe('per-directive agent model selection', () => {
 		await expect(execute('removed choice')).rejects.toThrow(/unavailable/);
 		expect(requests).toEqual([]);
 		expect(
-			await runtime.database.query('select status from agent_task where id = $1', [taskId])
+			await runtime.database.query('select status from conversation where id = $1', [conversationId])
 		).toEqual([{ status: 'attention' }]);
 	});
 
@@ -146,8 +148,8 @@ describe('per-directive agent model selection', () => {
 				agents.control(
 					runtime.effectId(action),
 					adminSubject,
-					Schema.decodeUnknownSync(TaskControlRequest)({
-						taskId,
+					Schema.decodeUnknownSync(ConversationControlRequest)({
+						conversationId,
 						action,
 						...(modelId ? { modelId } : {})
 					})
@@ -165,7 +167,15 @@ describe('per-directive agent model selection', () => {
 			await runtime.runtime.runPromise(
 				agents.models(runtime.effectId('catalog'), adminSubject, AgentId.make('web'))
 			)
-		).toEqual({ languageModels: [{ id: first }, { id: second }], defaultLanguageModelId: first });
+		).toEqual({
+			// The window rides with the id: it is what the runtime compacts against, so a caller
+			// listing models is told the same number the turn will be judged by.
+			languageModels: [
+				{ id: first, contextWindowTokens: 1_000_000 },
+				{ id: second, contextWindowTokens: 1_000_000 }
+			],
+			defaultLanguageModelId: first
+		});
 		await expect(
 			runtime.runtime.runPromise(
 				agents.models(

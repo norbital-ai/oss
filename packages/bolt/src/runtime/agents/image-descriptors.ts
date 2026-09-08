@@ -1,7 +1,7 @@
 import { toError } from '@norbital-ai/std';
 import { Effect, Option, Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
-import { ImageAsset, TaskId } from '@norbital-ai/bolt-protocol/facilities';
+import { ImageAsset, ConversationId } from '@norbital-ai/bolt-protocol/facilities';
 
 /** Guest/host wire token for one image. Bytes never ride this string. */
 export const IMAGE_DESCRIPTOR_SCHEME = 'norbital-image:v1:';
@@ -14,12 +14,12 @@ const keySegment = (value: string): string => {
 };
 
 /** Prefix every Task image key must start with. */
-export const taskAssetKeyPrefix = (taskId: TaskId | string): string =>
+export const taskAssetKeyPrefix = (taskId: ConversationId | string): string =>
 	`agent-tasks/${keySegment(taskId)}/`;
 
 /** Opaque Task-scoped object key. The guest names the key; the host stores and later resolves bytes. */
-export const taskAssetStorageKey = (
-	taskId: TaskId | string,
+export const conversationAssetStorageKey = (
+	taskId: ConversationId | string,
 	documentId: string,
 	fileName: string
 ): string => {

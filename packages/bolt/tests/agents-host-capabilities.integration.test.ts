@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	AgentId,
-	TaskId,
+	ConversationId,
 	DirectiveMode,
 	DirectivePriority,
 	type AIRequest,
@@ -72,10 +72,10 @@ describe('host capability discovery and execution', () => {
 			});
 			const runtime = harness;
 			const agents = await runtime.runtime.runPromise(Agents.Service);
-			const taskId = TaskId.make(recordId(`host-mode-${mode}`));
+			const conversationId = ConversationId.make(recordId(`host-mode-${mode}`));
 			await runtime.runtime.runPromise(
 				agents.submit(runtime.effectId('submit'), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput('Inspect my workspace.'),
 					mode: DirectiveMode.make(mode),
@@ -83,7 +83,7 @@ describe('host capability discovery and execution', () => {
 				})
 			);
 			await runtime.runtime.runPromise(
-				agents.execute(runtime.effectId('execute'), adminSubject, taskId)
+				agents.execute(runtime.effectId('execute'), adminSubject, conversationId)
 			);
 			expect(
 				calls
@@ -104,8 +104,8 @@ describe('host capability discovery and execution', () => {
 			if (mode === 'plan')
 				expect(JSON.stringify(requests[2]?.messages)).toContain('workspace_apply');
 			const rows = await runtime.database.query(
-				'select capability_snapshot from agent_run where task_id = $1',
-				[taskId]
+				'select capability_snapshot from turn where conversation_id = $1',
+				[conversationId]
 			);
 			expect(JSON.stringify(rows)).toContain('host/workspace_read');
 			expect(JSON.stringify(rows)).toContain('host/workspace_apply');
@@ -122,10 +122,10 @@ describe('host capability discovery and execution', () => {
 		});
 		const runtime = harness;
 		const agents = await runtime.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('invalid-host-catalog'));
+		const conversationId = ConversationId.make(recordId('invalid-host-catalog'));
 		await runtime.runtime.runPromise(
 			agents.submit(runtime.effectId('submit'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Inspect source.'),
 				mode: DirectiveMode.make('agent'),
@@ -133,11 +133,11 @@ describe('host capability discovery and execution', () => {
 			})
 		);
 		await expect(
-			runtime.runtime.runPromise(agents.execute(runtime.effectId('execute'), adminSubject, taskId))
+			runtime.runtime.runPromise(agents.execute(runtime.effectId('execute'), adminSubject, conversationId))
 		).rejects.toThrow();
 		expect(twin.requests).toEqual([]);
 		expect(
-			await runtime.database.query('select id from agent_run where task_id = $1', [taskId])
+			await runtime.database.query('select id from turn where conversation_id = $1', [conversationId])
 		).toEqual([]);
 	});
 });

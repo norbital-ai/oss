@@ -409,7 +409,26 @@ export const mutationPhaseFailure = (
 				...(step === undefined ? {} : { step })
 			});
 
-type MutationRoot = Readonly<{ readonly id: string; readonly action: 'create' | 'update' }>;
+/**
+ * One root of a mutation graph.
+ *
+ * `collection` is optional and defaults to the call's own — a batch is usually one collection. When
+ * roots name different collections the write is still *one* mutate: the engine groups them, reads
+ * and prepares each group, then compiles every group's operations into a single statement plan,
+ * applies it in one transaction and publishes one commit. That is what lets a turn write its `turn`
+ * row, its input message and the conversation together, instead of paying three commits — and a
+ * commit crosses to the host, so three of them is three host round trips.
+ *
+ * The field was read by the engine and absent from this type, so the capability existed and no
+ * caller could reach it. It is stated here because a write that fans across collections is exactly
+ * the write that must not be split.
+ */
+type MutationRoot = Readonly<{
+	readonly collection?: string;
+	readonly id: string;
+	readonly action: 'create' | 'update';
+	readonly expectedVersion?: number;
+}>;
 
 type MutateOptions = {
 	/** Explicit only for an invocation-bound create/update whose chosen id must not imply action. */

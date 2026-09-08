@@ -44,12 +44,11 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	...IDENTITY_COLLECTIONS,
 	collections.approval_request,
 	collections.requestor,
-	collections.agent_task,
-	collections.agent_plan,
-	collections.agent_message,
-	collections.agent_inbox,
-	collections.agent_run,
-	collections.agent_usage,
+	collections.conversation,
+	collections.plan,
+	collections.conversation_message,
+	collections.turn,
+	collections.turn_usage,
 	collections.automation_run,
 	collections.bolt_notifications
 ]);
@@ -114,126 +113,109 @@ export const SYSTEM_RELATIONSHIPS: ReadonlyArray<RelationDefinition> = Object.fr
 	}),
 	systemRelationship({
 		name: 'parentTask',
-		source: 'agent_task',
-		target: 'agent_task',
+		source: 'conversation',
+		target: 'conversation',
 		cardinality: 'one',
-		from: { collection: 'agent_task', column: 'parent_id' },
-		to: { collection: 'agent_task', column: 'id' }
+		from: { collection: 'conversation', column: 'parent_id' },
+		to: { collection: 'conversation', column: 'id' }
 	}),
 	systemRelationship({
 		name: 'children',
-		source: 'agent_task',
-		target: 'agent_task',
+		source: 'conversation',
+		target: 'conversation',
 		cardinality: 'many',
-		from: { collection: 'agent_task', column: 'id' },
-		to: { collection: 'agent_task', column: 'parent_id' }
+		from: { collection: 'conversation', column: 'id' },
+		to: { collection: 'conversation', column: 'parent_id' }
 	}),
 	systemRelationship({
 		name: 'activePlan',
-		source: 'agent_task',
-		target: 'agent_plan',
+		source: 'conversation',
+		target: 'plan',
 		cardinality: 'one',
-		from: { collection: 'agent_task', column: 'active_plan_id' },
-		to: { collection: 'agent_plan', column: 'id' }
+		from: { collection: 'conversation', column: 'active_plan_id' },
+		to: { collection: 'plan', column: 'id' }
 	}),
 	systemRelationship({
 		name: 'activeRun',
-		source: 'agent_task',
-		target: 'agent_run',
+		source: 'conversation',
+		target: 'turn',
 		cardinality: 'one',
-		from: { collection: 'agent_task', column: 'active_run_id' },
-		to: { collection: 'agent_run', column: 'id' }
+		from: { collection: 'conversation', column: 'active_turn_id' },
+		to: { collection: 'turn', column: 'id' }
 	}),
 	...(
 		[
-			['plans', 'agent_plan'],
-			['messages', 'agent_message'],
-			['directives', 'agent_inbox'],
-			['runs', 'agent_run']
+			['plans', 'plan'],
+			['messages', 'conversation_message'],
+			['runs', 'turn']
 		] as const
 	).map(([name, target]) =>
 		systemRelationship({
 			name,
-			source: 'agent_task',
+			source: 'conversation',
 			target,
 			cardinality: 'many' as const,
-			from: { collection: 'agent_task', column: 'id' },
-			to: { collection: target, column: 'task_id' }
+			from: { collection: 'conversation', column: 'id' },
+			to: { collection: target, column: 'conversation_id' }
 		})
 	),
-	...['agent_plan', 'agent_message', 'agent_inbox', 'agent_run'].map((source) =>
+	...['plan', 'conversation_message', 'turn'].map((source) =>
 		systemRelationship({
 			name: 'task',
 			source,
-			target: 'agent_task',
+			target: 'conversation',
 			cardinality: 'one' as const,
-			from: { collection: source, column: 'task_id' },
-			to: { collection: 'agent_task', column: 'id' }
+			from: { collection: source, column: 'conversation_id' },
+			to: { collection: 'conversation', column: 'id' }
 		})
 	),
 	systemRelationship({
 		name: 'run',
-		source: 'agent_message',
-		target: 'agent_run',
+		source: 'conversation_message',
+		target: 'turn',
 		cardinality: 'one',
-		from: { collection: 'agent_message', column: 'run_id' },
-		to: { collection: 'agent_run', column: 'id' }
+		from: { collection: 'conversation_message', column: 'turn_id' },
+		to: { collection: 'turn', column: 'id' }
 	}),
 	systemRelationship({
 		name: 'supersedes',
-		source: 'agent_message',
-		target: 'agent_message',
+		source: 'conversation_message',
+		target: 'conversation_message',
 		cardinality: 'one',
-		from: { collection: 'agent_message', column: 'supersedes_id' },
-		to: { collection: 'agent_message', column: 'id' }
+		from: { collection: 'conversation_message', column: 'supersedes_id' },
+		to: { collection: 'conversation_message', column: 'id' }
 	}),
 	systemRelationship({
-		name: 'message',
-		source: 'agent_inbox',
-		target: 'agent_message',
+		name: 'input',
+		source: 'turn',
+		target: 'conversation_message',
 		cardinality: 'one',
-		from: { collection: 'agent_inbox', column: 'message_id' },
-		to: { collection: 'agent_message', column: 'id' }
-	}),
-	systemRelationship({
-		name: 'claimedRun',
-		source: 'agent_inbox',
-		target: 'agent_run',
-		cardinality: 'one',
-		from: { collection: 'agent_inbox', column: 'claimed_run_id' },
-		to: { collection: 'agent_run', column: 'id' }
-	}),
-	systemRelationship({
-		name: 'directive',
-		source: 'agent_run',
-		target: 'agent_inbox',
-		cardinality: 'one',
-		from: { collection: 'agent_run', column: 'directive_id' },
-		to: { collection: 'agent_inbox', column: 'id' }
+		from: { collection: 'turn', column: 'input_message_id' },
+		to: { collection: 'conversation_message', column: 'id' }
 	}),
 	systemRelationship({
 		name: 'messages',
-		source: 'agent_run',
-		target: 'agent_message',
+		source: 'turn',
+		target: 'conversation_message',
 		cardinality: 'many',
-		from: { collection: 'agent_run', column: 'id' },
-		to: { collection: 'agent_message', column: 'run_id' }
+		from: { collection: 'turn', column: 'id' },
+		to: { collection: 'conversation_message', column: 'turn_id' }
 	}),
 	systemRelationship({
 		name: 'usage',
-		source: 'agent_run',
-		target: 'agent_usage',
+		source: 'turn',
+		target: 'turn_usage',
 		cardinality: 'many',
-		from: { collection: 'agent_run', column: 'id' },
-		to: { collection: 'agent_usage', column: 'run_id' }
+		from: { collection: 'turn', column: 'id' },
+		to: { collection: 'turn_usage', column: 'turn_id' }
 	}),
 	systemRelationship({
 		name: 'run',
-		source: 'agent_usage',
-		target: 'agent_run',
+		source: 'turn_usage',
+		target: 'turn',
 		cardinality: 'one',
-		from: { collection: 'agent_usage', column: 'run_id' },
-		to: { collection: 'agent_run', column: 'id' }
+		from: { collection: 'turn_usage', column: 'turn_id' },
+		to: { collection: 'turn', column: 'id' }
 	})
 ]);
 
@@ -332,11 +314,11 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			fields: ['id', 'name']
 		},
 		{
-			collection: collections.agent_task.name,
+			collection: collections.conversation.name,
 			action: 'read' as const,
 			where: OWN_OR_WORKBENCH_TASK
 		},
-		...[collections.agent_plan, collections.agent_message, collections.agent_inbox].map(
+		...[collections.plan, collections.conversation_message].map(
 			(systemCollection) => ({
 				collection: systemCollection.name,
 				action: 'read' as const,
@@ -344,19 +326,20 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			})
 		),
 		{
-			collection: collections.agent_run.name,
+			collection: collections.turn.name,
 			action: 'read' as const,
 			where: OWN_OR_WORKBENCH_TASK_RELATION,
 			fields: [
 				'id',
-				'task_id',
-				'directive_id',
-				'epoch',
+				'conversation_id',
+				'input_message_id',
 				'mode',
 				'phase',
 				'input_through_sequence',
 				'model_id',
-				'reasoning_requested',
+				// Readable: it is what compaction was judged against, so a reader of the transcript can
+				// see why a checkpoint landed where it did. `capability_snapshot` stays unexposed.
+				'context_window_tokens',
 				'status',
 				'created_at',
 				'updated_at',
@@ -364,7 +347,7 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			]
 		},
 		{
-			collection: collections.agent_usage.name,
+			collection: collections.turn_usage.name,
 			action: 'read' as const,
 			where: OWN_OR_WORKBENCH_USAGE
 		},

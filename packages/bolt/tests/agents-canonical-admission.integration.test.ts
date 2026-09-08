@@ -4,7 +4,7 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	MessageId,
-	TaskId
+	ConversationId
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -44,11 +44,11 @@ describe('canonical Task admission vertical slice', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000120');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000120');
 		const submit = (text: string) =>
 			harness!.runtime.runPromise(
 				agents.submit(harness!.effectId(text), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput(text),
 					mode: DirectiveMode.make('agent'),
@@ -57,7 +57,7 @@ describe('canonical Task admission vertical slice', () => {
 			);
 		await submit('Initial instruction');
 		const running = harness.runtime.runPromise(
-			agents.execute(harness.effectId('first-run'), adminSubject, taskId)
+			agents.execute(harness.effectId('first-run'), adminSubject, conversationId)
 		);
 		await started.promise;
 		try {
@@ -67,20 +67,20 @@ describe('canonical Task admission vertical slice', () => {
 		}
 		await running;
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('next-run'), adminSubject, taskId)
+			agents.execute(harness.effectId('next-run'), adminSubject, conversationId)
 		);
 		expect(prompts).toHaveLength(2);
 		expect(JSON.stringify(prompts[1])).toContain('Queued during generation');
 		expect(
 			await harness.database.query(
-				'select state from agent_inbox where task_id = $1 order by sequence',
-				[taskId]
+				'select state from conversation_message where conversation_id = $1 and state is not null order by sequence',
+				[conversationId]
 			)
-		).toEqual([{ state: 'settled' }, { state: 'settled' }]);
+		).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);
 		expect(
 			await harness.database.query(
-				'select count(*)::int as count from agent_message where task_id = $1',
-				[taskId]
+				'select count(*)::int as count from conversation_message where conversation_id = $1',
+				[conversationId]
 			)
 		).toEqual([{ count: 4 }]);
 	});
@@ -90,9 +90,9 @@ describe('canonical Task admission vertical slice', () => {
 			ai: cassetteTranscript(cassette('agents-admission-hello')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000110');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000110');
 		const request = {
-			taskId,
+			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput('hi'),
 			mode: DirectiveMode.make('agent'),
@@ -103,7 +103,7 @@ describe('canonical Task admission vertical slice', () => {
 			agents.submit(harness.effectId('send'), adminSubject, request)
 		);
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute'), adminSubject, conversationId)
 		);
 		const retry = await harness.runtime.runPromise(
 			agents.submit(harness.effectId('retry'), adminSubject, request)
@@ -116,7 +116,7 @@ describe('canonical Task admission vertical slice', () => {
 		const second = await harness.runtime.runPromise(
 			agents.submit(harness.effectId('send-again'), adminSubject, next)
 		);
-		expect(second.directiveId).not.toEqual(first.directiveId);
+		expect(second.messageId).not.toEqual(first.messageId);
 		await expect(
 			harness.runtime.runPromise(
 				agents.submit(harness.effectId('changed-retry'), adminSubject, {
@@ -126,12 +126,12 @@ describe('canonical Task admission vertical slice', () => {
 			)
 		).rejects.toThrow(/submission ID/);
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute-again'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute-again'), adminSubject, conversationId)
 		);
 		expect(
 			await harness.database.query(
-				'select count(*)::int as count from agent_message where task_id = $1',
-				[taskId]
+				'select count(*)::int as count from conversation_message where conversation_id = $1',
+				[conversationId]
 			)
 		).toEqual([{ count: 4 }]);
 	});
@@ -141,11 +141,11 @@ describe('canonical Task admission vertical slice', () => {
 		const prompts: unknown[] = twin3.requests as unknown[];
 		harness = await makeBoltTestRuntime(undefined, { ai: twin3.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000109');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000109');
 		const submit = (key: string, text: string) =>
 			harness!.runtime.runPromise(
 				agents.submit(harness!.effectId(key), adminSubject, {
-					taskId,
+					conversationId,
 					agentId: AgentId.make('web'),
 					message: Agents.userAgentInput(text),
 					mode: DirectiveMode.make('agent'),
@@ -154,51 +154,51 @@ describe('canonical Task admission vertical slice', () => {
 			);
 		await submit('initial', 'Remember reference amber');
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('first'), adminSubject, taskId)
+			agents.execute(harness.effectId('first'), adminSubject, conversationId)
 		);
 		const original = await harness.database.query(
-			'select * from agent_message where task_id = $1 order by sequence',
-			[taskId]
+			'select * from conversation_message where conversation_id = $1 order by sequence',
+			[conversationId]
 		);
 		await submit('followup', 'Continue using that reference');
 		await submit('queued', 'Also include the next instruction');
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('second'), adminSubject, taskId)
+			agents.execute(harness.effectId('second'), adminSubject, conversationId)
 		);
 		expect(JSON.stringify(prompts.at(-1))).toContain('Remember reference amber');
 		expect(JSON.stringify(prompts.at(-1))).toContain('Reply 1');
 		expect(JSON.stringify(prompts.at(-1))).not.toContain('Also include the next instruction');
 		await harness.runtime.runPromise(
-			agents.execute(harness.effectId('execute:queued-follow-up'), adminSubject, taskId)
+			agents.execute(harness.effectId('execute:queued-follow-up'), adminSubject, conversationId)
 		);
 		expect(JSON.stringify(prompts.at(-1))).toContain('Also include the next instruction');
 		expect(
 			await harness.database.query(
-				'select * from agent_message where task_id = $1 and sequence <= 2 order by sequence',
-				[taskId]
+				'select * from conversation_message where conversation_id = $1 and sequence <= 2 order by sequence',
+				[conversationId]
 			)
 		).toEqual(original);
 		expect(
-			await harness.database.query('select count(*)::int as count from agent_task where id = $1', [
-				taskId
+			await harness.database.query('select count(*)::int as count from conversation where id = $1', [
+				conversationId
 			])
 		).toEqual([{ count: 1 }]);
 		expect(
 			await harness.database.query(
-				'select status from agent_run where task_id = $1 order by epoch',
-				[taskId]
+				'select status from turn where conversation_id = $1 order by created_at',
+				[conversationId]
 			)
 		).toEqual([{ status: 'succeeded' }, { status: 'succeeded' }, { status: 'succeeded' }]);
 	});
 
-	it('atomically admits a Task message and directive before executing the Task', async () => {
+	it('admits one queued message and mints no work occurrence for it', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
 			ai: cassetteTranscript(cassette('agents-admission-hello')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000101');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000101');
 		const request = {
-			taskId,
+			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput('Hello'),
 			mode: DirectiveMode.make('agent'),
@@ -208,57 +208,55 @@ describe('canonical Task admission vertical slice', () => {
 		const admitted = await harness.runtime.runPromise(
 			agents.submit(harness.effectId('task-submit'), adminSubject, request)
 		);
-		expect(admitted.directiveId).toEqual(expect.any(String));
+		expect(admitted.messageId).toEqual(expect.any(String));
 		expect(
 			await harness.database.query(
 				`select
-					(select count(*)::int from agent_task where id = $1) as tasks,
-					(select count(*)::int from agent_message where task_id = $1) as messages,
-					(select count(*)::int from agent_inbox where task_id = $1) as directives,
-					(select count(*)::int from agent_run where task_id = $1) as runs`,
-				[taskId]
+					(select count(*)::int from conversation where id = $1) as tasks,
+					(select count(*)::int from conversation_message where conversation_id = $1) as messages,
+					(select count(*)::int from conversation_message where conversation_id = $1 and state is not null) as directives,
+					(select count(*)::int from turn where conversation_id = $1) as runs`,
+				[conversationId]
 			)
 		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 0 }]);
+		// Admitting a message mints no work occurrence. A conversation is not a task, and the caller
+		// that admits the message is the caller that answers it.
 		expect(
 			await harness.database.query(
-				`select command, status, input->>'taskId' as task_id
-				 from bolt_task
-				 where effect_id = $1`,
-				[`tasks.execute:${taskId}:${admitted.directiveId}`]
+				`select command from bolt_task where input->>'conversationId' = $1`,
+				[conversationId]
 			)
-			// Claimed at enqueue: the row is already running under the wake that carried it, so the
-			// host runs it now and discover leaves it alone until the lease lapses.
-		).toEqual([{ command: 'tasks.execute', status: 'running', task_id: taskId }]);
+		).toEqual([]);
 		expect(
 			await harness.database.query(
 				`select task.status, message.message->>'role' as role,
-					inbox.state, inbox.claimed_run_id
-				 from agent_task task
-				 join agent_message message on message.task_id = task.id
-				 join agent_inbox inbox on inbox.task_id = task.id
+					inbox.state, inbox.turn_id as turn_id
+				 from conversation task
+				 join conversation_message message on message.conversation_id = task.id
+				 join conversation_message inbox on inbox.conversation_id = task.id and inbox.state is not null
 				 where task.id = $1`,
-				[taskId]
+				[conversationId]
 			)
-		).toEqual([{ status: 'ready', role: 'user', state: 'queued', claimed_run_id: null }]);
+		).toEqual([{ status: 'ready', role: 'user', state: 'queued', turn_id: null }]);
 
 		const executed = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('task-execute'), adminSubject, taskId)
+			agents.execute(harness.effectId('task-execute'), adminSubject, conversationId)
 		);
-		expect(executed).toMatchObject({ taskId, status: 'done' });
+		expect(executed).toMatchObject({ conversationId, status: 'done' });
 		expect(JSON.stringify(executed.output)).toContain('Hello back.');
 		expect(
 			await harness.database.query(
 				`select task.status, inbox.state, run.status as run_status,
 					count(message.id)::int as messages
-				 from agent_task task
-				 join agent_inbox inbox on inbox.task_id = task.id
-				 join agent_run run on run.task_id = task.id
-				 join agent_message message on message.task_id = task.id
+				 from conversation task
+				 join conversation_message inbox on inbox.conversation_id = task.id and inbox.state is not null
+				 join turn run on run.conversation_id = task.id
+				 join conversation_message message on message.conversation_id = task.id
 				 where task.id = $1
 				 group by task.status, inbox.state, run.status`,
-				[taskId]
+				[conversationId]
 			)
-		).toEqual([{ status: 'done', state: 'settled', run_status: 'succeeded', messages: 2 }]);
+		).toEqual([{ status: 'done', state: 'consumed', run_status: 'succeeded', messages: 2 }]);
 	});
 
 	it('persists Plan mode as an active Plan revision and leaves the Task ready', async () => {
@@ -266,10 +264,10 @@ describe('canonical Task admission vertical slice', () => {
 			ai: cassetteTranscript(cassette('agents-admission-plan')).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make('00000000-0000-4000-8000-000000000102');
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000102');
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('plan-submit'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Plan the clean migration.'),
 				mode: DirectiveMode.make('plan'),
@@ -277,19 +275,19 @@ describe('canonical Task admission vertical slice', () => {
 			})
 		);
 		const result = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('plan-execute'), adminSubject, taskId)
+			agents.execute(harness.effectId('plan-execute'), adminSubject, conversationId)
 		);
 		expect(result.status).toBe('idle');
 		expect(
 			await harness.database.query(
 				`select task.status, plan.revision, plan.status as plan_status,
 					run.mode, run.phase, run.status as run_status, inbox.state
-				 from agent_task task
-				 join agent_plan plan on plan.id = task.active_plan_id
-				 join agent_run run on run.task_id = task.id
-				 join agent_inbox inbox on inbox.task_id = task.id
+				 from conversation task
+				 join plan plan on plan.id = task.active_plan_id
+				 join turn run on run.conversation_id = task.id
+				 join conversation_message inbox on inbox.conversation_id = task.id and inbox.state is not null
 				 where task.id = $1`,
-				[taskId]
+				[conversationId]
 			)
 		).toEqual([
 			{
@@ -299,7 +297,7 @@ describe('canonical Task admission vertical slice', () => {
 				mode: 'plan',
 				phase: 'model',
 				run_status: 'succeeded',
-				state: 'settled'
+				state: 'consumed'
 			}
 		]);
 	});

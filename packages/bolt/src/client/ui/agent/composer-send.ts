@@ -20,7 +20,7 @@ type ComposerSendHandlers<A> = Readonly<{
  * and `ensuring` always re-enables the composer. A defect still skips tap/tapError.
  *
  * The command is interrupted at {@link COMPOSER_COMMAND_DEADLINE} so a hung encode or
- * `tasks.submit` cannot leave the pending You bubble up forever.
+ * `conversations.send` cannot leave the pending You bubble up forever.
  */
 export function runComposerCommand<A, E extends { readonly message: string }>(
 	command: Effect.Effect<A, E>,

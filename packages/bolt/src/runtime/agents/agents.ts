@@ -1,11 +1,10 @@
 import { Clock, Context, Effect, ExecutionPlan, Layer, Schema, Stream } from 'effect';
-import { Prompt, Tool, Toolkit } from 'effect/unstable/ai';
+import { AiError, Prompt, Tool, Toolkit } from 'effect/unstable/ai';
 import { EffectId, ReleaseId, type AIMessageProgress } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
 import {
 	AgentId,
 	HostToolCatalog,
-	DirectiveId,
 	DirectiveMode,
 	DirectivePriority,
 	ExactCharge,
@@ -17,13 +16,13 @@ import {
 	type PlanVerdict,
 	ProviderCallId,
 	type ProviderObservation,
-	RunId,
+	TurnId,
 	RunPhase,
 	RunStatus,
 	SubjectId,
-	TaskAudience,
-	TaskId,
-	TaskStatus,
+	ConversationAudience,
+	ConversationId,
+	ConversationStatus,
 	UsageObservation,
 	WorkbenchId
 } from '@norbital-ai/bolt-protocol/facilities';
@@ -31,16 +30,16 @@ import {
 	attachmentAssetsFromMessage,
 	stripImageFileParts,
 	taskAssetKeyPrefix,
-	taskAssetStorageKey as taskScopedImageKey,
+	conversationAssetStorageKey as taskScopedImageKey,
 	userMessageWithImages
 } from './image-descriptors.js';
 import {
-	type TaskControlRequest,
-	type TaskControlResult,
-	type TaskEditMessageRequest,
-	type TaskEditMessageResult,
-	type TaskSubmitRequest,
-	type TaskSubmitResult,
+	type ConversationControlRequest,
+	type ConversationControlResult,
+	type ConversationEditMessageRequest,
+	type ConversationEditMessageResult,
+	type ConversationSendRequest,
+	type ConversationSendResult,
 	type TaskModelCatalog
 } from '@norbital-ai/bolt-protocol/system';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
@@ -57,7 +56,6 @@ import {
 	Tasks,
 	type AIInterface
 } from '#lib/runtime/facilities/services.js';
-import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -127,11 +125,16 @@ type CapabilitySnapshot = typeof CapabilitySnapshot.Type;
  * the owning run, which is the mode of the turn, not of the checkpoint.
  */
 const MessageAnnotation = Schema.Union([
+	/**
+	 * Where a queued input landed in the transcript, which is the input boundary and has no column.
+	 *
+	 * `priority` and `cancelled` used to live here too, beside the `priority` and `state` columns that
+	 * hold the same facts — two sources of truth the runtime and the panel each read a different half
+	 * of. The columns won.
+	 */
 	Schema.Struct({
 		tag: Schema.Literal('input'),
-		priority: DirectivePriority,
-		consumedAfterSequence: Schema.optionalKey(Schema.Natural),
-		cancelled: Schema.optionalKey(Schema.Boolean)
+		consumedAfterSequence: Schema.optionalKey(Schema.Natural)
 	}),
 	Schema.Struct({
 		tag: Schema.Literal('generation'),
@@ -141,7 +144,7 @@ const MessageAnnotation = Schema.Union([
 	}),
 	Schema.Struct({
 		tag: Schema.Literal('compact'),
-		origin: Schema.Literals(['manual', 'automatic']),
+		origin: Schema.Literals(['manual', 'automatic', 'requested']),
 		cutoff: Schema.Natural,
 		retainedMessageIds: Schema.Array(MessageId)
 	}),
@@ -154,65 +157,74 @@ const MessageAnnotation = Schema.Union([
 ]);
 type MessageAnnotation = typeof MessageAnnotation.Type;
 
-export const AgentTaskRow = Schema.Struct({
-	id: TaskId,
+export const ConversationRow = Schema.Struct({
+	id: ConversationId,
 	workbench_id: WorkbenchId,
 	subject_id: SubjectId,
 	agent_id: AgentId,
-	audience: TaskAudience,
-	parent_id: Schema.optionalKey(Schema.NullOr(TaskId)),
-	status: TaskStatus,
+	audience: ConversationAudience,
+	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
+	status: ConversationStatus,
 	active_plan_id: Schema.optionalKey(Schema.NullOr(PlanId)),
-	active_run_id: Schema.optionalKey(Schema.NullOr(RunId)),
-	epoch: Schema.Natural
+	active_turn_id: Schema.optionalKey(Schema.NullOr(TurnId)),
+	/** The agent's current checklist, set and read through the `todo` tool. */
+	todos: Schema.optionalKey(Schema.NullOr(TodoList))
 });
-type AgentTask = typeof AgentTaskRow.Type;
+type Conversation = typeof ConversationRow.Type;
 
-export const AgentPlanRow = Schema.Struct({
+export const PlanRow = Schema.Struct({
 	id: PlanId,
-	task_id: TaskId,
+	conversation_id: ConversationId,
 	revision: Schema.Natural,
 	checkpoint_sequence: Schema.Natural,
 	body: Schema.NonEmptyString,
 	status: Schema.Literals(['active', 'verified', 'stalled', 'superseded'])
 });
-type AgentPlan = typeof AgentPlanRow.Type;
+type Plan = typeof PlanRow.Type;
 
-export const AgentMessageRow = Schema.Struct({
+export const ConversationMessageRow = Schema.Struct({
 	id: MessageId,
-	task_id: TaskId,
+	conversation_id: ConversationId,
 	sequence: Schema.Natural,
-	run_id: Schema.optionalKey(Schema.NullOr(RunId)),
+	turn_id: Schema.optionalKey(Schema.NullOr(TurnId)),
 	author: Schema.Struct({
 		kind: Schema.Literals(['human', 'agent', 'parent-agent', 'tool', 'system']),
 		id: Schema.optionalKey(Schema.NonEmptyString)
 	}),
 	message: Schema.toEncoded(Prompt.Message),
 	semantic_hash: Schema.NonEmptyString,
+	/**
+	 * The queue, on the message. `queued` while somebody is waiting for an answer to it, then
+	 * `consumed` by the turn that answers it, or `cancelled` when the conversation is stopped.
+	 * Absent on every message nobody is waiting on: replies, tool results, system notes.
+	 */
+	state: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString)),
+	mode: Schema.optionalKey(Schema.NullOr(DirectiveMode)),
+	priority: Schema.optionalKey(Schema.NullOr(DirectivePriority)),
+	model_id: Schema.optionalKey(Schema.NullOr(ModelId)),
 	annotation: Schema.optionalKey(Schema.NullOr(MessageAnnotation)),
 	supersedes_id: Schema.optionalKey(Schema.NullOr(MessageId))
 });
-export type AgentMessage = typeof AgentMessageRow.Type;
+export type ConversationMessage = typeof ConversationMessageRow.Type;
 
-export const AgentRunRow = Schema.Struct({
-	id: RunId,
-	task_id: TaskId,
-	directive_id: DirectiveId,
-	epoch: Schema.Natural,
+export const TurnRow = Schema.Struct({
+	id: TurnId,
+	conversation_id: ConversationId,
+	input_message_id: MessageId,
 	mode: DirectiveMode,
 	phase: RunPhase,
 	input_through_sequence: Schema.Natural,
 	model_id: ModelId,
-	/** Whether this run asked the provider for reasoning; unrequested reasoning parts are never persisted. */
-	reasoning_requested: Schema.Boolean,
+	/** The model's context window as the catalog stated it when this turn was claimed. */
+	context_window_tokens: Schema.Natural,
 	status: RunStatus
 });
-type AgentRun = typeof AgentRunRow.Type;
+type Turn = typeof TurnRow.Type;
 
-export const AgentUsageRow = Schema.Struct({
+export const TurnUsageRow = Schema.Struct({
 	id: Schema.NonEmptyString,
 	call_id: ProviderCallId,
-	run_id: RunId,
+	turn_id: TurnId,
 	provider: Schema.NonEmptyString,
 	model: Schema.NonEmptyString,
 	operation: Schema.Literals(['language', 'embedding']),
@@ -262,23 +274,21 @@ const deterministicId = (scope: string): string => {
 		.join('-');
 };
 
-export const taskIdFor = (scope: string): TaskId => TaskId.make(deterministicId(`task:${scope}`));
+export const conversationIdFor = (scope: string): ConversationId => ConversationId.make(deterministicId(`task:${scope}`));
 const planIdFor = (scope: string): PlanId => PlanId.make(deterministicId(`plan:${scope}`));
 const messageIdFor = (scope: string): MessageId =>
 	MessageId.make(deterministicId(`message:${scope}`));
-const directiveIdFor = (scope: string): DirectiveId =>
-	DirectiveId.make(deterministicId(`directive:${scope}`));
-const runIdFor = (scope: string): RunId => RunId.make(deterministicId(`run:${scope}`));
+const runIdFor = (scope: string): TurnId => TurnId.make(deterministicId(`run:${scope}`));
 const providerCallIdFor = (scope: string): ProviderCallId =>
 	ProviderCallId.make(`call:${semanticHash(scope)}`);
 
 const MAX_IMAGE_COUNT = 8;
 const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
-export const taskAssetStorageKey = (taskId: TaskId, documentId: string, fileName: string): string =>
-	taskScopedImageKey(taskId, documentId, fileName);
-const validateAttachments = (taskId: TaskId, assets: ReadonlyArray<ImageAsset>) =>
+export const conversationAssetStorageKey = (conversationId: ConversationId, documentId: string, fileName: string): string =>
+	taskScopedImageKey(conversationId, documentId, fileName);
+const validateAttachments = (conversationId: ConversationId, assets: ReadonlyArray<ImageAsset>) =>
 	Effect.gen(function* () {
-		const prefix = taskAssetKeyPrefix(taskId);
+		const prefix = taskAssetKeyPrefix(conversationId);
 		if (
 			assets.length > MAX_IMAGE_COUNT ||
 			assets.reduce((sum, asset) => sum + asset.size, 0) > MAX_IMAGE_SOURCE_BYTES
@@ -326,8 +336,8 @@ const systemMessage = (content: string): Prompt.MessageEncoded =>
 	encodePromptMessage(Prompt.systemMessage({ content }));
 export const userAgentInput = (text: string): Prompt.MessageEncoded =>
 	encodePromptMessage(Prompt.userMessage({ content: [Prompt.textPart({ text })] }));
-const parentAgentInput = (parentTaskId: TaskId, text: string): Prompt.MessageEncoded =>
-	userAgentInput(`[Parent agent ${parentTaskId}]\n${text}`);
+const parentAgentInput = (parentConversationId: ConversationId, text: string): Prompt.MessageEncoded =>
+	userAgentInput(`[Parent agent ${parentConversationId}]\n${text}`);
 
 export const InboundAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,
@@ -372,7 +382,7 @@ export const inboundAgentInput = (messages: ReadonlyArray<InboundBatchMessage>) 
  * order: it happened, it is durable, and hiding it would need a cutoff, which is Compact's job and
  * not supersession's.
  */
-const supersessionProjection = (messages: ReadonlyArray<AgentMessage>) => {
+const supersessionProjection = (messages: ReadonlyArray<ConversationMessage>) => {
 	const superseded = new Set(
 		messages.flatMap(({ supersedes_id }) =>
 			supersedes_id === undefined || supersedes_id === null ? [] : [supersedes_id]
@@ -382,7 +392,7 @@ const supersessionProjection = (messages: ReadonlyArray<AgentMessage>) => {
 	return messages.filter(({ id }) => !superseded.has(id));
 };
 
-const compactProjection = (messages: ReadonlyArray<AgentMessage>) => {
+const compactProjection = (messages: ReadonlyArray<ConversationMessage>) => {
 	const checkpoint = messages.findLast(({ annotation }) => annotation?.tag === 'compact');
 	const annotation = checkpoint?.annotation;
 	if (checkpoint === undefined || annotation?.tag !== 'compact') return messages;
@@ -396,12 +406,64 @@ const compactProjection = (messages: ReadonlyArray<AgentMessage>) => {
 };
 
 // A queued input can precede a checkpoint in storage but be delivered afterwards.
-const contextSequence = (message: AgentMessage): number =>
+/**
+ * The turn's own copy of its transcript.
+ *
+ * A turn used to re-read every message row on every token boundary — up to 500 rows, twice per
+ * streamed part — to recover two facts it already had: the highest sequence in use, and the row it
+ * wrote on the part before. Both live here. It is built once from one read, and every write records
+ * itself as it lands, so what the ledger holds and what the table holds cannot diverge within a
+ * turn.
+ *
+ * It is **not** a substitute for reading, and the difference is where the two facts come from. A row
+ * is found here by an id this run derives deterministically, so nobody else can be writing it and a
+ * cached answer stays true for as long as the run does. A *sequence* is the opposite: it is the
+ * highest in the whole conversation, and admission writes a follow-up message into a conversation
+ * whose turn is still running — that is what queueing a message is. A sequence taken from this
+ * ledger and used after a provider call has returned is a sequence that was true before the call
+ * and collides with `conversation_message_sequence` after it. So a row that needs a new sequence
+ * still reads for one, close to its write; a row continuing one it already holds does not read at
+ * all, which is the whole of the streaming path.
+ */
+export type Transcript = Readonly<{
+	rows: () => ReadonlyArray<ConversationMessage>;
+	/** The highest sequence in use, which is what the next appended row counts from. */
+	lastSequence: () => number;
+	byId: (id: MessageId) => ConversationMessage | undefined;
+	/** Within-turn idempotency: the same content written twice is the same row. */
+	bySemanticHash: (hash: string) => ConversationMessage | undefined;
+	/** Insert, or replace in place when the row is one this turn already wrote. */
+	record: (row: ConversationMessage) => void;
+}>;
+
+export const makeTranscript = (initial: ReadonlyArray<ConversationMessage>): Transcript => {
+	const rows: Array<ConversationMessage> = [...initial];
+	return {
+		// A copy: a caller holding the ledger's own array would see it change under them.
+		rows: () => [...rows],
+		lastSequence: () => rows.reduce((highest, { sequence }) => Math.max(highest, sequence), 0),
+		byId: (id) => rows.find((row) => row.id === id),
+		bySemanticHash: (hash) => rows.find((row) => row.semantic_hash === hash),
+		record: (row) => {
+			const at = rows.findIndex((candidate) => candidate.id === row.id);
+			if (at >= 0) rows[at] = row;
+			else {
+				// Sequence order is the transcript's order, and a streamed part can land while an
+				// earlier row is still being written, so position is found rather than assumed.
+				const before = rows.findIndex((candidate) => candidate.sequence > row.sequence);
+				if (before < 0) rows.push(row);
+				else rows.splice(before, 0, row);
+			}
+		}
+	};
+};
+
+const contextSequence = (message: ConversationMessage): number =>
 	message.annotation?.tag === 'input' && message.annotation.consumedAfterSequence !== undefined
 		? Math.max(message.sequence, message.annotation.consumedAfterSequence + 1)
 		: message.sequence;
 
-const projectTaskMessages = (messages: ReadonlyArray<AgentMessage>, activePlan?: AgentPlan) => {
+const promptMessages = (messages: ReadonlyArray<ConversationMessage>, activePlan?: Plan) => {
 	const projected = compactProjection(
 		supersessionProjection(
 			messages.filter(
@@ -416,18 +478,18 @@ const projectTaskMessages = (messages: ReadonlyArray<AgentMessage>, activePlan?:
 		: projected.filter((message) => contextSequence(message) > activePlan.checkpoint_sequence);
 };
 
-const projectTaskPrompt = (input: {
+const projectPrompt = (input: {
 	readonly workspacePrompt: string;
 	readonly agentInstruction?: string;
 	readonly mode: DirectiveMode;
-	readonly messages: ReadonlyArray<AgentMessage>;
-	readonly activePlan?: AgentPlan;
+	readonly messages: ReadonlyArray<ConversationMessage>;
+	readonly activePlan?: Plan;
 }): ReadonlyArray<Prompt.MessageEncoded> => {
 	const system = [input.workspacePrompt, input.agentInstruction]
 		.filter((part): part is string => part !== undefined && part.trim() !== '')
 		.join('\n\n');
 	const activePlan = input.activePlan;
-	const messages = projectTaskMessages(input.messages, activePlan);
+	const messages = promptMessages(input.messages, activePlan);
 	return [
 		...(system === '' ? [] : [systemMessage(system)]),
 		...(activePlan === undefined
@@ -458,7 +520,7 @@ const toolCalls = (message: Prompt.MessageEncoded): ReadonlyArray<EncodedToolCal
 				part.type === 'tool-call' ? [{ id: part.id, name: part.name, params: part.params }] : []
 			);
 const unresolvedToolCalls = (
-	messages: ReadonlyArray<AgentMessage>
+	messages: ReadonlyArray<ConversationMessage>
 ): ReadonlyArray<EncodedToolCall> => {
 	const resolved = new Set(
 		messages.flatMap(({ message }) =>
@@ -574,7 +636,7 @@ const generatePlanVerdict = Effect.fn('Agents.generatePlanVerdict')(function* (
 });
 
 const usageMutation = Effect.fn('Agents.usageMutation')(function* (
-	runId: RunId,
+	runId: TurnId,
 	observation: ProviderObservation
 ) {
 	const complete =
@@ -594,10 +656,10 @@ const usageMutation = Effect.fn('Agents.usageMutation')(function* (
 							})
 					)
 				);
-	return yield* Schema.decodeUnknownEffect(AgentUsageRow)({
+	return yield* Schema.decodeUnknownEffect(TurnUsageRow)({
 		id: deterministicId(`usage:${observation.callId}`),
 		call_id: observation.callId,
-		run_id: runId,
+		turn_id: runId,
 		provider: observation.provider,
 		model: observation.model,
 		operation: observation.operation,
@@ -626,14 +688,38 @@ const releaseIdFor = (workspaceIdentity: unknown): ReleaseId =>
 type ResolvedAgent = Readonly<{
 	id: AgentId;
 	instruction?: string;
-	audience: TaskAudience;
+	audience: ConversationAudience;
 	delegation: 'enabled' | 'disabled';
 }>;
-type TaskExecutionResult = Readonly<{
-	taskId: TaskId;
-	status: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'attention';
+type TurnResult = Readonly<{
+	conversationId: ConversationId;
+	status: 'idle' | 'running' | 'done' | 'failed' | 'attention';
 	output?: Prompt.MessageEncoded;
 }>;
+
+/**
+ * Everything running a turn can fail with.
+ *
+ * Named because a parent now runs its children, so the recursion `execute → childBarrier →
+ * runChild → answerQueued → execute` is real and inference has no fixed point to find. One written
+ * union gives it one, and the three signatures that used to spell it out share it.
+ */
+type TurnFailure =
+	| TaskRuntimeError
+	| AccessControl.AccessDenied
+	| AgentModelUnavailable
+	| ToolNotAllowed
+	| McpToolError
+	| SkillError
+	| Collections.QueryError
+	| Collections.BatchMutationError
+	| Schema.SchemaError
+	| DispatchError
+	| Workspace.WorkspaceLookupError
+	| InvocationBudget.NestingLimitExceeded
+	| AuthoredRefusal
+	// Effect's `Toolkit` dispatch, which is how a tool call reaches its handler.
+	| AiError.AiError;
 
 /**
  * Who runs the admitted turn. `host` (the default, and the only shape the wire can express) hands
@@ -641,7 +727,6 @@ type TaskExecutionResult = Readonly<{
  * turn itself in the same invocation, the Envoy drain: no row, no wake, nothing for the host to race
  * the caller's own `execute` for the run claim.
  */
-type AgentExecution = Readonly<{ execution?: 'host' | 'inline' }>;
 
 export type Interface = Readonly<{
 	readonly models: (
@@ -655,9 +740,9 @@ export type Interface = Readonly<{
 	readonly submit: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		request: TaskSubmitRequest & AgentExecution
+		request: ConversationSendRequest
 	) => Effect.Effect<
-		TaskSubmitResult,
+		ConversationSendResult,
 		| TaskRuntimeError
 		| AccessControl.AccessDenied
 		| AgentModelUnavailable
@@ -675,9 +760,9 @@ export type Interface = Readonly<{
 	readonly editMessage: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		request: TaskEditMessageRequest
+		request: ConversationEditMessageRequest
 	) => Effect.Effect<
-		TaskEditMessageResult,
+		ConversationEditMessageResult,
 		| TaskRuntimeError
 		| AccessControl.AccessDenied
 		| AgentModelUnavailable
@@ -695,9 +780,9 @@ export type Interface = Readonly<{
 	readonly control: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		request: TaskControlRequest
+		request: ConversationControlRequest
 	) => Effect.Effect<
-		TaskControlResult,
+		ConversationControlResult,
 		| TaskRuntimeError
 		| AccessControl.AccessDenied
 		| AgentModelUnavailable
@@ -712,26 +797,23 @@ export type Interface = Readonly<{
 		| InvocationBudget.NestingLimitExceeded
 		| AuthoredRefusal
 	>;
+	/**
+	 * Answers one message. The primitive: an envoy or a schedule runs exactly the turn it came for.
+	 */
 	readonly execute: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		taskId: TaskId
-	) => Effect.Effect<
-		TaskExecutionResult,
-		| TaskRuntimeError
-		| AccessControl.AccessDenied
-		| AgentModelUnavailable
-		| ToolNotAllowed
-		| McpToolError
-		| SkillError
-		| Collections.QueryError
-		| Collections.BatchMutationError
-		| Schema.SchemaError
-		| DispatchError
-		| Workspace.WorkspaceLookupError
-		| InvocationBudget.NestingLimitExceeded
-		| AuthoredRefusal
-	>;
+		conversationId: ConversationId
+	) => Effect.Effect<TurnResult, TurnFailure>;
+	/**
+	 * Answers the message just sent, then everything else the conversation has waiting. What a person
+	 * holding a response open needs, and what replaced the durable work occurrence between turns.
+	 */
+	readonly answerQueued: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		conversationId: ConversationId
+	) => Effect.Effect<TurnResult, TurnFailure>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Agents');
@@ -776,48 +858,10 @@ const describeFailure = (failure: unknown): ToolFailure => {
 	return { code: 'tool_error', message: String(failure) };
 };
 
-/**
- * No provider request asks for reasoning yet: `generateMessage` sends no reasoning or thinking
- * option, so a run never requests it. A model that emits a literal reasoning part regardless (GLM
- * and DeepSeek answer `None.` when nothing was thought) must not have it persisted or rendered.
- * When per-model reasoning becomes a request option, this is the one place that reads it.
- */
-const reasoningRequested = (_modelId: ModelId): boolean => false;
-
 /** The agents a `subagent` spawn may name in this workspace: the web agent plus every envoy. */
 export const spawnableAgentIds = (
 	definition: Pick<WorkspaceDefinition, 'envoys'>
 ): ReadonlyArray<string> => [WEB_AGENT_NAME, ...definition.envoys.map(({ name }) => name)];
-
-/**
- * The assistant parts a run keeps. A reasoning part survives only when the run requested reasoning
- * and the part has text; an active (still streaming) part is kept while requested so its index is
- * stable across snapshots. Dropped parts are removed from `activeParts` and the remaining indexes
- * shift with the content, so `persistGeneration` sees one consistent message per snapshot.
- */
-export const retainedGeneration = (
-	run: Pick<AgentRun, 'reasoning_requested'>,
-	message: Prompt.MessageEncoded,
-	activeParts: ReadonlyArray<number>
-): { readonly message: Prompt.MessageEncoded; readonly activeParts: ReadonlyArray<number> } => {
-	if (message.role !== 'assistant' || isString(message.content)) return { message, activeParts };
-	const kept: Array<number> = [];
-	const content = message.content.filter((part, index) => {
-		const retained =
-			part.type !== 'reasoning' ||
-			(run.reasoning_requested && (activeParts.includes(index) || part.text.trim() !== ''));
-		if (retained) kept.push(index);
-		return retained;
-	});
-	if (content.length === message.content.length) return { message, activeParts };
-	return {
-		message: { ...message, content },
-		activeParts: activeParts.flatMap((index) => {
-			const next = kept.indexOf(index);
-			return next === -1 ? [] : [next];
-		})
-	};
-};
 
 /**
  * The content a Compact checkpoint stores: the model's prose and nothing else.
@@ -854,45 +898,69 @@ const EmptyToolInput: Schema.JsonObject = {
 };
 
 const writeActions: ReadonlyArray<'create' | 'update' | 'delete'> = ['create', 'update', 'delete'];
-const ParkedResult = Schema.Struct({ state: Schema.Literal('parked'), taskId: TaskId });
-
-const isParkedResult = Schema.is(ParkedResult);
 const isString = Schema.is(Schema.String);
+
+/** A conversation nobody is still working on. `attention` is terminal: it is waiting on a person. */
+const isSettled = (status: Conversation['status']) =>
+	status !== 'ready' && status !== 'running';
 const isObjectLike = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
 );
 
+const MAX_CHILD_CONSUME_NUDGES = 2;
 const MAX_PLAN_VERIFICATION_ATTEMPTS = 3;
 const PLAN_VERIFICATION_OUTPUT_TOKENS = 768;
 /**
- * The projection bound that makes TaskRuntime compact before an Agent turn instead of after a
- * provider refusal.
+ * How full a model's context may get before the turn compacts, as a fraction of its own window.
  *
- * Measured on the encoded projection — the exact array of `Prompt.MessageEncoded` about to be sent —
- * because that is the only quantity the runtime already has exactly. Tokens are not: a token count
- * belongs to a provider's tokenizer, and asking one costs a round trip per turn to approximate a
- * number the byte length already orders correctly.
+ * A fraction, not a constant. This used to be 64 KiB of encoded projection: one number for every
+ * model, measured in the wrong unit. It compacted a 1M-token model at six percent of its capacity
+ * and a 32k model too late, and no arithmetic on byte lengths could tell the two apart, because the
+ * quantity that matters is the model's window and the byte count does not know it. The window is
+ * now a required field on `ModelCatalogEntry` — a host registering a model knows it — and is stamped
+ * onto the turn at claim, so the bound is per-model and auditable after the fact.
  *
- * 64 KiB of encoded JSON is roughly 16k tokens of prose at the ~4 bytes/token rule of thumb, and
- * rather fewer for the JSON-heavy tool traffic that dominates a long Task. Against the smallest
- * context window Bolt targets (128k), that leaves the turn about seven eighths of its window for the
- * system contract, the Plan, the capability snapshot, tool results, and the response — the checkpoint
- * lands while the conversation still fits comfortably, not at the edge where a single large tool
- * result decides whether the turn survives. It is deliberately host-side: a workspace author cannot
- * raise it into a provider's hard failure, and no authored agent config carries a context budget for
- * it to live in.
+ * The tokens are the provider's own count from the previous call's observation, not an estimate:
+ * `inputTokens + outputTokens` is what the next call's input will be, plus whatever tool results
+ * were appended in between. Three quarters leaves room for that plus the reply, and leaves the
+ * checkpoint landing while the conversation still fits comfortably rather than at the edge where one
+ * large tool result decides whether the turn survives. It is deliberately host-side: a workspace
+ * author cannot raise it into a provider's hard failure.
  */
-const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
+const COMPACT_AT_FRACTION_OF_WINDOW = 0.75;
+/** How many checkpoints an agent may ask for in one turn. The runtime's own budget is one. */
+const MAX_REQUESTED_COMPACTIONS_PER_TURN = 3;
 const AUTO_COMPACT_OUTPUT_TOKENS = 1_536;
 const planVerificationExecutionPlan = ExecutionPlan.make({
 	provide: Context.empty(),
 	attempts: 2
 });
-const promptBytes = (messages: ReadonlyArray<Prompt.MessageEncoded>): number =>
-	new TextEncoder().encode(JSON.stringify(messages)).byteLength;
+/**
+ * What the last provider call actually cost in context, or zero before the first one.
+ *
+ * `total`, not `uncached`: a cached input token still occupies the window. An adapter that reports
+ * only `billableUnits` has no token counts at all, which reads as zero — and the estimate below
+ * then carries the decision on its own, which is the honest answer for a provider that will not say.
+ */
+const observedTokens = (usage: UsageObservation | null | undefined): number => {
+	if (usage === undefined || usage === null || !('inputTokens' in usage)) return 0;
+	return (usage.inputTokens?.total ?? 0) + (usage.outputTokens?.total ?? 0);
+};
+
+/**
+ * What the projection about to be sent is worth in tokens, roughly.
+ *
+ * Four bytes to the token is the usual rule of thumb, and it is only ever a rule of thumb: the true
+ * count belongs to a provider's tokenizer, which costs a round trip to ask. It is used *beside* the
+ * measurement rather than instead of it — the measurement says what the last call actually cost, the
+ * estimate covers everything appended since, and a first call has only the estimate. The larger of
+ * the two decides, so neither a long history nor one enormous tool result slips past.
+ */
+const estimatedTokens = (messages: ReadonlyArray<Prompt.MessageEncoded>): number =>
+	Math.ceil(new TextEncoder().encode(JSON.stringify(messages)).byteLength / 4);
 const ConsumedChildResult = Schema.Struct({
 	state: Schema.Literals(['done', 'failed']),
-	taskId: TaskId
+	conversationId: ConversationId
 });
 
 export const layer = Layer.effect(
@@ -902,50 +970,17 @@ export const layer = Layer.effect(
 		const access = yield* AccessControl.Service;
 		const collections = yield* Collections.Service;
 		const ai = yield* AI.Service;
-		const tasks = yield* Tasks.Service;
-		const queue = yield* TaskQueue.Service;
 		const database = yield* Database.Service;
 		const hostTools = yield* HostTools.Service;
 		const connector = yield* Connector.Service;
 		const remotes = yield* RemoteRegistry;
 
-		/**
-		 * Durable execute, claimed at enqueue: the `bolt_task` row is written already running and the
-		 * host is woken with its occurrence, so an agent turn reaches the provider in one host hop
-		 * rather than through a timer, a discover and a claim. Every caller here is a turn somebody is
-		 * waiting on (a submission, a settled run with more queued, a parent resumed by its child);
-		 * scheduled and background work keeps the ordinary pending-row shape.
-		 */
-		const enqueueExecute = Effect.fn('Agents.enqueueExecute')(function* (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			taskId: TaskId,
-			slot: string
-		) {
-			const now = yield* Clock.currentTimeMillis;
-			yield* queue
-				.enqueueClaimed(effectId, {
-					command: 'tasks.execute',
-					input: { taskId, bolt_run_as: encodeSubject(subject) },
-					effectId: `tasks.execute:${taskId}:${slot}`,
-					nowEpochMs: now
-				})
-				.pipe(
-					Effect.mapError(
-						(error) =>
-							new TaskRuntimeError({
-								operation: 'enqueue',
-								message: getErrorMessage(error)
-							})
-					)
-				);
-		});
 
 		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentId: AgentId) {
 			if (agentId === WEB_AGENT_NAME) {
 				return {
 					id: agentId,
-					audience: TaskAudience.make('personal'),
+					audience: ConversationAudience.make('personal'),
 					delegation: 'enabled'
 				} satisfies ResolvedAgent;
 			}
@@ -960,7 +995,7 @@ export const layer = Layer.effect(
 			return {
 				id: agentId,
 				instruction: envoy.task,
-				audience: TaskAudience.make('workbench'),
+				audience: ConversationAudience.make('workbench'),
 				delegation: envoy.delegation
 			} satisfies ResolvedAgent;
 		});
@@ -1098,20 +1133,21 @@ export const layer = Layer.effect(
 					reason: requested === undefined ? 'invalid-catalog' : 'not-found'
 				});
 			}
-			return selected.id;
+			// The entry, not the id: the turn needs the window as much as the name.
+			return selected;
 		});
 
-		const taskById = Effect.fn('Agents.taskById')(function* (
+		const conversationById = Effect.fn('Agents.conversationById')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			taskId: TaskId
+			conversationId: ConversationId
 		) {
 			const row = yield* collections.findFirst(effectId, subject, {
-				collection: 'agent_task',
-				where: { id: { eq: taskId } }
+				collection: 'conversation',
+				where: { id: { eq: conversationId } }
 			});
 			if (row === undefined) return undefined;
-			return yield* Schema.decodeUnknownEffect(AgentTaskRow)(row).pipe(
+			return yield* Schema.decodeUnknownEffect(ConversationRow)(row).pipe(
 				Effect.mapError(
 					() =>
 						new TaskRuntimeError({
@@ -1122,16 +1158,16 @@ export const layer = Layer.effect(
 			);
 		});
 
-		const requireOwnedTask = Effect.fn('Agents.requireOwnedTask')(function* (
+		const requireOwnedConversation = Effect.fn('Agents.requireOwnedConversation')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			taskId: TaskId
+			conversationId: ConversationId
 		) {
-			const task = yield* taskById(effectId, subject, taskId);
+			const task = yield* conversationById(effectId, subject, conversationId);
 			if (task === undefined || task.subject_id !== subject.userId) {
 				return yield* new AccessControl.AccessDenied({
 					action: 'agent',
-					resource: taskId,
+					resource: conversationId,
 					reason: 'unknown Task'
 				});
 			}
@@ -1141,124 +1177,163 @@ export const layer = Layer.effect(
 		const messageRows = Effect.fn('Agents.messageRows')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			taskId: TaskId
+			conversationId: ConversationId
 		) {
 			const rows = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_message',
-				where: { task_id: { eq: taskId } },
+				collection: 'conversation_message',
+				where: { conversation_id: { eq: conversationId } },
 				orderBy: { sequence: 'asc' },
 				limit: 500
 			});
-			const messages = yield* decodeRows(AgentMessageRow, rows);
-			if (
-				!messages.some(
-					(message) =>
-						message.annotation == null &&
-						['human', 'parent-agent', 'system'].includes(message.author.kind)
-				)
-			)
-				return messages;
-			// Existing conversations may have queued inputs from before delivery annotations existed.
-			const queued = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_inbox',
-				where: { task_id: { eq: taskId }, state: { eq: 'queued' } },
-				limit: 500
-			});
-			const pending = yield* decodeRows(
-				Schema.Struct({ message_id: MessageId, priority: DirectivePriority }),
-				queued
-			);
-			return messages.map((message) => {
-				const directive = pending.find((input) => input.message_id === message.id);
-				return message.annotation == null && directive !== undefined
-					? { ...message, annotation: { tag: 'input' as const, priority: directive.priority } }
-					: message;
-			});
+			const messages = yield* decodeRows(ConversationMessageRow, rows);
+			return messages;
 		});
 
 		type RelatedMutation = Readonly<Record<string, unknown>> & Readonly<{ id: string }>;
 
-		const completeRelation = Effect.fn('Agents.completeRelation')(function* (
+		const writeConversation = (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			collection: string,
-			ownerField: string,
-			ownerId: string,
-			changes: ReadonlyArray<RelatedMutation>
-		) {
-			const rows = yield* collections.findMany(effectId, subject, {
-				collection,
-				where: { [ownerField]: { eq: ownerId } },
-				orderBy: { created_at: 'asc' },
-				limit: 500
-			});
-			const existing = yield* decodeRows(Schema.Struct({ id: Schema.NonEmptyString }), rows);
-			const changed = new Set(changes.map(({ id }) => id));
-			return [
-				...existing.filter(({ id }) => !changed.has(id)).map(({ id }) => ({ id })),
-				...changes
-			];
-		});
-		const retainTaskRows = (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			taskId: TaskId,
-			collection: string,
-			changes: ReadonlyArray<RelatedMutation>
-		) => completeRelation(effectId, subject, collection, 'task_id', taskId, changes);
-		const mutateTask = (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			mutation: Readonly<Record<string, unknown>> & Readonly<{ id: TaskId }>,
+			mutation: Readonly<Record<string, unknown>> & Readonly<{ id: ConversationId }>,
 			action: 'create' | 'update' = 'update'
 		) =>
 			// The task row is the runtime's own bookkeeping, written as the workspace: no grant, no route.
-			collections.mutate(effectId, workspaceSubject(subject), 'agent_task', [mutation], 0, {
+			collections.mutate(effectId, workspaceSubject(subject), 'conversation', [mutation], 0, {
 				roots: [{ id: mutation.id, action }]
 			});
+
+		/**
+		 * Rows written where they live, rather than as passengers on the conversation.
+		 *
+		 * Every one of these writes used to travel nested under the task row, with the conversation's
+		 * own columns restated as the values they already held. The nesting is what made the mutate a
+		 * *replacement* — a sibling left out of the payload would be deleted — so each write first read
+		 * back up to 500 rows to restate the ids of rows nothing was changing. That read is
+		 * O(conversation) and it stood in front of a write per streamed part.
+		 *
+		 * A row addressed by its own collection has no siblings to restate and nothing to read first.
+		 * Where the conversation genuinely changed too, it is written on its own; where it did not —
+		 * `recordUsage`, steering delivery, a recall — the passenger write is simply gone.
+		 */
+		type GraphWrite = Readonly<{
+			collection: string;
+			row: RelatedMutation;
+			action?: 'create' | 'update';
+		}>;
+
+		/**
+		 * Rows written together, whatever collections they belong to, as one commit.
+		 *
+		 * A mutate is one transaction and publishes one commit, and a commit crosses to the host — so
+		 * the unit that matters is the call, not the collection. The engine has always grouped roots
+		 * by collection and compiled every group into a single statement plan; only the public root
+		 * type withheld the field that says which collection a root is in.
+		 *
+		 * That is what keeps a turn's start at one write: the `turn` row is created, its input
+		 * message is marked answered and the conversation is moved to `running`, in one statement,
+		 * with no sibling read in front of any of it.
+		 */
+		const writeGraph = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			writes: ReadonlyArray<GraphWrite>
+		) =>
+			writes.length === 0
+				? Effect.void
+				: collections.mutate(
+						effectId,
+						workspaceSubject(subject),
+						writes[0]!.collection,
+						writes.map(({ row }) => row),
+						0,
+						{
+							roots: writes.map(({ collection, row, action }) => ({
+								collection,
+								id: row.id,
+								action: action ?? 'update'
+							}))
+						}
+					);
+
+		const writeRows = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			rows: ReadonlyArray<RelatedMutation>,
+			action: 'create' | 'update' = 'update'
+		) => writeGraph(effectId, subject, rows.map((row) => ({ collection, row, action })));
+
+		const writeMessage = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			row: RelatedMutation,
+			action: 'create' | 'update'
+		) => writeRows(effectId, subject, 'conversation_message', [row], action);
 
 		const activePlan = Effect.fn('Agents.activePlan')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: AgentTask
+			task: Conversation
 		) {
 			if (task.active_plan_id === undefined || task.active_plan_id === null) return undefined;
 			const row = yield* collections.findFirst(effectId, subject, {
-				collection: 'agent_plan',
+				collection: 'plan',
 				where: { id: { eq: task.active_plan_id } }
 			});
 			if (row === undefined) return undefined;
-			return yield* Schema.decodeUnknownEffect(AgentPlanRow)(row);
+			return yield* Schema.decodeUnknownEffect(PlanRow)(row);
 		});
 
-		const lastSequence = (messages: ReadonlyArray<AgentMessage>): number =>
+		const lastSequence = (messages: ReadonlyArray<ConversationMessage>): number =>
 			messages.at(-1)?.sequence ?? 0;
 
 		type Admission = Readonly<{
-			taskId: TaskId;
+			conversationId: ConversationId;
 			agentId: AgentId;
 			submissionId?: MessageId;
 			message: Prompt.MessageEncoded;
 			author: Readonly<{ kind: 'human' | 'parent-agent' | 'system'; id?: string }>;
 			mode: DirectiveMode;
-			priority: DirectivePriority;
+			/** A person's choice. An agent writing to another agent does not have one — see `admit`. */
+			priority?: DirectivePriority;
 			annotation?: MessageAnnotation;
-			runId?: RunId;
+			runId?: TurnId;
 			supersedesId?: MessageId;
-			parent?: AgentTask;
+			parent?: Conversation;
 			resume?: boolean;
 			modelId?: ModelId;
-			execution?: 'host' | 'inline';
 		}>;
 
+		/**
+		 * One agent writing to another always steers; nobody else does unless they ask to.
+		 *
+		 * The two priorities differ in *when* a message is taken: `steer` at the end of the running
+		 * turn's next step, `normal` as a turn of its own once the current one finishes. A parent
+		 * that has just learned something its child needs is describing the step the child is about
+		 * to take, so waiting for the child to finish and then telling it is the wrong answer every
+		 * time — and a child left to finish first is a child that has already done the wrong work.
+		 *
+		 * Decided here rather than at the three call sites that admit on an agent's behalf, because
+		 * a rule stated three times is a rule that will hold in two places. It also removed the
+		 * `steer` action from the `subagent` tool: with the priority fixed, `message` and `steer`
+		 * were the same call under two names, and a model choosing between them could only get it
+		 * wrong.
+		 */
 		const admit = Effect.fn('Agents.admit')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			input: Admission
+			admission: Admission
 		) {
+			const input: Admission & { readonly priority: DirectivePriority } = {
+				...admission,
+				priority:
+					admission.author.kind === 'parent-agent'
+						? DirectivePriority.make('steer')
+						: (admission.priority ?? DirectivePriority.make('normal'))
+			};
 			const agent = yield* resolveAgent(input.agentId);
 			yield* access.authorize(subject, 'agent', agent.id);
-			const existing = yield* taskById(EffectId.make(`${effectId}:task`), subject, input.taskId);
+			const existing = yield* conversationById(EffectId.make(`${effectId}:task`), subject, input.conversationId);
 			// A human conversation outlives its runs. Delegated tasks retain terminal result semantics.
 			const conversation = existing?.parent_id == null && input.author.kind === 'human';
 			const continueConversation =
@@ -1278,22 +1353,22 @@ export const layer = Layer.effect(
 				) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: input.taskId,
+						resource: input.conversationId,
 						reason: 'Task identity is immutable'
 					});
 				}
 				if (!input.resume && !conversation && existing.status === 'stopped') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: input.taskId,
+						resource: input.conversationId,
 						reason: 'Task is stopped; use control resume'
 					});
 				}
 			}
-			let messages: ReadonlyArray<AgentMessage> = [];
-			if (existing !== undefined) messages = yield* messageRows(effectId, subject, input.taskId);
+			let messages: ReadonlyArray<ConversationMessage> = [];
+			if (existing !== undefined) messages = yield* messageRows(effectId, subject, input.conversationId);
 			const fingerprint = semanticHash({
-				taskId: input.taskId,
+				conversationId: input.conversationId,
 				...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
 				author: input.author,
 				message: input.message,
@@ -1304,6 +1379,12 @@ export const layer = Layer.effect(
 				priority: input.priority,
 				...(input.modelId === undefined ? {} : { modelId: input.modelId })
 			});
+			/**
+			 * Two identities, because two kinds of caller admit a message. A client mints a
+			 * `submissionId` per intentional message, so a retry of that send is the same id. The
+			 * runtime's own callers — a revision, a resume, a subagent spawn — mint nothing, and their
+			 * identity is the content itself, which is what makes those idempotent under replay.
+			 */
 			const duplicate = messages.find(({ id, semantic_hash }) =>
 				input.submissionId === undefined ? semantic_hash === fingerprint : id === input.submissionId
 			);
@@ -1311,124 +1392,85 @@ export const layer = Layer.effect(
 				if (duplicate.semantic_hash !== fingerprint)
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: input.taskId,
+						resource: input.conversationId,
 						reason: 'A submission ID cannot be reused for a different message.'
 					});
-				const directive = yield* collections.findFirst(effectId, subject, {
-					collection: 'agent_inbox',
-					where: { message_id: { eq: duplicate.id } }
-				});
-				if (directive !== undefined) {
-					const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: DirectiveId }))(
-						directive
-					);
-					if (input.execution !== 'inline')
-						yield* enqueueExecute(effectId, subject, input.taskId, decoded.id);
-					return { directiveId: decoded.id };
-				}
+				// The same message sent twice is the same message: already in the transcript, and either
+				// already queued or already answered. Nothing further is admitted for it.
+				return { messageId: duplicate.id };
 			}
 			if (input.modelId !== undefined)
 				yield* selectModel(EffectId.make(`${effectId}:model`), input.modelId);
-			const messageId = input.submissionId ?? messageIdFor(`${input.taskId}:${fingerprint}`);
-			const directiveId = directiveIdFor(`${input.taskId}:${fingerprint}`);
+			const messageId = input.submissionId ?? messageIdFor(`${input.conversationId}:${fingerprint}`);
 			const nextSequence = lastSequence(messages) + 1;
-			const inbox = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_inbox',
-				where: { task_id: { eq: input.taskId } },
-				orderBy: { sequence: 'desc' },
-				limit: 1
-			});
-			const inboxRows = yield* decodeRows(
-				Schema.Struct({ sequence: Schema.Number.check(Schema.isInt()) }),
-				inbox
-			);
-			const inboxSequence = inboxRows[0]?.sequence ?? 0;
+			/**
+			 * One row. A message somebody is waiting for an answer to carries what the turn answering
+			 * it needs — the mode, the model, and where it queues — because those describe this message
+			 * rather than a separate work item about it. A message nobody is waiting on carries no
+			 * queue state at all: an assistant reply, a tool result, a system note.
+			 */
 			const message = {
 				id: messageId,
-				task_id: input.taskId,
+				conversation_id: input.conversationId,
 				sequence: nextSequence,
 				author: input.author,
 				message: input.message,
 				semantic_hash: fingerprint,
-				...(input.runId === undefined ? {} : { run_id: input.runId }),
-				annotation: input.annotation ?? { tag: 'input', priority: input.priority },
-				...(input.supersedesId === undefined ? {} : { supersedes_id: input.supersedesId })
-			};
-			const directive = {
-				id: directiveId,
-				task_id: input.taskId,
-				sequence: inboxSequence + 1,
-				message_id: messageId,
+				...(input.runId === undefined ? {} : { turn_id: input.runId }),
+				annotation: input.annotation ?? { tag: 'input' },
+				...(input.supersedesId === undefined ? {} : { supersedes_id: input.supersedesId }),
+				state: 'queued',
 				mode: input.mode,
 				priority: input.priority,
-				...(input.modelId === undefined ? {} : { model_id: input.modelId }),
-				state: 'queued'
+				...(input.modelId === undefined ? {} : { model_id: input.modelId })
 			};
 			if (existing === undefined) {
-				const workbenchId = input.parent?.workbench_id ?? WorkbenchId.make(input.taskId);
-				yield* mutateTask(
+				const workbenchId = input.parent?.workbench_id ?? WorkbenchId.make(input.conversationId);
+				yield* writeConversation(
 					effectId,
 					subject,
 					{
-						id: input.taskId,
+						id: input.conversationId,
 						workbench_id: workbenchId,
 						subject_id: SubjectId.make(subject.userId),
 						agent_id: input.agentId,
 						audience: agent.audience,
 						...(input.parent === undefined ? {} : { parent_id: input.parent.id }),
 						status: 'ready',
-						epoch: 0,
-						messages: [message],
-						directives: [directive]
+						messages: [message]
 					},
 					'create'
 				);
 			} else {
-				const completeMessages = yield* retainTaskRows(
-					EffectId.make(`${effectId}:retain-messages`),
-					subject,
-					input.taskId,
-					'agent_message',
-					[message]
-				);
-				const completeDirectives = yield* retainTaskRows(
-					EffectId.make(`${effectId}:retain-directives`),
-					subject,
-					input.taskId,
-					'agent_inbox',
-					[directive]
-				);
-				yield* mutateTask(effectId, subject, {
-					id: input.taskId,
-					status: input.resume || continueConversation ? 'ready' : existing.status,
-					epoch: existing.epoch,
-					...(input.resume || continueConversation ? { active_run_id: null } : {}),
-					messages: completeMessages,
-					directives: completeDirectives
-				});
+				yield* writeMessage(effectId, subject, message, 'create');
+				// The conversation only changes when this admission reopens it; otherwise it is untouched.
+				if (input.resume || continueConversation)
+					yield* writeConversation(EffectId.make(`${effectId}:reopen`), subject, {
+						id: input.conversationId,
+						status: 'ready',
+						active_turn_id: null
+					});
 			}
-			if (input.execution !== 'inline')
-				yield* enqueueExecute(effectId, subject, input.taskId, directiveId);
-			return { directiveId } satisfies TaskSubmitResult;
+			return { messageId } satisfies ConversationSendResult;
 		});
 
-		const submit = Effect.fn('Agents.submit')(function* (
+		/**
+		 * Admits one message into the conversation and returns its id.
+		 *
+		 * Admission and the turn are separate calls but no longer separate *invocations*: there is no
+		 * durable directive between them and nothing to claim, so the caller that admits a message is
+		 * the caller that runs the turn for it. `conversations.send` does both in one guest invocation; an
+		 * envoy or a schedule does the same by calling `execute` itself.
+		 *
+		 * A second message arriving while a turn runs finds the conversation `running`, stays queued,
+		 * and is answered by the turn in flight when it reaches its next boundary.
+		 */
+		/** A send is an admission by a person: the request, plus who they are. */
+		const submit = (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			request: TaskSubmitRequest & AgentExecution
-		) {
-			return yield* admit(effectId, subject, {
-				taskId: request.taskId,
-				...(request.execution === undefined ? {} : { execution: request.execution }),
-				...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
-				agentId: request.agentId,
-				message: request.message,
-				author: { kind: 'human', id: subject.userId },
-				mode: request.mode,
-				priority: request.priority,
-				...(request.modelId === undefined ? {} : { modelId: request.modelId })
-			});
-		});
+			request: ConversationSendRequest
+		) => admit(effectId, subject, { ...request, author: { kind: 'human', id: subject.userId } });
 
 		/**
 		 * Revises one of the subject's own durable user messages.
@@ -1441,12 +1483,12 @@ export const layer = Layer.effect(
 		const editMessage = Effect.fn('Agents.editMessage')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			request: TaskEditMessageRequest
+			request: ConversationEditMessageRequest
 		) {
-			const task = yield* requireOwnedTask(
+			const task = yield* requireOwnedConversation(
 				EffectId.make(`${effectId}:task`),
 				subject,
-				request.taskId
+				request.conversationId
 			);
 			const messages = yield* messageRows(effectId, subject, task.id);
 			const original = messages.find(({ id }) => id === request.messageId);
@@ -1472,7 +1514,7 @@ export const layer = Layer.effect(
 				});
 			}
 			const admitted = yield* admit(effectId, subject, {
-				taskId: task.id,
+				conversationId: task.id,
 				agentId: task.agent_id,
 				message: request.message,
 				author: { kind: 'human', id: subject.userId },
@@ -1484,37 +1526,65 @@ export const layer = Layer.effect(
 			const revision = yield* collections.findFirst(
 				EffectId.make(`${effectId}:revision`),
 				subject,
-				{ collection: 'agent_message', where: { supersedes_id: { eq: request.messageId } } }
+				{ collection: 'conversation_message', where: { supersedes_id: { eq: request.messageId } } }
 			);
-			const decoded = yield* Schema.decodeUnknownEffect(AgentMessageRow)(revision);
+			const decoded = yield* Schema.decodeUnknownEffect(ConversationMessageRow)(revision);
 			return {
-				directiveId: admitted.directiveId,
 				messageId: decoded.id,
 				supersedesId: request.messageId
-			} satisfies TaskEditMessageResult;
+			} satisfies ConversationEditMessageResult;
 		});
 
 		const runById = Effect.fn('Agents.runById')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			runId: RunId
+			runId: TurnId
 		) {
 			const row = yield* collections.findFirst(effectId, subject, {
-				collection: 'agent_run',
+				collection: 'turn',
 				where: { id: { eq: runId } }
 			});
 			if (row === undefined) return undefined;
-			return yield* Schema.decodeUnknownEffect(AgentRunRow)(row);
+			return yield* Schema.decodeUnknownEffect(TurnRow)(row);
 		});
 
-		const taskDepth = Effect.fn('Agents.taskDepth')(function* (
+		/**
+		 * The newest provider observation this conversation has, or nothing before its first call.
+		 *
+		 * One bounded read per turn, which is what lets the token bound be checked before the turn's
+		 * first generation rather than after it. `turn_usage` is per turn, so this joins through the
+		 * conversation's turns rather than reading a column the usage row does not carry.
+		 */
+		const latestObservation = Effect.fn('Agents.latestObservation')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			root: AgentTask
+			conversationId: ConversationId
+		) {
+			const turns = yield* collections.findMany(EffectId.make(`${effectId}:turns`), subject, {
+				collection: 'turn',
+				where: { conversation_id: { eq: conversationId } },
+				orderBy: { created_at: 'desc' },
+				limit: 1
+			});
+			const newest = (yield* decodeRows(Schema.Struct({ id: TurnId }), turns))[0];
+			if (newest === undefined) return undefined;
+			const rows = yield* collections.findMany(EffectId.make(`${effectId}:usage`), subject, {
+				collection: 'turn_usage',
+				where: { turn_id: { eq: newest.id } },
+				orderBy: { created_at: 'desc' },
+				limit: 1
+			});
+			return (yield* decodeRows(TurnUsageRow, rows))[0];
+		});
+
+		const conversationDepth = Effect.fn('Agents.conversationDepth')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			root: Conversation
 		) {
 			let depth = 0;
 			let current = root;
-			const visited = new Set<TaskId>([root.id]);
+			const visited = new Set<ConversationId>([root.id]);
 			while (current.parent_id !== undefined && current.parent_id !== null) {
 				if (visited.has(current.parent_id) || depth >= 64) {
 					return yield* new TaskRuntimeError({
@@ -1523,7 +1593,7 @@ export const layer = Layer.effect(
 					});
 				}
 				visited.add(current.parent_id);
-				const parent = yield* taskById(
+				const parent = yield* conversationById(
 					EffectId.make(`${effectId}:parent:${depth}`),
 					subject,
 					current.parent_id
@@ -1543,25 +1613,22 @@ export const layer = Layer.effect(
 		const claim = Effect.fn('Agents.claim')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: AgentTask
+			task: Conversation
 		) {
-			if (task.active_run_id !== undefined && task.active_run_id !== null) {
-				const active = yield* runById(effectId, subject, task.active_run_id);
-				if (active !== undefined && (active.status === 'running' || active.status === 'waiting')) {
-					return active;
-				}
+			if (task.active_turn_id !== undefined && task.active_turn_id !== null) {
+				const active = yield* runById(effectId, subject, task.active_turn_id);
+				if (active !== undefined && active.status === 'running') return active;
 			}
 			if (task.status !== 'ready') return undefined;
 			const rows = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_inbox',
-				where: { task_id: { eq: task.id }, state: { eq: 'queued' } },
+				collection: 'conversation_message',
+				where: { conversation_id: { eq: task.id }, state: { eq: 'queued' } },
 				orderBy: { priority: 'desc', sequence: 'asc' },
 				limit: 1
 			});
-			const directives = yield* decodeRows(
+			const waiting = yield* decodeRows(
 				Schema.Struct({
-					id: DirectiveId,
-					message_id: MessageId,
+					id: MessageId,
 					priority: DirectivePriority,
 					sequence: Schema.Number.check(Schema.isInt()),
 					mode: DirectiveMode,
@@ -1569,61 +1636,46 @@ export const layer = Layer.effect(
 				}),
 				rows
 			);
-			const directive = directives[0];
+			const directive = waiting[0];
 			if (directive === undefined) return undefined;
 			const agent = yield* resolveAgent(task.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
-			const modelId = yield* selectModel(
+			const model = yield* selectModel(
 				EffectId.make(`${effectId}:model`),
 				directive.model_id ?? undefined
 			).pipe(
-				Effect.tapError(() => mutateTask(effectId, subject, { id: task.id, status: 'attention' }))
+				Effect.tapError(() => writeConversation(effectId, subject, { id: task.id, status: 'attention' }))
 			);
 			const tools = yield* allowedTools(
 				EffectId.make(`${effectId}:host-capabilities`),
 				subject,
 				agent
 			);
-			const epoch = task.epoch + 1;
-			const runId = runIdFor(`${task.id}:${directive.id}:${epoch}`);
+			const runId = runIdFor(`${task.id}:${directive.id}`);
 			const messages = yield* messageRows(effectId, subject, task.id);
 			const run = {
 				id: runId,
-				task_id: task.id,
-				directive_id: directive.id,
-				epoch,
+				conversation_id: task.id,
+				input_message_id: directive.id,
 				mode: directive.mode,
 				phase: 'model',
 				input_through_sequence: lastSequence(messages),
-				model_id: modelId,
-				reasoning_requested: reasoningRequested(modelId),
+				model_id: model.id,
+				context_window_tokens: model.contextWindowTokens,
 				capability_snapshot: capabilitySnapshot(subject, agent, tools),
 				status: 'running'
 			};
-			const completeDirectives = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-directives`),
-				subject,
-				task.id,
-				'agent_inbox',
-				[{ id: directive.id, state: 'claimed', claimed_run_id: runId }]
-			);
-			const completeRuns = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-runs`),
-				subject,
-				task.id,
-				'agent_run',
-				[run]
-			);
-			const directiveMessage = messages.find(({ id }) => id === directive.message_id);
-			const completeMessages = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-input`),
-				subject,
-				task.id,
-				'agent_message',
-				[
-					{
-						id: directive.message_id,
-						run_id: runId,
+			const directiveMessage = messages.find(({ id }) => id === directive.id);
+			// Starting a turn is one write: the run exists, the message it answers has left the queue,
+			// and the conversation is running — three collections, one statement, one commit.
+			yield* writeGraph(effectId, subject, [
+				{ collection: 'turn', row: run, action: 'create' },
+				{
+					collection: 'conversation_message',
+					row: {
+						id: directive.id,
+						turn_id: runId,
+						state: 'consumed',
 						...(directiveMessage?.annotation == null || directiveMessage.annotation.tag === 'input'
 							? {
 									annotation: {
@@ -1634,49 +1686,58 @@ export const layer = Layer.effect(
 								}
 							: {})
 					}
-				]
-			);
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: 'running',
-				active_run_id: runId,
-				epoch,
-				directives: completeDirectives,
-				runs: completeRuns,
-				messages: completeMessages
-			});
-			return yield* Schema.decodeUnknownEffect(AgentRunRow)(run);
+				},
+				{
+					collection: 'conversation',
+					row: { id: task.id, status: 'running', active_turn_id: runId }
+				}
+			]);
+			return yield* Schema.decodeUnknownEffect(TurnRow)(run);
 		});
 
-		const fencedTask = Effect.fn('Agents.fencedTask')(function* (
+		const fencedConversation = Effect.fn('Agents.fencedConversation')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun
+			run: Turn
 		) {
-			const task = yield* requireOwnedTask(effectId, subject, run.task_id);
+			const task = yield* requireOwnedConversation(effectId, subject, run.conversation_id);
+			/**
+			 * The conversation's own status is the fence, and stopping is a write to it.
+			 *
+			 * A turn re-checks this at every boundary, which is what `control stop` relies on: it
+			 * writes `stopped` and the turn in flight settles at its next boundary. Nothing reaches
+			 * into a running invocation, so nothing had to be built to let it.
+			 */
 			if (
-				task.active_run_id !== run.id ||
-				task.epoch !== run.epoch ||
+				task.active_turn_id !== run.id ||
 				(task.status !== 'running' && task.status !== 'ready')
 			) {
 				return yield* new TaskRuntimeError({
 					operation: 'fence',
-					message: 'The Task run fence is stale.'
+					message: 'This turn no longer holds the conversation.'
 				});
 			}
 			return task;
 		});
 
+		/**
+		 * Steering: messages that arrived while this turn was working, taken at a boundary.
+		 *
+		 * There is no inbox to drain. A queued message is already a row in the transcript, so this
+		 * marks the ones addressed to this turn's mode as consumed and stamps them with the run that
+		 * is about to read them. The turn then sees them because it re-reads the transcript at the top
+		 * of its next iteration.
+		 */
 		const consumeSteering = Effect.fn('Agents.consumeSteering')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun
+			run: Turn
 		) {
-			const task = yield* fencedTask(effectId, subject, run);
+			const task = yield* fencedConversation(effectId, subject, run);
 			const rows = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_inbox',
+				collection: 'conversation_message',
 				where: {
-					task_id: { eq: task.id },
+					conversation_id: { eq: task.id },
 					state: { eq: 'queued' },
 					priority: { eq: 'steer' },
 					mode: { eq: run.mode }
@@ -1684,93 +1745,64 @@ export const layer = Layer.effect(
 				orderBy: { sequence: 'asc' },
 				limit: 500
 			});
-			const directives = yield* decodeRows(
-				Schema.Struct({ id: DirectiveId, message_id: MessageId }),
-				rows
-			);
-			if (directives.length === 0) return false;
+			const steering = yield* decodeRows(Schema.Struct({ id: MessageId }), rows);
+			if (steering.length === 0) return false;
 			const messages = yield* messageRows(effectId, subject, task.id);
 			const consumedAfterSequence = lastSequence(messages);
-			const completeMessages = yield* retainTaskRows(
+			// Delivery and its receipt are the same write, under the same fence: a retry cannot
+			// deliver twice, and the conversation's own columns are unchanged by a delivery.
+			yield* writeRows(
 				EffectId.make(`${effectId}:inputs`),
 				subject,
-				task.id,
-				'agent_message',
-				directives.map((directive) => ({
-					id: directive.message_id,
-					run_id: run.id,
-					annotation: { tag: 'input', priority: 'steer', consumedAfterSequence }
+				'conversation_message',
+				steering.map(({ id }) => ({
+					id,
+					turn_id: run.id,
+					state: 'consumed',
+					annotation: { tag: 'input', consumedAfterSequence }
 				}))
 			);
-			const completeDirectives = yield* retainTaskRows(
-				EffectId.make(`${effectId}:directives`),
-				subject,
-				task.id,
-				'agent_inbox',
-				directives.map((directive) => ({
-					id: directive.id,
-					state: 'settled',
-					claimed_run_id: run.id
-				}))
-			);
-			// Delivery and its receipt commit together under the active run fence; retries cannot deliver twice.
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: task.status,
-				active_run_id: run.id,
-				epoch: run.epoch,
-				messages: completeMessages,
-				directives: completeDirectives
-			});
 			return true;
 		});
 
 		const appendMessage = Effect.fn('Agents.appendMessage')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun,
+			run: Turn,
+			transcript: Transcript,
 			author: Readonly<{ kind: 'agent' | 'tool' | 'system'; id?: string }>,
 			message: Prompt.MessageEncoded,
 			annotation?: MessageAnnotation
 		) {
-			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
-			const messages = yield* messageRows(effectId, subject, task.id);
+			const task = yield* fencedConversation(EffectId.make(`${effectId}:fence`), subject, run);
 			const fingerprint = semanticHash({ runId: run.id, effectId, author, message, annotation });
-			const existing = messages.find(({ semantic_hash }) => semantic_hash === fingerprint);
+			const existing = transcript.bySemanticHash(fingerprint);
 			if (existing !== undefined) return existing;
-			const sequence = lastSequence(messages) + 1;
+			// A new sequence, so a fresh read: a message admitted into this conversation while the turn
+			// was working holds a sequence this ledger has never seen.
+			const current = yield* messageRows(effectId, subject, task.id);
 			const row = {
 				id: messageIdFor(`${task.id}:${fingerprint}`),
-				task_id: task.id,
-				sequence,
-				run_id: run.id,
+				conversation_id: task.id,
+				sequence: lastSequence(current) + 1,
+				turn_id: run.id,
 				author,
 				message,
 				semantic_hash: fingerprint,
 				...(annotation === undefined ? {} : { annotation })
 			};
-			const completeMessages = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-messages`),
-				subject,
-				task.id,
-				'agent_message',
-				[row]
-			);
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: task.status,
-				active_run_id: run.id,
-				epoch: run.epoch,
-				messages: completeMessages
-			});
-			return yield* Schema.decodeUnknownEffect(AgentMessageRow)(row);
+			yield* writeMessage(effectId, subject, row, 'create');
+			const recorded = yield* Schema.decodeUnknownEffect(ConversationMessageRow)(row);
+			transcript.record(recorded);
+			return recorded;
 		});
 
 		/** Only an active, fenced generation may replace its in-progress message. Completed turns stay immutable. */
 		const persistGeneration = Effect.fn('Agents.persistGeneration')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun,
+			run: Turn,
+			transcript: Transcript,
 			authorId: string,
 			progress: AIMessageProgress,
 			annotation: MessageAnnotation | null
@@ -1789,11 +1821,10 @@ export const layer = Layer.effect(
 					operation: 'generation',
 					message: 'Generation contains invalid active part indexes.'
 				});
-			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
-			const messages = yield* messageRows(effectId, subject, task.id);
+			const task = yield* fencedConversation(EffectId.make(`${effectId}:fence`), subject, run);
 			const fingerprint = semanticHash({ runId: run.id, callId: progress.callId });
 			const id = messageIdFor(`${task.id}:${fingerprint}`);
-			const previous = messages.find((row) => row.id === id);
+			const previous = transcript.byId(id);
 			if (previous !== undefined && previous.annotation?.tag !== 'generation')
 				return yield* new TaskRuntimeError({
 					operation: 'generation',
@@ -1849,224 +1880,107 @@ export const layer = Layer.effect(
 						message: 'Final response must match completed stream parts.'
 					});
 			}
-			const rows = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain`),
-				subject,
-				task.id,
-				'agent_message',
-				[
-					{
-						id,
-						task_id: task.id,
-						sequence: previous?.sequence ?? lastSequence(messages) + 1,
-						run_id: run.id,
-						author: { kind: 'agent', id: authorId },
-						message: progress.message,
-						semantic_hash: fingerprint,
-						annotation
-					}
-				]
-			);
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: task.status,
-				active_run_id: run.id,
-				epoch: run.epoch,
-				messages: rows
-			});
+			// Parts after the first continue the row they already have, and read nothing at all — that
+			// is the per-token-boundary cost this exists to remove.
+			const sequence =
+				previous?.sequence ?? lastSequence(yield* messageRows(effectId, subject, task.id)) + 1;
+			const row = {
+				id,
+				conversation_id: task.id,
+				sequence,
+				turn_id: run.id,
+				author: { kind: 'agent' as const, id: authorId },
+				message: progress.message,
+				semantic_hash: fingerprint,
+				annotation
+			};
+			yield* writeMessage(effectId, subject, row, previous === undefined ? 'create' : 'update');
+			transcript.record(yield* Schema.decodeUnknownEffect(ConversationMessageRow)(row));
 		});
 
 		const recordUsage = Effect.fn('Agents.recordUsage')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun,
+			run: Turn,
 			observation: ProviderObservation
 		) {
-			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
-			const usage = yield* usageMutation(run.id, observation);
-			const completeUsage = yield* completeRelation(
-				EffectId.make(`${effectId}:retain-usage`),
+			yield* fencedConversation(EffectId.make(`${effectId}:fence`), subject, run);
+			yield* writeRows(
+				EffectId.make(`${effectId}:usage`),
 				subject,
-				'agent_usage',
-				'run_id',
-				run.id,
-				[usage]
+				'turn_usage',
+				[yield* usageMutation(run.id, observation)],
+				'create'
 			);
-			const completeRuns = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-runs`),
-				subject,
-				task.id,
-				'agent_run',
-				[{ id: run.id, usage: completeUsage }]
-			);
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: task.status,
-				active_run_id: run.id,
-				epoch: run.epoch,
-				runs: completeRuns
-			});
 		});
 
 		const updateRun = Effect.fn('Agents.updateRun')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun,
+			run: Turn,
 			input: Readonly<{
-				taskStatus: AgentTask['status'];
-				runStatus: AgentRun['status'];
-				phase: AgentRun['phase'];
+				taskStatus: Conversation['status'];
+				runStatus: Turn['status'];
+				phase: Turn['phase'];
 				active: boolean;
-				directiveState?: 'settled' | 'cancelled';
-				plans?: ReadonlyArray<Readonly<Record<string, unknown>>>;
 				activePlanId?: PlanId | null;
 			}>
 		) {
-			const task = yield* fencedTask(EffectId.make(`${effectId}:fence`), subject, run);
-			// Preserve the readable run metadata while advancing its state. The immutable capability
-			// snapshot stays in storage; the system read policy deliberately does not expose it.
-			const completeRuns = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-runs`),
-				subject,
-				task.id,
-				'agent_run',
-				[{ ...run, status: input.runStatus, phase: input.phase }]
-			);
-			if (input.plans !== undefined) {
-				for (const plan of input.plans) {
-					const id = plan['id'];
-					if (!isString(id) || id === '')
-						return yield* Effect.fail(new TypeError('A Task Plan mutation requires an id.'));
-				}
-			}
-			const completePlans =
-				input.plans === undefined
-					? undefined
-					: yield* retainTaskRows(
-							EffectId.make(`${effectId}:retain-plans`),
-							subject,
-							task.id,
-							'agent_plan',
-							input.plans.map((plan) => ({ ...plan, id: String(plan['id']) }))
-						);
-			const completeDirectives =
-				input.directiveState === undefined
-					? undefined
-					: yield* retainTaskRows(
-							EffectId.make(`${effectId}:retain-directives`),
-							subject,
-							task.id,
-							'agent_inbox',
-							[{ id: run.directive_id, state: input.directiveState }]
-						);
+			const task = yield* fencedConversation(EffectId.make(`${effectId}:fence`), subject, run);
+			/**
+			 * A conversation with a message still waiting is not done, whatever this turn thought. The
+			 * question is asked of the transcript, because the transcript is the queue.
+			 */
 			const hasQueued =
-				input.directiveState === 'settled' &&
+				input.taskStatus === 'done' &&
 				(yield* collections.findFirst(EffectId.make(`${effectId}:queued`), subject, {
-					collection: 'agent_inbox',
-					where: { task_id: { eq: task.id }, state: { eq: 'queued' } }
+					collection: 'conversation_message',
+					where: { conversation_id: { eq: task.id }, state: { eq: 'queued' } }
 				})) !== undefined;
-			const taskStatus = input.taskStatus === 'done' && hasQueued ? 'ready' : input.taskStatus;
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: taskStatus,
-				active_run_id: input.active ? run.id : null,
-				epoch: run.epoch,
-				...(input.activePlanId === undefined ? {} : { active_plan_id: input.activePlanId }),
-				...(completePlans === undefined ? {} : { plans: completePlans }),
-				runs: completeRuns,
-				...(completeDirectives === undefined ? {} : { directives: completeDirectives })
-			});
-			if (taskStatus === 'ready' && hasQueued) {
-				// Admission's wake may have been consumed while this run was still active.
-				yield* enqueueExecute(effectId, subject, task.id, `settled:${run.id}`);
-			}
+			const taskStatus = hasQueued ? 'ready' : input.taskStatus;
+			// The run's new state and the conversation's, together. Only `status` and `phase` are
+			// stated: the immutable capability snapshot stays in storage, and the system read policy
+			// deliberately does not expose it.
+			yield* writeGraph(effectId, subject, [
+				{ collection: 'turn', row: { id: run.id, status: input.runStatus, phase: input.phase } },
+				{
+					collection: 'conversation',
+					row: {
+						id: task.id,
+						status: taskStatus,
+						active_turn_id: input.active ? run.id : null,
+						...(input.activePlanId === undefined ? {} : { active_plan_id: input.activePlanId })
+					}
+				}
+			]);
 			return taskStatus;
 		});
 		const settleRun = (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: AgentRun,
-			taskStatus: AgentTask['status'],
-			phase: AgentRun['phase'],
-			changes: Readonly<{
-				plans?: ReadonlyArray<Readonly<Record<string, unknown>>>;
-				activePlanId?: PlanId | null;
-			}> = {}
+			run: Turn,
+			taskStatus: Conversation['status'],
+			phase: Turn['phase'],
+			changes: Readonly<{ activePlanId?: PlanId | null }> = {}
 		) =>
 			updateRun(effectId, subject, run, {
 				taskStatus,
 				runStatus: 'succeeded',
 				phase,
 				active: false,
-				directiveState: 'settled',
 				...changes
 			});
 
-		const wakeParent = Effect.fn('Agents.wakeParent')(function* (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			child: AgentTask
-		) {
-			if (child.parent_id === undefined || child.parent_id === null) return;
-			const parent = yield* taskById(EffectId.make(`${effectId}:parent`), subject, child.parent_id);
-			if (
-				parent === undefined ||
-				parent.status !== 'waiting' ||
-				parent.active_run_id === undefined ||
-				parent.active_run_id === null
-			) {
-				return;
-			}
-			const parentRun = yield* runById(
-				EffectId.make(`${effectId}:parent-run`),
-				subject,
-				parent.active_run_id
-			);
-			if (parentRun === undefined || parentRun.status !== 'waiting') return;
-			const epoch = parent.epoch + 1;
-			const completeRuns = yield* retainTaskRows(
-				EffectId.make(`${effectId}:retain-runs`),
-				subject,
-				parent.id,
-				'agent_run',
-				[{ ...parentRun, epoch, status: 'running', phase: 'children' }]
-			);
-			yield* mutateTask(effectId, subject, {
-				id: parent.id,
-				status: 'ready',
-				active_run_id: parentRun.id,
-				epoch,
-				runs: completeRuns
-			});
-			yield* enqueueExecute(effectId, subject, parent.id, `wake:${epoch}`);
-		});
-
-		const previousTodo = (
-			messages: ReadonlyArray<AgentMessage>,
-			runId: RunId
-		): TodoListValue | undefined => {
-			for (const row of messages.toReversed()) {
-				if (row.run_id !== runId) continue;
-				if (isString(row.message.content)) continue;
-				for (const part of row.message.content.toReversed()) {
-					if (part.type !== 'tool-result' || part.name !== 'todo' || part.isFailure) continue;
-					const decoded = Schema.decodeUnknownOption(TodoList)(part.result);
-					if (decoded._tag === 'Some') return decoded.value;
-				}
-			}
-			return undefined;
-		};
-
 		const attachments = (
-			messages: ReadonlyArray<AgentMessage>,
-			runId: RunId
+			messages: ReadonlyArray<ConversationMessage>,
+			runId: TurnId
 		): ReadonlyArray<ImageAsset> => {
 			const assets: Array<ImageAsset> = [];
 			for (const row of messages) {
 				if (row.annotation?.tag === 'input' && row.annotation.consumedAfterSequence === undefined)
 					continue;
 				assets.push(...attachmentAssetsFromMessage(row.message));
-				if (row.run_id !== runId) continue;
+				if (row.turn_id !== runId) continue;
 				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
 					if (part.type !== 'tool-result' || part.name !== 'use_image' || part.isFailure) continue;
@@ -2077,36 +1991,103 @@ export const layer = Layer.effect(
 			return assets;
 		};
 
-		const childBarrier = Effect.fn('Agents.childBarrier')(function* (
+		/**
+		 * Runs one child to a stop and returns the row it stopped at.
+		 *
+		 * `answerQueued` rather than `execute`, because a child may have more than one message
+		 * waiting — a spawn followed by a `message` — and a parent that ran only the first would
+		 * read an answer to half its instruction. Depth is not threaded: `conversationDepth` walks
+		 * `parent_id`, so the child computes its own and the nesting limit bounds the tree without
+		 * anything being carried.
+		 *
+		 * A child that will not settle is a defect, not a state: it would spin the parent's barrier,
+		 * so it is refused by name instead.
+		 */
+		/**
+		 * `answerQueued`, reachable from above it. The slot is what makes the recursion inferable.
+		 *
+		 * A parent runs its children, so `execute → childBarrier → runChild → answerQueued → execute`
+		 * is a real cycle and inference has no base case in it. One written type is the base case.
+		 *
+		 * `unknown`, because that is what `execute` infers, and stating anything narrower here would
+		 * be a claim this file cannot back. Two of the three sources are found and named — Effect's
+		 * `Toolkit` dispatch contributes `AiError`, which `TurnFailure` now carries — but a third
+		 * remains somewhere under `appendMessage`, and `Interface` has papered over it with an
+		 * `as Interface` cast since long before the cycle existed. Narrowing it is worth doing and is
+		 * not this change; a fictional union here would make the cast harder to find, not easier.
+		 *
+		 */
+		let driveConversation: (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: AgentTask,
-			messages: ReadonlyArray<AgentMessage>
+			conversationId: ConversationId
+			// repository-health:allow EFF11 -- the inferred channel of `execute`; narrowing it is
+			// tracked in RFC/agent-turn-latency.md, and a narrower claim here would be false today.
+		) => Effect.Effect<TurnResult, unknown>;
+
+		const runChild = Effect.fn('Agents.runChild')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			childId: ConversationId
+		) {
+			yield* driveConversation(EffectId.make(`${effectId}:answer`), subject, childId);
+			const settled = yield* requireOwnedConversation(
+				EffectId.make(`${effectId}:settled`),
+				subject,
+				childId
+			);
+			if (!isSettled(settled.status))
+				return yield* new TaskRuntimeError({
+					operation: 'children',
+					message: `Child conversation ${childId} did not settle; it is ${settled.status}.`
+				});
+			return settled;
+		});
+
+		const childBarrier: (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			task: Conversation,
+			messages: ReadonlyArray<ConversationMessage>
+			// repository-health:allow EFF11 -- the other half of the recursion's base case; see
+			// `driveConversation` above for why it cannot be narrower yet.
+		) => Effect.Effect<
+			Readonly<{ state: 'clear' } | { state: 'consume'; taskIds: ReadonlyArray<ConversationId> }>,
+			unknown
+		> = Effect.fn('Agents.childBarrier')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			task: Conversation,
+			messages: ReadonlyArray<ConversationMessage>
 		) {
 			const rows = yield* collections.findMany(effectId, subject, {
-				collection: 'agent_task',
+				collection: 'conversation',
 				where: { parent_id: { eq: task.id } },
 				orderBy: { created_at: 'asc' },
 				limit: 64
 			});
-			const children = yield* decodeRows(AgentTaskRow, rows);
+			const children = yield* decodeRows(ConversationRow, rows);
 			if (children.length === 0) return { state: 'clear' as const };
-			const consumed = new Set<TaskId>();
+			const consumed = new Set<ConversationId>();
 			for (const row of messages) {
 				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
 					if (part.type !== 'tool-result' || part.name !== 'subagent' || part.isFailure) continue;
 					const result = Schema.decodeUnknownOption(ConsumedChildResult)(part.result);
-					if (result._tag === 'Some') consumed.add(result.value.taskId);
+					if (result._tag === 'Some') consumed.add(result.value.conversationId);
 				}
 			}
-			const running = children.filter(({ status }) => status !== 'done' && status !== 'failed');
-			if (running.length > 0) {
-				return {
-					state: 'waiting',
-					taskIds: running.map(({ id }) => id)
-				};
-			}
+			/**
+			 * A child that has not run is run here, by its parent, before the barrier judges it.
+			 *
+			 * Nothing else would. A spawned child is a conversation with a queued message and no
+			 * caller sitting on it, and the runtime has exactly one driver of a turn — the request
+			 * that admitted the message. The parent is that request, one level up, so the parent is
+			 * the driver. This is what the durable occurrence used to be for, and the whole of what
+			 * it was for: `enqueueExecute` existed to give a child and a woken parent a caller.
+			 */
+			for (const child of children.filter(({ status }) => !isSettled(status)))
+				yield* runChild(EffectId.make(`${effectId}:child:${child.id}`), subject, child.id);
 			const unconsumed = children.filter(({ id }) => !consumed.has(id));
 			return unconsumed.length === 0
 				? { state: 'clear' as const }
@@ -2116,21 +2097,21 @@ export const layer = Layer.effect(
 					};
 		});
 
-		const controlTask = Effect.fn('Agents.controlTask')(function* (
+		const controlConversation = Effect.fn('Agents.controlConversation')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			taskId: TaskId,
+			conversationId: ConversationId,
 			action: 'stop' | 'resume',
 			modelId?: ModelId
 		) {
-			const task = yield* requireOwnedTask(effectId, subject, taskId);
+			const task = yield* requireOwnedConversation(effectId, subject, conversationId);
 			const agent = yield* resolveAgent(task.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
 			if (action === 'resume') {
 				if (task.status !== 'stopped' && task.status !== 'attention' && task.status !== 'failed') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: taskId,
+						resource: conversationId,
 						reason: 'Only a stopped, attention or failed Task may resume'
 					});
 				}
@@ -2138,8 +2119,8 @@ export const layer = Layer.effect(
 					EffectId.make(`${effectId}:previous-model`),
 					subject,
 					{
-						collection: 'agent_inbox',
-						where: { task_id: { eq: taskId } },
+						collection: 'conversation_message',
+						where: { conversation_id: { eq: conversationId }, model_id: { ne: null } },
 						orderBy: { sequence: 'desc' }
 					}
 				);
@@ -2151,138 +2132,91 @@ export const layer = Layer.effect(
 					modelId ?? prior.model_id ?? undefined
 				);
 				const result = yield* admit(effectId, subject, {
-					taskId,
+					conversationId,
 					agentId: task.agent_id,
-					message: systemMessage(`Resume this Task from durable epoch ${task.epoch}.`),
+					message: systemMessage('Resume this Task from its durable transcript.'),
 					author: { kind: 'system' },
 					mode: DirectiveMode.make('agent'),
 					priority: DirectivePriority.make('normal'),
 					resume: true,
-					modelId: selected
+					modelId: selected.id
 				});
 				// Explicit resume recalls the stopped objective and its cancelled queue as context.
 				// Ordinary follow-ups keep cancelled instructions excluded.
-				const history = yield* messageRows(effectId, subject, taskId);
+				const history = yield* messageRows(effectId, subject, conversationId);
 				const recalled = history
 					.filter(
 						(message) =>
-							message.annotation?.tag === 'input' && message.annotation.cancelled === true
+							message.state === 'cancelled'
 					)
 					.map((message) => ({
 						id: message.id,
 						annotation: { ...message.annotation, consumedAfterSequence: lastSequence(history) }
 					}));
-				if (recalled.length > 0) {
-					const messages = yield* retainTaskRows(
-						EffectId.make(`${effectId}:recall`),
-						subject,
-						taskId,
-						'agent_message',
-						recalled
-					);
-					yield* mutateTask(EffectId.make(`${effectId}:recall-inputs`), subject, {
-						id: taskId,
-						messages
-					});
-				}
+				yield* writeRows(
+					EffectId.make(`${effectId}:recall`),
+					subject,
+					'conversation_message',
+					recalled
+				);
 				return {
-					taskId,
+					conversationId,
 					status: 'ready',
-					directiveId: result.directiveId
+					messageId: result.messageId
 				};
 			}
-			const directives: Array<Readonly<{ id: DirectiveId; message_id: MessageId; state: string }>> =
-				[];
-			for (;;) {
-				const after = directives.at(-1)?.id;
-				const page = yield* collections.findMany(
-					EffectId.make(`${effectId}:directives:${directives.length}`),
-					subject,
-					{
-						collection: 'agent_inbox',
-						where: {
-							task_id: { eq: taskId },
-							...(after === undefined ? {} : { id: { gt: after } })
-						},
-						orderBy: { id: 'asc' },
-						limit: 500
-					}
-				);
-				directives.push(
-					...(yield* decodeRows(
-						Schema.Struct({ id: DirectiveId, message_id: MessageId, state: Schema.String }),
-						page
-					))
-				);
-				if (page.length < 500) break;
-			}
 			const stoppingRun =
-				task.active_run_id === undefined || task.active_run_id === null
+				task.active_turn_id === undefined || task.active_turn_id === null
 					? undefined
-					: yield* runById(EffectId.make(`${effectId}:stopping-run`), subject, task.active_run_id);
-			const completeRuns =
-				stoppingRun === undefined
-					? undefined
-					: yield* retainTaskRows(
-							EffectId.make(`${effectId}:retain-runs`),
-							subject,
-							task.id,
-							'agent_run',
-							[{ ...stoppingRun, status: 'stopped' }]
-						);
-			const queuedIds = new Set(
-				directives
-					.filter((directive) => directive.state === 'queued')
-					.map((directive) => directive.message_id)
-			);
-			const cancelledMessages = (yield* messageRows(effectId, subject, taskId))
-				.filter((message) => queuedIds.has(message.id) && message.annotation?.tag === 'input')
+					: yield* runById(EffectId.make(`${effectId}:stopping-run`), subject, task.active_turn_id);
+			/**
+			 * Stopping cancels what was waiting, and says so in one write.
+			 *
+			 * The run stops, every queued message leaves the queue cancelled, and the conversation
+			 * stops — literally the same statement, so no two of them can disagree about whether the
+			 * stop happened. The message the stopped turn was answering is cancelled with them: it was
+			 * consumed but never answered, and a stop that left it looking answered would never offer
+			 * it again.
+			 */
+			const cancelled = (yield* messageRows(effectId, subject, conversationId))
+				.filter(
+					(message) =>
+						message.state === 'queued' ||
+						(stoppingRun !== undefined && message.id === stoppingRun.input_message_id)
+				)
 				.map((message) => ({
-					id: message.id,
-					annotation: { ...message.annotation, cancelled: true }
+					collection: 'conversation_message',
+					row: { id: message.id, state: 'cancelled' }
 				}));
-			const completeMessages = yield* retainTaskRows(
-				EffectId.make(`${effectId}:cancel-inputs`),
-				subject,
-				taskId,
-				'agent_message',
-				cancelledMessages
-			);
-			yield* mutateTask(effectId, subject, {
-				id: task.id,
-				status: 'stopped',
-				active_run_id: null,
-				epoch: task.epoch,
-				directives: directives.map(({ id, state }) =>
-					state === 'queued' || state === 'claimed' ? { id, state: 'cancelled' } : { id }
-				),
-				messages: completeMessages,
-				...(completeRuns === undefined ? {} : { runs: completeRuns })
-			});
-			yield* tasks.execute(EffectId.make(`${effectId}:interrupt`), {
-				_tag: 'Interrupt',
-				taskId
-			});
-			return { taskId, status: 'stopped' as const };
+			yield* writeGraph(effectId, subject, [
+				...(stoppingRun === undefined
+					? []
+					: [{ collection: 'turn', row: { id: stoppingRun.id, status: 'stopped' } }]),
+				...cancelled,
+				{
+					collection: 'conversation',
+					row: { id: task.id, status: 'stopped', active_turn_id: null }
+				}
+			]);
+			return { conversationId, status: 'stopped' as const };
 		});
 
 		const toolContext = (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: AgentTask,
-			run: AgentRun,
+			task: Conversation,
+			run: Turn,
 			agent: ResolvedAgent,
 			tools: ReadonlyArray<ToolDeclaration>,
-			messages: ReadonlyArray<AgentMessage>
+			messages: ReadonlyArray<ConversationMessage>
 		): ToolExecutionContext => {
-			const todo = previousTodo(messages, run.id);
 			const readableCollectionNames = reachableCollections(subject, 'read');
 			const writableCollectionNames = reachableCollections(subject, 'write');
 			return {
 				effectId,
 				subject,
 				agentId: agent.id,
-				taskId: task.id,
+				conversationId: task.id,
 				workbenchId: task.workbench_id,
 				skills: allowedSkills(subject),
 				toolNames: tools.map(({ name }) => name),
@@ -2292,104 +2226,122 @@ export const layer = Layer.effect(
 				workspace,
 				collections,
 				hostTools,
-				...(todo === undefined ? {} : { previousTodo: todo })
+				...(task.todos == null ? {} : { previousTodo: task.todos })
 			};
 		};
+
+		const isTodoSet = (params: unknown): boolean =>
+			isObjectLike(params) && Reflect.get(params, 'operation') === 'set';
 
 		const executeDeclaredTool = Effect.fn('Agents.executeDeclaredTool')(function* (
 			declaration: ToolDeclaration,
 			params: unknown,
 			callId: string,
 			subject: Identity.Subject,
-			task: AgentTask,
-			run: AgentRun,
+			task: Conversation,
+			run: Turn,
 			agent: ResolvedAgent,
 			tools: ReadonlyArray<ToolDeclaration>,
-			messages: ReadonlyArray<AgentMessage>
+			messages: ReadonlyArray<ConversationMessage>
 		) {
 			const name = declaration.name;
+			/**
+			 * `todo` reconciles against what is stored *now*, not against the snapshot this turn began
+			 * with. One assistant message can carry several `todo` calls, and the second has to see the
+			 * first — which is the whole of done-is-terminal and single-doing. Only this tool needs it,
+			 * so only this tool pays the read.
+			 */
+			const current =
+				name === 'todo'
+					? ((yield* conversationById(EffectId.make(`${run.id}:todos:${callId}`), subject, task.id)) ??
+						task)
+					: task;
 			const context = toolContext(
 				EffectId.make(`${run.id}:tool:${callId}`),
 				subject,
-				task,
+				current,
 				run,
 				agent,
 				tools,
 				messages
 			);
-			if (isSystemTool(name)) return yield* executeSystemTool(name, params, context);
+			if (isSystemTool(name)) {
+				const result = yield* executeSystemTool(name, params, context);
+				/**
+				 * `todo set` is the one system tool that changes durable state, so it is the one that
+				 * writes. The catalog validated the replacement against what is stored and handed back
+				 * the list to store; persisting it here keeps every write in the runtime, where write
+				 * authority lives, rather than giving the catalog a database.
+				 */
+				if (name === 'todo' && isTodoSet(params))
+					yield* writeConversation(EffectId.make(`${context.effectId}:todos`), subject, {
+						id: task.id,
+						todos: result as Schema.Json
+					});
+				return result;
+			}
 			if (name === 'subagent') {
-				const depth = yield* taskDepth(EffectId.make(`${context.effectId}:depth`), subject, task);
-				const subagent: SubagentContext = {
+				const depth = yield* conversationDepth(EffectId.make(`${context.effectId}:depth`), subject, task);
+				const subagent: SubagentContext<unknown> = {
 					effectId: context.effectId,
 					subject,
 					workbenchId: task.workbench_id,
 					agentId: agent.id,
-					taskId: task.id,
+					conversationId: task.id,
 					spawnableAgentIds: spawnableAgentIds(workspace.definition),
 					collections,
 					budget: InvocationBudget.make(depth, InvocationBudget.DEFAULT_NESTING_LIMIT),
 					spawn: (actionId, childAgentId, instruction, _depth, toolCallId) =>
 						Effect.gen(function* () {
-							const childId = taskIdFor(`${run.id}:${toolCallId}`);
+							const childId = conversationIdFor(`${run.id}:${toolCallId}`);
 							const submitted = yield* admit(actionId, subject, {
-								taskId: childId,
+								conversationId: childId,
 								agentId: childAgentId,
 								message: parentAgentInput(task.id, instruction),
 								author: { kind: 'parent-agent', id: task.id },
 								mode: DirectiveMode.make('agent'),
-								priority: DirectivePriority.make('normal'),
 								parent: task,
 								modelId: run.model_id
 							});
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
-								taskId: childId,
-								directiveId: submitted.directiveId,
+								conversationId: childId,
+								messageId: submitted.messageId,
 								state: 'running'
 							});
 						}),
-					admit: (actionId, targetId, message, priority) =>
+					admit: (actionId, targetId, message) =>
 						Effect.gen(function* () {
-							const target = yield* requireOwnedTask(actionId, subject, targetId);
+							const target = yield* requireOwnedConversation(actionId, subject, targetId);
 							const submitted = yield* admit(actionId, subject, {
-								taskId: target.id,
+								conversationId: target.id,
 								agentId: target.agent_id,
 								message: parentAgentInput(task.id, message),
 								author: { kind: 'parent-agent', id: task.id },
 								mode: DirectiveMode.make('agent'),
-								priority: DirectivePriority.make(priority),
 								modelId: run.model_id
 							});
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
-								taskId: target.id,
-								directiveId: submitted.directiveId,
+								conversationId: target.id,
+								messageId: submitted.messageId,
 								state: 'queued'
 							});
 						}),
 					awaitTarget: (actionId, childId) =>
 						Effect.gen(function* () {
-							const child = yield* requireOwnedTask(actionId, subject, childId);
-							if (child.status === 'done' || child.status === 'failed') {
-								const childMessages = yield* messageRows(actionId, subject, child.id);
-								return yield* Schema.decodeUnknownEffect(Schema.Json)({
-									state: child.status,
-									taskId: child.id,
-									message: childMessages.at(-1)?.message ?? null
-								});
-							}
-							yield* updateRun(actionId, subject, run, {
-								taskStatus: 'waiting',
-								runStatus: 'waiting',
-								phase: 'children',
-								active: true
-							});
+							// Awaiting a child runs it, here, now. There is no park and nothing to wake.
+							const child = yield* requireOwnedConversation(actionId, subject, childId);
+							const settled = isSettled(child.status)
+								? child
+								: yield* runChild(actionId, subject, child.id);
+							const childMessages = yield* messageRows(actionId, subject, settled.id);
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
-								state: 'parked',
-								taskId: child.id
+								state: settled.status,
+								conversationId: settled.id,
+								message: childMessages.at(-1)?.message ?? null
 							});
 						}),
 					control: (actionId, childId, action) =>
-						controlTask(actionId, subject, childId, action).pipe(
+						controlConversation(actionId, subject, childId, action).pipe(
 							Effect.flatMap((result) => Schema.decodeUnknownEffect(Schema.Json)(result))
 						)
 				};
@@ -2431,11 +2383,11 @@ export const layer = Layer.effect(
 		const handledTool = Effect.fn('Agents.handledTool')(function* (
 			call: EncodedToolCall,
 			subject: Identity.Subject,
-			task: AgentTask,
-			run: AgentRun,
+			task: Conversation,
+			run: Turn,
 			agent: ResolvedAgent,
 			declarations: ReadonlyArray<ToolDeclaration>,
-			messages: ReadonlyArray<AgentMessage>
+			messages: ReadonlyArray<ConversationMessage>
 		) {
 			const declaration = declarations.find(({ name }) => name === call.name);
 			if (declaration === undefined) {
@@ -2488,11 +2440,12 @@ export const layer = Layer.effect(
 		const finishRun = Effect.fn('Agents.finishRun')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: AgentTask,
-			run: AgentRun,
+			task: Conversation,
+			run: Turn,
 			output: Prompt.MessageEncoded,
-			messages: ReadonlyArray<AgentMessage>
+			transcript: Transcript
 		) {
+			const messages = transcript.rows();
 			if (run.mode === 'plan') {
 				const body = (
 					isString(output.content)
@@ -2508,23 +2461,27 @@ export const layer = Layer.effect(
 				const current = yield* activePlan(effectId, subject, task);
 				const revision = (current?.revision ?? 0) + 1;
 				const planId = planIdFor(`${task.id}:${revision}:${semanticHash(body)}`);
-				const plans: Array<Readonly<Record<string, unknown>>> = [
-					...(current === undefined || (current.status !== 'active' && current.status !== 'stalled')
-						? []
-						: [{ id: current.id, status: 'superseded' }]),
-					{
-						id: planId,
-						task_id: task.id,
-						revision,
-						checkpoint_sequence: lastSequence(messages),
-						body,
-						status: 'active'
-					}
-				];
-				yield* settleRun(effectId, subject, run, 'ready', 'model', {
-					plans,
-					activePlanId: planId
-				});
+				if (current !== undefined && (current.status === 'active' || current.status === 'stalled'))
+					yield* writeRows(EffectId.make(`${effectId}:supersede`), subject, 'plan', [
+						{ id: current.id, status: 'superseded' }
+					]);
+				yield* writeRows(
+					EffectId.make(`${effectId}:plan`),
+					subject,
+					'plan',
+					[
+						{
+							id: planId,
+							conversation_id: task.id,
+							revision,
+							checkpoint_sequence: lastSequence(messages),
+							body,
+							status: 'active'
+						}
+					],
+					'create'
+				);
+				yield* settleRun(effectId, subject, run, 'ready', 'model', { activePlanId: planId });
 				return 'idle';
 			}
 			if (run.mode === 'compact') {
@@ -2546,7 +2503,7 @@ export const layer = Layer.effect(
 					active: true
 				});
 				const verificationMessages = [
-					...projectTaskPrompt({
+					...projectPrompt({
 						workspacePrompt: workspace.definition.prompt,
 						...(agent.instruction === undefined ? {} : { agentInstruction: agent.instruction }),
 						mode: 'agent' as const,
@@ -2601,27 +2558,26 @@ export const layer = Layer.effect(
 						EffectId.make(`${effectId}:verdict:${attempt}`),
 						subject,
 						run,
+						transcript,
 						{ kind: 'system' },
 						verdictMessage,
 						annotation
 					);
 					const complete = verified.verdict.complete;
+					yield* writeRows(EffectId.make(`${effectId}:verdict-plan:${attempt}`), subject, 'plan', [
+						{ id: plan.id, status: complete ? 'verified' : 'stalled' }
+					]);
 					const status = yield* settleRun(
 						effectId,
 						subject,
 						run,
 						complete ? 'done' : 'attention',
-						'verify',
-						{
-							plans: [{ id: plan.id, status: complete ? 'verified' : 'stalled' }]
-						}
+						'verify'
 					);
-					if (status === 'done')
-						yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
 					return status === 'ready' ? 'idle' : complete ? 'done' : 'attention';
 				}
 				yield* admit(EffectId.make(`${effectId}:continue:${attempt}`), subject, {
-					taskId: task.id,
+					conversationId: task.id,
 					agentId: task.agent_id,
 					message: verdictMessage,
 					author: { kind: 'system' },
@@ -2635,22 +2591,17 @@ export const layer = Layer.effect(
 				return 'idle';
 			}
 			const status = yield* settleRun(effectId, subject, run, 'done', 'model');
-			if (status === 'done')
-				yield* wakeParent(EffectId.make(`${effectId}:wake-parent`), subject, task);
 			return status === 'ready' ? 'idle' : 'done';
 		});
 
 		const execute = Effect.fn('Agents.execute')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			taskId: TaskId
+			conversationId: ConversationId
 		) {
-			let task = yield* requireOwnedTask(EffectId.make(`${effectId}:task`), subject, taskId);
+			let task = yield* requireOwnedConversation(EffectId.make(`${effectId}:task`), subject, conversationId);
 			const run = yield* claim(EffectId.make(`${effectId}:claim`), subject, task);
-			if (run === undefined) return { taskId, status: 'idle' } satisfies TaskExecutionResult;
-			if (run.status === 'waiting') {
-				return { taskId, status: 'waiting' } satisfies TaskExecutionResult;
-			}
+			if (run === undefined) return { conversationId, status: 'idle' } satisfies TurnResult;
 			const agent = yield* resolveAgent(task.agent_id);
 			const allTools = yield* allowedTools(
 				EffectId.make(`${effectId}:host-capabilities`),
@@ -2674,17 +2625,61 @@ export const layer = Layer.effect(
 									].includes(tool.name)
 							)
 						: allTools;
-			yield* tasks.execute(EffectId.make(`${effectId}:active`), { _tag: 'Active', taskId });
 			let output: Prompt.MessageEncoded | undefined;
+			/**
+			 * How many times the loop has told the model to consume a child before letting it finish.
+			 *
+			 * The nudge is the only pressure left once children run inline — a child always settles,
+			 * so `waiting` can never end the loop — and a model that will not take the hint would
+			 * otherwise spin here forever. It is bounded rather than trusted; the child's answer is in
+			 * the transcript either way, so finishing without the explicit `await` loses nothing but
+			 * the acknowledgement.
+			 */
+			let nudges = 0;
+			/**
+			 * The provider's own count from the last call, which is what the next call will carry in.
+			 *
+			 * Seeded from the newest observation this conversation already has, not from zero. A turn
+			 * inherits the transcript that grew it, so a fresh turn on a long conversation is exactly
+			 * the case that needs to compact *before* its first call rather than after a provider
+			 * refusal — and starting at zero would send that call and find out the hard way.
+			 */
+			let usedTokens = observedTokens(
+				(yield* latestObservation(EffectId.make(`${effectId}:tokens`), subject, conversationId))
+					?.usage
+			);
+			/** Set when the agent calls `compact` on itself; cleared once the checkpoint is written. */
+			let compactRequested = false;
+			/**
+			 * The two budgets are separate because the two callers are.
+			 *
+			 * The runtime gets one automatic checkpoint per turn: a turn still over the bound after
+			 * compacting has nothing left that a summary of a summary would shrink, and looping would
+			 * spend a provider call per iteration on a Task that can no longer finish. The agent gets
+			 * a few, because it is reorganizing rather than surviving a limit, and each request is a
+			 * deliberate act with a reason attached — but it is bounded all the same, since a model
+			 * that compacts every step makes no progress.
+			 */
+			let automaticCompactions = 0;
+			let requestedCompactions = 0;
 			const runEffect = Effect.gen(function* () {
 				for (let iteration = 0; ; iteration += 1) {
-					task = yield* fencedTask(EffectId.make(`${effectId}:fence:${iteration}`), subject, run);
+					task = yield* fencedConversation(EffectId.make(`${effectId}:fence:${iteration}`), subject, run);
 					yield* consumeSteering(EffectId.make(`${effectId}:steer:${iteration}`), subject, run);
-					let messages = yield* messageRows(
-						EffectId.make(`${effectId}:messages:${iteration}`),
-						subject,
-						task.id
+					/**
+					 * One read per iteration, and the turn's only one. Every write below records itself
+					 * into the ledger, so the re-reads that used to follow each of them are gone.
+					 * `consumeSteering` above can still write outside it, which is why this is rebuilt
+					 * per iteration rather than per turn; when the inbox goes, so does the rebuild.
+					 */
+					const transcript = makeTranscript(
+						yield* messageRows(
+							EffectId.make(`${effectId}:messages:${iteration}`),
+							subject,
+							task.id
+						)
 					);
+					let messages = transcript.rows();
 					let calls = unresolvedToolCalls(messages);
 					if (calls.length === 0) {
 						const plan = yield* activePlan(
@@ -2692,9 +2687,9 @@ export const layer = Layer.effect(
 							subject,
 							task
 						);
-						let assets = attachments(projectTaskMessages(messages, plan), run.id);
+						let assets = attachments(promptMessages(messages, plan), run.id);
 						yield* validateAttachments(task.id, assets);
-						let projected = projectTaskPrompt({
+						let projected = projectPrompt({
 							workspacePrompt: workspace.definition.prompt,
 							...(agent.instruction === undefined ? {} : { agentInstruction: agent.instruction }),
 							mode: run.mode,
@@ -2707,14 +2702,18 @@ export const layer = Layer.effect(
 						 * summarize that a second summary of a summary would shrink, and looping here
 						 * would spend a provider call per iteration on a Task that can no longer finish.
 						 */
-						const compactedThisRun = messages.some(
-							(message) => message.run_id === run.id && message.annotation?.tag === 'compact'
-						);
-						if (
-							run.mode === 'agent' &&
-							!compactedThisRun &&
-							promptBytes(projected) > AUTO_COMPACT_PROMPT_BYTES
-						) {
+						const bound = Math.floor(run.context_window_tokens * COMPACT_AT_FRACTION_OF_WINDOW);
+						const tokens = Math.max(usedTokens, estimatedTokens(projected));
+						const overBound = tokens > bound;
+						const requested = compactRequested;
+						compactRequested = false;
+						const affordable = requested
+							? requestedCompactions < MAX_REQUESTED_COMPACTIONS_PER_TURN
+							: automaticCompactions < 1;
+						if (run.mode === 'agent' && (requested || overBound) && affordable) {
+							const origin = requested ? 'requested' : 'automatic';
+							if (requested) requestedCompactions += 1;
+							else automaticCompactions += 1;
 							const currentInput = messages.findLast(
 								(message) =>
 									message.sequence <= run.input_through_sequence &&
@@ -2725,14 +2724,14 @@ export const layer = Layer.effect(
 							const retainedMessageIds = [
 								...new Set([
 									...(currentInput === undefined ? [] : [currentInput.id]),
-									...messages.filter(({ run_id }) => run_id === run.id).map(({ id }) => id)
+									...messages.filter(({ turn_id }) => turn_id === run.id).map(({ id }) => id)
 								])
 							];
 							const compacted = yield* generateMessage(
 								ai,
-								EffectId.make(`${effectId}:auto-compact-provider:${iteration}`),
+								EffectId.make(`${effectId}:compact-provider:${iteration}`),
 								{
-									callId: providerCallIdFor(`${run.id}:auto-compact:${iteration}`),
+									callId: providerCallIdFor(`${run.id}:compact:${lastSequence(messages)}`),
 									modelId: run.model_id,
 									/**
 									 * The instruction is the final user turn, not a trailing system message. A
@@ -2744,7 +2743,7 @@ export const layer = Layer.effect(
 									messages: [
 										...projected,
 										userAgentInput(
-											'Automatic Compact: summarize the durable context needed to continue this Task. Preserve decisions, constraints, unresolved work, tool evidence, child outcomes, and the current user instruction. Do not perform new work.'
+											`${origin === 'requested' ? 'Requested' : 'Automatic'} Compact: summarize the durable context needed to continue this Task. Preserve decisions, constraints, unresolved work, tool evidence, child outcomes, and the current user instruction. Do not perform new work.`
 										)
 									],
 									maxOutputTokens: AUTO_COMPACT_OUTPUT_TOKENS,
@@ -2752,61 +2751,90 @@ export const layer = Layer.effect(
 								}
 							);
 							yield* recordUsage(
-								EffectId.make(`${effectId}:auto-compact-usage:${iteration}`),
+								EffectId.make(`${effectId}:compact-usage:${iteration}`),
 								subject,
 								run,
 								compacted.observation
 							);
+							usedTokens = observedTokens(compacted.observation.usage);
 							yield* appendMessage(
-								EffectId.make(`${effectId}:auto-compact:${iteration}`),
+								EffectId.make(`${effectId}:compact:${iteration}`),
 								subject,
 								run,
+								transcript,
 								{ kind: 'agent', id: agent.id },
 								checkpointContent(compacted.message),
 								{
 									tag: 'compact',
-									origin: 'automatic',
+									origin,
 									cutoff: Math.max(0, ...messages.map(contextSequence)),
 									retainedMessageIds
 								}
 							);
-							messages = yield* messageRows(
-								EffectId.make(`${effectId}:auto-compact-messages:${iteration}`),
-								subject,
-								task.id
-							);
-							assets = attachments(projectTaskMessages(messages, plan), run.id);
-							projected = projectTaskPrompt({
+							messages = transcript.rows();
+							assets = attachments(promptMessages(messages, plan), run.id);
+							projected = projectPrompt({
 								workspacePrompt: workspace.definition.prompt,
 								...(agent.instruction === undefined ? {} : { agentInstruction: agent.instruction }),
 								mode: run.mode,
 								messages,
 								...(plan === undefined ? {} : { activePlan: plan })
 							});
-							const residualBytes = promptBytes(projected);
-							if (residualBytes > AUTO_COMPACT_PROMPT_BYTES) {
-								/**
-								 * Degraded, not failed. Refusing the turn here would brick every long
-								 * conversation the moment its retained material alone exceeds the bound, so
-								 * the turn proceeds and the condition is recorded the way every other
-								 * degraded outcome is: one canonical message carrying this run's id, never
-								 * a reintroduced run disposition column (RFC §4.2).
-								 */
+							/**
+							 * Degraded, not failed, and said immediately.
+							 *
+							 * The checkpoint has been written and the projection rebuilt over it, so this is
+							 * the moment the runtime knows whether compacting helped. Refusing the turn here
+							 * would brick every long conversation whose retained material alone exceeds the
+							 * bound, so the turn proceeds and the condition is recorded the way every other
+							 * degraded outcome is: one canonical message carrying this run's id.
+							 */
+							const residual = estimatedTokens(projected);
+							if (!requested && residual > bound) {
 								yield* appendMessage(
-									EffectId.make(`${effectId}:auto-compact-residual:${iteration}`),
+									EffectId.make(`${effectId}:compact-residual:${iteration}`),
 									subject,
 									run,
+									transcript,
 									{ kind: 'system' },
 									systemMessage(
-										`Automatic Compact left the projection above the context bound (${residualBytes} bytes against ${AUTO_COMPACT_PROMPT_BYTES}). This turn proceeds over the compacted projection without a second checkpoint.`
+										`Automatic Compact left the context at ${residual} tokens against a bound of ${bound}. This turn proceeds over the compacted projection without a second checkpoint.`
 									)
 								);
-								messages = yield* messageRows(
-									EffectId.make(`${effectId}:auto-compact-residual-messages:${iteration}`),
+								messages = transcript.rows();
+								projected = projectPrompt({
+									workspacePrompt: workspace.definition.prompt,
+									...(agent.instruction === undefined
+										? {}
+										: { agentInstruction: agent.instruction }),
+									mode: run.mode,
+									messages,
+									...(plan === undefined ? {} : { activePlan: plan })
+								});
+							}
+						} else if (requested) {
+							/**
+							 * A refusal the agent can read, once.
+							 *
+							 * A request that silently does nothing is worse than one that is refused: the
+							 * model asked for a checkpoint, and if it is not told the answer is no it will
+							 * ask again every step. `requestedCompactions` keeps counting past the limit, so
+							 * this fires on the first refusal and never again.
+							 */
+							requestedCompactions += 1;
+							if (requestedCompactions === MAX_REQUESTED_COMPACTIONS_PER_TURN + 1) {
+								yield* appendMessage(
+									EffectId.make(`${effectId}:compact-refused:${iteration}`),
 									subject,
-									task.id
+									run,
+									transcript,
+									{ kind: 'system' },
+									systemMessage(
+										`Compact was requested more than ${MAX_REQUESTED_COMPACTIONS_PER_TURN} times in one turn and is refused for the rest of it. Continue from the checkpoints already written.`
+									)
 								);
-								projected = projectTaskPrompt({
+								messages = transcript.rows();
+								projected = projectPrompt({
 									workspacePrompt: workspace.definition.prompt,
 									...(agent.instruction === undefined
 										? {}
@@ -2817,7 +2845,17 @@ export const layer = Layer.effect(
 								});
 							}
 						}
-						const callId = providerCallIdFor(`${run.id}:${iteration}`);
+						/**
+						 * The call is named by where the transcript stood when it was made, not by the loop
+						 * counter, because the counter restarts.
+						 *
+						 * A parent that parks on a child leaves `runEffect` and re-enters it on the wake with
+						 * the same turn and `iteration` back at 0. Two distinct provider calls then minted one
+						 * `call_id`, and the usage row for the second silently overwrote the first — a billable
+						 * observation lost with no failure anywhere. The sequence only ever advances, because
+						 * every generation appends the message it produced.
+						 */
+						const callId = providerCallIdFor(`${run.id}:${lastSequence(messages)}`);
 						let progressSequence = -1;
 						const provided = yield* generateMessage(
 							ai,
@@ -2835,22 +2873,18 @@ export const layer = Layer.effect(
 												operation: 'generation',
 												message: 'Progress belongs to another provider call.'
 											});
-										const retained = retainedGeneration(
-											run,
-											progress.message,
-											progress.activeParts
-										);
 										yield* persistGeneration(
 											EffectId.make(`${effectId}:part:${iteration}:${progress.sequence}`),
 											subject,
 											run,
+											transcript,
 											agent.id,
-											{ ...progress, ...retained },
+											progress,
 											{
 												tag: 'generation',
 												callId,
 												sequence: progress.sequence,
-												activeParts: retained.activeParts
+												activeParts: progress.activeParts
 											}
 										);
 										progressSequence = progress.sequence;
@@ -2864,9 +2898,8 @@ export const layer = Layer.effect(
 							run,
 							provided.observation
 						);
-						const generated = {
-							message: retainedGeneration(run, provided.message, []).message
-						};
+						usedTokens = observedTokens(provided.observation.usage);
+						const generated = { message: provided.message };
 						const annotation: MessageAnnotation | undefined =
 							run.mode === 'compact'
 								? {
@@ -2881,6 +2914,7 @@ export const layer = Layer.effect(
 								EffectId.make(`${effectId}:assistant:${iteration}`),
 								subject,
 								run,
+								transcript,
 								agent.id,
 								{
 									callId,
@@ -2895,13 +2929,14 @@ export const layer = Layer.effect(
 								EffectId.make(`${effectId}:assistant:${iteration}`),
 								subject,
 								run,
+								transcript,
 								{ kind: 'agent', id: agent.id },
 								generated.message,
 								annotation
 							);
 						output = generated.message;
 						calls = toolCalls(generated.message);
-						messages = yield* messageRows(effectId, subject, task.id);
+						messages = transcript.rows();
 					}
 					if (calls.length === 0 && output !== undefined) {
 						if (
@@ -2920,24 +2955,13 @@ export const layer = Layer.effect(
 							task,
 							messages
 						);
-						if (barrier.state === 'waiting') {
-							yield* updateRun(effectId, subject, run, {
-								taskStatus: 'waiting',
-								runStatus: 'waiting',
-								phase: 'children',
-								active: true
-							});
-							return {
-								taskId,
-								status: 'waiting',
-								...(output === undefined ? {} : { output })
-							} satisfies TaskExecutionResult;
-						}
-						if (barrier.state === 'consume') {
+						if (barrier.state === 'consume' && nudges < MAX_CHILD_CONSUME_NUDGES) {
+							nudges += 1;
 							yield* appendMessage(
 								EffectId.make(`${effectId}:children-required:${iteration}`),
 								subject,
 								run,
+								transcript,
 								{ kind: 'system' },
 								systemMessage(
 									`Consume required child Tasks with subagent await before finishing: ${barrier.taskIds.join(', ')}`
@@ -2946,11 +2970,11 @@ export const layer = Layer.effect(
 							output = undefined;
 							continue;
 						}
-						const status = yield* finishRun(effectId, subject, task, run, output, messages);
-						return { taskId, status, output } satisfies TaskExecutionResult;
+						const status = yield* finishRun(effectId, subject, task, run, output, transcript);
+						return { conversationId, status, output } satisfies TurnResult;
 					}
 					for (const call of calls) {
-						yield* fencedTask(EffectId.make(`${effectId}:tool-fence:${call.id}`), subject, run);
+						yield* fencedConversation(EffectId.make(`${effectId}:tool-fence:${call.id}`), subject, run);
 						const handled = yield* handledTool(
 							call,
 							subject,
@@ -2960,71 +2984,118 @@ export const layer = Layer.effect(
 							toolsForMode,
 							messages
 						);
-						if (isParkedResult(handled.encodedResult)) {
-							return {
-								taskId,
-								status: 'waiting',
-								...(output === undefined ? {} : { output })
-							} satisfies TaskExecutionResult;
-						}
 						yield* appendMessage(
 							EffectId.make(`${effectId}:tool-result:${call.id}`),
 							subject,
 							run,
+							transcript,
 							{ kind: 'tool', id: call.name },
 							toolResultMessage(call, handled.encodedResult, handled.isFailure)
 						);
-						messages = yield* messageRows(effectId, subject, task.id);
+						// The `compact` tool records intent and returns; this is where the loop hears it.
+						// Read off the calls it just ran rather than signalled back through the tool
+						// context, so there is no second copy of the fact to keep in agreement.
+						if (call.name === 'compact' && !handled.isFailure) compactRequested = true;
+						messages = transcript.rows();
 					}
 				}
 			});
 			return yield* runEffect.pipe(
 				Effect.tapError((cause) =>
-					appendMessage(
-						EffectId.make(`${effectId}:failed-message`),
-						subject,
-						run,
-						{ kind: 'system' },
-						systemMessage(`Task failed: ${describeFailure(cause).message.slice(0, 500)}`)
-					).pipe(
+					// The turn is over and its ledger is out of scope; a failing turn pays one read for
+					// the one message it still has to write.
+					messageRows(EffectId.make(`${effectId}:failed-messages`), subject, conversationId)
+						.pipe(Effect.map(makeTranscript))
+						.pipe(
+							Effect.flatMap((failedTranscript) =>
+								appendMessage(
+									EffectId.make(`${effectId}:failed-message`),
+									subject,
+									run,
+									failedTranscript,
+									{ kind: 'system' },
+									systemMessage(`Task failed: ${describeFailure(cause).message.slice(0, 500)}`)
+								)
+							)
+						)
+						.pipe(
 						Effect.ignore,
 						Effect.andThen(
 							updateRun(EffectId.make(`${effectId}:failed`), subject, run, {
 								taskStatus: 'failed',
 								runStatus: 'failed',
 								phase: 'model',
-								active: false,
-								directiveState: 'settled'
+								active: false
 							})
 						),
-						Effect.andThen(wakeParent(EffectId.make(`${effectId}:failed-parent`), subject, task)),
 						Effect.ignore
 					)
 				),
-				Effect.ensuring(
-					tasks
-						.execute(EffectId.make(`${effectId}:settled`), { _tag: 'Settled', taskId })
-						.pipe(Effect.ignore)
-				)
 			);
 		});
+
+		/**
+		 * Answers the message a caller just sent, and everything else the conversation has waiting.
+		 *
+		 * `execute` answers exactly one message, which is the right primitive: an envoy or a schedule
+		 * runs the turn it came for and nothing else. A person, though, is holding a response open,
+		 * and a conversation that settles with another message still queued would sit there until
+		 * somebody called again — which is what the durable work occurrence used to be for. This is
+		 * what replaced it.
+		 *
+		 * The first turn is unconditional. Driving it from the queue read would let a caller who
+		 * cannot see the row admit a message and then run nothing, which is a silent non-answer
+		 * rather than a visible refusal; the drain after it degrades to one turn when the queue is
+		 * unreadable, which is the old behaviour and never worse. It terminates because a turn
+		 * consumes the message it was started for, and a turn that leaves the head of the queue
+		 * untouched ends the loop rather than spinning on work it has already declined.
+		 */
+		const answerQueued = Effect.fn('Agents.answerQueued')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			conversationId: ConversationId
+		) {
+			const queuedHead = Effect.fn('Agents.queuedHead')(function* (id: EffectId) {
+				const row = yield* collections.findFirst(id, subject, {
+					collection: 'conversation_message',
+					where: { conversation_id: { eq: conversationId }, state: { eq: 'queued' } },
+					orderBy: { priority: 'desc', sequence: 'asc' }
+				});
+				return row === undefined ? undefined : String(row['id']);
+			});
+			const settled = yield* execute(
+				EffectId.make(`${effectId}:turn:0`),
+				subject,
+				conversationId
+			);
+			let head = yield* queuedHead(EffectId.make(`${effectId}:queued:0`));
+			for (let turn = 1; head !== undefined; turn += 1) {
+				yield* execute(EffectId.make(`${effectId}:turn:${turn}`), subject, conversationId);
+				const next = yield* queuedHead(EffectId.make(`${effectId}:queued:${turn}`));
+				if (next === head) break;
+				head = next;
+			}
+			return settled;
+		});
+
+		driveConversation = answerQueued;
 
 		const control = Effect.fn('Agents.control')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			request: TaskControlRequest
+			request: ConversationControlRequest
 		) {
-			const result = yield* controlTask(
+			const result = yield* controlConversation(
 				effectId,
 				subject,
-				request.taskId,
+				request.conversationId,
 				request.action,
 				request.modelId
 			);
 			return {
-				taskId: request.taskId,
-				status: yield* Schema.decodeUnknownEffect(TaskStatus)(result.status)
-			} satisfies TaskControlResult;
+				conversationId: request.conversationId,
+				status: yield* Schema.decodeUnknownEffect(ConversationStatus)(result.status)
+			} satisfies ConversationControlResult;
 		});
 
 		return Service.of({
@@ -3032,7 +3103,11 @@ export const layer = Layer.effect(
 			submit,
 			editMessage,
 			control,
-			execute: (effectId, subject, taskId) => execute(effectId, subject, taskId)
+			execute: (effectId, subject, conversationId) => execute(effectId, subject, conversationId),
+			answerQueued: (effectId, subject, conversationId) =>
+				answerQueued(effectId, subject, conversationId)
+			// The cast `Interface` has always carried: its declared error union is narrower than what
+			// the implementation infers. Pre-existing, and named here rather than left silent.
 		} as Interface);
 	})
 );

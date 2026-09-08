@@ -7,7 +7,7 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	ModelId,
-	TaskId,
+	ConversationId,
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding
@@ -29,9 +29,9 @@ const embeddingModelId = ModelId.make('test:embedding');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 const catalog = {
 	_tag: 'Catalog',
-	languageModels: [{ id: languageModelId }],
+	languageModels: [{ id: languageModelId, contextWindowTokens: 1_000_000 }],
 	defaultLanguageModelId: languageModelId,
-	embeddingModels: [{ id: embeddingModelId }],
+	embeddingModels: [{ id: embeddingModelId, contextWindowTokens: 1_000_000 }],
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
@@ -62,16 +62,16 @@ afterEach(async () => {
 });
 
 describe('Task resume control', () => {
-	it('creates an explicit durable resume directive and executes it under a new run epoch', async () => {
+	it('creates an explicit durable resume message and executes it as a new turn', async () => {
 		const twin = cassetteTranscript(cassette('agents-resume-explicit'));
 		const prompts = twin.requests;
 		const ai = twin.ai;
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-explicit-resume'));
+		const conversationId = ConversationId.make(recordId('task-explicit-resume'));
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Continue this from durable history.'),
 				mode: DirectiveMode.make('agent'),
@@ -80,7 +80,7 @@ describe('Task resume control', () => {
 		);
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('queued-followup'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Also retain the queued follow-up.'),
 				mode: DirectiveMode.make('agent'),
@@ -88,37 +88,37 @@ describe('Task resume control', () => {
 			})
 		);
 		await harness.runtime.runPromise(
-			agents.control(harness.effectId('stop'), adminSubject, { taskId, action: 'stop' })
+			agents.control(harness.effectId('stop'), adminSubject, { conversationId, action: 'stop' })
 		);
 		expect(
 			await harness.database.query(
-				'select state from agent_inbox where task_id = $1 order by sequence',
-				[taskId]
+				'select state from conversation_message where conversation_id = $1 and state is not null order by sequence',
+				[conversationId]
 			)
 		).toEqual([{ state: 'cancelled' }, { state: 'cancelled' }]);
 		expect(
 			await harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
 			)
-		).toEqual({ taskId, status: 'ready' });
+		).toEqual({ conversationId, status: 'ready' });
 
 		expect(
 			await harness.runtime.runPromise(
-				agents.execute(harness.effectId('execute:resume'), adminSubject, taskId)
+				agents.execute(harness.effectId('execute:resume'), adminSubject, conversationId)
 			)
-		).toMatchObject({ taskId, status: 'done' });
+		).toMatchObject({ conversationId, status: 'done' });
 		expect(JSON.stringify(prompts[0])).toContain('Continue this from durable history.');
-		expect(JSON.stringify(prompts[0])).toContain('Resume this Task from durable epoch');
+		expect(JSON.stringify(prompts[0])).toContain('Resume this Task from its durable transcript');
 		expect(JSON.stringify(prompts[0])).toContain('Also retain the queued follow-up.');
 		expect(prompts).toHaveLength(1);
 		expect(
 			await harness.database.query(
-				`select task.status, task.epoch, run.status as run_status, run.epoch as run_epoch
-				 from agent_task task join agent_run run on run.task_id = task.id
+				`select task.status, run.status as run_status
+				 from conversation task join turn run on run.conversation_id = task.id
 				 where task.id = $1`,
-				[taskId]
+				[conversationId]
 			)
-		).toEqual([{ status: 'done', epoch: 1, run_status: 'succeeded', run_epoch: 1 }]);
+		).toEqual([{ status: 'done', run_status: 'succeeded' }]);
 	});
 
 	it('persists the run failure as a transcript message and resumes from failed', async () => {
@@ -139,10 +139,10 @@ describe('Task resume control', () => {
 		};
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-failed-resume'));
+		const conversationId = ConversationId.make(recordId('task-failed-resume'));
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Doomed work.'),
 				mode: DirectiveMode.make('agent'),
@@ -150,14 +150,14 @@ describe('Task resume control', () => {
 			})
 		);
 		await expect(
-			harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, taskId))
+			harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, conversationId))
 		).rejects.toMatchObject({ message: expect.stringContaining('PROBE_FAILURE_REASON') });
 		expect(
 			await harness.database.query(
 				`select task.status, message.author->>'kind' as author, message.message::text as body
-				 from agent_task task join agent_message message on message.task_id = task.id
+				 from conversation task join conversation_message message on message.conversation_id = task.id
 				 where task.id = $1 order by message.sequence`,
-				[taskId]
+				[conversationId]
 			)
 		).toEqual([
 			expect.objectContaining({ status: 'failed', author: 'human' }),
@@ -169,19 +169,19 @@ describe('Task resume control', () => {
 		]);
 		expect(
 			await harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
 			)
-		).toEqual({ taskId, status: 'ready' });
+		).toEqual({ conversationId, status: 'ready' });
 	});
 
 	it('refuses resume for a Task that is not stopped or awaiting attention', async () => {
 		const ai = cassetteAi(cassette('agents-resume-done'));
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
-		const taskId = TaskId.make(recordId('task-invalid-resume'));
+		const conversationId = ConversationId.make(recordId('task-invalid-resume'));
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('submit'), adminSubject, {
-				taskId,
+				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Ready work.'),
 				mode: DirectiveMode.make('agent'),
@@ -190,7 +190,7 @@ describe('Task resume control', () => {
 		);
 		await expect(
 			harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { taskId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
 			)
 		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
 	});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ImageAsset, TaskId } from '@norbital-ai/bolt-protocol';
-import { taskAssetStorageKey } from '../src/runtime/agents/agents.js';
+import { ImageAsset, ConversationId } from '@norbital-ai/bolt-protocol';
+import { conversationAssetStorageKey } from '../src/runtime/agents/agents.js';
 import {
 	assertGuestImageDescriptorsOnly,
 	attachmentAssetsFromMessage,
@@ -25,19 +25,19 @@ describe('Task image asset boundary', () => {
 		assertGuestImageDescriptorsOnly(message);
 	});
 	it('derives an opaque, Task-scoped storage key without a document command surface', () => {
-		const first = TaskId.make('00000000-0000-4000-8000-000000000201');
-		const second = TaskId.make('00000000-0000-4000-8000-000000000202');
-		const key = taskAssetStorageKey(first, 'document-a', 'site-plan.png');
+		const first = ConversationId.make('00000000-0000-4000-8000-000000000201');
+		const second = ConversationId.make('00000000-0000-4000-8000-000000000202');
+		const key = conversationAssetStorageKey(first, 'document-a', 'site-plan.png');
 
 		expect(key).toMatch(/^agent-tasks\/[^/]+\/[^/]+\.png$/u);
 		expect(key).not.toContain(first);
-		expect(taskAssetStorageKey(second, 'document-a', 'site-plan.png')).not.toBe(key);
+		expect(conversationAssetStorageKey(second, 'document-a', 'site-plan.png')).not.toBe(key);
 	});
 
 	it('G5: guest turns carry descriptors only; host strips file parts before the facility wire', () => {
 		const asset = ImageAsset.make({
-			key: taskAssetStorageKey(
-				TaskId.make('00000000-0000-4000-8000-000000000201'),
+			key: conversationAssetStorageKey(
+				ConversationId.make('00000000-0000-4000-8000-000000000201'),
 				'document-a',
 				'site-plan.png'
 			),

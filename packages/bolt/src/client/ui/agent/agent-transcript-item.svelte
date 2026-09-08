@@ -30,7 +30,6 @@
 		generating = false,
 		hideTodo = false,
 		tools = undefined,
-		reasoningRequested = false,
 		subagent = undefined,
 		onedit
 	}: {
@@ -44,7 +43,6 @@
 		/** Call/result pairing over the loaded transcript; without it every part renders alone. */
 		tools?: ToolPairing | undefined;
 		/** Whether this message's run asked for reasoning; a provider's filler is never shown. */
-		reasoningRequested?: boolean;
 		/** The loaded transcript, so a `subagent` spawn row can render its child's conversation. */
 		subagent?: SubagentTranscript | undefined;
 		onedit?: ((message: PanelMessage) => void) | undefined;
@@ -57,10 +55,10 @@
 			: null
 	);
 	const steering = $derived(
-		message.annotation?.tag === 'input' && message.annotation.priority === 'steer'
+		message.priority === 'steer'
 	);
 	const cancelled = $derived(
-		message.annotation?.tag === 'input' && message.annotation.cancelled === true
+		message.state === 'cancelled'
 	);
 	const queued = $derived(
 		message.annotation?.tag === 'input' &&
@@ -92,18 +90,18 @@
 	type Part = Exclude<Prompt.MessageEncoded['content'], string>[number];
 	const isProgressPart = (part: Part) =>
 		(part.type === 'tool-call' || part.type === 'tool-result') &&
-		['todo', 'system/todo'].includes(part.name) &&
+		part.name === 'todo' &&
 		(part.type !== 'tool-result' || !part.isFailure);
 
 	const isActivePart = (index: number) =>
 		message.annotation?.tag === 'generation' && message.annotation.activeParts.includes(index);
 
 	/**
-	 * Reasoning shows only when the run asked for it and there is something to read. An empty part
-	 * still being written is a live status rather than content, so it stays while generating.
+	 * Reasoning is always captured, so the only question is whether there is something to read. An
+	 * empty part still being written is a live status rather than content, so it stays while
+	 * generating and goes when it settles with nothing in it.
 	 */
 	function reasoningVisible(part: Prompt.ReasoningPartEncoded, index: number): boolean {
-		if (!reasoningRequested) return false;
 		if (part.text.trim().length > 0) return true;
 		return generating && isActivePart(index);
 	}
@@ -149,6 +147,8 @@
 				return 'Automatic context checkpoint';
 			case 'manual':
 				return 'Manual context checkpoint';
+			case 'requested':
+				return 'Agent-requested context checkpoint';
 			case 'unresolved':
 				return 'Context checkpoint · origin unavailable';
 			case null:

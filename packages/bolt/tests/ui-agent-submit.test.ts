@@ -29,7 +29,7 @@ describe('G1 Task composer submit', () => {
 		const calls: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const command = vi.fn((name: string, input: unknown) => {
 			calls.push({ command: name, input });
-			return Promise.resolve({ directiveId: DIRECTIVE_ID });
+			return Promise.resolve({ messageId: DIRECTIVE_ID });
 		});
 		const agent = createAgentClient({
 			client: emptyAgentClient({ command }),
@@ -45,7 +45,7 @@ describe('G1 Task composer submit', () => {
 				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
-							taskId: TASK_ID,
+							conversationId: TASK_ID,
 							message,
 							mode: 'agent',
 							priority: 'normal',
@@ -72,9 +72,9 @@ describe('G1 Task composer submit', () => {
 		expect(pending).toBe(false);
 		expect(draft.cleared).toBe(true);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.command).toBe('tasks.submit');
+		expect(calls[0]?.command).toBe('conversations.send');
 		expect(calls[0]?.input).toMatchObject({
-			taskId: TASK_ID,
+			conversationId: TASK_ID,
 			agentId: 'web',
 			message: { role: 'user', content: HEADED_TEXT },
 			mode: 'agent',
@@ -87,7 +87,7 @@ describe('G1 Task composer submit', () => {
 		const calls: Array<{ readonly command: string }> = [];
 		const command = vi.fn((name: string) => {
 			calls.push({ command: name });
-			return Promise.resolve({ directiveId: DIRECTIVE_ID });
+			return Promise.resolve({ messageId: DIRECTIVE_ID });
 		});
 		const agent = createAgentClient({
 			client: emptyAgentClient({ command }),
@@ -109,7 +109,7 @@ describe('G1 Task composer submit', () => {
 				}).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
-							taskId: TASK_ID,
+							conversationId: TASK_ID,
 							message,
 							mode: 'agent',
 							priority: 'normal'
@@ -154,7 +154,7 @@ describe('G1 Task composer submit', () => {
 				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
-							taskId: TASK_ID,
+							conversationId: TASK_ID,
 							message,
 							mode: 'agent',
 							priority: 'normal'
@@ -231,7 +231,7 @@ describe('G1 Task composer submit', () => {
 				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
-							taskId: TASK_ID,
+							conversationId: TASK_ID,
 							message,
 							mode: 'agent',
 							priority: 'normal'

@@ -6,7 +6,7 @@ import {
 	DirectiveMode,
 	DirectivePriority,
 	ImageAsset,
-	type TaskId
+	type ConversationId
 } from '@norbital-ai/bolt-protocol/facilities';
 import { getErrorMessage } from '@norbital-ai/std';
 import { decodeNumber } from '@norbital-ai/std/json';
@@ -1027,7 +1027,7 @@ export const layerWith = (
 						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
 					}
 
-					const taskId: TaskId = Agents.taskIdFor(`envoy:${conversationId}:${rowIds.join(':')}`);
+					const taskId: ConversationId = Agents.conversationIdFor(`envoy:${conversationId}:${rowIds.join(':')}`);
 					const steerPattern = /^\s*\/steer(?:\s|$)/i;
 					const priority = rows.some(({ addressed, text }) => addressed && steerPattern.test(text))
 						? DirectivePriority.make('steer')
@@ -1053,7 +1053,7 @@ export const layerWith = (
 								}
 								const asset = ImageAsset.make({
 									...attachment.asset,
-									key: Agents.taskAssetStorageKey(
+									key: Agents.conversationAssetStorageKey(
 										taskId,
 										`${row.external_message_id}:${index}`,
 										attachment.asset.name
@@ -1088,13 +1088,11 @@ export const layerWith = (
 						const batch = Agents.inboundAgentInput(messages);
 						yield* agents
 							.submit(effectId, trigger.subject, {
-								taskId,
+								conversationId: taskId,
 								agentId: AgentId.make(envoyName),
 								message: batch,
 								mode: DirectiveMode.make('agent'),
-								priority,
-								// The drain runs the turn itself, below; the host must not race it for the claim.
-								execution: 'inline'
+								priority
 							})
 							.pipe(taskFailure(envoyName, 'Task submission'));
 						const executed = yield* agents
