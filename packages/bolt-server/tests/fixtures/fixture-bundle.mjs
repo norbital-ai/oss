@@ -167,6 +167,10 @@ export const dispatch = async (invocation, _facilities, signal) => {
 				}
 			});
 		}
+		if (invocation.command === 'test.hold') {
+			await new Promise((resolve) => setTimeout(resolve, invocation.input?.holdMillis ?? 0));
+			return ok({ status: 200, headers: {}, value: { held: invocation.input?.holdMillis ?? 0 } });
+		}
 		if (invocation.command === 'test.lastAdvance') {
 			return ok({ status: 200, headers: {}, value: lastAdvance });
 		}

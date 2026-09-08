@@ -55,7 +55,12 @@ export interface HostScheduleRejection extends Schema.Schema.Type<typeof HostSch
 
 export const HostScheduleDiscoverRequest = Schema.Struct({
 	nowEpochMs: Schema.Number.check(Schema.isInt(), Schema.isFinite()),
-	/** Host-owned dispatch deadline; the claim lease covers this complete interval. */
+	/**
+	 * How long a claim fences the row before an unrenewed lease counts as a dead host.
+	 *
+	 * It is not the interval a run fits in: an occurrence has no wall, and the guest renews its own
+	 * lease while it runs (`Invocation.Task.taskId`). What expiry means is that nobody renewed it.
+	 */
 	leaseForMillis: Schema.Number.check(
 		Schema.isInt(),
 		Schema.isGreaterThanOrEqualTo(1_000),

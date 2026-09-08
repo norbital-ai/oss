@@ -319,7 +319,6 @@ const provisionedDatabase = async (): Promise<Awaited<ReturnType<typeof makeTest
 			{
 				invocationId: activation.id,
 				effectId: EffectId.make(`provision:${step.id}`),
-				deadlineEpochMs: activation.deadlineEpochMs,
 				idempotencyKey: step.id
 			},
 			{ _tag: 'Query', sql: step.sql, parameters: [] },

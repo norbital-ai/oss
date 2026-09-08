@@ -63,13 +63,12 @@ export type DirectWork = Readonly<{
 }>;
 
 /**
- * The lease a row claimed at enqueue carries.
+ * The lease a claim carries, and the interval the running guest renews it by.
  *
- * A host tick claims through `discover` with the lease it was handed, which is its own dispatch
- * deadline. A guest claiming at enqueue has no host deadline to copy, so it uses the one Colony's
- * tick uses (five minutes). A self-host with a shorter invocation deadline only means an interrupted
- * run waits that much longer for the ordinary discover path to recover it; a live lease never fences
- * anything but a doubled claim.
+ * A run has no wall, so the lease is not the interval a run fits in: it is how long a host may go
+ * silent before the row counts as abandoned. The runtime renews its own row every half-lease while
+ * a `Task` invocation runs (`keepLeased`), so a live run is never reclaimed and a row whose lease
+ * lapses is one whose host died mid-run. A live lease never fences anything but a doubled claim.
  */
 export const ENQUEUE_CLAIM_LEASE_MILLIS = 5 * 60_000;
 
@@ -298,6 +297,25 @@ const claimStatement = (leaseForMillis: number): Statement => {
 			.toSQL()
 	);
 };
+
+/** Extends a live claim's lease while its run continues; a row another attempt owns is left alone. */
+const renewStatement = (taskId: string, attempt: number, leaseForMillis: number) =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({
+				lease_expires_at: dbNowPlusSeconds(leaseForMillis / 1_000),
+				updated_at: dbNow()
+			})
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.status, 'running'),
+					eq(boltTask.attempts, attempt)
+				)
+			)
+			.toSQL()
+	);
 
 /**
  * Writes one direct row in the state `claimStatement` would have left it in, returning the same
@@ -654,10 +672,12 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 		work: DirectWork,
 		leaseForMillis: number
 	): Effect.Effect<HostScheduleOccurrence | undefined, E> =>
-		Effect.map(
-			execute([claimedInsertStatement(work, leaseForMillis)]),
-			(rows) => rows.flatMap((row) => occurrenceOf(row) ?? []).at(0)
+		Effect.map(execute([claimedInsertStatement(work, leaseForMillis)]), (rows) =>
+			rows.flatMap((row) => occurrenceOf(row) ?? []).at(0)
 		);
 
-	return { declare, enqueueClaimed, fire, settle, when };
+	const renew = (taskId: string, attempt: number, leaseForMillis: number) =>
+		Effect.asVoid(execute([renewStatement(taskId, attempt, leaseForMillis)]));
+
+	return { declare, enqueueClaimed, fire, settle, when, renew };
 };

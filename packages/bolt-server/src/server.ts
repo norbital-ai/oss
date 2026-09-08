@@ -43,7 +43,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoadError, BundleLoader } from './bundle-loader.js';
 import { guardBindings } from './facilities/boundary.js';
-import type { ServerConfiguration } from './config.js';
+import { invocationDeadline, type ServerConfiguration } from './config.js';
 import { AdmissionStopped, ServerHealth } from './health.js';
 import type { TaskInvocationControl } from './schedules.js';
 import { systemCommandHeaders } from './system-headers.js';
@@ -329,10 +329,18 @@ const mutationIdsFrom = (
 	return [...pending];
 };
 
+/**
+ * One dispatch into the bundle.
+ *
+ * There is no wall unless the operator configured one; a facility that never answers is reported
+ * by that facility's own liveness bound. A client that stops waiting does not reach here either:
+ * the request fiber runs under the server's shutdown signal alone (`createServer` below), so the
+ * only thing that interrupts a dispatch is the process going away.
+ */
 const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 	invocation: Invocation,
 	facilities: FacilityBindings,
-	timeoutMillis: number,
+	timeoutMillis: number | undefined,
 	taskInvocations?: TaskInvocationControl
 ) {
 	const loader = yield* BundleLoader;
@@ -360,17 +368,22 @@ const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 						cause
 					})
 			}).pipe(
-				Effect.timeout(timeoutMillis),
-				// A bare `TimeoutError` carries no message, so it reached the caller as an unexplained
-				// 500. The deadline is the one fact worth reporting about it.
-				Effect.catchTag('TimeoutError', () =>
-					Effect.fail(
-						new ServerTransportError({
-							operation: 'BoltServer.Server.dispatch',
-							message: `Bolt bundle dispatch exceeded its ${timeoutMillis}ms deadline`
-						})
-					)
-				)
+				timeoutMillis === undefined
+					? (effect) => effect
+					: (effect) =>
+							effect.pipe(
+								Effect.timeout(timeoutMillis),
+								// A bare `TimeoutError` carries no message, so it reached the caller as an
+								// unexplained 500. The wall is the one fact worth reporting about it.
+								Effect.catchTag('TimeoutError', () =>
+									Effect.fail(
+										new ServerTransportError({
+											operation: 'BoltServer.Server.dispatch',
+											message: `Bolt bundle dispatch exceeded its ${timeoutMillis}ms deadline`
+										})
+									)
+								)
+							)
 			);
 			return yield* Schema.decodeUnknownEffect(BundleResult)(unsafeResult).pipe(
 				Effect.mapError(
@@ -398,7 +411,7 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 		protocolVersion: PROTOCOL_VERSION,
 		id: uuid.next(),
 		scope: configuration.scope,
-		deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+		...invocationDeadline(configuration, now),
 		connectionId,
 		event
 	});
@@ -418,7 +431,6 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 					{
 						invocationId: invocation.id,
 						effectId: EffectId.make(`${invocation.id}:transport-pull`),
-						deadlineEpochMs: invocation.deadlineEpochMs,
 						idempotencyKey: `${invocation.id}:transport-pull`
 					},
 					TransportRequest.cases.Pull.make({ connectionId, maxFrames: 256 }),
@@ -764,7 +776,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 					protocolVersion: PROTOCOL_VERSION,
 					id: (yield* UuidGeneration).next(),
 					scope: configuration.scope,
-					deadlineEpochMs: pluginNow + configuration.invocationTimeoutMillis,
+					...invocationDeadline(configuration, pluginNow),
 					plugin: names.plugin,
 					command: names.command,
 					input: decodedPayload.success.input ?? null,
@@ -829,7 +841,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			protocolVersion: PROTOCOL_VERSION,
 			id: (yield* UuidGeneration).next(),
 			scope: configuration.scope,
-			deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+			...invocationDeadline(configuration, now),
 			command,
 			input,
 			headers: rawRequestHeaders(request)
@@ -922,7 +934,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		protocolVersion: PROTOCOL_VERSION,
 		id: (yield* UuidGeneration).next(),
 		scope: configuration.scope,
-		deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+		...invocationDeadline(configuration, now),
 		method: request.method ?? 'GET',
 		url: request.url ?? '/',
 		headers: rawRequestHeaders(request),
@@ -1035,7 +1047,7 @@ const startServerEffect = <E>(
 					protocolVersion: PROTOCOL_VERSION,
 					id: (yield* UuidGeneration).next(),
 					scope,
-					deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+					...invocationDeadline(configuration, now),
 					command,
 					input,
 					headers
@@ -1108,15 +1120,12 @@ const startServerEffect = <E>(
 		});
 		onFacilitiesReady?.(liveFacilities);
 
+		// A client that goes away — a page reload, the composer's own abort — stops waiting and
+		// nothing else: the turn it started is durable work whose truth is the tenant database, so it
+		// runs to its end and writes its own terminal state. Stopping is a write the turn meets at
+		// its next boundary (`conversations.control stop`), never a socket closing. Only shutdown
+		// interrupts a request fiber, which is what lets the drain finish.
 		const server = createServer((request, response) => {
-			const requestAbort = new AbortController();
-			request.once('aborted', () => requestAbort.abort(new Error('HTTP client disconnected')));
-			response.once('close', () => {
-				if (!response.writableEnded) {
-					requestAbort.abort(new Error('HTTP client disconnected'));
-				}
-			});
-
 			runtime.runFork(
 				handleHttp(request, response, configuration, liveFacilities, sync, taskInvocations).pipe(
 					Effect.catchCause((cause) =>
@@ -1130,7 +1139,7 @@ const startServerEffect = <E>(
 						})
 					)
 				),
-				{ signal: AbortSignal.any([shutdown.signal, requestAbort.signal]) }
+				{ signal: shutdown.signal }
 			);
 		});
 

@@ -236,7 +236,11 @@ it.effect('dispatches realtime cancellation before transport shutdown', () =>
 	)
 );
 
-it.effect('interrupts exact bundle dispatch when the HTTP client disconnects', () =>
+/**
+ * A client that stops waiting stops nothing: the dispatch it started keeps running. Only the
+ * server's own shutdown interrupts it, which is what `stop()` relies on to drain.
+ */
+it.effect('keeps the bundle dispatch running when the HTTP client disconnects', () =>
 	Effect.acquireUseRelease(
 		Effect.tryPromise(() => startApplication({ configuration, facilities })),
 		(application) =>
@@ -260,7 +264,8 @@ it.effect('interrupts exact bundle dispatch when the HTTP client disconnects', (
 
 				yield* awaitInFlight(1);
 				yield* Effect.sync(() => pending.destroy());
-				yield* awaitInFlight(0);
+				yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 150)));
+				yield* awaitInFlight(1);
 			}),
 		(application) => Effect.promise(() => application.stop())
 	)

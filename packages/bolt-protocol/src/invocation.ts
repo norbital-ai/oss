@@ -8,11 +8,21 @@ export const InvocationScope = Schema.Struct({
 }).annotate({ identifier: 'BoltInvocationScope' });
 export interface InvocationScope extends Schema.Schema.Type<typeof InvocationScope> {}
 
+/**
+ * An operator-imposed wall on the whole invocation tree, absent by default.
+ *
+ * Absent means unbounded: the only budgets on an invocation are the guest's CPU time and each
+ * facility call's own liveness bound. A host that configures a wall sends the instant it ends; the
+ * guest runtime is the side that reads it (`app.ts`), and it is copied onto every facility call
+ * only as metadata that no host facility acts on.
+ */
+const DeadlineEpochMs = Schema.optionalKey(Schema.Number.check(Schema.isFinite()));
+
 const InvocationFields = {
 	protocolVersion: ProtocolVersion,
 	id: InvocationId,
 	scope: InvocationScope,
-	deadlineEpochMs: Schema.Number.check(Schema.isFinite())
+	deadlineEpochMs: DeadlineEpochMs
 };
 
 /** Host-proven context attached to plugin calls; it can only narrow authenticated authority. */
@@ -57,7 +67,15 @@ export const Invocation = Schema.TaggedUnion({
 		...InvocationFields,
 		command: Schema.NonEmptyString,
 		input: Schema.Json,
-		attempt: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+		attempt: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+		/**
+		 * The claimed queue row this occurrence runs, so the guest can keep its own lease alive.
+		 *
+		 * An occurrence has no wall, so the lease the claim took is not the interval the run fits in:
+		 * the runtime renews it for as long as the run lasts, and a row whose lease lapses is one
+		 * whose host died. Absent from a host that predates renewal; the row then recovers at expiry.
+		 */
+		taskId: Schema.optionalKey(Schema.NonEmptyString)
 	},
 	Realtime: {
 		...InvocationFields,
@@ -90,7 +108,7 @@ export const Activation = Schema.Struct({
 	protocolVersion: ProtocolVersion,
 	id: InvocationId,
 	scope: InvocationScope,
-	deadlineEpochMs: Schema.Number.check(Schema.isFinite()),
+	deadlineEpochMs: DeadlineEpochMs,
 	reason: Schema.Literals(['deploy', 'restart', 'repair'])
 }).annotate({ identifier: 'BoltActivation' });
 export interface Activation extends Schema.Schema.Type<typeof Activation> {}

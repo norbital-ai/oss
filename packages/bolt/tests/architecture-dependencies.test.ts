@@ -197,7 +197,9 @@ describe('Bolt architecture boundaries', () => {
 		// 17,946 -> 17,947: nullable custom column null must not undergo element-schema validation.
 		// 17,947 -> 17,951: the approval hold reads its request row by shape, because Colony's
 		// binding answers a transaction with every statement's rows and pg with the last statement's.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_951);
+		// 17,951 -> 17,956: a `Task` dispatch keeps its own claim's lease alive for as long as it
+		// runs, because an occurrence has no wall any more and a lapsed lease means a dead host.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_956);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`

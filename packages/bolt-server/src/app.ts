@@ -9,7 +9,7 @@ import { writeSync } from 'node:fs';
 import { attributeEscapedFailure, guardBindings } from './facilities/boundary.js';
 import { Clock, Deferred, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
-import type { ServerConfiguration } from './config.js';
+import { invocationDeadline, type ServerConfiguration } from './config.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
 import {
 	makeTaskBinding,
@@ -22,14 +22,14 @@ import {
 import { makeTimekeeper } from './timekeeper.js';
 
 /**
- * What one task occurrence (an agent turn, a scheduled automation slice) may take.
+ * The lease a claim takes, not a wall: an occurrence runs for as long as it needs.
  *
- * It is not the HTTP invocation timeout: a browser request is answered in seconds, while an agent
- * turn calling tools against a slow model runs for minutes and settles only at its end. Colony
- * grants the same five minutes (`schedule-tick.ts` `TICK_DEADLINE`); the lease the guest wrote on
- * the claimed row is the same number, so a host that dies mid-turn hands the row to the next tick.
+ * The guest renews its own lease every half-lease while the occurrence runs, so this is how long
+ * a host that died mid-turn keeps the row fenced before the next tick recovers it. Colony's tick
+ * hands its guests the same five minutes (`schedule-tick.ts` `TICK_LEASE`), which is also the lease
+ * the guest writes on a row it claims at enqueue.
  */
-const TASK_DEADLINE_MILLIS = 5 * 60_000;
+const TASK_LEASE_MILLIS = 5 * 60_000;
 import { waitUntilReady } from './ready.js';
 import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
@@ -187,14 +187,15 @@ export const startApplication = async (
 	 * The queue is driven through `host.schedules.discover` / `host.schedules.settle` with the
 	 * occurrences invoked between them — `schedules.ts` owns that conversation, because it is the
 	 * guest's protocol rather than this file's lifecycle. What is left here is which bundle it
-	 * talks to, which scope it talks about, and the deadline this host grants an invocation.
+	 * talks to, which scope it talks about, and the lease a claim takes.
 	 */
 	const tickOptions = Effect.gen(function* () {
 		const loader = yield* BundleLoader;
 		const bundle = yield* loader.load();
 		return {
 			scope: configuration.scope,
-			deadlineMillis: TASK_DEADLINE_MILLIS,
+			leaseMillis: TASK_LEASE_MILLIS,
+			announce: (nextDueAtEpochMs) => timekeeper.announce(nextDueAtEpochMs),
 			gatewaySecret: configuration.gatewaySecret,
 			invocations: taskInvocations,
 			dispatch: (invocation, signal) => bundle.dispatch(invocation, bound, signal)
@@ -286,9 +287,11 @@ export const startApplication = async (
 				protocolVersion: PROTOCOL_VERSION,
 				id: uuid.next(),
 				scope: configuration.scope,
-				deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+				...invocationDeadline(configuration, now),
 				reason: 'restart'
 			});
+			// The guest bounds its own activation by the wall above, when there is one; every facility
+			// call it makes carries its own liveness bound otherwise.
 			const unsafeResult = yield* Effect.tryPromise({
 				try: (signal) => bundle.activate(activation, bound, signal),
 				catch: (cause) =>
@@ -297,7 +300,7 @@ export const startApplication = async (
 						message: 'Bolt bundle activation failed',
 						cause
 					})
-			}).pipe(Effect.timeout(configuration.invocationTimeoutMillis));
+			});
 			const result = yield* Schema.decodeUnknownEffect(ActivationResult)(unsafeResult).pipe(
 				Effect.mapError(
 					(cause) =>

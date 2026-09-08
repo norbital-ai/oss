@@ -3,12 +3,10 @@ import {
 	Invocation,
 	InvocationId,
 	PROTOCOL_VERSION,
-	SYSTEM_TIMESTAMP_HEADER,
 	decodeBoltBundleModule,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
-import { Clock, Effect, Redacted, Schema } from 'effect';
-import { decodeNumber } from '@norbital-ai/std/json';
+import { Effect, Redacted, Schema } from 'effect';
 import { systemCommandHeaders } from './system-headers.js';
 
 export type DispatchSystemCommandInput = {
@@ -65,9 +63,8 @@ export const dispatchSystemCommand = (
 			String(input.scope.tenantId),
 			input.input
 		);
-		// Fallback only when the signed timestamp header is absent; the signed path already
-		// sources the clock inside `systemCommandHeaders`.
-		const now = yield* Clock.currentTimeMillis;
+		// No wall: a migration takes as long as its statements take, and each statement carries the
+		// database facility's own bound.
 		const result = yield* Effect.tryPromise(() =>
 			bundle.dispatch(
 				Invocation.cases.Command.make({
@@ -75,13 +72,12 @@ export const dispatchSystemCommand = (
 					// repository-health:allow EFF5 -- a pre-boot dispatch needs a fresh opaque invocation identity; no Effect service provides randomness and the id is transport metadata, never a decision input.
 					id: InvocationId.make(input.invocationId ?? `${input.command}:${crypto.randomUUID()}`),
 					scope: input.scope,
-					deadlineEpochMs: decodeNumber(headers[SYSTEM_TIMESTAMP_HEADER]?.[0] ?? now) + 30_000,
 					command: input.command,
 					input: input.input as never,
 					headers
 				}),
 				input.facilities,
-				AbortSignal.timeout(30_000)
+				new AbortController().signal
 			)
 		);
 		return yield* Effect.try(() => commandValue(result, input.command));

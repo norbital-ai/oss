@@ -10,6 +10,7 @@ import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import {
 	decodeUnknownSchema,
@@ -395,7 +396,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			{ tenantId: String(invocation.scope.tenantId) },
 			undefined
 		);
-		return yield* invoke(
+		const run = invoke(
 			binding,
 			{
 				effectId,
@@ -404,6 +405,10 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			},
 			invocation.input
 		);
+		// The occurrence has no wall, so the run keeps its own claim alive for as long as it lasts.
+		return yield* invocation.taskId === undefined
+			? run
+			: (yield* TaskQueue.Service).keepLeased(effectId, invocation.taskId, invocation.attempt, run);
 	}
 	if (invocation._tag !== 'Command')
 		return yield* new DispatchError({

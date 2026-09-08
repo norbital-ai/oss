@@ -331,7 +331,6 @@ export type StartedLocalDatabase = {
 const localDatabaseCall = (idempotencyKey: string) => ({
 	invocationId: InvocationId.make(`local-database-${idempotencyKey}`),
 	effectId: EffectId.make(`local-database-effect-${idempotencyKey}`),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	idempotencyKey
 });
 

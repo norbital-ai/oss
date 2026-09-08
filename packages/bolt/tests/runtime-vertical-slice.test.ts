@@ -747,6 +747,39 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
+	/**
+	 * No wall unless the host sets one. The runtime's only deadline is the instant a host chose to
+	 * send; absent, the tree runs for as long as its facility calls take — here a task facility that
+	 * answers slower than every former default would have allowed.
+	 */
+	it('lets an activation outwait a slow facility when no wall was sent, and cuts it when one was', async () => {
+		const slowTasks: FacilityBindings['tasks'] = {
+			call: async (metadata, request, signal) => {
+				await new Promise((resolve) => setTimeout(resolve, 60));
+				return tasks.call(metadata, request, signal);
+			}
+		};
+		const slow: FacilityBindings = { ...facilities, tasks: slowTasks };
+		const unbounded: Activation = {
+			protocolVersion: PROTOCOL_VERSION,
+			id: InvocationId.make('activation-unbounded'),
+			scope,
+			reason: 'deploy'
+		};
+		expect(await bundle.activate(unbounded, slow, new AbortController().signal)).toMatchObject({
+			_tag: 'Activated'
+		});
+		const walled: Activation = {
+			...unbounded,
+			id: InvocationId.make('activation-walled'),
+			deadlineEpochMs: Date.now() + 30
+		};
+		expect(await bundle.activate(walled, slow, new AbortController().signal)).toMatchObject({
+			_tag: 'Failure',
+			error: { code: 'deadline_exceeded' }
+		});
+	});
+
 	it('registers every durable callback during activation', async () => {
 		taskRequests.length = 0;
 		const activation: Activation = {
@@ -772,7 +805,7 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
-				{ command: 'notifications.drain' },
+				{ command: 'notifications.drain' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it

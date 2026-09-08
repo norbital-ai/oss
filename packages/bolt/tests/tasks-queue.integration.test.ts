@@ -100,6 +100,8 @@ describe('durable task queue over a host facility', () => {
 				Effect.runPromise(effects.settle(...args)),
 			enqueueClaimed: (...args: Parameters<typeof effects.enqueueClaimed>) =>
 				Effect.runPromise(effects.enqueueClaimed(...args)),
+			renew: (...args: Parameters<typeof effects.renew>) =>
+				Effect.runPromise(effects.renew(...args)),
 			when: () => Effect.runPromise(effects.when())
 		};
 	};
@@ -322,6 +324,37 @@ describe('durable task queue over a host facility', () => {
 		);
 		expect((await queue().fire(Date.now())).occurrences[0]).toMatchObject({
 			taskId: 'leased',
+			attempt: 2
+		});
+	});
+
+	it('renews a live lease under its own attempt and never under another', async () => {
+		await database.exec(
+			`insert into bolt_task (command, input, effect_id) values
+			 ('collections.discard', '{}', 'renewed')`
+		);
+		expect((await queue().fire(Date.now())).occurrences[0]).toMatchObject({
+			taskId: 'renewed',
+			attempt: 1
+		});
+		// About to lapse: the run has outlived the lease its claim took.
+		await database.exec(
+			"update bolt_task set lease_expires_at = now() + interval '1 second' where effect_id = 'renewed'"
+		);
+		// A renewal from the attempt that owns the row pushes the lease out by a full lease again...
+		await queue().renew('renewed', 1, LEASE_MILLIS);
+		const [renewed] = await tasks();
+		expect(Date.parse(String(renewed?.lease_expires_at))).toBeGreaterThan(
+			Date.now() + LEASE_MILLIS - 5_000
+		);
+		expect((await queue().fire(Date.now())).occurrences).toEqual([]);
+		// ...and one from any other attempt changes nothing: the row is not its to keep alive.
+		await database.exec(
+			"update bolt_task set lease_expires_at = now() - interval '1 second' where effect_id = 'renewed'"
+		);
+		await queue().renew('renewed', 2, LEASE_MILLIS);
+		expect((await queue().fire(Date.now())).occurrences[0]).toMatchObject({
+			taskId: 'renewed',
 			attempt: 2
 		});
 	});

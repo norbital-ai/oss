@@ -916,7 +916,6 @@ describe('a write queues the drain that will deliver it', () => {
 					{
 						invocationId: activation.id,
 						effectId: EffectId.make(`provision:${step.id}`),
-						deadlineEpochMs: activation.deadlineEpochMs,
 						idempotencyKey: step.id
 					},
 					{ _tag: 'Query', sql: step.sql, parameters: [] },

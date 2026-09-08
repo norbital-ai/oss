@@ -20,10 +20,27 @@ it.effect('loads deterministic development defaults', () =>
 			}),
 			mode: 'development',
 			drainTimeoutMillis: 10_000,
-			invocationTimeoutMillis: 300_000,
 			requestBodyLimitBytes: 1_048_576
 		});
 	}).pipe(Effect.provide(withConfiguration({ BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs' })))
+);
+
+/**
+ * No wall by default: an invocation runs for as long as its work takes. The variable is the
+ * operator choosing one anyway, and only then does an instant ride the invocation.
+ */
+it.effect('reads an invocation wall only when the operator sets one', () =>
+	Effect.gen(function* () {
+		const configuration = yield* loadConfiguration();
+		assert.strictEqual(configuration.invocationTimeoutMillis, 250);
+	}).pipe(
+		Effect.provide(
+			withConfiguration({
+				BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs',
+				BOLT_SERVER_INVOCATION_TIMEOUT_MS: '250'
+			})
+		)
+	)
 );
 
 /**

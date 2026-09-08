@@ -1,4 +1,4 @@
-import { Clock, Config, Context, Effect, Option, Redacted, Schema } from 'effect';
+import { Config, Context, Effect, Option, Redacted, Schema } from 'effect';
 import { decodeNumber } from '@norbital-ai/std/json';
 import {
 	ConfigResponse,
@@ -139,8 +139,7 @@ export const HostConfig = Context.Service<HostConfigShape>('@bolt/HostConfig');
  * produces.
  */
 export const hostConfigFromProcessEnv = (): HostConfigShape => ({
-	read: (key) =>
-		Config.option(Config.redacted(key)).pipe(Effect.orElseSucceed(() => Option.none()))
+	read: (key) => Config.option(Config.redacted(key)).pipe(Effect.orElseSucceed(() => Option.none()))
 });
 
 /**
@@ -154,21 +153,17 @@ export const hostConfigFromFacility = (
 	bindings: NonNullable<FacilityBindings['config']>
 ): HostConfigShape => ({
 	read: (key) =>
-		Effect.gen(function* () {
-			const deadlineEpochMs = (yield* Clock.currentTimeMillis) + 30_000;
-			return yield* Effect.tryPromise(() =>
-				bindings.call(
-					FacilityCall.make({
-						invocationId: InvocationId.make(`config:${key}`),
-						effectId: EffectId.make(`config:${key}`),
-						deadlineEpochMs,
-						idempotencyKey: `config:${key}`
-					}),
-					{ key },
-					new AbortController().signal
-				)
-			);
-		}).pipe(
+		Effect.tryPromise(() =>
+			bindings.call(
+				FacilityCall.make({
+					invocationId: InvocationId.make(`config:${key}`),
+					effectId: EffectId.make(`config:${key}`),
+					idempotencyKey: `config:${key}`
+				}),
+				{ key },
+				new AbortController().signal
+			)
+		).pipe(
 			Effect.mapError((cause) => `config facility failed: ${String(cause)}`),
 			Effect.flatMap((result) => {
 				if (result._tag !== 'Success') {

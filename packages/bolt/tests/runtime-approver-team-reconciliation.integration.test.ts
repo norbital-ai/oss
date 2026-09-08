@@ -123,7 +123,6 @@ const provisionedDatabase = async (seed: ReadonlyArray<string> = []) => {
 			{
 				invocationId: activation.id,
 				effectId: EffectId.make(`provision:${id}`),
-				deadlineEpochMs: activation.deadlineEpochMs,
 				idempotencyKey: id
 			},
 			{ _tag: 'Query', sql, parameters: parameters as never },

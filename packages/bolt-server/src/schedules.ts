@@ -142,8 +142,13 @@ export class ScheduleTickError extends Schema.TaggedError<ScheduleTickError>()(
 
 export type ScheduleTickOptions = Readonly<{
 	readonly scope: InvocationScope;
-	/** The deadline this host grants one invocation, applied to each dispatch the tick makes. */
-	readonly deadlineMillis: number;
+	/**
+	 * The lease a claim takes, handed to `discover`. Not a wall: the guest renews its own lease for
+	 * as long as the occurrence runs, so this is how long a dead host's row stays fenced.
+	 */
+	readonly leaseMillis: number;
+	/** Re-arms the host's timer to an instant a detached settle answered. */
+	readonly announce: (nextDueAtEpochMs: number) => void;
 	/** Absent on a host that configured no gateway secret, which refuses rather than runs unsigned. */
 	readonly gatewaySecret: Redacted.Redacted<string> | undefined;
 	/** So an `Interrupt` arriving in another invocation can abort the exact occurrence dispatch. */
@@ -179,7 +184,7 @@ const systemHeaders = (
 	);
 
 /**
- * One dispatch into the bundle, bounded by this host's invocation deadline.
+ * One dispatch into the bundle, with no wall: an occurrence runs for as long as it needs.
  *
  * The abort signal is the union of the caller's and this dispatch's own controller, so a task that
  * asks to be interrupted stops here and not only in the tenant's table.
@@ -204,16 +209,6 @@ const dispatchOnce = (
 				cause
 			})
 	}).pipe(
-		Effect.timeout(options.deadlineMillis),
-		Effect.mapError((cause) =>
-			cause instanceof ScheduleTickError
-				? cause
-				: new ScheduleTickError({
-						operation,
-						message: 'Bolt bundle did not answer within the invocation deadline',
-						cause
-					})
-		),
 		Effect.flatMap((value) =>
 			Schema.decodeUnknownEffect(BundleResult)(value).pipe(
 				Effect.mapError(
@@ -233,8 +228,7 @@ const systemCommand = (
 	options: ScheduleTickOptions,
 	command: string,
 	invocationId: InvocationId,
-	input: Schema.Json,
-	nowEpochMs: number
+	input: Schema.Json
 ): Effect.Effect<Schema.Json, ScheduleTickError> =>
 	Effect.gen(function* () {
 		const headers = yield* systemHeaders(options, command, input);
@@ -244,7 +238,6 @@ const systemCommand = (
 				protocolVersion: PROTOCOL_VERSION,
 				id: invocationId,
 				scope: options.scope,
-				deadlineEpochMs: nowEpochMs + options.deadlineMillis,
 				command,
 				input,
 				headers
@@ -300,10 +293,10 @@ const invokeOccurrence = (
 			protocolVersion: PROTOCOL_VERSION,
 			id: invocationId,
 			scope: options.scope,
-			deadlineEpochMs: nowEpochMs + options.deadlineMillis,
 			command: occurrence.command,
 			input: occurrence.input,
-			attempt: occurrence.attempt
+			attempt: occurrence.attempt,
+			taskId: occurrence.taskId
 		}),
 		invocationId,
 		occurrence.command
@@ -334,8 +327,7 @@ const invokeAndSettle = (
 			options,
 			HOST_SCHEDULE_SETTLE_COMMAND,
 			InvocationId.make(`${HOST_SCHEDULE_SETTLE_COMMAND}:${occurrence.taskId}:${nowEpochMs}`),
-			{ occurrence, outcome },
-			nowEpochMs
+			{ occurrence, outcome }
 		).pipe(
 			Effect.flatMap((value) => Schema.decodeUnknownEffect(HostScheduleSettleResponse)(value)),
 			Effect.map((settled) => settled.nextDueAtEpochMs),
@@ -369,12 +361,17 @@ export const runScheduleOccurrence = (
 	});
 
 /**
- * Discovers what is due, runs it, records it, and answers when anything is next due.
+ * Discovers what is due, starts it, and answers when anything is next due.
+ *
+ * The occurrences run detached from the tick. The timekeeper owns one callback lane, and an
+ * occurrence has no wall — an overnight agent held on that lane would hold every other schedule
+ * on this host behind it — so the tick's own work is the discovery, which is seconds. Each
+ * occurrence's settle answers the queue's next instant through `announce`, the earlier-only path,
+ * exactly as a carried wake does.
  *
  * The answer is what the timekeeper arms its one timer to, so `null` genuinely means "nothing", and
- * an idle workspace costs nothing until something announces. A settle that answers `null` does not
- * erase an instant discovery already reported: the conservative direction is one harmless extra
- * tick, never a missed one.
+ * an idle workspace costs nothing until something announces. Discovery already reports the claimed
+ * rows' lease expiry as the next instant, which is the fallback for a run this host loses.
  */
 export const runScheduleTick = (
 	options: ScheduleTickOptions
@@ -385,8 +382,7 @@ export const runScheduleTick = (
 			options,
 			HOST_SCHEDULE_DISCOVER_COMMAND,
 			InvocationId.make(`${HOST_SCHEDULE_DISCOVER_COMMAND}:${nowEpochMs}`),
-			{ nowEpochMs, leaseForMillis: options.deadlineMillis },
-			nowEpochMs
+			{ nowEpochMs, leaseForMillis: options.leaseMillis }
 		);
 		const discovered = yield* Schema.decodeUnknownEffect(HostScheduleDiscoverResponse)(answer).pipe(
 			Effect.mapError(
@@ -412,22 +408,20 @@ export const runScheduleTick = (
 			}
 			return discovered.nextDueAtEpochMs;
 		}
-		let nextDueAtEpochMs: number | null = discovered.nextDueAtEpochMs;
-		let settledCount = 0;
 		for (const occurrence of discovered.occurrences) {
-			const settled = yield* invokeAndSettle(options, nowEpochMs, occurrence);
-			if (Option.isNone(settled)) continue;
-			settledCount += 1;
-			if (settled.value !== null) nextDueAtEpochMs = settled.value;
+			yield* Effect.forkDetach(
+				invokeAndSettle(options, nowEpochMs, occurrence).pipe(
+					Effect.flatMap((settled) =>
+						Option.isNone(settled)
+							? // The occurrence ran; what was lost is the record of how it ended, which the
+								// guest's own lease expiry recovers.
+								Effect.logError(`schedules.tick: ${occurrence.taskId} ran but could not be settled`)
+							: Effect.sync(() => {
+									if (settled.value !== null) options.announce(settled.value);
+								})
+					)
+				)
+			);
 		}
-		if (settledCount !== discovered.occurrences.length) {
-			// The occurrences ran; what was lost is the record of how they ended, which the guest's own
-			// visibility deadline recovers. The tick still fails, so this host backs off instead of
-			// discovering the same unsettled work again immediately.
-			return yield* new ScheduleTickError({
-				operation: HOST_SCHEDULE_SETTLE_COMMAND,
-				message: `Bolt bundle settled ${settledCount}/${discovered.occurrences.length} occurrences`
-			});
-		}
-		return nextDueAtEpochMs;
+		return discovered.nextDueAtEpochMs;
 	});

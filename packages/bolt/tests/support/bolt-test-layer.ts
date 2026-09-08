@@ -538,7 +538,6 @@ export const makeBoltTestRuntime = async (
 			{
 				invocationId: context.invocationId,
 				effectId: EffectId.make(`migrate:${id}`),
-				deadlineEpochMs: context.deadlineEpochMs,
 				idempotencyKey: id
 			},
 			{ _tag: 'Query', sql, parameters: [] },

@@ -20,6 +20,34 @@ const configuration = ServerConfiguration.make({
 	requestBodyLimitBytes: 1_024
 });
 
+/** No wall unless configured: a command that holds longer than any old default still answers. */
+it.effect('lets an invocation run past every former default when no wall is configured', () =>
+	Effect.acquireUseRelease(
+		Effect.tryPromise(() =>
+			startApplication({
+				configuration: { ...configuration, invocationTimeoutMillis: undefined },
+				facilities: { scope: configuration.scope }
+			})
+		),
+		(application) =>
+			Effect.gen(function* () {
+				const response = yield* Effect.tryPromise(() =>
+					fetch(
+						`http://${application.address.host}:${application.address.port}/_bolt/command/test.hold`,
+						{
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ holdMillis: 1_500 })
+						}
+					)
+				);
+				assert.strictEqual(response.status, 200);
+				assert.deepStrictEqual(yield* Effect.tryPromise(() => response.json()), { held: 1_500 });
+			}),
+		(application) => Effect.promise(() => application.stop())
+	)
+);
+
 it.effect('returns a typed 400 response for malformed command JSON', () =>
 	Effect.acquireUseRelease(
 		Effect.tryPromise({

@@ -82,10 +82,15 @@ const guest = (
 
 const options = (
 	dispatch: (invocation: Invocation, signal: AbortSignal) => Promise<unknown>,
-	overrides?: { readonly gatewaySecret?: Redacted.Redacted<string> | undefined }
+	overrides?: {
+		readonly gatewaySecret?: Redacted.Redacted<string> | undefined;
+		readonly announce?: (nextDueAtEpochMs: number) => void;
+		readonly leaseMillis?: number;
+	}
 ) => ({
 	scope,
-	deadlineMillis: 5_000,
+	leaseMillis: overrides?.leaseMillis ?? 5_000,
+	announce: overrides?.announce ?? (() => {}),
 	gatewaySecret:
 		overrides !== undefined && 'gatewaySecret' in overrides
 			? overrides.gatewaySecret
@@ -100,6 +105,15 @@ const commandsOf = (seen: ReadonlyArray<Invocation>): ReadonlyArray<string> =>
 		invocation._tag === 'Command' || invocation._tag === 'Task' ? [invocation.command] : []
 	);
 
+/** Resolves once the guest has been handed `host.schedules.settle`: the detached occurrence is done. */
+const settlement = () => {
+	let resolve: () => void = () => {};
+	const done = new Promise<void>((r) => {
+		resolve = r;
+	});
+	return { done, resolve };
+};
+
 const inputOf = (seen: ReadonlyArray<Invocation>, command: string): unknown => {
 	for (const invocation of seen) {
 		if (
@@ -113,6 +127,8 @@ const inputOf = (seen: ReadonlyArray<Invocation>, command: string): unknown => {
 
 it.effect('discovers, invokes and settles one occurrence, answering the next instant', () =>
 	Effect.gen(function* () {
+		const announcedAt = settlement();
+		const announced: Array<number> = [];
 		const bundle = guest({
 			'host.schedules.discover': () =>
 				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: 1_000 }),
@@ -120,7 +136,15 @@ it.effect('discovers, invokes and settles one occurrence, answering the next ins
 			'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: 9_000 })
 		});
 
-		const nextDue = yield* runScheduleTick(options(bundle.dispatch));
+		const nextDue = yield* runScheduleTick(
+			options(bundle.dispatch, {
+				announce: (at) => {
+					announced.push(at);
+					announcedAt.resolve();
+				}
+			})
+		);
+		yield* Effect.promise(() => announcedAt.done);
 
 		// The three-command conversation, in the only order that is correct: the occurrence runs
 		// between the two host commands, never as one of them.
@@ -137,21 +161,69 @@ it.effect('discovers, invokes and settles one occurrence, answering the next ins
 			occurrence,
 			outcome: { _tag: 'Done', result: { ran: true } }
 		});
-		// The settle answer is the later fact about the same queue, so it is what the timer arms to.
-		assert.strictEqual(nextDue, 9_000);
+		// The tick answers what discovery reported — the occurrence runs off the tick's lane — and
+		// the settle's later fact about the same queue reaches the timer through `announce`.
+		assert.strictEqual(nextDue, 1_000);
+		assert.deepStrictEqual(announced, [9_000]);
+	})
+);
+
+/**
+ * The lease is not a wall. An occurrence that outlives it keeps running to its end, settles, and
+ * the tick that started it was free the whole time: the timekeeper's one lane holds the discovery,
+ * never the run.
+ */
+it.effect('runs an occurrence past its lease without cutting it, off the tick', () =>
+	Effect.gen(function* () {
+		const settled = settlement();
+		const bundle = guest({
+			'host.schedules.discover': () =>
+				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: null }),
+			'automations.nightly': () =>
+				new Promise((resolve) => setTimeout(() => resolve(answered({ ran: true })), 300)),
+			'host.schedules.settle': () => {
+				settled.resolve();
+				return answered({ settled: true, nextDueAtEpochMs: null });
+			}
+		});
+
+		const startedAt = Date.now();
+		yield* runScheduleTick(options(bundle.dispatch, { leaseMillis: 100 }));
+		// The tick returned before the occurrence finished.
+		assert.isBelow(Date.now() - startedAt, 250);
+		yield* Effect.promise(() => settled.done);
+		assert.isAtLeast(Date.now() - startedAt, 300);
+		assert.deepStrictEqual(commandsOf(bundle.seen), [
+			'host.schedules.discover',
+			'automations.nightly',
+			'host.schedules.settle'
+		]);
+		assert.deepStrictEqual(inputOf(bundle.seen, 'host.schedules.settle'), {
+			occurrence,
+			outcome: { _tag: 'Done', result: { ran: true } }
+		});
+		// The claim the guest keeps alive is named on the occurrence it runs.
+		const task = bundle.seen.find((invocation) => invocation._tag === 'Task');
+		assert.strictEqual(task?._tag === 'Task' ? task.taskId : undefined, occurrence.taskId);
+		assert.isUndefined(task?.deadlineEpochMs);
 	})
 );
 
 it.effect('signs each host command over its own command, tenant and input', () =>
 	Effect.gen(function* () {
+		const settled = settlement();
 		const bundle = guest({
 			'host.schedules.discover': () =>
 				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: null }),
 			'automations.nightly': () => answered(null),
-			'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: null })
+			'host.schedules.settle': () => {
+				settled.resolve();
+				return answered({ settled: true, nextDueAtEpochMs: null });
+			}
 		});
 
 		yield* runScheduleTick(options(bundle.dispatch));
+		yield* Effect.promise(() => settled.done);
 
 		for (const invocation of bundle.seen) {
 			if (invocation._tag !== 'Command') continue;
@@ -200,14 +272,19 @@ it.effect('refuses to dispatch at all when no gateway secret is configured', () 
 
 it.effect('reports a refused occurrence to the queue instead of failing the tick', () =>
 	Effect.gen(function* () {
+		const settled = settlement();
 		const bundle = guest({
 			'host.schedules.discover': () =>
 				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: 2_000 }),
 			'automations.nightly': () => refused('the automation threw'),
-			'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: null })
+			'host.schedules.settle': () => {
+				settled.resolve();
+				return answered({ settled: true, nextDueAtEpochMs: null });
+			}
 		});
 
 		const nextDue = yield* runScheduleTick(options(bundle.dispatch));
+		yield* Effect.promise(() => settled.done);
 
 		// The task ran and did not succeed. That is the guest's fact to record and apply attempts to,
 		// so the host settles it and stays punctual rather than backing its whole clock off.
@@ -223,16 +300,21 @@ it.effect('reports a refused occurrence to the queue instead of failing the tick
 
 it.effect('renders a thrown occurrence dispatch as a failed outcome', () =>
 	Effect.gen(function* () {
+		const done = settlement();
 		const bundle = guest({
 			'host.schedules.discover': () =>
 				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: null }),
 			'automations.nightly': () => {
 				throw new Error('bundle exploded');
 			},
-			'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: null })
+			'host.schedules.settle': () => {
+				done.resolve();
+				return answered({ settled: true, nextDueAtEpochMs: null });
+			}
 		});
 
 		yield* runScheduleTick(options(bundle.dispatch));
+		yield* Effect.promise(() => done.done);
 
 		assert.deepStrictEqual(commandsOf(bundle.seen), [
 			'host.schedules.discover',
@@ -261,19 +343,33 @@ it.effect('fails the tick when the guest refuses discovery, so the host backs of
 	})
 );
 
-it.effect('fails the tick when an occurrence ran but could not be settled', () =>
+/**
+ * An occurrence that ran but could not be settled is not the tick's failure any more: the run left
+ * the tick's lane, the loss is logged there, and the lease expiry discovery already reported is
+ * what recovers the record. The tick answers what it discovered.
+ */
+it.effect('answers the discovered instant when an occurrence ran but could not be settled', () =>
 	Effect.gen(function* () {
+		const settled = settlement();
 		const bundle = guest({
 			'host.schedules.discover': () =>
 				answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: 1_000 }),
 			'automations.nightly': () => answered(null),
-			'host.schedules.settle': () => refused('settle unavailable')
+			'host.schedules.settle': () => {
+				settled.resolve();
+				return refused('settle unavailable');
+			}
 		});
 
-		const failure = yield* runScheduleTick(options(bundle.dispatch)).pipe(Effect.flip);
+		const nextDue = yield* runScheduleTick(options(bundle.dispatch));
+		yield* Effect.promise(() => settled.done);
 
-		assert.strictEqual(failure.operation, 'host.schedules.settle');
-		assert.include(failure.message, '0/1');
+		assert.strictEqual(nextDue, 1_000);
+		assert.deepStrictEqual(commandsOf(bundle.seen), [
+			'host.schedules.discover',
+			'automations.nightly',
+			'host.schedules.settle'
+		]);
 	})
 );
 
@@ -312,13 +408,17 @@ it.effect('answers nothing due without invoking anything', () =>
 it.effect('aborts the exact occurrence dispatch an interrupt names', () =>
 	Effect.gen(function* () {
 		const invocations = makeTaskInvocationControl();
+		const settled = settlement();
 		let occurrenceAborted: boolean | undefined;
 		const bundle = guest(
 			{
 				'host.schedules.discover': () =>
 					answered({ occurrences: [occurrence], rejections: [], nextDueAtEpochMs: null }),
 				'automations.nightly': () => answered(null),
-				'host.schedules.settle': () => answered({ settled: true, nextDueAtEpochMs: null })
+				'host.schedules.settle': () => {
+					settled.resolve();
+					return answered({ settled: true, nextDueAtEpochMs: null });
+				}
 			},
 			(invocation, signal) => {
 				if (invocation._tag !== 'Task') return;
@@ -331,6 +431,7 @@ it.effect('aborts the exact occurrence dispatch an interrupt names', () =>
 		);
 
 		yield* runScheduleTick({ ...options(bundle.dispatch), invocations });
+		yield* Effect.promise(() => settled.done);
 
 		assert.strictEqual(occurrenceAborted, true);
 	})
@@ -390,53 +491,58 @@ it.effect('fails a carried occurrence whose settlement the guest refused', () =>
 	})
 );
 
-it.effect('a Wake carrying an occurrence arms the timer and dispatches it; a bare Wake only arms', () =>
-	Effect.gen(function* () {
-		const dispatched: Array<string> = [];
-		const timekeeper = makeTimekeeper({
-			tick: () => Effect.succeed(null),
-			run: Effect.runPromise,
-			onFailure: () => {}
-		});
-		const tasks = makeTaskBinding(timekeeper, () => {}, makeTaskInvocationControl(), (occurrence) =>
-			dispatched.push(occurrence.taskId)
-		);
-		const metadata = {
-			invocationId: InvocationId.make('invocation-wake'),
-			effectId: EffectId.make('effect-wake'),
-			deadlineEpochMs: Number.MAX_SAFE_INTEGER,
-			idempotencyKey: 'wake-1'
-		};
-		const signal = new AbortController().signal;
-		const leaseExpiry = Date.now() + 300_000;
+it.effect(
+	'a Wake carrying an occurrence arms the timer and dispatches it; a bare Wake only arms',
+	() =>
+		Effect.gen(function* () {
+			const dispatched: Array<string> = [];
+			const timekeeper = makeTimekeeper({
+				tick: () => Effect.succeed(null),
+				run: Effect.runPromise,
+				onFailure: () => {}
+			});
+			const tasks = makeTaskBinding(
+				timekeeper,
+				() => {},
+				makeTaskInvocationControl(),
+				(occurrence) => dispatched.push(occurrence.taskId)
+			);
+			const metadata = {
+				invocationId: InvocationId.make('invocation-wake'),
+				effectId: EffectId.make('effect-wake'),
+				deadlineEpochMs: Number.MAX_SAFE_INTEGER,
+				idempotencyKey: 'wake-1'
+			};
+			const signal = new AbortController().signal;
+			const leaseExpiry = Date.now() + 300_000;
 
-		const carried = yield* Effect.promise(() =>
-			tasks.call(
-				metadata,
-				TaskRequest.cases.Wake.make({
-					notLaterThanEpochMs: leaseExpiry,
-					occurrence: claimedOccurrence
-				}),
-				signal
-			)
-		);
-		assert.strictEqual(carried._tag, 'Success');
-		assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
-		// The fallback: the lease expiry is what the timer holds, not "now".
-		assert.strictEqual(timekeeper.armedFor(), leaseExpiry);
+			const carried = yield* Effect.promise(() =>
+				tasks.call(
+					metadata,
+					TaskRequest.cases.Wake.make({
+						notLaterThanEpochMs: leaseExpiry,
+						occurrence: claimedOccurrence
+					}),
+					signal
+				)
+			);
+			assert.strictEqual(carried._tag, 'Success');
+			assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
+			// The fallback: the lease expiry is what the timer holds, not "now".
+			assert.strictEqual(timekeeper.armedFor(), leaseExpiry);
 
-		const bare = yield* Effect.promise(() =>
-			tasks.call(
-				metadata,
-				TaskRequest.cases.Wake.make({ notLaterThanEpochMs: leaseExpiry - 1_000 }),
-				signal
-			)
-		);
-		assert.strictEqual(bare._tag, 'Success');
-		assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
-		assert.strictEqual(timekeeper.armedFor(), leaseExpiry - 1_000);
-		timekeeper.stop();
-	})
+			const bare = yield* Effect.promise(() =>
+				tasks.call(
+					metadata,
+					TaskRequest.cases.Wake.make({ notLaterThanEpochMs: leaseExpiry - 1_000 }),
+					signal
+				)
+			);
+			assert.strictEqual(bare._tag, 'Success');
+			assert.deepStrictEqual(dispatched, [claimedOccurrence.taskId]);
+			assert.strictEqual(timekeeper.armedFor(), leaseExpiry - 1_000);
+			timekeeper.stop();
+		})
 );
 
 /**

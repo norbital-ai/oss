@@ -70,6 +70,32 @@ describe('Bolt protocol schemas', () => {
 		expect(response._tag).toBe('Generated');
 	});
 
+	it('carries no wall unless a host sets one, and names the claim a task keeps alive', () => {
+		const command = Schema.decodeUnknownSync(Invocation)({
+			_tag: 'Command',
+			protocolVersion: PROTOCOL_VERSION,
+			id: 'invoke-unbounded',
+			scope: { tenantId: 'tenant-1', environment: 'production', releaseId: 'release-1' },
+			command: 'health',
+			input: null,
+			headers: {}
+		});
+		expect('deadlineEpochMs' in command).toBe(false);
+		const task = Schema.decodeUnknownSync(Invocation)({
+			_tag: 'Task',
+			protocolVersion: PROTOCOL_VERSION,
+			id: 'task-1',
+			scope: { tenantId: 'tenant-1', environment: 'production', releaseId: 'release-1' },
+			command: 'automations.nightly',
+			input: {},
+			attempt: 1,
+			taskId: 'schedule:automations.nightly@2026-09-09T00:00:00.000Z'
+		});
+		expect(task._tag === 'Task' ? task.taskId : undefined).toBe(
+			'schedule:automations.nightly@2026-09-09T00:00:00.000Z'
+		);
+	});
+
 	it('rejects an unsupported protocol version', () => {
 		const decoded = Schema.decodeUnknownResult(Invocation)({
 			_tag: 'Command',

@@ -62,6 +62,20 @@ export type Interface = Readonly<{
 		nowEpochMs: number,
 		leaseForMillis: number
 	) => Effect.Effect<HostScheduleDiscoverResponse, Database.FacilityError>;
+	/**
+	 * Keeps the claimed row's lease alive for as long as `effect` runs.
+	 *
+	 * A run has no wall, so the claim's lease is renewed every half-lease from inside the run and
+	 * released with it; a row whose lease still lapses is one whose host died. A renewal that fails
+	 * is logged and tried again at the next beat — the row then recovers at expiry, which is the
+	 * same outcome a dead host gets.
+	 */
+	readonly keepLeased: <A, E, R>(
+		effectId: EffectIdType,
+		taskId: string,
+		attempt: number,
+		effect: Effect.Effect<A, E, R>
+	) => Effect.Effect<A, E, R>;
 	/** Settles one exact occurrence from a later, fresh host invocation. */
 	readonly settle: (
 		effectId: EffectIdType,
@@ -188,6 +202,23 @@ export const layer = (_context: CallContext) =>
 						nextDueAtEpochMs: report.nextDueAtEpochMs ?? null
 					};
 				}),
+				keepLeased: (effectId, taskId, attempt, effect) =>
+					Effect.scoped(
+						Effect.andThen(
+							Effect.forkScoped(
+								makeQueue(executeUnder(effectId, 'lease'))
+									.renew(taskId, attempt, ENQUEUE_CLAIM_LEASE_MILLIS)
+									.pipe(
+										Effect.catch((failure) =>
+											Effect.logWarning(`tasks.lease: ${taskId}: ${failure.message}`)
+										),
+										Effect.delay(ENQUEUE_CLAIM_LEASE_MILLIS / 2),
+										Effect.forever
+									)
+							),
+							effect
+						)
+					),
 				settle: Effect.fn('TaskQueue.settle')(function* (effectId, taskId, attempt, outcome) {
 					const next = yield* makeQueue(executeUnder(effectId, 'settle')).settle(
 						taskId,
