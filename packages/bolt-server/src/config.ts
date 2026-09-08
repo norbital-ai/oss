@@ -212,9 +212,13 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			 * That is an acceptable difference because the exposure is different: this serves one
 			 * tenant, so a tenant that spins denies service to itself. The bound matters on the
 			 * multi-tenant host even though different workspaces never share a worker.
+			 *
+			 * The default is Colony's invocation budget, 300 s. An agent turn runs inside one
+			 * invocation, and a reasoning model needs well over 30 s for a turn with a tool call; the
+			 * old 30 s default cut every such turn off with "dispatch exceeded its deadline".
 			 */
 			invocationTimeoutMillis: Config.int('BOLT_SERVER_INVOCATION_TIMEOUT_MS').pipe(
-				Config.withDefault(30_000)
+				Config.withDefault(300_000)
 			),
 			requestBodyLimitBytes: Config.int('BOLT_SERVER_REQUEST_BODY_LIMIT_BYTES').pipe(
 				Config.withDefault(1_048_576)

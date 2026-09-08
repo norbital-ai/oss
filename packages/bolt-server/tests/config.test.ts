@@ -20,7 +20,7 @@ it.effect('loads deterministic development defaults', () =>
 			}),
 			mode: 'development',
 			drainTimeoutMillis: 10_000,
-			invocationTimeoutMillis: 30_000,
+			invocationTimeoutMillis: 300_000,
 			requestBodyLimitBytes: 1_048_576
 		});
 	}).pipe(Effect.provide(withConfiguration({ BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs' })))
