@@ -195,7 +195,9 @@ describe('Bolt architecture boundaries', () => {
 		// close reproduced contract-query and concurrent-resume failures. Both owners remain in
 		// this measured basket; no files or validation paths are moved outside the budget.
 		// 17,946 -> 17,947: nullable custom column null must not undergo element-schema validation.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_947);
+		// 17,947 -> 17,951: the approval hold reads its request row by shape, because Colony's
+		// binding answers a transaction with every statement's rows and pg with the last statement's.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_951);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`

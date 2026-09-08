@@ -1235,8 +1235,12 @@ export const layer = Layer.effect(
 											: Effect.fail(error)
 								)
 							);
-			if (inserted.rows.length > 0) {
-				yield* publishProjection(effectId, inserted.rows);
+			// pg and PGlite answer a transaction with its final statement's rows; Colony's binding
+			// answers with every statement's, so the read revalidation's `bolt_assert` rows precede the
+			// request row. The request row is the one carrying the projection, whichever binding replied.
+			const requestRows = inserted.rows.filter((row) => isJsonObject(row) && 'after' in row);
+			if (requestRows.length > 0) {
+				yield* publishProjection(effectId, requestRows);
 				return state;
 			}
 			const existing = yield* rawStatus(effectId, requestId);

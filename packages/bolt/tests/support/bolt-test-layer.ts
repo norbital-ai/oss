@@ -323,7 +323,13 @@ const jsonSafe = (rows: ReadonlyArray<Record<string, unknown>>): ReadonlyArray<S
 	);
 
 /** Binds a PGlite instance as the Database facility, recording every statement for assertions. */
-export const makeTestDatabase = async (): Promise<{
+export const makeTestDatabase = async (
+	/**
+	 * Which rows a transaction answers with. pg and PGlite bindings return the final statement's;
+	 * Colony's binding concatenates every statement's. A consumer has to read either.
+	 */
+	transactionRows: 'last' | 'every' = 'last'
+): Promise<{
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
 	readonly statements: ReadonlyArray<string>;
 	/**
@@ -375,10 +381,13 @@ export const makeTestDatabase = async (): Promise<{
 								...statement.parameters
 							]);
 							affectedRows += result.affectedRows ?? 0;
-							// A transaction has one result surface: the rows returned by its final statement.
-							// This is how both production database bindings behave, and it matters when earlier
-							// assertions also happen to return rows before a final commit-capture SELECT.
-							rows = jsonSafe(result.rows);
+							// pg and PGlite answer with the final statement's rows; Colony answers with every
+							// statement's, so an assertion's `bolt_assert` row precedes a final commit-capture
+							// SELECT. Bolt reads a transaction's rows by shape, never by position.
+							rows =
+								transactionRows === 'every'
+									? [...rows, ...jsonSafe(result.rows)]
+									: jsonSafe(result.rows);
 						}
 					});
 					return { _tag: 'Success', value: { rows, affectedRows } };
@@ -518,9 +527,11 @@ export const makeBoltTestRuntime = async (
 		 * for the wrong reason.
 		 */
 		readonly secretKey?: string | null;
+		/** See `makeTestDatabase`; `'every'` is what Colony's binding answers. */
+		readonly transactionRows?: 'last' | 'every';
 	} = {}
 ) => {
-	const database = await makeTestDatabase();
+	const database = await makeTestDatabase(bindings.transactionRows);
 	const tasks = makeTestTasks();
 	const run = async (id: string, sql: string): Promise<void> => {
 		const result = await database.binding.call(
