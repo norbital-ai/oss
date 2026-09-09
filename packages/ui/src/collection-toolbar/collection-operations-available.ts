@@ -1,6 +1,7 @@
 type CollectionOperationsSummary = {
 	readonly exportCount?: number;
 	readonly importCount?: number;
+	readonly bulkCount?: number;
 	readonly integrationCount?: number;
 	readonly deletion?: boolean;
 };
@@ -8,5 +9,6 @@ type CollectionOperationsSummary = {
 export const collectionOperationsAvailable = (operations: CollectionOperationsSummary) =>
 	(operations.exportCount ?? 0) > 0 ||
 	(operations.importCount ?? 0) > 0 ||
+	(operations.bulkCount ?? 0) > 0 ||
 	(operations.integrationCount ?? 0) > 0 ||
 	operations.deletion === true;

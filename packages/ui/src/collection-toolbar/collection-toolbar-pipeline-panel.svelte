@@ -7,6 +7,11 @@
 	import type { CollectionPipeline } from '#lib/collection-surface';
 
 	const { t } = useI18n<UiKeys>();
+	const KIND_ICON = {
+		export: 'lucide:download',
+		import: 'lucide:upload',
+		bulk: 'lucide:list-checks'
+	} as const;
 
 	let {
 		kind,
@@ -16,7 +21,7 @@
 		pendingOperation,
 		onRun
 	}: {
-		kind: 'import' | 'export';
+		kind: 'import' | 'export' | 'bulk';
 		pipelines: readonly CollectionPipeline<TRow>[];
 		selectedRows: readonly TRow[];
 		disabled: boolean;
@@ -33,10 +38,7 @@
 
 {#if pipelines.length === 0}
 	<Stack gap="sm" align="center" justify="center" class="min-h-32 px-5 py-8 text-center">
-		<Icon
-			icon={kind === 'export' ? 'lucide:download' : 'lucide:upload'}
-			class="size-5 text-muted-foreground"
-		/>
+		<Icon icon={KIND_ICON[kind]} class="size-5 text-muted-foreground" />
 		<p class="text-sm font-medium">{t('table.noPipelinesConfigured', { kind })}</p>
 		<p class="max-w-xs text-meta">
 			{t('table.noPipelinesDeclared', { kind })}
@@ -53,10 +55,7 @@
 					<div
 						class="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 					>
-						<Icon
-							icon={pipeline.icon ?? (kind === 'export' ? 'lucide:download' : 'lucide:upload')}
-							class="size-4"
-						/>
+						<Icon icon={pipeline.icon ?? KIND_ICON[kind]} class="size-4" />
 					</div>
 					<div class="min-w-0 flex-1">
 						<p class="text-sm font-medium">{pipeline.label}</p>

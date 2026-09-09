@@ -102,6 +102,7 @@
 		description,
 		exportPipelines = [],
 		importPipelines = [],
+		bulkPipelines = [],
 		integrations = [],
 		fields,
 		Card,
@@ -130,7 +131,8 @@
 	const effectiveSelectable = $derived(
 		selectable ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			importPipelines.some((pipeline) => pipeline.requiresSelection)
+			importPipelines.some((pipeline) => pipeline.requiresSelection) ||
+			bulkPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
 	const resolvedDetailRouteKey = $derived(
 		createCollectionRouteKey({
@@ -531,6 +533,7 @@
 			operations={{
 				exportPipelines,
 				importPipelines,
+				bulkPipelines,
 				integrations,
 				selectedRows: selectedRecords,
 				selectionControls,

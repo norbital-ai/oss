@@ -18,13 +18,14 @@
 	import CollectionToolbarIntegrationsPanel from './collection-toolbar-integrations-panel.svelte';
 	import CollectionToolbarPipelinePanel from './collection-toolbar-pipeline-panel.svelte';
 
-	const OperationKindSchema = Schema.Literals(['export', 'import']);
+	const OperationKindSchema = Schema.Literals(['export', 'import', 'bulk']);
 	type OperationKind = typeof OperationKindSchema.Type;
 
 	let {
 		collectionName,
 		exportPipelines,
 		importPipelines,
+		bulkPipelines,
 		integrations,
 		deletion,
 		selectedRows,
@@ -34,6 +35,7 @@
 		collectionName: string;
 		exportPipelines: readonly CollectionPipeline<TRow>[];
 		importPipelines: readonly CollectionPipeline<TRow>[];
+		bulkPipelines: readonly CollectionPipeline<TRow>[];
 		integrations: readonly CollectionIntegrationStatus[];
 		deletion?: CollectionRecordDeletion<TRow>;
 		selectedRows: readonly TRow[];
@@ -51,7 +53,13 @@
 	let expandedOverride = $state<string[] | undefined>(undefined);
 	const expandedSections = $derived(
 		expandedOverride ??
-			(exportPipelines.length > 0 ? ['export'] : deletion != null ? ['delete'] : ['export'])
+			(bulkPipelines.length > 0
+				? ['bulk']
+				: exportPipelines.length > 0
+					? ['export']
+					: deletion != null
+						? ['delete']
+						: ['export'])
 	);
 	let actionsOpen = $state(false);
 	let deleteArmed = $state(false);
@@ -59,6 +67,7 @@
 		collectionOperationsAvailable({
 			exportCount: exportPipelines.length,
 			importCount: importPipelines.length,
+			bulkCount: bulkPipelines.length,
 			integrationCount: integrations.length,
 			deletion: deletion != null
 		})
@@ -146,7 +155,11 @@
 {#snippet pipelinePanel(kind: OperationKind)}
 	<CollectionToolbarPipelinePanel
 		{kind}
-		pipelines={kind === 'import' ? importPipelines : exportPipelines}
+		pipelines={kind === 'import'
+			? importPipelines
+			: kind === 'bulk'
+				? bulkPipelines
+				: exportPipelines}
 		{selectedRows}
 		{disabled}
 		{pendingOperation}
@@ -195,6 +208,20 @@
 					</Inline>
 				</Accordion.Trigger>
 				<Accordion.Content class="px-1">{@render pipelinePanel('export')}</Accordion.Content>
+			</Accordion.Item>
+		{/if}
+		{#if bulkPipelines.length > 0}
+			<Accordion.Item value="bulk">
+				<Accordion.Trigger class="px-2 hover:no-underline">
+					<Inline gap="md">
+						<Icon icon="lucide:list-checks" class="size-4 shrink-0" />
+						<span>{t('table.bulkActions')}</span>
+						<span class="rounded-full bg-muted px-2 py-0.5 text-meta">
+							{bulkPipelines.length}
+						</span>
+					</Inline>
+				</Accordion.Trigger>
+				<Accordion.Content class="px-1">{@render pipelinePanel('bulk')}</Accordion.Content>
 			</Accordion.Item>
 		{/if}
 		{#if integrations.length > 0}

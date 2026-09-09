@@ -203,6 +203,8 @@ interface CollectionTableBaseProps<
 	features?: CollectionTableFeatures;
 	exportPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
 	importPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
+	/** Changes to the selected records that are neither an import nor an export, e.g. publish. */
+	bulkPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
 	integrations?: readonly CollectionIntegrationStatus[];
 	deletion?: CollectionRecordDeletion<NoInfer<TRow>>;
 	rowActions?: readonly Snippet<[CollectionTableRowActionContext<NoInfer<TRow>>]>[];

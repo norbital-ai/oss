@@ -57,6 +57,7 @@
 			(collectionOperationsAvailable({
 				exportCount: operations.exportPipelines?.length ?? 0,
 				importCount: operations.importPipelines?.length ?? 0,
+				bulkCount: operations.bulkPipelines?.length ?? 0,
 				integrationCount: operations.integrations?.length ?? 0,
 				deletion: operations.deletion != null
 			}) ||
@@ -136,6 +137,7 @@
 					collectionName={String(collection)}
 					exportPipelines={operations.exportPipelines ?? []}
 					importPipelines={operations.importPipelines ?? []}
+					bulkPipelines={operations.bulkPipelines ?? []}
 					integrations={operations.integrations ?? []}
 					deletion={operations.deletion}
 					selectedRows={operations.selectedRows ?? []}

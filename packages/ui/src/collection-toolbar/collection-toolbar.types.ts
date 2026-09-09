@@ -50,6 +50,8 @@ export interface CollectionToolbarActionProps {
 export interface CollectionToolbarOperations<TRow extends object> {
 	readonly exportPipelines?: readonly CollectionPipeline<TRow>[];
 	readonly importPipelines?: readonly CollectionPipeline<TRow>[];
+	/** Changes to the selected records that are neither an import nor an export. */
+	readonly bulkPipelines?: readonly CollectionPipeline<TRow>[];
 	readonly integrations?: readonly CollectionIntegrationStatus[];
 	readonly deletion?: CollectionRecordDeletion<TRow>;
 	readonly selectedRows?: readonly TRow[];

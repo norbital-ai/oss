@@ -19,6 +19,7 @@ test('collection operations are unavailable when nothing is configured', () => {
 test('collection operations are available for export, import, integrations, or deletion', () => {
 	assert.equal(collectionOperationsAvailable({ exportCount: 1 }), true);
 	assert.equal(collectionOperationsAvailable({ importCount: 2 }), true);
+	assert.equal(collectionOperationsAvailable({ bulkCount: 1 }), true);
 	assert.equal(collectionOperationsAvailable({ integrationCount: 1 }), true);
 	assert.equal(collectionOperationsAvailable({ deletion: true }), true);
 });

@@ -98,6 +98,7 @@ export interface CollectionKanbanProps<
 	description?: string;
 	exportPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];
 	importPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];
+	bulkPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];
 	integrations?: readonly CollectionIntegrationStatus[];
 	/**
 	 * Required card field declaration. The framework never enumerates schema fields into cards;

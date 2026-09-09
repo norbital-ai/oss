@@ -141,6 +141,7 @@
 		features = {},
 		exportPipelines = [],
 		importPipelines = [],
+		bulkPipelines = [],
 		integrations = [],
 		deletion,
 		columns,
@@ -213,7 +214,8 @@
 		selectable ||
 			deletion != null ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			importPipelines.some((pipeline) => pipeline.requiresSelection)
+			importPipelines.some((pipeline) => pipeline.requiresSelection) ||
+			bulkPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
 	let registeredColumns: readonly ColumnConfig[] = $state([]);
 	let initialFitApplied = $state(false);
@@ -366,6 +368,7 @@
 		collectionOperationsAvailable({
 			exportCount: exportPipelines.length,
 			importCount: importPipelines.length,
+			bulkCount: bulkPipelines.length,
 			integrationCount: integrations.length,
 			deletion: deletion != null
 		})
@@ -671,6 +674,7 @@
 			? {
 					exportPipelines,
 					importPipelines,
+					bulkPipelines,
 					integrations,
 					deletion: resolvedDeletion,
 					selectedRows: selectedRecords,
