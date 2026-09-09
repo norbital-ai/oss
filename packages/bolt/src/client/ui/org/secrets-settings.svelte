@@ -30,7 +30,13 @@
 	let { client }: { client: WorkspaceClient } = $props();
 
 	let drafts = $state<Record<string, string>>({});
-	const statusQuery = $derived(client.system.secrets.status({}));
+	// The vault answers a one-shot read; a save or clear bumps this so the page re-reads what it
+	// now holds instead of showing the state it loaded with.
+	let generation = $state(0);
+	const statusQuery = $derived.by(() => {
+		void generation;
+		return client.system.secrets.status({});
+	});
 	const entries = $derived<ReadonlyArray<EnvironmentVariable>>(statusQuery.current ?? []);
 	const loading = $derived(statusQuery.loading);
 	let saveError = $state<string | null>(null);
@@ -57,6 +63,7 @@
 				// stored keeps a copy alive in the page for no reason.
 				drafts = Object.fromEntries(Object.entries(drafts).filter(([key]) => key !== name));
 				saved = name;
+				generation += 1;
 			}),
 			Effect.catch((cause) => {
 				saveError = cause instanceof Error ? cause.message : 'Unable to store the value.';
