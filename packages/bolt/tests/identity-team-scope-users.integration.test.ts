@@ -11,12 +11,7 @@ import {
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
-import {
-	fixtureTeamId,
-	fixtureUserId,
-	seedSession,
-	seedTeam
-} from './support/fixture-identity.js';
+import { fixtureTeamId, fixtureUserId, seedSession, seedTeam } from './support/fixture-identity.js';
 
 /**
  * "A salesperson sees their own; their manager sees everyone under them", written once.
@@ -50,7 +45,6 @@ const command = (name: string, credential: string, input: unknown = null) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${credential}-${JSON.stringify(input)}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }

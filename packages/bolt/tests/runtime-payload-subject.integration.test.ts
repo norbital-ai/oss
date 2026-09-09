@@ -72,7 +72,6 @@ const command = (name: string, credential: string, input: unknown = {}) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }
@@ -83,7 +82,6 @@ const task = (name: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`task-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		attempt: 0
@@ -95,7 +93,6 @@ const plugin = (name: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`plugin-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		plugin: 'operator-console',
 		command: name,
 		input: input as never,

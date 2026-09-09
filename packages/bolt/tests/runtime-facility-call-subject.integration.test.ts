@@ -64,7 +64,6 @@ const command = (name: string, credential: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }
@@ -75,7 +74,6 @@ const task = (name: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`task-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		attempt: 0
@@ -86,7 +84,6 @@ const dataBrowserQuery = (credential: string, trustedContext: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make('plugin-query-impersonated'),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		plugin: 'data-browser',
 		command: 'query',
 		input: { collection: 'people', input: { limit: 20 } },
@@ -305,7 +302,6 @@ describe('the subject a facility call carries', () => {
 					protocolVersion: PROTOCOL_VERSION,
 					id: InvocationId.make('request-health'),
 					scope,
-					deadlineEpochMs: Date.now() + 30_000,
 					method: 'GET',
 					url: '/health',
 					headers: {}

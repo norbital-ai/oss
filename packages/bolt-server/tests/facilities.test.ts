@@ -43,7 +43,6 @@ import { makeMemoryTransport } from '../src/facilities/transport.js';
 const metadata = {
 	invocationId: InvocationId.make('invocation-1'),
 	effectId: EffectId.make('effect-1'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	idempotencyKey: 'stable-1'
 };
 

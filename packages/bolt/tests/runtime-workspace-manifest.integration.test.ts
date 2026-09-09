@@ -45,7 +45,6 @@ const manifestInvocation = (credential: string, command = 'workspace.manifest') 
 			environment: EnvironmentName.make('development'),
 			releaseId: ReleaseId.make('local')
 		},
-		deadlineEpochMs: Date.now() + 30_000,
 		command,
 		// `EmptyInput` is `Schema.Struct({})`. A command whose contract declares no input is invoked
 		// with an empty object, not with `null` — `null` is refused before the handler is reached.

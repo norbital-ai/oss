@@ -24,7 +24,6 @@ import { catalogAi } from './catalog-ai.js';
 import { loadPublicSeed, type PublicSeedQuery, type PublicSeedRows } from './load-public-seed.js';
 
 const DEFAULT_ENVIRONMENT = 'test';
-const DEFAULT_INVOCATION_TIMEOUT_MILLIS = 60_000;
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES = 16_384;
 
 type StartedHost = {
@@ -64,7 +63,6 @@ export type WithSelfHostInput = {
 	};
 	readonly founder?: { readonly email: string; readonly claimId: string } | false;
 	readonly host?: string;
-	readonly invocationTimeoutMillis?: number;
 	readonly requestBodyLimitBytes?: number;
 	readonly files?: boolean;
 	/** Any `FacilityBindings['ai']`. Default is the catalog test double, not a vendor lock. */
@@ -370,7 +368,6 @@ export const startSelfHostSession = async (
 				scope,
 				mode: 'development',
 				drainTimeoutMillis: 1_000,
-				invocationTimeoutMillis: input.invocationTimeoutMillis ?? DEFAULT_INVOCATION_TIMEOUT_MILLIS,
 				requestBodyLimitBytes: input.requestBodyLimitBytes ?? DEFAULT_REQUEST_BODY_LIMIT_BYTES,
 				gatewaySecret: Redacted.make(gatewaySecret)
 			}),

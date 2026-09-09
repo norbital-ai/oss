@@ -54,7 +54,6 @@ const command = (name: string, credential: string, input: unknown = null) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${credential}-${JSON.stringify(input)}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }

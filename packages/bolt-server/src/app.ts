@@ -9,7 +9,7 @@ import { writeSync } from 'node:fs';
 import { attributeEscapedFailure, guardBindings } from './facilities/boundary.js';
 import { Clock, Deferred, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
-import { invocationDeadline, type ServerConfiguration } from './config.js';
+import type { ServerConfiguration } from './config.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
 import {
 	makeTaskBinding,
@@ -287,11 +287,9 @@ export const startApplication = async (
 				protocolVersion: PROTOCOL_VERSION,
 				id: uuid.next(),
 				scope: configuration.scope,
-				...invocationDeadline(configuration, now),
 				reason: 'restart'
 			});
-			// The guest bounds its own activation by the wall above, when there is one; every facility
-			// call it makes carries its own liveness bound otherwise.
+			// Nothing walls the activation; every facility call it makes carries its own liveness bound.
 			const unsafeResult = yield* Effect.tryPromise({
 				try: (signal) => bundle.activate(activation, bound, signal),
 				catch: (cause) =>

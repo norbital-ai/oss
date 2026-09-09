@@ -30,14 +30,12 @@ const configuration = ServerConfiguration.make({
 	},
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1024
 });
 
 const metadata = {
 	invocationId: InvocationId.make('invocation-1'),
 	effectId: EffectId.make('effect-1'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	idempotencyKey: 'pglite-host-1'
 };
 

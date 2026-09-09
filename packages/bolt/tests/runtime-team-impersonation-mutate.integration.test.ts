@@ -41,7 +41,6 @@ const command = (name: string, credential: string, input: unknown = {}, team?: s
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${credential}-${team ?? 'self'}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: {

@@ -85,8 +85,7 @@ const TASK_COMMANDS: ReadonlyArray<string> = [...FixedCommandBindings.values()]
 
 const scopedInvocation = {
 	protocolVersion: PROTOCOL_VERSION,
-	scope,
-	deadlineEpochMs: Date.now() + 30_000
+	scope
 };
 
 const command = (name: string, credential: string, input: unknown = null) =>

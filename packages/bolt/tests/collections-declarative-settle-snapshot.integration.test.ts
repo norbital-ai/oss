@@ -79,7 +79,6 @@ describe('the test database transaction result', () => {
 				{
 					invocationId: InvocationId.make('transaction-final-statement'),
 					effectId: EffectId.make('transaction-final-statement'),
-					deadlineEpochMs: Date.now() + 10_000,
 					idempotencyKey: 'transaction-final-statement'
 				},
 				{

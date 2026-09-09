@@ -113,8 +113,6 @@ export interface CallSubject extends Schema.Schema.Type<typeof CallSubject> {}
 export const FacilityCall = Schema.Struct({
 	invocationId: InvocationId,
 	effectId: EffectId,
-	/** The invocation's operator-imposed wall, when it has one; metadata no host facility acts on. */
-	deadlineEpochMs: Schema.optionalKey(Schema.Number.check(Schema.isFinite())),
 	idempotencyKey: Schema.NonEmptyString,
 	subject: Schema.optionalKey(CallSubject)
 }).annotate({ identifier: 'BoltFacilityCall' });

@@ -24,7 +24,6 @@ import {
 const metadata = {
 	invocationId: InvocationId.make('invocation-1'),
 	effectId: EffectId.make('effect-1'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	idempotencyKey: 'local-adapters-1'
 };
 
@@ -150,7 +149,6 @@ it.effect(
 							},
 							mode: 'development',
 							drainTimeoutMillis: 1_000,
-							invocationTimeoutMillis: 1_000,
 							requestBodyLimitBytes: 1024
 						}),
 						facilities: {

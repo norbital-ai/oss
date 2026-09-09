@@ -23,8 +23,6 @@ export class FacilityError extends Schema.TaggedError<FacilityError>()('Bolt.Fac
 
 export type CallContext = Readonly<{
 	readonly invocationId: InvocationId;
-	/** The invocation's operator-imposed wall, when the host set one. Absent is unbounded. */
-	readonly deadlineEpochMs?: number;
 	/**
 	 * The deployment environment this invocation was made against, as the host named it.
 	 *
@@ -72,9 +70,6 @@ export const invokeBinding = <Input, Output>(
 		const metadata: FacilityCall = {
 			invocationId: context.invocationId,
 			effectId,
-			...(context.deadlineEpochMs === undefined
-				? {}
-				: { deadlineEpochMs: context.deadlineEpochMs }),
 			idempotencyKey: effectId,
 			...(Option.isSome(subject)
 				? {

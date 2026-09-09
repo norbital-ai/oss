@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId, InvocationId, success, type FacilityBinding } from '@norbital-ai/bolt-protocol';
-import { FacilityError, invokeBinding, type CallContext } from '../src/runtime/facilities/database.js';
+import {
+	FacilityError,
+	invokeBinding,
+	type CallContext
+} from '../src/runtime/facilities/database.js';
 
 const context: CallContext = {
 	invocationId: InvocationId.make('invocation-1'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	environment: 'test',
 	tenantId: 'tenant'
 };

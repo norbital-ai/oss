@@ -43,7 +43,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoadError, BundleLoader } from './bundle-loader.js';
 import { guardBindings } from './facilities/boundary.js';
-import { invocationDeadline, type ServerConfiguration } from './config.js';
+import type { ServerConfiguration } from './config.js';
 import { AdmissionStopped, ServerHealth } from './health.js';
 import type { TaskInvocationControl } from './schedules.js';
 import { systemCommandHeaders } from './system-headers.js';
@@ -332,15 +332,14 @@ const mutationIdsFrom = (
 /**
  * One dispatch into the bundle.
  *
- * There is no wall unless the operator configured one; a facility that never answers is reported
- * by that facility's own liveness bound. A client that stops waiting does not reach here either:
+ * There is no wall: what bounds a guest is its CPU budget, and a facility that never answers is
+ * reported by that facility's own liveness bound. A client that stops waiting does not reach here either:
  * the request fiber runs under the server's shutdown signal alone (`createServer` below), so the
  * only thing that interrupts a dispatch is the process going away.
  */
 const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 	invocation: Invocation,
 	facilities: FacilityBindings,
-	timeoutMillis: number | undefined,
 	taskInvocations?: TaskInvocationControl
 ) {
 	const loader = yield* BundleLoader;
@@ -367,24 +366,7 @@ const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 						message: 'Bolt bundle dispatch failed',
 						cause
 					})
-			}).pipe(
-				timeoutMillis === undefined
-					? (effect) => effect
-					: (effect) =>
-							effect.pipe(
-								Effect.timeout(timeoutMillis),
-								// A bare `TimeoutError` carries no message, so it reached the caller as an
-								// unexplained 500. The wall is the one fact worth reporting about it.
-								Effect.catchTag('TimeoutError', () =>
-									Effect.fail(
-										new ServerTransportError({
-											operation: 'BoltServer.Server.dispatch',
-											message: `Bolt bundle dispatch exceeded its ${timeoutMillis}ms deadline`
-										})
-									)
-								)
-							)
-			);
+			});
 			return yield* Schema.decodeUnknownEffect(BundleResult)(unsafeResult).pipe(
 				Effect.mapError(
 					(cause) =>
@@ -411,11 +393,10 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 		protocolVersion: PROTOCOL_VERSION,
 		id: uuid.next(),
 		scope: configuration.scope,
-		...invocationDeadline(configuration, now),
 		connectionId,
 		event
 	});
-	const result = yield* dispatch(invocation, facilities, configuration.invocationTimeoutMillis);
+	const result = yield* dispatch(invocation, facilities);
 	if (result._tag === 'Failure') {
 		return yield* new ServerTransportError({
 			operation: 'BoltServer.Server.realtime',
@@ -776,7 +757,6 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 					protocolVersion: PROTOCOL_VERSION,
 					id: (yield* UuidGeneration).next(),
 					scope: configuration.scope,
-					...invocationDeadline(configuration, pluginNow),
 					plugin: names.plugin,
 					command: names.command,
 					input: decodedPayload.success.input ?? null,
@@ -787,7 +767,6 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 					trustedContext: decodedPayload.success.trustedContext ?? {}
 				}),
 				facilities,
-				configuration.invocationTimeoutMillis,
 				taskInvocations
 			)
 		);
@@ -841,17 +820,11 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 			protocolVersion: PROTOCOL_VERSION,
 			id: (yield* UuidGeneration).next(),
 			scope: configuration.scope,
-			...invocationDeadline(configuration, now),
 			command,
 			input,
 			headers: rawRequestHeaders(request)
 		});
-		const result = yield* dispatch(
-			invocation,
-			facilities,
-			configuration.invocationTimeoutMillis,
-			taskInvocations
-		);
+		const result = yield* dispatch(invocation, facilities, taskInvocations);
 		if (result._tag === 'Success') {
 			// The data plane (§1.1): whatever this write committed rides the standing streams — the
 			// change list is the invocation's return value, not an API, and the pump turns it into
@@ -934,18 +907,12 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		protocolVersion: PROTOCOL_VERSION,
 		id: (yield* UuidGeneration).next(),
 		scope: configuration.scope,
-		...invocationDeadline(configuration, now),
 		method: request.method ?? 'GET',
 		url: request.url ?? '/',
 		headers: rawRequestHeaders(request),
 		...(body === undefined ? {} : { body })
 	});
-	const result = yield* dispatch(
-		invocation,
-		facilities,
-		configuration.invocationTimeoutMillis,
-		taskInvocations
-	);
+	const result = yield* dispatch(invocation, facilities, taskInvocations);
 	writeDispatchResult(response, result);
 });
 
@@ -1047,16 +1014,11 @@ const startServerEffect = <E>(
 					protocolVersion: PROTOCOL_VERSION,
 					id: (yield* UuidGeneration).next(),
 					scope,
-					...invocationDeadline(configuration, now),
 					command,
 					input,
 					headers
 				});
-				const result = yield* dispatch(
-					invocation,
-					liveFacilities,
-					configuration.invocationTimeoutMillis
-				);
+				const result = yield* dispatch(invocation, liveFacilities);
 				if (result._tag === 'Failure') {
 					return yield* Effect.fail(new SyncGuestRejected(result.error.httpStatus ?? 500, command));
 				}

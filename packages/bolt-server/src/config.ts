@@ -19,8 +19,6 @@ export const ServerConfiguration = Schema.Struct({
 	scope: InvocationScope,
 	mode: Schema.Literals(['development', 'production']),
 	drainTimeoutMillis: Schema.Int,
-	/** An operator-imposed wall on every invocation this host runs. Absent — the default — is unbounded. */
-	invocationTimeoutMillis: Schema.optional(Schema.Int),
 	requestBodyLimitBytes: Schema.Int,
 	/**
 	 * The secret this host proves itself with when it calls a `host.*` command on its own bundle.
@@ -39,15 +37,6 @@ export const ServerConfiguration = Schema.Struct({
 });
 
 export interface ServerConfiguration extends Schema.Schema.Type<typeof ServerConfiguration> {}
-
-/** The wall an invocation carries onto the wire: the operator's, when one is configured, else none. */
-export const invocationDeadline = (
-	configuration: Pick<ServerConfiguration, 'invocationTimeoutMillis'>,
-	nowEpochMs: number
-) =>
-	configuration.invocationTimeoutMillis === undefined
-		? {}
-		: { deadlineEpochMs: nowEpochMs + configuration.invocationTimeoutMillis };
 
 /** Reports invalid or unavailable self-host process configuration. */
 export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
@@ -209,34 +198,13 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			drainTimeoutMillis: Config.int('BOLT_SERVER_DRAIN_TIMEOUT_MS').pipe(
 				Config.withDefault(10_000)
 			),
-			/**
-			 * An operator-imposed wall on the whole invocation tree, in milliseconds. Unset by default.
-			 *
-			 * There is no cap on how long an invocation may run: an overnight agent, a statutory
-			 * research run or a turn on a slow reasoning model takes as long as it takes, and what
-			 * bounds it is each facility call's own liveness bound. Setting this variable is the
-			 * operator choosing a wall anyway; the runtime enforces it as `deadline_exceeded`.
-			 *
-			 * It is a wall on the tree, not a bound on CPU occupancy, and this host has no knob for the
-			 * latter — deliberately, because it could not honour one. The bundle runs in this process
-			 * rather than in a worker thread, so there is no thread to terminate and no way to interrupt
-			 * a synchronous tenant loop from inside the loop's own event loop. Colony enforces its 2 s
-			 * CPU budget because each invocation gets a fresh isolate it can dispose. That is an
-			 * acceptable difference because the exposure is different: this serves one tenant, so a
-			 * tenant that spins denies service to itself.
-			 */
-			invocationTimeoutMillis: Config.option(Config.int('BOLT_SERVER_INVOCATION_TIMEOUT_MS')),
 			requestBodyLimitBytes: Config.int('BOLT_SERVER_REQUEST_BODY_LIMIT_BYTES').pipe(
 				Config.withDefault(1_048_576)
 			),
 			gatewaySecret: Config.option(Config.redacted(GATEWAY_SECRET_VARIABLE))
 		});
 
-		if (
-			values.drainTimeoutMillis < 1 ||
-			(Option.isSome(values.invocationTimeoutMillis) && values.invocationTimeoutMillis.value < 1) ||
-			values.requestBodyLimitBytes < 1
-		) {
+		if (values.drainTimeoutMillis < 1 || values.requestBodyLimitBytes < 1) {
 			return yield* new ConfigurationError({
 				operation: 'BoltServer.Configuration.validateBounds',
 				cause: new Error('timeouts and request body limit must be positive integers')
@@ -254,9 +222,6 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			}),
 			mode: values.mode,
 			drainTimeoutMillis: values.drainTimeoutMillis,
-			...(Option.isSome(values.invocationTimeoutMillis)
-				? { invocationTimeoutMillis: values.invocationTimeoutMillis.value }
-				: {}),
 			requestBodyLimitBytes: values.requestBodyLimitBytes,
 			...(Option.isSome(values.gatewaySecret) ? { gatewaySecret: values.gatewaySecret.value } : {})
 		});

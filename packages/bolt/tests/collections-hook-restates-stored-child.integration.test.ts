@@ -101,12 +101,11 @@ const definition = workspace({
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
-			grants: (['employments', 'entitlements', 'entries', 'facts'] as const).flatMap(
-				(name) =>
-					(['create', 'read', 'update', 'delete'] as const).map((action) => ({
-						collection: name,
-						action
-					}))
+			grants: (['employments', 'entitlements', 'entries', 'facts'] as const).flatMap((name) =>
+				(['create', 'read', 'update', 'delete'] as const).map((action) => ({
+					collection: name,
+					action
+				}))
 			)
 		})
 	]
@@ -185,7 +184,11 @@ interface RestatementSchema {
  * stored entries by id plus one new entry the write derives. The stored rows are restated so the
  * non-cascade edge deletes nothing; the new entry is the grandchild whose commit is under test.
  */
-const restatedEntitlements = (api: Api<RestatementSchema, unknown>, employmentId: string, code: string) =>
+const restatedEntitlements = (
+	api: Api<RestatementSchema, unknown>,
+	employmentId: string,
+	code: string
+) =>
 	Effect.gen(function* () {
 		const entitlements = yield* api.db.entitlements.findMany({
 			where: { employment_id: { eq: employmentId } }
@@ -237,7 +240,8 @@ const authored = {
 			mutate: {
 				perRecord: {
 					before: {
-						description: 'Stages the employment ledger the new fact changes, then refuses one fact by name.',
+						description:
+							'Stages the employment ledger the new fact changes, then refuses one fact by name.',
 						handler: ({ input, existing, api }) =>
 							Effect.gen(function* () {
 								if (existing !== undefined) return input;
@@ -279,7 +283,6 @@ const command = (name: string, input: unknown) => {
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${invocationSequence}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: ['Bearer admin-token'] }
@@ -305,7 +308,10 @@ const push = async (
 	input: Readonly<{
 		readonly idempotencyKey: string;
 		readonly collection: string;
-		readonly row: Readonly<{ readonly action: 'create' | 'update'; readonly values: Record<string, unknown> }>;
+		readonly row: Readonly<{
+			readonly action: 'create' | 'update';
+			readonly values: Record<string, unknown>;
+		}>;
 		readonly baseVersions?: ReadonlyArray<BaseVersion>;
 	}>
 ) => {
@@ -332,7 +338,10 @@ const requiredId = (row: Readonly<Record<string, unknown>> | undefined, label: s
 	return id;
 };
 
-const requiredVersion = (row: Readonly<Record<string, unknown>> | undefined, label: string): number => {
+const requiredVersion = (
+	row: Readonly<Record<string, unknown>> | undefined,
+	label: string
+): number => {
 	const version = row?.['row_version'];
 	if (typeof version !== 'number') throw new Error(`${label} has no row_version`);
 	return version;
@@ -342,15 +351,24 @@ const requiredVersion = (row: Readonly<Record<string, unknown>> | undefined, lab
 const seedEmployment = async (runtime: BoltTestRuntime) => {
 	await runtime.runtime.runPromise(
 		Effect.gen(function* () {
-			yield* (yield* Collections.Service).mutate(EffectId.make('seed-employment'), adminSubject, 'employments', [
-				{
-					name: 'Ada',
-					employment_entitlements: [
-						{ kind: 'annual', quantity: 14, entitlement_entries: [{ code: 'opening', amount: 14 }] },
-						{ kind: 'sick', quantity: 10, entitlement_entries: [{ code: 'opening', amount: 10 }] }
-					]
-				}
-			]);
+			yield* (yield* Collections.Service).mutate(
+				EffectId.make('seed-employment'),
+				adminSubject,
+				'employments',
+				[
+					{
+						name: 'Ada',
+						employment_entitlements: [
+							{
+								kind: 'annual',
+								quantity: 14,
+								entitlement_entries: [{ code: 'opening', amount: 14 }]
+							},
+							{ kind: 'sick', quantity: 10, entitlement_entries: [{ code: 'opening', amount: 10 }] }
+						]
+					}
+				]
+			);
 		})
 	);
 	const employment = (await runtime.database.query('select id, row_version from employments'))[0];
@@ -400,7 +418,10 @@ describe('a hook restating a stored child inside a browser mutation', () => {
 			collection: 'employments',
 			row: { action: 'update', values: { id: employment.id, name: 'Ada (exited)' } },
 			baseVersions: [
-				{ row: { collection: 'employments', recordId: employment.id }, rowVersion: employment.version }
+				{
+					row: { collection: 'employments', recordId: employment.id },
+					rowVersion: employment.version
+				}
 			]
 		});
 		expect(outcome, JSON.stringify(outcome)).toMatchObject({ resolution: 'accepted' });
@@ -446,7 +467,11 @@ describe('a hook restating a stored child inside a browser mutation', () => {
 			collection: 'facts',
 			row: {
 				action: 'create',
-				values: { id: '00000000-0000-4000-8000-00000000f002', employment_id: employment.id, note: 'refuse' }
+				values: {
+					id: '00000000-0000-4000-8000-00000000f002',
+					employment_id: employment.id,
+					note: 'refuse'
+				}
 			}
 		});
 		expect(refused).toMatchObject({
@@ -471,16 +496,16 @@ describe('a hook restating a stored child inside a browser mutation', () => {
 		const values = {
 			id: employment.id,
 			name: 'Ada (edited)',
-			employment_entitlements: [
-				{ id: annual.id, quantity: 15 },
-				{ id: sick.id }
-			]
+			employment_entitlements: [{ id: annual.id, quantity: 15 }, { id: sick.id }]
 		};
 		const rootVersion = {
 			row: { collection: 'employments', recordId: employment.id },
 			rowVersion: employment.version
 		};
-		const sickVersion = { row: { collection: 'entitlements', recordId: sick.id }, rowVersion: sick.version };
+		const sickVersion = {
+			row: { collection: 'entitlements', recordId: sick.id },
+			rowVersion: sick.version
+		};
 
 		// The caller submitted the entitlement itself, so it is the caller's row: a stale whole-row
 		// base version on it is a conflict, exactly as before the workspace-seed rule.
@@ -494,11 +519,14 @@ describe('a hook restating a stored child inside a browser mutation', () => {
 				sickVersion
 			]
 		});
-		expect(stale, JSON.stringify(stale)).toMatchObject({ resolution: 'rejected', code: 'conflict' });
+		expect(stale, JSON.stringify(stale)).toMatchObject({
+			resolution: 'rejected',
+			code: 'conflict'
+		});
 		expect(await harness.database.query('select name from employments')).toEqual([{ name: 'Ada' }]);
-		expect(await harness.database.query('select quantity from entitlements where id = $1', [annual.id])).toEqual([
-			{ quantity: 14 }
-		]);
+		expect(
+			await harness.database.query('select quantity from entitlements where id = $1', [annual.id])
+		).toEqual([{ quantity: 14 }]);
 
 		// The same payload with the versions the browser really read is accepted: the refusal above
 		// was the stale version, not the nesting.
@@ -516,10 +544,13 @@ describe('a hook restating a stored child inside a browser mutation', () => {
 		expect(await harness.database.query('select name from employments')).toEqual([
 			{ name: 'Ada (edited)' }
 		]);
-		expect(await harness.database.query('select quantity from entitlements where id = $1', [annual.id])).toEqual([
-			{ quantity: 15 }
-		]);
+		expect(
+			await harness.database.query('select quantity from entitlements where id = $1', [annual.id])
+		).toEqual([{ quantity: 15 }]);
 		// The caller's relation stood, so the hook derived nothing: the ledger is untouched.
-		expect((await entriesByEntitlement(harness)).map((row) => row['code'])).toEqual(['opening', 'opening']);
+		expect((await entriesByEntitlement(harness)).map((row) => row['code'])).toEqual([
+			'opening',
+			'opening'
+		]);
 	}, 90_000);
 });

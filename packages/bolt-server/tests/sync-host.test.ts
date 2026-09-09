@@ -41,7 +41,6 @@ const configuration = ServerConfiguration.make({
 	}),
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 5_000,
 	requestBodyLimitBytes: 1_024,
 	gatewaySecret: Redacted.make(GATEWAY_SECRET)
 });

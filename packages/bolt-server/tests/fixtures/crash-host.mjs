@@ -37,7 +37,6 @@ const application = await startLocalApplication({
 		scope,
 		mode: 'development',
 		drainTimeoutMillis: 1_000,
-		invocationTimeoutMillis: 1_000,
 		requestBodyLimitBytes: 1024
 	}),
 	facilities: { scope, config: makeConfigBinding({ BOLT_SECRETS_KEY: 'crash-host' }) }

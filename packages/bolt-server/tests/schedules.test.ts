@@ -205,7 +205,6 @@ it.effect('runs an occurrence past its lease without cutting it, off the tick', 
 		// The claim the guest keeps alive is named on the occurrence it runs.
 		const task = bundle.seen.find((invocation) => invocation._tag === 'Task');
 		assert.strictEqual(task?._tag === 'Task' ? task.taskId : undefined, occurrence.taskId);
-		assert.isUndefined(task?.deadlineEpochMs);
 	})
 );
 
@@ -510,7 +509,6 @@ it.effect(
 			const metadata = {
 				invocationId: InvocationId.make('invocation-wake'),
 				effectId: EffectId.make('effect-wake'),
-				deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 				idempotencyKey: 'wake-1'
 			};
 			const signal = new AbortController().signal;
@@ -563,7 +561,6 @@ const scheduleConfiguration = ServerConfiguration.make({
 	scope,
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 5_000,
 	requestBodyLimitBytes: 1024,
 	gatewaySecret: Redacted.make(GATEWAY_SECRET)
 });

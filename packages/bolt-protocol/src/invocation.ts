@@ -8,21 +8,10 @@ export const InvocationScope = Schema.Struct({
 }).annotate({ identifier: 'BoltInvocationScope' });
 export interface InvocationScope extends Schema.Schema.Type<typeof InvocationScope> {}
 
-/**
- * An operator-imposed wall on the whole invocation tree, absent by default.
- *
- * Absent means unbounded: the only budgets on an invocation are the guest's CPU time and each
- * facility call's own liveness bound. A host that configures a wall sends the instant it ends; the
- * guest runtime is the side that reads it (`app.ts`), and it is copied onto every facility call
- * only as metadata that no host facility acts on.
- */
-const DeadlineEpochMs = Schema.optionalKey(Schema.Number.check(Schema.isFinite()));
-
 const InvocationFields = {
 	protocolVersion: ProtocolVersion,
 	id: InvocationId,
-	scope: InvocationScope,
-	deadlineEpochMs: DeadlineEpochMs
+	scope: InvocationScope
 };
 
 /** Host-proven context attached to plugin calls; it can only narrow authenticated authority. */
@@ -108,7 +97,6 @@ export const Activation = Schema.Struct({
 	protocolVersion: ProtocolVersion,
 	id: InvocationId,
 	scope: InvocationScope,
-	deadlineEpochMs: DeadlineEpochMs,
 	reason: Schema.Literals(['deploy', 'restart', 'repair'])
 }).annotate({ identifier: 'BoltActivation' });
 export interface Activation extends Schema.Schema.Type<typeof Activation> {}

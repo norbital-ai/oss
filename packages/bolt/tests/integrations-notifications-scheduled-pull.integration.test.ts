@@ -272,7 +272,6 @@ const activation: Activation = {
 		environment: EnvironmentName.make('test'),
 		releaseId: ReleaseId.make('release-1')
 	},
-	deadlineEpochMs: Date.now() + 10_000,
 	reason: 'deploy'
 };
 

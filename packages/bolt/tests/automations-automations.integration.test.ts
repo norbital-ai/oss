@@ -42,7 +42,6 @@ const manualStart = (id: string, name: string, input: Readonly<Record<string, ne
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(id),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: 'automations.start',
 		input: { name, input },
 		headers: { authorization: ['Bearer automation-test-token'] }
@@ -429,7 +428,11 @@ describe('Automations owner', () => {
 							const second = yield* (api as RuntimeAuthoringApi).automations.run('child', {
 								from: 'second profile'
 							});
-							return { parent: true, childConversationId: child.taskId, secondConversationId: second.taskId };
+							return {
+								parent: true,
+								childConversationId: child.taskId,
+								secondConversationId: second.taskId
+							};
 						})
 				},
 				child: {

@@ -425,9 +425,6 @@ export const ActivationCommands = {
 /** The call context an activation's facility calls are made under. One shape, built once. */
 const activationContext = (activation: Activation): CallContext => ({
 	invocationId: activation.id,
-	...(activation.deadlineEpochMs === undefined
-		? {}
-		: { deadlineEpochMs: activation.deadlineEpochMs }),
 	environment: String(activation.scope.environment),
 	tenantId: String(activation.scope.tenantId)
 });
@@ -437,8 +434,7 @@ const activationContext = (activation: Activation): CallContext => ({
  *
  * Activation is the one path that talks to the database outside an invocation: it registers the
  * release's routing with the host, and it writes this release's schedules into the tenant's own
- * `bolt_schedule`. Both are bound from the same call context, so the deadline that bounds the
- * activation is the deadline every one of its facility calls carries.
+ * `bolt_schedule`. Both are bound from the same call context.
  */
 const activationLayer = (activation: Activation, facilities: FacilityBindings) => {
 	const context = activationContext(activation);
@@ -584,53 +580,12 @@ const BundleActivation = {
 								})
 							)
 						);
-		// An activation has no wall unless the host configured one: its facility calls each carry
-		// their own liveness bound, and a host that never answers is reported by that bound.
-		return Effect.runPromise(
-			withDeadline(effect, activation.deadlineEpochMs).pipe(
-				Effect.catch(() =>
-					Effect.succeed({
-						_tag: 'Failure' as const,
-						error: makeWireError(
-							'deadline_exceeded',
-							'Activation did not finish inside its deadline',
-							{ retryable: true }
-						)
-					})
-				)
-			),
-			{ signal }
-		);
+		// Nothing walls an activation: its facility calls each carry their own liveness bound, and a
+		// host that never answers is reported by that bound.
+		return Effect.runPromise(effect, { signal });
 	}
 };
 const activate = BundleActivation.activate;
-
-/**
- * The tree, bounded by the operator's wall when there is one and unbounded otherwise.
- *
- * There is no default wall: an overnight agent, a statutory research run or a turn on a slow
- * reasoning model takes as long as it takes. What bounds an invocation is the guest's CPU budget
- * (the host's, because only the host can terminate the thread) and each facility call's own
- * liveness bound. A host that configures a wall sends `deadlineEpochMs`, and this is the one place
- * that reads it: every nested piece of work under the invocation — a hook chain, an import
- * pipeline, an agent's tool calls — is the same fiber tree, so none of it can be given a fresh
- * budget by running deeper. The remaining time is read through the Clock at execution rather than
- * at construction, so the wall is measured against the instant the invocation actually starts.
- *
- * Floored at one millisecond rather than zero. A wall that has already passed is a real state and
- * the answer to it is the same `deadline_exceeded` every other overrun gets, reached by timing out
- * immediately; a non-positive duration would be read as "no limit" by some combinators, which is
- * precisely backwards.
- */
-const withDeadline = <A, E, R>(
-	effect: Effect.Effect<A, E, R>,
-	deadlineEpochMs: number | undefined
-) =>
-	deadlineEpochMs === undefined
-		? effect
-		: Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
-				Effect.timeout(effect, Math.max(1, deadlineEpochMs - nowEpochMs))
-			);
 
 /** Owns run behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const BundleDispatch = {
@@ -645,9 +600,6 @@ const BundleDispatch = {
 	) => {
 		const context: CallContext = {
 			invocationId: invocation.id,
-			...(invocation.deadlineEpochMs === undefined
-				? {}
-				: { deadlineEpochMs: invocation.deadlineEpochMs }),
 			environment: String(invocation.scope.environment),
 			tenantId: String(invocation.scope.tenantId)
 		};
@@ -673,7 +625,7 @@ const BundleDispatch = {
 				)
 			)
 		);
-		const effect = withDeadline(provided, invocation.deadlineEpochMs).pipe(
+		const effect = provided.pipe(
 			Effect.match({
 				onFailure: (raised): BundleResult => {
 					/**
@@ -846,11 +798,10 @@ const BundleDispatch = {
 					if (Cause.isTimeoutError(error))
 						return {
 							_tag: 'Failure',
-							error: makeWireError(
-								'deadline_exceeded',
-								'The invocation did not finish inside its deadline',
-								{ httpStatus: 504, retryable: true }
-							)
+							error: makeWireError('deadline_exceeded', 'A timeout inside the invocation fired', {
+								httpStatus: 504,
+								retryable: true
+							})
 						};
 					if (error instanceof Collections.MutationQuarantined)
 						return {

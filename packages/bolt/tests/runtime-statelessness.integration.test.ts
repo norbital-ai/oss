@@ -12,11 +12,10 @@ import * as Workspace from '../src/runtime/workspace.js';
  *
  * What these tests are about is that two invocations running at once share nothing, so each gets
  * its own context rather than a module-level one they both point at. The environment is the
- * harness default: nothing here reads it — the transport facility passes invocation id, deadline
- * and subject to the binding and no mode — so a value chosen per test would be decoration.
+ * harness default: nothing here reads it — the transport facility passes invocation id and
+ * subject to the binding and no mode — so a value chosen per test would be decoration.
  */
-const callContext = (invocationId: string) =>
-	testCallContext(invocationId, { deadlineEpochMs: Date.now() + 1000 });
+const callContext = (invocationId: string) => testCallContext(invocationId);
 
 describe('artifact statelessness', () => {
 	it('keeps independent workspace registries isolated', async () => {

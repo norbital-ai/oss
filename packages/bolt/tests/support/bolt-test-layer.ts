@@ -271,7 +271,6 @@ export const TEST_TENANT = 'test-tenant';
 
 const context: CallContext = {
 	invocationId: InvocationId.make('test-invocation'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	environment: TEST_ENVIRONMENT,
 	tenantId: TEST_TENANT
 };
@@ -287,13 +286,11 @@ const context: CallContext = {
 export const testCallContext = (
 	invocationId: string,
 	options: {
-		readonly deadlineEpochMs?: number;
 		readonly environment?: string;
 		readonly tenantId?: string;
 	} = {}
 ): CallContext => ({
 	invocationId: InvocationId.make(invocationId),
-	deadlineEpochMs: options.deadlineEpochMs ?? Date.now() + 10_000,
 	environment: options.environment ?? TEST_ENVIRONMENT,
 	tenantId: options.tenantId ?? TEST_TENANT
 });

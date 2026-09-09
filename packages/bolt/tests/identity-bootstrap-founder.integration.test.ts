@@ -103,7 +103,6 @@ const signed = (command: string, input: Record<string, unknown>, secret = HOST_S
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${command}-${(sequence += 1)}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command,
 		input: input as never,
 		headers: {
@@ -119,7 +118,6 @@ const asPerson = (command: string, credential: string, input: Record<string, unk
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${command}-${(sequence += 1)}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }

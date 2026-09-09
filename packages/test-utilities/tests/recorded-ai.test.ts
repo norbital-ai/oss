@@ -7,7 +7,6 @@ import { recordedAi, type RecordedGenerated } from '../src/recorded-ai.ts';
 const metadata = {
 	invocationId: InvocationId.make('invocation-1'),
 	effectId: EffectId.make('effect-1'),
-	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
 	idempotencyKey: 'recorded-ai-1'
 };
 

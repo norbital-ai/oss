@@ -70,7 +70,7 @@ describe('Bolt protocol schemas', () => {
 		expect(response._tag).toBe('Generated');
 	});
 
-	it('carries no wall unless a host sets one, and names the claim a task keeps alive', () => {
+	it('names the claim a task keeps alive', () => {
 		const command = Schema.decodeUnknownSync(Invocation)({
 			_tag: 'Command',
 			protocolVersion: PROTOCOL_VERSION,
@@ -80,7 +80,6 @@ describe('Bolt protocol schemas', () => {
 			input: null,
 			headers: {}
 		});
-		expect('deadlineEpochMs' in command).toBe(false);
 		const task = Schema.decodeUnknownSync(Invocation)({
 			_tag: 'Task',
 			protocolVersion: PROTOCOL_VERSION,
@@ -102,7 +101,6 @@ describe('Bolt protocol schemas', () => {
 			protocolVersion: PROTOCOL_VERSION + 1,
 			id: 'invoke-1',
 			scope: { tenantId: 'tenant-1', environment: 'production', releaseId: 'release-1' },
-			deadlineEpochMs: Date.now() + 1_000,
 			command: 'health',
 			input: null,
 			headers: { authorization: ['Bearer fixture-token'] }

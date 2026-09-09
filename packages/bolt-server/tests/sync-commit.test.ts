@@ -17,7 +17,6 @@ import { makeSyncCommitFacility } from '../src/server.js';
 const metadata = {
 	invocationId: InvocationId.make('sync-commit:test'),
 	effectId: EffectId.make('sync-commit:test:effect'),
-	deadlineEpochMs: 4_000_000_000_000,
 	idempotencyKey: 'sync-commit:test:effect'
 };
 
@@ -49,9 +48,7 @@ describe('bolt-server sync commit facility', () => {
 					committed: (commit) => {
 						assert.deepStrictEqual(commit.scope, scope);
 						return Effect.runPromise(
-							Deferred.succeed(entered, undefined).pipe(
-								Effect.andThen(Deferred.await(release))
-							)
+							Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
 						);
 					}
 				},
@@ -67,21 +64,15 @@ describe('bolt-server sync commit facility', () => {
 			assert.strictEqual(running.pollUnsafe(), undefined);
 
 			yield* Deferred.succeed(release, undefined);
-			assert.deepStrictEqual(
-				yield* Fiber.join(running),
-				success(SyncCommitResponse.make({}))
-			);
+			assert.deepStrictEqual(yield* Fiber.join(running), success(SyncCommitResponse.make({})));
 		})
 	);
 
 	it('does not acknowledge a rejected host settlement', async () => {
 		const rejected = new Error('sync.advance rejected the commit');
-		const facility = makeSyncCommitFacility(
-			{ committed: () => Promise.reject(rejected) },
-			scope
+		const facility = makeSyncCommitFacility({ committed: () => Promise.reject(rejected) }, scope);
+		await expect(facility.call(metadata, request, new AbortController().signal)).rejects.toBe(
+			rejected
 		);
-		await expect(
-			facility.call(metadata, request, new AbortController().signal)
-		).rejects.toBe(rejected);
 	});
 });

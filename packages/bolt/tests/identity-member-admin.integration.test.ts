@@ -10,10 +10,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { ADMIN_STATUS, NORMAL_STATUS } from '../src/runtime/identity/identity.js';
-import {
-	GATEWAY_SECRET_VARIABLE,
-	HostConfig
-} from '../src/runtime/access/system-principal.js';
+import { GATEWAY_SECRET_VARIABLE, HostConfig } from '../src/runtime/access/system-principal.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { fixtureTeamId, fixtureUserId, seedSession, seedTeam } from './support/fixture-identity.js';
@@ -70,7 +67,6 @@ const asPerson = (command: string, credential: string, input: Record<string, unk
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${command}-${(sequence += 1)}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command,
 		input: input as never,
 		headers: { authorization: [`Bearer ${credential}`] }

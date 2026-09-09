@@ -51,7 +51,6 @@ const command = (name: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`command-${name}-${crypto.randomUUID()}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		headers: { authorization: ['Bearer admin-token'] }

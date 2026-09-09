@@ -26,24 +26,6 @@ it.effect('loads deterministic development defaults', () =>
 );
 
 /**
- * No wall by default: an invocation runs for as long as its work takes. The variable is the
- * operator choosing one anyway, and only then does an instant ride the invocation.
- */
-it.effect('reads an invocation wall only when the operator sets one', () =>
-	Effect.gen(function* () {
-		const configuration = yield* loadConfiguration();
-		assert.strictEqual(configuration.invocationTimeoutMillis, 250);
-	}).pipe(
-		Effect.provide(
-			withConfiguration({
-				BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs',
-				BOLT_SERVER_INVOCATION_TIMEOUT_MS: '250'
-			})
-		)
-	)
-);
-
-/**
  * The gateway secret is absent above and present here, and both are ordinary states.
  *
  * A host that configures none still starts and serves; what it cannot do is prove itself to its own

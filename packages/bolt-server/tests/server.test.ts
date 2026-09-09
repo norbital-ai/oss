@@ -16,7 +16,6 @@ const configuration = ServerConfiguration.make({
 	},
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1_024
 });
 
@@ -25,7 +24,7 @@ it.effect('lets an invocation run past every former default when no wall is conf
 	Effect.acquireUseRelease(
 		Effect.tryPromise(() =>
 			startApplication({
-				configuration: { ...configuration, invocationTimeoutMillis: undefined },
+				configuration,
 				facilities: { scope: configuration.scope }
 			})
 		),

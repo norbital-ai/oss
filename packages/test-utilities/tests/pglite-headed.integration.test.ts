@@ -7,7 +7,11 @@ import {
 	MissingChromiumError,
 	type HeadedBrowser
 } from '@norbital-ai/test-utilities';
-import { startApplication, ServerConfiguration, makeDatabaseFromConfig } from '@norbital-ai/bolt-server';
+import {
+	startApplication,
+	ServerConfiguration,
+	makeDatabaseFromConfig
+} from '@norbital-ai/bolt-server';
 import type { DatabaseProvider } from '@norbital-ai/bolt-server';
 import { ConfigProvider, Effect } from 'effect';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -39,7 +43,6 @@ const configuration = ServerConfiguration.make({
 	},
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1024
 });
 

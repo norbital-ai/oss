@@ -43,7 +43,6 @@ const query = (trustedContext: unknown, credential?: string) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`plugin-query-${credential ?? 'anonymous'}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		plugin: 'data-browser',
 		command: 'query',
 		input: { collection: 'people', input: { limit: 20 } },

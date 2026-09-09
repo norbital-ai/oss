@@ -457,7 +457,6 @@ const invoke = async (command: string, input: Schema.Json): Promise<BundleResult
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`invoke-${command}`),
 		scope,
-		deadlineEpochMs: Date.now() + 10_000,
 		command,
 		input,
 		headers: { authorization: ['Bearer test-session'] }
@@ -479,7 +478,6 @@ const invokePlugin = async (
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`plugin-${command}`),
 		scope,
-		deadlineEpochMs: Date.now() + 10_000,
 		plugin: 'data-browser',
 		command,
 		input,
@@ -503,7 +501,6 @@ describe('runnable Bolt vertical slice', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			id: InvocationId.make('unauthenticated-command'),
 			scope,
-			deadlineEpochMs: Date.now() + 10_000,
 			command: 'apps.visible',
 			input: { subject: employee },
 			headers: {}
@@ -519,7 +516,6 @@ describe('runnable Bolt vertical slice', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			id: InvocationId.make('request-auth'),
 			scope,
-			deadlineEpochMs: Date.now() + 10_000,
 			method: 'GET',
 			url: '/apps',
 			headers: { Authorization: ['Bearer test-session'] }
@@ -638,7 +634,6 @@ describe('runnable Bolt vertical slice', () => {
 				protocolVersion: PROTOCOL_VERSION,
 				id: InvocationId.make('sync-prefix-bytes'),
 				scope,
-				deadlineEpochMs: Date.now() + 10_000,
 				command: 'sync.connect',
 				input: {
 					queries: [
@@ -733,7 +728,6 @@ describe('runnable Bolt vertical slice', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			id: InvocationId.make('realtime-input'),
 			scope,
-			deadlineEpochMs: Date.now() + 10_000,
 			connectionId: 'connection-1',
 			event: {
 				_tag: 'Input',
@@ -747,46 +741,12 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
-	/**
-	 * No wall unless the host sets one. The runtime's only deadline is the instant a host chose to
-	 * send; absent, the tree runs for as long as its facility calls take — here a task facility that
-	 * answers slower than every former default would have allowed.
-	 */
-	it('lets an activation outwait a slow facility when no wall was sent, and cuts it when one was', async () => {
-		const slowTasks: FacilityBindings['tasks'] = {
-			call: async (metadata, request, signal) => {
-				await new Promise((resolve) => setTimeout(resolve, 60));
-				return tasks.call(metadata, request, signal);
-			}
-		};
-		const slow: FacilityBindings = { ...facilities, tasks: slowTasks };
-		const unbounded: Activation = {
-			protocolVersion: PROTOCOL_VERSION,
-			id: InvocationId.make('activation-unbounded'),
-			scope,
-			reason: 'deploy'
-		};
-		expect(await bundle.activate(unbounded, slow, new AbortController().signal)).toMatchObject({
-			_tag: 'Activated'
-		});
-		const walled: Activation = {
-			...unbounded,
-			id: InvocationId.make('activation-walled'),
-			deadlineEpochMs: Date.now() + 30
-		};
-		expect(await bundle.activate(walled, slow, new AbortController().signal)).toMatchObject({
-			_tag: 'Failure',
-			error: { code: 'deadline_exceeded' }
-		});
-	});
-
 	it('registers every durable callback during activation', async () => {
 		taskRequests.length = 0;
 		const activation: Activation = {
 			protocolVersion: PROTOCOL_VERSION,
 			id: InvocationId.make('activation-1'),
 			scope,
-			deadlineEpochMs: Date.now() + 10_000,
 			reason: 'deploy'
 		};
 		const result = await bundle.activate(activation, facilities, new AbortController().signal);

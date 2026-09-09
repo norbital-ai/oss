@@ -63,7 +63,6 @@ export const dispatch = async (invocation, facilities, signal) => {
 			{
 				invocationId: invocation.id,
 				effectId: `${invocation.id}:commit`,
-				deadlineEpochMs: invocation.deadlineEpochMs,
 				idempotencyKey: `${invocation.id}:commit`
 			},
 			{ changes: [] },

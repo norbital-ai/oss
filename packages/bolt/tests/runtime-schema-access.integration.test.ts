@@ -44,7 +44,6 @@ const command = (name: string, credential: string) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`schema-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		// Every `schema.*` contract declares `EmptyInput` (`Schema.Struct({})`), so the empty payload
 		// is `{}`. `null` fails the contract decode, which happens before authority is consulted, and
@@ -59,7 +58,6 @@ const task = (name: string, input: unknown) =>
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make(`schema-task-${name}`),
 		scope,
-		deadlineEpochMs: Date.now() + 30_000,
 		command: name,
 		input: input as never,
 		attempt: 0

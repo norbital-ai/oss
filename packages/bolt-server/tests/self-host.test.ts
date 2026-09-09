@@ -21,7 +21,6 @@ const configuration = ServerConfiguration.make({
 	},
 	mode: 'development',
 	drainTimeoutMillis: 1_000,
-	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1024
 });
 

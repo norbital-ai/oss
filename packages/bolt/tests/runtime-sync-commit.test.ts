@@ -15,7 +15,6 @@ import { SyncCommit } from '../src/runtime/facilities/services.js';
 
 const context: CallContext = {
 	invocationId: InvocationId.make('sync-commit:test'),
-	deadlineEpochMs: 4_000_000_000_000,
 	environment: 'test',
 	tenantId: 'tenant-test'
 };
@@ -46,7 +45,7 @@ describe('Bolt SyncCommit service', () => {
 
 			yield* Deferred.await(entered);
 			yield* Effect.yieldNow;
-				assert.strictEqual(running.pollUnsafe(), undefined);
+			assert.strictEqual(running.pollUnsafe(), undefined);
 
 			yield* Deferred.succeed(release, undefined);
 			yield* Fiber.join(running);
@@ -61,11 +60,11 @@ describe('Bolt SyncCommit service', () => {
 						failure(
 							makeWireError('sync_settlement_failed', 'sync.advance rejected the commit', {
 								retryable: true,
-									outcome: 'unknown'
-								})
-							)
+								outcome: 'unknown'
+							})
 						)
-				};
+					)
+			};
 			const error = yield* Effect.gen(function* () {
 				const syncCommit = yield* SyncCommit.Service;
 				return yield* syncCommit
