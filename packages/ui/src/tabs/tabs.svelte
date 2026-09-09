@@ -71,10 +71,12 @@
 	const resolvedLayout = $derived(
 		layout ?? (variant === 'default' && listClass == null ? 'responsive' : 'horizontal')
 	);
+	// A vertical strip is always the underline rail: the pill chrome is a horizontal idiom.
+	const resolvedVariant = $derived(resolvedLayout === 'vertical' ? 'underline' : variant);
 	const resolvedListClass = $derived(
 		// `responsive` lists are width-full. The default chrome also owns horizontal margins, so it
 		// must return to auto width or its 100% width plus both margins overhangs the PageHeader inset.
-		listClass ?? (variant === 'default' ? cn(INSET_MX_CLASS, 'w-auto') : undefined)
+		listClass ?? (resolvedVariant === 'default' ? cn(INSET_MX_CLASS, 'w-auto') : undefined)
 	);
 </script>
 
@@ -83,7 +85,7 @@
 		{@render listPrefix()}
 	{/if}
 	<TabsList
-		{variant}
+		variant={resolvedVariant}
 		{semantics}
 		layout={resolvedLayout}
 		class={resolvedListClass}
@@ -98,7 +100,7 @@
 			{:else if configTab?.label !== undefined && isSnippet(configTab.label)}
 				{@render configTab.label()}
 			{:else}
-				<Inline as="span" gap="xs" justify="center">
+				<Inline as="span" gap="xs" justify={resolvedLayout === 'vertical' ? 'start' : 'center'}>
 					{#if tab.icon}
 						<IconWrapper name={tab.icon} class={tab.label ? 'size-3.5' : 'size-4'} />
 					{/if}

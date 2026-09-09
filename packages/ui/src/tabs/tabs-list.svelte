@@ -76,7 +76,8 @@
 			},
 			layout: {
 				horizontal: '',
-				vertical: '',
+				// A rail reads like a list: every label starts at the same left edge.
+				vertical: 'w-full justify-start text-left',
 				responsive: ''
 			}
 		},
