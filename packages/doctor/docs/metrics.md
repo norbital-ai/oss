@@ -162,8 +162,9 @@ Every finding has scanner-owned buckets in canonical order: `simplicity`, `strai
 `modularity`, `testability`, `efficiency`, `type-safety`, `colocation`, `no-bloat`. Reports expose
 count and density for each. A multi-principle finding
 contributes once per bucket, so bucket counts need not sum to total findings. The current scanner
-covers `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, and `.svelte`; other structural production extensions
-are listed as uncovered, with static-quality/health withheld and verdict `incomplete`.
+covers `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, and `.svelte`; other
+structural production extensions are listed as uncovered, with static-quality/health withheld and
+verdict `incomplete`.
 
 ## Composite scores and regression
 

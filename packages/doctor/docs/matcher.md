@@ -58,7 +58,7 @@ its `not: [c]` is `rule: { all: [<shape>, { not: c }] }`, both of which say what
 | `{ count: { min, of } }`                         | **extension** — `of` matches at least `min` unwrapped times      |
 | `{ fact: { name, …params } }`                    | **extension** — a registered analysis answers for this node (see Facts) |
 
-Alongside the matcher, `defineMatcher` accepts `utils` (named rules `matches` resolves) and
+Alongside the matcher, `defineRule` accepts `utils` (named rules `matches` resolves) and
 `constraints` (a rule per metavariable, narrowing what it may bind).
 
 ## The node model

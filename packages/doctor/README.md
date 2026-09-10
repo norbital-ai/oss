@@ -9,8 +9,9 @@ reachability, dead exports, duplicate bodies, type-aware deprecation checks, and
 metrics table. Curated rule sets are named explicitly or not loaded at all.
 
 Rules are ordinary YAML files committed to your repository. A person or an agent adds one, opens
-a pull request, and the next audit enforces it. A `rule` half uses ast-grep's pattern shape; a
-`detect`/`prefer` pair names an overlap detector.
+a pull request, and the next audit enforces it. A `rule` half uses ast-grep's pattern shape; an
+overlap detector is an ordinary rule document under `packs/overlaps/`, not a `detect`/`prefer`
+pair.
 
 ## Install
 

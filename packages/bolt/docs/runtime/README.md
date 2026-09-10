@@ -24,7 +24,9 @@ A Command, Plugin, or Task payload that claims them is refused before contract d
 
 Missing or invalid session/system proof is **401** (`DispatchError { code: 'unauthorized' }`,
 message `Missing command credential`). Tenant mismatch, refused impersonation, and
-`AccessDenied` are **403**. An authenticated unknown route is **404**.
+`AccessDenied` are **403**. An authenticated unknown command raises
+`DispatchError { code: 'unknown_command' }`, which `app.ts` does not map to a status, so it is
+reported as **500** `dispatch_failed`. There is no 404 mapping.
 
 ---
 

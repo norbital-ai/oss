@@ -5,7 +5,14 @@ middle tier — a finding nobody is accountable for accumulates, and a gate that
 pile of them is not a gate.
 
 Confidence describes how strongly the syntax implies a problem, not whether the matched code is
-important. `hint` rules are intentionally absent from the default decision brief.
+important. `hint` rules are intentionally absent from the default decision brief, and a pack
+document's `confidence` field defaults to `high`.
+
+Every row below is a YAML pack rule and the id, summary, and severity are the document's own. The
+packs ship with `@norbital-ai/doctor` (`boundaries`, `structure`, `graph`, `stringly`, `overlaps`),
+`@norbital-ai/doctor-effect` (`effect`, `ceremony`), and `@norbital-ai/doctor-norbital`
+(`platform`, `svelte`, `reactive`, `capability`). `LEGACY2` is the one built-in rule, owned by the
+type-aware tier.
 
 ## Principle buckets
 
@@ -24,111 +31,133 @@ order: `simplicity`, `straightforwardness`, `modularity`, `testability`, `effici
 | colocation          | Duplicate/dead owners, one-off/proxy units, canonical library ownership, alias use                                                       |
 | no-bloat            | Redundant shapes, reconstruction, duplication, one-off/proxy units, dead code, repeated work, identity reactivity                        |
 
-Sub-rules such as `R3a` and `UI17c` are included by their displayed family. The receipt aggregates
+Sub-rules such as `R3a` and `R3b` are included by their displayed family. The receipt aggregates
 each finding once in every bucket it carries; multi-tag findings therefore intentionally contribute
 to more than one principle total.
 
 ## Type boundaries
 
-| Rule    | Level | Confidence | Detects                                                                                       | Preferred action                                                                             |
-| ------- | ----- | ---------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| R1      | error | high       | `any` in a value signature or annotation                                                      | Use the domain type or boundary `unknown`.                                                   |
-| R3a     | error | high       | Cast to `Record<string, unknown>`                                                             | Preserve or validate the actual shape.                                                       |
-| R3b     | error | high       | `as unknown as`                                                                               | Remove it or document a true non-data framework boundary.                                    |
-| R3e     | error | medium     | Single cast to `unknown`                                                                      | Accept `unknown` at the boundary instead.                                                    |
-| R3f     | error | high       | Explicit cast to `any`                                                                        | Replace it with a real type.                                                                 |
-| R5b     | error | high       | Predicate manually reconstructs a type from an explicitly `unknown` parameter                 | Decode with Effect Schema; typed collection refinements and discriminated unions are exempt. |
-| R5d     | hint  | medium     | Chained `in` guard                                                                            | Prefer one schema validation.                                                                |
-| R6a     | error | high       | Cast directly around `JSON.parse`                                                             | Parse through a schema.                                                                      |
-| R6b     | error | medium     | `JSON.parse` without an enclosing parse/safeParse                                             | Validate the parsed value.                                                                   |
-| R7      | error | high       | Rows or generic result collapsed to `unknown`                                                 | Preserve the adapter generic.                                                                |
-| R8      | error | high       | Proven Response/RPC-shaped command output or broad domain JSON value is manually duck-decoded | Decode once with its domain Effect Schema.                                                   |
-| SCHEMA1 | error | high       | Runtime Zod import/require or direct package declaration                                      | Remove Zod; use Effect Schema.                                                               |
-| CLONE   | error | high       | `JSON.parse(JSON.stringify(...))`                                                             | Use the established clone utility.                                                           |
+| Rule     | Level | Detects                                                          |
+| -------- | ----- | ---------------------------------------------------------------- |
+| CLONE    | error | JSON stringify/parse clone                                       |
+| COERCE1  | error | `Number()` decodes IO instead of a schema                        |
+| EFF11    | error | Effect error channel erased to `unknown`                         |
+| GUARD1   | error | hand-rolled object duck guard reconstructs a record              |
+| GUARD2   | error | runtime `typeof` discriminant instead of a schema decode         |
+| PARSE1   | error | `JSON.parse` in a ternary branch skips the decode boundary       |
+| R1       | error | `any` in a signature or annotation                               |
+| R3a      | error | cast to `Record<string, unknown>`                                |
+| R3b      | error | unapproved double cast                                           |
+| R3e      | error | single cast to `unknown`                                         |
+| R3f      | error | explicit cast to `any`                                           |
+| R5d      | hint  | `in`-operator duck typing                                        |
+| R6a      | error | `JSON.parse` followed by a cast                                  |
+| R6b      | error | `JSON.parse` without visible validation                          |
+| REFLECT1 | error | `Reflect.get` reads a coerced object instead of a decoded boundary |
+| SCHEMA1  | error | Zod bypasses the required Effect Schema boundary                 |
+| STD2     | error | error message is extracted inline instead of `getErrorMessage`   |
+| STD3     | error | unknown catch value is normalized to `Error` inline              |
+
+GUARD2 carries the no-runtime-type-checking law: if code must ask `typeof` what a value is, the
+type system broke at the boundary that handed the value over, so the repair is a schema decode
+(`Schema.is` / a domain schema), not a sharper discriminant. Ambient receivers — `globalThis`,
+`process`, `import.meta`, `window`, `document`, `module` — are environment detection, not value
+type checking, and stay quiet. GUARD1 dominates GUARD2 where the object-record conjunction matches
+both, because one `decodeUnknownOption` repair clears both claims.
 
 ## Structure
 
-| Rule     | Level | Confidence | Detects                                                                                                         | Preferred action                                                                    |
-| -------- | ----- | ---------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| AL1      | hint  | high       | Bare named type alias                                                                                           | Use the original type.                                                              |
-| AL2      | hint  | high       | Primitive type alias                                                                                            | Remove it unless it is a real brand.                                                |
-| AL3      | hint  | high       | Alias for `Record<string, unknown>`                                                                             | Model the real shape.                                                               |
-| AL4      | error | high       | Object/union type whose name matches a same-file Effect Schema                                                  | Derive with `typeof SchemaOwner.Type` or `Schema.Schema.Type`.                      |
-| AL5      | error | high       | Exported object (≥3 fields) or string union duplicated                                                          | One Effect Schema owner; derive or re-export it.                                    |
-| AL6      | error | high       | Collection-shaped object type restates/re-keys a row                                                            | Compose from the schema-owned row with `Pick`/`Omit`/indexed access.                |
-| AL7      | error | high       | Exported durable/wire/receipt object (≥3 fields) has no matching Effect Schema                                  | Define the boundary schema and derive the type.                                     |
-| AL8      | error | high       | Function parameter contains an inline `{ role, content/parts }` message shape                                   | Accept the canonical schema-inferred message type or compose from it.               |
-| AL9      | error | medium     | Function parameter contains an inline data object with four or more fields                                      | Accept a schema-inferred type or compose the parameter from its owner.              |
-| AL11     | error | high       | Local schema repeats an exported domain schema's fields and primitive families                                  | Import and compose the canonical schema owner.                                      |
-| AR1      | error | high       | Function only copies source properties into a new object                                                        | Use the row directly or spread it where an actual override is needed.               |
-| AR2      | error | high       | Whole-row select aliases columns, usually for a later remap                                                     | Select the table/row shape and keep its canonical keys.                             |
-| AR5      | error | high       | Returned object re-lists at least six of six/eight fields from one or two inputs                                | Preserve the typed object/projection, spread it, or fix the upstream schema/client. |
-| SQL1     | error | high       | Raw SQL outside transaction requests/control or narrowly identifiable schema-bootstrap DDL                      | Use the typed collection/query builder; keep only transaction/bootstrap SQL.        |
-| DDL1     | error | high       | Authored table/index or table-column/constraint definition bypasses the model compiler                          | Declare the model once and let the compiler emit its physical schema.               |
-| S1       | error | high       | Empty catch without an ignore rationale                                                                         | Handle or log the failure.                                                          |
-| S3       | hint  | high       | Same expression checked against null and undefined                                                              | Use `value != null`.                                                                |
-| S5       | hint  | high       | `Array.from(new Set(...))`                                                                                      | Use `[...new Set(...)]`.                                                            |
-| D1       | error | high       | Exact non-trivial named function, method, constructor/accessor, or class body duplicated                        | Keep one entity owner and import, call, or extend it.                               |
-| COMPAT1  | error | high       | Explicit deprecated/legacy/backward-compat forwarding declaration or re-export surface                          | Migrate consumers and delete the compatibility surface.                             |
-| LEGACY1  | error | high       | Authored declaration carries `@deprecated`                                                                      | Remove the legacy owner after migrating its consumers.                              |
-| LEGACY2  | error | high       | TypeScript resolves an actual use to a deprecated API                                                           | Use the supported API; import-site diagnostics alone are deduplicated.              |
-| TRANS1   | error | high       | Executable code is attached to an explicit remove-after-migration/temporary-until marker                        | Complete the transition and delete the scaffold.                                    |
-| TRANS2   | error | high       | Canonical field read falls back to an explicitly `legacy`/`compat`/`deprecated` field                           | Migrate stored data and keep one canonical field.                                   |
-| D2       | error | high       | Identical `if`/`else` or ternary branches                                                                       | Remove the meaningless condition or consolidate the shared logic.                   |
-| Q1       | error | high       | Callback-named function forwards every parameter unchanged to one callback                                      | Call the callback directly.                                                         |
-| Q3       | error | high       | Private function has one same-file direct call and forwards its parameters unchanged                            | Call the forwarded owner directly.                                                  |
-| Q4       | hint  | medium     | Private function has one same-file direct call and a small mutation-free single expression                      | Review whether its name earns the indirection; inline when it does not.             |
-| IDENT1   | error | high       | `onSuccess` handler returns its argument unchanged                                                              | Drop the match; use `orElseSucceed` / `catch` / `getOrElse` so success is implicit. |
-| SWALLOW1 | error | high       | `Effect.catch` handler is empty or returns `undefined`                                                          | Log, fail, or recover with a real value; do not discard the error channel.          |
-| SWALLOW2 | error | high       | `Effect.catch` handler returns an empty value (`[]`, `{}`, `null`, `undefined`, `''`)                           | Fail, or recover with `succeedNone`/`Option.none` so absent stays typed.            |
-| FETCH1   | error | high       | Bare `fetch(` call                                                                                              | Use `httpRequest` from `@norbital-ai/std/http`.                                     |
-| EFF11    | error | high       | `Effect.Effect<A, unknown>` erases the error channel                                                            | Name the failure type; `R` as `unknown` is not this rule.                           |
-| COERCE1  | error | high       | `Number()` used as an IO decoder                                                                                | Use `decodeNumber` from `@norbital-ai/std/json`.                                    |
-| Q5       | error | high       | Parameter is typed as the `undefined` or `void` singleton                                                       | Drop the phantom argument or type a real domain value.                              |
-| RET1     | hint  | high       | Implementation writes a return type TypeScript already infers                                                    | Drop the annotation; keep type predicates, overloads, and `declare`/interface contracts. |
-| GUARD1   | error | high       | `typeof x === 'object' && x !== null` reconstructs a record by hand                                             | Decode with Effect Schema (`JsonObject` / the domain schema).                       |
-| GUARD2   | error | high       | `typeof x === '<kind>'` decides what a value is at runtime                                                       | Decode with Effect Schema (`Schema.is`); a typeof ask means the boundary upstream failed. |
-| REFLECT1 | error | high       | `Reflect.get(Object(...), key)` reads a coerced value instead of a decoded boundary                             | Decode once; read typed fields.                                                     |
-| STATE2   | error | high       | Module `const` Map/Set is mutated from a function                                                                | Move lifetime into a factory or inject the cache.                                   |
-| STATE3   | error | high       | Module `let` binding is mutated from a function                                                                  | Move lifetime into a factory, scoped service, or instance owner.                    |
-| ERR1     | error | high       | `new Error(String(cause))` stringifies the caught value into a new Error                                         | Preserve the failure: `new Error(message, { cause })` or `toError` from std.        |
-| ERR2     | error | high       | A catch arm builds a new Error without preserving the caught failure as its `cause`                              | Attach `{ cause }` to the error the arm builds.                                     |
-| STD2     | error | high       | `instanceof Error ? .message : String(.)` reimplements `getErrorMessage`                                        | Import `getErrorMessage` from `@norbital-ai/std`.                                   |
-| STD3     | error | high       | `instanceof Error ? cause : new Error(String(cause))` reimplements `toError`                                    | Import `toError` from `@norbital-ai/std`.                                           |
-| PARSE1   | error | high       | Ternary `JSON.parse` branch skips the decode boundary                                                           | Decode with Effect Schema (`Schema.parseJson`).                                     |
-| VOID1    | error | high       | `void Promise.resolve(...)` discards a native Promise                                                           | Return or `yield*` the work so failure is owned.                                    |
-| EFF8     | error | high       | `Effect.gen` only unwraps a service and maps `json`                                                             | Use `Effect.map` / `Effect.flatMap` on the service call.                            |
-| EFF9     | error | high       | `Effect.promise` drops rejection onto the defect channel                                                        | Use `Effect.tryPromise` and name the failure.                                       |
-| EFF10    | error | high       | SvelteKit `error()` throws inside Effect                                                                        | Fail in Effect and map to `error()` at the HTTP edge.                               |
-| SANDWICH1| error | high       | Effect is `runPromise`'d and lifted back into Effect                                                            | Keep one runtime; return the inner Effect.                                          |
-| QRY1     | error | high       | A generated query is mirrored or adapted by a handwritten query state machine                                   | Render `.current`/`.loading`/`.error`; the sync engine owns freshness.              |
-| QRY2     | error | high       | A live query is manually refreshed or refetched                                                                 | Delete the refresh path; mutations and the sync engine update the query.            |
-| QRY3     | error | high       | A derived query receives a plain binding that froze a reactive parameter at initialization                      | Derive the parameter binding or construct the parameters inside the query owner.    |
-| QRY4     | error | high       | A query interface/class exposes a public `refresh`/`refetch` member                                             | Remove the member; keep sync re-execution private to the engine.                    |
-| LIVE1    | error | high       | A named/timer/loop polling mechanism repeatedly waits and reads                                                 | Read the live collection once and let sync update it.                               |
-| LIVE2    | error | high       | `EventSource`, `text/event-stream`, or `sse` is used outside the sync stream                                    | Remove the stream or route live collection data through the sync engine.            |
-| MUT1     | error | high       | A generated mutation is wrapped by local Effect/Promise, refresh, or lifecycle orchestration                    | Invoke the generated mutation directly and render its owned lifecycle state.        |
-| ORM1     | error | high       | A Drizzle column supplies a second physical-name string, whether repeated or remapped                           | Keep one vocabulary: use the canonical property and omit the optional name.         |
-| PERF1    | error | high       | Potentially unbounded invariant collection is linearly searched inside another traversal                        | Build one `Map`/`Set` index before traversing.                                      |
-| PERF2    | error | high       | Effect Schema predicate/decoder factory rebuilt inside a traversal                                              | Hoist the decoder once outside the callback.                                        |
-| PERF3    | error | high       | Three or more consecutive eager `filter`/`map`/`flatMap` traversals                                             | Fuse the work into one pass or a canonical `filterMap`/indexed owner.               |
-| PERF4    | error | high       | Pure `filter` materializes all matches only to read index zero/`at(0)`/`shift()`                                | Use `find`; effectful predicates are deliberately excluded.                         |
-| EQ1      | error | high       | `JSON.stringify` used on both sides of equality                                                                 | Use domain `Equivalence` or a canonical comparison.                                 |
-| STATE1   | error | high       | Top-level mutable binding/collection is mutated from a non-IIFE function                                        | Move lifetime into a factory, scoped service, or instance owner.                    |
-| MOD1     | error | high       | Relative static import/export, dynamic import, import-equals, or `require` resolves to its own module           | Import the namespace at the consumer or use the module's named exports directly.    |
-| POLICY1  | error | high       | Policy/admission identity parameter has no decision/call use, directly or through a local alias                 | Use the identity in the policy or remove it from the contract.                      |
-| OPS1     | error | high       | Operational owner hard-codes `health/status: 'ready'` or `accepting: true, outstanding: 0`                      | Derive readiness and admission from observed dependency or capacity state.          |
-| NODE1    | error | high       | Named callable combines line splitting, assignment parsing, and output construction for `.env` text             | Import `parseEnv` from `node:util`.                                                 |
-| NODE2    | error | high       | Direct or mutual recursion reaches non-recursive `readdir`/`readdirSync` without a control-flow prune           | Use Node's recursive directory read; retain walkers that actually prevent descent.  |
-| NODE3    | error | high       | CLI entrypoint manually searches `process.argv` for a long or short option, including beside `parseArgs`        | Declare the command grammar once with `node:util.parseArgs`.                        |
-| NODE4    | error | high       | A glob-labelled entrypoint applies `includes`/`indexOf`/`search` to a pattern, even beside native glob          | Use `node:fs`/`node:fs/promises` `glob` and preserve real glob semantics.           |
-| BOOT1    | error | high       | Executed module initialization captures `process.env` before a direct or local-wrapper `loadEnvFile` call fires | Load the environment before capturing configuration.                                |
-| COMPLEX1 | error | high       | Function control flow reaches four nested decision/loop levels                                                  | Use guard clauses or move a coherent policy into its owner.                         |
-| FILE1    | error | high       | Production source unreachable from package, framework, compiler, script, config, or worker roots                | Delete it or connect it to a real entrypoint.                                       |
-| EXP1     | error | high       | A closed package export map proves an exported declaration has no production or test consumer                   | Remove `export`/the declaration or consume it from a real entrypoint.               |
-| IMP1     | error | high       | Relative import climbs at least two parent directories and resolves to a declared alias target                  | Use the declared alias for the deep traversal.                                      |
-| SUP1     | error | high       | A health allowance is blanket, legacy, unknown, unexplained, or no longer suppresses a finding                  | Remove stale markers or use one exact, reasoned `repository-health:allow <rule>`.   |
-| P9       | hint  | high       | Export-star declaration                                                                                         | Export concrete symbols from owners.                                                |
+| Rule     | Level | Detects                                                                                        |
+| -------- | ----- | ---------------------------------------------------------------------------------------------- |
+| A1       | error | discarded timer requires cleanup review                                                        |
+| A5       | hint  | catch only rethrows                                                                            |
+| A6       | error | await inside a synchronous loop                                                                |
+| AL1      | hint  | bare type alias                                                                                |
+| AL2      | hint  | primitive type alias                                                                           |
+| AL3      | hint  | loose-record type alias                                                                        |
+| AL8      | error | inline message shape redeclares the canonical message type                                     |
+| AL9      | error | large inline data parameter has no named schema-derived owner                                  |
+| BOOT1    | error | environment file is loaded after configuration is captured                                     |
+| COMPLEX1 | error | function control flow nests four or more levels                                                |
+| CONV1    | error | the agent's durable model is a conversation, not a task                                        |
+| D2       | error | conditional has identical branches                                                             |
+| E1       | error | environment-dependent behavior                                                                 |
+| EFF10    | error | SvelteKit `error()` throws from the middle of `Effect.gen`                                     |
+| EFF8     | error | `Effect.gen` only unwraps a service and maps `json`                                            |
+| EFF9     | error | `Effect.promise` drops rejection onto the defect channel                                       |
+| ERR1     | error | caught value is stringified into a new `Error`, so its type and stack are destroyed            |
+| ERR2     | error | catch arm builds a new `Error` without preserving the caught failure as its `cause`            |
+| FETCH1   | error | raw `fetch` bypasses the typed HTTP client                                                     |
+| IDENT1   | error | match handler returns its success value unchanged                                              |
+| IMP1     | error | deep relative import bypasses a declared alias for the same target                             |
+| MOD1     | error | module imports or re-exports itself                                                            |
+| NODE1    | error | source reimplements Node built-in environment parsing                                          |
+| NODE2    | error | unpruned recursive directory walk reimplements `node:fs`                                       |
+| NODE3    | error | command entrypoint reimplements `node:util` `parseArgs`                                        |
+| NODE4    | error | glob entrypoint uses substring matching instead of `node:fs` `glob`                            |
+| OPS1     | error | operational health or admission state is hard-coded                                            |
+| P9       | hint  | export-star barrel                                                                             |
+| PERF2    | error | Effect Schema decoder is rebuilt for every element                                             |
+| PERF3    | error | three or more eager collection traversals are chained                                          |
+| PERF4    | error | `filter` materializes every match only to select the first                                     |
+| POLICY1  | error | policy or admission service ignores the identity it is meant to isolate                        |
+| Q1       | error | callback-named function forwards every parameter unchanged                                     |
+| Q3       | error | private function has one same-file direct call and forwards its parameters unchanged           |
+| Q4       | hint  | private function has one same-file direct call and a small mutation-free single expression     |
+| Q5       | error | parameter is typed as `undefined` or `void`                                                    |
+| RET1     | hint  | implementation return type is written instead of inferred                                      |
+| S1       | error | silent catch block                                                                             |
+| S3       | hint  | verbose null and undefined check                                                               |
+| S5       | hint  | `Array.from(new Set(...))`                                                                     |
+| SANDWICH1| error | Effect is run to a Promise and lifted back into Effect                                         |
+| STATE2   | error | module `const` collection is mutated from a function                                           |
+| STATE3   | error | module `let` binding is mutated from a function                                                |
+| SWALLOW1 | error | `Effect.catch` handler discards the failure with an empty body                                  |
+| SWALLOW2 | error | `Effect.catch` handler returns an empty value, so corruption is indistinguishable from a legitimate empty result |
+| V6       | error | async IIFE in lifecycle code                                                                   |
+| VOID1    | error | native Promise is discarded with `void`                                                        |
+
+Q1, Q5, GUARD1, and REFLECT1 are YAML `rule` matchers. Q3/Q4 are YAML rules that match a
+forwarder or small expression and require exactly one same-file call of that name. Q1 is the
+callback-shaped transparent forwarder, including exported aliases. Q3 is the private one-use
+forwarder and dominates Q1 at the same site. Q4 is the private one-use expression that is not a
+forwarder. Exported/API functions, callbacks passed as values, recursive functions, branching
+bodies, async/generator/generic boundaries, and mutable expressions are excluded from Q3/Q4. Q5
+is a singleton `undefined`/`void` parameter type, not a union with `undefined`. The health report
+retains Q1/Q3/Q4 per pillar so indirection density can be compared without turning ambiguous style
+into a gate.
+
+PERF4 requires a side-effect-free predicate so replacing the materialization with `find` preserves
+behavior. These rules do not infer cost from a method name alone.
+
+The error-channel rules are one law at three depths. SWALLOW2 fires only on an *empty* recovered
+value — `[]`, `{}`, `null`, `undefined`, `''` — where corruption and a legitimately empty result are
+indistinguishable; an honest absent marker (`succeedNone`, `Option.none`) and a real fallback value
+stay quiet. ERR1 fires on `new Error(String(cause))` and exempts the `instanceof` ternary that STD3
+already diagnoses. ERR2 follows a caught value statically through both arm hosts (`Effect.catch`
+calls and `catch:` properties) and stays quiet the moment the arm's Error carries that value as its
+`cause`, in property or shorthand form; an arm that omits the binding entirely is always reported.
+ERR1 dominates ERR2 where one arm matches both, because one `{ cause }` repair clears both claims.
+
+STATE3 pairs with STATE1 and STATE2 to close the hidden-state family: STATE1 owns module `let` in
+Effect-importing modules, STATE2 owns module `const` collections, and STATE3 owns module `let`
+mutated from a function elsewhere. Function-local `let`, `??=` memo assignments, and plain reads
+stay quiet. The first bound top-level `let` names the binding the mutation must target, the same
+single-coupling limitation STATE2 carries.
+
+## Repository graph
+
+| Rule  | Level | Detects                                                        |
+| ----- | ----- | -------------------------------------------------------------- |
+| D1    | error | duplicate non-trivial function, method, or class body          |
+| EXP1  | error | exported declaration has no static consumer                    |
+| FILE1 | error | production file is unreachable from a real entrypoint          |
+
+D1 compares only named code entities: functions, assigned functions, methods,
+constructors/accessors, and classes. It requires at least four body lines and 24 syntax tokens and
+compares changed/path-scoped entities with all production files. Exact duplicated classes own the
+diagnosis and suppress their duplicated members. Repeated inline statements and anonymous callback
+bodies are not candidates.
 
 ## Pillar targeting for simplification rules
 
@@ -157,89 +186,133 @@ owner. `BOOT1` follows calls to local bootstrap wrappers in module execution ord
 | NODE4   | Sandbox and compiler file-search tools                                         | Confined root + glob pattern → Node glob expansion → matched files          |
 | BOOT1   | Node server/bootstrap entrypoints                                              | Environment file load → configuration capture → service startup             |
 
-## Async and configuration
+## Stringly-typed identifiers
 
-| Rule    | Level | Confidence | Detects                                                                                           | Preferred action                                                                           |
-| ------- | ----- | ---------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| A1      | error | medium     | Discarded timer call                                                                              | Verify cleanup and ownership.                                                              |
-| A5      | hint  | high       | Catch block whose only statement rethrows                                                         | Remove it or add context.                                                                  |
-| A6      | error | medium     | Await in a non-`for await` loop body                                                              | Confirm sequencing is required; batch independent work.                                    |
-| E1      | error | high       | Direct DEV/PROD/MODE or NODE_ENV behavior branch                                                  | Centralize environment policy.                                                             |
-| E2      | hint  | high       | ENABLE/DISABLE/USE/SKIP flag declaration                                                          | Use canonical configuration.                                                               |
-| E3      | error | high       | Get-or-throw or re-check of a schema-owned env var                                                | Read `$env/static/private` or `$env/dynamic/private`. Constraints live in `env.schema.ts`. |
-| EFF1    | error | high       | Native `try`/`catch` in production                                                                | Model failure with Effect.                                                                 |
-| EFF2    | error | high       | `new Promise`, Promise types/statics/chains                                                       | Use Effect constructors, schedules, races, and traversal.                                  |
-| EFF3    | error | high       | Native `async` or `await` in production                                                           | Keep control flow in Effect; adapt only at the mechanically required edge.                 |
-| EFF4    | error | high       | Local RateLimiter, Cache, clamp, partition, chunks, or equivalence algorithm duplicates Effect v4 | Use the catalogued Effect primitive.                                                       |
-| EFF5    | error | high       | Effect workflow reads ambient time or randomness                                                  | Inject it or use Effect Clock/Random.                                                      |
-| EFF6    | error | high       | `throw` inside typed Effect composition                                                           | Fail through the typed Effect error channel.                                               |
-| EFF7    | error | high       | `Effect.gen` contains only one direct yield                                                       | Use the yielded Effect directly.                                                           |
-| NONDET1 | error | high       | Ordinary function in an Effect-owned runtime module reads ambient time/randomness                 | Inject the value/clock/random source; UI components and parameter defaults are exempt.     |
-| LOG1    | error | high       | Runtime global `console` call outside a catch/CLI                                                 | Use Effect logging or an injected structured logger.                                       |
-| IO1     | error | high       | Runtime synchronous Node filesystem/process IO                                                    | Use Effect platform FileSystem/Command.                                                    |
+| Rule | Level | Detects                                                                |
+| ---- | ----- | ---------------------------------------------------------------------- |
+| STR1 | error | branches on an open-domain identifier compared to a source literal     |
+| STR2 | error | tests an open-domain identifier against a literal allowlist            |
+| STR3 | error | dispatches on an open-domain identifier                                |
 
-EFF4 uses `references/effect-v4-public-api.json`, generated from the pinned Effect package. Names
-never prove a finding. RateLimiter needs window/counter/threshold state; Cache binds get, set, and
-expiry/in-flight evidence to the same map; clamp requires the exact nested min/max shape; partition
-requires complementary filters or two unchanged push buckets; equivalence requires size/key parity
-plus a pure same-index/key comparison; chunking requires the exact zero-based size stride and
-`slice(index, index + size)` push. Importing the matched primitive exempts the file.
+## Library overlaps
 
-## Canonical reuse
+| Rule               | Level | Detects                                                                      |
+| ------------------ | ----- | ---------------------------------------------------------------------------- |
+| OVERLAP_CACHE      | error | has/get/set memo around a computation reimplements a library cache            |
+| OVERLAP_CHUNK      | error | sliding slice loop reimplements a library chunk                              |
+| OVERLAP_CLAMP      | error | nested `Math.min`/`Math.max` reimplements a library clamp                    |
+| OVERLAP_DEEP_EQUAL | error | `JSON.stringify` comparison reimplements a library deep equal                |
+| OVERLAP_GROUP_BY   | error | reduce into keyed buckets reimplements a library `groupBy`                   |
+| OVERLAP_PARTITION  | error | a predicate filtered twice reimplements a library partition                  |
+| OVERLAP_RATE_LIMIT | error | timestamp compared against now before doing work reimplements a rate limiter |
+| OVERLAP_SUM        | error | reduce with addition reimplements a library sum                              |
+| OVERLAP_UNIQUE     | error | `Set` round-trip reimplements a library unique                               |
 
-| Rule | Level | Confidence | Detects                                                    | Preferred action                                       |
-| ---- | ----- | ---------- | ---------------------------------------------------------- | ------------------------------------------------------ |
-| STD1 | error | medium     | Local function shadows a curated `@norbital-ai/std` helper | Import the shared helper or justify the local variant. |
+Overlap detectors are ordinary `rule` documents under `packs/overlaps/`; there is no separate
+detector form.
 
-STD1 intentionally covers only stable helpers the package actually publishes: `deepDiff` and
-`safeParse` from `@norbital-ai/std/json`; `getErrorMessage` from `@norbital-ai/std/error`; `humanize`
-and `textSearchMatches` from `@norbital-ai/std/string`; and `treeFind` and `treeFlatten` from
-`@norbital-ai/std/tree`. It does not match imports or similarly named values that are not functions.
-Each helper's exact source module inside the package named `@norbital-ai/std` is its canonical owner,
-not a shadow; same-named implementations elsewhere in that package or in consumers still match.
-Domain-specific date, finance, and Reckon APIs remain public but are deliberately outside this
-name-only shadow check.
+## Effect ownership
+
+| Rule    | Level | Detects                                                        |
+| ------- | ----- | -------------------------------------------------------------- |
+| EFF1    | error | native `try`/`catch` bypasses Effect error control             |
+| EFF2    | error | native Promise control bypasses Effect concurrency             |
+| EFF3    | error | `async`/`await` appears in an Effect-owned module              |
+| EFF5    | error | Effect workflow reads ambient time or randomness               |
+| EFF6    | error | `throw` escapes the typed Effect error channel                 |
+| EFF7    | error | single-yield `Effect.gen` adds no composition                  |
+| EQ1     | error | `JSON` serialization is used as equality                       |
+| IO1     | error | runtime code performs blocking synchronous Node IO             |
+| LOG1    | error | runtime `console` call bypasses structured logging             |
+| NONDET1 | error | ordinary Effect-owned module reads ambient time or randomness  |
+| STATE1  | error | module-scoped mutable state hides shared lifetime              |
+
+## Effect ceremony
+
+| Rule      | Level | Detects                                                                 |
+| --------- | ----- | ----------------------------------------------------------------------- |
+| CEREMONY1 | error | an Effect runtime is started to evaluate a total synchronous expression |
+| CEREMONY2 | error | an Effect is run for its side effect and its failure channel discarded  |
+| CEREMONY3 | error | a component runs an Effect synchronously during render                  |
+| CEREMONY4 | error | a Result is constructed for a value that cannot fail                    |
+| CEREMONY5 | error | one collection is filtered twice where a single partition would do      |
+
+## Platform
+
+| Rule    | Level | Detects                                                                          |
+| ------- | ----- | -------------------------------------------------------------------------------- |
+| COMPAT1 | error | explicit legacy or compatibility forwarding surface                              |
+| DDL1    | error | authored table, column, constraint, or index DDL bypasses the model compiler     |
+| E2      | hint  | feature flag declared in source                                                  |
+| E3      | error | env get-or-throw or re-validation wrapper                                        |
+| LEGACY1 | error | authored declaration is explicitly deprecated                                    |
+| LEGACY2 | error | compiler-resolved deprecated API is still used (type-aware tier)                 |
+| LIVE1   | error | handwritten polling bypasses the live sync engine                                |
+| LIVE2   | error | server-sent events are used outside the sync engine                              |
+| ORM1    | error | ORM column declares a second physical-name vocabulary                            |
+| QRY2    | error | live query is refreshed manually instead of updating through sync                |
+| QRY3    | error | query parameters froze reactive input outside `$derived`                         |
+| QRY4    | error | public query contract exposes manual refresh                                     |
+| ROOT1   | error | legacy tenant substrate root override bypasses the canonical one-root contract   |
+| SQL1    | error | raw SQL outside transaction ownership or schema bootstrap DDL                    |
+| TRANS1  | error | executable code carries an explicit removal or migration marker                  |
+| TRANS2  | error | canonical data falls back to an explicit legacy field                            |
+| UI18    | error | client UI sends a raw transport command instead of using the generated API       |
+
+COMPAT1 requires both explicit legacy intent (path or declaration marker) and structural forwarding:
+a re-export, alias, or unchanged-parameter call. Ordinary public aliases, adapters that transform
+data, and package barrels are valid.
+
+LEGACY1 is authored intent, while LEGACY2 is compiler evidence. LEGACY2 is produced from TypeScript
+suggestion diagnostics only at actual uses, not from API-name lists or import declarations. TRANS1
+requires a concrete removal/migration phrase attached to executable code; ordinary TODOs do not
+match. TRANS2 requires two static fields and an explicit legacy marker in the fallback field name.
+
+QRY2 reports `refresh`/`refetch` on a query-named receiver or a binding initialized from a generated
+collection/facade query. It is lifecycle-independent: a click handler is no more entitled to bypass
+sync than an effect or timer. QRY4 closes the API side of the same boundary by rejecting refresh
+members on query interfaces and classes, so a package cannot make the forbidden operation available
+without a finding even before a caller appears.
+
+QRY3 resolves lexical bindings and follows `$state`, `$props`, and `$derived` dependencies through
+plain object/scalar initializers. It reports only a plain binding outside the query owner that
+transitively read a reactive value before the query's `$derived` ran. Inline parameters, direct
+reactive bindings, `$derived` parameter objects, bindings recomputed inside the same `$derived.by`,
+static constants, and synchronous parameter factory functions invoked inside `$derived` are clean.
+This is scope-aware initialization semantics, not a name heuristic.
+
+LIVE1 reports explicit poll owners, timers whose callback asks for status/data, and loops that combine
+a wait with a read. Ordinary clocks and data-processing loops are negative fixtures. LIVE2 reserves
+`EventSource` and SSE media/protocol declarations for the exact client sync-stream owner,
+`packages/bolt/src/client/sync/sse-driver.ts`.
+
+SQL1 recognizes transaction ownership structurally: a literal beneath a `Transaction.statements`
+property, a helper that returns only a Transaction request, or a direct call to the branded
+`transactionSql` imported from Bolt's persistence owner. A same-named local/lookalike helper is still
+raw SQL. Model/compiler tagged expressions and the policy compiler's explicit `policySql` input are the DDL
+bootstrap exceptions; ordinary runtime tagged SQL is not.
 
 ## Svelte
 
-| Rule | Level | Confidence | Detects                                                                  | Preferred action                                                             |
-| ---- | ----- | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| V1   | error | high       | `$effect` only derives local `$state` through a pure expression          | Replace it with `$derived`; external synchronization and cleanup are exempt. |
-| V14  | error | high       | Top-level `let`/`var` in `.svelte` / `.svelte.ts` that is not a rune     | Use `$state(...)`.                                                           |
-| V15  | error | high       | Top-level computed binding that is not `$derived`                        | Use `$derived(...)` or `$derived.by(...)`.                                   |
-| V16  | error | high       | Svelte 4 `$:` reactive statement                                         | Use `$derived` or `{@attach}`.                                               |
-| V17  | error | high       | Svelte 4 `export let`                                                    | Use `$props()`.                                                              |
-| V19  | error | high       | Optional component prop is wrapped in an empty-object conditional spread | Pass the possibly-undefined prop directly.                                   |
-| V18  | error | high       | `$derived(identifier)` only aliases an existing reactive value           | Read the source directly.                                                    |
-| V3   | error | high       | Svelte 4 `on:` directive                                                 | Use the Svelte 5 event property.                                             |
-| V4   | error | high       | `svelte/store` import in a component                                     | Use runes.                                                                   |
-| V5   | error | high       | Async `onMount` callback                                                 | Start async work inside a synchronous callback.                              |
-| V6   | error | high       | Void async IIFE in lifecycle code                                        | Give the operation cancellation and ownership.                               |
-| V7   | error | high       | Async `$effect` callback                                                 | Keep the effect synchronous.                                                 |
-| V8   | error | medium     | More than eight independently declared `$state` cells                    | Group cohesive state or move a responsibility to its owner.                  |
-| V9   | error | high       | `watch`/`watch.pre` callback writes its own reactive source              | Derive the value or make the update direction explicit.                      |
-| V10  | error | high       | Two watches write into one another's reactive sources                    | Replace the feedback loop with one owner and one update path.                |
-| V11  | error | medium     | False `$state` mounted flag set true by `onMount`                        | Model the browser-only capability or defer the actual operation.             |
-| V12  | error | medium     | `onDestroy` callback mutates component `$state`                          | Tear down external resources without publishing dead state.                  |
-| V13  | error | high       | Mount acquires a timer/listener/observer with no cleanup path            | Return cleanup from `onMount` or use `onDestroy`.                            |
-| SCAN | error | high       | Source parser failure                                                    | Fix syntax or scanner configuration before trusting the report.              |
+| Rule | Level | Detects                                                                        |
+| ---- | ----- | ------------------------------------------------------------------------------ |
+| V1   | error | `$effect` is last-resort external sync; prefer `$derived` or `{@attach}`       |
+| V7   | error | async `$effect`                                                                |
+| V14  | error | plain `let`/`var` in a rune module should be `$state`                          |
+| V15  | error | computed binding in a rune module should be `$derived`                         |
+| V18  | error | `$derived` aliases one identifier without deriving a value                     |
+| V20  | error | `$effect` delegates to a named function, so its dependencies are invisible     |
 
-V8 counts separate top-level component variables and reactive class fields; one cohesive
-`$state({ ... })` object is one cell. V9 and V10 follow statically named state/member paths and do
-not guess about longer dynamic dependency graphs. V13 accepts either cleanup returned directly by
-`onMount` or an explicit `onDestroy` owner in the same component. V1 requires a pure local-state
-write whose right side reads local reactive values; browser APIs, resources, callbacks, and cleanup
-paths are excluded. V14/V15 only inspect top-level
+V1 requires a pure local-state write whose right side reads local reactive values; browser APIs,
+resources, callbacks, and cleanup paths are excluded. V14/V15 only inspect top-level
 bindings in `.svelte` instance scripts. Function-local `let`, `{@const}`, factories, `new`, and
 `.svelte.ts` module caches are ordinary bindings. A component-local generation token used only by a
 prefix increment and identity comparisons with captured locals is imperative concurrency
-bookkeeping, not render state; any other read or write remains V14. A `const` literal is left alone. V15 requires a
-pure computed expression that reads other locals. V16/V17 are leftover Svelte 4 syntax. A matching `*Schema` plus a hand-written
-`type Foo` / `interface Foo` is AL4; two exported types with the same structural fingerprint (three
-or more fields, or a string-literal union) are AL5.
+bookkeeping, not render state; any other read or write remains V14. A `const` literal is left alone.
+V15 requires a pure computed expression that reads other locals.
 
 Packages that publish Svelte components and declare Svelte as a peer dependency are reusable
-component libraries. UI1-UI17 consumer-composition rules do not apply inside those primitive
+component libraries. The `UI*` consumer-composition rules do not apply inside those primitive
 implementations; general syntax, boundary, Effect, and Tailwind runtime-value rules still apply.
 
 ### Effects must show what they depend on
@@ -272,18 +345,6 @@ $effect(() => reveal()); // none of which is visible here
 Write the reads at the effect, or inline the body. A reader should be able to answer "what re-runs
 this?" without opening another function and tracing its early returns.
 
-## Shared UI
-
-| Rule | Level | Confidence | Detects                                                     | Preferred action                                                   |
-| ---- | ----- | ---------- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| UI1  | error | high       | Native `<select>` outside the shared UI implementation      | Use `Combobox` or the shared `Select` primitives.                  |
-| UI2  | error | high       | Manual `tablist`/tab-button semantics                       | Use `Tabs` from `@norbital-ai/ui/tabs`.                            |
-| UI3  | error | medium     | Native `<table>` containing a Svelte `{#each}` block        | Use `CollectionTable` or the appropriate specialized renderer.     |
-| UI4  | error | high       | `alert`, `confirm`, or `prompt`, including `window.*` forms | Use the application dialog, alert-dialog, sheet, or toast surface. |
-
-UI1–UI3 exempt the public UI package source, where native elements are implementation details. UI2 does
-not flag semantic navigation; it requires explicit tab semantics. UI3 does not flag static tables.
-
 ## Layout law
 
 Composition and scroll ownership rules from the authoring skill's layout guides. The layout primitives
@@ -292,164 +353,55 @@ are `Stack`, `Inline`, `Cluster`, `Grid`, `Columns`, `Split`, `Cover`, `Bound`, 
 must never hand-roll what a primitive owns: sibling rhythm (gap), scroll regions (Bound+Scroll), the app
 inset (tokens), or height contracts (Bound sizes).
 
-| Rule | Level | Confidence | Detects                                                                                                                               | Preferred action                                           |
-| ---- | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| UI5  | error | high       | Raw `overflow-(?:[xy]-)?(?:auto\|scroll)` scroll region on an element                                                                 | Use `Scroll axis=… name=…` (with `Bound` if bounded)       |
-| UI6  | error | high       | Raw `flex`/`grid` container arranging siblings (`gap-`, `space-`, …)                                                                  | Use `Stack`/`Inline`/`Cluster`/`Grid`/`Columns`            |
-| UI7  | error | medium     | Sibling margin: `space-y-*`/`space-x-*` or `mt-2+`/`mb-*`/`ml-*`/`mr-*`                                                               | Parent owns the gap via a primitive `gap`                  |
-| UI8  | error | high       | Literal app inset classes (`px-4 py-2 sm:px-6` etc.)                                                                                  | Use the `inset` prop or the exported INSET tokens          |
-| UI9  | error | medium     | Hand-rolled scroll shell: `overflow` + `flex` + `h-full`/`flex-1` chain                                                               | Use an explicit `Bound` + `Scroll` pair                    |
-| UI10 | error | high       | Layout classes on a primitive that owns the prop: `items-*`, `justify-*`, `self-*`, `place-*`, `flex-1`, `grow`, `shrink-0`, `h-full` | Compose with `align`/`justify`/`grow`/`fill`/`size`        |
-| UI11 | error | medium     | Redundant wrapper element adding no layout or boundary                                                                                | Remove it, or give it a primitive's job                    |
-| UI12 | error | high       | Tailwind arbitrary value interpolated at runtime: `` `[prop:${value}]` ``                                                             | Put the value in `style`, or enumerate literal classes     |
-| UI13 | error | high       | Sibling spacing written on a child of a gap-owning primitive                                                                          | Parent owns the gap; never `mb-*`/`space-y-*` on kids      |
-| UI14 | error | high       | Measure centred by hand (`mx-auto` + `max-w-*`)                                                                                       | Use `Center measure=…`                                     |
-| UI15 | error | medium     | Fixed layout dimension on a primitive (`h-[…]`, `h-dvh`, …)                                                                           | Use `Bound size=` or intrinsic height                      |
-| UI16 | error | high       | Nested vertical scrollports: `Scroll` wrapping a form/table/tabs/matrix, or `MatrixRenderer` without explicit `bounded`               | One scroll owner per axis; `bounded={false}` in forms      |
-| UI17 | error | high       | Template renders a uuid/system id or declares a framework field in table/form composition                                             | Automatic relationship labels; never declare system fields |
+| Rule | Level | Detects                                                        |
+| ---- | ----- | -------------------------------------------------------------- |
+| UI5  | error | raw overflow scroll region bypasses the `Scroll` primitive      |
+| UI6  | error | raw flex/grid container bypasses the layout primitives          |
+| UI7  | error | sibling margin bypasses the parent gap contract                 |
+| UI8  | error | literal app inset classes bypass the inset tokens               |
+| UI12 | error | Tailwind arbitrary value built at runtime emits no CSS          |
+| UI15 | error | fixed pane height on a primitive instead of `Bound` size        |
+| UI17 | error | template exposes uuid/system id to operators                    |
+| UI19 | error | raw positioning class bypasses the layout primitives            |
+| UI21 | error | viewport or arbitrary height class bypasses `Bound`             |
+| UI22 | error | raw `overflow-hidden` bypasses `Bound` clipping                 |
+| UI23 | error | inline style carries layout that belongs on a primitive         |
+| UI24 | error | stylesheet layout declaration bypasses the layout primitives    |
+| UI25 | error | class string composed in the script is unreachable as tokens    |
 
-Three uuid surfaces never appear as a component node, so UI17 cannot see them: they are UI17a
-(collection with no representation), UI17b (custom-type renderer) and UI17c (`recordLabel`), all
-errors, detailed below.
+UI5–UI8, UI19, UI21, and UI22 match static `class` tokens on plain elements; UI6, UI19, UI21 and
+UI22 carry `**/packages/ui/src/**` in `ignore` so primitive implementations are exempt. UI7 matches
+`space-y-*`/`space-x-*` and `mt-*`/`mb-*`/`ml-*`/`mr-*` from `2` through `19`, so the sanctioned
+caption nudge (`mt-0.5`/`mt-1`) and `ml-auto` alignment stay quiet.
 
-UI5–UI9 scan static `class="…"` values on plain elements. Audited exemptions: controls (`button`,
-`label`, `a`, `input`, `select`, `textarea`), fixed-size icon chips, table internals, media clipping
-(`img`, `video`, `progress`), and text truncation utilities. UI7 deliberately ignores the sanctioned
-caption nudge (`mt-0.5`/`mt-1` under a heading) and `ml-auto` alignment; it flags anything at or above
-`mt-2`, all `mb-*`, and every `ml-*`/`mr-*`. Static `class={…}` expressions are invisible to the scan —
-audit them by hand.
-
-UI16 walks the Svelte component tree. A `Scroll` that nests `CollectionForm`, `CollectionTable`,
-`CollectionKanban`, `Tabs` with visible content, another `Scroll`, a `*Form` wrapper, or a bounded
-`MatrixRenderer` is a scroll trap. `Tabs showContent={false}` is chrome-only and is not a scroll
-owner. Separately, every `MatrixRenderer` call site must set `bounded={false}` (yield to the
-parent form/sheet scroll) or `bounded={true}` (deliberate local height) — the default is the trap.
-
-UI5–UI9 also read a static `style="…"` attribute: `display: flex|grid`, `grid-template-*` on a raw
-element, and `overflow: auto|scroll` are the same law as the class forms. Layout primitives may
-set those styles themselves (Cover rows, Grid tracks).
-
-| Rule  | Level | Confidence | Detects                                                                                                                                                                | Preferred action                                                                             |
-| ----- | ----- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| UI17  | error | high       | Template paints a system uuid or declares `<Column>` / `<Field>` for `id`, timestamps, row version, system period, or approval id                                      | Omit framework fields; automatic relationship renderer resolves authored FKs                 |
-| UI17a | error | high       | `src/collections/*/+model.ts` declaring a `uuid()`/`file()` column with no sibling `+representation.svelte`                                                            | Author the representation; configure contextual `relationOptions` only when needed           |
-| UI17b | error | high       | `src/custom-types/*/+renderer.svelte` binding an Effect Schema UUID field to a raw `<Input>`, interpolating it into display text, or editing the whole variant as JSON | Inline a `Combobox` over the target collection                                               |
-| UI17c | error | high       | `recordLabel` naming a `uuid()`/`file()` id, a `custom()`/`json()` object, or a name that is not a column                                                              | Name a column that holds text; never a SQL label column                                      |
-| UI18  | error | high       | Client Svelte feature calls raw `transport.command`/`command`                                                                                                          | Reads use typed reactive db/system collections; imperative work uses generated `api.invoke`. |
+UI23 and UI24 carry the same law into a static `style="…"` attribute and stylesheet declarations:
+`display: flex|grid` and `position: absolute|fixed|sticky` on a raw element belong on a primitive.
+UI25 flags a `class={…}` expression composed in the script, whose tokens a static class scan cannot
+see.
 
 UI17 enforces [controller-surfaces.md](../../../../agent-skills/authoring-tenant-workspace/references/controller-surfaces.md)
 rule 2 for authored `.svelte` templates (not `packages/ui` internals).
 
-UI17a–c cover uuid surfaces that reach an operator without appearing as a standard field control.
-Collection create/edit requires an explicit `+representation.svelte`; there is no schema-enumerated
-form fallback. A `custom()` column is one JSONB value, so the ids inside it are typed into hand-rolled
-controls by the custom-type renderer rather than into a `Field`. And `recordLabel` is a string array in
-`+model.ts`: a label whose every term comes back empty falls back to joining every scalar column —
-which is how a record-detail title comes to be a row of uuids. All three are errors because each
-paints an id the operator cannot act on and none can be found by reading the template.
+## Reactive ownership
 
-UI17c flags only terms with no text in them: a `uuid()`/`file()` id, a `custom()`/`json()` object, or
-a name that is not a column at all. Type is not a fault — `resolveRecordLabel` in
-`@norbital-ai/std/collection` evaluates the compiled label term by term, renders a `Date` as ISO,
-stringifies numbers and booleans, and leaves a null term out so the survivors still join. So
-`recordLabel: ['work_date', 'state']` is correct as written. Do **not** answer this rule with a
-`generatedAlwaysAs` label column: it duplicates that coercion, and the `to_char(...)` such a column
-needs is STABLE, so PostgreSQL refuses it with `generation expression is not immutable` and the
-template stops migrating. Name a column that holds text.
+| Rule   | Level | Detects                                                                         |
+| ------ | ----- | ------------------------------------------------------------------------------- |
+| REACT1 | error | a timer drives query refresh; the client already owns the subscription           |
+| REACT2 | error | generated query is refreshed imperatively instead of re-deriving                 |
+| REACT3 | error | hand-rolled memo of completed work duplicates the client cache                   |
+| REACT4 | error | component branches on the runtime environment instead of a lifecycle boundary    |
+| REACT5 | error | an `$effect` hides its dependency set behind `untrack` or a dependency-only read |
 
-D1 compares only named code entities: functions, assigned functions, methods,
-constructors/accessors, and classes. It requires at least four body lines and 24 syntax tokens and
-compares changed/path-scoped entities with all production files. Exact duplicated classes own the
-diagnosis and suppress their duplicated members. Repeated inline statements and anonymous callback
-bodies are not candidates.
+## Generated-client capability
 
-COMPAT1 requires both explicit legacy intent (path or declaration marker) and structural forwarding:
-a re-export, alias, or unchanged-parameter call. Ordinary public aliases, adapters that transform
-data, and package barrels are valid.
+| Rule        | Level | Detects                                                              |
+| ----------- | ----- | -------------------------------------------------------------------- |
+| CAP_MUTATION| error | a scope rebuilds mutation lifecycle the generated client already provides |
+| CAP_QUERY   | error | a scope rebuilds query ownership the generated client already provides    |
+| HOOK_REACH  | hint  | a collection hook reads, writes or nests as the workspace            |
 
-LEGACY1 is authored intent, while LEGACY2 is compiler evidence. LEGACY2 is produced from TypeScript
-suggestion diagnostics only at actual uses, not from API-name lists or import declarations. TRANS1
-requires a concrete removal/migration phrase attached to executable code; ordinary TODOs do not
-match. TRANS2 requires two static fields and an explicit legacy marker in the fallback field name.
-
-PERF1 excludes inline or bound fixed collections of four or fewer items and receivers derived in the
-outer callback. PERF4 requires a side-effect-free predicate so replacing the materialization with
-`find` preserves behavior. These rules do not infer cost from a method name alone.
-
-Q1, Q5, GUARD1, and REFLECT1 are YAML `rule` matchers. Q3/Q4 are YAML rules that match a
-forwarder or small expression and require exactly one same-file call of that name. Q1 is the
-callback-shaped transparent forwarder, including exported aliases. Q3 is the private one-use
-forwarder and dominates Q1 at the same site. Q4 is the private one-use expression that is not a
-forwarder. Exported/API functions, callbacks passed as values, recursive functions, branching
-bodies, async/generator/generic boundaries, and mutable expressions are excluded from Q3/Q4. Q5
-is a singleton `undefined`/`void` parameter type, not a union with `undefined`. The health report
-retains Q1/Q3/Q4 per pillar so indirection density can be compared without turning ambiguous style
-into a gate.
-
-QRY1 has two mechanically bounded proofs of a handwritten query owner. The legacy-independent proof
-requires one lexical owner to combine storage, loading, and at least two cache/facade lifecycle
-signals. The generated-operation proof starts from a query bound by `$derived`: copying its
-`.current`/`.loading`/`.error` state into `$state` from `$effect`, or adapting its `refresh()` through
-Effect/Promise, fails. Direct rendering, derived projections, and passing the query object onward
-remain clean. Manual refresh is independently forbidden by QRY2.
-
-QRY2 reports `refresh`/`refetch` on a query-named receiver or a binding initialized from a generated
-collection/facade query. It is lifecycle-independent: a click handler is no more entitled to bypass
-sync than an effect or timer. QRY4 closes the API side of the same boundary by rejecting refresh
-members on query interfaces and classes, so a package cannot make the forbidden operation available
-without a finding even before a caller appears.
-
-QRY3 resolves lexical bindings and follows `$state`, `$props`, and `$derived` dependencies through
-plain object/scalar initializers. It reports only a plain binding outside the query owner that
-transitively read a reactive value before the query's `$derived` ran. Inline parameters, direct
-reactive bindings, `$derived` parameter objects, bindings recomputed inside the same `$derived.by`,
-static constants, and synchronous parameter factory functions invoked inside `$derived` are clean.
-This is scope-aware initialization semantics, not a name heuristic.
-
-MUT1 follows direct and locally aliased generated collection writes and `api.*.mutate` calls inside
-Svelte rune modules. The mutation itself is the lifecycle owner. Wrapping it in
-`Effect.tryPromise`/`Effect.runPromise`, native
-`try`/`catch`/`finally`, Promise catch/finally chains, manually refreshing a live query, or toggling a
-local lifecycle state machine fails as one dominant finding for the enclosing function. A direct
-generated call and an existing mutation object's `.mutate(...)` remain clean. Busy/error names are
-supporting evidence only; the primary evidence is handwritten orchestration around a proven
-generated mutation.
-
-LIVE1 reports explicit poll owners, timers whose callback asks for status/data, and loops that combine
-a wait with a read. Ordinary clocks and data-processing loops are negative fixtures. LIVE2 reserves
-`EventSource` and SSE media/protocol declarations for the exact client sync-stream owner,
-`packages/bolt/src/client/sync/sse-driver.ts`.
-
-SQL1 recognizes transaction ownership structurally: a literal beneath a `Transaction.statements`
-property, a helper that returns only a Transaction request, or a direct call to the branded
-`transactionSql` imported from Bolt's persistence owner. A same-named local/lookalike helper is still
-raw SQL. Model/compiler tagged expressions and the policy compiler's explicit `policySql` input are the DDL
-bootstrap exceptions; ordinary runtime tagged SQL is not.
-
-The error-channel rules are one law at three depths. SWALLOW2 fires only on an *empty* recovered
-value — `[]`, `{}`, `null`, `undefined`, `''` — where corruption and a legitimately empty result are
-indistinguishable; an honest absent marker (`succeedNone`, `Option.none`) and a real fallback value
-stay quiet. ERR1 fires on `new Error(String(cause))` and exempts the `instanceof` ternary that STD3
-already diagnoses. ERR2 follows a caught value statically through both arm hosts (`Effect.catch`
-calls and `catch:` properties) and stays quiet the moment the arm's Error carries that value as its
-`cause`, in property or shorthand form; an arm that omits the binding entirely is always reported.
-ERR1 dominates ERR2 where one arm matches both, because one `{ cause }` repair clears both claims.
-
-GUARD2 carries the no-runtime-type-checking law: if code must ask `typeof` what a value is, the
-type system broke at the boundary that handed the value over, so the repair is a schema decode
-(`Schema.is` / a domain schema), not a sharper discriminant. Ambient receivers — `globalThis`,
-`process`, `import.meta`, `window`, `document`, `module` — are environment detection, not value
-type checking, and stay quiet. GUARD1 dominates GUARD2 where the object-record conjunction matches
-both, because one `decodeUnknownOption` repair clears both claims.
-
-STATE3 pairs with STATE1 and STATE2 to close the hidden-state family: STATE1 owns module `let` in
-Effect-importing modules, STATE2 owns module `const` collections, and STATE3 owns module `let`
-mutated from a function elsewhere. Function-local `let`, `??=` memo assignments, and plain reads
-stay quiet. The first bound top-level `let` names the binding the mutation must target, the same
-single-coupling limitation STATE2 carries.
-
-SUP1 accepts only an exact known rule on the same line or immediately before the suppressed syntax,
-followed by `--` and a concrete domain reason. Rule identifiers are token-matched (`UI1` cannot
-suppress `UI10`). Blanket ignores, former-scanner markers, unknown rules, unexplained allowances,
-and allowances for which the underlying detector no longer fires are errors. A separate tool's own
-suppression vocabulary is outside this rule.
+`CAP_QUERY` and `CAP_MUTATION` own the generated-client capability boundary: a scope that combines
+refresh timers, loading/saving state, progress collections, `.current` reads, or try/catch
+orchestration around generated client calls is rebuilding a lifecycle the client already provides.
+The repair is to render the generated object's own state. `HOOK_REACH` flags a collection hook that
+reads, writes, or nests as the workspace.

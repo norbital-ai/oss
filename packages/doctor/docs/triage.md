@@ -1,7 +1,8 @@
 # Legacy rule triage
 
 Every rule in the legacy detector (`SCANNER_VERSION = 30`, 115 rules) with a disposition and a
-reason. Nothing may stop being enforced without a row here.
+reason. The current scanner is `SCANNER_VERSION = 34` and the packs hold 139 rule ids. Nothing may
+stop being enforced without a row here.
 
 `fires` counts findings in the doctor corpus the operator configures. oss does not guess sibling
 `norbital/`, `templates/`, or `templates_private/` checkouts. The historical snapshot was 5246
@@ -17,7 +18,7 @@ separately: `$:`, `export let`, `on:` directives, `svelte/store`, async `onMount
 | Disposition | Count | Meaning                                                                           |
 | ----------- | ----: | --------------------------------------------------------------------------------- |
 | portable    |    87 | one file, no checker — the new runner already has this shape                      |
-| cross-file  |    14 | needs whole-repo evidence. **These live in `static-scan.mjs`, not `analyze.mjs`** |
+| cross-file  |     6 | needs whole-repo evidence. **These live in `src/cross-file.ts`, not `src/analysis/inventory.ts`** |
 | write-off   |    11 | targets syntax this codebase no longer contains                                   |
 | checker     |     1 | needs a `ts.Program` — ported; the type-aware tier now always runs                |
 | engine      |     2 | not a rule; a property of the runner                                              |
@@ -26,21 +27,22 @@ separately: `$:`, `export let`, `on:` directives, `svelte/store`, async `onMount
 
 Verified rather than assumed — both claims in the brief needed correcting.
 
-**The graph tier is independent.** `analyze.mjs` runs with no receipt and produces
+**The graph tier is independent.** `src/analysis/` runs with no receipt and produces
 `duplicatePathways`, `overlappingPathways`, `functionalityClusters`, `pillars`, `colocation`,
 `inlineCandidates`, `cycles` and `hotspots` from its own module graph. Duplication detection,
 pillar colocation, and useless-indirection candidates therefore survive intact.
 
-**The cross-file _rules_ do not.** All 14 live in `static-scan.mjs`; `analyze.mjs` emits none of
-them. `FILE1` alone fires 288 times. Deleting static-scan without a whole-repo pass in the new
-runner silently stops enforcing reachability, dead exports, duplicate bodies, redeclared schemas and
-the uuid-exposure family. **This is a fifth work item the brief did not have.**
+**The cross-file _rules_ do not.** All 6 live in `src/cross-file.ts`; `src/analysis/inventory.ts`
+emits none of them. `FILE1` alone fires 288 times. Deleting the legacy scanner without a whole-repo
+pass in the new runner silently stops enforcing reachability, dead exports, duplicate bodies,
+redeclared schemas and the uuid-exposure family. **This is a fifth work item the brief did not
+have.**
 
-**Library reimplementation is covered and was two shapes short.** The legacy `EFF4` carried six
-families — `Number.clamp`, `Array.chunksOf`, `Array.partition`, `Equivalence`, `Cache`,
-`RateLimiter`. `overlaps.ts` covered the first four. `cache` and `rate-limit` are now added, each
-with a fixture, so no family stops being enforced. `STD1` is a seven-entry owner registry and ports
-as data.
+**Library reimplementation is covered.** The legacy `EFF4` carried six families —
+`Number.clamp`, `Array.chunksOf`, `Array.partition`, `Equivalence`, `Cache`, `RateLimiter`. Nine
+detectors under `packs/overlaps/*.yaml` now cover those families and more (`cache`, `chunk`,
+`clamp`, `deep-equal`, `group-by`, `partition`, `rate-limit`, `sum`, `unique`), so no family stops
+being enforced.
 
 **Write-offs are 11, not ~67.** The brief estimated most of the catalogue descends from the Svelte 4
 migration. Measured, only the rules matching genuinely extinct syntax qualify. The `UI5`–`UI18`
@@ -55,11 +57,11 @@ are portable.
 | `A5`       | hint  |     0 | **portable**   | single file, no checker                              | catch only rethrows                                                                |
 | `A6`       | error |    35 | **portable**   | single file, no checker                              | await inside a synchronous loop                                                    |
 | `AL1`      | hint  |     0 | **portable**   | single file, no checker                              | bare type alias                                                                    |
-| `AL11`     | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | local Effect Schema redeclares an exported domain schema instead of importing it   |
+| `AL11`     | error |     0 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | local Effect Schema redeclares an exported domain schema instead of importing it   |
 | `AL2`      | hint  |     0 | **portable**   | single file, no checker                              | primitive type alias                                                               |
 | `AL3`      | hint  |     0 | **portable**   | single file, no checker                              | loose-record type alias                                                            |
 | `AL4`      | error |     0 | **portable**   | single file, no checker                              | hand-written type beside a matching Effect Schema                                  |
-| `AL5`      | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | redeclared data shape; own one Effect Schema and derive                            |
+| `AL5`      | error |     0 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | redeclared data shape; own one Effect Schema and derive                            |
 | `AL6`      | error |     0 | **portable**   | single file, no checker                              | collection row shape redeclared instead of composed                                |
 | `AL7`      | error |     0 | **portable**   | single file, no checker                              | durable or wire boundary object has no Effect Schema                               |
 | `AL8`      | error |     1 | **portable**   | single file, no checker                              | inline message shape redeclares the canonical message type                         |
@@ -70,7 +72,7 @@ are portable.
 | `CLONE`    | error |     1 | **portable**   | single file, no checker                              | JSON stringify/parse clone                                                         |
 | `COMPAT1`  | error |     0 | **portable**   | single file, no checker                              | explicit legacy or compatibility forwarding surface                                |
 | `COMPLEX1` | error |     8 | **portable**   | single file, no checker                              | function control flow nests four or more levels                                    |
-| `D1`       | error |    41 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | duplicate non-trivial function, method, or class body                              |
+| `D1`       | error |    41 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | duplicate non-trivial function, method, or class body                              |
 | `D2`       | error |     0 | **portable**   | single file, no checker                              | conditional has identical branches                                                 |
 | `DDL1`     | error |    37 | **portable**   | single file, no checker                              | authored table, column, constraint, or index DDL bypasses the model compiler       |
 | `E1`       | error |     0 | **portable**   | single file, no checker                              | environment-dependent behavior                                                     |
@@ -84,8 +86,8 @@ are portable.
 | `EFF6`     | error |    11 | **portable**   | single file, no checker                              | throw escapes the typed Effect error channel                                       |
 | `EFF7`     | error |   128 | **portable**   | single file, no checker                              | single-yield Effect.gen adds no composition                                        |
 | `EQ1`      | error |     0 | **portable**   | single file, no checker                              | JSON serialization is used as equality                                             |
-| `EXP1`     | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | exported declaration has no static consumer                                        |
-| `FILE1`    | error |   288 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | production file is unreachable from a real entrypoint                              |
+| `EXP1`     | error |     0 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | exported declaration has no static consumer                                        |
+| `FILE1`    | error |   288 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | production file is unreachable from a real entrypoint                              |
 | `IMP1`     | error |   666 | **portable**   | single file, no checker                              | deep relative import bypasses a declared alias for the same target                 |
 | `IO1`      | error |   109 | **portable**   | single file, no checker                              | runtime code performs blocking synchronous Node IO                                 |
 | `LEGACY1`  | error |     0 | **portable**   | single file, no checker                              | authored declaration is explicitly deprecated                                      |
@@ -132,7 +134,7 @@ are portable.
 | `S3`       | hint  |     2 | **portable**   | single file, no checker                              | verbose null and undefined check                                                   |
 | `S5`       | hint  |     0 | **portable**   | single file, no checker                              | Array.from(new Set(...))                                                           |
 | `SCAN`     | error |     0 | **engine**     | parse failure; a property of the runner              | source could not be parsed                                                         |
-| `SCHEMA1`  | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | Zod bypasses the required Effect Schema boundary                                   |
+| `SCHEMA1`  | error |     0 | **cross-file** | whole-repo evidence; in `src/cross-file.ts`, NOT `src/analysis/inventory.ts` | Zod bypasses the required Effect Schema boundary                                   |
 | `SQL1`     | error |   277 | **portable**   | single file, no checker                              | raw SQL string outside migration/schema/DDL infrastructure                         |
 | `STATE1`   | error |    65 | **portable**   | single file, no checker                              | module-scoped mutable state hides shared lifetime                                  |
 | `STD1`     | error |     0 | **portable**   | single file, no checker                              | local helper duplicates @norbital-ai/std                                           |
@@ -148,9 +150,7 @@ are portable.
 | `UI15`     | error |     0 | **portable**   | single file, no checker                              | fixed layout dimension on a primitive instead of Bound size                        |
 | `UI16`     | error |     0 | **portable**   | single file, no checker                              | nested scrollports trap wheel events (Scroll/matrix/form)                          |
 | `UI17`     | error |     0 | **portable**   | single file, no checker                              | template exposes uuid/system id to operators                                       |
-| `UI17a`    | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | collection with uuid columns has no +representation.svelte                         |
 | `UI17b`    | error |     0 | **portable**   | single file, no checker                              | custom-type renderer exposes a uuid field to operators                             |
-| `UI17c`    | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | recordLabel cannot resolve to a string                                             |
 | `UI18`     | error |     0 | **portable**   | single file, no checker                              | client UI sends a raw transport command instead of using the generated API         |
 | `UI2`      | error |     0 | **write-off**  | Svelte 4 syntax, 0 occurrences realm-wide            | hand-rolled tab semantics bypass shared Tabs                                       |
 | `UI3`      | error |     0 | **write-off**  | Svelte 4 syntax, 0 occurrences realm-wide            | repeated native table bypasses a collection renderer                               |
@@ -161,10 +161,6 @@ are portable.
 | `UI8`      | error |     0 | **portable**   | single file, no checker                              | literal app inset classes bypass the inset tokens                                  |
 | `UI9`      | error |     0 | **portable**   | single file, no checker                              | hand-rolled height/overflow scroll chain bypasses Bound+Scroll                     |
 | `V1`       | error |     0 | **portable**   | single file, no checker                              | $effect is last-resort external sync; prefer $derived or {@attach}                 |
-| `V10`      | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | watch callbacks form a reactive cycle                                              |
-| `V11`      | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | mounted flag mirrors lifecycle state                                               |
-| `V12`      | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | onDestroy mutates component state                                                  |
-| `V13`      | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | onMount resource has no lifecycle cleanup                                          |
 | `V14`      | error |     0 | **portable**   | single file, no checker                              | plain let/var in a rune module should be $state                                    |
 | `V15`      | error |     0 | **portable**   | single file, no checker                              | computed binding in a rune module should be $derived                               |
 | `V16`      | error |     0 | **write-off**  | Svelte 4 syntax, 0 occurrences realm-wide            | Svelte 4 $: reactive statement                                                     |
@@ -176,8 +172,6 @@ are portable.
 | `V5`       | error |     0 | **write-off**  | Svelte 4 syntax, 0 occurrences realm-wide            | async onMount cannot return cleanup                                                |
 | `V6`       | error |     1 | **portable**   | fires; the write-off was wrong                       | async IIFE in lifecycle code                                                       |
 | `V7`       | error |     0 | **portable**   | single file, no checker                              | async $effect                                                                      |
-| `V8`       | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | component owns too many independent state cells                                    |
-| `V9`       | error |     0 | **cross-file** | whole-repo evidence; in static-scan, NOT analyze.mjs | watch writes state read by its own source                                          |
 
 ## Corrections found during the port
 
