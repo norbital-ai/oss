@@ -38,8 +38,8 @@
 		"playwright": "1.62.1"
 	},
 	"peerDependencies": {
-		"@norbital-ai/bolt-protocol": "0.0.27",
-		"@norbital-ai/bolt-server": "0.0.27",
+		"@norbital-ai/bolt-protocol": "0.0.28",
+		"@norbital-ai/bolt-server": "0.0.28",
 		"effect": "4.0.0-rc.111 || 4.0.0-rc.112"
 	},
 	"devDependencies": {
