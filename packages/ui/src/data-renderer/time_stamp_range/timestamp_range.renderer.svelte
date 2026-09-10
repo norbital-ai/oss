@@ -2,6 +2,7 @@
 	import { Schema } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { toStoredInstant, toViewerInstant } from '../utc-day.js';
 	import DateView from './views/date.view.svelte';
 
 	/** The picker's own range shape; the database sends a tstzrange literal instead. */
@@ -42,8 +43,33 @@
 		return match ? { start: match[1] || undefined, end: match[2] || undefined } : {};
 	}
 
+	/**
+	 * Day precision stores one canonical day per bound — midnight UTC, the prefix `bolt_instant`
+	 * and `bolt_daterange` read — while the calendar works in the viewer's zone. The two transforms
+	 * are applied here, at the renderer boundary, so the view never has to know.
+	 */
+	const dayPrecision = $derived(field.precision === 'day');
+
+	const shownRange = (range: RangeValue): RangeValue =>
+		!dayPrecision
+			? range
+			: {
+					start: range.start == null ? range.start : (toViewerInstant(range.start) ?? range.start),
+					end: range.end == null ? range.end : (toViewerInstant(range.end) ?? range.end)
+				};
+
+	const storedRange = (range: RangeValue): RangeValue =>
+		!dayPrecision
+			? range
+			: {
+					start: range.start == null ? range.start : (toStoredInstant(range.start) ?? range.start),
+					end: range.end == null ? range.end : (toStoredInstant(range.end) ?? range.end)
+				};
+
 	const pickerValue = $derived.by((): RangeValue | RangeValue[] =>
-		field.array && Array.isArray(value) ? value.map(parseRange) : parseRange(value)
+		field.array && Array.isArray(value)
+			? value.map((item) => shownRange(parseRange(item)))
+			: shownRange(parseRange(value))
 	);
 </script>
 
@@ -57,7 +83,7 @@
 			: placeholder}
 		{disabled}
 		class={className}
-		onValueChange={(next) => onValueChange?.(next)}
+		onValueChange={(next) => onValueChange?.(next.map(storedRange))}
 	/>
 {:else}
 	<DateView
@@ -69,6 +95,6 @@
 			: placeholder}
 		{disabled}
 		class={className}
-		onValueChange={(next) => onValueChange?.(next)}
+		onValueChange={(next) => onValueChange?.(storedRange(next))}
 	/>
 {/if}

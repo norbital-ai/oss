@@ -4,6 +4,7 @@
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { toStoredInstant, toViewerInstant } from '../utc-day.js';
 	import { instantFieldAllowsClear } from './timestamp.utils';
 
 	const { t } = useI18n<UiKeys>();
@@ -25,22 +26,30 @@
 		return isString(item) && item ? item : null;
 	}
 
+	/**
+	 * Day precision stores one canonical day per value — midnight UTC, the prefix `bolt_instant`
+	 * reads — while the calendar works in the viewer's zone. The two transforms are applied here,
+	 * at the renderer boundary; the time-of-day variant passes values through untouched.
+	 */
+	const dayPrecision = $derived(field.precision === 'day');
+	const shownDay = (item: string | null): string | null =>
+		!dayPrecision || item == null ? item : toViewerInstant(item);
+	const storedDay = (item: string | null): string | null =>
+		!dayPrecision || item == null ? item : toStoredInstant(item);
+
 	const dateTimeValue = $derived.by((): string | string[] | null => {
 		if (!field.array) return instantString(value);
 		return Array.isArray(value) ? value.flatMap((item) => instantString(item) ?? []) : [];
 	});
 	const datePickerValue = $derived.by((): string | string[] | null => {
-		if (!field.array) return instantString(value);
+		if (!field.array) return shownDay(instantString(value));
 		if (!Array.isArray(value)) return [];
-		return value.flatMap((item) => instantString(item) ?? []);
+		return value.flatMap((item) => shownDay(instantString(item)) ?? []);
 	});
 	const allowClear = $derived(instantFieldAllowsClear(field));
 
 	function updateDate(next: string | string[] | null): void {
-		// Day precision changes only what the picker exposes. The selected value remains the exact
-		// instant emitted by the calendar in the viewer's timezone; it is never collapsed to a bare
-		// YYYY-MM-DD string or stored in a second temporal representation.
-		onValueChange?.(next);
+		onValueChange?.(Array.isArray(next) ? next.map(storedDay) : storedDay(next));
 	}
 </script>
 

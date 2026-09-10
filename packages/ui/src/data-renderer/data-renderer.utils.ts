@@ -11,6 +11,7 @@ import {
 	phoneCountryFromLocale
 } from '#lib/data-renderer/phone_number/phone_number.utils';
 import { coerceNumericValue } from '#lib/data-renderer/numeric/numeric.values';
+import { formatUtcDay, utcDayOf } from '#lib/data-renderer/utc-day';
 
 export { coerceNumericValue } from '#lib/data-renderer/numeric/numeric.values';
 
@@ -77,6 +78,19 @@ function formatInstantRange(
 		start = match[1] || null;
 		end = match[2] || null;
 	}
+	// Day precision reads each bound's canonical UTC day, the same prefix the database and the
+	// workspace's `dateKey` read, so the boundary day prints the same for every viewer.
+	if (field.precision === 'day') {
+		const startDay = utcDayOf(start);
+		const endDay = utcDayOf(end);
+		return `${startDay == null ? String(start ?? resolveText(t, 'dataRenderer.null')) : formatUtcDay(startDay, locale)} – ${
+			end == null
+				? resolveText(t, 'dataRenderer.present')
+				: endDay == null
+					? String(end)
+					: formatUtcDay(endDay, locale)
+		}`;
+	}
 	const instantField: CollectionField = {
 		name: 'range_boundary',
 		kind: 'instant',
@@ -98,9 +112,7 @@ function formatDateRange(value: unknown, locale: string): string {
 				},
 				{ locale, dateStyle: 'medium' }
 			)
-		).pipe(
-			Effect.orElseSucceed(() => formatStructuredValue(value))
-		)
+		).pipe(Effect.orElseSucceed(() => formatStructuredValue(value)))
 	);
 }
 
@@ -142,6 +154,12 @@ function formatScalar(
 			});
 		}
 		case 'instant': {
+			// A day-precision instant names one canonical UTC day (`bolt_instant`'s reading), so it
+			// is printed as that day for every viewer rather than shifted by the viewer's zone.
+			if (field.precision === 'day') {
+				const day = utcDayOf(value);
+				if (day != null) return formatUtcDay(day, locale);
+			}
 			const date = dateValue(value);
 			return date
 				? new Intl.DateTimeFormat(
