@@ -66,7 +66,7 @@
 	-->
 		<!-- repository-health:allow UI6 -- a fixed 16px icon chip centres the orb in one grid cell; the Grid primitive's auto-fit/tracks column sizing cannot express a single place-items cell of this size -->
 		<div class="grid size-4 shrink-0 place-items-center">
-		<NorbitalThinkingOrb {state} size={16} />
+		<NorbitalThinkingOrb {state} shape="mobius" size={16} />
 	</div>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"

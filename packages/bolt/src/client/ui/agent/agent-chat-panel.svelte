@@ -755,7 +755,12 @@
 <Stack gap="none" fill class="min-h-0 bg-card">
 	{#if headerOrb}
 		<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-4 py-3">
-			<NorbitalThinkingOrb state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
+			<NorbitalThinkingOrb
+				state={orbState}
+				shape="mobius"
+				size={18}
+				label={t(agentOrbStatusKey(orbState))}
+			/>
 			<span class="text-sm font-semibold">Agent</span>
 		</Inline>
 	{/if}

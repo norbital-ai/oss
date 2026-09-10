@@ -6,4 +6,9 @@ export {
 	Root as ThinkingOrb
 };
 
-export { ThinkingOrbStateSchema, type ThinkingOrbState } from './thinking-orb.svelte';
+export {
+	ThinkingOrbStateSchema,
+	ThinkingOrbShapeSchema,
+	type ThinkingOrbState,
+	type ThinkingOrbShape
+} from './thinking-orb.svelte';

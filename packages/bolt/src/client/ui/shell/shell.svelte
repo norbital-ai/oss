@@ -902,6 +902,7 @@
 						>
 							<NorbitalThinkingOrb
 								state={fabAgentState}
+								shape="mobius"
 								size={16}
 								label={t(agentOrbStatusKey(fabAgentState))}
 							/>

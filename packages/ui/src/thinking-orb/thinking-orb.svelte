@@ -1,16 +1,38 @@
 <script lang="ts" module>
 	import { Schema } from 'effect';
 
-	/** What the orb says, in the three states a reader can actually act on: nothing is happening,
-	 * something is, or something broke.
+	/** What the orb says, in the states a reader can actually act on.
+	 *
+	 * `ready`, `working` and `error` are the original three, kept first and kept meaning what they
+	 * meant. `waiting`, `done` and `stopped` exist because the canonical Task lifecycle has six
+	 * members and projecting them onto three told a lie in two places: an agent parked on an approval
+	 * rendered as an agent that had broken, and a finished turn rendered as one that had never run.
 	 *
 	 * The union lives beside the component rather than in the Bolt agent runtime because the orb is
 	 * now a shared primitive — the marketing site renders one to stand for AI without importing a
 	 * transcript projector. Bolt re-exports it as `AgentOrbState` from `agent-orb-state.ts`, which
 	 * keeps the runtime's own vocabulary intact.
 	 */
-	export const ThinkingOrbStateSchema = Schema.Literals(['ready', 'working', 'error']);
+	export const ThinkingOrbStateSchema = Schema.Literals([
+		'ready',
+		'working',
+		'waiting',
+		'done',
+		'stopped',
+		'error'
+	]);
 	export type ThinkingOrbState = typeof ThinkingOrbStateSchema.Type;
+
+	/**
+	 * Where the particles are seeded. The engine is the same either way.
+	 *
+	 * `sphere` is the mark this component shipped with and stays the default, so every 16px caller
+	 * keeps the icon it already had. `mobius` seeds them across a Möbius band — and, for `ready`,
+	 * into a galaxy — which buys a silhouette per state instead of a speed per state. Speed alone is
+	 * invisible in a still frame and at 16px, which is exactly where this mark is read.
+	 */
+	export const ThinkingOrbShapeSchema = Schema.Literals(['sphere', 'mobius']);
+	export type ThinkingOrbShape = typeof ThinkingOrbShapeSchema.Type;
 </script>
 
 <script lang="ts">
@@ -25,17 +47,33 @@
 		visibility: number;
 	};
 	type SphereSeed = { latitude: number; longitude: number };
+	/** A place on the band, and the same particle's place in the galaxy. One set, read two ways. */
+	type BandSeed = {
+		u: number;
+		v: number;
+		disc: number;
+		spiral: number;
+		arm: number;
+		scatterA: number;
+		scatterR: number;
+		scatterY: number;
+	};
+	type OrbLayout =
+		| { readonly shape: 'sphere'; readonly seeds: SphereSeed[] }
+		| { readonly shape: 'mobius'; readonly seeds: BandSeed[] };
 	/** Where a shape sits in the unit box and what it takes to seat it there. */
 	type ShapeFit = { centreX: number; centreY: number; scale: number };
 	/** One fit per state, since the burst an `error` throws reaches further than a turning sphere. */
 	type ShapeFits = Record<ThinkingOrbState, ShapeFit>;
 	let {
 		state = 'ready',
+		shape = 'sphere',
 		size = 20,
 		label,
 		class: className = ''
 	}: {
 		state?: ThinkingOrbState;
+		shape?: ThinkingOrbShape;
 		size?: number;
 		label?: string;
 		class?: string;
@@ -47,12 +85,115 @@
 	/**
 	 * How long, and how finely, a shape is sampled to find its own extent.
 	 *
-	 * Long enough to cover the slowest motion the sphere has — its 0.42 rad/s tilt and the error
-	 * burst's own loop both close well inside it. The step is coarse because the extremes move
-	 * smoothly: a finer one shifts the measured reach by well under a tenth of a device pixel.
+	 * Long enough to cover the slowest motion any shape has — the 0.42 rad/s sphere tilt, the band's
+	 * 0.52 rad/s sway and the error burst's own loop all close inside it. The step is coarse because
+	 * the extremes move smoothly: a finer one shifts the measured reach by well under a tenth of a
+	 * device pixel, and this runs once per size for six states.
 	 */
-	const FIT_SAMPLE_SECONDS = 12;
-	const FIT_SAMPLE_STEP = 0.25;
+	const FIT_SAMPLE_SECONDS = 15;
+	const FIT_SAMPLE_STEP = 0.6;
+
+	const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+	const GALAXY_ARMS = 2;
+
+	/**
+	 * The sphere answers three states, and is asked for six.
+	 *
+	 * Rather than invent three more sphere behaviours nobody asked for, the three added states map
+	 * onto the nearest one it already draws. A caller who wants them told apart asks for `mobius`.
+	 */
+	const SPHERE_EQUIVALENT: Record<ThinkingOrbState, 'ready' | 'working' | 'error'> = {
+		ready: 'ready',
+		working: 'working',
+		waiting: 'working',
+		done: 'ready',
+		stopped: 'ready',
+		error: 'error'
+	};
+
+	/**
+	 * Each band state owns a silhouette, not just a speed.
+	 *
+	 * `tilt`, `width` and `twist` differ per state — edge-on to wait, flat to finish, broken to halt —
+	 * and the accent then says which of the near ones this is. Every silhouette is seated afterwards,
+	 * so none of them is visually larger than another.
+	 */
+	type BandConfig = {
+		readonly turn: number;
+		readonly tilt: number;
+		readonly sway: number;
+		readonly width: number;
+		readonly twist: number;
+		readonly breath: number;
+		readonly ripple: number;
+		readonly flutter: number;
+		readonly galaxy?: boolean;
+		readonly gap?: boolean;
+	};
+	const BAND: Record<ThinkingOrbState, BandConfig> = {
+		working: {
+			turn: 0.9,
+			tilt: 0.62,
+			sway: 0.11,
+			width: 0.34,
+			twist: 1,
+			breath: 0.075,
+			ripple: 2.1,
+			flutter: 0.3
+		},
+		ready: {
+			galaxy: true,
+			turn: 0.17,
+			tilt: 0.92,
+			sway: 0.05,
+			width: 0,
+			twist: 0,
+			breath: 0,
+			ripple: 0,
+			flutter: 0
+		},
+		waiting: {
+			turn: 0.08,
+			tilt: 1.18,
+			sway: 0.03,
+			width: 0.42,
+			twist: 1,
+			breath: 0.05,
+			ripple: 1.1,
+			flutter: 0.17
+		},
+		done: {
+			turn: 0.3,
+			tilt: 0.26,
+			sway: 0.04,
+			width: 0.11,
+			twist: 0.22,
+			breath: 0.018,
+			ripple: 0.5,
+			flutter: 0.05
+		},
+		stopped: {
+			gap: true,
+			turn: 0,
+			tilt: 0.62,
+			sway: 0,
+			width: 0.34,
+			twist: 1,
+			breath: 0,
+			ripple: 0,
+			flutter: 0
+		},
+		error: {
+			turn: 0.5,
+			tilt: 0.62,
+			sway: 0.08,
+			width: 0.34,
+			twist: 1,
+			breath: 0.04,
+			ripple: 1.4,
+			flutter: 0.22
+		}
+	};
 
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
 	function liveOrbState(root: Element): ThinkingOrbState {
@@ -68,6 +209,12 @@
 	/** Returns the shortest signed angular distance between two radians. */
 	function angleDistance(a: number, b: number): number {
 		return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+	}
+
+	/** Deterministic scatter in [-1, 1]. The galaxy needs jitter, and a seed set has to be stable. */
+	function noise(index: number, salt: number): number {
+		const value = Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453;
+		return (value - Math.floor(value)) * 2 - 1;
 	}
 
 	/** Applies yaw and tilt rotations to a 3D point for sphere rendering. */
@@ -115,6 +262,48 @@
 		return layout;
 	}
 
+	/**
+	 * Builds band seeds, and the same particles' places in the galaxy.
+	 *
+	 * The count is set by dot pitch, not by taste: at 96px the band's circumference is about 169
+	 * device pixels against a ~3.5px dot, so past roughly 48 steps around the gaps close and the
+	 * field stops reading as particles at all. Rows across are staggered by half a step, as the
+	 * sphere's rings are, so the three never line up into parallel rails.
+	 */
+	function buildBandLayout(renderSize: number): BandSeed[] {
+		const sizeRatio = renderSize / 64;
+		const around = Math.max(26, Math.round(44 * clamp(Math.pow(sizeRatio, 0.4), 0.6, 1)));
+		const across = Math.max(2, Math.round(3 * clamp(Math.pow(sizeRatio, 0.3), 0.7, 1)));
+		const step = (Math.PI * 2) / around;
+		const total = around * across;
+		const layout: BandSeed[] = [];
+
+		for (let ring = 0; ring < around; ring += 1) {
+			for (let column = 0; column < across; column += 1) {
+				const index = layout.length;
+				layout.push({
+					u: ring * step + (column % 2) * (step / 2) + column * 0.037,
+					v: across === 1 ? 0 : (column / (across - 1)) * 2 - 1,
+					// An even distribution over area, which the galaxy then packs inward.
+					disc: Math.sqrt((index + 0.5) / total),
+					spiral: index * GOLDEN_ANGLE,
+					arm: (index % GALAXY_ARMS) * ((Math.PI * 2) / GALAXY_ARMS),
+					scatterA: noise(index, 1),
+					scatterR: noise(index, 2),
+					scatterY: noise(index, 3)
+				});
+			}
+		}
+
+		return layout;
+	}
+
+	function buildLayout(orbShape: ThinkingOrbShape, renderSize: number): OrbLayout {
+		return orbShape === 'mobius'
+			? { shape: 'mobius', seeds: buildBandLayout(renderSize) }
+			: { shape: 'sphere', seeds: buildSphereLayout(renderSize) };
+	}
+
 	/** Positions and styles a sphere particle for the given agent orb state. */
 	function spherePoint(
 		mode: ThinkingOrbState,
@@ -123,6 +312,7 @@
 		time: number
 	): OrbPoint {
 		const seed = layout[index];
+		const equivalent = SPHERE_EQUIVALENT[mode];
 		const baseLatitude = seed.latitude;
 		const drift = Math.sin(time * 0.68 + index * 0.31) * 0.018;
 		// Faster than the old 0.22: the orb reads as alive at a glance rather than only on a stare.
@@ -134,14 +324,14 @@
 			0.58 * Math.sin(latitude * 8.2 - time * 2.35) +
 			0.42 * Math.sin(longitude * 3 + latitude * 2.4 - time * 1.45);
 		const baseRipple = 0.012 * Math.sin(longitude * 3 - time * 0.8);
-		const stateRipple = mode === 'working' ? thinkingWave * 0.018 : 0;
+		const stateRipple = equivalent === 'working' ? thinkingWave * 0.018 : 0;
 		const pulse = 1 + baseRipple + stateRipple;
 		const tilt = 0.38 + Math.sin(time * 0.42) * 0.045;
 		const sphereX = ringRadius * Math.cos(longitude);
 		const sphereZ = ringRadius * Math.sin(longitude);
 		const point = rotatePoint(sphereX * pulse, latitude * pulse, sphereZ * pulse, 0, tilt);
 
-		if (mode === 'working') {
+		if (equivalent === 'working') {
 			const currentA = angleDistance(longitude, time * 1.55 + latitude * 2.4);
 			const currentB = angleDistance(longitude, -time * 1.15 - latitude * 2.8 + Math.PI);
 			const current = Math.max(
@@ -150,7 +340,7 @@
 			);
 			point.accent = current * clamp(point.z * 1.55);
 			point.boost = point.accent * 0.16;
-		} else if (mode === 'error') {
+		} else if (equivalent === 'error') {
 			/**
 			 * Comes apart and back together, rather than melting away.
 			 *
@@ -178,6 +368,146 @@
 		}
 
 		return point;
+	}
+
+	/**
+	 * The band is a ribbon, so it is allowed to flap.
+	 *
+	 * `flutter` runs two harmonics along `u` that widen the strip and lift it off its own plane,
+	 * `breath` scales the radius, `sway` rocks the tilt. All three are seated afterwards, which is
+	 * why the mark can move this much without changing size in its box.
+	 */
+	function bandPlacement(config: BandConfig, seed: BandSeed, time: number): OrbPoint & { u: number } {
+		const u = seed.u + time * config.turn;
+		const wave =
+			Math.sin(u * 2 - time * config.ripple * 1.6) * 0.65 +
+			Math.sin(u * 3 + time * config.ripple * 0.9) * 0.35;
+		const flutter = wave * config.flutter;
+		const width = config.width * (1 + flutter);
+		const breath = 1 + config.breath * Math.sin(u * 3 - time * config.ripple);
+		const radius = (0.78 + seed.v * width * Math.cos(u / 2) * config.twist) * breath;
+		const tilt = config.tilt + Math.sin(time * 0.52) * config.sway;
+		const point = rotatePoint(
+			radius * Math.cos(u),
+			seed.v * width * Math.sin(u / 2) * config.twist + flutter * 0.11,
+			radius * Math.sin(u),
+			0,
+			tilt
+		);
+		// A break in the hoop, at the near side where a reader is already looking.
+		if (config.gap === true && Math.abs(angleDistance(u, Math.PI / 2)) < 0.85) point.visibility = 0;
+		return { ...point, u };
+	}
+
+	/**
+	 * Idle is a galaxy: two arms wound by radius, a bulge that carries the light, a rim that falls
+	 * away to faint ink.
+	 *
+	 * The arm pattern turns rigidly, as a density wave rather than with the material. Rotating the
+	 * particles differentially — faster at the core, as real matter moves — winds the arms up into an
+	 * even disc within a few seconds, which is a dot pattern and not a galaxy. Each particle only
+	 * wobbles around its place in the pattern.
+	 */
+	function galaxyPlacement(
+		config: BandConfig,
+		seed: BandSeed,
+		time: number
+	): OrbPoint & { u: number; disc: number } {
+		const radius = clamp(Math.pow(seed.disc, 1.55) + seed.scatterR * 0.045, 0.015, 1.05);
+		const wind = 5.4 * Math.pow(radius, 0.62);
+		const fray = seed.scatterA * (0.14 + 0.62 * radius);
+		const wobble = 0.045 * Math.sin(time * 0.9 + seed.spiral * 3.1);
+		const theta = seed.arm + wind + fray + wobble + time * config.turn;
+		const orbit = radius * (1 + 0.02 * Math.sin(time * 1.3 + seed.spiral * 2.2));
+		// Thick at the bulge, a thin sheet at the rim.
+		const thickness = seed.scatterY * (0.03 + 0.2 * Math.pow(1 - radius, 2.4));
+		const tilt = config.tilt + Math.sin(time * 0.52) * config.sway;
+		const point = rotatePoint(orbit * Math.cos(theta), thickness, orbit * Math.sin(theta), 0, tilt);
+		return { ...point, u: theta, disc: radius };
+	}
+
+	/** Positions and styles a band particle: the accent is what separates the near-neighbour states. */
+	function bandPoint(
+		mode: ThinkingOrbState,
+		index: number,
+		layout: BandSeed[],
+		time: number
+	): OrbPoint {
+		const seed = layout[index];
+		const config = BAND[mode];
+
+		if (config.galaxy === true) {
+			const placed = galaxyPlacement(config, seed, time);
+			const core = Math.exp(-(placed.disc * placed.disc) / 0.05);
+			const inner = Math.exp(-(placed.disc * placed.disc) / 0.34) * 0.3;
+			placed.accent = clamp(core * (0.72 + 0.28 * Math.sin(time * 1.1)) + inner);
+			placed.boost = placed.accent * 0.45 + Math.pow(1 - placed.disc, 3) * 0.4;
+			placed.visibility *= 0.28 + 0.72 * Math.pow(1 - placed.disc, 0.85);
+			return placed;
+		}
+
+		const point = bandPlacement(config, seed, time);
+		const depth = clamp(point.z * 1.55);
+
+		if (mode === 'working') {
+			// Two currents crossing, quick: a transition should look like it is already moving.
+			const currentA = angleDistance(point.u, time * 2.4 + seed.v * 2.4);
+			const currentB = angleDistance(point.u, -time * 1.8 - seed.v * 2.8 + Math.PI);
+			const current = Math.max(
+				Math.exp(-(currentA * currentA) / 0.1),
+				Math.exp(-(currentB * currentB) / 0.12) * 0.72
+			);
+			point.accent = current * depth;
+			point.boost = point.accent * 0.16;
+		} else if (mode === 'waiting') {
+			/**
+			 * The turn all but stops and the light gathers at the crossing — `u = π`, where the surface
+			 * turns over — while the rest of the field falls back, so the knot is the silhouette rather
+			 * than a detail. Waiting is a held breath, not a failure: still brand, never destructive.
+			 */
+			const held = angleDistance(point.u, Math.PI);
+			const near = Math.exp(-(held * held) / 0.22);
+			point.accent = near * (0.45 + depth * 0.55) * (0.55 + 0.45 * Math.sin(time * 1.9));
+			point.boost = point.accent * 0.55;
+			point.visibility *= 0.34 + 0.66 * near;
+		} else if (mode === 'done') {
+			// A flush that fills the flat ring and decays: the shape settling, not dying.
+			const cycle = (time * 0.28) % 1;
+			const flush = Math.exp(-((cycle - 0.15) ** 2) / 0.02) + 0.06;
+			point.accent = clamp(flush) * (0.35 + depth * 0.65) * 0.8;
+			point.boost = point.accent * 0.1;
+			point.visibility *= 0.82;
+		} else if (mode === 'stopped') {
+			// Nothing travels, nothing turns, and the hoop is open. Multiplied rather than assigned:
+			// the break is already written into visibility and has to survive this.
+			point.accent = 0;
+			point.visibility *= 0.62;
+		} else if (mode === 'error') {
+			const burst = (time * 0.85 + index * 0.0007) % 1;
+			const scatter = Math.sin(Math.PI * burst) ** 1.6;
+			const jitter = Math.sin(index * 12.9898 + time * 0.4) * 0.5;
+			const spread = 1 + scatter * (0.55 + jitter * 0.35);
+			point.x *= spread;
+			point.y *= spread;
+			point.z *= spread;
+			point.accent = 1;
+			point.boost = 0.1 + scatter * 0.24;
+			point.visibility *= 0.45 + (1 - scatter) * 0.55;
+		}
+
+		return point;
+	}
+
+	/** Places one particle for a state, in whichever shape this orb is drawing. */
+	function shapePoint(
+		layout: OrbLayout,
+		mode: ThinkingOrbState,
+		index: number,
+		time: number
+	): OrbPoint {
+		return layout.shape === 'mobius'
+			? bandPoint(mode, index, layout.seeds, time)
+			: spherePoint(mode, index, layout.seeds, time);
 	}
 
 	/**
@@ -211,12 +541,19 @@
 		};
 	}
 
-	/** Measures the sphere in each state it can be drawn in, for one layout. */
-	function buildShapeFits(layout: SphereSeed[]): ShapeFits {
-		const count = layout.length;
+	/** Measures the shape in each state it can be drawn in, for one layout. */
+	function buildShapeFits(layout: OrbLayout): ShapeFits {
+		const count = layout.seeds.length;
 		const fit = (mode: ThinkingOrbState): ShapeFit =>
-			measureFit((time, index) => spherePoint(mode, index, layout, time), count);
-		return { ready: fit('ready'), working: fit('working'), error: fit('error') };
+			measureFit((time, index) => shapePoint(layout, mode, index, time), count);
+		return {
+			ready: fit('ready'),
+			working: fit('working'),
+			waiting: fit('waiting'),
+			done: fit('done'),
+			stopped: fit('stopped'),
+			error: fit('error')
+		};
 	}
 
 	/** Seats a shape's point in the unit box: centred, and reaching exactly to the edge. */
@@ -230,19 +567,22 @@
 	/**
 	 * Places one particle for a state, seated in the box.
 	 *
-	 * Seating is what keeps the mark still. Each state's sphere carries a different extent of its own
+	 * Seating is what keeps the mark still. Each state's shape carries a different extent of its own
 	 * — `error` throws its dots to 1.7x, which reached past the box, where `contain: paint` cut them
-	 * off — so drawn raw the mark changed size and place as the agent's state changed. Seated, every
-	 * state draws one mark, in one position, at one size.
+	 * off, and the band goes edge-on to wait — so drawn raw the mark changed size and place as the
+	 * agent's state changed. Seated, every state draws one mark, in one position, at one size.
+	 *
+	 * It also has to happen before the transition mix, not after: seat the blended point instead and
+	 * the mark rescales continuously while it travels between two states.
 	 */
 	function pointForState(
+		layout: OrbLayout,
 		mode: ThinkingOrbState,
 		index: number,
-		layout: SphereSeed[],
 		time: number,
 		fits: ShapeFits
 	): OrbPoint {
-		return fitPoint(spherePoint(mode, index, layout, time), fits[mode]);
+		return fitPoint(shapePoint(layout, mode, index, time), fits[mode]);
 	}
 
 	/** Linearly interpolates every field between two orb particle snapshots. */
@@ -272,6 +612,7 @@
 <span
 	class={`norbital-thinking-orb ${className}`}
 	data-state={state}
+	data-shape={shape}
 	data-compact={size <= 36 ? 'true' : undefined}
 	style={`--orb-size: ${size}px; width: ${size}px; height: ${size}px; display: grid; place-items: center; position: relative; flex: none`}
 	role={label ? 'img' : undefined}
@@ -301,18 +642,20 @@
 		let lastColorRead = 0;
 		let lastCanvasSize = 0;
 		let lastDpr = 0;
-		let sphereLayout: SphereSeed[] = [];
+		let lastShape: ThinkingOrbShape | undefined;
+		let orbLayout: OrbLayout | undefined;
 		let shapeFits: ShapeFits | undefined;
 		let lastDrawnState: ThinkingOrbState | null = null;
 		let lastDrawnSize = 0;
 
-		/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */
+		/** Resizes the canvas and rebuilds the layout when size, shape or DPR changes. */
 		function syncCanvas(): number {
 			const dpr = Math.min(2, window.devicePixelRatio || 1);
-			if (lastCanvasSize !== size || lastDpr !== dpr) {
-				if (lastCanvasSize !== size || shapeFits === undefined) {
-					sphereLayout = buildSphereLayout(size);
-					shapeFits = buildShapeFits(sphereLayout);
+			if (lastCanvasSize !== size || lastDpr !== dpr || lastShape !== shape) {
+				if (lastCanvasSize !== size || lastShape !== shape || shapeFits === undefined) {
+					orbLayout = buildLayout(shape, size);
+					shapeFits = buildShapeFits(orbLayout);
+					lastShape = shape;
 				}
 				canvasElement.width = Math.max(1, Math.round(size * dpr));
 				canvasElement.height = Math.max(1, Math.round(size * dpr));
@@ -340,11 +683,18 @@
 			}
 
 			const compact = size <= 36;
-			const layout = sphereLayout;
+			const layout = orbLayout;
 			const fits = shapeFits;
-			if (fits === undefined) return;
-			const count = layout.length;
-			const transitionDuration = compact ? 145 : 190;
+			if (layout === undefined || fits === undefined) return;
+			const count = layout.seeds.length;
+			/**
+			 * Long enough to see, short enough not to read as lag.
+			 *
+			 * A band that swings edge-on to wait travels further than a sphere that changes its sweep,
+			 * so the larger sizes take longer. At 16px in the sidebar the move is a few pixels and a
+			 * long one just looks like the icon is behind.
+			 */
+			const transitionDuration = compact ? 145 : 520;
 			const transitionProgress = staticFrame
 				? 1
 				: clamp((now - transitionStarted) / transitionDuration);
@@ -370,14 +720,19 @@
 			const points: Array<OrbPoint & { index: number }> = [];
 
 			for (let index = 0; index < count; index += 1) {
-				const from = pointForState(previousState, index, layout, elapsed, fits);
-				const to = pointForState(targetState, index, layout, elapsed, fits);
+				const to = pointForState(layout, targetState, index, elapsed, fits);
+				if (mix >= 1) {
+					points.push({ ...to, index });
+					continue;
+				}
+				const from = pointForState(layout, previousState, index, elapsed, fits);
 				points.push({ ...interpolatePoint(from, to, mix), index });
 			}
 			points.sort((a, b) => a.z - b.z || a.index - b.index);
 
 			context.clearRect(0, 0, size, size);
 			for (const point of points) {
+				if (point.visibility <= 0.001) continue;
 				const depth = clamp((point.z + 1.08) / 2.16);
 				const near = depth ** 1.45;
 				const dotRadius = (0.26 + near * 1.08 + point.boost) * dotScale;
@@ -488,6 +843,7 @@
 		contain: strict;
 	}
 
+	.norbital-thinking-orb[data-state='error'],
 	.norbital-thinking-orb[data-state='failed'] {
 		color: var(--color-destructive);
 		--orb-accent: var(--color-destructive);
