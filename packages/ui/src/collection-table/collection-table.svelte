@@ -738,7 +738,7 @@
 
 <Bound
 	size="full"
-	class="collection-table-responsive min-h-[24rem] w-full"
+	class="min-h-[24rem] w-full"
 	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	data-collection-table-surface
 	data-collection-table-bounded={bounded ? 'true' : 'false'}
@@ -846,15 +846,13 @@
 	/* These classes are forwarded to child-component roots. They must be global:
 	   a scoped selector carries this component's Svelte hash, which those roots do
 	   not, and leaves both responsive variants painted on top of each other. */
-	:global(.collection-table-responsive) {
-		container-type: inline-size;
-	}
-
 	:global(.collection-table-narrow) {
 		display: none;
 	}
 
-	@container (max-width: 47.999rem) {
+	/* Compact presentation is a phone viewport state, not a consequence of a narrow
+	   desktop pane, so this follows the viewport rather than the surface's inline size. */
+	@media (max-width: 47.999rem) {
 		:global(.collection-table-wide) {
 			display: none;
 		}

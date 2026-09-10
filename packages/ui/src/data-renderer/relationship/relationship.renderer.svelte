@@ -67,6 +67,7 @@
 				where: narrowed.length
 					? { ...declaredWhere, ...Object.fromEntries(narrowed.map(([k, v]) => [k, { eq: v }])) }
 					: declaredWhere,
+				...(relationOptions?.with ? { with: relationOptions.with } : {}),
 				...(relationOptions?.orderBy ? { orderBy: relationOptions.orderBy } : {}),
 				...(searchQuery.trim()
 					? { search: { mode: 'lexical' as const, term: searchQuery.trim() } }
@@ -91,7 +92,11 @@
 		return {
 			records,
 			target,
-			query: { where: { id: { in: selectedIds } }, limit: selectedIds.length }
+			query: {
+				where: { id: { in: selectedIds } },
+				...(relationOptions.with ? { with: relationOptions.with } : {}),
+				limit: selectedIds.length
+			}
 		};
 	});
 	const valueQuery = $derived(

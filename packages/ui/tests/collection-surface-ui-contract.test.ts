@@ -37,17 +37,14 @@ test('the narrow collection list keeps one records scrollport around every card'
 	);
 });
 
-test('CollectionTable chooses exactly one responsive body from its own inline size', () => {
+test('CollectionTable chooses exactly one responsive body from the viewport', () => {
 	const table = componentSource('collection-table/collection-table.svelte');
 
-	assert.match(
-		table,
-		/:global\(\.collection-table-responsive\)\s*\{\s*container-type: inline-size;/u
-	);
+	assert.doesNotMatch(table, /@container \(max-width: 47\.999rem\)/u);
 	assert.match(table, /:global\(\.collection-table-narrow\)\s*\{\s*display: none;/u);
 	assert.match(
 		table,
-		/@container \(max-width: 47\.999rem\)[\s\S]*?:global\(\.collection-table-wide\)[\s\S]*?display: none;[\s\S]*?:global\(\.collection-table-narrow\)[\s\S]*?display: grid;/u
+		/@media \(max-width: 47\.999rem\)[\s\S]*?:global\(\.collection-table-wide\)[\s\S]*?display: none;[\s\S]*?:global\(\.collection-table-narrow\)[\s\S]*?display: grid;/u
 	);
 });
 

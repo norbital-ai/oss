@@ -233,6 +233,8 @@ export type CollectionGroupedResult<TRow extends object> = Readonly<Record<strin
 export interface CollectionRelationOptions<TRow extends object = CollectionRecord> {
 	/** How one option reads. Required — nothing is inferred, and without it a value shows as its id. */
 	readonly label: (record: TRow) => string;
+	/** Relations to carry on each option, so a label can read past the row's own columns. */
+	readonly with?: CollectionBaseQuery<TRow>['with'];
 	/** Narrows which records are offered. */
 	readonly where?: CollectionBaseQuery<TRow>['where'];
 	readonly orderBy?: CollectionBaseQuery<TRow>['orderBy'];
