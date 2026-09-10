@@ -290,6 +290,11 @@ const toApplicationItem = (
 						child.key === `${app.name}/${app.defaultChild}` || child.key === app.defaultChild
 				) ?? children[0]);
 	const href = landing?.href ?? applicationHref(app.name);
+	// The card's image, and the banner is what a workspace actually publishes for one. `thumbnail`
+	// is a separate authored prop that no template sets — the card read it, found nothing, and drew
+	// the same icon on the same gradient for every app in every workspace, while the app's own hero
+	// showed the artwork one click later. An authored thumbnail still wins where somebody states one.
+	const cardImage = app.thumbnail ?? app.banner ?? null;
 	return {
 		key: app.name,
 		label: resolveNavigationLabel(input.i18n, app.name, app.label || humanize(app.name)),
@@ -298,7 +303,7 @@ const toApplicationItem = (
 		active: isUnder(input.currentPath, href) || children.some((child) => child.active === true),
 		featureColor: 'customApps',
 		...(app.description == null ? {} : { description: app.description }),
-		...(app.thumbnail == null ? {} : { thumbnail: app.thumbnail }),
+		...(cardImage == null ? {} : { thumbnail: cardImage }),
 		...(children.length > 0 ? { children } : {})
 	};
 };

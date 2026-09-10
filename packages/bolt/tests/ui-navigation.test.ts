@@ -48,6 +48,29 @@ describe('workspace navigation', () => {
 		expect(applications[0]?.active).toBe(true);
 	});
 
+	it('gives the overview card the authored banner when no thumbnail is stated', () => {
+		const applications = buildApplicationNavigation({
+			apps: [
+				{ name: 'payroll', label: 'Payroll', banner: '/media/payroll-banner.webp' },
+				{
+					name: 'people',
+					label: 'People',
+					banner: '/media/people-banner.webp',
+					thumbnail: '/media/people-card.webp'
+				},
+				{ name: 'plain', label: 'Plain' }
+			],
+			currentPath: '/app/payroll'
+		});
+		// The banner is the only image a workspace publishes per app; a card that reads only
+		// `thumbnail` draws the icon for every app in every workspace. An authored thumbnail wins.
+		expect(applications.map((item) => item.thumbnail)).toEqual([
+			'/media/payroll-banner.webp',
+			'/media/people-card.webp',
+			undefined
+		]);
+	});
+
 	it('marks the current app active and places host plugins by their declared placement', () => {
 		const applications = buildApplicationNavigation({
 			apps: [
