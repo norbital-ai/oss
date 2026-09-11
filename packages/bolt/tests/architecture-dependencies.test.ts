@@ -199,7 +199,9 @@ describe('Bolt architecture boundaries', () => {
 		// binding answers a transaction with every statement's rows and pg with the last statement's.
 		// 17,951 -> 17,956: a `Task` dispatch keeps its own claim's lease alive for as long as it
 		// runs, because an occurrence has no wall any more and a lapsed lease means a dead host.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_956);
+		// 17,956 -> 17,965: the hook runaway guard counts staged-write waves, not staged records,
+		// so deleting a run that settled more than eight rows is no longer refused as a runaway.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_965);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -242,9 +244,11 @@ describe('Bolt architecture boundaries', () => {
 		// 910 -> 923: before hooks receive relationship snapshots and approval reservations retain
 		// normalized values. 923 -> 940: each root primes and decodes its own input; only the batch
 		// preparation owner decodes the full batch, avoiding quadratic memory at 10,000 rows.
+		// 940 -> 946: the runaway guard counts staged-write waves instead of staged records, so a
+		// hook releasing a whole run's settled rows stages one write rather than one per row.
 		// The aggregate ceiling still includes this complete preparation path.
 		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
-			940
+			946
 		);
 		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
 		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives

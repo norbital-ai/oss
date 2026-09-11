@@ -558,18 +558,23 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 				? Effect.void
 				: Effect.fail(ports.versionConflict(collection, id, expected, current));
 		};
-		let stagedWriteCalls = 0;
+		let stagedOrdinal = 0;
+		// The cascade's depth is its wave count, not its record count: a hook releasing a thousand
+		// settled rows is one write, and counting records refused every payroll that settled nine.
+		let stagedWave = 0;
 		const stagedWrites: Array<GraphRootSeed & { readonly action: 'create' | 'update' }> = [];
 		const stagedDeletes: Array<{ readonly collection: string; readonly id: string }> = [];
 		const stageHookWrites: HookWriteOps<Error> = {
-			mutate: (collection: string, records: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
-				Effect.forEach(records, (values) =>
-					ports.refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls).pipe(
-						Effect.map(() => {
+			mutate: (collection: string, records: ReadonlyArray<Readonly<Record<string, unknown>>>) => {
+				if (records.length === 0) return Effect.void;
+				return ports.refuseRunawayHooks('staged mutate', collection, stagedWave + 1).pipe(
+					Effect.map(() => {
+						for (const values of records) {
+							stagedOrdinal++;
 							const submittedId = values['id'];
 							const id = isString(submittedId)
 								? submittedId
-								: ports.deriveRecordId(`${effectId}:staged:${stagedWriteCalls}:${collection}`);
+								: ports.deriveRecordId(`${effectId}:staged:${stagedOrdinal}:${collection}`);
 							const action = isString(submittedId) ? 'update' : 'create';
 							stagedWrites.push({
 								collection,
@@ -578,17 +583,20 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 								action,
 								readExisting: isString(submittedId)
 							});
-						})
-					)
-				).pipe(Effect.asVoid),
-			delete: (collection: string, ids: ReadonlyArray<string>) =>
-				Effect.forEach(ids, (id) =>
-					ports.refuseRunawayHooks('staged delete', collection, ++stagedWriteCalls).pipe(
-						Effect.map(() => {
-							stagedDeletes.push({ collection, id });
-						})
-					)
-				).pipe(Effect.asVoid)
+						}
+					}),
+					Effect.asVoid
+				);
+			},
+			delete: (collection: string, ids: ReadonlyArray<string>) => {
+				if (ids.length === 0) return Effect.void;
+				return ports.refuseRunawayHooks('staged delete', collection, stagedWave + 1).pipe(
+					Effect.map(() => {
+						for (const id of ids) stagedDeletes.push({ collection, id });
+					}),
+					Effect.asVoid
+				);
+			}
 		};
 		const graphPreparers = makeGraphPreparers<Error | AuthoredRefusal, Requirements>({
 			...ports,
@@ -769,6 +777,7 @@ export const prepareDeclarativeGraph = <Error, ReadError extends Error, Requirem
 			);
 		}
 		while (stagedWrites.length > 0 || stagedDeletes.length > 0) {
+			stagedWave++;
 			const deleteWave = stagedDeletes.splice(0);
 			for (const staged of deleteWave) {
 				const stored = yield* storedGraphRow(
