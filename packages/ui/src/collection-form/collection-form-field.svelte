@@ -25,9 +25,11 @@
 
 <script lang="ts" generics="TFieldName extends string">
 	import { humanize } from '@norbital-ai/std/string';
+	import Icon from '@iconify/svelte';
 	import { DataRenderer, type FieldRendererComponent } from '#lib/data-renderer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
+	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import type { CollectionFormFieldProps } from '#lib/collection-form/collection-form.types';
@@ -38,6 +40,7 @@
 	let {
 		name,
 		label,
+		description,
 		class: className,
 		hidden = false,
 		readonly = false,
@@ -83,6 +86,25 @@
 				error={context.historyError()}
 				load={context.loadHistory}
 			/>
+			{#if description}
+				<Tooltip delayDuration={200} side="bottom" align="start" sideOffset={6}>
+					{#snippet trigger({ props })}
+						<button
+							{...props}
+							type="button"
+							aria-label={t('form.fieldDescriptionLabel', { label: fieldLabel })}
+							class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							<Icon icon="lucide:info" class="size-3" aria-hidden="true" />
+						</button>
+					{/snippet}
+					{#snippet content()}
+						<p class="max-w-72 px-2.5 py-2 text-left text-xs text-muted-foreground">
+							{description}
+						</p>
+					{/snippet}
+				</Tooltip>
+			{/if}
 			{#if dirty}
 				<span
 					class="size-1.5 rounded-full bg-brand"

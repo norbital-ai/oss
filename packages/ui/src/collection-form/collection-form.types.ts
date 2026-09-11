@@ -53,6 +53,12 @@ export interface CollectionFormFieldProps<
 > {
 	name: TFieldName;
 	label?: string;
+	/**
+	 * One sentence on what this field decides, shown as a tooltip behind an info icon beside the
+	 * label. The form never prints it inline: a description laced between fields is read once and
+	 * then becomes clutter the next time a reader passes it.
+	 */
+	description?: string;
 	class?: string;
 	/** Registered without a visual control; custom composition or a collection hook owns the value. */
 	hidden?: boolean;
