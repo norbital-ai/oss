@@ -62,6 +62,23 @@ const readiness = async (baseUrl: string): Promise<number | 'refused'> => {
 
 const sleep = (millis: number) => new Promise((resolve) => setTimeout(resolve, millis));
 
+/**
+ * The host's readiness, polled until it answers.
+ *
+ * `startHost` resolves on the "ready" log line, which the child prints before the listener has
+ * accepted its first connection; a single probe reads `refused` on a slower runner and failed CI
+ * twice. Bounded here, so a host that never answers is still a failure rather than a hang.
+ */
+const waitReady = async (baseUrl: string): Promise<number> => {
+	const deadline = Date.now() + 10_000;
+	for (;;) {
+		const status = await readiness(baseUrl);
+		if (status === 200) return status;
+		if (Date.now() > deadline) throw new Error(`host never answered 200; last=${status}`);
+		await sleep(10);
+	}
+};
+
 describe('process policy', () => {
 	const hosts: Array<Host> = [];
 	afterEach(async () => {
@@ -83,7 +100,7 @@ describe('process policy', () => {
 			async () => {
 				const host = await startHost(fault);
 				hosts.push(host);
-				expect(await readiness(host.baseUrl)).toBe(200);
+				expect(await waitReady(host.baseUrl)).toBe(200);
 				const observed: Array<number | 'refused'> = [];
 				let polling = true;
 				const poll = (async () => {
@@ -133,8 +150,7 @@ describe('process policy', () => {
 		async () => {
 			const host = await startHost('none');
 			hosts.push(host);
-			await sleep(400);
-			expect(await readiness(host.baseUrl)).toBe(200);
+			expect(await waitReady(host.baseUrl)).toBe(200);
 			expect(host.stderr()).not.toContain('escaped');
 			host.child.kill('SIGTERM');
 			expect(await within(host.exited, 10_000, 'graceful exit')).toEqual({ code: 0, signal: null });
