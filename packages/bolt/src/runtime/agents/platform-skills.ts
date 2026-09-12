@@ -67,8 +67,22 @@ export default defineModel(
 
 ## Relations
 
-\`src/collections/+relationship.ts\` declares how collections join. Then a model may name a related
-record with nested reads/writes from the client. Keep scalar \`r.uuid()\` columns for the foreign key.
+\`src/collections/+relationship.ts\` declares how collections join. Keep scalar \`r.uuid()\` columns
+for foreign keys. The compiler generates the local \`$types.js\` import during validation:
+
+\`\`\`ts
+import type { Relationships } from './$types.js';
+
+export default ((r) => ({
+  accounts: { account_contacts: r.many.contacts() },
+  contacts: {
+    contact_account: r.one.accounts({ from: r.contacts.account_id, to: r.accounts.id })
+  }
+})) satisfies Relationships;
+\`\`\`
+
+Each relation has a unique name; declare the one side with explicit \`from\` and \`to\`, then the
+inverse many side. Relationship fields get record pickers in the platform's create/edit forms.
 
 ## Apps
 
@@ -78,23 +92,32 @@ body region; that region owns the inset, the concrete surface owns scrolling.
 \`\`\`svelte
 <script lang="ts">
   import { client } from '$bolt/client';
+  import type { TenantI18nKeys } from '$bolt/i18n-keys';
+  import { getCollectionClientForSurface } from '@norbital-ai/ui/collection-runtime';
   import { CollectionTable } from '@norbital-ai/ui/collection-table';
+  import { useI18n } from '@norbital-ai/ui/i18n';
   import { Bound, Cover } from '@norbital-ai/ui/layout';
   import { PageHeader } from '@norbital-ai/ui/page-header';
+
+  const { t } = useI18n<TenantI18nKeys>();
+  const workspaceClient = getCollectionClientForSurface(client, 'accounts');
 </script>
 
 <svelte:head>
-  <title>Accounts</title>
+  <title>{t('app.accounts.title')}</title>
   <meta name="bolt:icon" content="lucide:building" />
 </svelte:head>
 
 {#snippet pageHeading()}
-  <PageHeader title="Accounts" description="Companies you sell to." />
+  <PageHeader
+    title={t('app.accounts.header_title')}
+    description={t('app.accounts.header_description')}
+  />
 {/snippet}
 
 <Cover as="main" top={pageHeading}>
   <Bound size="full" inset>
-    <CollectionTable {client} collection="accounts">
+    <CollectionTable client={workspaceClient} collection="accounts" view="accounts:table">
       {#snippet columns({ Column })}
         <Column name="name" />
         <Column name="status" />
@@ -117,19 +140,19 @@ keys in \`messages.zh.json\`). App identity keys are \`app.<app>.title\`, \`app.
 ## The generated workspace tree (.norbital)
 
 \`bolt sync\` owns this; do not hand-edit it. Know where to look:
-- \`.norbital/generated/authoring-types.ts\` — the exact generated types for your models, fields,
-  client methods, and app props. This is the source of truth for signatures. Read it when unsure.
+- \`.norbital/generated/authoring-types.ts\` — generated types for models and fields. Generated
+  files and dependencies are not exposed through \`workspace_read\`; do not try to read them.
 - \`.norbital/generated/collections.js\`, \`client.*\` — the compiled client and registry.
 - \`.norbital/diagnosis/findings.tsv\` — the audit's findings (one row per finding) after a build.
 - \`.norbital/migrations/\` — committed schema history; \`.norbital/config/\` — authored doctor config.
 
-If a path under \`.norbital\` is not listed by \`workspace_files\`, ask the host to compile the draft
-(\`workspace_validate\`) and read the diagnostics it returns.
+Validation returns diagnostics directly; it does not add generated files to the authored draft.
+Do not validate an unchanged draft to discover more files. Author a small step, then validate it.
 
 ## Method
 
 1. Read the existing source (\`workspace_files\`, \`workspace_read\`) before writing.
-2. State the collections and app surfaces you will add; then author with \`workspace_edit\` (precise
+2. State the collections and app surfaces you will add; then author a small batch with \`workspace_edit\` (precise
    replacements) or \`workspace_apply\` (whole files). Supply the current \`expectedCommit\`; a stale
    commit fails without partial changes — re-read and retry.
 3. Call \`workspace_validate\`. Fix every error it returns and call it again until clean.

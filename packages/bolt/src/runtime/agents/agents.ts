@@ -2642,6 +2642,7 @@ export const layer = Layer.effect(
 			 * the acknowledgement.
 			 */
 			let nudges = 0;
+			let emptyReplies = 0;
 			/**
 			 * The provider's own count from the last call, which is what the next call will carry in.
 			 *
@@ -2870,7 +2871,8 @@ export const layer = Layer.effect(
 								callId,
 								modelId: run.model_id,
 								messages: projected,
-								maxOutputTokens: 2_048,
+								// Reasoning shares the output allowance with source edits and tool arguments.
+								maxOutputTokens: 16_384,
 								tools: toolsForMode,
 								onProgress: (progress) =>
 									Effect.gen(function* () {
@@ -2945,6 +2947,29 @@ export const layer = Layer.effect(
 						messages = transcript.rows();
 					}
 					if (calls.length === 0 && output !== undefined) {
+						if (
+							!Schema.decodeUnknownSync(Prompt.AssistantMessage)(output).content.some(
+								(part) => part.type === 'file' || (part.type === 'text' && part.text.trim() !== '')
+							)
+						) {
+							if (emptyReplies++ > 0)
+								return yield* new TaskRuntimeError({
+									operation: 'generate',
+									message: 'The model returned no answer or tool call after a continuation.'
+								});
+							yield* appendMessage(
+								EffectId.make(`${effectId}:empty-reply:${iteration}`),
+								subject,
+								run,
+								transcript,
+								{ kind: 'system' },
+								systemMessage(
+									'Your previous generation contained no answer or tool call. Continue the requested work with a tool call, or give a concrete answer. Keep source edits to small batches.'
+								)
+							);
+							output = undefined;
+							continue;
+						}
 						if (
 							yield* consumeSteering(
 								EffectId.make(`${effectId}:final-steer:${iteration}`),
