@@ -218,7 +218,8 @@ describe('authored inference tool loop', () => {
 		const closing = requests[2];
 		if (closing?._tag !== 'Generate') throw new Error('closing');
 		const roles = closing.messages.map((m) => m.role);
-		expect(roles).toEqual(['user', 'assistant', 'tool', 'tool', 'assistant', 'user']);
+		expect(roles).toEqual(['user', 'assistant', 'tool', 'tool', 'user']);
+		expect(JSON.stringify(closing.messages)).not.toContain('The rate is 7.5%.');
 		const toolMessage = closing.messages[2];
 		if (typeof toolMessage?.content === 'string') throw new Error('tool content');
 		const part = toolMessage?.content[0] as { result: unknown; isFailure: boolean };
@@ -227,8 +228,16 @@ describe('authored inference tool loop', () => {
 		const unknown = closing.messages[3];
 		if (typeof unknown?.content === 'string') throw new Error('tool content');
 		expect((unknown?.content[0] as { isFailure: boolean; result: unknown }).isFailure).toBe(true);
-		expect(String((unknown?.content[0] as { result: unknown }).result)).toContain('Unknown tool "nope"');
+		expect(String((unknown?.content[0] as { result: unknown }).result)).toContain(
+			'Unknown tool "nope"'
+		);
 		expect(JSON.stringify(closing.messages.at(-1))).toContain('Return the structured result now');
+		expect(closing.messages.at(-1)).toMatchObject({
+			role: 'user',
+			content: expect.stringContaining(
+				JSON.stringify(Schema.toJsonSchemaDocument(Schema.Struct({ rate: Schema.Number })).schema)
+			)
+		});
 	});
 
 	it('keeps calling tools up to the cap, surfacing failures as results', async () => {
@@ -236,14 +245,17 @@ describe('authored inference tool loop', () => {
 		let runs = 0;
 		const infer = inferOp(
 			EffectId.make('inference-steps'),
-			generateWith((request, turn) =>
-				request.output._tag === 'Object'
-					? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
-					: turn < 3
-						? AIGenerationResult.cases.Message.make({
-								message: assistant([toolCall(`c${requests.length}`, 'again', {})])
-							})
-						: AIGenerationResult.cases.Message.make({ message: assistant('Enough.') }), requests)
+			generateWith(
+				(request, turn) =>
+					request.output._tag === 'Object'
+						? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
+						: turn < 3
+							? AIGenerationResult.cases.Message.make({
+									message: assistant([toolCall(`c${requests.length}`, 'again', {})])
+								})
+							: AIGenerationResult.cases.Message.make({ message: assistant('Enough.') }),
+				requests
+			)
 		);
 		const output = await Effect.runPromise(
 			infer({
@@ -316,7 +328,12 @@ describe('authored inference tool loop', () => {
 				schema: Schema.Struct({}),
 				prompt: 'x',
 				tools: [
-					{ name: 'Bad Name', description: 'x', input: Schema.Struct({}), run: () => Effect.succeed(null) }
+					{
+						name: 'Bad Name',
+						description: 'x',
+						input: Schema.Struct({}),
+						run: () => Effect.succeed(null)
+					}
 				]
 			})
 		);

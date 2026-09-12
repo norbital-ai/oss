@@ -276,9 +276,11 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 							'ai.response_invalid',
 							'The AI provider returned the wrong output kind for a tool turn.'
 						);
-					conversation.push(turn.result.message);
 					const calls = inferenceToolCalls(turn.result.message);
+					// The tool phase has no output schema. Its terminal draft can invent a shape that
+					// biases the structured turn; retain the tool evidence, not that unchecked answer.
 					if (calls.length === 0) break;
+					conversation.push(turn.result.message);
 					for (const call of calls) {
 						const tool = tools.find(({ name }) => name === call.name);
 						const outcome =
@@ -318,7 +320,7 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 						Prompt.userMessage({
 							content: [
 								Prompt.textPart({
-									text: 'Return the structured result now, from the evidence gathered above. Do not call tools.'
+									text: `Return the structured result now, from the evidence gathered above. Do not call tools. Return only JSON with exactly the property names and value types in this JSON schema, without Markdown fences:\n${JSON.stringify(jsonSchema)}`
 								})
 							]
 						})
