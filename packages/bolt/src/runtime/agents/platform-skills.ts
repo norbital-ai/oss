@@ -155,6 +155,14 @@ Data is a single typed client: \`import { client } from '$bolt/client'\`. Reads 
 queries (\`client.db.<collection>.findMany({ where, orderBy, columns, with })\`); writes are
 \`client.db.<collection>.mutate([...])\`. There is no refetch/invalidate in the client.
 
+Apps use Svelte 5 runes: \`let selected = $state('')\`, \`const rows = $derived(query.current ?? [])\`,
+and \`onclick={handler}\`. Keep the query reactive; its first \`current\` may be empty while it loads.
+Do not copy it once on mount. Filters use operators, for example \`where: { id: { eq: selected } }\`.
+Svelte templates are not JSX: declare \`{#snippet editor()}...{/snippet}\` in the markup and pass
+\`editor\` as a snippet prop. Do not import React-style \`useState\` or \`useEffect\` from Svelte, or mix
+legacy \`$:\` statements with runes. Import UI components from their public subpaths, such as
+\`@norbital-ai/ui/button\` and \`@norbital-ai/ui/tabs\`, not the package root.
+
 ## Copy
 
 Every visible body string comes from \`t('key')\` using your \`src/i18n/messages.en.json\` (mirror the
