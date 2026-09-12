@@ -174,8 +174,10 @@ For a custom save action, import \`submitCollectionMutation\` from
 \`@norbital-ai/ui/collection-form\` and \`Effect\` from \`effect\`:
 \`await Effect.runPromise(submitCollectionMutation(() => client.db.documents.mutate([values])))\`.
 The result is a settlement with \`kind: 'committed' | 'pendingApproval'\`, not an array of rows.
-For a new record, generate \`crypto.randomUUID()\` before writing and supply it as \`values.id\`;
-retain it after a committed settlement. Report pending approval accurately.
+For a new record, omit \`id\`: the client generates it. Supplying \`id\` means UPDATE and requires
+an existing row in the live query. To retain a created id, capture \`handle.row?.id\` from the
+Promise returned by \`mutate\` inside the callback, return that handle, and retain the id only
+after a committed settlement. Report pending approval accurately.
 
 To upload a browser File, import \`getDataRendererRuntimeContext\` from
 \`@norbital-ai/ui/data-renderer\` and capture \`const runtime = getDataRendererRuntimeContext()\`
