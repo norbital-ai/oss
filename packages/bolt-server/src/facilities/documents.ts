@@ -16,8 +16,8 @@ export async function extractDocumentText(
 	const sha256 = createHash('sha256').update(bytes).digest('hex');
 	const mime = contentType.split(';', 1)[0]!.trim().toLowerCase();
 	if (mime !== 'application/pdf') {
-		if (!/^(text\/[\w.+-]+|application\/(json|(?:[\w.-]+\+)?xml))$/.test(mime))
-			throw new Error('Supported documents are PDF, text, JSON and XML.');
+		if (!/^(text\/[\w.+-]+|application\/(csv|json|(?:[\w.-]+\+)?xml))$/.test(mime))
+			throw new Error('Supported documents are PDF, text, CSV, JSON and XML.');
 		const charset = /charset\s*=\s*["']?([\w-]+)/i;
 		const declared =
 			contentType.match(charset)?.[1] ??

@@ -255,6 +255,22 @@ describe('public web connector address selection', () => {
 	});
 
 	const processEvents: Array<string> = [];
+	it('reads application/csv datasets without losing multilingual cells', async () => {
+		const body = '投保等級,月投保金額（元）\r\n1,29500\r\n';
+		const binding = makeWebConnectorBinding({
+			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+			request: async () => ({
+				status: 200,
+				contentType: 'application/csv',
+				body: Buffer.from('\uFEFF' + body)
+			})
+		});
+		expect(await read(binding, 'https://official.example/dataset')).toMatchObject({
+			_tag: 'Success',
+			value: { output: { body } }
+		});
+	});
+
 	const record = (cause: unknown) =>
 		processEvents.push(cause instanceof Error ? cause.message : String(cause));
 	beforeEach(() => {

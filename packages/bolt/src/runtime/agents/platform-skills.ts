@@ -43,17 +43,17 @@ A leading \`+\` is a compiler role; a misplaced or unknown one is an error. Ever
 ## Collections
 
 \`\`\`ts
-import { defineModel, enums, text, number, instant, boolean, file, r, custom } from '@norbital-ai/bolt/authoring';
+import { defineModel, enums, text, numeric, instant, boolean, file, uuid, custom } from '@norbital-ai/bolt/authoring';
 
 export default defineModel(
   {
     title: text().notNull(),
     status: enums(['open', 'closed']),
-    budget: number(),
+    budget: numeric(),
     due: instant(),
     active: boolean(),
     attachment: file(),
-    account_id: r.uuid()            // scalar reference; wire it in +relationship.ts
+    account_id: uuid()             // scalar reference; wire it in +relationship.ts
   },
   { description: '...', recordLabel: 'title', icon: 'lucide:file-question' }
 );
@@ -67,7 +67,7 @@ export default defineModel(
 
 ## Relations
 
-\`src/collections/+relationship.ts\` declares how collections join. Keep scalar \`r.uuid()\` columns
+\`src/collections/+relationship.ts\` declares how collections join. Keep scalar \`uuid()\` columns
 for foreign keys. The compiler generates the local \`$types.js\` import during validation:
 
 \`\`\`ts

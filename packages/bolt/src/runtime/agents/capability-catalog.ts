@@ -174,7 +174,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'todo',
 		description:
-			"Read or replace this conversation's ordered Todo checklist. `read` takes no items. `set` replaces the whole list; stable IDs reconcile progress, and a done item cannot be reopened or reworded. Todo is evidence, not completion authority.",
+			"Read or replace this conversation's ordered Todo checklist. `read` takes no items. `set` replaces the whole list; at most one item may be doing, stable IDs reconcile progress, and a done item cannot be reopened or reworded. Todo is evidence, not completion authority.",
 		command: 'platform:todo',
 		inputSchema: objectInput(
 			{
