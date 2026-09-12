@@ -220,6 +220,21 @@ describe('workspace build guard', () => {
 		).toThrow(/\+representation\.svelte:1 — <CollectionForm recordId=\{… id …\}>/);
 	});
 
+	it('leaves extracted component CSS to the Svelte plugin while still auditing component queries', () => {
+		expect(
+			audit(
+				'.review.svelte-abc { display: flex; }',
+				'/w/src/apps/+transcriber.svelte?svelte&type=style&lang.css'
+			)
+		).toBeNull();
+		expect(() =>
+			audit(
+				'<CollectionForm recordId={record?.id} />',
+				'/w/src/apps/+transcriber.svelte?custom=true'
+			)
+		).toThrow(/framework-owned system column/);
+	});
+
 	it('runs before the Svelte compiler, the last point at which a prop is still a syntactic position', () => {
 		expect(plugin?.enforce).toBe('pre');
 	});

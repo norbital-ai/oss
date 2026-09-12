@@ -140,7 +140,10 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 		 * only ever looked at `.ts`.
 		 */
 		transform: (code, id) => {
-			const file = id.split('?')[0] ?? id;
+			const [file = id, query] = id.split('?');
+			// Svelte's extracted stylesheet keeps the component filename but contains CSS.
+			const parameters = new URLSearchParams(query);
+			if (parameters.has('svelte') && parameters.get('type') === 'style') return null;
 			if (/\/(?:node_modules|\.yalc|\.norbital)\//.test(file)) return null;
 			if (
 				file.startsWith(`${resolve(workspaceRoot, 'src')}${sep}`) &&
