@@ -643,7 +643,6 @@
 	>
 		{#snippet agent({ expanded })}
 			<AgentTrigger
-				state={fabAgentState}
 				label={t('bolt.shell.askAgent')}
 				shortcut={agentShortcut}
 				{expanded}

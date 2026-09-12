@@ -14,16 +14,13 @@
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
-	import type { NorbiusStripState } from '@norbital-ai/ui/norbius-strip';
 
 	let {
-		state,
 		label,
 		shortcut,
 		expanded = true,
 		onclick
 	}: {
-		state: NorbiusStripState;
 		/** The visible name of the action, e.g. "Norbius". */
 		label: string;
 		/** Rendered shortcut, e.g. "⌘K". */
@@ -59,11 +56,15 @@
 		orb reads at the 14px its neighbours' glyphs read at.
 
 		No label on the orb: the button already carries one, and a second would be read twice.
+
+		No state either. State lives on a conversation, and this button is the door to Norbius as
+		a whole — the orb inside the sheet and the composer wear the open conversation's state; the
+		door stays at rest.
 	-->
 	<div
 		class="flex size-6 shrink-0 items-center justify-center rounded-md border border-input bg-background shadow-xs"
 	>
-		<NorbiusStrip {state} size={20} />
+		<NorbiusStrip size={20} />
 	</div>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"

@@ -87,11 +87,6 @@ export type DotPoint = {
 	boost: number;
 	/** Visibility in [0, 1]; a dot at 0 is neither drawn nor measured. */
 	vis: number;
-	/**
-	 * A point of a solid body rather than a dot: never drawn as one, and a face made only of solid
-	 * points is filled opaque black on any ground — a black hole's shadow is black.
-	 */
-	solid?: boolean;
 };
 
 export type DotGeometry<Seed, State extends string> = {
@@ -104,11 +99,6 @@ export type DotGeometry<Seed, State extends string> = {
 	 * `RIBBON_BELOW`, where its dots could not resolve.
 	 */
 	faces?(seeds: Seed[], state: State): ReadonlyArray<readonly [number, number, number, number]>;
-	/**
-	 * The box size below which `faces` are painted as a faint surface under the dots. Defaults to
-	 * `RIBBON_BELOW`; a mark that is a surface at every size passes `Infinity`.
-	 */
-	readonly surfaceBelow?: number;
 };
 
 /**
@@ -312,11 +302,9 @@ export function attachDotField<Seed, State extends string>(
 		ctx.clearRect(0, 0, size, size);
 		const half = size / 2;
 
-		const surfaced = geometry.faces !== undefined && size < (geometry.surfaceBelow ?? RIBBON_BELOW);
-		if (surfaced && geometry.faces) {
+		if (ribbon && geometry.faces) {
 			// A faint surface under the dots, far to near, so the shape shows through the lattice
-			// — at icon size, where the dots alone would read as a smudge, or at every size for a
-			// mark that is a body rather than a diagram.
+			// at a size where the dots alone would read as a smudge.
 			const faces = geometry.faces(seeds, targetState).map(([a, b, c, d]) => {
 				const quad = [points[a], points[b], points[c], points[d]] as const;
 				return { quad, z: (quad[0].z + quad[1].z + quad[2].z + quad[3].z) / 4 };
@@ -332,12 +320,9 @@ export function attachDotField<Seed, State extends string>(
 				const depth = clamp((z + 1) / 2);
 				const light = (a.light + b.light + c.light + d.light) / 4;
 				const fill = clamp((0.08 + 0.3 * depth) * (0.5 + 0.5 * light) * vis);
-				// A solid face is a body's own colour, on any ground: the shadow is black. Every other
-				// face is translucent ink, so a surface passing in front of the shadow glows across it
-				// instead of wiping it out.
-				const solid = quad.every((p) => p.solid);
-				ctx.globalAlpha = solid ? 1 : fill;
-				ctx.fillStyle = solid ? 'rgb(0,0,0)' : css(ink);
+				// Translucent ink, so overlapping patches read as one surface.
+				ctx.globalAlpha = fill;
+				ctx.fillStyle = css(ink);
 				// A hairline in the fill colour closes the seams between patches.
 				ctx.strokeStyle = ctx.fillStyle;
 				ctx.lineWidth = 0.5;
@@ -360,7 +345,7 @@ export function attachDotField<Seed, State extends string>(
 		const floor = ribbon ? 0.1 : INK_FLOOR;
 		points.sort((a, b) => a.z - b.z || a.index - b.index);
 		for (const point of points) {
-			if (point.vis <= 0.02 || point.solid) continue;
+			if (point.vis <= 0.02) continue;
 			const depth = clamp((point.z + 1) / 2);
 			const dotRadius = dotFarPx + (dotNearPx - dotFarPx) * depth + (compact ? 0 : point.boost);
 			// Far dots sit close to the ground, near dots are full ink; a surface seen edge-on is

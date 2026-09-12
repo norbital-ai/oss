@@ -294,7 +294,11 @@
 						{/if}
 						<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
 					{:else}
-						<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
+						{#if parentAttribution}
+							<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
+						{:else}
+							<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
+						{/if}
 					{/if}
 				</div>
 			{:else}
@@ -313,7 +317,11 @@
 									>{/if}
 								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
 							{:else}
-								<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
+								{#if parentAttribution}
+									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+								{:else}
+									<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
+								{/if}
 							{/if}
 						</div>
 					{:else if part.type === 'reasoning'}

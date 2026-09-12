@@ -135,6 +135,24 @@
 	const panelMessages = $derived(projectConversationMessages(messagesQuery?.current ?? []));
 	const rootMessages = $derived(panelMessages.filter((message) => message.conversationId === activeConversationId));
 	const tools = $derived(pairToolCalls(panelMessages));
+	/**
+	 * Evidence of what the conversation actually did, by tool name and count.
+	 *
+	 * The transcript shows the calls themselves; this is the auditable tally — how many pages were
+	 * read, files edited, children spawned — so a reader can see the work was done rather than taking
+	 * the agent's prose for it. Derived from the durable messages, so it survives a reload.
+	 */
+	const activityCounts = $derived.by(() => {
+		const counts = new Map<string, number>();
+		for (const entry of panelMessages) {
+			const content = entry.message.content;
+			if (typeof content === 'string') continue;
+			for (const part of content)
+				if (part.type === 'tool-call')
+					counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
+		}
+		return [...counts.entries()].sort((left, right) => right[1] - left[1]);
+	});
 
 	const plansQuery = $derived(
 		activeConversationIds.length === 0
@@ -475,15 +493,25 @@
 						revisedMessage = null;
 						clearPendingAttachments();
 					},
-					onFailure: (failure) => {
-						sendFailure = failure;
-					},
+					onFailure: reportSendFailure,
 					onSettled: () => {
 						pending = false;
 					}
 				}
 			);
 		});
+	}
+
+	/**
+	 * Paint a failed send, unless the workbench still has a running Task.
+	 *
+	 * The composer's wall is a lost-request guard, not a turn deadline: while the root Task or any
+	 * child Task is still running there is nothing lost, so the timeout stays silent and the durable
+	 * row clears the pending bubble when it lands.
+	 */
+	function reportSendFailure(message: string): void {
+		if (allTasks.some((task) => task.status === 'running')) return;
+		sendFailure = message;
 	}
 
 	function submit(priority: 'normal' | 'steer' = 'normal') {
@@ -549,9 +577,7 @@
 						revisedMessage = null;
 						clearPendingAttachments();
 					},
-					onFailure: (failure) => {
-						sendFailure = failure;
-					},
+					onFailure: reportSendFailure,
 					onSettled: () => {
 						pending = false;
 					}
@@ -770,18 +796,11 @@
 </script>
 
 <Stack gap="none" fill class="min-h-0 bg-card">
-	{#if headerOrb}
-		<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-4 py-3">
-			<NorbiusStrip
-				state={orbState}
-				size={18}
-				label={t(agentOrbStatusKey(orbState))}
-			/>
-			<span class="text-sm font-semibold">Norbius</span>
-		</Inline>
-	{/if}
-
 	<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-3 py-2">
+		{#if headerOrb}
+			<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
+			<span class="shrink-0 text-sm font-semibold">Norbius</span>
+		{/if}
 		<div class="min-w-0 flex-1">
 			<TaskSelector
 				model={taskSelector}
@@ -806,6 +825,18 @@
 			<Icon icon="lucide:plus" class="size-4" />
 		</Button>
 	</Inline>
+
+	{#if activityCounts.length > 0}
+		<Inline
+			gap="sm"
+			class="shrink-0 flex-wrap border-b border-border/60 px-3 py-1 text-tiny text-muted-foreground"
+			aria-label="Tool activity in this conversation"
+		>
+			{#each activityCounts as [name, count] (name)}
+				<span data-tool-activity={name}>{name} × {count}</span>
+			{/each}
+		</Inline>
+	{/if}
 
 	<Scroll
 		class="min-h-0 flex-1"
