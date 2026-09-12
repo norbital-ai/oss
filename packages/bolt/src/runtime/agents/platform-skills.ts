@@ -104,7 +104,8 @@ body region; that region owns the inset, the concrete surface owns scrolling.
 </script>
 
 <svelte:head>
-  <title>{t('app.accounts.title')}</title>
+  <title>Accounts</title>
+  <meta name="description" content="Companies you sell to." />
   <meta name="bolt:icon" content="lucide:building" />
 </svelte:head>
 
@@ -133,9 +134,10 @@ queries (\`client.db.<collection>.findMany({ where, orderBy, columns, with })\`)
 
 ## Copy
 
-Every user-facing string comes from \`t('key')\` using your \`src/i18n/messages.en.json\` (mirror the
+Every visible body string comes from \`t('key')\` using your \`src/i18n/messages.en.json\` (mirror the
 keys in \`messages.zh.json\`). App identity keys are \`app.<app>.title\`, \`app.<app>.header_title\`,
-\`app.<app>.header_description\`.
+\`app.<app>.header_description\`. Keep head metadata static English: the compiler extracts it as
+text, and \`app.<app>.title\` supplies the translated sidebar name.
 
 ## The generated workspace tree (.norbital)
 
