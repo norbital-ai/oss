@@ -1,6 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
+import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
 import { Schema } from 'effect';
 import { getErrorMessage } from '@norbital-ai/std';
 import { extractDocumentText } from './documents.js';
@@ -53,6 +55,7 @@ export const isPublicWebAddress = (address: string): boolean => {
 
 type Address = Awaited<ReturnType<typeof lookup>>;
 const isString = Schema.is(Schema.String);
+const unzipPage = promisify(gunzip);
 type PageResponse = Readonly<{
 	status: number;
 	location?: string;
@@ -159,14 +162,24 @@ const attemptPage = (
 					else chunks.push(chunk);
 				});
 				response.on('error', reject);
-				response.on('end', () =>
-					resolve({
-						status,
-						headers: responseHeaders,
-						contentType: response.headers['content-type'] ?? '',
-						body: Buffer.concat(chunks)
-					})
-				);
+				response.on('end', () => {
+					const body = Buffer.concat(chunks);
+					// Some official sites send gzip even when Accept-Encoding is identity.
+					const decoded =
+						response.headers['content-encoding'] === 'gzip'
+							? unzipPage(body, { maxOutputLength: WEB_PAGE_BYTE_LIMIT })
+							: Promise.resolve(body);
+					decoded.then(
+						(body) =>
+							resolve({
+								status,
+								headers: responseHeaders,
+								contentType: response.headers['content-type'] ?? '',
+								body
+							}),
+						reject
+					);
+				});
 			}
 		);
 		req.on('error', (cause: Error) => {

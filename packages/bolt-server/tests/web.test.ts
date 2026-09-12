@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:net';
 import { Readable } from 'node:stream';
+import { gzipSync } from 'node:zlib';
 import type { request as httpsRequest } from 'node:https';
 import { pdfFixture } from './helpers/pdf-fixture.js';
 
@@ -178,8 +179,9 @@ const unroutable = (address: string) =>
  */
 const makeFakeRequest = (
 	attempts: Array<Attempt>,
-	body = '<h1>reached</h1>',
-	failing: (address: string) => boolean = (address) => address.includes(':')
+	body: string | Uint8Array = '<h1>reached</h1>',
+	failing: (address: string) => boolean = (address) => address.includes(':'),
+	headers: Readonly<Record<string, string>> = {}
 ): FakeRequest =>
 	((_url: unknown, options: Record<string, unknown>, onResponse: (response: unknown) => void) => {
 		const req = Object.assign(new EventEmitter(), { end: () => undefined });
@@ -199,7 +201,7 @@ const makeFakeRequest = (
 				onResponse(
 					Object.assign(Readable.from([Buffer.from(body)]), {
 						statusCode: 200,
-						headers: { 'content-type': 'text/html' }
+						headers: { 'content-type': 'text/html', ...headers }
 					})
 				)
 			);
@@ -209,6 +211,49 @@ const makeFakeRequest = (
 	}) as unknown as FakeRequest;
 
 describe('public web connector address selection', () => {
+	it.each([false, true])(
+		'decodes unsolicited gzip within the byte limit (oversized: %s)',
+		async (oversized) => {
+			const body = oversized
+				? 'x'.repeat(WEB_PAGE_BYTE_LIMIT + 1)
+				: '<h1>Thuế thu nhập cá nhân</h1>';
+			const binding = makeWebConnectorBinding({
+				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+				request: makeRequestPage(
+					makeFakeRequest([], gzipSync(body), () => false, {
+						'content-encoding': 'gzip',
+						'content-type': 'text/html; charset=utf-8'
+					})
+				)
+			});
+			const result = await read(binding, 'https://official.example/');
+			if (oversized) expect(result._tag).toBe('Failure');
+			else expect(result).toMatchObject({ _tag: 'Success', value: { output: { body } } });
+		}
+	);
+
+	it.each([
+		{ contentType: 'text/html; charset=windows-1252', prefix: '' },
+		{
+			contentType: 'text/html',
+			prefix: '<meta http-equiv="content-type" content="text/html; charset=windows-1252">'
+		}
+	])('decodes the declared character encoding in $contentType', async ({ contentType, prefix }) => {
+		const body = Buffer.concat([
+			Buffer.from(prefix + '<p>Employer'),
+			Buffer.from([0x92]),
+			Buffer.from('s contribution</p>')
+		]);
+		const binding = makeWebConnectorBinding({
+			resolve: async () => [{ address: '1.1.1.1', family: 4 }],
+			request: async () => ({ status: 200, contentType, body })
+		});
+		expect(await read(binding, 'https://official.example/')).toMatchObject({
+			_tag: 'Success',
+			value: { output: { body: prefix + '<p>Employer’s contribution</p>' } }
+		});
+	});
+
 	const processEvents: Array<string> = [];
 	const record = (cause: unknown) =>
 		processEvents.push(cause instanceof Error ? cause.message : String(cause));
@@ -251,10 +296,7 @@ describe('public web connector address selection', () => {
 		});
 		const result = await read(binding, 'https://example.test/');
 		expect(result._tag).toBe('Success');
-		expect(attempts.map((attempt) => attempt.address)).toEqual([
-			'1.0.0.1',
-			'1.1.1.1'
-		]);
+		expect(attempts.map((attempt) => attempt.address)).toEqual(['1.0.0.1', '1.1.1.1']);
 		expect(attempts.every((attempt) => attempt.deferred)).toBe(true);
 		expect(processEvents).toEqual([]);
 	});
@@ -308,7 +350,9 @@ describe('public web connector address selection', () => {
 				],
 				signal
 			)
-		).rejects.toThrow(/could not be reached on any address; last 127\.0\.0\.1: connect ECONNREFUSED/);
+		).rejects.toThrow(
+			/could not be reached on any address; last 127\.0\.0\.1: connect ECONNREFUSED/
+		);
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(processEvents).toEqual([]);
 	});

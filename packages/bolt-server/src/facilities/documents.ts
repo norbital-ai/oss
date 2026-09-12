@@ -17,8 +17,18 @@ export async function extractDocumentText(
 	const mime = contentType.split(';', 1)[0]!.trim().toLowerCase();
 	if (mime !== 'application/pdf') {
 		if (!/^(text\/[\w.+-]+|application\/(json|(?:[\w.-]+\+)?xml))$/.test(mime))
-			throw new Error('Supported documents are PDF, UTF-8 text, JSON and XML.');
-		const body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+			throw new Error('Supported documents are PDF, text, JSON and XML.');
+		const charset = /charset\s*=\s*["']?([\w-]+)/i;
+		const declared =
+			contentType.match(charset)?.[1] ??
+			(mime === 'text/html'
+				? Buffer.from(bytes.subarray(0, 1024))
+						.toString('latin1')
+						.match(/<meta\b[^>]*>/gi)
+						?.map((tag) => tag.match(charset)?.[1])
+						.find((value) => value !== undefined)
+				: undefined);
+		const body = new TextDecoder(declared ?? 'utf-8', { fatal: true }).decode(bytes);
 		if (body.includes('\u0000')) throw new Error('Document contains binary data.');
 		if (bytes.byteLength > 2 * 1024 * 1024)
 			throw new Error('Document text exceeds the 2 MiB limit.');
