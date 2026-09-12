@@ -113,7 +113,9 @@ Author it with the model, then test creating and reopening a record in the brows
 </CollectionForm>
 \`\`\`
 
-Include all fields the user needs, including relationship and file fields. A relationship Field
+Declare every mutable field exactly once, including relationship and file fields; use
+\`<Field name="internal_value" hidden />\` for a value users must not edit. Framework fields such as
+\`id\` are hidden automatically. A relationship Field
 can use \`relationOptions={{ label: (row) => String(row.name ?? ''), orderBy: { name: 'asc' } }}\`
 to show meaningful record names. CollectionForm supplies validation and save controls.
 
@@ -163,6 +165,26 @@ Svelte templates are not JSX: declare \`{#snippet editor()}...{/snippet}\` in th
 legacy \`$:\` statements with runes. Import UI components from their public subpaths, such as
 \`@norbital-ai/ui/button\` and \`@norbital-ai/ui/tabs\`, not the package root.
 
+Prefer callbacks for user actions. When a reactive side effect is necessary, import \`watch\` from
+\`runed\`: \`watch(() => selected, (value, previousValue) => { /* react to this source only */ })\`.
+It runs initially; optional third argument \`{ lazy: true }\` skips that first run. Do not overwrite
+unsaved input on every live-query emission; use an explicit Load action for saved document content.
+
+For a custom save action, import \`submitCollectionMutation\` from
+\`@norbital-ai/ui/collection-form\` and \`Effect\` from \`effect\`:
+\`await Effect.runPromise(submitCollectionMutation(() => client.db.documents.mutate([values])))\`.
+The result is a settlement with \`kind: 'committed' | 'pendingApproval'\`, not an array of rows.
+For a new record, generate \`crypto.randomUUID()\` before writing and supply it as \`values.id\`;
+retain it after a committed settlement. Report pending approval accurately.
+
+To upload a browser File, import \`getDataRendererRuntimeContext\` from
+\`@norbital-ai/ui/data-renderer\` and capture \`const runtime = getDataRendererRuntimeContext()\`
+during component initialization, never inside an event handler. Obtain
+\`runtime?.createFileUploadClient()\`; if unavailable, report that upload is unavailable.
+\`await Effect.runPromise(uploadClient.upload(file))\` returns \`storageKey, name, size, type\`.
+Store a \`file()\` value as \`{ storage_key: result.storageKey, file_name: result.name,
+file_size: result.size, mime_type: result.type }\`; \`runtime.fileUrl(storage_key)\` resolves downloads.
+
 ## Copy
 
 Every visible body string comes from \`t('key')\` using your \`src/i18n/messages.en.json\` (mirror the
@@ -185,6 +207,8 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
 ## Method
 
 1. Read the existing source (\`workspace_files\`, \`workspace_read\`) before writing.
+   Child agents have the same source access; delegating a dependency-signature lookup does not
+   expose node_modules. Use this contract and compiler diagnostics instead of recursive lookups.
 2. State the collections and app surfaces you will add; then author a small batch with \`workspace_edit\` (precise
    replacements) or \`workspace_apply\` (whole files). Supply the current \`expectedCommit\`; a stale
    commit fails without partial changes — re-read and retry.
