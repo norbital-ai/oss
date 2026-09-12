@@ -118,6 +118,51 @@ describe('authored inference tool loop', () => {
 		embed: () => Effect.die('unexpected embedding request')
 	});
 
+	it('separates concurrent and repeated inferences while preserving replay identities', async () => {
+		const run = async () => {
+			const requests: Array<AIRequest> = [];
+			const effectIds: Array<string> = [];
+			const binding = generateWith(
+				(request) =>
+					request.output._tag === 'Object'
+						? AIGenerationResult.cases.Object.make({ value: { rate: 7.5 } })
+						: AIGenerationResult.cases.Message.make({ message: assistant('Evidence ready.') }),
+				requests
+			);
+			const infer = inferOp(EffectId.make('statutory-batch'), {
+				...binding,
+				generate: (id, request) => {
+					effectIds.push(id);
+					return binding.generate(id, request);
+				}
+			});
+			const request = (country: string) =>
+				infer({
+					model: 'provider/research',
+					schema: Schema.Struct({ rate: Schema.Number }),
+					prompt: `Research ${country}.`,
+					tools: [
+						{
+							name: 'read_page',
+							description: 'Read official evidence.',
+							input: Schema.Struct({}),
+							run: () => Effect.succeed('Official evidence.')
+						}
+					]
+				});
+			await Effect.runPromise(Effect.all([request('PH'), request('TW')], { concurrency: 2 }));
+			await Effect.runPromise(request('PH'));
+			const callIds = requests.map((request) => {
+				if (request._tag !== 'Generate') throw new Error('expected generation');
+				return request.callId;
+			});
+			expect(new Set(callIds).size).toBe(6);
+			expect(new Set(effectIds).size).toBe(6);
+			return { callIds, effectIds };
+		};
+		expect(await run()).toEqual(await run());
+	});
+
 	it('lets the model call authored tools, then closes with the structured turn', async () => {
 		const requests: Array<AIRequest> = [];
 		const reads: Array<string> = [];

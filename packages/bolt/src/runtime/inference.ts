@@ -183,10 +183,13 @@ const inferenceImageAssets = (
  * The authored schema remains the local decode authority. The provider receives one encoded Effect
  * message and the host resolves any image descriptors before its provider call.
  */
-export const inferOp =
-	(effectId: EffectIdType, ai: AIInterface) =>
-	(input: InferenceRequest): Effect.Effect<unknown, Database.FacilityError> =>
+export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
+	let sequence = 0;
+	return (input: InferenceRequest): Effect.Effect<unknown, Database.FacilityError> =>
 		Effect.gen(function* () {
+			// A handler can research several lineages concurrently or ask again after a rejection.
+			// Provider call ids become idempotency keys, so each inference needs its own child id.
+			const inferenceId = EffectId.make(`${effectId}:infer:${++sequence}`);
 			const refusal = (code: string, message: string) =>
 				new Database.FacilityError({
 					operation: 'ai.generate',
@@ -258,9 +261,9 @@ export const inferOp =
 							`The model requested tools for ${MAX_INFERENCE_TOOL_TURNS} turns without answering; refusing to continue.`
 						);
 					const turn = yield* ai.generate(
-						EffectId.make(`${effectId}:infer:step:${step}`),
+						EffectId.make(`${inferenceId}:step:${step}`),
 						AIRequest.cases.Generate.make({
-							callId: ProviderCallId.make(`${effectId}:infer:step:${step}`),
+							callId: ProviderCallId.make(`${inferenceId}:step:${step}`),
 							modelId,
 							messages: [...conversation],
 							maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
@@ -323,9 +326,9 @@ export const inferOp =
 				);
 			}
 			const response = yield* ai.generate(
-				effectId,
+				inferenceId,
 				AIRequest.cases.Generate.make({
-					callId: ProviderCallId.make(`${effectId}:infer`),
+					callId: ProviderCallId.make(inferenceId),
 					modelId,
 					messages: conversation,
 					maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
@@ -350,3 +353,4 @@ export const inferOp =
 				)
 			);
 		});
+};
