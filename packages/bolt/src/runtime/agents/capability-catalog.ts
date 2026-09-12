@@ -719,6 +719,8 @@ export type SubagentContext<E = never> = Readonly<{
 	readonly workbenchId: WorkbenchId;
 	readonly agentId: AgentId;
 	readonly conversationId: ConversationId;
+	/** True when this conversation is itself a child Task: a child may coordinate but not spawn. */
+	readonly isChild: boolean;
 	/** The agents a spawn may name; the same set the tool's schema advertised. */
 	readonly spawnableAgentIds: ReadonlyArray<string>;
 	readonly collections: Collections.Interface;
@@ -783,10 +785,8 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 		case 'spawn': {
 			// A child Task must not spawn its own children: the lineage is exactly one level deep. The
 			// per-invocation nesting budget resets when a child runs its own turn, so the durable parent
-			// link is the cap — a conversation with a parent may coordinate via read/message/await/stop,
-			// but it may not widen the tree.
-			const current = yield* workbenchTask(context, context.conversationId, false);
-			if (current.parent_id != null)
+			// link carried on the context is the cap.
+			if (context.isChild)
 				return yield* new ToolNotAllowed({
 					agent: context.agentId,
 					tool: 'subagent:child-cannot-spawn'

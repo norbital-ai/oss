@@ -43,6 +43,7 @@ import {
 	type TaskModelCatalog
 } from '@norbital-ai/bolt-protocol/system';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
+import { PLATFORM_SKILLS } from './platform-skills.js';
 import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { RemoteRegistry } from '#lib/runtime/collections/authored.js';
@@ -1000,10 +1001,14 @@ export const layer = Layer.effect(
 			} satisfies ResolvedAgent;
 		});
 
-		const allowedSkills = (subject: Identity.Subject) =>
-			workspace.definition.skills.filter(({ name }) =>
+		const allowedSkills = (subject: Identity.Subject) => {
+			const held = workspace.definition.skills.filter(({ name }) =>
 				access.capabilities(subject).skills.has(name)
 			);
+			const names = new Set(held.map(({ name }) => name));
+			// Host skills are always available; an authored skill of the same name wins.
+			return [...held, ...PLATFORM_SKILLS.filter(({ name }) => !names.has(name))];
+		};
 
 		const writesForSubject = (subject: Identity.Subject): boolean =>
 			workspace.definition.collections.some((collection) =>
@@ -2288,6 +2293,7 @@ export const layer = Layer.effect(
 					workbenchId: task.workbench_id,
 					agentId: agent.id,
 					conversationId: task.id,
+					isChild: depth > 0,
 					spawnableAgentIds: spawnableAgentIds(workspace.definition),
 					collections,
 					budget: InvocationBudget.make(depth, InvocationBudget.DEFAULT_NESTING_LIMIT),

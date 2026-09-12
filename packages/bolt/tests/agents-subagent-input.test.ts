@@ -53,13 +53,15 @@ const untouched = () =>
 
 const subagentContext = (
 	spawnable: ReadonlyArray<string>,
-	spawned: Array<{ agentId: string; instruction: string }> = []
+	spawned: Array<{ agentId: string; instruction: string }> = [],
+	isChild = false
 ): SubagentContext => ({
 	effectId: EffectId.make('subagent-input'),
 	subject,
 	workbenchId: WorkbenchId.make('00000000-0000-4000-8000-000000000010'),
 	agentId: AgentId.make('web'),
 	conversationId: ConversationId.make('00000000-0000-4000-8000-000000000011'),
+	isChild,
 	spawnableAgentIds: spawnable,
 	collections: { findMany: untouched } as unknown as Collections.Interface,
 	budget: InvocationBudget.make(0),
@@ -163,6 +165,20 @@ describe('subagent tool input (RFC bolt.md B7, AGENT-SUB1)', () => {
 		);
 		expect(result).toEqual({ conversationId: 'child', state: 'running' });
 		expect(spawned).toEqual([{ agentId: 'worker', instruction: 'Report the field status.' }]);
+	});
+
+	it('refuses a spawn from a child Task: the lineage is exactly one level deep', async () => {
+		const spawned: Array<{ agentId: string; instruction: string }> = [];
+		const failure = await failureOf(
+			executeSubagentTool(
+				{ action: 'spawn', agentId: 'worker', instruction: 'Spawn a grandchild.' },
+				subagentContext(['web', 'worker'], spawned, true),
+				'spawn-child'
+			)
+		);
+		expect(failure).toBeInstanceOf(ToolNotAllowed);
+		expect((failure as ToolNotAllowed).tool).toBe('subagent:child-cannot-spawn');
+		expect(spawned).toEqual([]);
 	});
 
 	it('reports a platform tool decode failure the same way, with a nested path', async () => {
