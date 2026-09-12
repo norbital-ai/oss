@@ -28,7 +28,7 @@ src/
   collections/<name>/+model.ts    the collection's columns
   collections/<name>/+hooks.ts    optional validation/write hooks
   collections/<name>/+pipelines.ts optional import/export
-  collections/<name>/+representation.svelte  optional custom create/edit/display
+  collections/<name>/+representation.svelte  required for user-facing create/edit/display
   datatypes/<name>/+definition.ts + +renderer.svelte  named domain values
   apps/+<app>.svelte              an app surface
   automations/+<name>.ts          durable, after-commit work
@@ -84,22 +84,52 @@ export default ((r) => ({
 Each relation has a unique name; declare the one side with explicit \`from\` and \`to\`, then the
 inverse many side. Relationship fields get record pickers in the platform's create/edit forms.
 
-## Apps
+## Record forms
 
-An app is \`src/apps/+<app>.svelte\`. Every app is one \`Cover\` with a page heading and exactly one
-body region; that region owns the inset, the concrete surface owns scrolling.
+A model and table alone do not provide a create/edit form. Every collection users create or open
+needs an explicit \`+representation.svelte\`; otherwise New shows "requires an explicit representation".
+Author it with the model, then test creating and reopening a record in the browser:
 
 \`\`\`svelte
 <script lang="ts">
   import { client } from '$bolt/client';
-  import type { TenantI18nKeys } from '$bolt/i18n-keys';
+  import type { RepresentationProps } from './$types.js';
+  import { getCollectionClientForSurface } from '@norbital-ai/ui/collection-runtime';
+  import { CollectionForm } from '@norbital-ai/ui/collection-form';
+  import { Grid } from '@norbital-ai/ui/layout';
+
+  let { record, close }: RepresentationProps = $props();
+  const workspaceClient = getCollectionClientForSurface(client, 'accounts form');
+</script>
+
+<CollectionForm client={workspaceClient} collection="accounts"
+  defaultValues={record ?? undefined} onAfterSubmit={record ? undefined : close}>
+  {#snippet children({ Field })}
+    <Grid minimum="compact">
+      <Field name="name" />
+      <Field name="status" />
+    </Grid>
+  {/snippet}
+</CollectionForm>
+\`\`\`
+
+Include all fields the user needs, including relationship and file fields. A relationship Field
+can use \`relationOptions={{ label: (row) => String(row.name ?? ''), orderBy: { name: 'asc' } }}\`
+to show meaningful record names. CollectionForm supplies validation and save controls.
+
+## Apps
+
+An app is \`src/apps/+<app>.svelte\`. The workspace shell renders its translated page heading.
+Do not repeat it inside the app. Use one \`Cover\` and exactly one body region; that region owns
+the inset, the concrete surface owns scrolling.
+
+\`\`\`svelte
+<script lang="ts">
+  import { client } from '$bolt/client';
   import { getCollectionClientForSurface } from '@norbital-ai/ui/collection-runtime';
   import { CollectionTable } from '@norbital-ai/ui/collection-table';
-  import { useI18n } from '@norbital-ai/ui/i18n';
   import { Bound, Cover } from '@norbital-ai/ui/layout';
-  import { PageHeader } from '@norbital-ai/ui/page-header';
 
-  const { t } = useI18n<TenantI18nKeys>();
   const workspaceClient = getCollectionClientForSurface(client, 'accounts');
 </script>
 
@@ -109,14 +139,7 @@ body region; that region owns the inset, the concrete surface owns scrolling.
   <meta name="bolt:icon" content="lucide:building" />
 </svelte:head>
 
-{#snippet pageHeading()}
-  <PageHeader
-    title={t('app.accounts.header_title')}
-    description={t('app.accounts.header_description')}
-  />
-{/snippet}
-
-<Cover as="main" top={pageHeading}>
+<Cover as="main">
   <Bound size="full" inset>
     <CollectionTable client={workspaceClient} collection="accounts" view="accounts:table">
       {#snippet columns({ Column })}
