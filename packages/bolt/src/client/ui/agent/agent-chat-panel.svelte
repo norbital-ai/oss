@@ -269,14 +269,6 @@
 			}
 		}
 	}
-	const canSend = $derived(
-		!pending &&
-			!controlPending &&
-			taskAcceptsSubmission &&
-			modelAvailable &&
-			draftSendable(parsedDraft)
-	);
-
 	function planState(): string {
 		if (activePlan === undefined) return '';
 		if (activeRun?.phase === 'verify' && activeRun.status === 'running') return 'Verifying';
@@ -582,9 +574,7 @@
 		if (composer !== null && composer.value !== draft) draft = composer.value;
 		const parsed = parseTaskSlashCommand(draft);
 		if (
-			pending ||
-			controlPending ||
-			!taskAcceptsSubmission ||
+			composerLocked ||
 			!modelAvailable ||
 			!draftSendable(parsed)
 		)
@@ -728,6 +718,15 @@
 			new Set(panelMessages.map((message) => message.id))
 		)
 	);
+	/**
+	 * The composer is closed only until the operator's own message is durable, not for the whole
+	 * turn. `conversations.send` blocks until the turn settles, so `pending` spans the entire run;
+	 * gating on it would stop a person from queueing a follow-up. A send while a turn runs is
+	 * admitted `queued` and answered at the running turn's next boundary.
+	 */
+	const admissionPending = $derived(visibleAdmission !== null && sendFailure === null);
+	const composerLocked = $derived(admissionPending || controlPending || !taskAcceptsSubmission);
+	const canSend = $derived(!composerLocked && modelAvailable && draftSendable(parsedDraft));
 
 	/**
 	 * B11: the transcript follows its tail. The scrollport is the `Scroll` below; the reader's
@@ -1041,7 +1040,7 @@
 				rows={2}
 				placeholder="Ask anything, or type /plan or /compact"
 				class="max-h-40 min-h-14 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
-				disabled={pending || controlPending || !taskAcceptsSubmission}
+				disabled={composerLocked}
 			/>
 			{#if pendingAttachments.length > 0}
 				<Inline gap="xs" class="px-2.5">
@@ -1076,7 +1075,7 @@
 				<button
 					type="button"
 					aria-label="Attach media or files"
-					disabled={pending || controlPending || !taskAcceptsSubmission}
+					disabled={composerLocked}
 					onclick={() => filePicker?.click()}
 					class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 				>
@@ -1093,7 +1092,7 @@
 						: t('bolt.agent.selectModel')}
 					searchable
 					allowClear={false}
-					disabled={pending || controlPending || modelQuery.loading}
+					disabled={composerLocked || modelQuery.loading}
 					onValueChange={(value) => {
 						if (typeof value === 'string') selectedModelId = value;
 					}}
@@ -1105,7 +1104,7 @@
 					aria-pressed={planMode}
 					aria-keyshortcuts="Tab"
 					title="Switch between Agent and Plan (Tab)"
-					disabled={pending || controlPending || !taskAcceptsSubmission}
+					disabled={composerLocked}
 					onclick={() => (planMode = !planMode)}
 					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode
 						? 'bg-primary/10 text-primary'
@@ -1157,7 +1156,7 @@
 					disabled={!canSend}
 					aria-label={revisedMessage !== null ? 'Send revised message' : 'Send message'}
 				>
-					{#if pending}
+					{#if admissionPending}
 						<Spinner class="size-4" label={t(agentOrbBusyStatusKey(orbState))} />
 					{:else}
 						<Icon icon="lucide:arrow-up" class="size-4" />

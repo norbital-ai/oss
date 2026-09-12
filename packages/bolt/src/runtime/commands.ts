@@ -651,6 +651,60 @@ const BINDINGS = [
 			})
 	),
 	binding(
+		'identity.createTeam',
+		{ Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const outcome = yield* (yield* Identity.Service).createTeam(
+					context.effectId,
+					context.tenantId,
+					principal(context).userId,
+					{
+						name: input.name,
+						parentId: input.parentId ?? null,
+						description: input.description ?? null
+					}
+				);
+				if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+				return json(outcome.team);
+			})
+	),
+	binding(
+		'identity.updateTeam',
+		{ Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const outcome = yield* (yield* Identity.Service).updateTeam(
+					context.effectId,
+					context.tenantId,
+					principal(context).userId,
+					input.teamId,
+					{
+						name: input.name,
+						parentId: input.parentId,
+						description: input.description
+					}
+				);
+				if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+				return json(outcome.team);
+			})
+	),
+	binding(
+		'identity.deleteTeam',
+		{ Command: { ...session('manage identity'), authorize: authorizeMembership } },
+		(context, input) =>
+			Effect.gen(function* () {
+				const outcome = yield* (yield* Identity.Service).deleteTeam(
+					context.effectId,
+					context.tenantId,
+					principal(context).userId,
+					input.teamId
+				);
+				if (outcome._tag === 'Refused') return yield* membershipRefusal(outcome.reason);
+				return json(outcome.team);
+			})
+	),
+	binding(
 		'identity.invitation.inspect',
 		{ Command: system('host invitation inspection') },
 		(context, input) =>

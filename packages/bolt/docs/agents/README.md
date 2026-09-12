@@ -59,10 +59,9 @@ commit, and its roots may name different collections — so starting a turn crea
 message it answers answered and moves the conversation to `running` in **one** statement, and
 settling it writes the run and the conversation in one more. A whole turn is four commits. The
 conversation row is written only when the conversation itself changes: recording a provider call,
-delivering steering and recalling a cancelled message all leave it alone. Nesting makes a mutate a
-*replacement*, so the write has to name every sibling it is not changing, which costs a read of the
-whole transcript before every write. The turn also holds its transcript in memory for its duration
-and records each row as it writes it, so a streamed part reads nothing at all.
+delivering steering and recalling a cancelled message all leave it alone. The turn also holds its
+transcript in memory for its duration and records each row as it writes it, so a streamed part reads
+nothing at all.
 
 Providers may deliver acknowledged part snapshots through `AIMessageProgress`. Part starts persist
 empty placeholders; part ends persist their content. Token deltas stay inside the provider adapter.
@@ -114,9 +113,9 @@ caller is present for the entire turn and answers everything waiting before it r
 The composer lists the host-configured language models. Selection is validated before admission,
 saved on the directive, and copied into the immutable run. Changing a queued turn's choice never
 changes an active run. A removed model fails explicitly; it never falls back to another model.
-Resume can select a recovery model, otherwise it retains the last directive's choice. Child Tasks
-and automatic Plan continuation inherit the current run's model. A send that omits a model uses the host
-default.
+Resume can select a recovery model, otherwise it retains the last directive's choice. Child
+conversations and automatic Plan continuation inherit the current run's model. A send that omits a
+model uses the host default.
 
 `conversations.editMessage` appends a revision of one of the subject's own user messages and queues the
 Agent directive that continues from it. The original row is not edited or deleted; the new row
@@ -304,14 +303,13 @@ snapshot. Full history remains available to ordinary queries and audit policy.
 `pending`, `doing`, or `done` states. Duplicate IDs, empty text, multiple doing items, and regression
 of a completed ID fail validation.
 
-The call and result are canonical `conversation_message` rows. The latest successful `todo` result in the
-active run is the current projection; the last terminal run remains visible until another directive
-starts. There is no Todo collection. Todo is progress evidence, while Plan verification remains the
-completion authority.
+The call and result are canonical `conversation_message` rows, and a `set` writes the replacement list
+to `conversation.todos`, which the panel reads directly as the current projection. There is no Todo
+collection. Todo is progress evidence, while Plan verification remains the completion authority.
 
 ---
 
-## Child Tasks and barriers
+## Child conversations and barriers
 
 The `subagent` tool supports spawn, read, message, await, stop, and resume inside one root
 workbench. Its input schema is built per workspace when the run's capability snapshot is taken:

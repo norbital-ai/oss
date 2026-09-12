@@ -64,8 +64,7 @@ quarantined`; nothing is claimed saved before its outcome. `project()` overlays 
 the retained prefix so the UI updates same-frame.
 
 The shell (`src/client/ui/shell/`) owns workspace navigation, the agent panel, sync status, omni
-finder, and notifications. Colony's workspace shell (`workspace-shell.svelte`) opens the workspace
-in online mode at **5 s** (`continueOnline`) if bootstrap has not finished.
+finder, and notifications.
 
 A custom type's `+renderer.svelte` is loaded when a `DataRenderer` first meets that kind
 (`src/client/ui/shell/custom-type-renderers.svelte.ts`). A load that fails is a state, not a

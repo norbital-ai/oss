@@ -54,19 +54,16 @@
 	class="rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'}"
 >
 	<!--
-		The same box every other sidebar icon sits in, so the orb lands where a `size-4` glyph lands.
-
-		`Notifications` beside it is `IconWrapper class="size-4 shrink-0"`, and the agent sheet's own
-		header already wrapped its orb this way — this trigger was the one call site left rendering the
-		orb bare. The orb is 16px and `flex: none` on its own, so nothing was resizing it; what it
-		lacked was the fixed grid cell its neighbours are centred in, which is what makes a row of
-		icons share one optical axis rather than each sitting wherever its own glyph falls.
+		The same chip every other top-level sidebar item wears, so the orb sits on the same
+		optical axis as the icons beside it. The orb's drawn mark is 72% of its box, so a 20px
+		orb reads at the 14px its neighbours' glyphs read at.
 
 		No label on the orb: the button already carries one, and a second would be read twice.
 	-->
-		<!-- repository-health:allow UI6 -- a fixed 16px icon chip centres the orb in one grid cell; the Grid primitive's auto-fit/tracks column sizing cannot express a single place-items cell of this size -->
-		<div class="grid size-4 shrink-0 place-items-center">
-		<NorbitalThinkingOrb {state} shape="mobius" size={16} />
+	<div
+		class="flex size-6 shrink-0 items-center justify-center rounded-md border border-input bg-background shadow-xs"
+	>
+		<NorbitalThinkingOrb {state} shape="mobius" size={20} />
 	</div>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"

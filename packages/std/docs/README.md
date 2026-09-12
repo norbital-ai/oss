@@ -13,8 +13,8 @@ framework package.
 `string`, and `tree` are public subpaths. The package root exposes only the stable general-purpose
 subset.
 
-Billing is the shared catalogue and calculation authority for Norbital seat and usage prices — the
-website's pricing page reads it directly, and a host reads it to price a plan. It is not a checkout
+Billing is the shared catalogue and calculation authority for Norbital base (per-workspace) and usage
+prices — the website's pricing page reads it directly, and a host reads it to price a plan. It is not a checkout
 UI, a Stripe integration, or an entitlement engine; those concerns belong to the host app.
 
 ## Usage rule

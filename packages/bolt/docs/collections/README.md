@@ -47,8 +47,8 @@ an included relationship the parent does not own is refused. An omitted relation
 untouched. Unlinking is a write to the child's foreign key, not an omission. Nested graph writes and
 cascading deletes are bounded to eight levels.
 
-Authored hooks have five explicit sites: `mutate.prepare`, `mutate.before`, `mutate.after`,
-`delete.before`, and `delete.after`. A before refusal commits no domain write. An after refusal names
+Authored hooks have six explicit sites: `mutate.prepare`, `mutate.before`, `mutate.after`,
+`delete.prepare`, `delete.before`, and `delete.after`. A before refusal commits no domain write. An after refusal names
 that the write already committed; it is never flattened into the same failure as a preparation
 refusal. Hook-triggered writes use the same service and have an eight-level nesting guard. Inside a
 write the caller was allowed to make, a hook is the workspace: the caller is judged on the shape it

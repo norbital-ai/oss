@@ -2022,7 +2022,7 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			conversationId: ConversationId
 			// repository-health:allow EFF11 -- the inferred channel of `execute`; narrowing it is
-			// tracked in RFC/agent-turn-latency.md, and a narrower claim here would be false today.
+			// tracked in RFC/residual-gates.md, and a narrower claim here would be false today.
 		) => Effect.Effect<TurnResult, unknown>;
 
 		const runChild = Effect.fn('Agents.runChild')(function* (

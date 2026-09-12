@@ -112,8 +112,7 @@ ignores, former-scanner markers, unknown rule ids, missing reasons, and stale al
 positive fixtures. Used exact allowances and unrelated tools' own suppression comments are
 negative fixtures. It also completes the v20 clipping boundary: `overflow-hidden` and
 `overflow-clip` never establish a scroll region, while `overflow-auto` and `overflow-scroll` do.
-The collection compiler's root `src/+env.ts` declaration is a proven entry surface like
-`src/+seed.ts`.
+The collection compiler's root `src/+env.ts` declaration is the proven entry surface.
 
 Scanner v24 makes reactive query ownership explicit. Every proven generated client read in a Svelte
 rune module must be lexically inside `$derived` or `$derived.by`, including static/no-argument

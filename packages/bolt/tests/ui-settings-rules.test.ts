@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { layoutTeamHierarchy, type TeamNode } from '../src/client/ui/settings/team-hierarchy.js';
+import {
+	layoutTeamHierarchy,
+	searchTeamNodes,
+	subtreeIds,
+	type TeamNode
+} from '../src/client/ui/settings/team-hierarchy.js';
 import {
 	invitationStatusAt,
 	isActionableInvitation,
@@ -173,5 +178,48 @@ describe('team hierarchy layout', () => {
 				result.positions.map((position) => [position.id, `${position.x}:${position.y}`])
 			);
 		expect(asMap(forward)).toEqual(asMap(reversed));
+	});
+});
+
+describe('team hierarchy search', () => {
+	const teams: ReadonlyArray<TeamNode> = [
+		{ id: 'root', name: 'Company' },
+		{ id: 'a', name: 'Engineering', parentId: 'root' },
+		{ id: 'b', name: 'People', parentId: 'root' },
+		{ id: 'a1', name: 'Platform', parentId: 'a' }
+	];
+
+	it('keeps every ancestor of a match so the path stays visible', () => {
+		expect(searchTeamNodes(teams, 'platform').map(({ id }) => id)).toEqual(['root', 'a', 'a1']);
+	});
+
+	it('returns the whole chart for a blank query', () => {
+		expect(searchTeamNodes(teams, '  ')).toHaveLength(4);
+	});
+
+	it('matches on the description too', () => {
+		const withDescription = teams.map((team) =>
+			team.id === 'b' ? { ...team, description: 'Hiring and onboarding' } : team
+		);
+		expect(searchTeamNodes(withDescription, 'onboarding').map(({ id }) => id)).toEqual([
+			'root',
+			'b'
+		]);
+	});
+});
+
+describe('team subtree ids', () => {
+	const teams: ReadonlyArray<TeamNode> = [
+		{ id: 'root', name: 'Company' },
+		{ id: 'a', name: 'Engineering', parentId: 'root' },
+		{ id: 'a1', name: 'Platform', parentId: 'a' }
+	];
+
+	it('includes the team and everything beneath it', () => {
+		expect([...subtreeIds(teams, 'a')].sort()).toEqual(['a', 'a1']);
+	});
+
+	it('is just the team itself for a leaf', () => {
+		expect([...subtreeIds(teams, 'a1')]).toEqual(['a1']);
 	});
 });

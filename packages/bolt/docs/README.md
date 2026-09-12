@@ -34,7 +34,7 @@ packages/bolt/docs/
 | [collections](./collections/README.md)                       | Reads, graph writes, hooks, history, embeddings                     |
 | [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md)       |
 | [runtime](./runtime/README.md)                               | Dispatch admission, `invoke.*`, Data Browser 403 vs other-plugin 401 |
-| [agents](./agents/README.md)                                 | Durable Tasks, Effect AI, envoys vs automations                     |
+| [agents](./agents/README.md)                                 | Conversations and turns, Effect AI, envoys vs automations           |
 
 | Colony               | Owned in the Colony product repository |
 | -------------------- | -------------------------------------- |

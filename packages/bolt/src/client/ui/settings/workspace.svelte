@@ -2,7 +2,11 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { getCollectionNavigationContext } from '@norbital-ai/ui/collection-navigation';
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Button } from '@norbital-ai/ui/button';
+	import { Input } from '@norbital-ai/ui/input';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
+	import { Effect } from 'effect';
+	import { getErrorMessage } from '@norbital-ai/std';
 	import type { CollectionDefinition, CollectionRecord } from '@norbital-ai/std/collection';
 	import {
 		EMPTY_WORKSPACE_ACCESS,
@@ -13,6 +17,7 @@
 	} from '#lib/client/ui/settings/rows.js';
 	import TeamChart from './teams-flow.svelte';
 	import { inMemoryCollectionClient } from '#lib/client/ui/settings/table-client.js';
+	import { readMembershipEditor } from '#lib/client/ui/system/membership-editor.svelte.js';
 	import { onDestroy } from 'svelte';
 
 	/**
@@ -157,6 +162,37 @@
 	});
 
 	let activeTab = $state('people');
+
+	const readEditor = readMembershipEditor();
+	const editor = $derived(readEditor());
+	const canManage = $derived(editor?.canManage === true);
+
+	let inviteEmail = $state('');
+	let invitePending = $state(false);
+	let inviteFailure = $state<string | null>(null);
+
+	const sendInvite = (): void => {
+		const membership = editor;
+		const email = inviteEmail.trim();
+		if (membership === null || email === '') return;
+		invitePending = true;
+		inviteFailure = null;
+		Effect.runFork(
+			membership.invite(email).pipe(
+				Effect.match({
+					onSuccess: () => {
+						invitePending = false;
+						inviteEmail = '';
+						membership.refresh();
+					},
+					onFailure: (cause) => {
+						invitePending = false;
+						inviteFailure = getErrorMessage(cause);
+					}
+				})
+			)
+		);
+	};
 </script>
 
 <section
@@ -252,10 +288,41 @@
 {/snippet}
 
 {#snippet teamsView()}
-	<TeamChart teams={access.teams} />
+	<TeamChart teams={access.teams} members={access.members} />
 {/snippet}
 
 {#snippet invitationsView()}
+	{#if canManage}
+		<Stack
+			as="form"
+			gap="sm"
+			class="mb-4 rounded-lg border border-border bg-card p-4"
+			onsubmit={(event) => {
+				event.preventDefault();
+				sendInvite();
+			}}
+		>
+			<div class="flex flex-wrap items-end gap-2">
+				<label class="min-w-56 grow text-sm font-medium" for="invite-email">
+					<Stack gap="xs">
+						<span>Invite somebody</span>
+						<Input
+							id="invite-email"
+							type="email"
+							bind:value={inviteEmail}
+							placeholder="name@example.com"
+						/>
+					</Stack>
+				</label>
+				<Button type="submit" size="sm" disabled={invitePending || inviteEmail.trim() === ''}>
+					{invitePending ? 'Sending…' : 'Send invitation'}
+				</Button>
+			</div>
+			{#if inviteFailure !== null}
+				<p class="text-xs text-destructive" role="alert">{inviteFailure}</p>
+			{/if}
+		</Stack>
+	{/if}
 	{#key invitationRows}
 		<CollectionTable
 			client={peopleClient}

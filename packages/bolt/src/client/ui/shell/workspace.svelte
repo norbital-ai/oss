@@ -528,6 +528,11 @@
 			workspace.frameworkClient.system.identity.assignTeam({ memberId, teamId }),
 		setMemberAdmin: (memberId, admin) =>
 			workspace.frameworkClient.system.identity.setMemberAdmin({ memberId, admin }),
+		invite: (email) => workspace.frameworkClient.system.identity.invite({ email }),
+		createTeam: (draft) => workspace.frameworkClient.system.identity.createTeam(draft),
+		updateTeam: (teamId, changes) =>
+			workspace.frameworkClient.system.identity.updateTeam({ teamId, ...changes }),
+		deleteTeam: (teamId) => workspace.frameworkClient.system.identity.deleteTeam({ teamId }),
 		refresh: () => {
 			accessEpoch += 1;
 		}

@@ -3,6 +3,7 @@
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Tabs } from '@norbital-ai/ui/tabs';
 	import { Schema } from 'effect';
 	import type { Prompt } from 'effect/unstable/ai';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -178,6 +179,22 @@
 -->
 {#snippet toolRow(call: ToolCallPart | null, result: ToolResultPart | null, pendingPart: boolean)}
 	{@const name = call?.name ?? result?.name ?? ''}
+	{#snippet toolInput()}
+		{#if call !== null}
+			{@render payload('Tool input', call.params)}
+		{:else}
+			<p class="m-0 px-1 py-2 text-tiny text-muted-foreground">No input.</p>
+		{/if}
+	{/snippet}
+	{#snippet toolOutput()}
+		{#if result !== null}
+			{@render payload('Tool output', result.result)}
+		{:else}
+			<p class="m-0 px-1 py-2 text-tiny text-muted-foreground"
+				>{generating ? 'Waiting for output…' : 'No output.'}</p
+			>
+		{/if}
+	{/snippet}
 	<details
 		class="group/tool w-full rounded-lg py-1.5 text-xs"
 		data-tool-row={name}
@@ -201,10 +218,17 @@
 					>{/if}
 			</Inline>
 		</summary>
-		<Stack gap="xs" class="mt-1">
-			{#if call !== null}{@render payload('Tool call', call.params)}{/if}
-			{#if result !== null}{@render payload('Tool result', result.result)}{/if}
-		</Stack>
+		<Tabs
+			variant="chip"
+			animate={false}
+			contentPadding={false}
+			class="mt-1 h-auto w-full"
+			listClass="w-auto"
+			config={[
+				{ name: 'input', label: 'Input', content: toolInput },
+				{ name: 'output', label: 'Output', content: toolOutput }
+			]}
+		/>
 	</details>
 {/snippet}
 

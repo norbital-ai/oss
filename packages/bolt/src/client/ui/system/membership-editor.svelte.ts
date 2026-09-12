@@ -6,14 +6,28 @@ type MembershipTeam = Readonly<{
 	readonly name: string;
 }>;
 
-type MembershipEditor = Readonly<{
+/** What a team edit changes; an absent key leaves the field alone, an explicit `null` clears it. */
+export type TeamChanges = Readonly<{
+	readonly name?: string;
+	readonly parentId?: string | null;
+	readonly description?: string | null;
+}>;
+
+export type TeamDraft = Readonly<{
+	readonly name: string;
+	readonly parentId?: string | null;
+	readonly description?: string;
+}>;
+
+export type MembershipEditor = Readonly<{
 	readonly canManage: boolean;
 	readonly teams: ReadonlyArray<MembershipTeam>;
-	readonly assignTeam: (
-		memberId: string,
-		teamId: string | null
-	) => Effect.Effect<unknown, Error>;
+	readonly assignTeam: (memberId: string, teamId: string | null) => Effect.Effect<unknown, Error>;
 	readonly setMemberAdmin: (memberId: string, admin: boolean) => Effect.Effect<unknown, Error>;
+	readonly invite: (email: string) => Effect.Effect<unknown, Error>;
+	readonly createTeam: (draft: TeamDraft) => Effect.Effect<unknown, Error>;
+	readonly updateTeam: (teamId: string, changes: TeamChanges) => Effect.Effect<unknown, Error>;
+	readonly deleteTeam: (teamId: string) => Effect.Effect<unknown, Error>;
 	readonly refresh: () => void;
 }>;
 

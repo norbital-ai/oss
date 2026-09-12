@@ -37,7 +37,9 @@ export const ConversationSendRequest = Schema.Struct({
 	priority: DirectivePriority,
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface ConversationSendRequest extends Schema.Schema.Type<typeof ConversationSendRequest> {}
+export interface ConversationSendRequest extends Schema.Schema.Type<
+	typeof ConversationSendRequest
+> {}
 
 export const ConversationSendResult = Schema.Struct({ messageId: MessageId });
 export interface ConversationSendResult extends Schema.Schema.Type<typeof ConversationSendResult> {}
@@ -60,27 +62,34 @@ export const ConversationEditMessageRequest = Schema.Struct({
 	message: Schema.toEncoded(Prompt.Message),
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface ConversationEditMessageRequest extends Schema.Schema.Type<typeof ConversationEditMessageRequest> {}
+export interface ConversationEditMessageRequest extends Schema.Schema.Type<
+	typeof ConversationEditMessageRequest
+> {}
 
 export const ConversationEditMessageResult = Schema.Struct({
 	messageId: MessageId,
 	supersedesId: MessageId
 });
-export interface ConversationEditMessageResult extends Schema.Schema.Type<typeof ConversationEditMessageResult> {}
+export interface ConversationEditMessageResult extends Schema.Schema.Type<
+	typeof ConversationEditMessageResult
+> {}
 
 export const ConversationControlRequest = Schema.Struct({
 	conversationId: ConversationId,
 	action: Schema.Literals(['stop', 'resume']),
 	modelId: Schema.optionalKey(ModelId)
 });
-export interface ConversationControlRequest extends Schema.Schema.Type<typeof ConversationControlRequest> {}
+export interface ConversationControlRequest extends Schema.Schema.Type<
+	typeof ConversationControlRequest
+> {}
 
 export const ConversationControlResult = Schema.Struct({
 	conversationId: ConversationId,
 	status: ConversationStatus
 });
-export interface ConversationControlResult extends Schema.Schema.Type<typeof ConversationControlResult> {}
-
+export interface ConversationControlResult extends Schema.Schema.Type<
+	typeof ConversationControlResult
+> {}
 
 /** The approval state exchanged by the browser approval commands and their runtime handler. */
 export const ApprovalState = Schema.TaggedUnion({
@@ -196,6 +205,14 @@ export const WorkspaceAccess = Schema.Struct({
 	)
 }).annotate({ identifier: 'BoltWorkspaceAccess' });
 export type WorkspaceAccess = typeof WorkspaceAccess.Type;
+
+/** One team row, as a team write answers with it. Mirrors the nested shape inside `WorkspaceAccess`. */
+export const WorkspaceTeam = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	description: Schema.optionalKey(Schema.String)
+}).annotate({ identifier: 'BoltWorkspaceTeam' });
 const ApprovalCapabilityRows = Schema.Array(
 	Schema.Struct({
 		id: Schema.NonEmptyString,
@@ -361,7 +378,39 @@ export const SystemCommandContracts = [
 	commandContract({
 		name: 'identity.invite',
 		input: Schema.Struct({ email: Schema.NonEmptyString }),
-		responses: [ok(Schema.Struct({ invitationId: Schema.NonEmptyString }))]
+		responses: [ok(Schema.Struct({ invitationId: Schema.NonEmptyString }))],
+		clientPath: ['identity', 'invite'],
+		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'identity.createTeam',
+		input: Schema.Struct({
+			name: Schema.NonEmptyString,
+			parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			description: Schema.optionalKey(Schema.String)
+		}),
+		responses: [ok(WorkspaceTeam)],
+		clientPath: ['identity', 'createTeam'],
+		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'identity.updateTeam',
+		input: Schema.Struct({
+			teamId: Schema.NonEmptyString,
+			name: Schema.optionalKey(Schema.String),
+			parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			description: Schema.optionalKey(Schema.NullOr(Schema.String))
+		}),
+		responses: [ok(WorkspaceTeam)],
+		clientPath: ['identity', 'updateTeam'],
+		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'identity.deleteTeam',
+		input: Schema.Struct({ teamId: Schema.NonEmptyString }),
+		responses: [ok(WorkspaceTeam)],
+		clientPath: ['identity', 'deleteTeam'],
+		clientMode: 'operation'
 	}),
 	commandContract({
 		name: 'identity.assignTeam',

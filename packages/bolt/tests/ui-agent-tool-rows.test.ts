@@ -24,9 +24,9 @@ vi.mock('@norbital-ai/ui/layout', async () => {
 	const { default: Fragment } = await import('./support/finder-test-fragment.svelte');
 	return { Inline: Fragment, Stack: Fragment };
 });
-// The prior-transcript tabs never mount in these fixtures; the ui build's tabs entry is not resolvable here.
+// The ui build's tabs entry is not resolvable here; the double renders every tab's content.
 vi.mock('@norbital-ai/ui/tabs', async () => ({
-	Tabs: (await import('./support/finder-test-fragment.svelte')).default
+	Tabs: (await import('./support/agent-tabs-double.svelte')).default
 }));
 
 const parentTask = '00000000-0000-4000-8000-000000000501';

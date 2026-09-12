@@ -103,4 +103,54 @@ export const layoutTeamHierarchy = (
 		height: ordered.reduce((tallest, position) => Math.max(tallest, position.y), 0)
 	};
 };
+
+/**
+ * Narrows the chart to teams matching `query`, keeping every ancestor of a match so the path that
+ * leads to it stays visible. Not a graph search on the rendered layout — a plain walk of the
+ * parent links, which is what a nested team tree actually is.
+ */
+export const searchTeamNodes = (
+	teams: ReadonlyArray<TeamNode>,
+	query: string
+): ReadonlyArray<TeamNode> => {
+	const needle = query.trim().toLocaleLowerCase();
+	if (needle === '') return teams;
+	const byId = new Map(teams.map((team) => [team.id, team] as const));
+	const kept = new Set<string>();
+	for (const team of teams) {
+		const haystack = `${team.name} ${team.description ?? ''}`.toLocaleLowerCase();
+		if (!haystack.includes(needle)) continue;
+		kept.add(team.id);
+		let parentId = team.parentId ?? null;
+		const guard = new Set<string>();
+		while (parentId !== null && !guard.has(parentId)) {
+			guard.add(parentId);
+			kept.add(parentId);
+			parentId = byId.get(parentId)?.parentId ?? null;
+		}
+	}
+	return teams.filter((team) => kept.has(team.id));
+};
+
+/**
+ * The ids beneath `rootId`, including `rootId` itself. A team may not be re-parented into its own
+ * subtree, so the reparent picker offers exactly the complement of this set.
+ */
+export const subtreeIds = (teams: ReadonlyArray<TeamNode>, rootId: string): ReadonlySet<string> => {
+	const children = new Map<string, Array<string>>();
+	for (const team of teams) {
+		const parentId = team.parentId ?? null;
+		if (parentId === null) continue;
+		children.set(parentId, [...(children.get(parentId) ?? []), team.id]);
+	}
+	const found = new Set<string>();
+	const stack = [rootId];
+	while (stack.length > 0) {
+		const id = stack.pop();
+		if (id === undefined || found.has(id)) continue;
+		found.add(id);
+		stack.push(...(children.get(id) ?? []));
+	}
+	return found;
+};
 import { Schema } from 'effect';
