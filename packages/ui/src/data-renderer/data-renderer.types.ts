@@ -10,6 +10,8 @@ export interface FieldRendererProps {
 	disabled?: boolean;
 	placeholder?: string;
 	onValueChange?: (value: unknown) => void;
+	/** Prevent submission while this control is still preparing its value (for example, an upload). */
+	onPendingChange?: (pending: boolean) => void;
 	/** Full matrix/form row when the renderer needs sibling fields. */
 	row?: Record<string, unknown>;
 	onRowChange?: (patch: Record<string, unknown>) => void;

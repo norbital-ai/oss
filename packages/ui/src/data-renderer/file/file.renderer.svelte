@@ -23,7 +23,8 @@
 		runtime,
 		disabled = false,
 		class: className,
-		onValueChange
+		onValueChange,
+		onPendingChange
 	}: DataRendererProps & { runtime?: DataRendererRuntime } = $props();
 
 	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial client.
@@ -71,6 +72,7 @@
 		multiple={true}
 		value={selectedFiles}
 		{client}
+		{onPendingChange}
 		maxFileSize={MAX_WORKSPACE_FILE_SIZE}
 		accept={acceptedTypes}
 		{disabled}
@@ -82,6 +84,7 @@
 		multiple={false}
 		value={selectedFile}
 		{client}
+		{onPendingChange}
 		maxFileSize={MAX_WORKSPACE_FILE_SIZE}
 		accept={acceptedTypes}
 		{disabled}

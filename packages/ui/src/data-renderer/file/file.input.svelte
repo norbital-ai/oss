@@ -32,6 +32,7 @@
 		borderless?: boolean;
 		allowClear?: boolean;
 		onUploadStart?: (files: File[]) => void;
+		onPendingChange?: (pending: boolean) => void;
 		onUploadError?: (error: string, file?: File) => void;
 		onFileRejected?: (rejection: { reason: string; file: File }) => void;
 	}
@@ -51,6 +52,7 @@
 		readonly = false,
 		borderless = false,
 		onUploadStart,
+		onPendingChange,
 		onUploadError,
 		onFileRejected
 	}: Props<T> = $props();
@@ -184,6 +186,7 @@
 		if (validFiles.length === 0) return Effect.void;
 
 		onUploadStart?.(validFiles);
+		onPendingChange?.(true);
 		return Effect.asVoid(
 			client.uploadMany(validFiles).pipe(
 				Effect.tap((results) =>
@@ -197,7 +200,8 @@
 						const message = error instanceof Error ? error.message : t('dataRenderer.uploadFailed');
 						onUploadError?.(message);
 					})
-				)
+				),
+				Effect.ensuring(Effect.sync(() => onPendingChange?.(false)))
 			)
 		);
 	};

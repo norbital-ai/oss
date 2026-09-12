@@ -8,6 +8,7 @@
 		row: () => Record<string, unknown>;
 		value: (name: string) => unknown;
 		setValue: (name: string, value: unknown) => void;
+		setPending: (name: string, pending: boolean) => void;
 		register: (name: string, hidden: boolean) => () => void;
 		dirty: (name: string) => boolean;
 		errors: (name: string) => string[];
@@ -126,6 +127,7 @@
 				renderer={renderer as FieldRendererComponent | undefined}
 				rendererProps={rendererProps as Readonly<Record<string, unknown>>}
 				onValueChange={(next) => context.setValue(name, next)}
+				onPendingChange={(pending) => context.setPending(name, pending)}
 			/>
 		</div>
 		{#if errors.length > 0}

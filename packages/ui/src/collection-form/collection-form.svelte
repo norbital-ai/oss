@@ -18,6 +18,7 @@
 	import { Cluster, Cover, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { optionalCollectionRecordId } from '#lib/collection-surface';
 	import { collectionFormSubmissionPending } from './collection-form-pending';
 	import {
@@ -199,6 +200,7 @@
 	const operations = $derived(client.db[collection]);
 	const registeredFields = new Map<string, number>();
 	const hiddenFields = new Set<string>();
+	const pendingFields = new SvelteSet<string>();
 	/**
 	 * The collection's writable columns: the declared `input`'s set when the workspace declares
 	 * one, the catalog's mutable fields otherwise. Registration, the mutation mask and unknown-key
@@ -301,6 +303,10 @@
 		value: (name) => Reflect.get(form.getData(), name),
 		// Field values are schema-typed at FormState; collection fields pass unknown at the boundary.
 		setValue: (name, value) => form.setValue(name, value as never),
+		setPending: (name, pending) => {
+			if (pending) pendingFields.add(name);
+			else pendingFields.delete(name);
+		},
 		register: (name, hidden) => {
 			registeredFields.set(name, (registeredFields.get(name) ?? 0) + 1);
 			if (hidden) hiddenFields.add(name);
@@ -309,6 +315,7 @@
 				if (count <= 1) registeredFields.delete(name);
 				else registeredFields.set(name, count - 1);
 				if (hidden) hiddenFields.delete(name);
+				pendingFields.delete(name);
 			};
 		},
 		dirty: (name) => form.hasChangesForPath(name),
@@ -323,19 +330,15 @@
 
 	function submit(event: SubmitEvent): void {
 		event.preventDefault();
+		if (form.disabled || submissionPending || pendingFields.size > 0) return;
 		assertCollectionFormFieldRegistration(String(collection), mutationFieldNames, registeredFields);
 		Effect.runFork(
-			form
-				.submit()
-				.pipe(
-					Effect.catch((cause) => {
-						if (failure_message) toast.error(failure_message);
-						return Effect.logError(
-							`[CollectionForm:${String(collection)}] submission failed`,
-							cause
-						);
-					})
-				)
+			form.submit().pipe(
+				Effect.catch((cause) => {
+					if (failure_message) toast.error(failure_message);
+					return Effect.logError(`[CollectionForm:${String(collection)}] submission failed`, cause);
+				})
+			)
 		);
 	}
 
@@ -346,7 +349,7 @@
 		clearTimeout(autoSendTimer);
 		autoSendTimer = setTimeout(() => {
 			if (sendMode !== 'auto') return;
-			if (loading || disabled || updateRestriction != null) return;
+			if (loading || form.disabled || updateRestriction != null || pendingFields.size > 0) return;
 			if (!form.isDirty || form.isSubmitting || submissionPending) return;
 			Effect.runFork(
 				Effect.gen(function* () {
@@ -425,6 +428,7 @@
 					disabled={loading ||
 						form.disabled ||
 						submissionPending ||
+						pendingFields.size > 0 ||
 						Boolean(recordId && !form.isDirty)}
 				>
 					{#if submissionPending}
@@ -437,7 +441,11 @@
 				<Button
 					type="button"
 					variant="outline"
-					disabled={loading || form.disabled || submissionPending || !form.isDirty}
+					disabled={loading ||
+						form.disabled ||
+						submissionPending ||
+						pendingFields.size > 0 ||
+						!form.isDirty}
 					onclick={clear}>{t('common.clear')}</Button
 				>
 				{#if form.isDirty}
@@ -456,6 +464,7 @@
 					disabled={loading ||
 						disabled ||
 						submissionPending ||
+						pendingFields.size > 0 ||
 						deleting ||
 						Boolean(deleteRestriction) ||
 						deleteAction.disabled}

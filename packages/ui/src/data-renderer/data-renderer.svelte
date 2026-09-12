@@ -23,6 +23,7 @@
 		disabled = false,
 		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
+		onPendingChange,
 		row,
 		onRowChange,
 		locale,
@@ -78,6 +79,7 @@
 				disabled={effectiveDisabled}
 				{placeholder}
 				{onValueChange}
+				{onPendingChange}
 				{row}
 				{onRowChange}
 				locale={localeEffective}
@@ -92,6 +94,7 @@
 				disabled={effectiveDisabled}
 				{placeholder}
 				{onValueChange}
+				{onPendingChange}
 				{row}
 				locale={localeEffective}
 				options={relationOptions ?? automaticRelationOptions}
@@ -108,6 +111,7 @@
 				disabled={effectiveDisabled}
 				{placeholder}
 				{onValueChange}
+				{onPendingChange}
 				{row}
 				{onRowChange}
 				locale={localeEffective}
@@ -148,6 +152,7 @@
 				disabled={effectiveDisabled}
 				{placeholder}
 				{onValueChange}
+				{onPendingChange}
 				{row}
 				{onRowChange}
 				locale={localeEffective}

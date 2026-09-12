@@ -59,6 +59,7 @@
 		disabled = false,
 		placeholder = t('dataRenderer.valuePlaceholder'),
 		onValueChange,
+		onPendingChange,
 		locale,
 		class: className
 	}: DataRendererProps = $props();
@@ -248,6 +249,7 @@
 		{value}
 		{disabled}
 		{onValueChange}
+		{onPendingChange}
 		runtime={rendererRuntime}
 		class={className}
 	/>
