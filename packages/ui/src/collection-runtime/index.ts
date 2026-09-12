@@ -22,6 +22,7 @@ export type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegi
 
 export interface CollectionSurface {
 	readonly representation?: CollectionRepresentationComponent;
+	readonly representationLoading?: boolean;
 	/** Static `bolt:banner` URL declared on the collection's `+representation.svelte`, if any. */
 	readonly banner?: string | null;
 	/** Why the authored representation could not be loaded, when there was one and it failed. */

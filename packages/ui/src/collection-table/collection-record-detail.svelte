@@ -276,6 +276,8 @@
 		{#key recordId}
 			<Representation {record} close={onClose} />
 		{/key}
+	{:else if collectionSurface?.representationLoading}
+		<p class="text-sm text-muted-foreground" role="status">{t('form.loadingForm')}</p>
 	{:else if record && client}
 		<CollectionRecordDetailEmpty
 			icon="lucide:file-warning"

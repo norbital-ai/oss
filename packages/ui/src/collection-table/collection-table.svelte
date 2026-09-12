@@ -829,6 +829,8 @@
 						createOpen = false;
 					}}
 				/>
+			{:else if collectionSurface?.representationLoading}
+				<p class="text-sm text-muted-foreground" role="status">{t('form.loadingForm')}</p>
 			{:else if collectionSurface?.representationFailure}
 				<p class="text-sm text-destructive" role="alert">
 					The representation for "{String(collection)}" failed to load: {collectionSurface.representationFailure}

@@ -83,8 +83,8 @@
 	 * The authored record surfaces, keyed by collection.
 	 *
 	 * A workspace declares what a record *is* in `+representation.svelte` — which fields belong on
-	 * the sheet, in what order, through which renderer. `CollectionTable` looks for one here and falls
-	 * back to the auto-emitted form.
+	 * the sheet, in what order, through which renderer. `CollectionTable` looks for one here and
+	 * distinguishes loading from an absent or failed representation.
 	 *
 	 * Filled in as each exact key is first read rather than awaited as a batch. These modules improve
 	 * one record surface, but none decides which application the person may enter, so an unopened
@@ -129,7 +129,12 @@
 					);
 				}
 			}
-			return Reflect.get(surfaces, property, receiver);
+			return (
+				Reflect.get(surfaces, property, receiver) ??
+				(isString(property) && requestedCollectionSurfaces.has(property)
+					? { representationLoading: true }
+					: undefined)
+			);
 		}
 	});
 	setCollectionSurfaceRuntime({
