@@ -82,7 +82,9 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		expect(result.status).toBe('done');
 
 		const second = requests[1]!;
-		expect(toolResultFor(second, 'list_skills')).toEqual({ skills: ['payroll'] });
+		expect(toolResultFor(second, 'list_skills')).toEqual({
+			skills: ['payroll', 'authoring-tenant-workspace']
+		});
 		expect(toolResultsFor(second, 'read_skill')[0]).toEqual({
 			name: 'payroll',
 			body: '# Payroll\n\nUse the approved workflow.'
@@ -95,7 +97,7 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		expect(String(refusal?.failure.message)).toContain('secret-handbook');
 		expect(String(refusal?.failure.message)).toContain('missing');
 
-		// The capability snapshot carries only the granted skill's digest.
+		// The capability snapshot carries the granted skill and the built-in authoring skill.
 		const snapshot = await harness!.database.query(
 			`select run.capability_snapshot->'capabilities' as capabilities
 			 from turn run where run.conversation_id = $1`,
@@ -106,7 +108,10 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		)(snapshot[0]?.capabilities).filter(
 			(capability: { kind: string }) => capability.kind === 'skill'
 		);
-		expect(skills).toHaveLength(1);
+		expect(skills.map(({ id }) => id)).toEqual([
+			'tenant/payroll',
+			'tenant/authoring-tenant-workspace'
+		]);
 		expect(feed).toHaveLength(2);
 	});
 

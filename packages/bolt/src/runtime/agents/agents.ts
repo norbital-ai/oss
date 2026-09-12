@@ -1620,10 +1620,8 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			task: Conversation
 		) {
-			if (task.active_turn_id !== undefined && task.active_turn_id !== null) {
-				const active = yield* runById(effectId, subject, task.active_turn_id);
-				if (active !== undefined && active.status === 'running') return active;
-			}
+			// The caller that claimed a running turn owns its loop. A second send only queues
+			// its message; stop/resume creates a new turn if the original invocation failed.
 			if (task.status !== 'ready') return undefined;
 			const rows = yield* collections.findMany(effectId, subject, {
 				collection: 'conversation_message',

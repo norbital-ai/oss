@@ -65,7 +65,21 @@ describe('steering admitted during an active run', () => {
 		await generationStarted;
 		try {
 			await submit('follow-up', 'Include the newly queued detail.');
+			expect(
+				(await harness.runtime.runPromise(
+					agents.answerQueued(harness.effectId('answer:follow-up'), adminSubject, conversationId)
+				)).status
+			).toBe('idle');
 			await submit('steer', 'Do the steered thing first.', 'steer');
+			expect(
+				(await harness.runtime.runPromise(
+					agents.answerQueued(harness.effectId('answer:steer'), adminSubject, conversationId)
+				)).status
+			).toBe('idle');
+			expect(requests).toHaveLength(0);
+			expect(
+				await harness.database.query('select status from conversation where id = $1', [conversationId])
+			).toEqual([{ status: 'running' }]);
 		} finally {
 			releaseGeneration();
 		}
