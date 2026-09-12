@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { SVGAttributes } from 'svelte/elements';
 	import { productLayerIconGeometry, type ProductIconName } from '#lib/product-icon/product-icons';
-	import { ThinkingOrb } from '#lib/thinking-orb';
+	import { NorbiusStrip } from '#lib/norbius-strip';
 
 	let {
 		name,
@@ -19,9 +19,9 @@
 </script>
 
 {#if name === 'agent'}
-	<!-- The Agent mark is the thinking orb itself — the same animated sphere live surfaces render,
+	<!-- The Agent mark is the Norbius strip itself — the same animated band live surfaces render,
 	     so a listed `product:agent` means what the workspace means by an agent. -->
-	<ThinkingOrb {size} class={className} />
+	<NorbiusStrip {size} class={className} />
 {:else}
 	<svg
 		viewBox="0 0 24 24"

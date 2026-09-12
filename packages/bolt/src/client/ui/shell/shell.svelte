@@ -15,7 +15,7 @@
 	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
 	import { Bound, Center, Cover, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
-	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
+	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
 	import AgentTrigger from './agent-trigger.svelte';
 	import {
 		requestAgentComposerFocus,
@@ -900,9 +900,8 @@
 							class="grid size-4 shrink-0 place-items-center text-foreground"
 							data-testid="workspace-agent-orb"
 						>
-							<NorbitalThinkingOrb
+							<NorbiusStrip
 								state={fabAgentState}
-								shape="mobius"
 								size={16}
 								label={t(agentOrbStatusKey(fabAgentState))}
 							/>

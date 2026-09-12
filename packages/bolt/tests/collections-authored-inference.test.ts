@@ -186,7 +186,7 @@ describe('authored inference tool loop', () => {
 		expect(JSON.stringify(closing.messages.at(-1))).toContain('Return the structured result now');
 	});
 
-	it('keeps calling tools for as long as the model asks, surfacing failures as results', async () => {
+	it('keeps calling tools up to the cap, surfacing failures as results', async () => {
 		const requests: Array<AIRequest> = [];
 		let runs = 0;
 		const infer = inferOp(
@@ -225,6 +225,38 @@ describe('authored inference tool loop', () => {
 		if (closing?._tag !== 'Generate') throw new Error('closing');
 		const failed = closing.messages.find((m) => m.role === 'tool');
 		expect(JSON.stringify(failed)).toContain('page unavailable');
+	});
+
+	it('refuses after the tool-turn cap instead of looping forever', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(
+			EffectId.make('inference-unbounded'),
+			generateWith(
+				(_request, turn) =>
+					AIGenerationResult.cases.Message.make({
+						message: assistant([toolCall(`c${turn}`, 'again', {})])
+					}),
+				requests
+			)
+		);
+		const exit = await Effect.runPromiseExit(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({ rate: Schema.Number }),
+				prompt: 'Loop forever.',
+				tools: [
+					{
+						name: 'again',
+						description: 'Always asks for another turn.',
+						input: Schema.Struct({}),
+						run: () => Effect.succeed(null)
+					}
+				]
+			})
+		);
+		expect(exit._tag).toBe('Failure');
+		expect(JSON.stringify(exit)).toContain('ai.tool_loop_unbounded');
+		expect(requests).toHaveLength(12);
 	});
 
 	it('refuses an ill-formed tool list before any provider call', async () => {

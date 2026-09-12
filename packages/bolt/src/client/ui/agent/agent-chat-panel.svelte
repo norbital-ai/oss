@@ -5,12 +5,13 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { watch } from 'runed';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Badge } from '@norbital-ai/ui/badge';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { getErrorMessage } from '@norbital-ai/std';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
+	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { workspaceSession } from '#lib/client/session.js';
 	import {
@@ -24,7 +25,12 @@
 	import AgentContextSegment from './agent-context-segment.svelte';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import { buildTaskSelector, projectConversations } from './conversation-selector.js';
-	import { commandMenuItems, findCommandTrigger, insertCommand } from './composer-commands.js';
+	import {
+		commandMenuItems,
+		findCommandTrigger,
+		selectComposerCommand,
+		type ComposerCommand
+	} from './composer-commands.js';
 	import { pairToolCalls, type SubagentTranscript } from './tool-rows.js';
 	import {
 		compactOrigin,
@@ -491,7 +497,7 @@
 				submittedModelId === undefined
 			)
 				return Effect.void;
-			const mode = parsed.kind === 'submission' ? parsed.mode : planMode ? 'plan' : 'agent';
+			const mode = activeCommand ?? (planMode ? 'plan' : 'agent');
 			const retry = retryableAdmission(visibleAdmission, {
 				agentId: runtime.agentId,
 				message,
@@ -539,6 +545,7 @@
 						selectedConversationId = result.conversationId;
 						composingNew = false;
 						draft = '';
+						commandMode = null;
 						revisedMessage = null;
 						clearPendingAttachments();
 					},
@@ -593,6 +600,11 @@
 	let caret = $state(0);
 	let commandHighlight = $state(0);
 	let commandMenuDismissed = $state(false);
+	let commandMode = $state<ComposerCommand | null>(null);
+	/** The command a send would carry: the selected badge, or one typed into the draft. */
+	const activeCommand = $derived(
+		commandMode ?? (parsedDraft.kind === 'submission' ? parsedDraft.mode : null)
+	);
 	const commandTrigger = $derived(findCommandTrigger(draft, caret));
 	const commandItems = $derived(
 		commandTrigger === null ? [] : commandMenuItems(commandTrigger.query)
@@ -614,14 +626,20 @@
 		const item = commandItems[index];
 		const trigger = commandTrigger;
 		if (item === undefined || item.kind !== 'composer-command' || trigger === null) return;
-		const next = insertCommand(draft, trigger, item.command);
-		draft = next.draft;
+		const next = selectComposerCommand(draft, trigger, item.command);
+		commandMode = next.mode;
+		draft = next.message;
 		caret = next.caret;
 		commandMenuDismissed = true;
 		queueMicrotask(() => {
 			composer?.focus();
 			composer?.setSelectionRange(next.caret, next.caret);
 		});
+	}
+
+	function clearCommandMode(): void {
+		commandMode = null;
+		queueMicrotask(() => composer?.focus());
 	}
 
 	function onCommandMenuKeydown(event: KeyboardEvent): boolean {
@@ -754,13 +772,12 @@
 <Stack gap="none" fill class="min-h-0 bg-card">
 	{#if headerOrb}
 		<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-4 py-3">
-			<NorbitalThinkingOrb
+			<NorbiusStrip
 				state={orbState}
-				shape="mobius"
 				size={18}
 				label={t(agentOrbStatusKey(orbState))}
 			/>
-			<span class="text-sm font-semibold">Agent</span>
+			<span class="text-sm font-semibold">Norbius</span>
 		</Inline>
 	{/if}
 
@@ -997,9 +1014,9 @@
 		{#if sendFailure !== null}
 			<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
 		{/if}
-		{#if planMode || parsedDraft.kind === 'submission'}
+		{#if planMode || activeCommand !== null}
 			<p class="text-tiny text-muted-foreground">
-				{parsedDraft.kind === 'submission' && parsedDraft.mode === 'compact'
+				{activeCommand === 'compact'
 					? 'Summarize this conversation and keep its transcript available.'
 					: 'Revise the full plan before putting it into action.'}
 			</p>
@@ -1024,6 +1041,25 @@
 					onhighlight={(index) => (commandHighlight = index)}
 					onclearscope={() => (commandMenuDismissed = true)}
 				/>
+			{/if}
+			{#if commandMode !== null}
+				<Inline align="center" gap="xs" class="px-2.5 pt-2">
+					<Badge variant="outline" class="gap-1.5 pr-1 pl-2 font-mono">
+						<Icon
+							icon={commandMode === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text'}
+							class="size-3 shrink-0"
+						/>
+						<span>/{commandMode}</span>
+						<button
+							type="button"
+							class="rounded-full opacity-70 transition-opacity hover:opacity-100"
+							aria-label={`Remove /${commandMode}`}
+							onclick={clearCommandMode}
+						>
+							<Icon icon="lucide:x" class="size-3" />
+						</button>
+					</Badge>
+				</Inline>
 			{/if}
 			<label class="sr-only" for="agent-task-composer">Message</label>
 			<Textarea

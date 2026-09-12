@@ -13,8 +13,8 @@
 	import { tick } from 'svelte';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
-	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
-	import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
+	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
+	import type { NorbiusStripState } from '@norbital-ai/ui/norbius-strip';
 
 	let {
 		state,
@@ -23,8 +23,8 @@
 		expanded = true,
 		onclick
 	}: {
-		state: ThinkingOrbState;
-		/** The visible name of the action, e.g. "Ask agent". */
+		state: NorbiusStripState;
+		/** The visible name of the action, e.g. "Norbius". */
 		label: string;
 		/** Rendered shortcut, e.g. "⌘K". */
 		shortcut?: string;
@@ -63,7 +63,7 @@
 	<div
 		class="flex size-6 shrink-0 items-center justify-center rounded-md border border-input bg-background shadow-xs"
 	>
-		<NorbitalThinkingOrb {state} shape="mobius" size={20} />
+		<NorbiusStrip {state} size={20} />
 	</div>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"

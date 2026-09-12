@@ -650,7 +650,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. A message reaches a running child at its next step, not after its current one.',
+		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. Only the root Task may spawn; a child Task can read, message, await, stop, and resume its siblings but cannot spawn its own children. A message reaches a running child at its next step, not after its current one.',
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{
@@ -781,6 +781,16 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 	).pipe(Effect.mapError((error) => invalidToolInput(SUBAGENT_TOOL_NAME, error)));
 	switch (action.action) {
 		case 'spawn': {
+			// A child Task must not spawn its own children: the lineage is exactly one level deep. The
+			// per-invocation nesting budget resets when a child runs its own turn, so the durable parent
+			// link is the cap — a conversation with a parent may coordinate via read/message/await/stop,
+			// but it may not widen the tree.
+			const current = yield* workbenchTask(context, context.conversationId, false);
+			if (current.parent_id != null)
+				return yield* new ToolNotAllowed({
+					agent: context.agentId,
+					tool: 'subagent:child-cannot-spawn'
+				});
 			const depth = yield* context.budget.nest(`child of ${context.agentId}`);
 			return yield* context.spawn(
 				context.effectId,

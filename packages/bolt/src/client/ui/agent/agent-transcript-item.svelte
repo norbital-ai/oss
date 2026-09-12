@@ -79,7 +79,7 @@
 			case 'parent-agent':
 				return 'Parent agent';
 			case 'agent':
-				return 'Agent';
+				return 'Norbius';
 			case 'tool':
 				return undefined;
 			case 'system':

@@ -113,6 +113,19 @@ export class CommandState {
 				this.#updateFilter(value ?? '');
 			}
 		);
+
+		// Sync the indicator when a controlled `activeValue` changes. Without this the internally
+		// seeded indicator wins forever, so a parent that drives navigation (the composer's `/` and
+		// `@` menus own the textarea keys) moves nothing.
+		watch(
+			() => this.#props.activeValue,
+			(value) => {
+				if (value === undefined || value === this.indicatorItemValue) return;
+				if (this.items.some((item) => item.value === value && !item.disabled)) {
+					this.indicatorItemValue = value;
+				}
+			}
+		);
 	}
 
 	// ============================================================================

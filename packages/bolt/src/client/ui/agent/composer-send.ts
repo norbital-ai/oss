@@ -15,14 +15,14 @@ import { Duration, Effect } from 'effect';
  * genuinely lost request does not hang the composer forever. The host's own invocation deadline
  * settles the turn before this fires.
  */
-export const COMPOSER_COMMAND_DEADLINE_MILLIS = 300_000;
+export const COMPOSER_COMMAND_DEADLINE_MILLIS = 1_800_000;
 
 /** Effect duration for the same wall. */
-export const COMPOSER_COMMAND_DEADLINE = '300 seconds' as const satisfies Duration.Input;
+export const COMPOSER_COMMAND_DEADLINE = '1800 seconds' as const satisfies Duration.Input;
 
 /** Operator-visible sentence when the send does not return before the wall. */
 export const COMPOSER_ADMISSION_TIMEOUT_MESSAGE =
-	'The agent did not answer within 5 minutes. Your message was saved; reopen the conversation to see the reply.';
+	'The agent did not answer within 30 minutes. Your message was saved; reopen the conversation to see the reply.';
 
 type ComposerSendHandlers<A> = Readonly<{
 	readonly onSuccess: (result: A) => void;

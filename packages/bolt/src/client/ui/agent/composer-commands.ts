@@ -4,7 +4,8 @@
  *
  * A command is only ever the first thing in a draft: `/plan` and `/compact` are parsed off the
  * start by `parseTaskSlashCommand`, so a `/` anywhere else is prose and opens nothing. The menu is
- * a static list with one row per command; selecting one leaves `/plan ` in the draft and closes.
+ * a static list with one row per command; selecting one lifts the command out of the draft into a
+ * mode the composer shows as a badge, leaving only the message text behind.
  */
 import type { MentionMenuItem } from './mention-sources.js';
 
@@ -41,16 +42,17 @@ export function commandMenuItems(query: string): readonly MentionMenuItem[] {
 }
 
 /**
- * Replace the live `/query` with the chosen command and one trailing space, so the message that
- * follows keeps its word boundary. Text after the caret is preserved.
+ * Lift the chosen command out of the live `/query` and return the mode plus the message text that
+ * follows it. The command no longer lives in the draft: the composer renders it as a badge, and the
+ * send path reads the mode directly. Text after the caret is preserved and the caret lands at the
+ * start of that text.
  */
-export function insertCommand(
+export function selectComposerCommand(
 	draft: string,
 	trigger: { readonly query: string },
 	command: ComposerCommand
-): { draft: string; caret: number } {
+): { readonly mode: ComposerCommand; readonly message: string; readonly caret: number } {
 	const after = draft.slice(1 + trigger.query.length);
-	const inserted = `/${command} `;
-	const rest = after.startsWith(' ') ? after.slice(1) : after;
-	return { draft: `${inserted}${rest}`, caret: inserted.length };
+	const message = after.startsWith(' ') ? after.slice(1) : after;
+	return { mode: command, message, caret: 0 };
 }

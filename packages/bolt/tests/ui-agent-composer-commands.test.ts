@@ -3,7 +3,7 @@ import {
 	COMPOSER_COMMANDS,
 	commandMenuItems,
 	findCommandTrigger,
-	insertCommand
+	selectComposerCommand
 } from '../src/client/ui/agent/composer-commands.js';
 import { parseTaskSlashCommand } from '../src/client/ui/agent/intent.js';
 
@@ -31,22 +31,28 @@ describe('AGENT-UI4 the / command menu', () => {
 		expect(findCommandTrigger('/thisisnotacommandname', 22)).toBeNull();
 	});
 
-	it('leaves "/plan " in the composer after a selection, with the caret after it', () => {
-		expect(insertCommand('/', { query: '' }, 'plan')).toEqual({ draft: '/plan ', caret: 6 });
-		expect(insertCommand('/pl', { query: 'pl' }, 'plan')).toEqual({ draft: '/plan ', caret: 6 });
-		expect(insertCommand('/co', { query: 'co' }, 'compact')).toEqual({
-			draft: '/compact ',
-			caret: 9
+	it('lifts the selected command into a mode and leaves only the message text', () => {
+		expect(selectComposerCommand('/', { query: '' }, 'plan')).toEqual({
+			mode: 'plan',
+			message: '',
+			caret: 0
 		});
-		// Text after the caret survives, and an existing space is not doubled.
-		expect(insertCommand('/p rollout', { query: 'p' }, 'plan')).toEqual({
-			draft: '/plan rollout',
-			caret: 6
+		expect(selectComposerCommand('/pl', { query: 'pl' }, 'plan')).toEqual({
+			mode: 'plan',
+			message: '',
+			caret: 0
 		});
-		// The inserted draft closes the menu and is what the send path already parses.
-		const inserted = insertCommand('/', { query: '' }, 'plan');
-		expect(findCommandTrigger(inserted.draft, inserted.caret)).toBeNull();
-		expect(parseTaskSlashCommand(inserted.draft)).toMatchObject({ kind: 'submission', mode: 'plan' });
+		expect(selectComposerCommand('/co', { query: 'co' }, 'compact')).toEqual({
+			mode: 'compact',
+			message: '',
+			caret: 0
+		});
+		// Text after the query survives, and the leading space is not part of the message.
+		expect(selectComposerCommand('/p rollout', { query: 'p' }, 'plan')).toEqual({
+			mode: 'plan',
+			message: 'rollout',
+			caret: 0
+		});
 	});
 
 	it('offers exactly the commands the send path parses', () => {

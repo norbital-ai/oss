@@ -1,4 +1,4 @@
-import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
+import type { NorbiusStripState } from '@norbital-ai/ui/norbius-strip';
 import type { ConversationStatus } from '@norbital-ai/bolt-protocol';
 
 type AgentOrbStatusKey =
@@ -9,7 +9,7 @@ type AgentOrbStatusKey =
 	| 'bolt.agent.turnStopped'
 	| 'bolt.agent.failed';
 
-export function agentOrbStatusKey(state: ThinkingOrbState): AgentOrbStatusKey {
+export function agentOrbStatusKey(state: NorbiusStripState): AgentOrbStatusKey {
 	switch (state) {
 		case 'ready':
 			return 'bolt.shell.workspaceAgentDescription';
@@ -27,7 +27,7 @@ export function agentOrbStatusKey(state: ThinkingOrbState): AgentOrbStatusKey {
 }
 
 export function agentOrbBusyStatusKey(
-	state: ThinkingOrbState
+	state: NorbiusStripState
 ): Exclude<AgentOrbStatusKey, 'bolt.shell.workspaceAgentDescription'> {
 	return state === 'error' ? 'bolt.agent.failed' : 'bolt.agent.working';
 }
@@ -50,7 +50,7 @@ type AgentOrbStateInput = Readonly<{
  * `pending` and `failed` remain the caller's own overrides: they are what a surface knows about a
  * turn it has just dispatched, before any status has been written for it.
  */
-export function agentOrbState(input: AgentOrbStateInput): ThinkingOrbState {
+export function agentOrbState(input: AgentOrbStateInput): NorbiusStripState {
 	if (input.failed === true || input.status === 'failed') return 'error';
 	if (input.status === 'attention') return 'waiting';
 	if (input.pending === true || input.status === 'running') return 'working';
