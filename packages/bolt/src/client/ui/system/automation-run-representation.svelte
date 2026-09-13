@@ -53,19 +53,32 @@
 </script>
 
 <Stack gap="lg" class="p-5" aria-live="polite">
-	<Inline gap="md" align="center">
-		<div
-			class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500"
-		>
-			<Icon icon="lucide:refresh-cw" class="size-5 {status === 'running' ? 'animate-spin' : ''}" />
-		</div>
-		<Stack gap="xs" class="min-w-0">
-			<p class="truncate text-base font-semibold text-foreground">
-				{text('name') ?? t('bolt.automations.run')}
-			</p>
+	<Inline justify="between" align="center" gap="md">
+		<Inline gap="md" align="center" class="min-w-0">
+			<div
+				class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500"
+			>
+				<Icon
+					icon="lucide:refresh-cw"
+					class="size-5 {status === 'running' ? 'animate-spin' : ''}"
+				/>
+			</div>
+			<Stack gap="xs" class="min-w-0">
+				<p class="truncate text-base font-semibold text-foreground">
+					{text('name') ?? t('bolt.automations.run')}
+				</p>
+				<p class="truncate text-xs text-muted-foreground">
+					{progress?.message ?? t('bolt.automations.noProgressMessage')}
+				</p>
+			</Stack>
+		</Inline>
+		<Inline gap="sm" align="center" class="shrink-0">
+			<Progress value={progress?.percent ?? 0} class="h-1.5 w-24" />
+			<span class="text-xs font-semibold tabular-nums text-foreground"
+				>{progress?.percent ?? 0}%</span
+			>
 			<span
-				class="w-fit rounded-full px-2 py-0.5 text-xs font-semibold capitalize {status ===
-				'done'
+				class="rounded-full px-2 py-0.5 text-xs font-semibold capitalize {status === 'done'
 					? 'bg-success/10 text-success'
 					: status === 'running'
 						? 'bg-brand/10 text-brand'
@@ -75,21 +88,8 @@
 			>
 				{statusLabel}
 			</span>
-		</Stack>
-	</Inline>
-
-	<Stack gap="sm" class="rounded-lg border bg-card p-4">
-		<Inline justify="between" align="center" gap="md">
-			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.currentProgress')}</h3>
-			<span class="text-sm font-semibold tabular-nums text-foreground"
-				>{progress?.percent ?? 0}%</span
-			>
 		</Inline>
-		<Progress value={progress?.percent ?? 0} class="h-2" />
-		<p class="text-sm text-muted-foreground">
-			{progress?.message ?? t('bolt.automations.noProgressMessage')}
-		</p>
-	</Stack>
+	</Inline>
 
 	<Stack gap="sm">
 		<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.runDetails')}</h3>

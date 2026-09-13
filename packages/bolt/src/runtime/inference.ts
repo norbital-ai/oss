@@ -343,18 +343,6 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					// so a long reasoning turn is not mistaken for a mute facility.
 					() => Effect.void
 				);
-				if (turn.result._tag === 'Object') {
-					// A provider (or a recorded fixture) that answers the schema directly has submitted
-					// the value; the agentic path is the tool loop, but a direct object is still a result.
-					return yield* Schema.decodeUnknownEffect(input.schema)(turn.result.value).pipe(
-						Effect.mapError((error) =>
-							refusal(
-								'ai.response_invalid',
-								`The AI provider response does not match the authored schema: ${String(error).replace(/\s+/g, ' ').slice(0, 400)}`
-							)
-						)
-					);
-				}
 				if (turn.result._tag !== 'Message')
 					return yield* refusal(
 						'ai.response_invalid',

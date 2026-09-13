@@ -20,7 +20,7 @@ export { startPglite } from './start-pglite.js';
 export type { StartedPglite } from './start-pglite.js';
 
 export { catalogAi, testAiCatalog, TEST_CONTEXT_WINDOW_TOKENS } from './catalog-ai.js';
-export { recordedAi } from './recorded-ai.js';
+export { recordedAi, recordedSubmission } from './recorded-ai.js';
 export type { RecordedGenerated } from './recorded-ai.js';
 export {
 	cassetteAi,
