@@ -3274,7 +3274,9 @@ export const layer = Layer.effect(
 							purpose: 'compaction',
 							tools: declarations,
 							messages: prompt,
-							maxOutputTokens: outputLimit
+							maxOutputTokens: outputLimit,
+							// Stream, so a long summary keeps re-arming the host's IO silence wall.
+							onProgress: () => Effect.void
 						}
 					);
 					yield* recordUsage(

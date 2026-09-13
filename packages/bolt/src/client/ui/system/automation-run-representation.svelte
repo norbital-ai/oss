@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Schema } from 'effect';
 	import Icon from '@iconify/svelte';
-	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -45,11 +44,6 @@
 				? result
 				: JSON.stringify(result, null, 2)
 	);
-	const resultLanguage = $derived.by((): 'json' | 'plaintext' => {
-		if (printableResult === undefined) return 'plaintext';
-		const trimmed = printableResult.trimStart();
-		return trimmed.startsWith('{') || trimmed.startsWith('[') ? 'json' : 'plaintext';
-	});
 	const timestamp = (name: string): string => {
 		const value = text(name);
 		if (value === undefined) return '—';
@@ -119,14 +113,11 @@
 	{:else if printableResult}
 		<Stack gap="xs">
 			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.result')}</h3>
-			<CodeEditor
-				value={printableResult}
-				language={resultLanguage}
-				readonly
-				ariaLabel={t('bolt.automations.result')}
-				minHeight="7rem"
-				class="max-h-72 w-full min-h-0 rounded-lg border bg-muted/40 shadow-none"
-			/>
+			<!-- A plain block, not an editor: an embedded scroller swallows the wheel and traps the
+			     sheet's own scroll. Horizontal overflow only; vertical scrolling belongs to the sheet. -->
+			<pre
+				class="w-full overflow-x-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-foreground"
+				aria-label={t('bolt.automations.result')}><code>{printableResult}</code></pre>
 		</Stack>
 	{/if}
 </Stack>

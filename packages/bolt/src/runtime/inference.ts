@@ -81,6 +81,16 @@ const INFERENCE_RESULT_TOOL = 'return_result';
 const MAX_INFERENCE_PAUSES = 3;
 /** How many malformed submissions are corrected before the inference is refused. */
 const MAX_INFERENCE_RESULT_FAILURES = 3;
+/**
+ * Automatic context maintenance for the inference loop.
+ *
+ * The loop appends every tool result and would otherwise grow past the model's window, at which
+ * point the host refuses the call. When the conversation passes this size, older tool results are
+ * replaced with a short stub while the most recent ones stay whole: the model can re-open a source
+ * if it still needs the detail, and the loop stays inside the window with no caller tuning.
+ */
+const MAX_INFERENCE_CONTEXT_CHARS = 400_000;
+const KEEP_RECENT_TOOL_RESULTS = 4;
 
 /**
  * Bounds on what one tool turn may carry. The loop itself has no step cap: the model calls tools
@@ -261,6 +271,32 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 				message
 			];
 			const assets = imageAssets.length === 0 ? {} : { imageAssets };
+			/** Replace older tool evidence with a stub once the loop approaches the model window. */
+			const maintainInferenceContext = (): void => {
+				if (JSON.stringify(conversation).length <= MAX_INFERENCE_CONTEXT_CHARS) return;
+				const toolIndexes = conversation.flatMap((entry, index) =>
+					entry.role === 'tool' ? [index] : []
+				);
+				const keep = new Set(toolIndexes.slice(-KEEP_RECENT_TOOL_RESULTS));
+				for (const index of toolIndexes) {
+					if (keep.has(index)) continue;
+					const entry = conversation[index];
+					if (entry === undefined || entry.role !== 'tool' || typeof entry.content === 'string')
+						continue;
+					conversation[index] = {
+						...entry,
+						content: entry.content.map((part) =>
+							part.type === 'tool-result'
+								? {
+										...part,
+										result:
+											'[older tool result trimmed to keep the loop inside the model window; re-read the source if you need its detail]'
+									}
+								: part
+						)
+					};
+				}
+			};
 			/**
 			 * The loop is an ordinary agentic run whose final structured answer is a tool call.
 			 *
@@ -302,7 +338,10 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 						messages: [...conversation],
 						output: { _tag: 'Message', tools: declarations },
 						...assets
-					})
+					}),
+					// Stream, with no-op progress: each streamed part re-arms the host's IO silence wall,
+					// so a long reasoning turn is not mistaken for a mute facility.
+					() => Effect.void
 				);
 				if (turn.result._tag === 'Object') {
 					// A provider (or a recorded fixture) that answers the schema directly has submitted
@@ -413,6 +452,7 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 						)
 					);
 				}
+				maintainInferenceContext();
 			}
 		});
 };
