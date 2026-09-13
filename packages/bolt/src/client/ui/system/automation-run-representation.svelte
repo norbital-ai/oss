@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Schema } from 'effect';
 	import Icon from '@iconify/svelte';
+	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { useI18n } from '@norbital-ai/ui/i18n';
@@ -44,6 +45,11 @@
 				? result
 				: JSON.stringify(result, null, 2)
 	);
+	const resultLanguage = $derived.by((): 'json' | 'plaintext' => {
+		if (printableResult === undefined) return 'plaintext';
+		const trimmed = printableResult.trimStart();
+		return trimmed.startsWith('{') || trimmed.startsWith('[') ? 'json' : 'plaintext';
+	});
 	const timestamp = (name: string): string => {
 		const value = text(name);
 		if (value === undefined) return '—';
@@ -113,11 +119,16 @@
 	{:else if printableResult}
 		<Stack gap="xs">
 			<h3 class="text-sm font-semibold text-foreground">{t('bolt.automations.result')}</h3>
-			<!-- A plain block, not an editor: an embedded scroller swallows the wheel and traps the
-			     sheet's own scroll. Horizontal overflow only; vertical scrolling belongs to the sheet. -->
-			<pre
-				class="w-full overflow-x-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-foreground"
-				aria-label={t('bolt.automations.result')}><code>{printableResult}</code></pre>
+			<!-- No max height: a constrained editor keeps its own scroller and swallows the sheet's
+			     wheel. Let the editor size to its content so vertical scrolling belongs to the sheet. -->
+			<CodeEditor
+				value={printableResult}
+				language={resultLanguage}
+				readonly
+				ariaLabel={t('bolt.automations.result')}
+				minHeight="7rem"
+				class="w-full rounded-lg border bg-muted/40 shadow-none"
+			/>
 		</Stack>
 	{/if}
 </Stack>
