@@ -106,9 +106,13 @@ describe('process policy', () => {
 				const poll = (async () => {
 					while (polling) {
 						observed.push(await readiness(host.baseUrl));
-						await sleep(10);
+						await sleep(5);
 					}
 				})();
+				// Signal the fault only now, with the observer running, so the 503 the policy sets
+				// before stopping is sampled rather than raced against a timer.
+				host.child.kill('SIGUSR2');
+				await sleep(15);
 				const exit = await within(host.exited, 10_000, 'host exit');
 				polling = false;
 				await poll;
@@ -126,6 +130,7 @@ describe('process policy', () => {
 		async () => {
 			const host = await startHost('facility-late-socket');
 			hosts.push(host);
+			host.child.kill('SIGUSR2');
 			await within(
 				(async () => {
 					while (!host.stderr().includes('was contained')) await sleep(20);

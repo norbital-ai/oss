@@ -1,9 +1,9 @@
 // A bolt-server host as a process: started the way an embedder starts it, with the process policy
 // installed, so a test can watch what the whole process does when a failure escapes.
 //
-//   CRASH_HOST_FAULT=uncaught|rejection   raise the fault 100ms after `/readyz` answered 200
+//   CRASH_HOST_FAULT=uncaught|rejection   raise the fault on SIGUSR2
 //   CRASH_HOST_FAULT=facility-late-socket  a guarded facility resolves, then a socket it opened
-//                                          emits `error` with no listener
+//                                          emits `error` with no listener, on SIGUSR2
 //
 // Prints `ready <baseUrl>` once listening. Stays up until stopped or killed.
 import { createServer } from 'node:net';
@@ -42,23 +42,24 @@ const application = await startLocalApplication({
 	facilities: { scope, config: makeConfigBinding({ BOLT_SECRETS_KEY: 'crash-host' }) }
 });
 installProcessShutdown(application);
-process.stdout.write(`ready ${application.baseUrl}\n`);
 
-// The fault must land after readiness is observable, not after the ready line: the listener may not
-// accept its first connection for longer than the delay on a loaded runner, and then `/readyz` reads
-// refused until the fault fires and the test never observes the 200 it asserts.
-for (;;) {
-	try {
-		if ((await fetch(`${application.baseUrl}/readyz`)).status === 200) break;
-	} catch {}
-	await new Promise((resolve) => setTimeout(resolve, 10));
-}
-
-setTimeout(() => {
+// The fault is raised on SIGUSR2, not on a timer. A fixed delay races the test: a loaded runner can
+// deschedule the observer for longer than the delay, so the process is already dying before the
+// first readiness probe, and a short graceful stop can close the 503 window before a sample lands.
+// The test signals once it has seen 200 and is polling, which makes the order deterministic. The
+// handler is installed before the ready line, so the signal cannot arrive before it is registered.
+const raiseFault = () => {
 	if (fault === 'uncaught') throw new Error('injected uncaught exception');
 	if (fault === 'rejection') void Promise.reject(new Error('injected unhandled rejection'));
 	if (fault === 'facility-late-socket')
 		void lateSocketBinding
 			.call({ effectId: 'late-1' }, {}, new AbortController().signal)
 			.then((result) => process.stdout.write(`facility ${result._tag}\n`));
-}, 100);
+};
+process.on('SIGUSR2', () => {
+	// `throw` from a signal handler would be swallowed by the emitter; raise it on the next tick so
+	// it escapes as an uncaught exception, which is the failure the policy is meant to observe.
+	if (fault === 'uncaught') setImmediate(raiseFault);
+	else raiseFault();
+});
+process.stdout.write(`ready ${application.baseUrl}\n`);
