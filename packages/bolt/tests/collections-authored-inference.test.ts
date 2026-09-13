@@ -369,6 +369,24 @@ describe('authored inference tool loop', () => {
 		expect(first.messages[1]).toMatchObject({ role: 'user' });
 	});
 
+	it('accepts a directly returned object as the submitted value', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(
+			EffectId.make('inference-object'),
+			generateWith(() => AIGenerationResult.cases.Object.make({ value: { rate: 3 } }), requests)
+		);
+		const output = await Effect.runPromise(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({ rate: Schema.Number }),
+				prompt: 'Answer directly.',
+				tools: []
+			})
+		);
+		expect(output).toEqual({ rate: 3 });
+		expect(requests).toHaveLength(1);
+	});
+
 	it('refuses an ill-formed tool list before any provider call', async () => {
 		const requests: Array<AIRequest> = [];
 		const infer = inferOp(
