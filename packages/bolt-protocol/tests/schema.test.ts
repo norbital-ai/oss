@@ -45,6 +45,9 @@ describe('Bolt protocol schemas', () => {
 		expect(Object.keys(AIRequest.cases.Generate.fields)).toEqual([
 			'_tag',
 			'callId',
+			'sessionId',
+			'toolOutputLimit',
+			'purpose',
 			'modelId',
 			'messages',
 			'maxOutputTokens',
@@ -52,6 +55,15 @@ describe('Bolt protocol schemas', () => {
 			'imageAssets',
 			'fileAssets'
 		]);
+		expect(() =>
+			Schema.decodeUnknownSync(AIRequest)({ ...decoded, sessionId: '../foreign-session' })
+		).toThrow();
+		expect(
+			Schema.decodeUnknownSync(AIRequest)({
+				...decoded,
+				sessionId: '00000000-0000-4000-8000-000000000abc'
+			})
+		).toMatchObject({ sessionId: '00000000-0000-4000-8000-000000000abc' });
 		const response = Schema.decodeUnknownSync(AIResponse)({
 			_tag: 'Generated',
 			result: {

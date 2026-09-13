@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
 	import { AgentId, FileAsset } from '@norbital-ai/bolt-protocol/facilities';
+	import { ConversationQueueRequest } from '@norbital-ai/bolt-protocol';
 	import Icon from '@iconify/svelte';
+	import { Tooltip } from '@norbital-ai/ui/tooltip';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { watch } from 'runed';
 	import { Button } from '@norbital-ai/ui/button';
+	import * as AlertDialog from '@norbital-ai/ui/alert-dialog';
+	import * as Popover from '@norbital-ai/ui/popover';
+	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { getErrorMessage } from '@norbital-ai/std';
@@ -23,6 +28,8 @@
 	import TaskSelector from './conversation-selector.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import AgentContextSegment from './agent-context-segment.svelte';
+	import AgentMessageQueue from './agent-message-queue.svelte';
+	import { orderedQueuedMessages } from '#lib/runtime/agents/queue-order.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import { buildTaskSelector, projectConversations } from './conversation-selector.js';
 	import {
@@ -39,19 +46,26 @@
 	} from './context-view.js';
 	import {
 		aggregateTaskCharges,
+		aggregateTaskTokens,
 		formatTaskCharge,
+		formatAgentTokens,
+		latestContextTokens,
 		conversationTodos,
 		modelChangeDividers,
 		projectConversationMessages,
 		projectPlans,
 		projectTurns,
 		turnWaitingSeconds,
-		projectAgentUsage,
+		projectAgentUsage
 	} from './transcript.js';
 	import { agentOrbBusyStatusKey, agentOrbState, agentOrbStatusKey } from './agent-orb-state.js';
 	import { createTailFollower, transcriptTailSignature } from './transcript-follow.js';
 	import { AGENT_COMPOSER_FOCUS_EVENT } from './composer-chrome.js';
-	import { isAgentModeShortcut, parseTaskSlashCommand } from './intent.js';
+	import {
+		DEFAULT_COMPACTION_MESSAGE,
+		isAgentModeShortcut,
+		parseTaskSlashCommand
+	} from './intent.js';
 	import {
 		retryableAdmission,
 		visibleUnsettledAdmission,
@@ -68,10 +82,10 @@
 		})
 	);
 
-	let { headerOrb = true }: { headerOrb?: boolean } = $props();
+	let { onclose }: { onclose?: () => void } = $props();
 
 	let draft = $state('');
-	let planMode = $state(false);
+	let planMode = $state<boolean | null>(null);
 	let selectedModelId = $state<string | undefined>(undefined);
 	const modelQuery = $derived(
 		runtime.client.system.conversations.models({ agentId: AgentId.make(runtime.agentId) })
@@ -81,6 +95,9 @@
 	let pending = $state(false);
 	let sendFailure = $state<string | null>(null);
 	let controlPending = $state(false);
+	let confirmingStop = $state(false);
+	let confirmingDeletePlan = $state(false);
+	let queuePending = $state(false);
 	let unsettledAdmission = $state<UnsettledTaskAdmission | null>(null);
 	let composer = $state<HTMLTextAreaElement | null>(null);
 	let filePicker = $state<HTMLInputElement | null>(null);
@@ -100,7 +117,9 @@
 		allTasks.filter((task) => task.parent_id === null && task.agent_id === runtime.agentId)
 	);
 	const defaultTask = $derived(rootTasks[0]);
-	const activeConversationId = $derived(composingNew ? undefined : (selectedConversationId ?? defaultTask?.id));
+	const activeConversationId = $derived(
+		composingNew ? undefined : (selectedConversationId ?? defaultTask?.id)
+	);
 	const activeTask = $derived(allTasks.find((task) => task.id === activeConversationId));
 
 	function treeConversationIds(
@@ -133,26 +152,14 @@
 				})
 	);
 	const panelMessages = $derived(projectConversationMessages(messagesQuery?.current ?? []));
-	const rootMessages = $derived(panelMessages.filter((message) => message.conversationId === activeConversationId));
+	const rootMessages = $derived(
+		panelMessages.filter((message) => message.conversationId === activeConversationId)
+	);
+	const queuedMessages = $derived(orderedQueuedMessages(rootMessages));
+	const deliveredMessages = $derived(
+		rootMessages.filter((message) => message.state !== 'queued' && message.state !== 'removed')
+	);
 	const tools = $derived(pairToolCalls(panelMessages));
-	/**
-	 * Evidence of what the conversation actually did, by tool name and count.
-	 *
-	 * The transcript shows the calls themselves; this is the auditable tally — how many pages were
-	 * read, files edited, children spawned — so a reader can see the work was done rather than taking
-	 * the agent's prose for it. Derived from the durable messages, so it survives a reload.
-	 */
-	const activityCounts = $derived.by(() => {
-		const counts = new Map<string, number>();
-		for (const entry of panelMessages) {
-			const content = entry.message.content;
-			if (typeof content === 'string') continue;
-			for (const part of content)
-				if (part.type === 'tool-call')
-					counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
-		}
-		return [...counts.entries()].sort((left, right) => right[1] - left[1]);
-	});
 
 	const plansQuery = $derived(
 		activeConversationIds.length === 0
@@ -170,6 +177,8 @@
 			: plans.find((plan) => plan.id === activeTask.active_plan_id)
 	);
 
+	const draftingPlan = $derived(activePlan?.status === 'draft');
+
 	const runsQuery = $derived(
 		activeConversationIds.length === 0
 			? undefined
@@ -184,6 +193,12 @@
 		new Map(runs.map((run) => [run.id, run.mode] as const))
 	);
 	const rootRuns = $derived(runs.filter((run) => run.conversation_id === activeConversationId));
+	const planning = $derived(
+		draftingPlan ||
+			(planMode ??
+				(rootMessages.findLast((message) => message.state === 'consumed' && message.mode != null)
+					?.mode ?? rootRuns[0]?.mode) === 'plan')
+	);
 	/** Read off stored run rows, so the seam between models is still there after a reload. */
 	const modelDividers = $derived(modelChangeDividers(rootRuns, rootMessages));
 	const subagentTranscript: SubagentTranscript = $derived({
@@ -209,9 +224,15 @@
 			? undefined
 			: rootRuns.find((run) => run.id === activeTask.active_turn_id)
 	);
+	const planLocksMode = $derived(
+		activePlan?.status === 'draft' ||
+			activePlan?.status === 'active' ||
+			activePlan?.status === 'stalled' ||
+			(activeRun?.mode === 'plan' && activeRun.status === 'running')
+	);
 	const contextView = $derived(
 		projectAgentContextView({
-			messages: rootMessages,
+			messages: deliveredMessages,
 			runs: rootRuns,
 			...(activePlan === undefined ? {} : { activePlan })
 		})
@@ -221,7 +242,7 @@
 			(plansQuery?.current?.length ?? 0) >= 500 ||
 			(runsQuery?.current?.length ?? 0) >= 1_000
 	);
-	const runIds = $derived(rootRuns.map((run) => run.id));
+	const runIds = $derived(runs.map((run) => run.id));
 	const usageQuery = $derived(
 		runIds.length === 0
 			? undefined
@@ -231,8 +252,29 @@
 					limit: 2_000
 				})
 	);
-	const taskCharges = $derived(
-		aggregateTaskCharges(projectAgentUsage(usageQuery?.current ?? []), new Set(runIds))
+	const usageRows = $derived(projectAgentUsage(usageQuery?.current ?? []));
+	const taskCharges = $derived(aggregateTaskCharges(usageRows, new Set(runIds)));
+	const taskTokens = $derived(aggregateTaskTokens(usageRows, new Set(runIds)));
+	const tokenCount = $derived(formatAgentTokens(taskTokens.input + taskTokens.output));
+	const contextRun = $derived(activeRun ?? rootRuns[0]);
+	const contextCapacity = $derived(
+		contextRun?.context_window_tokens ??
+			modelQuery.current?.languageModels.find((model) => model.id === modelId)?.contextWindowTokens
+	);
+	const contextTokens = $derived(latestContextTokens(usageRows, contextRun));
+	const contextPercent = $derived(
+		contextTokens === undefined || !contextCapacity
+			? undefined
+			: Math.min(100, (contextTokens / contextCapacity) * 100)
+	);
+	const usageIncomplete = $derived(
+		activeTask?.status === 'running' ||
+			runs.some((run) => run.status === 'stopped' && run.phase === 'model') ||
+			contextProjectionIncomplete ||
+			(usageQuery?.current?.length ?? 0) >= 2_000 ||
+			usageRows.length !== (usageQuery?.current?.length ?? 0) ||
+			taskTokens.missingCalls > 0 ||
+			usageRows.some((row) => row.charge === null)
 	);
 	const costLabel = $derived(taskCharges.map(formatTaskCharge).join(' · '));
 	const todo = $derived(conversationTodos(activeTask ?? null));
@@ -281,7 +323,7 @@
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {
-		if (pendingAttachments.length > 0) return true;
+		if (pendingAttachments.length > 0 || activeCommand === 'compact') return true;
 		switch (parsed.kind) {
 			case 'message':
 				return parsed.message.trim().length > 0;
@@ -297,12 +339,16 @@
 		if (activePlan === undefined) return '';
 		if (activeRun?.phase === 'verify' && activeRun.status === 'running') return 'Verifying';
 		switch (activePlan.status) {
+			case 'draft':
+				return 'Planning';
 			case 'active':
 				return 'Active';
 			case 'stalled':
 				return 'Stalled';
 			case 'verified':
 				return 'Verified';
+			case 'discarded':
+				return 'Deleted';
 			case 'superseded':
 				return 'Superseded';
 			default: {
@@ -332,6 +378,7 @@
 	}
 
 	function beginNewTask(): void {
+		planMode = null;
 		selectedConversationId = undefined;
 		composingNew = true;
 		tail.pin();
@@ -342,6 +389,7 @@
 	}
 
 	function selectTask(conversationId: string): void {
+		planMode = null;
 		selectedConversationId = conversationId;
 		selectedModelId = undefined;
 		composingNew = false;
@@ -362,13 +410,17 @@
 					? file.type
 					: extension === 'pdf'
 						? 'application/pdf'
-						: ['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].includes(
-									extension ?? ''
-							  )
-							? 'text/plain'
-							: null;
+						: extension === 'docx'
+							? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+							: extension === 'xlsx'
+								? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+								: ['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].includes(
+											extension ?? ''
+									  )
+									? 'text/plain'
+									: null;
 			if (mimeType === null || file.size === 0) {
-				sendFailure = `${file.name}: attach a nonempty image, PDF or text document.`;
+				sendFailure = `${file.name}: attach a nonempty image, PDF, DOCX, XLSX or text document.`;
 				return;
 			}
 			additions.push({ id: globalThis.crypto.randomUUID(), file, mimeType, previewUrl: null });
@@ -514,24 +566,69 @@
 		sendFailure = message;
 	}
 
-	function submit(priority: 'normal' | 'steer' = 'normal') {
+	function updateQueue(change: (typeof ConversationQueueRequest.Encoded)['change']): void {
+		if (activeConversationId === undefined || queuePending) return;
+		queuePending = true;
+		sendFailure = null;
+		Effect.runFork(
+			Schema.decodeUnknownEffect(ConversationQueueRequest)({
+				conversationId: activeConversationId,
+				change
+			}).pipe(
+				Effect.flatMap(agentClient.updateQueue),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						sendFailure = getErrorMessage(error);
+					})
+				),
+				Effect.ensuring(
+					Effect.sync(() => {
+						queuePending = false;
+					})
+				)
+			)
+		);
+	}
+
+	function submit(
+		priority: 'normal' | 'steer' = 'normal',
+		transition?: 'execute' | 'revise' | 'delete'
+	) {
 		return Effect.suspend(() => {
 			if (composer !== null && composer.value !== draft) draft = composer.value;
 			const parsed = parseTaskSlashCommand(draft);
-			const message = parsed.message.trim();
-			const submittedModelId = modelId;
+			const message =
+				transition === 'execute'
+					? 'Execute the finalized Plan. Verify every acceptance criterion before finishing.'
+					: transition === 'revise'
+						? 'Pause execution for Plan revision. Preserve the existing requirements and progress; ask what I want changed. Do not edit the Plan until I provide the change.'
+						: transition === 'delete'
+							? 'Delete the Plan and stop its execution.'
+							: parsed.message.trim() ||
+								(activeCommand === 'compact' ? DEFAULT_COMPACTION_MESSAGE : '');
+			const planAction =
+				transition === undefined || activePlan === undefined
+					? undefined
+					: { action: transition, planId: activePlan.id };
+			const submittedModelId = transition === 'delete' ? undefined : modelId;
 			if (
 				(message.length === 0 && pendingAttachments.length === 0) ||
-				submittedModelId === undefined
+				(transition !== 'delete' && submittedModelId === undefined)
 			)
 				return Effect.void;
-			const mode = activeCommand ?? (planMode ? 'plan' : 'agent');
+			const mode =
+				transition === 'execute' || transition === 'delete'
+					? 'agent'
+					: transition === 'revise'
+						? 'plan'
+						: (activeCommand ?? (planning ? 'plan' : 'agent'));
 			const retry = retryableAdmission(visibleAdmission, {
 				agentId: runtime.agentId,
 				message,
 				mode,
+				...(planAction === undefined ? {} : { planAction }),
 				priority,
-				modelId: submittedModelId
+				...(submittedModelId === undefined ? {} : { modelId: submittedModelId })
 			});
 			const conversationId =
 				retry?.conversationId ??
@@ -543,16 +640,22 @@
 				agentId: runtime.agentId,
 				message,
 				mode,
+				...(planAction === undefined ? {} : { planAction }),
 				priority,
-				modelId: submittedModelId,
+				...(submittedModelId === undefined ? {} : { modelId: submittedModelId }),
 				draft
 			} satisfies UnsettledTaskAdmission;
 			unsettledAdmission = admission;
+			selectedConversationId = conversationId;
+			composingNew = false;
 			pending = true;
 			sendFailure = null;
 			tail.pin();
 			return runComposerCommand(
-				storePendingAttachments(conversationId).pipe(
+				(transition === undefined
+					? storePendingAttachments(conversationId)
+					: Effect.succeed([])
+				).pipe(
 					Effect.flatMap((assets) =>
 						encodeUserMessageWithAttachments(message, assets).pipe(
 							Effect.flatMap((encoded) =>
@@ -561,29 +664,28 @@
 									submissionId: admission.submissionId,
 									message: encoded,
 									mode,
+									...(planAction === undefined ? {} : { planAction }),
 									priority,
-									modelId: submittedModelId
+									...(submittedModelId === undefined ? {} : { modelId: submittedModelId })
 								})
 							)
 						)
 					)
 				),
 				{
-					onSuccess: (result) => {
-						selectedConversationId = result.conversationId;
-						composingNew = false;
-						draft = '';
-						commandMode = null;
-						revisedMessage = null;
-						clearPendingAttachments();
-					},
+					onSuccess: () => finishAdmission(admission),
 					onFailure: reportSendFailure,
 					onSettled: () => {
-						pending = false;
+						if (unsettledAdmission?.submissionId === admission.submissionId) pending = false;
 					}
 				}
 			);
 		});
+	}
+
+	function deletePlan(): void {
+		if (activeTask?.status === 'running') confirmingDeletePlan = true;
+		else Effect.runFork(submit('normal', 'delete'));
 	}
 
 	function control(action: 'stop' | 'resume'): void {
@@ -606,12 +708,7 @@
 	function attemptSend(priority: 'normal' | 'steer' = 'normal'): void {
 		if (composer !== null && composer.value !== draft) draft = composer.value;
 		const parsed = parseTaskSlashCommand(draft);
-		if (
-			composerLocked ||
-			!modelAvailable ||
-			!draftSendable(parsed)
-		)
-			return;
+		if (composerLocked || !modelAvailable || !draftSendable(parsed)) return;
 		if (revisedMessage !== null) {
 			Effect.runFork(editRevision());
 			return;
@@ -698,7 +795,7 @@
 		if (commandMenuOpen && onCommandMenuKeydown(event)) return;
 		if (isAgentModeShortcut(event)) {
 			event.preventDefault();
-			planMode = !planMode;
+			if (!planLocksMode) planMode = !planning;
 			return;
 		}
 		if (
@@ -710,8 +807,13 @@
 			!event.isComposing
 		) {
 			event.preventDefault();
-			attemptSend('normal');
+			activatePrimaryAction();
 		}
+	}
+
+	function activatePrimaryAction(): void {
+		if (taskWorking && !draftSendable(parsedDraft)) confirmingStop = true;
+		else attemptSend('normal');
 	}
 
 	onDestroy(() => {
@@ -758,9 +860,28 @@
 		visibleUnsettledAdmission(
 			unsettledAdmission,
 			tasksWithHumanMessage,
-			admissionConversationId === undefined || allTasks.some((task) => task.id === admissionConversationId),
+			admissionConversationId === undefined ||
+				allTasks.some((task) => task.id === admissionConversationId),
 			new Set(panelMessages.map((message) => message.id))
 		)
+	);
+	function finishAdmission(admission: UnsettledTaskAdmission): void {
+		if (unsettledAdmission?.submissionId !== admission.submissionId) return;
+		if (admission.planAction !== undefined) planMode = admission.planAction.action === 'revise';
+		if (admission.planAction === undefined && draft === admission.draft) {
+			draft = '';
+			commandMode = null;
+			revisedMessage = null;
+			clearPendingAttachments();
+		}
+		unsettledAdmission = null;
+		pending = false;
+	}
+	watch(
+		() => [unsettledAdmission, visibleAdmission] as const,
+		([admission, visible]) => {
+			if (admission !== null && visible === null) finishAdmission(admission);
+		}
 	);
 	/**
 	 * The composer is closed only until the operator's own message is durable, not for the whole
@@ -782,10 +903,12 @@
 	const transcriptSignature = $derived(
 		transcriptTailSignature(contextView.focusMessages, visibleAdmission !== null)
 	);
-	$effect(() => {
-		void transcriptSignature;
-		void tick().then(() => tail.follow());
-	});
+	watch(
+		() => transcriptSignature,
+		() => {
+			void tick().then(() => tail.follow());
+		}
+	);
 	$effect(() => {
 		const body = transcriptPort?.firstElementChild;
 		if (!(body instanceof HTMLElement)) return;
@@ -797,10 +920,10 @@
 
 <Stack gap="none" fill class="min-h-0 bg-card">
 	<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-3 py-2">
-		{#if headerOrb}
+		<div class="shrink-0" data-testid="workspace-agent-orb">
 			<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
-			<span class="shrink-0 text-sm font-semibold">Norbius</span>
-		{/if}
+		</div>
+		<span class="shrink-0 text-sm font-semibold">Norbius</span>
 		<div class="min-w-0 flex-1">
 			<TaskSelector
 				model={taskSelector}
@@ -810,11 +933,8 @@
 				ariaLabel="Select conversation"
 				emptyLabel="Conversation is not available"
 				onValueChange={selectTask}
-				icon="lucide:messages-square"
 			/>
 		</div>
-		{#if costLabel !== ''}<span class="shrink-0 text-tiny text-muted-foreground">{costLabel}</span
-			>{/if}
 		<Button
 			variant="ghost"
 			size="icon"
@@ -824,19 +944,18 @@
 		>
 			<Icon icon="lucide:plus" class="size-4" />
 		</Button>
+		{#if onclose}
+			<Button
+				variant="ghost"
+				size="icon"
+				class="size-8"
+				aria-label={t('bolt.agent.closePanel')}
+				onclick={onclose}
+			>
+				<Icon icon="lucide:x" class="size-4" />
+			</Button>
+		{/if}
 	</Inline>
-
-	{#if activityCounts.length > 0}
-		<Inline
-			gap="sm"
-			class="shrink-0 flex-wrap border-b border-border/60 px-3 py-1 text-tiny text-muted-foreground"
-			aria-label="Tool activity in this conversation"
-		>
-			{#each activityCounts as [name, count] (name)}
-				<span data-tool-activity={name}>{name} × {count}</span>
-			{/each}
-		</Inline>
-	{/if}
 
 	<Scroll
 		class="min-h-0 flex-1"
@@ -875,11 +994,19 @@
 							active model-view boundary cannot be certified until older rows are paged.
 						</div>
 					{/if}
+
 					<AgentContextSegment
-						plan={activePlan}
+						plan={draftingPlan ? undefined : activePlan}
 						runs={rootRuns}
-						messages={rootMessages}
+						messages={deliveredMessages}
 						status={planState()}
+						onrevise={() => Effect.runFork(submit('steer', 'revise'))}
+						ondelete={deletePlan}
+						deleteDisabled={composerLocked}
+						transitionDisabled={composerLocked ||
+							draft.trim().length > 0 ||
+							pendingAttachments.length > 0 ||
+							!modelAvailable}
 						{tools}
 						subagent={subagentTranscript}
 					/>
@@ -956,7 +1083,9 @@
 									<Inline align="center" gap="sm" class="text-micro text-muted-foreground">
 										<span class="h-px flex-1 bg-border"></span>
 										<Icon icon="lucide:cpu" class="size-3 shrink-0" />
-										<span class="shrink-0">{t('bolt.agent.modelChanged', { model: changedModel })}</span>
+										<span class="shrink-0"
+											>{t('bolt.agent.modelChanged', { model: changedModel })}</span
+										>
 										<span class="h-px flex-1 bg-border"></span>
 									</Inline>
 								</li>
@@ -986,7 +1115,7 @@
 								>
 							</li>
 						{/if}
-						{#if visibleAdmission !== null}
+						{#if visibleAdmission !== null && activeTask?.status !== 'running'}
 							<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
 								<Stack gap="xs" align="end">
 									<span class="text-tiny font-medium text-muted-foreground">You</span>
@@ -1004,10 +1133,43 @@
 		</Stack>
 	</Scroll>
 
+	{#if draftingPlan}
+		<div class="min-w-0 shrink-0 px-3 pb-3" data-draft-plan>
+			<AgentContextSegment
+				plan={activePlan}
+				runs={rootRuns}
+				messages={deliveredMessages}
+				status={planState()}
+				{tools}
+				subagent={subagentTranscript}
+				executePending={admissionPending && visibleAdmission?.planAction?.action === 'execute'}
+				onexecute={() => Effect.runFork(submit('normal', 'execute'))}
+				ondelete={deletePlan}
+				deleteDisabled={composerLocked}
+				transitionDisabled={composerLocked || !modelAvailable}
+				executeDisabled={composerLocked ||
+					activeTask?.status === 'running' ||
+					queuedMessages.some((message) => message.mode === 'plan') ||
+					!modelAvailable ||
+					draft.trim().length > 0 ||
+					pendingAttachments.length > 0}
+			/>
+		</div>
+	{/if}
+
 	<Stack
 		gap="sm"
 		class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+		data-agent-composer
 	>
+		<AgentMessageQueue
+			messages={queuedMessages}
+			pendingText={activeTask?.status === 'running' ? visibleAdmission?.message : undefined}
+			busy={queuePending}
+			onsteer={(messageId) => updateQueue({ action: 'steer', messageId })}
+			onremove={(messageId) => updateQueue({ action: 'remove', messageId })}
+			onreorder={(messageIds) => updateQueue({ action: 'reorder', messageIds })}
+		/>
 		{#if revisedMessage !== null}
 			<Inline
 				align="center"
@@ -1045,11 +1207,11 @@
 		{#if sendFailure !== null}
 			<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
 		{/if}
-		{#if planMode || activeCommand !== null}
+		{#if (planning && !draftingPlan) || activeCommand === 'compact'}
 			<p class="text-tiny text-muted-foreground">
 				{activeCommand === 'compact'
 					? 'Summarize this conversation and keep its transcript available.'
-					: 'Revise the full plan before putting it into action.'}
+					: 'Discuss the approach here. Expand the draft Plan above the prompt to review it.'}
 			</p>
 		{/if}
 		<Stack
@@ -1058,7 +1220,7 @@
 			class="relative rounded-[1.25rem] border-0 bg-transparent text-popover-foreground shadow-none"
 			onsubmit={(event) => {
 				event.preventDefault();
-				attemptSend('normal');
+				activatePrimaryAction();
 			}}
 		>
 			{#if commandMenuOpen && commandTrigger !== null}
@@ -1134,7 +1296,7 @@
 				<input
 					bind:this={filePicker}
 					type="file"
-					accept="image/*,text/*,application/pdf,application/json,application/xml,.md,.csv,.tsv,.log,.yaml,.yml"
+					accept="image/*,text/*,application/pdf,application/json,application/xml,.docx,.xlsx,.md,.csv,.tsv,.log,.yaml,.yml"
 					multiple
 					class="sr-only"
 					onchange={onFilePicked}
@@ -1148,6 +1310,64 @@
 				>
 					<Icon icon="lucide:plus" class="size-5" />
 				</button>
+				<Popover.Root>
+					<Popover.Trigger
+						data-agent-usage
+						class="flex h-7 cursor-pointer list-none items-center gap-1 rounded px-1 text-xs tabular-nums hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+						aria-label={`${t('bolt.agent.contextWindowUsed')}: ${contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / ${contextCapacity === undefined ? '—' : formatAgentTokens(contextCapacity)}; ${costLabel}; ${tokenCount} tokens`}
+					>
+						<Icon icon="lucide:chart-pie" class="size-3.5" />
+						<span>{contextPercent === undefined ? '—' : `${Math.round(contextPercent)}%`}</span>
+						<span>· {costLabel || '—'}</span>
+					</Popover.Trigger>
+					<Popover.Content
+						side="top"
+						align="start"
+						class="w-72 max-w-[calc(100vw-3rem)] p-0 text-xs"
+					>
+						<Scroll name="Context and usage" style="height: auto; max-height: min(24rem, 60dvh)">
+							<Stack gap="sm" class="p-3">
+								<Stack gap="xs" class="border-b border-border pb-3">
+									<Inline justify="between" gap="sm" class="text-xs tabular-nums">
+										<span>{t('bolt.agent.contextWindowUsed')}</span>
+										<span
+											>{contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / {contextCapacity ===
+											undefined
+												? '—'
+												: formatAgentTokens(contextCapacity)}</span
+										>
+									</Inline>
+									<Progress
+										value={contextPercent ?? 0}
+										aria-label={t('bolt.agent.contextWindowUsed')}
+										class="h-1"
+									/>
+									<p class="text-micro text-muted-foreground">
+										{t('bolt.agent.contextReceiptNote')}
+									</p>
+								</Stack>
+								<p>{t('bolt.agent.usageScope')}</p>
+								<dl class="grid grid-cols-2 gap-1 tabular-nums">
+									<dt>{t('bolt.agent.totalTokens')}</dt>
+									<dd class="text-right">{tokenCount}</dd>
+									<dt>{t('bolt.agent.totalCost')}</dt>
+									<dd class="text-right">{costLabel || '—'}</dd>
+								</dl>
+								<dl class="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+									<dt>{t('bolt.agent.inputTokens')}</dt>
+									<dd class="text-right">{taskTokens.input.toLocaleString()}</dd>
+									<dt>{t('bolt.agent.cachedInput')}</dt>
+									<dd class="text-right">{taskTokens.cacheRead.toLocaleString()}</dd>
+									<dt>{t('bolt.agent.outputTokens')}</dt>
+									<dd class="text-right">{taskTokens.output.toLocaleString()}</dd>
+									<dt>{t('bolt.agent.reasoningTokens')}</dt>
+									<dd class="text-right">{taskTokens.reasoning.toLocaleString()}</dd>
+								</dl>
+								{#if usageIncomplete}<p>{t('bolt.agent.usagePartialNote')}</p>{/if}
+							</Stack>
+						</Scroll>
+					</Popover.Content>
+				</Popover.Root>
 				<span class="flex-1"></span>
 				<Combobox
 					options={modelOptions}
@@ -1166,70 +1386,116 @@
 					class="w-auto min-w-0 max-w-[45%]"
 					triggerClass="h-7 border-0 bg-transparent px-1.5 text-xs font-normal shadow-none hover:bg-muted"
 				/>
-				<button
-					type="button"
-					aria-pressed={planMode}
-					aria-keyshortcuts="Tab"
-					title="Switch between Agent and Plan (Tab)"
-					disabled={composerLocked}
-					onclick={() => (planMode = !planMode)}
-					class="rounded-md px-1.5 py-0.5 text-xs font-normal {planMode
-						? 'bg-primary/10 text-primary'
-						: 'text-muted-foreground hover:bg-muted'}"
+				<Tooltip
+					text={draftingPlan
+						? 'A draft plan is active. Execute it from the plan header, or delete it to return to Agent mode.'
+						: activePlan?.status === 'active' || activePlan?.status === 'stalled'
+							? 'This conversation has an active plan. Revise or delete the plan using its actions.'
+							: activeRun?.mode === 'plan' && activeRun.status === 'running'
+								? 'The agent is preparing the plan. Wait for the response or stop it before switching modes.'
+								: composerLocked
+									? 'Wait for the current message to be accepted before switching modes.'
+									: 'Switch between Agent and Plan (Tab)'}
+					contentClass="max-w-64 text-xs"
 				>
-					{planMode ? 'Plan' : 'Agent'}
-				</button>
-				{#if taskWorking}
+					{#snippet trigger({ props })}
+						<button
+							{...props}
+							type="button"
+							aria-pressed={planning}
+							aria-keyshortcuts="Tab"
+							aria-disabled={composerLocked || planLocksMode}
+							onclick={() => {
+								if (!composerLocked && !planLocksMode) planMode = !planning;
+							}}
+							class="rounded-md px-1.5 py-0.5 text-xs font-normal {planning
+								? 'bg-primary/10 text-primary'
+								: 'text-muted-foreground hover:bg-muted'}"
+						>
+							{planning ? 'Plan' : 'Agent'}
+						</button>
+					{/snippet}
+				</Tooltip>
+				{#if taskWorking && !draftSendable(parsedDraft)}
 					<Button
 						type="button"
-						variant="ghost"
 						size="icon"
-						class="size-8 rounded-full"
-						disabled={!canSend}
-						aria-label="Steer current turn"
-						title="Send at the next agent step"
-						onclick={() => attemptSend('steer')}
-					>
-						<Icon icon="lucide:milestone" class="size-4" />
-					</Button>
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						class="size-8 rounded-full"
+						class="size-8 shrink-0 rounded-full"
 						disabled={!canStop}
-						aria-label="Stop generating"
-						onclick={() => control('stop')}
+						aria-label={t('bolt.agent.stop')}
+						title={t('bolt.agent.stop')}
+						onclick={() => (confirmingStop = true)}
 					>
-						<Icon icon="lucide:square" class="size-4" />
+						<Icon icon="lucide:square" class="size-3.5 fill-current" />
 					</Button>
-				{:else if canResume}
+				{:else if canResume && !draftSendable(parsedDraft)}
 					<Button
 						type="button"
-						variant="ghost"
 						size="icon"
-						class="size-8 rounded-full"
+						class="size-8 shrink-0 rounded-full"
 						disabled={controlPending || !modelAvailable}
 						aria-label="Resume conversation"
 						onclick={() => control('resume')}
 					>
 						<Icon icon="lucide:play" class="size-4" />
 					</Button>
+				{:else}
+					<Button
+						type="submit"
+						size="icon"
+						class="size-8 shrink-0 rounded-full"
+						disabled={!canSend}
+						aria-label={revisedMessage !== null
+							? 'Send revised message'
+							: taskWorking
+								? t('bolt.agent.queueMessage')
+								: t('bolt.agent.send')}
+						title={taskWorking ? t('bolt.agent.queueMessage') : t('bolt.agent.send')}
+					>
+						{#if admissionPending}<Spinner
+								class="size-4"
+								label={t(agentOrbBusyStatusKey(orbState))}
+							/>
+						{:else}<Icon
+								icon={taskWorking ? 'lucide:list-plus' : 'lucide:arrow-up'}
+								class="size-4"
+							/>{/if}
+					</Button>
 				{/if}
-				<Button
-					type="submit"
-					size="icon"
-					class="size-8 rounded-full"
-					disabled={!canSend}
-					aria-label={revisedMessage !== null ? 'Send revised message' : 'Send message'}
-				>
-					{#if admissionPending}
-						<Spinner class="size-4" label={t(agentOrbBusyStatusKey(orbState))} />
-					{:else}
-						<Icon icon="lucide:arrow-up" class="size-4" />
-					{/if}
-				</Button>
 			</Inline>
 		</Stack>
 	</Stack>
 </Stack>
+
+<AlertDialog.Root bind:open={confirmingStop}>
+	<AlertDialog.Content class="max-w-sm">
+		<AlertDialog.Header>
+			<AlertDialog.Title>{t('bolt.agent.confirmStopTitle')}</AlertDialog.Title>
+			<AlertDialog.Description>{t('bolt.agent.confirmStopDescription')}</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>{t('bolt.agent.keepWorking')}</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={() => control('stop')}
+				>{t('bolt.agent.confirmStop')}</AlertDialog.Action
+			>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={confirmingDeletePlan}>
+	<AlertDialog.Content class="max-w-sm">
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete this Plan?</AlertDialog.Title>
+			<AlertDialog.Description
+				>This stops its current execution and cancels queued messages. Conversation history stays
+				available.</AlertDialog.Description
+			>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Keep plan</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={() => Effect.runFork(submit('normal', 'delete'))}
+				>Delete plan</AlertDialog.Action
+			>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

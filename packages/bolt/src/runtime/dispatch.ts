@@ -401,7 +401,10 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			{
 				effectId,
 				tenantId: invocation.scope.tenantId,
-				origin: 'Task'
+				origin: 'Task',
+				...(invocation.taskId === undefined
+					? {}
+					: { scheduledTask: { id: invocation.taskId, attempt: invocation.attempt } })
 			},
 			invocation.input
 		);

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	PlanId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import { systemToolSpecs } from '../src/runtime/agents/capability-catalog.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -10,22 +16,21 @@ import {
 } from './support/bolt-test-layer.js';
 import { fileURLToPath } from 'node:url';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
-import { lastToolResult, toolResultFor } from './agents-canonical-ai-fixture.js';
+import {
+	lastToolResult,
+	toolResultFor,
+	scriptedTranscript,
+	assistantToolCall,
+	assistantText
+} from './agents-canonical-ai-fixture.js';
 
 const cassette = (name: string) =>
 	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
 
 const SYSTEM_TOOLS = systemToolSpecs.map(({ name }) => name);
-/**
- * A model small enough for one large instruction to fill, and an instruction that fills it.
- *
- * Compaction is a fraction of the model's own context window now, not a fixed byte count, so a
- * suite that wants to see it states a small window rather than a large prompt. 64 KiB of prose is
- * roughly 16k tokens at the estimator's four-bytes-to-the-token; a 20k window puts the bound at 15k,
- * which this clears and an ordinary turn does not come close to.
- */
-const SMALL_CONTEXT_WINDOW_TOKENS = 20_000;
-const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(64 * 1_024)}`;
+// A long completed discussion exceeds the working-context threshold; the new request stays small.
+const SMALL_CONTEXT_WINDOW_TOKENS = 1_000_000;
+const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(280 * 1_024)}`;
 
 const PERSON_ID = '00000000-0000-4000-8000-000000000401';
 const TOOL_TASK_ID = ConversationId.make('00000000-0000-4000-8000-000000000401');
@@ -54,11 +59,18 @@ const openTask = async (
 		agents.submit(harness.effectId(`submit:${name}`), adminSubject, {
 			conversationId,
 			agentId: AgentId.make('web'),
-			message: Agents.userAgentInput(message),
+			message: Agents.userAgentInput(
+				message === LARGE_INSTRUCTION ? 'Continue the task.' : message
+			),
 			mode: DirectiveMode.make(mode),
 			priority: DirectivePriority.make('normal')
 		})
 	);
+	if (message === LARGE_INSTRUCTION)
+		await harness.database.query(
+			`insert into conversation_message(id,conversation_id,sequence,author,message,semantic_hash) values(gen_random_uuid(),$1,2,$2,$3,'fixture-history')`,
+			[conversationId, { kind: 'agent', id: 'web' }, assistantText(LARGE_INSTRUCTION)]
+		);
 	return { agents, conversationId };
 };
 
@@ -105,7 +117,12 @@ describe('scripted agent pipeline transcript', () => {
 			'write_collection'
 		]);
 		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-system'));
-		const { result, conversationId } = await runTask(ai, '01', 'agent', 'Exercise every system tool.');
+		const { result, conversationId } = await runTask(
+			ai,
+			'01',
+			'agent',
+			'Exercise every system tool.'
+		);
 		expect(result.status).toBe('done');
 		/**
 		 * Every system tool the recording exercised, which is every one except `compact`.
@@ -171,7 +188,7 @@ describe('scripted agent pipeline transcript', () => {
 		expect(feed[0]).toMatchObject({
 			automaticCompact: true,
 			planMode: false,
-			maxOutputTokens: 1_536
+			maxOutputTokens: 4_096
 		});
 		expect(feed[0]?.promptBytes).toBeGreaterThan(64 * 1_024);
 		expect(feed[1]).toMatchObject({ automaticCompact: false, planMode: false });
@@ -188,39 +205,28 @@ describe('scripted agent pipeline transcript', () => {
 		expect(compact).toEqual([{ tag: 'compact', origin: 'automatic' }]);
 	});
 
-	it('does not auto-compact in Plan mode; the model is fed the Plan contract', async () => {
-		const { ai, feed } = cassetteTranscript(
-			cassette('agents-pipe-plan'),
-			SMALL_CONTEXT_WINDOW_TOKENS
-		);
+	it('auto-compacts planning history and preserves the Plan tool restrictions', async () => {
+		const { ai, feed, requests } = scriptedTranscript([
+			assistantText('Continue discussing the draft.')
+		]);
 		const { result, conversationId } = await runTask(ai, '03', 'plan', LARGE_INSTRUCTION);
 		expect(result.status).toBe('idle');
-		expect(feed).toHaveLength(1);
-		expect(feed[0]).toMatchObject({
-			automaticCompact: false,
-			planMode: true
-		});
-		expect(feed[0]?.promptBytes).toBeGreaterThan(64 * 1_024);
+		expect(requests[0]?.purpose).toBe('compaction');
+		expect(requests[1]?.purpose).toBeUndefined();
+		expect(JSON.stringify(requests[1]?.messages)).toContain(
+			'Retained: the current user instruction, open decisions, and unresolved work.'
+		);
+		expect(JSON.stringify(requests[1]?.messages)).not.toContain(LARGE_INSTRUCTION);
+		expect(feed).toHaveLength(2);
 		expect(
 			await harness!.database.query(
-				`select plan.status, run.mode
-				 from conversation task
-				 join plan plan on plan.id = task.active_plan_id
-				 join turn run on run.conversation_id = task.id
-				 where task.id = $1`,
-				[conversationId]
-			)
-		).toEqual([{ status: 'active', mode: 'plan' }]);
-		expect(
-			await harness!.database.query(
-				`select count(*)::int as n from conversation_message
-				 where conversation_id = $1 and annotation->>'origin' = 'automatic'`,
+				'select count(*)::int as n from plan where conversation_id=$1',
 				[conversationId]
 			)
 		).toEqual([{ n: 0 }]);
 	});
 
-	it('Plan mode refuses write_collection and still leaves an active Plan', async () => {
+	it('Plan mode refuses write_collection and preserves the discussion', async () => {
 		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-plan-refuse'));
 		const { result } = await runTask(ai, '04', 'plan', 'Plan a people write.');
 		expect(result.status).toBe('idle');
@@ -250,7 +256,10 @@ describe('scripted agent pipeline transcript', () => {
 		).toEqual([{ n: 0 }]);
 
 		const resumed = await harness!.runtime.runPromise(
-			agents.control(harness!.effectId('resume:05'), adminSubject, { conversationId, action: 'resume' })
+			agents.control(harness!.effectId('resume:05'), adminSubject, {
+				conversationId,
+				action: 'resume'
+			})
 		);
 		expect(resumed).toMatchObject({ conversationId, status: 'ready' });
 		const executed = await harness!.runtime.runPromise(
@@ -283,7 +292,15 @@ describe('scripted agent pipeline transcript', () => {
 
 	it('Plan mode then Agent: the model loses the pre-checkpoint brief and is given the Active Plan', async () => {
 		const brief = 'UNIQUE_PLAN_BRIEF_MUST_LEAVE_THE_FEED';
-		const { ai, feed, requests } = cassetteTranscript(cassette('agents-pipe-plan-agent'));
+		const { ai, feed, requests } = scriptedTranscript([
+			assistantToolCall(
+				'update_plan',
+				{ operation: 'replace', expectedRevision: 0, body: 'Objective: ship export.' },
+				'plan'
+			),
+			assistantText('Draft ready.'),
+			assistantText('Export completed.')
+		]);
 		const { agents, conversationId } = await openTask(ai, '07', 'plan', brief);
 		const planned = await harness!.runtime.runPromise(
 			agents.execute(harness!.effectId('execute:07:plan'), adminSubject, conversationId)
@@ -297,6 +314,19 @@ describe('scripted agent pipeline transcript', () => {
 				conversationId,
 				agentId: AgentId.make('web'),
 				message: Agents.userAgentInput('Execute the Active Plan.'),
+				planAction: {
+					action: 'execute',
+					planId: PlanId.make(
+						String(
+							(
+								await harness!.database.query(
+									'select active_plan_id from conversation where id=$1',
+									[conversationId]
+								)
+							)[0]?.active_plan_id
+						)
+					)
+				},
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal')
 			})
@@ -305,8 +335,8 @@ describe('scripted agent pipeline transcript', () => {
 			agents.execute(harness!.effectId('execute:07:agent'), adminSubject, conversationId)
 		);
 		expect(executed.status).toBe('done');
-		expect(feed[1]).toMatchObject({ planMode: false, automaticCompact: false });
-		const agentFeed = JSON.stringify(requests[1]?.messages);
+		expect(feed[2]).toMatchObject({ planMode: false, automaticCompact: false });
+		const agentFeed = JSON.stringify(requests[2]?.messages);
 		expect(agentFeed).toContain('Active Plan revision');
 		expect(agentFeed).toContain('Objective: ship export.');
 		expect(agentFeed).not.toContain(brief);

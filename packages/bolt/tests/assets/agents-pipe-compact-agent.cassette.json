@@ -4,7 +4,7 @@
     "recordedAt": "2026-09-06T19:11:13.853Z",
     "model": "openrouter/z-ai/glm-5.3-flash",
     "purpose": "Live GLM probe replayed offline. Pipeline only, never generation.",
-    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape."
+    "provenance": "Messages: constrained live probe (exact tool calls validated deep-equal; texts dictated verbatim). Observations: minimal adapter shape. Compaction summary adapted to the four-row checkpoint contract; no new model call."
   },
   "turns": [
     {
@@ -14,7 +14,7 @@
         "message": {
           "options": {},
           "role": "assistant",
-          "content": "Retained: open payroll decisions and the current export work."
+          "content": "| Section | Summary |\n| --- | --- |\n| Goal | Complete the payroll export. |\n| Progress | Prior context reviewed. |\n| What we learned | Retained: open payroll decisions and the current export work. |\n| What's left | Resolve open decisions and continue export work. |"
         }
       },
       "observation": {

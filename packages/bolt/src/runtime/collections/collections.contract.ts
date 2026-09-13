@@ -6,6 +6,7 @@
  * against. Both import the contract here rather than each other, so the module graph stays acyclic.
  */
 import { Context, Effect, Schema } from 'effect';
+import { getErrorMessage } from '@norbital-ai/std';
 import type {
 	CollectionMutateRequest,
 	CollectionMutationBaseVersion,
@@ -348,12 +349,8 @@ export class PendingApproval extends Schema.TaggedError<PendingApproval>()(
  *   caller must not retry the batch: it would write it a second time. `committed` names the rows
  *   that are now facts so the caller can report or reconcile them.
  *
- * `cause` is kept rather than replaced, and this is the part that matters more than the tag. An
- * `AuthoredRefusal` mapped to a 422 and a `PendingApproval` answered as a 202 are decisions made
- * far downstream by `instanceof`, so a wrapper that swallowed the original would silently turn every
- * business rule in the workspace back into a 500 — the exact regression `AuthoredRefusal` was built
- * to end. `runtime/app.ts` unwraps this before its own mapping runs, so the phase is additive: it
- * adds a fact nobody had, and takes nothing away.
+ * Keep the original `cause`: runtime/app.ts unwraps it to map AuthoredRefusal to 422 and
+ * PendingApproval to 202. The message exposes its reason to automation failure summaries.
  */
 export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailure>()(
 	'Bolt.Collections.MutationPhaseFailure',
@@ -369,6 +366,9 @@ export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailur
 	}
 ) {
 	readonly retryable = false;
+	override get message(): string {
+		return `${this.phase} ${this.collection}: ${getErrorMessage(this.cause)}`;
+	}
 	/** The failure this wrapped, for a caller that would rather test than unwrap by hand. */
 	get underlying(): unknown {
 		return this.cause;

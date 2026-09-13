@@ -46,15 +46,16 @@ describe('Effect AI durable contract', () => {
 				.toSorted()
 		).toEqual(['conversation', 'conversation_message', 'plan', 'turn', 'turn_usage']);
 		// Nothing is called a task any more; the durable work queue keeps that name for itself.
-		expect(Object.keys(SYSTEM_COLLECTION_MODELS).filter((name) => name.startsWith('agent_'))).toEqual(
-			[]
-		);
+		expect(
+			Object.keys(SYSTEM_COLLECTION_MODELS).filter((name) => name.startsWith('agent_'))
+		).toEqual([]);
 		expect(Object.keys(SYSTEM_COLLECTION_MODELS.conversation.columns)).toEqual([
 			'workbench_id',
 			'subject_id',
 			'agent_id',
 			'audience',
 			'parent_id',
+			'title',
 			'status',
 			'active_plan_id',
 			'active_turn_id',
@@ -128,12 +129,13 @@ describe('Effect AI durable contract', () => {
 	it('decodes Task, Plan, directive, and public run metadata boundaries', () => {
 		expect(
 			Schema.decodeUnknownSync(ConversationRow)({
+				row_version: 0,
 				id: durableIds.task,
 				workbench_id: 'workbench-1',
 				subject_id: 'subject-1',
 				agent_id: 'agent-1',
 				audience: 'personal',
-				status: 'ready',
+				status: 'ready'
 			}).status
 		).toBe('ready');
 		expect(

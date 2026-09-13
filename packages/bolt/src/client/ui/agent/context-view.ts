@@ -41,7 +41,8 @@ export function projectAgentContextView(
 	}>
 ): AgentContextView {
 	const latestCheckpoint = compactCheckpoint(input.messages);
-	const planCutoff = input.activePlan?.checkpoint_sequence ?? null;
+	const planCutoff =
+		input.activePlan?.status === 'draft' ? null : (input.activePlan?.checkpoint_sequence ?? null);
 	const checkpoint =
 		latestCheckpoint !== null && (planCutoff === null || latestCheckpoint.sequence > planCutoff)
 			? latestCheckpoint
@@ -53,6 +54,8 @@ export function projectAgentContextView(
 	const compactCutoff =
 		latestCheckpoint?.annotation?.tag === 'compact' ? latestCheckpoint.annotation.cutoff : null;
 	const outsideMessageIds = new Set<string>();
+	const historyMessageIds = new Set<string>();
+	const contextOrder = new Map<string, number>();
 	const detailMessageIds = new Set<string>();
 	const runModes = new Map(input.runs.map((run) => [String(run.id), run.mode] as const));
 
@@ -63,6 +66,7 @@ export function projectAgentContextView(
 				: message.sequence;
 		const queued =
 			message.annotation?.tag === 'input' && message.annotation.consumedAfterSequence === undefined;
+		contextOrder.set(message.id, sequence);
 		const afterCompact =
 			compactCutoff === null ||
 			sequence > compactCutoff ||
@@ -70,6 +74,14 @@ export function projectAgentContextView(
 			retained.has(message.id);
 		const afterPlan = planCutoff === null || sequence > planCutoff;
 		if (!queued && (!afterCompact || !afterPlan)) outsideMessageIds.add(message.id);
+		// Group the entire completed conversation, even requests explicitly retained by the model.
+		if (
+			!queued &&
+			((compactCutoff !== null && sequence <= compactCutoff) ||
+				(planCutoff !== null && sequence <= planCutoff) ||
+				message.id === checkpoint?.id)
+		)
+			historyMessageIds.add(message.id);
 
 		const runMode = message.runId === null ? undefined : runModes.get(message.runId);
 		if (runMode === 'plan' || runMode === 'compact' || message.annotation?.tag === 'compact') {
@@ -80,12 +92,13 @@ export function projectAgentContextView(
 	return {
 		checkpoint,
 		checkpointOrigin: checkpoint === null ? null : compactOrigin(checkpoint),
-		focusMessages: input.messages.filter(
-			(message) => !outsideMessageIds.has(message.id) && message.id !== checkpoint?.id
-		),
-		historyMessages: input.messages.filter(
-			(message) => outsideMessageIds.has(message.id) || message.id === checkpoint?.id
-		),
+		focusMessages: input.messages
+			.filter((message) => !historyMessageIds.has(message.id))
+			.toSorted(
+				(left, right) =>
+					contextOrder.get(left.id)! - contextOrder.get(right.id)! || left.sequence - right.sequence
+			),
+		historyMessages: input.messages.filter((message) => historyMessageIds.has(message.id)),
 		outsideMessageIds,
 		detailMessageIds
 	};

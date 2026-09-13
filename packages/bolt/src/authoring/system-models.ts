@@ -327,6 +327,7 @@ const conversationModel = defineModel(
 		agent_id: text().notNull(),
 		audience: text().notNull(),
 		parent_id: uuid(),
+		title: text(),
 		status: text().notNull(),
 		active_plan_id: uuid(),
 		active_turn_id: uuid(),
@@ -429,7 +430,10 @@ const conversationMessageModel = defineModel(
 			{ name: 'conversation_message_turn', columns: ['turn_id', 'sequence'] },
 			// What a turn asks for at every boundary: this conversation's waiting messages, in the
 			// order it should answer them.
-			{ name: 'conversation_message_queue', columns: ['conversation_id', 'state', 'priority', 'sequence'] },
+			{
+				name: 'conversation_message_queue',
+				columns: ['conversation_id', 'state', 'priority', 'sequence']
+			},
 			{ name: 'conversation_message_supersedes', columns: ['supersedes_id'], unique: true },
 			{
 				name: 'conversation_message_identity',
@@ -441,7 +445,6 @@ const conversationMessageModel = defineModel(
 		]
 	}
 );
-
 
 /** One fenced execution attempt with one immutable authority snapshot. */
 const turnModel = defineModel(
@@ -507,7 +510,7 @@ const turnUsageModel = defineModel(
  * `bolt_task.input` can contain secrets and arbitrary command payloads, so the record itself must
  * never replicate. Direct invocations write this row themselves; a database trigger projects cron
  * occurrences from `bolt_task`. Clients receive only lifecycle, progress, error and typed result.
- */const automationRunModel = defineModel(
+ */ const automationRunModel = defineModel(
 	{
 		task_id: text().notNull().unique(),
 		name: text().notNull(),

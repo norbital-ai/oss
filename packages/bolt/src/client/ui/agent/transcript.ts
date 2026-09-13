@@ -7,6 +7,7 @@ import {
 	ModelId,
 	PlanId,
 	PlanStatus,
+	PlanAction,
 	ProviderCallId,
 	TurnId,
 	RunPhase,
@@ -39,6 +40,8 @@ const PlanVerdictAnnotation = Schema.Struct({
 const MessageAnnotation = Schema.Union([
 	Schema.Struct({
 		tag: Schema.Literal('input'),
+		planAction: Schema.optionalKey(PlanAction),
+		queuePosition: Schema.optionalKey(Schema.Natural),
 		consumedAfterSequence: Schema.optionalKey(Schema.Natural)
 	}),
 	CompactAnnotation,
@@ -64,6 +67,7 @@ const ConversationMessageRow = Schema.Struct({
 	annotation: Schema.NullOr(MessageAnnotation),
 	/** The queue, on the message: `queued` until answered, then `consumed` or `cancelled`. */
 	state: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString)),
+	mode: Schema.optionalKey(Schema.NullOr(DirectiveMode)),
 	priority: Schema.optionalKey(Schema.NullOr(Schema.Literals(['normal', 'steer'])))
 });
 export type ConversationMessageRow = typeof ConversationMessageRow.Type;
@@ -121,6 +125,7 @@ export type PanelMessage = Readonly<{
 	annotation: MessageAnnotation | null;
 	/** The queue columns, read from the row rather than from a second copy in the annotation. */
 	state: string | null;
+	mode?: typeof DirectiveMode.Type | null;
 	priority: 'normal' | 'steer' | null;
 }>;
 
@@ -148,6 +153,7 @@ export function projectConversationMessages(rows: readonly unknown[]): PanelMess
 		message: row.message,
 		annotation: row.annotation,
 		state: row.state ?? null,
+		...(row.mode === undefined ? {} : { mode: row.mode }),
 		priority: row.priority ?? null
 	}));
 }
@@ -234,7 +240,9 @@ const decodeTodoResult = Schema.decodeUnknownOption(TodoResult);
  * tool-result — a second scanner that had to agree with the runtime's by hand, and that carried a
  * `system/todo` alias for a name nothing has ever emitted. One stored list, one reader.
  */
-export function conversationTodos(conversation: { readonly todos?: unknown } | null): TodoResult | null {
+export function conversationTodos(
+	conversation: { readonly todos?: unknown } | null
+): TodoResult | null {
 	if (conversation == null) return null;
 	const decoded = decodeTodoResult(conversation.todos);
 	return Option.isSome(decoded) ? decoded.value : null;
@@ -246,14 +254,14 @@ type ExactTaskCharge = Readonly<{
 	scale: number;
 }>;
 
-/** Aggregates settled provider charges with integer arithmetic only. */
+/** Provider observations are already incurred costs, even before billing settlement. */
 export function aggregateTaskCharges(
 	rows: readonly TurnUsageRow[],
 	runIds: ReadonlySet<string>
 ): ExactTaskCharge[] {
 	const totals = new Map<string, ExactTaskCharge>();
 	for (const row of rows) {
-		if (!runIds.has(row.turn_id) || row.settlement_state !== 'settled' || row.charge === null) {
+		if (!runIds.has(row.turn_id) || row.charge === null) {
 			continue;
 		}
 		const charge = row.charge;
@@ -274,13 +282,79 @@ export function aggregateTaskCharges(
 	return [...totals.values()].sort((left, right) => left.currency.localeCompare(right.currency));
 }
 
-/** Converts one exact total to display text only at the UI boundary. */
+const decodeTokenCount = Schema.decodeUnknownOption(
+	Schema.NumberFromString.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(0),
+		Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+	)
+);
+
+export function aggregateTaskTokens(rows: readonly TurnUsageRow[], runIds: ReadonlySet<string>) {
+	const total = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		reasoning: 0,
+		reportedCalls: 0,
+		missingCalls: 0
+	};
+	for (const row of rows) {
+		if (!runIds.has(row.turn_id)) continue;
+		const usage = row.usage;
+		if (usage !== null && 'inputTokens' in usage && usage.inputTokens.total !== undefined) {
+			total.input += usage.inputTokens.total;
+			total.output += usage.outputTokens.total ?? 0;
+			total.cacheRead += usage.inputTokens.cacheRead ?? 0;
+			total.reasoning += usage.outputTokens.reasoning ?? 0;
+			total.reportedCalls += 1;
+		} else if (
+			usage !== null &&
+			'billableUnits' in usage &&
+			usage.billableUnits.inputTokens !== undefined
+		) {
+			const input = decodeTokenCount(usage.billableUnits.inputTokens);
+			if (Option.isSome(input)) {
+				total.input += input.value;
+				total.reportedCalls += 1;
+			} else total.missingCalls += 1;
+		} else total.missingCalls += 1;
+	}
+	return total;
+}
+
+/** Format presentation only; accounting retains the exact decimal total. */
 export function formatTaskCharge(charge: ExactTaskCharge): string {
 	const negative = charge.coefficient < 0n;
-	const digits = (negative ? -charge.coefficient : charge.coefficient).toString();
-	if (charge.scale === 0) return `${charge.currency} ${negative ? '-' : ''}${digits}`;
-	const padded = digits.padStart(charge.scale + 1, '0');
-	const whole = padded.slice(0, -charge.scale);
-	const fraction = padded.slice(-charge.scale).replace(/0+$/, '');
-	return `${charge.currency} ${negative ? '-' : ''}${whole}${fraction === '' ? '' : `.${fraction}`}`;
+	const absolute = negative ? -charge.coefficient : charge.coefficient;
+	const divisor = 10n ** BigInt(Math.max(0, charge.scale - 2));
+	if (absolute > 0n && charge.scale > 2 && absolute < divisor)
+		return `${charge.currency} ${negative ? '>-0.01' : '<0.01'}`;
+	const cents =
+		charge.scale <= 2
+			? absolute * 10n ** BigInt(2 - charge.scale)
+			: (absolute + divisor / 2n) / divisor;
+	return `${charge.currency} ${negative ? '-' : ''}${(cents / 100n).toLocaleString('en-US')}.${(cents % 100n).toString().padStart(2, '0')}`;
+}
+
+export const formatAgentTokens = (tokens: number): string =>
+	new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens);
+
+/** The last reported request for this root turn; cumulative/child usage is not context size. */
+export function latestContextTokens(
+	rows: readonly TurnUsageRow[],
+	run: TurnRow | undefined
+): number | undefined {
+	if (run === undefined) return undefined;
+	const usage = rows.findLast(
+		(row) =>
+			row.turn_id === run.id &&
+			row.model === run.model_id &&
+			row.operation === 'language' &&
+			row.usage !== null &&
+			'inputTokens' in row.usage
+	)?.usage;
+	return usage !== undefined && usage !== null && 'inputTokens' in usage
+		? usage.inputTokens.total
+		: undefined;
 }

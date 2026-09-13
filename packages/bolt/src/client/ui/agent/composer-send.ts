@@ -11,9 +11,8 @@ import { Duration, Effect } from 'effect';
  *
  * The wall is not what tells the operator their message landed: the pending bubble is cleared when
  * the durable row arrives over live sync, independently of this response (`visibleUnsettledAdmission`).
- * So this only has to be longer than a turn the host is willing to run, and short enough that a
- * genuinely lost request does not hang the composer forever. The host's own invocation deadline
- * settles the turn before this fires.
+ * This bounds the browser wait only. The host runs detached from that wait and may continue
+ * overnight. The panel suppresses this timeout while durable task state still reports running.
  */
 export const COMPOSER_COMMAND_DEADLINE_MILLIS = 1_800_000;
 

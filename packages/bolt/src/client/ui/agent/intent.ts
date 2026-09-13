@@ -1,3 +1,6 @@
+export const DEFAULT_COMPACTION_MESSAGE =
+	'Compact the conversation into goal, progress, what we learned, and what is left.';
+
 /** Parses canonical composer commands; anything else is an ordinary message. */
 export function parseTaskSlashCommand(source: string):
 	| { readonly kind: 'message'; readonly message: string }
@@ -6,13 +9,13 @@ export function parseTaskSlashCommand(source: string):
 			readonly mode: 'plan' | 'compact';
 			readonly message: string;
 			readonly complete: boolean;
-	  }
- {
+	  } {
 	const match = /^\s*\/(plan|compact)(?:\s+([\s\S]*))?$/i.exec(source);
 	if (!match) return { kind: 'message', message: source };
 	const command = match[1]?.toLowerCase();
 	if (command !== 'plan' && command !== 'compact') return { kind: 'message', message: source };
-	const message = (match[2] ?? '').trim();
+	const message =
+		(match[2] ?? '').trim() || (command === 'compact' ? DEFAULT_COMPACTION_MESSAGE : '');
 	return {
 		kind: 'submission',
 		mode: command,
@@ -23,10 +26,7 @@ export function parseTaskSlashCommand(source: string):
 
 /** Plain Tab toggles composer mode; mention menus and modified Tab retain precedence. */
 export function isAgentModeShortcut(
-	event: Pick<
-		KeyboardEvent,
-		'key' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey' | 'isComposing'
-	>
+	event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey' | 'isComposing'>
 ): boolean {
 	return (
 		event.key === 'Tab' &&

@@ -1,7 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -44,7 +49,8 @@ const siblingAggregations = (statements: ReadonlyArray<string>): ReadonlyArray<s
 /** Reads that project rows, as opposed to the `bolt_assert` preconditions a write carries. */
 const transcriptReads = (statements: ReadonlyArray<string>): ReadonlyArray<string> =>
 	statements.filter(
-		(statement) => statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
+		(statement) =>
+			statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
 	);
 
 const writesTo = (statements: ReadonlyArray<string>, table: string): ReadonlyArray<string> =>
@@ -93,15 +99,9 @@ describe('what one agent turn costs the database', () => {
 	it('does not re-read the whole transcript once per streamed part', async () => {
 		const { statements } = await runTurn('agents-admission-hello');
 
-		/**
-		 * Seven. Six are bounded lookups — `limit 1`, or the queued rows only — that the queue does on
-		 * the message rows themselves; one is the transcript.
-		 *
-		 * What matters is what is *not* here: a read per streamed part. Neither this number nor the
-		 * one above moves with the length of a reply, and
-		 * `agents-part-streaming.integration.test.ts` is the row that proves it.
-		 */
-		expect(transcriptReads(statements)).toHaveLength(7);
+		// Three history reads plus six queue checks, including Plan revision at both boundaries.
+		// The streaming suite asserts the same count with eight provider part boundaries.
+		expect(transcriptReads(statements)).toHaveLength(9);
 	});
 
 	it('writes each row once, to its own collection', async () => {

@@ -340,6 +340,15 @@ export const buildSchemaPlan = (
 			const sql = `create table if not exists ${table} (${SYSTEM_COLUMNS}${declaredColumns.length === 0 ? '' : `, ${declaredColumns.join(', ')}`})`;
 			return [
 				{ id: `collection:${collection.name}`, sql },
+				// CREATE IF NOT EXISTS does not upgrade existing framework tables.
+				...(collection.name === 'conversation'
+					? [
+							{
+								id: 'collection:conversation:upgrade:title',
+								sql: `alter table ${table} add column if not exists ${renderColumn('title', collection.fields['title']!)}`
+							}
+						]
+					: []),
 				...declaredIndexSteps(collection),
 				...modelIndexSteps(collection),
 				...approvalRequestOngoingIndexSteps(collection),

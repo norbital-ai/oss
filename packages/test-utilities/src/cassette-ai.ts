@@ -260,7 +260,7 @@ export const cassetteVerdict = (
 
 /** Mirror of the canonical fixture: the runtime's auto-compact summary call is answered in-line and never consumes a cassette turn. */
 const COMPACT_SUMMARY_TEXT =
-	'Retained: the current user instruction, open decisions, and unresolved work.';
+	"| Section | Summary |\n| --- | --- |\n| Goal | Retained: the current user instruction, open decisions, and unresolved work. |\n| Progress | No completed work in this fixture. |\n| What we learned | Original context is preserved in Transcript. |\n| What's left | Continue the requested work. |";
 
 export type CassetteInspection = Readonly<{
 	readonly callId: GenerateRequest['callId'];

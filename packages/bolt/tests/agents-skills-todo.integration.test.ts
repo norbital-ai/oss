@@ -1,13 +1,22 @@
 import { Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import { policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 import { Prompt } from 'effect/unstable/ai';
-import { scriptedTranscript } from './agents-canonical-ai-fixture.js';
+import {
+	scriptedTranscript,
+	assistantText,
+	assistantToolCall
+} from './agents-canonical-ai-fixture.js';
 import { lastToolFailure, toolResultFor, toolResultsFor } from './agents-canonical-ai-fixture.js';
 
 const cassette = (name: string) =>
@@ -40,7 +49,11 @@ const definition = workspace({
 	prompt: 'You are the skilled operations agent.',
 	tools: [],
 	skills: [
-		{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' },
+		{
+			name: 'payroll',
+			description: 'Approved payroll workflow.',
+			body: '# Payroll\n\nUse the approved workflow.'
+		},
 		{ name: 'secret-handbook', body: '# Secrets\n\nNever distributed.' }
 	],
 	requiredFacilities: []
@@ -76,6 +89,53 @@ const runTurn = async (
 };
 
 describe('distributed skills and the Todo surface in the loop', () => {
+	it('shares a tenant skill with both authorized people while keeping different workspace registries separate', async () => {
+		for (const tenant of ['alpha', 'beta']) {
+			const body = `# Payroll\nFollow only ${tenant}'s approved payroll workflow.`;
+			const { ai, requests } = scriptedTranscript([
+				assistantToolCall('list_skills', {}, 'list-first'),
+				assistantToolCall('read_skill', { name: 'payroll' }, 'read-first'),
+				assistantText('Read.'),
+				assistantToolCall('list_skills', {}, 'list-second'),
+				assistantToolCall('read_skill', { name: 'payroll' }, 'read-second'),
+				assistantText('Read.')
+			]);
+			harness = await makeBoltTestRuntime(
+				{ ...definition, name: tenant, skills: [{ name: 'payroll', body }] },
+				{ ai }
+			);
+			const agents = await harness.runtime.runPromise(Agents.Service);
+			for (let index = 0; index < 2; index++) {
+				const actor = { ...subject, userId: `operator-${index + 1}` };
+				const id = ConversationId.make(`00000000-0000-4000-8000-000000000b0${index}`);
+				await harness.runtime.runPromise(
+					agents.submit(harness.effectId(`submit-${index}`), actor, {
+						conversationId: id,
+						agentId: AgentId.make('web'),
+						message: Agents.userAgentInput('Read the payroll skill.'),
+						mode: DirectiveMode.make('agent'),
+						priority: DirectivePriority.make('normal')
+					})
+				);
+				await harness.runtime.runPromise(
+					agents.execute(harness.effectId(`execute-${index}`), actor, id)
+				);
+				expect(toolResultFor(requests[index * 3 + 1]!, 'list_skills')).toMatchObject({
+					readTool: 'read_skill',
+					skills: expect.arrayContaining([expect.objectContaining({ name: 'payroll' })])
+				});
+				expect(toolResultFor(requests[index * 3 + 2]!, 'read_skill')).toEqual({
+					name: 'payroll',
+					body
+				});
+			}
+			expect(JSON.stringify(requests)).not.toContain(
+				`only ${tenant === 'alpha' ? 'beta' : 'alpha'}'s approved`
+			);
+			await harness.dispose();
+			harness = undefined;
+		}
+	});
 	it('lists and reads only the skills the subject holds, and refuses an unheld skill', async () => {
 		const { ai, feed, requests } = cassetteTranscript(cassette('agents-skills-01'));
 		const { result, conversationId } = await runTurn(ai, '01', 'Follow the payroll skill.');
@@ -83,7 +143,14 @@ describe('distributed skills and the Todo surface in the loop', () => {
 
 		const second = requests[1]!;
 		expect(toolResultFor(second, 'list_skills')).toEqual({
-			skills: ['payroll', 'authoring-tenant-workspace']
+			readTool: 'read_skill',
+			skills: [
+				{ name: 'payroll', description: 'Approved payroll workflow.' },
+				expect.objectContaining({
+					name: 'authoring-tenant-workspace',
+					description: expect.any(String)
+				})
+			]
 		});
 		expect(toolResultsFor(second, 'read_skill')[0]).toEqual({
 			name: 'payroll',
@@ -157,7 +224,9 @@ describe('distributed skills and the Todo surface in the loop', () => {
 
 		// The row holds it, so nothing has to walk the transcript to find it.
 		expect(
-			await harness!.database.query('select todos from conversation where id = $1', [conversationId])
+			await harness!.database.query('select todos from conversation where id = $1', [
+				conversationId
+			])
 		).toEqual([{ todos: { items } }]);
 
 		// And a second turn reads back exactly that.
@@ -175,7 +244,9 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		);
 		// The second turn only read, so the stored list is untouched and still the one the first set.
 		expect(
-			await harness!.database.query('select todos from conversation where id = $1', [conversationId])
+			await harness!.database.query('select todos from conversation where id = $1', [
+				conversationId
+			])
 		).toEqual([{ todos: { items } }]);
 	});
 
@@ -196,7 +267,11 @@ describe('distributed skills and the Todo surface in the loop', () => {
 				providerExecuted: false
 			});
 		const inspect = (status: string) => ({ id: 'inspect', text: 'Inspect the registry', status });
-		const exportPayroll = (status: string) => ({ id: 'export', text: 'Export the payroll', status });
+		const exportPayroll = (status: string) => ({
+			id: 'export',
+			text: 'Export the payroll',
+			status
+		});
 		const encode = Schema.encodeSync(Prompt.Message);
 		const { ai, requests } = scriptedTranscript([
 			encode(

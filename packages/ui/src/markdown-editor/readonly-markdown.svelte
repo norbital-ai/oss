@@ -43,7 +43,7 @@
 		 * reply, a tool result, a preview pane. The document scale puts an `h2` at `text-3xl` under
 		 * a full-width rule, which inside a chat pane is larger than the page title.
 		 */
-		scale?: 'document' | 'documentation' | 'reading';
+		scale?: 'document' | 'documentation' | 'reading' | 'compact';
 		/** Add stable ids and self-links to headings for long-form documentation. */
 		anchorHeadings?: boolean;
 		/** Raw HTML remains enabled for existing editor/chat consumers; documentation can refuse it. */
@@ -131,9 +131,10 @@
 <div
 	bind:this={rootElement}
 	class={cn(
-		'tiptap min-w-0 max-w-full outline-none',
+		'tiptap min-w-0 max-w-full [overflow-wrap:anywhere] outline-none',
 		scale === 'documentation' && 'tiptap-documentation',
-		scale === 'reading' && 'tiptap-reading',
+		(scale === 'reading' || scale === 'compact') && 'tiptap-reading',
+		scale === 'compact' && 'tiptap-compact',
 		className
 	)}
 >

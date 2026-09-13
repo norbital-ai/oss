@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -66,19 +71,31 @@ describe('steering admitted during an active run', () => {
 		try {
 			await submit('follow-up', 'Include the newly queued detail.');
 			expect(
-				(await harness.runtime.runPromise(
-					agents.answerQueued(harness.effectId('answer:follow-up'), adminSubject, conversationId)
-				)).status
+				(
+					await harness.runtime.runPromise(
+						agents.answerQueued(harness.effectId('answer:follow-up'), adminSubject, conversationId)
+					)
+				).status
 			).toBe('idle');
-			await submit('steer', 'Do the steered thing first.', 'steer');
+			const queuedSteer = await submit('steer', 'Do the steered thing first.');
+			await harness.runtime.runPromise(
+				agents.updateQueue(harness.effectId('promote:steer'), adminSubject, {
+					conversationId,
+					change: { action: 'steer', messageId: queuedSteer.messageId }
+				})
+			);
 			expect(
-				(await harness.runtime.runPromise(
-					agents.answerQueued(harness.effectId('answer:steer'), adminSubject, conversationId)
-				)).status
+				(
+					await harness.runtime.runPromise(
+						agents.answerQueued(harness.effectId('answer:steer'), adminSubject, conversationId)
+					)
+				).status
 			).toBe('idle');
 			expect(requests).toHaveLength(0);
 			expect(
-				await harness.database.query('select status from conversation where id = $1', [conversationId])
+				await harness.database.query('select status from conversation where id = $1', [
+					conversationId
+				])
 			).toEqual([{ status: 'running' }]);
 		} finally {
 			releaseGeneration();
@@ -87,12 +104,15 @@ describe('steering admitted during an active run', () => {
 		// and no work occurrence was minted to remember that — the queue is the transcript.
 		expect((await execution).status).toBe('idle');
 		expect(
-			await harness.database.query('select status from conversation where id = $1', [conversationId])
-		).toEqual([{ status: 'ready' }]);
-		expect(
-			await harness.database.query('select command from bolt_task where input->>\'conversationId\' = $1', [
+			await harness.database.query('select status from conversation where id = $1', [
 				conversationId
 			])
+		).toEqual([{ status: 'ready' }]);
+		expect(
+			await harness.database.query(
+				"select command from bolt_task where input->>'conversationId' = $1",
+				[conversationId]
+			)
 		).toEqual([]);
 		// The first generation was already running; the next model step receives only the steer.
 		expect(requests[0] && JSON.stringify(requests[0])).not.toContain('steered thing');

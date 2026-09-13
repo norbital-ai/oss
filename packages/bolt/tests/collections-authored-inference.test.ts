@@ -240,7 +240,7 @@ describe('authored inference tool loop', () => {
 		});
 	});
 
-	it('keeps calling tools up to the cap, surfacing failures as results', async () => {
+	it('keeps calling tools until the model finishes, surfacing failures as results', async () => {
 		const requests: Array<AIRequest> = [];
 		let runs = 0;
 		const infer = inferOp(
@@ -284,36 +284,40 @@ describe('authored inference tool loop', () => {
 		expect(JSON.stringify(failed)).toContain('page unavailable');
 	});
 
-	it('refuses after the tool-turn cap instead of looping forever', async () => {
+	it('allows research to finish beyond twelve tool turns', async () => {
 		const requests: Array<AIRequest> = [];
 		const infer = inferOp(
-			EffectId.make('inference-unbounded'),
+			EffectId.make('inference-long-research'),
 			generateWith(
-				(_request, turn) =>
-					AIGenerationResult.cases.Message.make({
-						message: assistant([toolCall(`c${turn}`, 'again', {})])
-					}),
+				(request, turn) =>
+					request.output._tag === 'Object'
+						? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
+						: AIGenerationResult.cases.Message.make({
+								message:
+									turn < 13
+										? assistant([toolCall(`c${turn}`, 'next_page', {})])
+										: assistant('Enough evidence.')
+							}),
 				requests
 			)
 		);
-		const exit = await Effect.runPromiseExit(
+		const output = await Effect.runPromise(
 			infer({
 				model: 'provider/research',
 				schema: Schema.Struct({ rate: Schema.Number }),
-				prompt: 'Loop forever.',
+				prompt: 'Read the required pages and return the rate.',
 				tools: [
 					{
-						name: 'again',
-						description: 'Always asks for another turn.',
+						name: 'next_page',
+						description: 'Read the next page.',
 						input: Schema.Struct({}),
 						run: () => Effect.succeed(null)
 					}
 				]
 			})
 		);
-		expect(exit._tag).toBe('Failure');
-		expect(JSON.stringify(exit)).toContain('ai.tool_loop_unbounded');
-		expect(requests).toHaveLength(12);
+		expect(output).toEqual({ rate: 1 });
+		expect(requests).toHaveLength(15);
 	});
 
 	it('refuses an ill-formed tool list before any provider call', async () => {

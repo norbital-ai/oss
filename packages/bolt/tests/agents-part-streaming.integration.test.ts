@@ -1,7 +1,12 @@
 import { afterEach, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -120,24 +125,13 @@ it('commits each part boundary before the provider finishes, then retains one co
 	);
 	expect(observed).toHaveLength(4);
 
-	/**
-	 * Eight part boundaries cost this turn no more reads than two would.
-	 *
-	 * This is the property the streaming path turns on, and this is the only place in the suite that
-	 * can show it: every other turn streams two parts, so a count taken there cannot tell "once per
-	 * turn" apart from "once per part". Here the provider sends each of four snapshots twice and the
-	 * turn reads exactly what `agents-turn-write-cost.integration.test.ts` pins for an ordinary
-	 * two-part reply. None of those reads belongs to a part: every part after the first continues a
-	 * row the turn already holds and reads nothing at all.
-	 *
-	 * Before the turn kept a ledger this was two reads of up to 500 rows *per boundary*, inside the
-	 * provider call. The number to watch is not seven; it is that seven does not move when the
-	 * boundaries do.
-	 */
+	// Eight boundaries cost the same nine reads as an ordinary two-part reply: three history
+	// reads and six queue checks (including Plan revision before generation and at completion).
 	const transcriptReads = harness.database.statements.filter(
-		(statement) => statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
+		(statement) =>
+			statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
 	);
-	expect(transcriptReads).toHaveLength(7);
+	expect(transcriptReads).toHaveLength(9);
 	const rows = await harness.database.query(
 		"select message, annotation from conversation_message where conversation_id = $1 and message->>'role' = 'assistant'",
 		[conversationId]
@@ -210,7 +204,9 @@ it('keeps interrupted parts for display but excludes incomplete tool calls from 
 		);
 	await submit('Start');
 	await expect(
-		harness.runtime.runPromise(agents.execute(harness.effectId('first'), adminSubject, conversationId))
+		harness.runtime.runPromise(
+			agents.execute(harness.effectId('first'), adminSubject, conversationId)
+		)
 	).rejects.toThrow(/Connection lost/);
 	const stored = await harness.database.query(
 		"select * from conversation_message where conversation_id = $1 and annotation->>'tag' = 'generation'",
@@ -287,7 +283,9 @@ it.each(['skip', 'rewrite', 'reopen', 'invalid-index', 'unfinished-final'] as co
 			})
 		);
 		await expect(
-			harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, conversationId))
+			harness.runtime.runPromise(
+				agents.execute(harness.effectId('execute'), adminSubject, conversationId)
+			)
 		).rejects.toThrow(/boundary|immutable|indexes|Final response/);
 		expect(
 			await harness.database.query(

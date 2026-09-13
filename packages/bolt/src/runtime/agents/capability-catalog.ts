@@ -170,6 +170,38 @@ const objectInput = (
 	additionalProperties: false
 });
 
+/** Only the root planning loop exposes this capability. Persistence belongs to that loop. */
+export const PlanUpdateInput = Schema.Union([
+	Schema.Struct({
+		operation: Schema.Literal('replace'),
+		expectedRevision: Schema.Natural,
+		body: Schema.NonEmptyString
+	}),
+	Schema.Struct({
+		operation: Schema.Literal('patch'),
+		expectedRevision: Schema.Natural,
+		oldText: Schema.NonEmptyString,
+		newText: Schema.String
+	})
+]);
+
+export const planToolSpec: ToolDeclaration = {
+	name: 'update_plan',
+	command: 'platform:update_plan',
+	description:
+		'Create or revise the draft Plan only. replace writes the complete Markdown plan; patch replaces exactly one matching oldText. Supply expectedRevision (0 before creation). Preserve requirements, constraints and acceptance checks. This never executes the plan.',
+	inputSchema: objectInput(
+		{
+			operation: { type: 'string', enum: ['replace', 'patch'] },
+			expectedRevision: { type: 'integer', minimum: 0 },
+			body: { type: 'string', minLength: 1 },
+			oldText: { type: 'string', minLength: 1 },
+			newText: { type: 'string' }
+		},
+		['operation', 'expectedRevision']
+	)
+};
+
 export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'todo',
@@ -198,7 +230,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'compact',
 		description:
-			'Checkpoint this conversation: summarize the durable context you still need and continue from it. Use it when the transcript has grown long enough that older detail is getting in the way, or after finishing a phase of work whose intermediate steps no longer matter. The checkpoint is written at your next step, not inside this call, and the current instruction plus everything from this turn is always retained. The runtime also does this on its own when the context approaches the model window; calling it yourself is for reorganizing, not for staying under a limit.',
+			'Checkpoint this conversation: summarize the durable context you still need and continue from it. Use it when the transcript has grown long enough that older detail is getting in the way, or after finishing a phase of work whose intermediate steps no longer matter. The checkpoint is written at your next step, not inside this call, and the current instruction is retained while completed tool exchanges are summarized. The runtime also does this at its bounded working-context limit; calling it yourself is for reorganizing, not for staying under a limit.',
 		command: 'platform:compact',
 		inputSchema: objectInput(
 			{
@@ -218,12 +250,14 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'list_skills',
-		description: 'List Skills authorized for this run.',
+		description:
+			"List tenant-wide and platform skills authorized for this run. If list_personal_skills is available, use it to discover this user's private skills too. Read only relevant skill bodies on demand.",
 		command: 'platform:list_skills'
 	},
 	{
 		name: 'read_skill',
-		description: 'Read one authorized Skill body.',
+		description:
+			'Read one tenant or platform skill returned by list_skills, using its exact name. Personal skills use read_personal_skill instead.',
 		command: 'platform:read_skill',
 		inputSchema: objectInput({ name: { type: 'string', minLength: 1 } }, ['name'])
 	},
@@ -542,7 +576,13 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				skills: context.skills.map(({ name: skill }) => skill)
 			} satisfies DescribeWorkspaceResult;
 		case 'list_skills':
-			return { skills: context.skills.map(({ name: skill }) => skill) };
+			return {
+				readTool: 'read_skill',
+				skills: context.skills.map(({ name, description }) => ({
+					name,
+					...(description === undefined ? {} : { description })
+				}))
+			};
 		case 'read_skill': {
 			const parsed = yield* decode(name, SkillNameInput, input);
 			const body = yield* readSkillBody(context.skills, parsed.name);
@@ -633,7 +673,8 @@ export const executeHostTool = Effect.fn('CapabilityCatalog.executeHostTool')(fu
 ) {
 	const call = context.hostTools.execute(EffectId.make(`${context.effectId}:host:${name}`), {
 		tool: name,
-		input
+		input,
+		sessionId: context.conversationId
 	});
 	return (yield* context.subject.system !== true && context.subject.policies.length === 0
 		? call.pipe(Effect.provideService(Identity.CurrentSubject, context.subject))
@@ -650,7 +691,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. Only the root Task may spawn; a child Task can read, message, await, stop, and resume its siblings but cannot spawn its own children. A message reaches a running child at its next step, not after its current one.',
+		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. This tool is available only to the root Task; child Tasks cannot delegate or control other Tasks. A message reaches a running child at its next step, not after its current one.',
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{

@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Schema } from 'effect';
+import { describeModel } from '../authoring/model-introspection.js';
+import { SYSTEM_MODELS } from '../authoring/system-models.js';
+import { defineSystemRowModel } from '../authoring/system-row-model.js';
 import type { RelationDefinition } from '../authoring/workspace-schema.js';
 
 type SnapshotColumn = Readonly<{
@@ -48,6 +51,16 @@ export const workspaceSchemaFingerprint = (
 		collections[entry.table] = collection;
 	}
 	const schema = {
+		// Framework columns share the tenant database. Omitting them lets a package upgrade skip
+		// migration while its new queries already expect columns absent from the old database.
+		framework: {
+			row: describeModel(defineSystemRowModel()),
+			models: Object.fromEntries(
+				Object.entries(SYSTEM_MODELS)
+					.toSorted(([a], [b]) => a.localeCompare(b))
+					.map(([name, model]) => [name, describeModel(model)])
+			)
+		},
 		collections: Object.fromEntries(
 			Object.entries(collections)
 				.toSorted(([left], [right]) => left.localeCompare(right))
@@ -72,9 +85,7 @@ export const workspaceSchemaFingerprint = (
 			.toSorted((left, right) =>
 				[left.source, left.name, left.target, left.cardinality]
 					.join('\u0000')
-					.localeCompare(
-						[right.source, right.name, right.target, right.cardinality].join('\u0000')
-					)
+					.localeCompare([right.source, right.name, right.target, right.cardinality].join('\u0000'))
 			)
 	};
 	return `sha256:${createHash('sha256')

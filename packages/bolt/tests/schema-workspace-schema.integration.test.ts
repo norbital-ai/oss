@@ -60,6 +60,36 @@ describe('WorkspaceSchema owner', () => {
 		}
 	});
 
+	it('upgrades existing conversation tables without losing history and can run twice', async () => {
+		const harness = await makeBoltTestRuntime();
+		try {
+			const id = '00000000-0000-4000-8000-000000000123';
+			await harness.database.query(
+				'insert into conversation(id, agent_id, subject_id, workbench_id, status, audience) values ($1, $2, $3, $4, $5, $6)',
+				[id, 'web', 'owner', 'development', 'done', 'private']
+			);
+			await harness.database.query('alter table conversation drop column title');
+			const schema = await harness.runtime.runPromise(WorkspaceSchema.Service);
+			expect(await harness.runtime.runPromise(schema.verify(harness.effectId('before')))).toContain(
+				'conversation: missing column title'
+			);
+			await harness.runtime.runPromise(schema.migrate(harness.effectId('upgrade')));
+			await harness.database.query('update conversation set title=$1 where id=$2', [
+				'Preserved task',
+				id
+			]);
+			await harness.runtime.runPromise(schema.migrate(harness.effectId('retry')));
+			expect(
+				await harness.database.query('select id, title, status from conversation where id=$1', [id])
+			).toEqual([{ id, title: 'Preserved task', status: 'done' }]);
+			expect(await harness.runtime.runPromise(schema.verify(harness.effectId('after')))).toEqual(
+				[]
+			);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
 	it('verifies polymorphic references against their physical storage columns', async () => {
 		const harness = await makeBoltTestRuntime(
 			testWorkspace({

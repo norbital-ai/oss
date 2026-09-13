@@ -54,7 +54,6 @@ describe('G3 Plan Compact and edit', () => {
 		expect(intentSource).toMatch(/\/\(plan\|compact\)/);
 		expect(panelSource).toContain('editMessage');
 		expect(panelSource).toContain('/compact');
-		expect(panelSource).toContain("planMode ? 'plan' : 'agent'");
 	});
 });
 

@@ -3,7 +3,7 @@ import type { SkillDeclaration } from '../../authoring/workspace-schema.js';
 /**
  * Skills the host supplies to every workspace agent, beside the ones the workspace authors.
  *
- * A tenant starts empty and is built by its agent; that agent cannot read `node_modules`, and the
+ * A tenant starts empty and is built by its agent; the
  * published `authoring-tenant-workspace` skill is a repository artifact, not something a tenant
  * installs. Without a contract in hand it researches instead of authoring. This skill is that
  * contract, carried in the runtime so it is present in every workspace and pinned to the platform
@@ -12,9 +12,28 @@ import type { SkillDeclaration } from '../../authoring/workspace-schema.js';
 const AUTHORING_CONTRACT = `# Authoring a Norbital tenant workspace
 
 You can author this workspace's source and it will be compiled and served. Write the files below;
-never hand-edit generated output. You have no shell — to compile and lint a draft, call the
+never hand-edit generated output. To compile and lint a draft, call the
 \`workspace_validate\` host tool (it runs install + sync + lint + audit in the workspace sandbox and
 returns diagnostics). Read its findings and fix them; do not claim success without it.
+
+When advertised, \`sandbox_bash\` executes arbitrary Node or shell scripts and project tests in a
+disposable copy of the exact draft commit. It has no network, Git repository, credentials or tenant
+database. Check its exit code. Install the pinned dependencies with the documented guest toolchain
+before running project tests. Guest file changes are discarded; save source through
+\`workspace_edit\` / \`workspace_apply\`. Never attempt Git operations. Planning cannot execute code.
+
+Discover tenant/platform workflows with \`list_skills\`. When available, also use
+\`list_personal_skills\` for the authenticated user's private workflows. Use each list's returned
+\`readTool\` with an exact listed name; a platform skill is not a personal skill. Read only relevant bodies;
+skills do not grant extra permissions. Personal skills are stored privately by Colony, not in source.
+
+Validation does not execute the test suite or browser acceptance. Use only tools actually listed in
+this session. If a required test or browser tool is unavailable, report that check as unrun; label
+acceptance supplied by the user or tester as prior evidence, with its commit when known. A green
+compile is not proof of the full user workflow. Finish with a concise account of changes, checks
+actually run, and required checks still open. Do not turn unused starter files into new requirements
+or disregard an instruction to preserve existing data. Start from the current requirement and
+known evidence; read relevant files and API sections rather than repeatedly auditing unchanged work.
 
 ## The authored filesystem
 
@@ -22,6 +41,7 @@ returns diagnostics). Read its findings and fix them; do not claim success witho
 src/
   +agents.md                      shared workspace prompt (web + envoy turns)
   +env.ts                         optional declared env vars
+  capabilities/skills/<name>/SKILL.md  tenant-wide reusable workflow
   access/+teams.ts                team -> policy names
   access/policies/+<name>.ts      grants/approvals/capabilities/limits
   collections/+relationship.ts    cross-collection relations
@@ -39,6 +59,26 @@ src/
 
 A leading \`+\` is a compiler role; a misplaced or unknown one is an error. Everything else under
 \`src/\` is ordinary source the compiler does not claim.
+
+## Tenant skills
+
+Create \`src/capabilities/skills/<name>/SKILL.md\` with YAML frontmatter and a Markdown body:
+
+\`\`\`markdown
+---
+name: crm-acceptance
+description: Verify CRM acceptance criteria with current source and runtime evidence.
+---
+# CRM acceptance
+Read the current requirement, inspect the relevant source, and record checks and remaining gaps.
+\`\`\`
+
+Use a lowercase kebab-case name matching its directory. No separate manifest is required. Format and
+validate the draft. Discovery through \`list_skills\` reads the current runtime artifact; a new skill
+in the private draft becomes discoverable after that draft is built into a Preview or published
+release. \`describe_workspace\` describes the current runtime; \`workspace_files\` and
+\`workspace_read\` inspect the private source draft. Confirm the environment, release and commit
+before comparing their contents. A running app can be either Preview or Live.
 
 ## Collections
 
@@ -153,6 +193,12 @@ the inset, the concrete surface owns scrolling.
 </Cover>
 \`\`\`
 
+For custom forms, document editors, or other flowing content, use
+\`import { Bound, Cover, Scroll } from '@norbital-ai/ui/layout'\` and
+\`<Cover as="main"><Bound size="full"><Scroll name={t('app.<app>.header_title')} inset>…</Scroll></Bound></Cover>\`.
+\`Scroll\` requires a human-readable \`name\`. \`Cover\` clips its body; \`Bound\` alone does not
+scroll. Test the last action at a short viewport. A CollectionTable already owns its scrolling.
+
 Data is a single typed client: \`import { client } from '$bolt/client'\`. Reads are live reactive
 queries (\`client.db.<collection>.findMany({ where, orderBy, columns, with })\`); writes are
 \`client.db.<collection>.mutate([...])\`. There is no refetch/invalidate in the client.
@@ -208,16 +254,30 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
 
 ## Method
 
-1. Read the existing source (\`workspace_files\`, \`workspace_read\`) before writing.
+1. Read the existing source (\`workspace_files\`, \`workspace_read\`) before writing. Use its
+   character \`offset\` and \`limit\` to read the relevant excerpt; do not reread unchanged whole files.
    Child agents have the same source access; delegating a dependency-signature lookup does not
    expose node_modules. Use this contract and compiler diagnostics instead of recursive lookups.
-2. State the collections and app surfaces you will add; then author a small batch with \`workspace_edit\` (precise
-   replacements) or \`workspace_apply\` (whole files). Supply the current \`expectedCommit\`; a stale
-   commit fails without partial changes — re-read and retry.
-3. Call \`workspace_validate\`. Fix every error it returns and call it again until clean.
-4. Only then report what you changed, by file, and what it does. Never claim a path compiles because
-   it looks right.`;
+2. State the collections and app surfaces you will add; then author a small batch. Use
+   \`workspace_edit\` for existing files and \`workspace_apply\` for new files. Every successful edit
+   returns the next \`expectedCommit\`; reuse it without an extra listing. On a stale commit, reread
+   only the affected source and reconcile. Never rewrite a large file to change a few lines.
+3. Call \`workspace_format\` with the latest commit, then \`workspace_validate\`. Formatting is
+   deterministic tool work, never a model-generated indentation rewrite. Fix compiler errors with
+   precise edits. If the same error repeats without new evidence, inspect the diagnostic and change
+   approach. Continue unblocked work; report a blocker when it actually requires outside input.
+   Do not repeat unchanged validation or search task history for unavailable dependencies.
+4. At a completed phase, request \`compact\` with the verified files, remaining requirements and
+   next action. Keep working from the checkpoint instead of carrying all earlier source reads.
+5. Report what validation actually proved. Compilation does not prove UI or data workflows;
+   name the interactions still untested. Guard asynchronous saves against pending upload, decode,
+   permission, and recording states both in the button and in its handler.`;
 
 export const PLATFORM_SKILLS: ReadonlyArray<SkillDeclaration> = [
-	{ name: 'authoring-tenant-workspace', body: AUTHORING_CONTRACT }
+	{
+		name: 'authoring-tenant-workspace',
+		description:
+			'Author tenant source, collections, apps, skills and tests using the published workspace contract.',
+		body: AUTHORING_CONTRACT
+	}
 ];

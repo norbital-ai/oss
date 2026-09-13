@@ -15,14 +15,13 @@
 	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
 	import { Bound, Center, Cover, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
-	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
 	import AgentTrigger from './agent-trigger.svelte';
 	import {
 		requestAgentComposerFocus,
 		type AgentComposerSeed
 	} from '#lib/client/ui/agent/composer-chrome.js';
 	import { useAgentClient } from '../agent/client.svelte.js';
-	import { agentOrbState, agentOrbStatusKey } from '#lib/client/ui/agent/agent-orb-state.js';
+	import { agentOrbState } from '#lib/client/ui/agent/agent-orb-state.js';
 	import {
 		mergeBoltConversationMessages,
 		type TenantMessageCatalogs
@@ -882,38 +881,18 @@
 	<Sheet.Root open={agentSheetOpen} onOpenChange={closeAgentSheet}>
 		<Sheet.Content
 			flush
-			contained
-			portalTarget="[data-slot='sidebar-inset']"
+			portalTarget="body"
 			side="right"
-			class="h-full {'w-[min(30rem,100%)]'} flex-col max-md:min-h-[min(85dvh,48rem)] sm:max-w-[30rem]"
+			class="md:w-[var(--sheet-width,30rem)]"
+			showCloseButton={false}
 			persistenceKey="bolt-workspace-agent"
 			preventBackgroundClick="narrow"
 			onOpenAutoFocus={(event) => {
 				event.preventDefault();
 			}}
 		>
-			<Stack gap="none" fill class="min-h-0">
-				<Sheet.Header class="shrink-0 bg-card px-4 pt-3 pr-12 pb-1 text-left sm:px-5 sm:pr-12">
-					<Inline gap="sm" align="center" class="min-w-0">
-						<div
-							class="grid size-4 shrink-0 place-items-center text-foreground"
-							data-testid="workspace-agent-orb"
-						>
-							<NorbiusStrip
-								state={fabAgentState}
-								size={16}
-								label={t(agentOrbStatusKey(fabAgentState))}
-							/>
-						</div>
-						<Sheet.Title class="min-w-0 truncate text-sm font-semibold">
-							{t('bolt.shell.workspaceAgentTitle')}
-						</Sheet.Title>
-					</Inline>
-				</Sheet.Header>
-				<Stack gap="none" grow class="min-h-0">
-					<AgentChatPanel headerOrb={false} />
-				</Stack>
-			</Stack>
+			<Sheet.Title class="sr-only">{t('bolt.shell.workspaceAgentTitle')}</Sheet.Title>
+			<AgentChatPanel onclose={() => closeAgentSheet(false)} />
 		</Sheet.Content>
 	</Sheet.Root>
 {/if}

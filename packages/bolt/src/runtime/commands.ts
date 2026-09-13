@@ -51,6 +51,7 @@ import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.
 import { Secrets } from '#lib/runtime/secrets/secrets.js';
 import * as Sync from '#lib/runtime/sync/sync.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
+import * as AgentDriver from '#lib/runtime/agents/driver.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
@@ -64,6 +65,7 @@ export type ExecutionContext = Readonly<{
 	effectId: EffectId;
 	tenantId: TenantId;
 	origin: InvocationOrigin;
+	scheduledTask?: Readonly<{ id: string; attempt: number }>;
 	principal?: Identity.Subject;
 	actor?: Identity.Subject;
 	impersonatedTeam?: string;
@@ -793,6 +795,7 @@ const BINDINGS = [
 		Effect.gen(function* () {
 			yield* (yield* Automations.Service).recover(EffectId.make(`${context.effectId}:automations`));
 			yield* (yield* TaskQueue.Service).recover(EffectId.make(`${context.effectId}:tasks`));
+			yield* AgentDriver.recover(EffectId.make(`${context.effectId}:agents`));
 			return json({ recovered: true });
 		})
 	),
@@ -873,17 +876,16 @@ const BINDINGS = [
 				Effect.map(agents.models(context.effectId, principal(context), input.agentId), json)
 			)
 	),
-	/**
-	 * One command, one invocation, straight to generation.
-	 *
-	 * Admission and the turn were two guest invocations with a durable work occurrence between them,
-	 * and the occurrence existed only so the second could find the first. It does not need to: the
-	 * caller that admits the message is present for the whole turn, so it runs it. The response
-	 * returns when the turn settles, which is why this command carries the `agents.turn` budget.
-	 *
-	 * A message admitted while a turn is already running stays queued and is answered by the turn in
-	 * flight; `execute` then finds nothing to claim and returns idle, which is the honest answer.
-	 */
+	/** Admission is durable before the task scheduler starts or resumes the conversation. */
+	binding(
+		'conversations.answer',
+		{ Task: task('persisted conversation execution owner') },
+		(context, input) =>
+			Effect.map(
+				AgentDriver.run(context.effectId, context.tenantId, context.scheduledTask, input.messageId),
+				json
+			)
+	),
 	binding(
 		'conversations.send',
 		{ Command: session('TaskService.submit exact task object') },
@@ -892,10 +894,9 @@ const BINDINGS = [
 				const agents = yield* Agents.Service;
 				const subject = principal(context);
 				const admitted = yield* agents.submit(context.effectId, subject, input);
-				yield* agents.answerQueued(
-					EffectId.make(`${context.effectId}:answer`),
-					subject,
-					input.conversationId
+				yield* AgentDriver.schedule(
+					EffectId.make(`${context.effectId}:schedule`),
+					admitted.messageId
 				);
 				return json(admitted);
 			})
@@ -904,17 +905,40 @@ const BINDINGS = [
 		'conversations.editMessage',
 		{ Command: session('TaskService.editMessage exact task object') },
 		(context, input) =>
+			Effect.gen(function* () {
+				const agents = yield* Agents.Service;
+				const subject = principal(context);
+				const admitted = yield* agents.editMessage(context.effectId, subject, input);
+				yield* AgentDriver.schedule(
+					EffectId.make(`${context.effectId}:schedule`),
+					admitted.messageId
+				);
+				return json(admitted);
+			})
+	),
+	binding(
+		'conversations.updateQueue',
+		{ Command: session('author-owned pending message queue') },
+		(context, input) =>
 			Effect.flatMap(Agents.Service, (agents) =>
-				Effect.map(agents.editMessage(context.effectId, principal(context), input), json)
+				Effect.map(agents.updateQueue(context.effectId, principal(context), input), json)
 			)
 	),
 	binding(
 		'conversations.control',
 		{ Command: session('TaskService.control exact task object') },
 		(context, input) =>
-			Effect.flatMap(Agents.Service, (agents) =>
-				Effect.map(agents.control(context.effectId, principal(context), input), json)
-			)
+			Effect.gen(function* () {
+				const agents = yield* Agents.Service;
+				const subject = principal(context);
+				const result = yield* agents.control(context.effectId, subject, input);
+				if (input.action === 'resume')
+					yield* AgentDriver.recover(
+						EffectId.make(`${context.effectId}:schedule`),
+						input.conversationId
+					);
+				return json(result);
+			})
 	),
 	binding('workspace.manifest', { Command: session('visible workspace manifest') }, (context) =>
 		Effect.map(workspaceManifest(context, false), json)

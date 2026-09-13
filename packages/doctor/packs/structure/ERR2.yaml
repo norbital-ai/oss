@@ -33,7 +33,7 @@ rule:
     - all:
         - pattern:
             context: '({ catch: ($C) => new Error($...MSG) });'
-            selector: 'ArrowFunction'
+            selector: 'PropertyAssignment'
         - not:
             has:
               any:
@@ -47,7 +47,7 @@ rule:
     - all:
         - pattern:
             context: '({ catch: () => new Error($...MSG) });'
-            selector: 'ArrowFunction'
+            selector: 'PropertyAssignment'
 examples:
   bad:
     - "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed')));"
@@ -56,3 +56,5 @@ examples:
     - "export const fail = (effect) => effect.pipe(Effect.catch((cause) => new Error('request failed', { cause })));"
     - "export const fail = (input) => Effect.tryPromise({ try: () => go(input), catch: (cause) => new Error('request failed', { cause }) });"
     - 'export const fail = (effect) => effect.pipe(Effect.catch((cause) => Effect.fail(toError(cause))));'
+    - "export const fail = (effect) => effect.pipe(Effect.filterOrFail(valid, () => new Error('invalid input')));"
+    - "export const fail = () => new Error('new error without a caught failure');"

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { Schema } from 'effect';
 
-const PdfText = Schema.Struct({ body: Schema.NonEmptyString, pageCount: Schema.Natural });
+const DocumentText = Schema.Struct({
+	body: Schema.NonEmptyString,
+	pageCount: Schema.optionalKey(Schema.Natural)
+});
 
 /** Resolve text offline; parser CPU/memory are bounded independently of the host event loop. */
 export async function extractDocumentText(
@@ -15,9 +18,13 @@ export async function extractDocumentText(
 		throw new Error('Documents must contain between 1 byte and 20 MiB.');
 	const sha256 = createHash('sha256').update(bytes).digest('hex');
 	const mime = contentType.split(';', 1)[0]!.trim().toLowerCase();
-	if (mime !== 'application/pdf') {
+	const office = [
+		'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+		'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+	].includes(mime);
+	if (mime !== 'application/pdf' && !office) {
 		if (!/^(text\/[\w.+-]+|application\/(csv|json|(?:[\w.-]+\+)?xml))$/.test(mime))
-			throw new Error('Supported documents are PDF, text, CSV, JSON and XML.');
+			throw new Error('Supported documents are PDF, DOCX, XLSX, text, CSV, JSON and XML.');
 		const charset = /charset\s*=\s*["']?([\w-]+)/i;
 		const declared =
 			contentType.match(charset)?.[1] ??
@@ -37,10 +44,13 @@ export async function extractDocumentText(
 	const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
 	const worker = new Worker(
 		new URL(
-			import.meta.url.endsWith('.ts') ? './pdf-worker.ts' : './pdf-worker.js',
+			`./${office ? 'office' : 'pdf'}-worker.${import.meta.url.endsWith('.ts') ? 'ts' : 'js'}`,
 			import.meta.url
 		),
-		{ workerData: bytes, resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 } }
+		{
+			workerData: office ? { bytes, mime } : bytes,
+			resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 }
+		}
 	);
 	let onAbort: () => void = () => {};
 	try {
@@ -50,11 +60,11 @@ export async function extractDocumentText(
 			worker.once('message', resolve);
 			worker.once('error', reject);
 			worker.once('exit', () =>
-				reject(new Error('PDF extraction ended without a complete result.'))
+				reject(new Error('Document extraction ended without a complete result.'))
 			);
 			if (bounded.aborted) onAbort();
 		});
-		return { ...Schema.decodeUnknownSync(PdfText)(result), sha256 };
+		return { ...Schema.decodeUnknownSync(DocumentText)(result), sha256 };
 	} finally {
 		bounded.removeEventListener('abort', onAbort);
 		await worker.terminate();

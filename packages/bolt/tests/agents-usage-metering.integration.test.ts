@@ -126,6 +126,30 @@ const execute = async (ai: FacilityBinding<AIRequest, AIResponse>, name: string)
 };
 
 describe('immutable provider observations', () => {
+	it('records costs above the advisory $5 gauge and continues tool execution', async () => {
+		let calls = 0;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('unexpected request');
+				const message = calls++ === 0 ? toolCall('above-gauge') : text('Completed.');
+				return {
+					_tag: 'Success',
+					value: generated(request, message, {
+						...observation(request, true),
+						charge: { currency: 'USD', coefficient: 6n, scale: 0 }
+					})
+				};
+			}
+		};
+		const { result } = await execute(ai, 'above-gauge');
+		expect(result.status).toBe('done');
+		expect(calls).toBe(2);
+		expect(await harness!.database.query('select charge from turn_usage')).toEqual([
+			{ charge: { currency: 'USD', coefficient: '6', scale: 0 } },
+			{ charge: { currency: 'USD', coefficient: '6', scale: 0 } }
+		]);
+	});
 	it('stores one exact pending settlement row for every provider attempt', async () => {
 		const ai = cassetteAi(cassette('agents-usage-complete'));
 		const { result, conversationId } = await execute(ai, 'complete');

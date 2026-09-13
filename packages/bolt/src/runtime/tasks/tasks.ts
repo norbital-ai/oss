@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import {
 	EffectId,
 	type DatabaseRequest,
@@ -11,6 +11,7 @@ import type { CallContext } from '#lib/runtime/facilities/database.js';
 import { Tasks } from '#lib/runtime/facilities/services.js';
 import {
 	ENQUEUE_CLAIM_LEASE_MILLIS,
+	deferStatement,
 	makeQueue,
 	progressStatement,
 	recoverStatements,
@@ -44,6 +45,11 @@ export type Interface = Readonly<{
 	readonly enqueueClaimed: (
 		effectId: EffectIdType,
 		work: DirectWork
+	) => Effect.Effect<void, Database.FacilityError>;
+	readonly defer: (
+		effectId: EffectIdType,
+		taskId: string,
+		attempt: number
 	) => Effect.Effect<void, Database.FacilityError>;
 	readonly declare: (
 		effectId: EffectIdType,
@@ -185,6 +191,10 @@ export const layer = (_context: CallContext) =>
 					Effect.ignore(tasks.execute(effectId, { _tag: 'Interrupt', taskId })),
 				wake,
 				enqueueClaimed,
+				defer: Effect.fn('TaskQueue.defer')(function* (effectId, taskId, attempt) {
+					yield* database.execute(effectId, asRequest([deferStatement(taskId, attempt)]));
+					yield* wake(EffectId.make(`${effectId}:wake`), (yield* Clock.currentTimeMillis) + 10_000);
+				}),
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					makeQueue(executeUnder(effectId, 'declare')).declare(declarations, nowEpochMs)
 				),

@@ -55,14 +55,14 @@
 	// svelte-ignore state_referenced_locally
 	const expanded = new PersistedState(persistenceKey, defaultExpanded);
 	const providerStyle = $derived(
-		`--sidebar-width:${sidebarWidth};--sidebar-width-icon:${sidebarWidthIcon};`
+		`--sidebar-width:${sidebarWidth};--sidebar-width-icon:${sidebarWidthIcon};--sidebar-height:var(--workspace-shell-height,100dvh);`
 	);
 </script>
 
 <Sidebar.Provider
 	bind:open={expanded.current}
 	style={providerStyle}
-	class={cn(className, 'h-dvh min-h-0 overflow-clip')}
+	class={cn(className, 'h-[var(--workspace-shell-height,100dvh)] min-h-0 overflow-clip')}
 	data-workspace-shell-frame
 >
 	<Sidebar.Root
@@ -79,7 +79,10 @@
 		{@render navigation()}
 	</Sidebar.Root>
 
-	<Sidebar.Inset as="main" class={cn(insetClass, 'h-dvh min-h-0 min-w-0 overflow-clip')}>
+	<Sidebar.Inset
+		as="main"
+		class={cn(insetClass, 'h-[var(--workspace-shell-height,100dvh)] min-h-0 min-w-0 overflow-clip')}
+	>
 		<Inline
 			as="header"
 			gap="sm"

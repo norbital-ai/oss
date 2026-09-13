@@ -151,6 +151,7 @@ export {
 } from './sync-registry.js';
 
 export {
+	AGENT_TOOL_OUTPUT_LIMIT,
 	AgentId,
 	AIGenerationOutput,
 	AIToolDefinition,
@@ -196,6 +197,7 @@ export {
 	PlanId,
 	PlanVerdict,
 	PlanStatus,
+	PlanAction,
 	ProviderCallId,
 	ProviderObservation,
 	ProviderUsageEncoded,
@@ -223,6 +225,7 @@ export {
 	ConversationControlResult,
 	ConversationEditMessageRequest,
 	ConversationEditMessageResult,
+	ConversationQueueRequest,
 	TaskModelCatalog,
 	ConversationSendRequest,
 	ConversationSendResult,

@@ -1,3 +1,4 @@
+import type { ConversationSendRequest } from '@norbital-ai/bolt-protocol';
 /** One client-minted idempotency key retained only while its command outcome is unknown. */
 export type UnsettledTaskAdmission = Readonly<{
 	conversationId: string;
@@ -5,6 +6,7 @@ export type UnsettledTaskAdmission = Readonly<{
 	agentId: string;
 	message: string;
 	mode: 'agent' | 'plan' | 'compact';
+	planAction?: (typeof ConversationSendRequest.Encoded)['planAction'];
 	priority: 'normal' | 'steer';
 	modelId?: string;
 	draft: string;
@@ -37,6 +39,7 @@ export const retryableAdmission = (
 		agentId: string;
 		message: string;
 		mode: 'agent' | 'plan' | 'compact';
+		planAction?: (typeof ConversationSendRequest.Encoded)['planAction'];
 		priority: 'normal' | 'steer';
 		modelId?: string;
 	}>
@@ -45,6 +48,8 @@ export const retryableAdmission = (
 	admission.agentId === input.agentId &&
 	admission.message === input.message &&
 	admission.mode === input.mode &&
+	admission.planAction?.action === input.planAction?.action &&
+	admission.planAction?.planId === input.planAction?.planId &&
 	admission.priority === input.priority &&
 	admission.modelId === input.modelId
 		? admission

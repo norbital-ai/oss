@@ -16,6 +16,13 @@ import {
 describe('mutationPhaseFailure', () => {
 	const cause = new Error('the write actually failed because of this');
 
+	it('reports the phase and underlying reason through Error.message', () => {
+		const failure = mutationPhaseFailure('prepare', 'jurisdiction_settings', [], cause);
+		expect(failure.message).toBe(
+			'prepare jurisdiction_settings: the write actually failed because of this'
+		);
+	});
+
 	it('survives an empty collection name instead of throwing', () => {
 		const failure = mutationPhaseFailure('settle', '', ['committed-id'], cause);
 		expect(failure).toBeInstanceOf(MutationPhaseFailure);

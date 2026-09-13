@@ -201,7 +201,11 @@ describe('Bolt architecture boundaries', () => {
 		// runs, because an occurrence has no wall any more and a lapsed lease means a dead host.
 		// 17,956 -> 17,965: the hook runaway guard counts staged-write waves, not staged records,
 		// so deleting a run that settled more than eight rows is no longer refused as a runaway.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_965);
+		// 17,965 -> 17,974: an explicit idempotent conversation-title upgrade. CREATE TABLE IF
+		// NOT EXISTS alone leaves existing tenants without the new framework column.
+		// 17,974 -> 17,977: Task dispatch carries the actual task ID/attempt to the durable
+		// agent driver; public command input cannot supply or impersonate this claim.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_977);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { projectAgentContextView } from '../src/client/ui/agent/context-view.js';
@@ -22,8 +27,8 @@ import {
  * only place to look.
  */
 /** Small enough that one large instruction fills it; see `agents-pipeline-transcript` for why. */
-const SMALL_CONTEXT_WINDOW_TOKENS = 20_000;
-const AUTO_COMPACT_PROMPT_BYTES = 64 * 1_024;
+const SMALL_CONTEXT_WINDOW_TOKENS = 1_000_000;
+const AUTO_COMPACT_PROMPT_BYTES = 280 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
 
 let harness: BoltTestRuntime | undefined;
@@ -46,10 +51,18 @@ describe('automatic compaction mid-turn', () => {
 			agents.submit(harness.effectId('submit:continue'), adminSubject, {
 				conversationId,
 				agentId: AgentId.make('web'),
-				message: Agents.userAgentInput(LARGE_INSTRUCTION),
+				message: Agents.userAgentInput('Continue the task.'),
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal')
 			})
+		);
+		await harness.database.query(
+			`insert into conversation_message(id,conversation_id,sequence,author,message,semantic_hash) values(gen_random_uuid(),$1,2,$2,$3,'fixture-history')`,
+			[
+				conversationId,
+				{ kind: 'agent', id: 'web' },
+				{ role: 'assistant', content: [{ type: 'text', text: LARGE_INSTRUCTION }] }
+			]
 		);
 		const result = await harness.runtime.runPromise(
 			agents.execute(harness.effectId('execute:continue'), adminSubject, conversationId)
@@ -63,6 +76,9 @@ describe('automatic compaction mid-turn', () => {
 		const tailMessage = compactRequest.messages.at(-1)!;
 		expect(tailMessage.role).toBe('user');
 		expect(JSON.stringify(tailMessage.content)).toContain('Automatic Compact:');
+		expect(JSON.stringify(tailMessage.content)).toContain(
+			"Goal; Progress; What we learned; What's left"
+		);
 
 		const rows = await harness.database.query(
 			`select id, conversation_id, sequence, turn_id, author, message, annotation
@@ -85,6 +101,8 @@ describe('automatic compaction mid-turn', () => {
 		const checkpointIndex = messages.findIndex((message) => message.annotation?.tag === 'compact');
 		expect(checkpointIndex).toBeGreaterThan(0);
 		const checkpoint = messages[checkpointIndex]!;
+		for (const label of ['Goal', 'Progress', 'What we learned', "What's left"])
+			expect(JSON.stringify(checkpoint.message.content)).toContain(`| ${label} |`);
 		// The panel's row decoder keeps only the keys it projects; provenance is read off the row.
 		expect(rows[checkpointIndex]).toMatchObject({
 			annotation: { tag: 'compact', origin: 'automatic' }
@@ -97,8 +115,7 @@ describe('automatic compaction mid-turn', () => {
 				: checkpoint.message.content.map((part) => part.type)
 		).toEqual(['text']);
 
-		// The retained projection stays over the bound for this fixture, as it did on the host, so
-		// the residual system line follows the checkpoint; then two tool rounds and the reply.
+		// The completion note follows the checkpoint; then two tool rounds and the reply.
 		const after = messages.slice(checkpointIndex + 1);
 		expect(after.map((message) => message.author.kind)).toEqual([
 			'system',
@@ -108,7 +125,9 @@ describe('automatic compaction mid-turn', () => {
 			'tool',
 			'agent'
 		]);
-		expect(JSON.stringify(after[0]!.message.content)).toContain('without a second checkpoint');
+		expect(JSON.stringify(after[0]!.message.content)).toContain(
+			'request that produced it has been fulfilled'
+		);
 		for (const [index, message] of after.entries()) {
 			expect(message.conversationId).toBe(conversationId);
 			expect(message.runId).toBe(runs[0]!.id);
@@ -119,7 +138,11 @@ describe('automatic compaction mid-turn', () => {
 		// The panel's projection: the checkpoint moves to history, every later row stays in focus.
 		const view = projectAgentContextView({ messages, runs });
 		expect(view.checkpoint?.id).toBe(checkpoint.id);
-		expect(view.historyMessages.map((message) => message.id)).toEqual([checkpoint.id]);
+		expect(view.historyMessages.map((message) => message.id)).toEqual(
+			messages
+				.filter((message) => message.sequence <= checkpoint.sequence)
+				.map((message) => message.id)
+		);
 		const focusIds = new Set(view.focusMessages.map((message) => message.id));
 		for (const message of after) expect(focusIds.has(message.id)).toBe(true);
 		expect(view.focusMessages.map((message) => message.sequence)).toEqual(

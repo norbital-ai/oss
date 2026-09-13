@@ -290,23 +290,7 @@ export const layer = (schemaPlan: SchemaPlan) =>
 					// The lineage runs after the plan, never before: its DDL calls `bolt_date` and
 					// `bolt_daterange` and indexes with `gin_trgm_ops`, all of which the plan's foundation
 					// installs, and it records itself in a ledger the plan creates.
-					//
-					// This fork is why two definitions of every collection table exist — the plan's
-					// `create table if not exists` and the lineage's `CREATE TABLE`. The intended end state is
-					// that the lineage owns collection DDL and the plan owns only extensions, functions and
-					// `bolt_*` tables. Three things block it:
-					//
-					//   - `system-collections.ts` declares `approval_request` and `requestor` as
-					//     `CollectionDefinition`s, not Drizzle models. They are Bolt's, not any workspace's, so
-					//     they appear in no workspace lineage and only the plan can create them.
-					//   - An EXCLUDE constraint is not a Drizzle entity (see `CollectionDefinition.exclusions`),
-					//     so the lineage cannot render one and the plan is the only writer.
-					//   - Every definition assembled in a test is `field.*` calls with no lineage behind them,
-					//     and `tests/support/bolt-test-layer.ts` provisions from the plan.
-					//
-					// Closing it means giving system collections and tests a generated lineage — a mechanism
-					// that does not exist. What keeps the two halves honest meanwhile is that they render the
-					// same types from the same declaration; `tests/compiler/schema-migrations.test.ts` pins that.
+					// Framework tables and upgrades belong to the plan; authored tables to committed lineage.
 					yield* applyLineage(effectId);
 					// Now that the collections exist, whichever half created them.
 					if (postLineageSteps.length > 0) {

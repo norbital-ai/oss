@@ -2,7 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as ModelIntrospection from '../src/authoring/model-introspection.js';
+import { SYSTEM_MODELS } from '../src/authoring/system-models.js';
 import { Effect } from 'effect';
 import { defineModel, text } from '../src/authoring/index.js';
 import type { ModelDeclaration } from '../src/authoring/models-schema.js';
@@ -63,6 +65,26 @@ const committedWorkspace = async (
 };
 
 describe('sync migration-lineage validation', () => {
+	it('changes release schema identity when framework columns change without authored DDL changes', () => {
+		const snapshot = { ddl: [] };
+		const current = workspaceSchemaFingerprint(snapshot, []);
+		const describeModel = ModelIntrospection.describeModel;
+		const olderFramework = vi
+			.spyOn(ModelIntrospection, 'describeModel')
+			.mockImplementation((model) => {
+				const fields = describeModel(model);
+				return model === SYSTEM_MODELS.conversation
+					? Object.fromEntries(Object.entries(fields).filter(([name]) => name !== 'title'))
+					: fields;
+			});
+		try {
+			expect(workspaceSchemaFingerprint(snapshot, [])).not.toBe(current);
+		} finally {
+			olderFramework.mockRestore();
+		}
+		expect(workspaceSchemaFingerprint(snapshot, [])).toBe(current);
+	});
+
 	it('reimports an edited model in a long-lived process instead of reusing its ESM cache entry', async () => {
 		const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 		const root = await mkdtemp(join(packageRoot, '.lineage-validation-'));

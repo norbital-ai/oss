@@ -13,6 +13,11 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
+	scriptedTranscript,
+	assistantText,
+	assistantToolCall
+} from './agents-canonical-ai-fixture.js';
+import {
 	adminSubject,
 	makeBoltTestRuntime,
 	recordId,
@@ -26,6 +31,24 @@ const cassette = (name: string) =>
 
 const catalog: HostToolCatalog = {
 	tools: [
+		...[
+			['sandbox_bash', false],
+			['web_fetch', true],
+			['list_personal_skills', true],
+			['read_personal_skill', true],
+			['save_personal_skill', false]
+		].map(([name, readOnly]) => ({
+			name: String(name),
+			description: 'Scoped capability fixture.',
+			inputSchema: { type: 'object', properties: {} },
+			readOnly: readOnly === true
+		})),
+		{
+			name: 'workspace_validate',
+			description: 'Read-only validation still executes a build.',
+			inputSchema: { type: 'object', properties: {} },
+			readOnly: true
+		},
 		{
 			name: 'workspace_read',
 			description: 'Read private source.',
@@ -47,6 +70,56 @@ afterEach(async () => {
 });
 
 describe('host capability discovery and execution', () => {
+	it('estimates bounded host receipts without compacting their full temporary-file contents', async () => {
+		const conversationId = ConversationId.make(recordId('bounded-tool-output'));
+		const { ai, feed } = scriptedTranscript([
+			assistantToolCall('workspace_read', {}, 'bounded-read'),
+			assistantText('Read the bounded receipt.')
+		]);
+		harness = await makeBoltTestRuntime(undefined, {
+			ai,
+			hostTools: {
+				call: async (_metadata, request) => ({
+					_tag: 'Success',
+					value: {
+						output:
+							request.tool === 'capability_catalog'
+								? {
+										tools: [
+											...catalog.tools,
+											{
+												name: 'agent_output_read',
+												description: 'Read bounded receipts.',
+												inputSchema: { type: 'object', properties: {} },
+												readOnly: true
+											}
+										]
+									}
+								: { contents: 'evidence'.repeat(50_000) }
+					}
+				})
+			}
+		});
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('submit'), adminSubject, {
+				conversationId,
+				agentId: AgentId.make('web'),
+				message: Agents.userAgentInput('Inspect my workspace.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		expect(
+			(
+				await harness.runtime.runPromise(
+					agents.execute(harness.effectId('execute'), adminSubject, conversationId)
+				)
+			).status
+		).toBe('done');
+		expect(feed.map(({ automaticCompact }) => automaticCompact)).toEqual([false, false]);
+	});
+
 	it.each(['agent', 'plan'] as const)(
 		'discovers authorized source tools and enforces %s mode',
 		async (mode) => {
@@ -98,6 +171,13 @@ describe('host capability discovery and execution', () => {
 			expect(first?.output._tag).toBe('Message');
 			if (first?.output._tag !== 'Message') throw new Error('Expected tool-capable generation');
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_read')).toBe(true);
+			for (const tool of ['web_fetch', 'list_personal_skills', 'read_personal_skill'])
+				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(true);
+			for (const tool of ['sandbox_bash', 'save_personal_skill'])
+				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(mode === 'agent');
+			expect(first.output.tools?.some(({ name }) => name === 'workspace_validate')).toBe(
+				mode === 'agent'
+			);
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_apply')).toBe(
 				mode === 'agent'
 			);
@@ -133,11 +213,15 @@ describe('host capability discovery and execution', () => {
 			})
 		);
 		await expect(
-			runtime.runtime.runPromise(agents.execute(runtime.effectId('execute'), adminSubject, conversationId))
+			runtime.runtime.runPromise(
+				agents.execute(runtime.effectId('execute'), adminSubject, conversationId)
+			)
 		).rejects.toThrow();
 		expect(twin.requests).toEqual([]);
 		expect(
-			await runtime.database.query('select id from turn where conversation_id = $1', [conversationId])
+			await runtime.database.query('select id from turn where conversation_id = $1', [
+				conversationId
+			])
 		).toEqual([]);
 	});
 });

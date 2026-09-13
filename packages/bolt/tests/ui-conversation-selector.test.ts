@@ -13,11 +13,17 @@ describe('projectConversations', () => {
 		expect(projectConversations([root])).toEqual([
 			{
 				...root,
+				title: null,
 				parent_id: null,
 				active_plan_id: null,
 				active_turn_id: null
 			}
 		]);
+	});
+	it('keeps the automatic title from a synced conversation', () => {
+		expect(projectConversations([{ ...root, title: 'Review the CRM records' }])[0]?.title).toBe(
+			'Review the CRM records'
+		);
 	});
 
 	it('keeps a Task when those keys arrive as null', () => {

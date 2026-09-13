@@ -254,6 +254,11 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		credential: string
 	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
+	/** Re-authorize a persisted person's work from current membership; never accepts role claims. */
+	readonly resolveUser: (
+		effectId: EffectId,
+		userId: string
+	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
 	readonly resolveSubject: (
 		effectId: EffectId,
 		provider: string,
@@ -807,10 +812,35 @@ export const layerWith = (
 						Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
 					);
 					return yield* subjectFromSource(effectId, {
+						...source,
 						userId: source.id,
-						tenantId: source.tenantId,
-						...(source.email === undefined ? {} : { email: source.email }),
-						...(source.status === undefined ? {} : { status: source.status }),
+						teamId: source.team_id
+					});
+				}),
+				resolveUser: Effect.fn('Identity.resolveUser')(function* (effectId, userId) {
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({
+								userId: usersTable.id,
+								tenantId: usersTable.tenantId,
+								email: usersTable.email,
+								status: usersTable.status,
+								teamId: usersTable.team_id
+							})
+							.from(usersTable)
+							.where(eq(usersTable.id, userId))
+							.limit(1)
+					);
+					if (result.rows[0] === undefined)
+						return yield* new AuthenticationError({ reason: 'invalid' });
+					const source = yield* Schema.decodeUnknownEffect(UserSubjectSourceRow)(
+						result.rows[0]
+					).pipe(Effect.mapError(() => new AuthenticationError({ reason: 'malformed' })));
+					return yield* subjectFromSource(effectId, {
+						...source,
+						userId: source.id,
 						teamId: source.team_id
 					});
 				}),

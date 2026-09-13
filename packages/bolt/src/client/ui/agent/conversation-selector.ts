@@ -16,6 +16,7 @@ const Conversation = Schema.Struct({
 	agent_id: AgentId,
 	audience: ConversationAudience,
 	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
+	title: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	status: ConversationStatus,
 	active_plan_id: Schema.optionalKey(Schema.NullOr(PlanId)),
 	active_turn_id: Schema.optionalKey(Schema.NullOr(TurnId)),
@@ -27,6 +28,7 @@ export type Conversation = Readonly<{
 	agent_id: typeof AgentId.Type;
 	audience: typeof ConversationAudience.Type;
 	parent_id: typeof ConversationId.Type | null;
+	title?: string | null;
 	status: typeof ConversationStatus.Type;
 	active_plan_id: typeof PlanId.Type | null;
 	active_turn_id: typeof TurnId.Type | null;
@@ -47,6 +49,7 @@ export function projectConversations(rows: readonly unknown[]): Conversation[] {
 				agent_id: task.agent_id,
 				audience: task.audience,
 				parent_id: task.parent_id ?? null,
+				title: task.title ?? null,
 				status: task.status,
 				active_plan_id: task.active_plan_id ?? null,
 				active_turn_id: task.active_turn_id ?? null
@@ -128,9 +131,9 @@ export function buildTaskSelector(input: {
 			rows.push({
 				kind: 'task',
 				id: task.id,
-				title: `${task.status === 'done' || task.status === 'ready' ? 'Conversation' : task.status} · ${task.id.slice(0, 8)}`,
+				title: task.title || `Conversation · ${task.id.slice(0, 8)}`,
 				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
-				searchText: `${task.id} ${task.status} ${task.agent_id}`,
+				searchText: `${task.title ?? ''} ${task.id} ${task.status} ${task.agent_id}`,
 				audience: 'personal'
 			});
 		}
@@ -145,9 +148,9 @@ export function buildTaskSelector(input: {
 			rows.push({
 				kind: 'task',
 				id: task.id,
-				title: `${task.status === 'done' || task.status === 'ready' ? 'Conversation' : task.status} · ${task.id.slice(0, 8)}`,
+				title: task.title || `Conversation · ${task.id.slice(0, 8)}`,
 				icon: task.status === 'failed' ? 'lucide:circle-alert' : 'lucide:message-square',
-				searchText: `${task.id} ${task.status} ${task.agent_id}`,
+				searchText: `${task.title ?? ''} ${task.id} ${task.status} ${task.agent_id}`,
 				audience: 'workbench'
 			});
 		}

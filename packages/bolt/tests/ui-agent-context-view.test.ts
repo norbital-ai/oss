@@ -30,13 +30,52 @@ const runRow = (id: string, mode: 'agent' | 'plan' | 'compact') => ({
 });
 
 describe('agent model-view projection', () => {
+	it('groups retained history but keeps queued and late-consumed input after the boundary', () => {
+		const rows = canonicalAgentRows([
+			{ conversationId, message: { role: 'user', content: 'Original request' } },
+			{ conversationId, message: { role: 'assistant', content: 'Completed work' } },
+			{
+				conversationId,
+				message: { role: 'user', content: 'Queued request' },
+				annotation: { tag: 'input' }
+			},
+			{
+				conversationId,
+				message: { role: 'user', content: 'Delivered after compaction' },
+				annotation: { tag: 'input', consumedAfterSequence: 4 }
+			},
+			{
+				conversationId,
+				message: { role: 'assistant', content: 'Complete summary' },
+				annotation: {
+					tag: 'compact',
+					origin: 'requested',
+					cutoff: 3,
+					retainedMessageIds: ['00000000-0000-4000-8000-000000000001']
+				}
+			}
+		]);
+		const view = projectAgentContextView({ messages: projectConversationMessages(rows), runs: [] });
+		expect(view.historyMessages.map((message) => message.sequence)).toEqual([0, 1, 4]);
+		expect(view.focusMessages.map((message) => message.sequence)).toEqual([2, 3]);
+		expect(view.outsideMessageIds.has('00000000-0000-4000-8000-000000000001')).toBe(false);
+	});
+
 	it('keeps a planning revision visible until its replacement plan owns the transcript', () => {
 		const messages = projectConversationMessages(
 			canonicalAgentRows([
 				{ conversationId, message: { role: 'user', content: 'Original objective' } },
-				{ conversationId, runId: planTurnId, message: { role: 'assistant', content: 'Complete plan one' } },
+				{
+					conversationId,
+					runId: planTurnId,
+					message: { role: 'assistant', content: 'Complete plan one' }
+				},
 				{ conversationId, message: { role: 'user', content: 'Add validation' } },
-				{ conversationId, runId: agentTurnId, message: { role: 'assistant', content: 'Complete plan two' } }
+				{
+					conversationId,
+					runId: agentTurnId,
+					message: { role: 'assistant', content: 'Complete plan two' }
+				}
 			])
 		);
 		const runs = projectTurns([

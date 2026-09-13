@@ -7,6 +7,12 @@ import {
 	ConversationId
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
+import { userMessageWithImages } from '../src/runtime/agents/image-descriptors.js';
+import {
+	scriptedTranscript,
+	assistantText,
+	assistantToolCall
+} from './agents-canonical-ai-fixture.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -26,6 +32,69 @@ afterEach(async () => {
 });
 
 describe('canonical Task admission vertical slice', () => {
+	it('admits supported Office documents through the real conversation boundary and refuses executables', async () => {
+		const { ai, requests } = scriptedTranscript([
+			assistantText('Read DOCX.'),
+			assistantText('Read XLSX.')
+		]);
+		harness = await makeBoltTestRuntime(undefined, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const formats = [
+			['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+			['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+		] as const;
+		for (const [index, [extension, mimeType]] of formats.entries()) {
+			const conversationId = ConversationId.make(`00000000-0000-4000-8000-00000000030${index}`);
+			const file = {
+				name: `check.${extension}`,
+				key: Agents.conversationAssetStorageKey(conversationId, 'office', `check.${extension}`),
+				mimeType,
+				size: 1024
+			};
+			await harness.runtime.runPromise(
+				agents.submit(harness.effectId(`office-${index}`), adminSubject, {
+					conversationId,
+					agentId: AgentId.make('web'),
+					message: userMessageWithImages('Read the attached acceptance document.', [file]),
+					mode: DirectiveMode.make('agent'),
+					priority: DirectivePriority.make('normal')
+				})
+			);
+			expect(
+				(
+					await harness.runtime.runPromise(
+						agents.execute(harness.effectId(`office-run-${index}`), adminSubject, conversationId)
+					)
+				).status
+			).toBe('done');
+			expect(requests[index]?.fileAssets).toEqual([file]);
+			expect(requests[index]?.imageAssets ?? []).toEqual([]);
+		}
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000309');
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('executable'), adminSubject, {
+				conversationId,
+				agentId: AgentId.make('web'),
+				message: userMessageWithImages('Run this', [
+					{
+						name: 'check.exe',
+						key: Agents.conversationAssetStorageKey(conversationId, 'binary', 'check.exe'),
+						mimeType: 'application/x-msdownload',
+						size: 1024
+					}
+				]),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
+		await expect(
+			harness.runtime.runPromise(
+				agents.execute(harness.effectId('executable-run'), adminSubject, conversationId)
+			)
+		).rejects.toThrow('outside this conversation or malformed');
+		expect(requests).toHaveLength(2);
+	});
+
 	it('retains messages queued while a provider is working and answers them in the same conversation', async () => {
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -56,6 +125,9 @@ describe('canonical Task admission vertical slice', () => {
 				})
 			);
 		await submit('Initial instruction');
+		expect(
+			await harness.database.query('select title from conversation where id = $1', [conversationId])
+		).toEqual([{ title: 'Initial instruction' }]);
 		const running = harness.runtime.runPromise(
 			agents.execute(harness.effectId('first-run'), adminSubject, conversationId)
 		);
@@ -70,6 +142,9 @@ describe('canonical Task admission vertical slice', () => {
 			agents.execute(harness.effectId('next-run'), adminSubject, conversationId)
 		);
 		expect(prompts).toHaveLength(2);
+		expect(
+			await harness.database.query('select title from conversation where id = $1', [conversationId])
+		).toEqual([{ title: 'Initial instruction' }]);
 		expect(JSON.stringify(prompts[1])).toContain('Queued during generation');
 		expect(
 			await harness.database.query(
@@ -179,9 +254,10 @@ describe('canonical Task admission vertical slice', () => {
 			)
 		).toEqual(original);
 		expect(
-			await harness.database.query('select count(*)::int as count from conversation where id = $1', [
-				conversationId
-			])
+			await harness.database.query(
+				'select count(*)::int as count from conversation where id = $1',
+				[conversationId]
+			)
 		).toEqual([{ count: 1 }]);
 		expect(
 			await harness.database.query(
@@ -259,9 +335,20 @@ describe('canonical Task admission vertical slice', () => {
 		).toEqual([{ status: 'done', state: 'consumed', run_status: 'succeeded', messages: 2 }]);
 	});
 
-	it('persists Plan mode as an active Plan revision and leaves the Task ready', async () => {
+	it('persists an explicit Plan edit as a draft revision and leaves the Task ready', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
-			ai: cassetteTranscript(cassette('agents-admission-plan')).ai
+			ai: scriptedTranscript([
+				assistantToolCall(
+					'update_plan',
+					{
+						operation: 'replace',
+						expectedRevision: 0,
+						body: 'Plan the clean migration and verify it.'
+					},
+					'plan'
+				),
+				assistantText('Draft ready.')
+			]).ai
 		});
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000102');
@@ -293,7 +380,7 @@ describe('canonical Task admission vertical slice', () => {
 			{
 				status: 'ready',
 				revision: 1,
-				plan_status: 'active',
+				plan_status: 'draft',
 				mode: 'plan',
 				phase: 'model',
 				run_status: 'succeeded',

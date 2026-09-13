@@ -121,15 +121,11 @@ Tenant Skills live at `src/capabilities/skills/<name>/SKILL.md` (same package sh
 Skills: optional `references/`, `scripts/`, `assets/`). They compile into the release and are
 offered through `list_skills` / `read_skill`.
 
-Personal capabilities are `.norbital/personal/` — ignored, never committed, never a build or
-release input:
-
-```text
-.norbital/personal/
-├── skills/<name>/SKILL.md
-├── mcp/+<name>.ts
-└── scripts/
-```
+Colony stores personal skills privately per tenant and authenticated user. Discover with
+`list_personal_skills`, load one with `read_personal_skill`, and manage with
+`save_personal_skill` / `delete_personal_skill`. Discovery excludes bodies. These skills
+are not source or release input and do not grant permissions. `.norbital/personal/**`
+remains ignored; it is not scanned for personal skills, MCP registrations or scripts.
 
 There is no `bolt build`, no `+agent.ts`, no `+seed.ts`. Fixtures come from `seed_bank/` via
 Colony. Generated `.norbital/{diagnosis,dist,generated,types}` is never hand-edited;

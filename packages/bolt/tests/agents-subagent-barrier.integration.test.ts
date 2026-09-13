@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import { envoy } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -23,7 +28,7 @@ const definition = testWorkspace({
 			audience: 'authenticated',
 			policies: ['admin'],
 			task: 'Report field status.',
-			delegation: 'disabled'
+			delegation: 'enabled'
 		})
 	]
 });
@@ -34,7 +39,11 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const submitParent = async (agents: Agents.Interface, name: string, conversationId: ConversationId) => {
+const submitParent = async (
+	agents: Agents.Interface,
+	name: string,
+	conversationId: ConversationId
+) => {
 	await harness!.runtime.runPromise(
 		agents.submit(harness!.effectId(`submit:${name}`), adminSubject, {
 			conversationId,
@@ -47,7 +56,9 @@ const submitParent = async (agents: Agents.Interface, name: string, conversation
 };
 
 const execute = (agents: Agents.Interface, name: string, conversationId: ConversationId) =>
-	harness!.runtime.runPromise(agents.execute(harness!.effectId(name), adminSubject, conversationId));
+	harness!.runtime.runPromise(
+		agents.execute(harness!.effectId(name), adminSubject, conversationId)
+	);
 
 const childTaskRow = async (parentId: ConversationId) => {
 	const rows = await harness!.database.query(
@@ -58,6 +69,27 @@ const childTaskRow = async (parentId: ConversationId) => {
 };
 
 describe('sub-agent orchestration over a scripted transcript', () => {
+	it('refuses fabricated child delegation and plan calls even when the child declaration enables delegation', async () => {
+		const parentId = ConversationId.make('00000000-0000-4000-8000-000000000911');
+		const { ai } = scriptedTranscript([
+			assistantToolCall('subagent', { action: 'spawn', agentId: 'worker', instruction: 'Inspect only.' }, 'spawn-boundary'),
+			assistantText('Child dispatched.'),
+			assistantToolCall('subagent', { action: 'spawn', agentId: 'web', instruction: 'Must not run.' }, 'fabricated-spawn'),
+			assistantToolCall('update_plan', { operation: 'replace', expectedRevision: 0, body: 'Must not create a child plan.' }, 'fabricated-plan'),
+			assistantText('Boundary checked.'),
+			async () => assistantToolCall('subagent', { action: 'await', conversationId: String((await childTaskRow(parentId))?.id) }, 'consume-boundary'),
+			assistantText('Finished.')
+		]);
+		harness = await makeBoltTestRuntime(definition, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		await submitParent(agents, '911', parentId);
+		await execute(agents, '911', parentId);
+		const child = await childTaskRow(parentId);
+		expect(await harness.database.query('select id from conversation where parent_id = $1', [child?.id])).toEqual([]);
+		expect(await harness.database.query('select id from plan where conversation_id = $1', [child?.id])).toEqual([]);
+		const rows = await harness.database.query('select message from conversation_message where conversation_id = $1 and author->>\'kind\' = \'tool\'', [child?.id]);
+		expect(JSON.stringify(rows).match(/"isFailure":true/g)).toHaveLength(2);
+	});
 	/**
 	 * A parent runs its own children, in its own turn, and does not stop for them.
 	 *
@@ -82,12 +114,21 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 				return assistantText('Child dispatched; standing by.');
 			},
 			// The child's own turn, run by the parent at the barrier rather than by a separate caller.
-			assistantText('Field status: all sites nominal.'),
+			(request) => {
+				const tools = request.output._tag === 'Message' ? request.output.tools : [];
+				expect(tools?.map(({ name }) => name)).not.toContain('subagent');
+				expect(tools?.map(({ name }) => name)).not.toContain('update_plan');
+				return assistantText('Field status: all sites nominal.');
+			},
 			(request) => {
 				expect(JSON.stringify(request.messages)).toContain(
 					'Consume required child Tasks with subagent await before finishing'
 				);
-				return assistantToolCall('subagent', { action: 'await', conversationId: childConversationId }, 'await-1');
+				return assistantToolCall(
+					'subagent',
+					{ action: 'await', conversationId: childConversationId },
+					'await-1'
+				);
 			},
 			assistantText('Child result consumed; the field report is nominal.')
 		]);
@@ -173,14 +214,22 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 				expect(spawned).toMatchObject({ conversationId: childConversationId, state: 'running' });
 				return assistantToolCall(
 					'subagent',
-					{ action: 'message', conversationId: childConversationId, message: 'Capture the invoice count.' },
+					{
+						action: 'message',
+						conversationId: childConversationId,
+						message: 'Capture the invoice count.'
+					},
 					'message-1'
 				);
 			},
 			() =>
 				assistantToolCall(
 					'subagent',
-					{ action: 'message', conversationId: childConversationId, message: 'Prioritize the payroll export.' },
+					{
+						action: 'message',
+						conversationId: childConversationId,
+						message: 'Prioritize the payroll export.'
+					},
 					'steer-1'
 				),
 			assistantText('Directives delivered; standing by.'),

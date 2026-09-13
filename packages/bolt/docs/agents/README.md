@@ -5,11 +5,10 @@ conversation state; Effect AI owns prompts, model calls, typed tools, response p
 output, retries, scopes, and interruption. Web and Envoy callers use the same send and control
 commands.
 
-**An agent has no tasks.** It has a conversation, turns within it, and a queue of messages waiting to
-be answered — and that queue belongs to the conversation, not to a work scheduler. `bolt_task`, the
-durable work queue, runs automations, schedules and envoy drains, and the agent path touches it zero
-times. Some queue work *calls* a conversation — a scheduled envoy drain is queue work, and it then
-sends a message — but the queue's involvement ends at the caller's door.
+The conversation owns its message queue, Plan and transcript. The existing \`bolt_task\` queue owns
+execution: a browser admission creates a durable continuation, and the host runs it with a renewable
+lease. Closing the browser does not stop it. A restarted host reclaims expired work; an unscheduled
+admission is repaired during host recovery. There is no separate agent scheduler.
 
 Source: `src/runtime/agents/agents.ts`, `src/runtime/agents/capability-catalog.ts`,
 and `src/runtime/envoys/envoys.ts`.
@@ -23,7 +22,10 @@ returns the ordinary collection-mutation approval state: [approvals](../access/a
 
 ```text
 conversations.send
-     │  admit one queued conversation_message; no directive, no work occurrence
+     │  admit one queued conversation_message; persist its execution authority
+     │  enqueue conversations.answer; return the admission
+     ▼
+host task queue (renewable lease)
      ▼
 take the conversation
      │  status idle→running is the mutex; mint a turn + snapshot capabilities
@@ -51,7 +53,7 @@ is encoded as a typed tool-result part and committed before the next model itera
 
 Every write goes to the collection it belongs to — a message to `conversation_message`, a turn to
 `turn`, a plan to `plan`, a provider call to `turn_usage` — and never as a relation nested under the
-conversation row. Nesting makes a mutate a *replacement*, so the write has to name every sibling it
+conversation row. Nesting makes a mutate a _replacement_, so the write has to name every sibling it
 is not changing, which costs a read of the whole conversation before every write.
 
 Rows that change together are still written together. A mutate is one transaction and publishes one
@@ -101,19 +103,23 @@ conversations.editMessage({ conversationId, messageId, message, modelId });
 conversations.control({ conversationId, action: 'stop' | 'resume', modelId }); // model applies to resume
 ```
 
-A send does not schedule anything. It admits the message and answers it in the same invocation:
-there is no work occurrence to mint, no directive to claim, and nothing for a host scheduler to
-discover. The response returns when the turn settles, which is why `conversations.send` carries the
-`agents.turn` budget rather than the ordinary command deadline.
+Send and message revision return after admission and durable scheduling. Resume preserves the prior
+turn's mode and selected model and schedules its continuation. The internal `conversations.answer`
+route accepts only a matching live task claim. It resolves the original user from current membership;
+changed or removed authority prevents model calls and surfaces an error. No session credential is
+stored in the task payload.
 
-That is also the whole of the durability trade. A turn does not survive its caller: closing the tab
-or losing the connection aborts it, and there is no resume. What replaced the occurrence is that the
-caller is present for the entire turn and answers everything waiting before it returns.
+A driver owns the root turn and its synchronous children. Its lease renews while it works. Competing
+queued work waits without consuming failure retries. On restart, only the reclaimed driver's turns
+are fenced and recovered. Missing tool receipts become explicit unknown outcomes, never evidence
+that a mutation did not happen. The root resumes from its transcript; interrupted children are
+marked failed for the parent to assess. Stop remains terminal until a person resumes or sends new
+instructions. Permanent provider failures still require attention after provider retries are exhausted.
 
 The composer lists the host-configured language models. Selection is validated before admission,
-saved on the directive, and copied into the immutable run. Changing a queued turn's choice never
+saved on the message, and copied into the immutable run. Changing a queued turn's choice never
 changes an active run. A removed model fails explicitly; it never falls back to another model.
-Resume can select a recovery model, otherwise it retains the last directive's choice. Child
+Resume can select a recovery model, otherwise it retains the last turn's choice. Child
 conversations and automatic Plan continuation inherit the current run's model. A send that omits a
 model uses the host default.
 
@@ -135,17 +141,17 @@ which is what makes them idempotent under replay.
 
 A message somebody is waiting for an answer to carries its own queue state — `queued` until a turn
 answers it, then `consumed`, or `cancelled` if the conversation is stopped — together with the mode,
-model and priority that turn should run under. Those describe *this message*, not a separate work
+model and priority that turn should run under. Those describe _this message_, not a separate work
 item about it. A message nobody is waiting on carries no queue state at all: an assistant reply, a
 tool result, a system note.
 
 **Priority decides when a queued message enters the transcript**, and that is the whole of what
 `steer` means:
 
-| Priority | Enters the transcript | Effect |
-| --- | --- | --- |
-| `steer` | at the next **step**, mid-turn | consumed before the next model call, keeping the running turn's model and capability snapshot |
-| `normal` | at the end of the **turn** | answered by a new turn |
+| Priority | Enters the transcript          | Effect                                                                                        |
+| -------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `steer`  | at the next **step**, mid-turn | consumed before the next model call, keeping the running turn's model and capability snapshot |
+| `normal` | at the end of the **turn**     | answered by a new turn                                                                        |
 
 **One agent writing to another always steers.** A person chooses; an agent does not, because a
 parent writes to a child precisely when the child is about to act on what it says, and a message
@@ -182,15 +188,15 @@ every descendant in the root conversation's workbench.
 
 These ordinary Bolt system collections are the complete logical agent store:
 
-| Collection             | Durable responsibility                                                                                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conversation`         | Workbench, subject and agent ownership, audience, parent, lifecycle, active plan and turn. Its `status` is also the mutex                                                   |
-| `turn`                 | One provider loop: the queued message it answers, mode, phase, input boundary, model, capability snapshot, status. An identifier and a usage owner, not a lifecycle          |
+| Collection             | Durable responsibility                                                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversation`         | Workbench, subject and agent ownership, audience, parent, lifecycle, active plan and turn. Its `status` is also the mutex                                                          |
+| `turn`                 | One provider loop: the queued message it answers, mode, phase, input boundary, model, capability snapshot, status. An identifier and a usage owner, not a lifecycle                |
 | `conversation_message` | One encoded Effect `Prompt.Message`, ordered by sequence, with author, semantic hash, optional turn, annotation — **and its queue state**: `state`, `mode`, `priority`, `model_id` |
-| `plan`                 | Immutable plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                                              |
-| `turn_usage`           | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                                                 |
+| `plan`                 | Immutable plan revisions containing objective, approach, verification criteria, checkpoint sequence, and state                                                                     |
+| `turn_usage`           | One immutable usage and exact-charge observation per provider attempt, with replay-safe settlement identity                                                                        |
 
-There is no sixth. `agent_inbox` was a table of directives *about* messages; its one real job is a
+There is no sixth. `agent_inbox` was a table of directives _about_ messages; its one real job is a
 column on the message it was about.
 
 `conversation.status` is the write fence. Taking the conversation is a conditional move to `running`
@@ -217,7 +223,7 @@ reasoning on every turn, and it is kept. `ReasoningPart` is already a member of 
 `AssistantMessagePart` and the column already accepts one, so nothing was added to make this work;
 what was removed is the flag that threw the content away. The literal a model emits when nothing was
 thought (`None.`) is stored too: it is what the model said, and a transcript that silently edits
-that is not a transcript. Whether an empty part is *rendered* is the panel's decision, and a
+that is not a transcript. Whether an empty part is _rendered_ is the panel's decision, and a
 whitespace-only part is not shown once it settles.
 
 Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
@@ -247,49 +253,81 @@ message model.
 Agent mode performs ordinary implementation or conversation work. If a Plan is active, its exact
 revision is included in the prompt and governs execution.
 
-Plan mode creates one `plan` revision containing the objective, implementation approach, and
-verification criteria. It receives only the read-oriented planning capability set and does not
-perform implementation writes. A newer Plan atomically supersedes the active revision while prior
-revisions remain queryable.
-Every revision reproduces the complete plan. Only the final response text becomes the plan body;
-reasoning remains in its transcript. Queued inputs record when they were delivered, so a plan or
-compaction written while they waited cannot hide them from their eventual turn.
+Planning is root-only. Its only mutation capability is `update_plan`: create or replace the
+Markdown body, or apply an exact single-match text patch against `expectedRevision`. Each accepted
+change creates an immutable body revision and atomically supersedes its predecessor. Ordinary
+assistant replies remain discussion and do not replace the Plan. The planning capability set permits
+source/documentation reads and read-only web search/fetch when supplied by the host; validation,
+tests, data queries, delegation and implementation tools are excluded even if marked read-only.
 
-After an Agent run implements an active Plan, the same conversation runtime enters its `verify` phase and
-makes a separate tool-free structured-output call. A complete verdict verifies the Plan. An
-incomplete verdict appends its gaps and admits a bounded successor Agent directive. The production
-runtime permits three verification attempts before marking the plan stalled and the conversation attention.
-Plan and Compact runs do not enter this phase.
+During planning, discussion stays visible as a normal conversation. A collapsed draft Plan floats
+above the queue and composer and can be expanded for review. Execute plan seals that revision and
+records the context cutoff in the same transaction that claims the execution input. Only then does
+the UI archive prior discussion under the Plan's Summary/Transcript tabs. Execution receives the
+Plan, platform instructions and newly delivered messages; pre-finalization discussion is not replayed.
+Queued inputs use their delivery position, so they remain visible to the run that consumes them.
 
-Compact mode appends an annotated system message containing the summary, cutoff sequence, and
-explicitly retained message IDs. The automatic checkpoint stores only the text parts of the summary
-generation (a reasoning part or a tool call the model emits are dropped, and a checkpoint with no
-prose carries a sentence saying so), and its summary instruction is the final user turn of that
-request rather than a trailing system message, so a model does not resume the tool loop it was
-asked to summarize. It never edits or deletes durable messages.
+A draft locks the conversation in planning. Changing the composer mode cannot start execution:
+`conversations.send` requires an explicit `planAction: { action: "execute", planId }` for the current
+revision, emitted by the Plan button. Revision pauses the executor at a tool boundary and parks
+queued execution inputs until the revised draft is explicitly executed. Delete removes the active
+Plan and returns to ordinary Agent mode; deleting during execution also stops that turn and cancels
+its queued inputs. Both revision and deletion preserve any existing archive cutoff instead of
+reintroducing old planning discussion. Their admission and claim writes fence the conversation row
+version so stale transitions cannot overwrite a concurrent deletion.
 
-**Three things ask for a checkpoint, and the annotation records which.** A person runs `/compact`,
-which is an ordinary `conversations.send` with `mode: "compact"` (`origin: "manual"`). The agent
-calls the `compact` tool, giving a reason, when a phase of work is done and its intermediate steps
-have stopped earning their place (`origin: "requested"`) — up to three times in a turn, after which
-it is refused in a system message it can read. And the runtime checkpoints on its own when the
-context nears the model's window (`origin: "automatic"`), once per turn: a turn still over the bound
-after compacting has nothing left that a summary of a summary would shrink, so the second attempt
-records a degraded note instead and the turn proceeds. Every path preserves the active Plan, current
-instruction, decisions, constraints, receipts, unresolved work, and child outcomes.
+Each natural completion of execution enters `verify`. A separate reviewer call receives the Plan
+and projected evidence, excluding the executor's role instructions and hidden reasoning. It uses the
+selected model and session, with its own metered call ID. Success requires complete=true and no gaps.
+An incomplete verdict privately queues actionable gaps for another execution turn; there is no
+fixed verification-cycle cap. Transient provider retries remain bounded. Explicit Stop fences a late
+verdict and does not auto-resume. Plan and Compact turns never invoke the verifier. Routine system
+messages stay hidden; errors are surfaced.
 
-**The bound is the model's own context window**, three quarters of it, not a fixed size. The window
-is a required field on `ModelCatalogEntry` — a host registering a model knows it — and is stamped
-onto the turn at claim, so a checkpoint can be read back against the bound that caused it. It used
-to be 64 KiB of projected prompt bytes: one number for every model, in the wrong unit, compacting a
-1M-token model at six percent of its capacity and a 32k model too late.
+Compact mode appends an annotated agent message containing the summary, cutoff sequence, and
+explicitly retained message IDs. Only text parts become the checkpoint. Every checkpoint uses one Markdown table:
 
-What is compared against it is the provider's own token count from the last call — `inputTokens +
-outputTokens`, cached tokens included, since a cached token still occupies the window — or a
-four-bytes-to-the-token estimate of the projection, whichever is larger. The measurement says what
-the last call cost; the estimate covers everything appended since, and a conversation's first call
-has only the estimate. The checkpoint generation runs on the turn's own model, so the cached prefix
-it shares with the turn stays cached.
+| Section         | Summary                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| Goal            | Objective, constraints and decisions in one or two sentences; do not repeat completed instructions. |
+| Progress        | Completed work, verified checks, exact commits and acceptance evidence.                             |
+| What we learned | Findings, failure causes and relevant context.                                                      |
+| What's left     | Unfinished work, blockers, questions and the next action, including a final response still owed.    |
+
+Empty, malformed or truncated summaries are rejected without replacing context. Manual, automatic
+and requested compaction share the same implementation: at most 800 words with a 4,096-token
+allowance, then one corrective attempt
+at 8,192 tokens. Each attempt is metered separately. The summary instruction is the final user turn
+of the request so a model does not resume the tool loop it was asked to summarize. A separate system
+message marks a completed checkpoint request fulfilled before ordinary work resumes. Durable
+messages are never edited or deleted by compaction.
+
+The generation carries `purpose: "compaction"` on the same model and session. Tool schemas remain
+present on the normal summary path to preserve the request prefix; the host disables tool selection
+and optional DeepSeek reasoning for this purpose. An oversized legacy transcript is folded in bounded
+fragments with a rolling summary and no tools. Only a complete fold replaces the prior checkpoint. Reasoning-mode or context changes can still cause a cache miss.
+
+**Three things ask for a checkpoint.** A person sends `/compact` (`origin: "manual"`), an agent
+calls `compact` after completing a phase (`origin: "requested"`, at most three times per turn), or
+the runtime crosses its working-context bound (`origin: "automatic"`). All modes use automatic
+compaction, including planning and verification. The soft threshold is the smaller of 64,000
+estimated tokens and 75% of the model's declared window. A separate conservative UTF-8/JSON byte
+budget accounts for tool schemas, chat overhead and the full requested reply allowance. It checks
+ordinary calls, each compaction fragment/retry and verifier calls before dispatch. The working
+projection is checked again after compaction; retained instructions or a Plan that still cannot fit
+fail closed, preserving the transcript. There is no "continue over budget" path.
+
+Colony additionally checks the resolved prompt, including extracted document text and binary assets,
+before sending HTTP to the provider. Document compression cannot bypass the descriptor-level check.
+These guards deliberately overcount rather than equating four bytes with one exact token. They are
+not a provider tokenizer: the catalog's context window and the provider's reported usage remain the
+sources for capacity and actual token counts. An oversized immutable attachment needs a smaller
+selection or a larger context window; repeatedly summarizing the same history cannot fix it.
+
+The conversation ID travels as `AIRequest.Generate.sessionId` through normal generation,
+compaction, verification, and later turns. Hosts can use that stable identity for provider cache
+routing without putting changing per-call IDs into the cache key. Required reasoning metadata
+remains in the canonical provider messages.
 
 Prompt projection uses the current system contract, active Plan, newest applicable Compact
 checkpoint and retained messages, messages after the checkpoint, and the run's immutable capability
@@ -360,7 +398,7 @@ Platform collection tools use the same policy engine and approval behavior as UI
 Authored tools and MCP tools require an effective policy grant. For the web agent acting for a
 person, the optional host facility answers `capability_catalog` with tool names, descriptions,
 JSON input schemas and `readOnly` flags. An unbound host contributes no tools. A malformed bound
-catalogue is an error. Plan receives only read-only host tools; Compact receives none. Machine and
+catalogue is an error. Plan receives only explicitly allowed source and web reads; readOnly alone does not admit a tool. Compact receives none. Machine and
 envoy identities do not acquire personal workspace authoring through this catalogue.
 
 Every Message generation sends the allowed tools in `output.tools`. Providers must forward these
@@ -402,11 +440,20 @@ across tabs and workspaces. Agent mutations enter the same committed change batc
 prefix deltas as any other collection. Field masks hide capability snapshots, provider details, and
 internal failures when the viewer lacks permission.
 
-The conversation renders the current context below a two-tab Plan/Summary and Prior transcript
-segment. Planning revisions stay visible while working, then join the saved prior transcript when
-the complete replacement plan arrives. Goal progress, usage and child work are projections of the
+The conversation groups earlier messages inside a bounded Plan or Compaction segment with Summary
+and Transcript tabs. The card discloses messages retained alongside the summary in the model context;
+they remain inside Transcript rather than being repeated below the card. Queued and late-consumed
+inputs stay in the continuing conversation. Planning discussion stays visible until the user starts execution; draft edits alone do not archive it. Goal progress, usage and child work are projections of the
 same live queries. Child views use the same context segment. Composer uploads sit at the left;
 model, mode, steering and send controls sit at the right. Access follows the requestor's policies.
+
+Pending inputs appear in a compact queue above the composer. Dragging changes their execution
+order, Steer now promotes an input for delivery at the current turn's next boundary without
+interrupting the provider call, and Remove excludes it from execution. Queue changes are
+author-scoped and checked against row versions. Queue positions live in input annotations;
+transcript sequences and message contents remain unchanged. Removed inputs are distinct from
+stop-cancelled inputs and are never recalled by Resume. Delivered inputs enter the model prompt at
+their consumption point rather than their earlier submission position.
 
 Where a run's `model_id` differs from the previous run that persisted a message, the panel renders
 a divider naming the new model before that run's first message (`modelChangeDividers` in
@@ -428,8 +475,10 @@ the model's text is markdown, never HTML.
 
 ## Exact metering
 
-Every language or embedding provider attempt receives a deterministic `call_id` before dispatch and
-produces one `turn_usage` row. Plan creation, Plan verification, manual and automatic Compact,
+Every language or embedding provider attempt receives a deterministic `call_id` before dispatch.
+A returned observation produces a `turn_usage` row; interrupted calls can be billed before their
+final observation arrives, so running and interrupted-model totals are shown as partial.
+Plan creation, Plan verification, manual and automatic Compact,
 ordinary Agent iterations, retries, fallbacks, embeddings, and child calls all follow this path.
 
 The row records provider, model, operation, provider-authoritative integer usage units, and an exact
@@ -442,5 +491,21 @@ settlement; missing usage, charge, source, or pricing version marks the row atte
 is valid only when all four are present. Conversation totals are exact aggregations of visible usage rows or
 the billing ledger and are converted to presentation decimals only at the UI boundary.
 
+Runs have no fixed tool-call count or USD 5 stop. Cost is a visible gauge, not permission to stop
+productive work. After three identical consecutive failed tool attempts, the runtime appends
+recovery guidance and keeps working. Completion, explicit stop, authorization and actual failures
+still settle the turn normally. History reads paginate by sequence, so conversations beyond 500
+messages retain their newest evidence and allocate new message sequences correctly. The browser
+wait timeout does not cancel the detached host run.
+
+The inline composer disclosure shows rounded context usage, cost and input/output tokens, including child turns
+and pending settlement receipts. It exposes cache reads and reasoning separately without counting
+them twice; missing receipts are labelled partial. Tool counts are collapsed inside the disclosure.
+
 Provider calls and external tool effects run outside database transactions. The immutable usage row
 and idempotent ledger settlement ensure a retry cannot silently double-charge or settle an estimate.
+
+Conversation titles use the first sentence of the first user message, trimmed to 80 characters,
+without a separate model call. Internal child-agent routing prefixes are excluded. Upgrading an existing database adds the nullable title column idempotently. Framework model
+columns participate in the compiler's schema fingerprint, so a package upgrade cannot bypass the
+host migration gate merely because the authored collection lineage is unchanged.

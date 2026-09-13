@@ -82,13 +82,6 @@ const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
  */
 const MAX_INFERENCE_TOOL_RESULT_CHARS = 24_000;
 const MAX_INFERENCE_TOOLS = 16;
-/**
- * The most tool turns one inference may take before it must answer.
- *
- * Without this the loop is bounded only by the model deciding to stop, and a research prompt that
- * keeps asking for another page never does. Bounded, the worst case is this many provider calls.
- */
-const MAX_INFERENCE_TOOL_TURNS = 12;
 const INFERENCE_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
 
@@ -255,11 +248,6 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					inputSchema: Schema.toJsonSchemaDocument(tool.input).schema
 				}));
 				for (let step = 0; ; step += 1) {
-					if (step >= MAX_INFERENCE_TOOL_TURNS)
-						return yield* refusal(
-							'ai.tool_loop_unbounded',
-							`The model requested tools for ${MAX_INFERENCE_TOOL_TURNS} turns without answering; refusing to continue.`
-						);
 					const turn = yield* ai.generate(
 						EffectId.make(`${inferenceId}:step:${step}`),
 						AIRequest.cases.Generate.make({

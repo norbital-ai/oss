@@ -640,6 +640,27 @@
 		@apply mb-0;
 	}
 
+	/* Compact Markdown inside summaries and plan panes uses product typography. */
+	.tiptap-compact {
+		@apply text-sm;
+		overflow-wrap: anywhere;
+	}
+	.tiptap-compact h1 {
+		@apply text-heading;
+	}
+	.tiptap-compact h2 {
+		@apply text-base tracking-normal;
+	}
+	.tiptap-compact h3,
+	.tiptap-compact h4,
+	.tiptap-compact h5,
+	.tiptap-compact h6 {
+		@apply text-sm tracking-normal;
+	}
+	.tiptap-compact pre {
+		@apply max-w-full overflow-x-auto;
+	}
+
 	.tiptap blockquote {
 		@apply my-4 border-l-2 border-border pl-4 text-muted-foreground;
 	}

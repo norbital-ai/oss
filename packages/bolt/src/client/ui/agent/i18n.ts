@@ -2,6 +2,17 @@ import { defineMessages, type LocaleCatalogs } from '@norbital-ai/std/i18n';
 
 const boltConversationMessages = defineMessages({
 	en: {
+		'bolt.agent.contextLabel': 'Context',
+		'bolt.agent.contextReceiptNote':
+			'Last reported model input. Pending messages and tool results are not yet included.',
+		'bolt.agent.queueMessage': 'Queue message',
+		'bolt.agent.totalTokens': 'Tokens so far',
+		'bolt.agent.totalCost': 'Cost so far',
+		'bolt.agent.confirmStopTitle': 'Stop this response?',
+		'bolt.agent.confirmStopDescription':
+			'The current response will stop. Completed work is kept. Queued messages will be paused until you resume.',
+		'bolt.agent.keepWorking': 'Keep working',
+		'bolt.agent.confirmStop': 'Stop response',
 		'bolt.agent.adminConversationReadOnly':
 			'Read-only administrator view. Only the conversation owner can reply.',
 		'bolt.agent.agent': 'Agent',
@@ -34,6 +45,14 @@ const boltConversationMessages = defineMessages({
 		'bolt.agent.conversationScope': 'Conversation scope',
 		'bolt.agent.conversationThread': 'Conversation thread',
 		'bolt.agent.costReportedByProvider': 'Reported by the provider',
+		'bolt.agent.noUsageReported': 'No usage reported',
+		'bolt.agent.usagePartial': 'Partial',
+		'bolt.agent.usageScope': 'This conversation, including delegated tasks.',
+		'bolt.agent.inputTokens': 'Input tokens',
+		'bolt.agent.cachedInput': 'Cached input',
+		'bolt.agent.outputTokens': 'Output tokens',
+		'bolt.agent.reasoningTokens': 'Of which reasoning',
+		'bolt.agent.usagePartialNote': 'Some usage is unavailable. These totals are incomplete.',
 		'bolt.agent.couldNotFinish': 'The agent could not finish this response. Try sending it again.',
 		'bolt.agent.couldNotStart': 'The conversation could not be started. Try sending it again.',
 		'bolt.agent.default': 'Default',
@@ -558,6 +577,16 @@ const boltConversationMessages = defineMessages({
 		'bolt.studio.noDeployLog': 'No deploy log.'
 	},
 	zh: {
+		'bolt.agent.contextLabel': '上下文',
+		'bolt.agent.contextReceiptNote': '最近一次已报告的模型输入，尚未包含待处理消息和工具结果。',
+		'bolt.agent.queueMessage': '加入消息队列',
+		'bolt.agent.totalTokens': '累计 Token',
+		'bolt.agent.totalCost': '累计费用',
+		'bolt.agent.confirmStopTitle': '停止此回复？',
+		'bolt.agent.confirmStopDescription':
+			'将停止当前回复，并保留已完成的工作。队列中的消息将暂停，直到您恢复。',
+		'bolt.agent.keepWorking': '继续运行',
+		'bolt.agent.confirmStop': '停止回复',
 		'bolt.agent.adminConversationReadOnly': '管理员只读视图。只有对话所有者可以回复。',
 		'bolt.agent.agent': '助手',
 		'bolt.agent.agentIsWorking': '助手正在工作',
@@ -585,6 +614,14 @@ const boltConversationMessages = defineMessages({
 		'bolt.agent.conversationScope': '会话范围',
 		'bolt.agent.conversationThread': '会话线程',
 		'bolt.agent.costReportedByProvider': '由服务提供商报告',
+		'bolt.agent.noUsageReported': '尚未报告用量',
+		'bolt.agent.usagePartial': '部分数据',
+		'bolt.agent.usageScope': '当前对话，包括委派任务。',
+		'bolt.agent.inputTokens': '输入词元',
+		'bolt.agent.cachedInput': '缓存输入',
+		'bolt.agent.outputTokens': '输出词元',
+		'bolt.agent.reasoningTokens': '其中推理词元',
+		'bolt.agent.usagePartialNote': '部分用量不可用，当前合计不完整。',
 		'bolt.agent.couldNotFinish': '助手未能完成此回复，请重新发送。',
 		'bolt.agent.couldNotStart': '无法开始对话，请再试一次。',
 		'bolt.agent.default': '默认',

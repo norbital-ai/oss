@@ -55,12 +55,8 @@
 			? plainMessageText(message)
 			: null
 	);
-	const steering = $derived(
-		message.priority === 'steer'
-	);
-	const cancelled = $derived(
-		message.state === 'cancelled'
-	);
+	const steering = $derived(message.priority === 'steer');
+	const cancelled = $derived(message.state === 'cancelled');
 	const queued = $derived(
 		message.annotation?.tag === 'input' &&
 			message.annotation.consumedAfterSequence === undefined &&
@@ -123,10 +119,12 @@
 	);
 	const renders = $derived(
 		failureText !== null ||
-			isString(message.message.content) ||
-			visibleParts.length > 0 ||
-			message.annotation?.tag === 'compact' ||
-			message.annotation?.tag === 'plan-verdict'
+			(message.message.role !== 'system' &&
+				message.author.kind !== 'system' &&
+				(isString(message.message.content) ||
+					visibleParts.length > 0 ||
+					message.annotation?.tag === 'compact' ||
+					message.annotation?.tag === 'plan-verdict'))
 	);
 
 	function fileHref(part: Prompt.FilePartEncoded): string | null {
@@ -190,9 +188,9 @@
 		{#if result !== null}
 			{@render payload('Tool output', result.result)}
 		{:else}
-			<p class="m-0 px-1 py-2 text-tiny text-muted-foreground"
-				>{generating ? 'Waiting for output…' : 'No output.'}</p
-			>
+			<p class="m-0 px-1 py-2 text-tiny text-muted-foreground">
+				{generating ? 'Waiting for output…' : 'No output.'}
+			</p>
 		{/if}
 	{/snippet}
 	<details
@@ -295,7 +293,11 @@
 						<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
 					{:else}
 						{#if parentAttribution}
-							<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
+							<ReadonlyMarkdown
+								scale="reading"
+								allowHtml={false}
+								content={message.message.content}
+							/>
 						{:else}
 							<p class="m-0 break-words whitespace-pre-wrap">{message.message.content}</p>
 						{/if}

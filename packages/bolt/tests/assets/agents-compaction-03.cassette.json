@@ -14,7 +14,7 @@
         "message": {
           "options": {},
           "role": "assistant",
-          "content": "Retained: the open export decisions."
+          "content": "| Section | Summary |\n| --- | --- |\n| Goal | Complete the export. |\n| Progress | Export decisions reviewed. |\n| What we learned | Retained: the open export decisions. |\n| What's left | Resolve the open decisions. |"
         }
       },
       "observation": {

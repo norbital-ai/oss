@@ -1019,7 +1019,11 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		policies: [],
 		prompt,
 		tools: authoredTools,
-		skills: compiledAuthoring.capabilities.skills.map(({ name, body }) => ({ name, body })),
+		skills: compiledAuthoring.capabilities.skills.map(({ name, description, body }) => ({
+			name,
+			description,
+			body
+		})),
 		automations: automations.map((name) => ({
 			name,
 			trigger: { _tag: 'Schedule', cron: '0 * * * *' },

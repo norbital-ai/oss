@@ -6,6 +6,7 @@ import {
 	ConversationEditMessageRequest,
 	type ConversationEditMessageResult,
 	ConversationSendRequest,
+	ConversationQueueRequest,
 	type ConversationSendResult
 } from '@norbital-ai/bolt-protocol';
 import { getErrorMessage } from '@norbital-ai/std';
@@ -19,6 +20,7 @@ type TaskSubmissionInput = Readonly<{
 	readonly submissionId?: string;
 	readonly message: Prompt.MessageEncoded;
 	readonly mode: ConversationSendRequest['mode'];
+	readonly planAction?: (typeof ConversationSendRequest.Encoded)['planAction'];
 	readonly priority?: ConversationSendRequest['priority'];
 	readonly modelId?: string;
 }>;
@@ -79,6 +81,7 @@ type AgentClient = Readonly<{
 	writeSurface: (next: AgentSurface) => void;
 	submit: (input: TaskSubmissionInput) => Effect.Effect<TaskSubmission, AgentClientFailure>;
 	editMessage: (input: TaskRevisionInput) => Effect.Effect<TaskRevision, AgentClientFailure>;
+	updateQueue: (input: ConversationQueueRequest) => Effect.Effect<unknown, AgentClientFailure>;
 	control: (
 		conversationId: string,
 		action: ConversationControlRequest['action'],
@@ -106,6 +109,7 @@ function submitTask(
 			agentId: active.agentId,
 			message: input.message,
 			mode: input.mode,
+			...(input.planAction === undefined ? {} : { planAction: input.planAction }),
 			priority: input.priority ?? 'normal',
 			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
@@ -113,7 +117,10 @@ function submitTask(
 				active.client.system.conversations
 					.send(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
 					.pipe(
-						Effect.map((result) => ({ conversationId: request.conversationId, messageId: result.messageId }))
+						Effect.map((result) => ({
+							conversationId: request.conversationId,
+							messageId: result.messageId
+						}))
 					)
 			)
 		)
@@ -189,7 +196,13 @@ export function createAgentClient(runtime: TurntimeConfig): AgentClient {
 		},
 		submit: (input) => submitTask(runtime, input),
 		editMessage: (input) => editTask(runtime, input),
-		control: (conversationId, action, modelId) => controlConversation(runtime, conversationId, action, modelId)
+		updateQueue: (input) =>
+			agentRequest(
+				'conversations.updateQueue',
+				runtime.client.system.conversations.updateQueue(input, AbortSignal.timeout(15_000))
+			),
+		control: (conversationId, action, modelId) =>
+			controlConversation(runtime, conversationId, action, modelId)
 	};
 }
 

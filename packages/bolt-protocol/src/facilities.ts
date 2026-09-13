@@ -80,8 +80,20 @@ export const ConversationStatus = Schema.Literals([
 	'failed'
 ]);
 export type ConversationStatus = typeof ConversationStatus.Type;
-export const PlanStatus = Schema.Literals(['active', 'verified', 'stalled', 'superseded']);
+export const PlanStatus = Schema.Literals([
+	'draft',
+	'active',
+	'verified',
+	'stalled',
+	'superseded',
+	'discarded'
+]);
 export type PlanStatus = typeof PlanStatus.Type;
+export const PlanAction = Schema.Struct({
+	action: Schema.Literals(['execute', 'revise', 'delete']),
+	planId: PlanId
+});
+export type PlanAction = typeof PlanAction.Type;
 export const DirectiveMode = Schema.Literals(['agent', 'plan', 'compact']);
 export type DirectiveMode = typeof DirectiveMode.Type;
 export const DirectivePriority = Schema.Literals(['normal', 'steer']);
@@ -198,10 +210,16 @@ export type AIMessageProgress = typeof AIMessageProgress.Type;
 export type FacilityProgress = (event: Schema.Json) => Promise<void>;
 
 /** Thin Effect-message/model boundary. It owns no queue, provider dialect, or usage accumulator. */
+export const AGENT_TOOL_OUTPUT_LIMIT = 16_384;
 export const AIRequest = Schema.TaggedUnion({
 	Catalog: {},
 	Generate: {
 		callId: ProviderCallId,
+		/** Stable conversation identity for provider cache affinity across turns and checkpoints. */
+		sessionId: Schema.optionalKey(ConversationId),
+		toolOutputLimit: Schema.optionalKey(Schema.Literal(AGENT_TOOL_OUTPUT_LIMIT)),
+		/** Summarize completed work without spending the summary allowance on optional reasoning. */
+		purpose: Schema.optionalKey(Schema.Literal('compaction')),
 		modelId: ModelId,
 		messages: Schema.Array(Schema.toEncoded(Prompt.Message)),
 		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
@@ -334,7 +352,11 @@ export type TaskRequest = typeof TaskRequest.Type;
 export const TaskResponse = Schema.Struct({ output: Schema.optionalKey(Schema.Json) });
 export interface TaskResponse extends Schema.Schema.Type<typeof TaskResponse> {}
 
-export const HostToolRequest = Schema.Struct({ tool: Schema.NonEmptyString, input: Schema.Json });
+export const HostToolRequest = Schema.Struct({
+	tool: Schema.NonEmptyString,
+	input: Schema.Json,
+	sessionId: Schema.optionalKey(ConversationId)
+});
 export interface HostToolRequest extends Schema.Schema.Type<typeof HostToolRequest> {}
 export const HostToolResponse = Schema.Struct({ output: Schema.Json });
 export interface HostToolResponse extends Schema.Schema.Type<typeof HostToolResponse> {}

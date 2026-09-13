@@ -248,7 +248,7 @@ export const scriptedTranscript = (
 				feed.push(inspection);
 				if (inspection.automaticCompact) {
 					return assistantText(
-						'Retained: the current user instruction, open decisions, and unresolved work.'
+						"| Section | Summary |\n| --- | --- |\n| Goal | Retained: the current user instruction, open decisions, and unresolved work. |\n| Progress | No completed work in this fixture. |\n| What we learned | Original context is preserved in Transcript. |\n| What's left | Continue the requested work. |"
 					);
 				}
 				const reply = script[scriptIndex];

@@ -156,7 +156,9 @@ describe('the workspace system prompt', () => {
 			schemaFingerprint: 'sha256:fixture',
 			integrationFiles: []
 		});
-		expect(declaredWorkspace(artifact)['skills']).toEqual([{ name: 'triage', body }]);
+		expect(declaredWorkspace(artifact)['skills']).toEqual([
+			{ name: 'triage', description: 'Resolve tickets', body }
+		]);
 	});
 
 	/**

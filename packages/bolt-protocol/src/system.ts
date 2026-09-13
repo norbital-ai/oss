@@ -10,6 +10,7 @@ import {
 import { CommandHeaders, commandContract } from './host.js';
 import {
 	AgentId,
+	PlanAction,
 	DirectiveMode,
 	DirectivePriority,
 	MessageId,
@@ -34,6 +35,7 @@ export const ConversationSendRequest = Schema.Struct({
 	agentId: AgentId,
 	message: Schema.toEncoded(Prompt.Message),
 	mode: DirectiveMode,
+	planAction: Schema.optionalKey(PlanAction),
 	priority: DirectivePriority,
 	modelId: Schema.optionalKey(ModelId)
 });
@@ -72,6 +74,21 @@ export const ConversationEditMessageResult = Schema.Struct({
 });
 export interface ConversationEditMessageResult extends Schema.Schema.Type<
 	typeof ConversationEditMessageResult
+> {}
+
+/** Changes waiting messages without editing their content or transcript sequence. */
+export const ConversationQueueRequest = Schema.Struct({
+	conversationId: ConversationId,
+	change: Schema.Union([
+		Schema.Struct({ action: Schema.Literals(['steer', 'remove']), messageId: MessageId }),
+		Schema.Struct({
+			action: Schema.Literal('reorder'),
+			messageIds: Schema.Array(MessageId).check(Schema.isMinLength(1))
+		})
+	])
+});
+export interface ConversationQueueRequest extends Schema.Schema.Type<
+	typeof ConversationQueueRequest
 > {}
 
 export const ConversationControlRequest = Schema.Struct({
@@ -472,6 +489,12 @@ export const SystemCommandContracts = [
 		clientMode: 'query'
 	}),
 	commandContract({
+		name: 'conversations.answer',
+		input: Schema.Struct({ messageId: MessageId }),
+		responses: [ok(Schema.Json)],
+		budgetKey: 'agents.turn'
+	}),
+	commandContract({
 		name: 'conversations.send',
 		input: ConversationSendRequest,
 		responses: [ok(ConversationSendResult)],
@@ -488,11 +511,19 @@ export const SystemCommandContracts = [
 		budgetKey: 'agents.turn'
 	}),
 	commandContract({
+		name: 'conversations.updateQueue',
+		input: ConversationQueueRequest,
+		responses: [ok(Schema.Struct({ conversationId: ConversationId }))],
+		clientPath: ['conversations', 'updateQueue'],
+		clientMode: 'operation'
+	}),
+	commandContract({
 		name: 'conversations.control',
 		input: ConversationControlRequest,
 		responses: [ok(ConversationControlResult)],
 		clientPath: ['conversations', 'control'],
-		clientMode: 'operation'
+		clientMode: 'operation',
+		budgetKey: 'agents.turn'
 	}),
 	commandContract({
 		name: 'workspace.manifest',

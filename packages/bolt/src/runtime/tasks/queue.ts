@@ -348,6 +348,28 @@ const claimedInsertStatement = (work: DirectWork, leaseForMillis: number): State
 			.toSQL()
 	);
 
+/** Yield a busy conversation without spending its failure retry allowance; attempts stay monotonic. */
+export const deferStatement = (taskId: string, attempt: number): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({
+				status: 'pending',
+				lease_expires_at: null,
+				max_attempts: increment(boltTask.max_attempts),
+				run_at: dbNowPlusSeconds(10),
+				updated_at: dbNow()
+			})
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.status, 'running'),
+					eq(boltTask.attempts, attempt)
+				)
+			)
+			.toSQL()
+	);
+
 /** Earliest pending availability, running lease expiry, or cron declaration. */
 const whenStatement = (): Statement =>
 	toStatement(

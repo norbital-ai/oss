@@ -287,8 +287,20 @@ export interface RelationDefinition {
 
 /** The renderer vocabulary retained from the authored column builder. */
 export type FieldPresentationKind =
-	| 'text' | 'phone' | 'enum' | 'integer' | 'numeric' | 'boolean' | 'instant'
-	| 'instant_range' | 'uuid' | 'geolocation' | 'file' | 'json' | 'money' | 'reference'
+	| 'text'
+	| 'phone'
+	| 'enum'
+	| 'integer'
+	| 'numeric'
+	| 'boolean'
+	| 'instant'
+	| 'instant_range'
+	| 'uuid'
+	| 'geolocation'
+	| 'file'
+	| 'json'
+	| 'money'
+	| 'reference'
 	| string;
 
 export interface CompiledFieldDefinition extends FieldDefinition {
@@ -302,8 +314,9 @@ export interface CompiledFieldDefinition extends FieldDefinition {
 	readonly databaseNotNull?: true;
 }
 
-export interface CompiledCollection
-	extends CollectionDefinition<Readonly<Record<string, CompiledFieldDefinition>>> {
+export interface CompiledCollection extends CollectionDefinition<
+	Readonly<Record<string, CompiledFieldDefinition>>
+> {
 	readonly sourcePath: string;
 }
 
@@ -349,8 +362,9 @@ export const McpRegistrationDefinition = Schema.Struct({
 		])
 	)
 });
-export interface McpRegistrationDefinition
-	extends Schema.Schema.Type<typeof McpRegistrationDefinition> {}
+export interface McpRegistrationDefinition extends Schema.Schema.Type<
+	typeof McpRegistrationDefinition
+> {}
 
 interface CompiledMcpRegistration {
 	readonly name: string;
@@ -906,8 +920,9 @@ const McpServerDefinition = Schema.Struct({
 });
 interface McpServerDefinition extends Schema.Schema.Type<typeof McpServerDefinition> {}
 
-/** One compiled workspace Skill. The artifact carries the authored body rather than a file-store guess. */
+/** One compiled workspace Skill, including discovery metadata and the on-demand body. */
 export const SkillDeclaration = Schema.Struct({
+	description: Schema.optionalKey(Schema.NonEmptyString),
 	name: Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), Schema.isMaxLength(64)),
 	body: Schema.NonEmptyString
 });
@@ -930,10 +945,7 @@ export interface ToolDeclaration {
  * the same `ToolDeclaration` a platform or workspace tool uses, with an MCP route attached. Policy
  * grants still name the server, while invocation resolves the exact offered declaration by tool name.
  */
-const describeMcpServer = (
-	name: string,
-	definition: unknown
-): ReadonlyArray<ToolDeclaration> => {
+const describeMcpServer = (name: string, definition: unknown): ReadonlyArray<ToolDeclaration> => {
 	const server = Schema.decodeUnknownSync(McpServerDefinition)(definition);
 	const serverName = Schema.decodeUnknownSync(McpToolRoute.fields.server)(name);
 	const defaultDescription = (tool: string) =>
@@ -941,14 +953,13 @@ const describeMcpServer = (
 			? `${serverName} MCP tool ${tool}`
 			: `${server.description} — ${tool}`;
 	return server.tools.map((declared) => {
-		const tool =
-			isString(declared)
-				? { name: declared, description: defaultDescription(declared) }
-				: {
-						name: declared.name,
-						description: declared.description ?? defaultDescription(declared.name),
-						inputSchema: declared.inputSchema
-					};
+		const tool = isString(declared)
+			? { name: declared, description: defaultDescription(declared) }
+			: {
+					name: declared.name,
+					description: declared.description ?? defaultDescription(declared.name),
+					inputSchema: declared.inputSchema
+				};
 		return {
 			name: `${serverName}:${tool.name}`,
 			description: tool.description,

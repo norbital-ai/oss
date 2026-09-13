@@ -17,7 +17,13 @@ describe('Task composer intent', () => {
 		});
 	});
 
-	it('requires submission instructions and leaves similar prefixes as messages', () => {
+	it('compacts without extra instructions but requires a planning request', () => {
+		expect(parseTaskSlashCommand('/compact')).toMatchObject({
+			kind: 'submission',
+			mode: 'compact',
+			complete: true,
+			message: expect.stringContaining('Compact')
+		});
 		expect(parseTaskSlashCommand('/plan')).toEqual({
 			kind: 'submission',
 			mode: 'plan',

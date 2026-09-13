@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,
@@ -22,7 +27,11 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const taskRequest = (conversationId: ConversationId, text: string, priority: 'normal' | 'steer' = 'normal') => ({
+const taskRequest = (
+	conversationId: ConversationId,
+	text: string,
+	priority: 'normal' | 'steer' = 'normal'
+) => ({
 	conversationId,
 	agentId: AgentId.make('web'),
 	message: Agents.userAgentInput(text),
@@ -35,6 +44,156 @@ const assistant = (text: string) =>
 	encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }));
 
 describe('Task directive queue', () => {
+	it('refuses removal when a pending message is claimed after the queue read', async () => {
+		harness = await makeBoltTestRuntime();
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000507');
+		const sent = await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('race:submit'),
+				adminSubject,
+				taskRequest(conversationId, 'Keep the claimed message.')
+			)
+		);
+		const original = harness.database.binding.call;
+		let raced = false;
+		const intercept = vi
+			.spyOn(harness.database.binding, 'call')
+			.mockImplementation(async (...args) => {
+				const result = await original(...args);
+				const request = args[1];
+				if (
+					!raced &&
+					request._tag === 'Query' &&
+					request.sql.includes('conversation_message') &&
+					request.parameters.includes('queued')
+				) {
+					raced = true;
+					await harness!.database.query(
+						"update conversation_message set state = 'consumed', row_version = row_version + 1 where id = $1",
+						[sent.messageId]
+					);
+				}
+				return result;
+			});
+		try {
+			await expect(
+				harness.runtime.runPromise(
+					agents.updateQueue(harness.effectId('race:remove'), adminSubject, {
+						conversationId,
+						change: { action: 'remove', messageId: sent.messageId }
+					})
+				)
+			).rejects.toThrow();
+			expect(raced).toBe(true);
+			expect(
+				await harness.database.query('select state from conversation_message where id = $1', [
+					sent.messageId
+				])
+			).toEqual([{ state: 'consumed' }]);
+		} finally {
+			intercept.mockRestore();
+		}
+	});
+
+	it('reorders and removes pending messages without rewriting history or executing removed work', async () => {
+		const twin = scriptedTranscript([assistant('Third answered.'), assistant('First answered.')]);
+		harness = await makeBoltTestRuntime(undefined, { ai: twin.ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000504');
+		const sent = [];
+		for (const text of ['First request.', 'Removed request.', 'Third request.']) {
+			sent.push(
+				await harness.runtime.runPromise(
+					agents.submit(harness.effectId(text), adminSubject, taskRequest(conversationId, text))
+				)
+			);
+		}
+		await harness.runtime.runPromise(
+			agents.updateQueue(harness.effectId('reorder'), adminSubject, {
+				conversationId,
+				change: {
+					action: 'reorder',
+					messageIds: [sent[2]!.messageId, sent[1]!.messageId, sent[0]!.messageId]
+				}
+			})
+		);
+		await harness.runtime.runPromise(
+			agents.updateQueue(harness.effectId('remove'), adminSubject, {
+				conversationId,
+				change: { action: 'remove', messageId: sent[1]!.messageId }
+			})
+		);
+		await harness.runtime.runPromise(
+			agents.answerQueued(harness.effectId('answer'), adminSubject, conversationId)
+		);
+		expect(twin.requests).toHaveLength(2);
+		expect(JSON.stringify(twin.requests[0]?.messages)).toContain('Third request.');
+		expect(JSON.stringify(twin.requests[0]?.messages)).not.toContain('First request.');
+		expect(JSON.stringify(twin.requests[1]?.messages)).toContain('First request.');
+		const continued = JSON.stringify(twin.requests[1]?.messages);
+		expect(continued.indexOf('First request.')).toBeGreaterThan(
+			continued.indexOf('Third answered.')
+		);
+		expect(JSON.stringify(twin.requests)).not.toContain('Removed request.');
+		expect(
+			await harness.database.query(
+				'select sequence, state from conversation_message where conversation_id = $1 and state is not null order by sequence',
+				[conversationId]
+			)
+		).toEqual([
+			{ sequence: 1, state: 'consumed' },
+			{ sequence: 2, state: 'removed' },
+			{ sequence: 3, state: 'consumed' }
+		]);
+		await expect(
+			harness.runtime.runPromise(
+				agents.updateQueue(harness.effectId('too-late'), adminSubject, {
+					conversationId,
+					change: { action: 'remove', messageId: sent[0]!.messageId }
+				})
+			)
+		).rejects.toThrow('queue changed');
+	});
+
+	it('refuses duplicate, incomplete, and foreign queue changes', async () => {
+		harness = await makeBoltTestRuntime();
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000505');
+		const first = await harness.runtime.runPromise(
+			agents.submit(harness.effectId('first'), adminSubject, taskRequest(conversationId, 'First.'))
+		);
+		const second = await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('second'),
+				adminSubject,
+				taskRequest(conversationId, 'Second.')
+			)
+		);
+		for (const messageIds of [[first.messageId, first.messageId], [first.messageId]]) {
+			await expect(
+				harness.runtime.runPromise(
+					agents.updateQueue(harness.effectId(`invalid:${messageIds.length}`), adminSubject, {
+						conversationId,
+						change: { action: 'reorder', messageIds }
+					})
+				)
+			).rejects.toThrow('queue changed');
+		}
+		const foreign = ConversationId.make('00000000-0000-4000-8000-000000000506');
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('foreign'), adminSubject, taskRequest(foreign, 'Other task.'))
+		);
+		await expect(
+			harness.runtime.runPromise(
+				agents.updateQueue(harness.effectId('cross-task'), adminSubject, {
+					conversationId: foreign,
+					change: { action: 'remove', messageId: second.messageId }
+				})
+			)
+		).rejects.toThrow('queue changed');
+	});
+
 	/**
 	 * One `conversations.send` answers everything waiting, not only the message it carried.
 	 *
@@ -72,7 +231,11 @@ describe('Task directive queue', () => {
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000503');
 		await harness.runtime.runPromise(
-			agents.submit(harness.effectId('drain:first'), adminSubject, taskRequest(conversationId, 'First.'))
+			agents.submit(
+				harness.effectId('drain:first'),
+				adminSubject,
+				taskRequest(conversationId, 'First.')
+			)
 		);
 		// The whole point: `answerQueued`, not `execute`.
 		const answering = harness.runtime.runPromise(
