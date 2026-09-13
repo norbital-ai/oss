@@ -496,8 +496,8 @@ describe('root Plan lifecycle', () => {
 	});
 
 	it('budgets the independent verifier and compacts oversized evidence before reviewing', async () => {
-		const summaries: Array<{ messages: unknown; maxOutputTokens: number }> = [];
-		const verdicts: Array<{ messages: unknown; maxOutputTokens: number }> = [];
+		const summaries: Array<{ messages: unknown; maxOutputTokens?: number }> = [];
+		const verdicts: Array<{ messages: unknown; maxOutputTokens?: number }> = [];
 		const ai = successfulAI(
 			(request, index) => {
 				if (request.purpose === 'compaction') {
@@ -528,7 +528,7 @@ describe('root Plan lifecycle', () => {
 			[...summaries, ...verdicts].every(
 				(r) =>
 					new TextEncoder().encode(JSON.stringify(r.messages)).byteLength * 2 +
-						r.maxOutputTokens +
+						(r.maxOutputTokens ?? 0) +
 						4096 <
 					1_000_000
 			)

@@ -181,7 +181,7 @@ const encodedText = (message: Prompt.MessageEncoded): string =>
 
 export type GenerateInspection = Readonly<{
 	readonly callId: string;
-	readonly maxOutputTokens: number;
+	readonly maxOutputTokens: number | undefined;
 	readonly promptBytes: number;
 	readonly automaticCompact: boolean;
 	readonly planMode: boolean;

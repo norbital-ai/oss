@@ -69,7 +69,7 @@ describe('the compact tool', () => {
 		'retries an invalid checkpoint once and records both receipts (%s)',
 		async (invalid) => {
 			const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000c09');
-			const attempts: Array<{ callId: string; modelId: string; maxOutputTokens: number }> = [];
+			const attempts: Array<{ callId: string; modelId: string; maxOutputTokens?: number }> = [];
 			const base = successfulAI((request, index) => {
 				if (index === 0)
 					return assistantToolCall(

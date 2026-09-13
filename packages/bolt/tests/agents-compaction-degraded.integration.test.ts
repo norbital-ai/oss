@@ -62,7 +62,7 @@ const runConversation = async (
 
 describe('auto-compaction degraded paths', () => {
 	it('rejects an oversized retained instruction without spending on an ineffective compaction', async () => {
-		const requests: Array<{ purpose?: string; messages: unknown; maxOutputTokens: number }> = [];
+		const requests: Array<{ purpose?: string; messages: unknown; maxOutputTokens?: number }> = [];
 		const ai = successfulAI((request) => {
 			requests.push(request);
 			return assistantText('Checkpoint: the full original request remains in history.');
@@ -81,7 +81,7 @@ describe('auto-compaction degraded paths', () => {
 	});
 
 	it('folds legacy history larger than the window in bounded calls, then continues normally', async () => {
-		const requests: Array<{ purpose?: string; messages: unknown; maxOutputTokens: number }> = [];
+		const requests: Array<{ purpose?: string; messages: unknown; maxOutputTokens?: number }> = [];
 		const ai = successfulAI((request) => {
 			requests.push(request);
 			return assistantText(
@@ -105,7 +105,7 @@ describe('auto-compaction degraded paths', () => {
 			requests.every(
 				(r) =>
 					new TextEncoder().encode(JSON.stringify(r.messages)).byteLength * 2 +
-						r.maxOutputTokens +
+						(r.maxOutputTokens ?? 0) +
 						4096 <
 					1_000_000
 			)
@@ -150,7 +150,7 @@ describe('auto-compaction degraded paths', () => {
 	it.each([false, true])(
 		'retries malformed manual summaries without losing history (fails=%s)',
 		async (alwaysInvalid) => {
-			const requests: Array<{ callId: string; modelId: string; maxOutputTokens: number }> = [];
+			const requests: Array<{ callId: string; modelId: string; maxOutputTokens?: number }> = [];
 			const summary =
 				"| Section | Summary |\n| --- | --- |\n| Goal | Preserve the workspace and finish its export. |\n| Progress | Draft abc123 validated. |\n| What we learned | Export must preserve attachments. |\n| What's left | Export the validated draft. |";
 			const ai = successfulAI((request) => {
