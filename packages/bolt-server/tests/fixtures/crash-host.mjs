@@ -44,6 +44,16 @@ const application = await startLocalApplication({
 installProcessShutdown(application);
 process.stdout.write(`ready ${application.baseUrl}\n`);
 
+// The fault must land after readiness is observable, not after the ready line: the listener may not
+// accept its first connection for longer than the delay on a loaded runner, and then `/readyz` reads
+// refused until the fault fires and the test never observes the 200 it asserts.
+for (;;) {
+	try {
+		if ((await fetch(`${application.baseUrl}/readyz`)).status === 200) break;
+	} catch {}
+	await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 setTimeout(() => {
 	if (fault === 'uncaught') throw new Error('injected uncaught exception');
 	if (fault === 'rejection') void Promise.reject(new Error('injected unhandled rejection'));
