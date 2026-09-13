@@ -222,7 +222,16 @@ export const AIRequest = Schema.TaggedUnion({
 		purpose: Schema.optionalKey(Schema.Literal('compaction')),
 		modelId: ModelId,
 		messages: Schema.Array(Schema.toEncoded(Prompt.Message)),
-		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+		/**
+		 * A context-fit reservation, not a provider cap.
+		 *
+		 * The host neither sends `max_tokens` nor truncates a turn to this: a model must be free to
+		 * reason and then answer in the same call. The runtime uses it only to reserve space against
+		 * the context window when deciding whether a prompt fits.
+		 */
+		maxOutputTokens: Schema.optionalKey(
+			Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+		),
 		output: AIGenerationOutput,
 		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset)),
 		fileAssets: Schema.optionalKey(Schema.Array(FileAsset))

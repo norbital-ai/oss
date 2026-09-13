@@ -625,7 +625,7 @@ const generateMessage = Effect.fn('Agents.generateMessage')(function* <ProgressE
 		purpose?: 'compaction';
 		modelId: ModelId;
 		messages: ReadonlyArray<Prompt.MessageEncoded>;
-		maxOutputTokens: number;
+		maxOutputTokens?: number;
 		imageAssets?: ReadonlyArray<ImageAsset>;
 		fileAssets?: ReadonlyArray<FileAsset>;
 		tools?: ReadonlyArray<ToolDeclaration>;
@@ -642,7 +642,9 @@ const generateMessage = Effect.fn('Agents.generateMessage')(function* <ProgressE
 			...(input.purpose === undefined ? {} : { purpose: input.purpose }),
 			modelId: input.modelId,
 			messages: [...input.messages],
-			maxOutputTokens: input.maxOutputTokens,
+			...(input.maxOutputTokens === undefined
+				? {}
+				: { maxOutputTokens: input.maxOutputTokens }),
 			output: {
 				_tag: 'Message',
 				...(input.tools === undefined || input.tools.length === 0
@@ -683,7 +685,7 @@ const generatePlanVerdict = Effect.fn('Agents.generatePlanVerdict')(function* (
 		toolOutputLimit?: typeof AGENT_TOOL_OUTPUT_LIMIT | undefined;
 		modelId: ModelId;
 		messages: ReadonlyArray<Prompt.MessageEncoded>;
-		maxOutputTokens: number;
+		maxOutputTokens?: number;
 	}
 ) {
 	const response = yield* ai.generate(effectId, {
@@ -693,7 +695,9 @@ const generatePlanVerdict = Effect.fn('Agents.generatePlanVerdict')(function* (
 		...(input.toolOutputLimit === undefined ? {} : { toolOutputLimit: input.toolOutputLimit }),
 		modelId: input.modelId,
 		messages: [...input.messages],
-		maxOutputTokens: input.maxOutputTokens,
+		...(input.maxOutputTokens === undefined
+			? {}
+			: { maxOutputTokens: input.maxOutputTokens }),
 		output: { _tag: 'PlanVerdict' }
 	});
 	if (
@@ -975,9 +979,7 @@ export const checkpointContent = (message: Prompt.MessageEncoded): Prompt.Messag
 };
 
 const completeCheckpoint = (
-	message: Prompt.MessageEncoded,
-	usage: UsageObservation | undefined,
-	outputLimit: number
+	message: Prompt.MessageEncoded
 ): Prompt.MessageEncoded | undefined => {
 	const checkpoint = checkpointContent(message);
 	if (checkpoint.content === CHECKPOINT_WITHOUT_SUMMARY) return undefined;
@@ -997,14 +999,11 @@ const completeCheckpoint = (
 		labels.some((label, index) => {
 			const cells = /^\|([^|]*)\|((?:\\.|[^|])*)\|$/.exec(rows[index + 2] ?? '');
 			return cells?.[1]?.trim().toLowerCase() !== label.toLowerCase() || !cells[2]?.trim();
-		})
-	)
-		return undefined;
-	// A nonempty answer at the output ceiling can still end mid-sentence and lose the next action.
-	if (
-		usage !== undefined &&
-		'outputTokens' in usage &&
-		(usage.outputTokens?.total ?? 0) >= outputLimit
+		}) ||
+		// The closing row must be whole. A summary cut off mid-row is incomplete regardless of why,
+		// and the table shape is the only truncation signal that does not confuse reasoning tokens
+		// for answer tokens.
+		!/^\|([^|]*)\|((?:\\.|[^|])*)\|$/.test(rows[5] ?? '')
 	)
 		return undefined;
 	return checkpoint;
@@ -3284,7 +3283,7 @@ export const layer = Layer.effect(
 						run,
 						compacted.observation
 					);
-					next = completeCheckpoint(compacted.message, compacted.observation.usage, outputLimit);
+					next = completeCheckpoint(compacted.message);
 					if (next !== undefined) break;
 				}
 				if (next === undefined)

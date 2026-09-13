@@ -39,6 +39,8 @@ export type AuthoredInferenceImage = Readonly<{
  */
 export type InferenceRequest = Readonly<{
 	readonly schema: Schema.Codec<unknown, unknown>;
+	/** Standing directive: identity, the current state, and the goal. Sent as the system message. */
+	readonly system?: string;
 	readonly prompt: string;
 	readonly model: string;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
@@ -69,8 +71,16 @@ export type AuthoredInferenceTool = Readonly<{
 const MAX_INFERENCE_IMAGES = 8;
 const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 
-/** Leaves schema-constrained inference enough room to finish one complete JSON value. */
-const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
+/**
+ * The name reserved for the tool call that carries the final structured result.
+ *
+ * An authored tool may not use it: the loop must be able to tell a research call from the answer.
+ */
+const INFERENCE_RESULT_TOOL = 'return_result';
+/** How many consecutive reason-only turns are tolerated before the inference is refused. */
+const MAX_INFERENCE_PAUSES = 3;
+/** How many malformed submissions are corrected before the inference is refused. */
+const MAX_INFERENCE_RESULT_FAILURES = 3;
 
 /**
  * Bounds on what one tool turn may carry. The loop itself has no step cap: the model calls tools
@@ -194,6 +204,7 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 			const unsupportedKeys = Object.keys(input).filter(
 				(key) =>
 					key !== 'schema' &&
+					key !== 'system' &&
 					key !== 'prompt' &&
 					key !== 'model' &&
 					key !== 'images' &&
@@ -212,13 +223,19 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 			);
 			const imageAssets = yield* inferenceImageAssets(input.images);
 			const jsonSchema = Schema.toJsonSchemaDocument(input.schema).schema;
-			const message = yield* Schema.encodeEffect(Prompt.Message)(
+			const encode = (message: Prompt.Message) =>
+				Schema.encodeEffect(Prompt.Message)(message).pipe(
+					Effect.mapError(() =>
+						refusal('ai.message_invalid', 'The Effect prompt could not be encoded.')
+					)
+				);
+			const message = yield* encode(
 				Prompt.userMessage({ content: [Prompt.textPart({ text: input.prompt })] })
-			).pipe(
-				Effect.mapError(() =>
-					refusal('ai.message_invalid', 'The Effect prompt could not be encoded.')
-				)
 			);
+			const system =
+				input.system === undefined
+					? undefined
+					: yield* encode(Prompt.systemMessage({ content: input.system }));
 			const tools = input.tools ?? [];
 			if (tools.length > MAX_INFERENCE_TOOLS)
 				return yield* refusal(
@@ -239,108 +256,151 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					);
 				toolNames.add(tool.name);
 			}
-			const conversation: Array<Prompt.MessageEncoded> = [message];
+			const conversation: Array<Prompt.MessageEncoded> = [
+				...(system === undefined ? [] : [system]),
+				message
+			];
 			const assets = imageAssets.length === 0 ? {} : { imageAssets };
-			if (tools.length > 0) {
-				const declarations = tools.map((tool) => ({
+			/**
+			 * The loop is an ordinary agentic run whose final structured answer is a tool call.
+			 *
+			 * A schema-constrained single turn forces the model's reasoning and its whole answer into
+			 * one output budget. DeepSeek V4.1 Flash counts reasoning against `max_tokens`, so a
+			 * research prompt that reasons past the budget returns no content at all — the
+			 * "No text content in response" failure — and retrying the identical request repeats the
+			 * same exhaustion. Running the authored tools as a normal multi-turn loop and taking the
+			 * answer from a reserved submission tool lets reasoning span turns, each with its own
+			 * budget, and never asks the provider to emit a strict JSON value in the same breath as
+			 * the reasoning that produced it.
+			 */
+			if (toolNames.has(INFERENCE_RESULT_TOOL))
+				return yield* refusal(
+					'ai.request_invalid',
+					`api.infer reserves the tool name "${INFERENCE_RESULT_TOOL}" for its structured result; rename the authored tool.`
+				);
+			const declarations = [
+				...tools.map((tool) => ({
 					name: tool.name,
 					description: tool.description,
 					inputSchema: Schema.toJsonSchemaDocument(tool.input).schema
-				}));
-				for (let step = 0; ; step += 1) {
-					const turn = yield* ai.generate(
-						EffectId.make(`${inferenceId}:step:${step}`),
-						AIRequest.cases.Generate.make({
-							callId: ProviderCallId.make(`${inferenceId}:step:${step}`),
-							modelId,
-							messages: [...conversation],
-							maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-							output: { _tag: 'Message', tools: declarations },
-							...assets
-						})
+				})),
+				{
+					name: INFERENCE_RESULT_TOOL,
+					description:
+						'Submit the final structured result. Call this exactly once, when the research is complete, and call nothing else in that turn. Its arguments are the result.',
+					inputSchema: jsonSchema
+				}
+			];
+			let pauses = 0;
+			let resultFailures = 0;
+			for (let step = 0; ; step += 1) {
+				const turn = yield* ai.generate(
+					EffectId.make(`${inferenceId}:step:${step}`),
+					AIRequest.cases.Generate.make({
+						callId: ProviderCallId.make(`${inferenceId}:step:${step}`),
+						modelId,
+						messages: [...conversation],
+						output: { _tag: 'Message', tools: declarations },
+						...assets
+					})
+				);
+				if (turn.result._tag !== 'Message')
+					return yield* refusal(
+						'ai.response_invalid',
+						'The AI provider returned the wrong output kind for a tool turn.'
 					);
-					if (turn.result._tag !== 'Message')
+				const calls = inferenceToolCalls(turn.result.message);
+				const resultCall = calls.find((call) => call.name === INFERENCE_RESULT_TOOL);
+				if (resultCall !== undefined) {
+					const decoded = yield* Effect.exit(
+						Schema.decodeUnknownEffect(input.schema)(resultCall.params)
+					);
+					if (Exit.isSuccess(decoded)) return decoded.value;
+					if (++resultFailures > MAX_INFERENCE_RESULT_FAILURES)
 						return yield* refusal(
 							'ai.response_invalid',
-							'The AI provider returned the wrong output kind for a tool turn.'
-						);
-					const calls = inferenceToolCalls(turn.result.message);
-					// The tool phase has no output schema. Its terminal draft can invent a shape that
-					// biases the structured turn; retain the tool evidence, not that unchecked answer.
-					if (calls.length === 0) break;
-					conversation.push(turn.result.message);
-					for (const call of calls) {
-						const tool = tools.find(({ name }) => name === call.name);
-						const outcome =
-							tool === undefined
-								? Exit.fail(`Unknown tool "${call.name}". Available: ${[...toolNames].join(', ')}.`)
-								: yield* Effect.exit(
-										Schema.decodeUnknownEffect(tool.input)(call.params).pipe(
-											Effect.mapError(
-												() => `The arguments do not match the "${tool.name}" input schema.`
-											),
-											Effect.flatMap((params) =>
-												tool.run(params).pipe(Effect.mapError((error) => getErrorMessage(error)))
-											)
-										)
-									);
-						conversation.push(
-							encodePromptMessage(
-								Prompt.toolMessage({
-									content: [
-										Prompt.toolResultPart({
-											id: call.id,
-											name: call.name,
-											result: Exit.isSuccess(outcome)
-												? clipToolResult(outcome.value)
-												: getErrorMessage(Cause.squash(outcome.cause)),
-											isFailure: !Exit.isSuccess(outcome),
-											providerExecuted: false
-										})
-									]
-								})
+							`The AI provider response does not match the authored schema: ${getErrorMessage(
+								Cause.squash(decoded.cause)
 							)
+								.replace(/\s+/g, ' ')
+								.slice(0, 400)}`
 						);
-					}
+					conversation.push(turn.result.message);
+					conversation.push(
+						encodePromptMessage(
+							Prompt.toolMessage({
+								content: [
+									Prompt.toolResultPart({
+										id: resultCall.id,
+										name: resultCall.name,
+										result:
+											`The result did not match the schema: ${getErrorMessage(Cause.squash(decoded.cause)).replace(/\s+/g, ' ').slice(0, 400)}. ` +
+											`Call "${INFERENCE_RESULT_TOOL}" again with the corrected result.`,
+										isFailure: true,
+										providerExecuted: false
+									})
+								]
+							})
+						)
+					);
+					continue;
 				}
-				conversation.push(
-					encodePromptMessage(
-						Prompt.userMessage({
-							content: [
-								Prompt.textPart({
-									text: `Return the structured result now, from the evidence gathered above. Do not call tools. Return only JSON with exactly the property names and value types in this JSON schema, without Markdown fences:\n${JSON.stringify(jsonSchema)}`
-								})
-							]
-						})
-					)
-				);
+				if (calls.length === 0) {
+					// The model reasoned without acting. Give it another turn rather than forcing the
+					// answer into the turn its reasoning already spent.
+					if (++pauses > MAX_INFERENCE_PAUSES)
+						return yield* refusal(
+							'ai.response_invalid',
+							'api.infer ended without returning a structured result.'
+						);
+					conversation.push(turn.result.message);
+					conversation.push(
+						encodePromptMessage(
+							Prompt.userMessage({
+								content: [
+									Prompt.textPart({
+										text: `Call a research tool to continue, or call "${INFERENCE_RESULT_TOOL}" with the final result, matching this JSON schema:\n${JSON.stringify(jsonSchema)}`
+									})
+								]
+							})
+						)
+					);
+					continue;
+				}
+				conversation.push(turn.result.message);
+				for (const call of calls) {
+					const tool = tools.find(({ name }) => name === call.name);
+					const outcome =
+						tool === undefined
+							? Exit.fail(`Unknown tool "${call.name}". Available: ${[...toolNames, INFERENCE_RESULT_TOOL].join(', ')}.`)
+							: yield* Effect.exit(
+									Schema.decodeUnknownEffect(tool.input)(call.params).pipe(
+										Effect.mapError(
+											() => `The arguments do not match the "${tool.name}" input schema.`
+										),
+										Effect.flatMap((params) =>
+											tool.run(params).pipe(Effect.mapError((error) => getErrorMessage(error)))
+										)
+									)
+								);
+					conversation.push(
+						encodePromptMessage(
+							Prompt.toolMessage({
+								content: [
+									Prompt.toolResultPart({
+										id: call.id,
+										name: call.name,
+										result: Exit.isSuccess(outcome)
+											? clipToolResult(outcome.value)
+											: getErrorMessage(Cause.squash(outcome.cause)),
+										isFailure: !Exit.isSuccess(outcome),
+										providerExecuted: false
+									})
+								]
+							})
+						)
+					);
+				}
 			}
-			const response = yield* ai.generate(
-				inferenceId,
-				AIRequest.cases.Generate.make({
-					callId: ProviderCallId.make(inferenceId),
-					modelId,
-					messages: conversation,
-					maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-					output: { _tag: 'Object', objectName: 'inference', jsonSchema },
-					...assets
-				})
-			);
-			if (response.result._tag !== 'Object') {
-				return yield* refusal(
-					'ai.response_invalid',
-					'The AI provider returned the wrong output kind.'
-				);
-			}
-			return yield* Schema.decodeUnknownEffect(input.schema)(response.result.value).pipe(
-				Effect.mapError((error) =>
-					// The path matters: "eligibility: null where an array or omission was expected" is
-					// actionable; "does not match the authored schema" sent a day into guesswork.
-					refusal(
-						'ai.response_invalid',
-						`The AI provider response does not match the authored schema: ${String(error).replace(/\s+/g, ' ').slice(0, 400)}`
-					)
-				)
-			);
 		});
 };

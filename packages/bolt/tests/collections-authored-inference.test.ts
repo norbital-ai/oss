@@ -11,6 +11,45 @@ import { describe, expect, it } from 'vitest';
 import { inferOp } from '../src/runtime/inference.js';
 import type { InferenceTool } from '../src/authoring/index.js';
 
+const observation = (request: Extract<AIRequest, { _tag: 'Generate' }>) =>
+	ProviderObservation.make({
+		callId: request.callId,
+		provider: 'test',
+		model: request.modelId,
+		operation: 'language'
+	});
+const encodeMessage = Schema.encodeSync(Prompt.Message);
+const assistant = (content: Array<Prompt.AssistantMessagePart> | string) =>
+	encodeMessage(
+		Prompt.assistantMessage({
+			content: typeof content === 'string' ? [Prompt.textPart({ text: content })] : content
+		})
+	);
+const toolCall = (id: string, name: string, params: Record<string, unknown>) =>
+	Prompt.toolCallPart({ id, name, params, providerExecuted: false });
+/** The reserved submission tool every `api.infer` advertises, carrying the structured answer. */
+const submit = (value: Record<string, unknown>) => assistant([toolCall('result', 'return_result', value)]);
+const generateWith = (
+	script: (
+		request: Extract<AIRequest, { _tag: 'Generate' }>,
+		turn: number
+	) => typeof AIGenerationResult.Type,
+	requests: Array<AIRequest>
+) => ({
+	catalog: () => Effect.die('unexpected catalog request'),
+	generate: (_effectId: unknown, request: AIRequest) => {
+		requests.push(request);
+		if (request._tag !== 'Generate') return Effect.die('expected a generate request');
+		return Effect.succeed(
+			AIResponse.cases.Generated.make({
+				result: script(request, requests.length - 1),
+				observation: observation(request)
+			})
+		);
+	},
+	embed: () => Effect.die('unexpected embedding request')
+});
+
 describe('authored inference image boundary', () => {
 	it('sends compact host-resolved asset descriptors instead of isolate-expanded bytes', async () => {
 		let captured: AIRequest | undefined;
@@ -20,15 +59,10 @@ describe('authored inference image boundary', () => {
 				captured = request;
 				return Effect.succeed(
 					AIResponse.cases.Generated.make({
-						result: AIGenerationResult.cases.Object.make({
-							value: { suspicious: false }
+						result: AIGenerationResult.cases.Message.make({
+							message: submit({ suspicious: false })
 						}),
-						observation: ProviderObservation.make({
-							callId: request.callId,
-							provider: 'test',
-							model: request.modelId,
-							operation: 'language'
-						})
+						observation: observation(request)
 					})
 				);
 			},
@@ -55,10 +89,16 @@ describe('authored inference image boundary', () => {
 		expect(output).toEqual({ suspicious: false });
 		expect(captured?._tag).toBe('Generate');
 		if (captured?._tag !== 'Generate') throw new Error('expected a generate request');
+		// The final answer rides a tool call, so the turn is an ordinary message carrying the
+		// submission tool rather than a schema-constrained `Object` turn.
 		expect(captured.output).toMatchObject({
-			_tag: 'Object',
-			objectName: expect.any(String),
-			jsonSchema: expect.objectContaining({ type: 'object' })
+			_tag: 'Message',
+			tools: expect.arrayContaining([
+				expect.objectContaining({
+					name: 'return_result',
+					inputSchema: expect.objectContaining({ type: 'object' })
+				})
+			])
 		});
 		expect(captured.messages).toEqual([
 			{
@@ -81,52 +121,15 @@ describe('authored inference image boundary', () => {
 });
 
 describe('authored inference tool loop', () => {
-	const observation = (request: Extract<AIRequest, { _tag: 'Generate' }>) =>
-		ProviderObservation.make({
-			callId: request.callId,
-			provider: 'test',
-			model: request.modelId,
-			operation: 'language'
-		});
-	const encodeMessage = Schema.encodeSync(Prompt.Message);
-	const assistant = (content: Array<Prompt.AssistantMessagePart> | string) =>
-		encodeMessage(
-			Prompt.assistantMessage({
-				content: typeof content === 'string' ? [Prompt.textPart({ text: content })] : content
-			})
-		);
-	const toolCall = (id: string, name: string, params: Record<string, unknown>) =>
-		Prompt.toolCallPart({ id, name, params, providerExecuted: false });
-	const generateWith = (
-		script: (
-			request: Extract<AIRequest, { _tag: 'Generate' }>,
-			turn: number
-		) => typeof AIGenerationResult.Type,
-		requests: Array<AIRequest>
-	) => ({
-		catalog: () => Effect.die('unexpected catalog request'),
-		generate: (_effectId: unknown, request: AIRequest) => {
-			requests.push(request);
-			if (request._tag !== 'Generate') return Effect.die('expected a generate request');
-			return Effect.succeed(
-				AIResponse.cases.Generated.make({
-					result: script(request, requests.length - 1),
-					observation: observation(request)
-				})
-			);
-		},
-		embed: () => Effect.die('unexpected embedding request')
-	});
-
 	it('separates concurrent and repeated inferences while preserving replay identities', async () => {
 		const run = async () => {
 			const requests: Array<AIRequest> = [];
 			const effectIds: Array<string> = [];
 			const binding = generateWith(
-				(request) =>
-					request.output._tag === 'Object'
-						? AIGenerationResult.cases.Object.make({ value: { rate: 7.5 } })
-						: AIGenerationResult.cases.Message.make({ message: assistant('Evidence ready.') }),
+				() =>
+					AIGenerationResult.cases.Message.make({
+						message: submit({ rate: 7.5 })
+					}),
 				requests
 			);
 			const infer = inferOp(EffectId.make('statutory-batch'), {
@@ -156,30 +159,31 @@ describe('authored inference tool loop', () => {
 				if (request._tag !== 'Generate') throw new Error('expected generation');
 				return request.callId;
 			});
-			expect(new Set(callIds).size).toBe(6);
-			expect(new Set(effectIds).size).toBe(6);
+			// One turn answers each inference: the submission tool carries the result.
+			expect(new Set(callIds).size).toBe(3);
+			expect(new Set(effectIds).size).toBe(3);
 			return { callIds, effectIds };
 		};
 		expect(await run()).toEqual(await run());
 	});
 
-	it('lets the model call authored tools, then closes with the structured turn', async () => {
+	it('lets the model call authored tools, then submits the structured result', async () => {
 		const requests: Array<AIRequest> = [];
 		const reads: Array<string> = [];
 		const infer = inferOp(
 			EffectId.make('inference-tools'),
-			generateWith((request, turn) => {
-				if (request.output._tag === 'Object')
-					return AIGenerationResult.cases.Object.make({ value: { rate: 7.5 } });
-				return turn === 0
-					? AIGenerationResult.cases.Message.make({
-							message: assistant([
-								toolCall('call-1', 'read_page', { url: 'https://www.bli.gov.tw/en/' }),
-								toolCall('call-2', 'nope', {})
-							])
-						})
-					: AIGenerationResult.cases.Message.make({ message: assistant('The rate is 7.5%.') });
-			}, requests)
+			generateWith(
+				(_request, turn) =>
+					turn === 0
+						? AIGenerationResult.cases.Message.make({
+								message: assistant([
+									toolCall('call-1', 'read_page', { url: 'https://www.bli.gov.tw/en/' }),
+									toolCall('call-2', 'nope', {})
+								])
+							})
+						: AIGenerationResult.cases.Message.make({ message: submit({ rate: 7.5 }) }),
+				requests
+			)
 		);
 		const output = await Effect.runPromise(
 			infer({
@@ -203,8 +207,7 @@ describe('authored inference tool loop', () => {
 		expect(reads).toEqual(['https://www.bli.gov.tw/en/']);
 		expect(requests.map((r) => (r._tag === 'Generate' ? r.output._tag : r._tag))).toEqual([
 			'Message',
-			'Message',
-			'Object'
+			'Message'
 		]);
 		const first = requests[0];
 		if (first?._tag !== 'Generate' || first.output._tag !== 'Message') throw new Error('turn');
@@ -213,13 +216,13 @@ describe('authored inference tool loop', () => {
 				name: 'read_page',
 				description: 'Read one official page.',
 				inputSchema: expect.objectContaining({ type: 'object' })
-			}
+			},
+			expect.objectContaining({ name: 'return_result' })
 		]);
-		const closing = requests[2];
+		const closing = requests[1];
 		if (closing?._tag !== 'Generate') throw new Error('closing');
 		const roles = closing.messages.map((m) => m.role);
-		expect(roles).toEqual(['user', 'assistant', 'tool', 'tool', 'user']);
-		expect(JSON.stringify(closing.messages)).not.toContain('The rate is 7.5%.');
+		expect(roles).toEqual(['user', 'assistant', 'tool', 'tool']);
 		const toolMessage = closing.messages[2];
 		if (typeof toolMessage?.content === 'string') throw new Error('tool content');
 		const part = toolMessage?.content[0] as { result: unknown; isFailure: boolean };
@@ -231,29 +234,20 @@ describe('authored inference tool loop', () => {
 		expect(String((unknown?.content[0] as { result: unknown }).result)).toContain(
 			'Unknown tool "nope"'
 		);
-		expect(JSON.stringify(closing.messages.at(-1))).toContain('Return the structured result now');
-		expect(closing.messages.at(-1)).toMatchObject({
-			role: 'user',
-			content: expect.stringContaining(
-				JSON.stringify(Schema.toJsonSchemaDocument(Schema.Struct({ rate: Schema.Number })).schema)
-			)
-		});
 	});
 
-	it('keeps calling tools until the model finishes, surfacing failures as results', async () => {
+	it('keeps calling tools until the model submits, surfacing failures as results', async () => {
 		const requests: Array<AIRequest> = [];
 		let runs = 0;
 		const infer = inferOp(
 			EffectId.make('inference-steps'),
 			generateWith(
-				(request, turn) =>
-					request.output._tag === 'Object'
-						? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
-						: turn < 3
-							? AIGenerationResult.cases.Message.make({
-									message: assistant([toolCall(`c${requests.length}`, 'again', {})])
-								})
-							: AIGenerationResult.cases.Message.make({ message: assistant('Enough.') }),
+				(_request, turn) =>
+					turn < 3
+						? AIGenerationResult.cases.Message.make({
+								message: assistant([toolCall(`c${requests.length}`, 'again', {})])
+							})
+						: AIGenerationResult.cases.Message.make({ message: submit({ rate: 1 }) }),
 				requests
 			)
 		);
@@ -277,8 +271,8 @@ describe('authored inference tool loop', () => {
 		);
 		expect(output).toEqual({ rate: 1 });
 		expect(runs).toBe(3);
-		expect(requests).toHaveLength(5);
-		const closing = requests[4];
+		expect(requests).toHaveLength(4);
+		const closing = requests[3];
 		if (closing?._tag !== 'Generate') throw new Error('closing');
 		const failed = closing.messages.find((m) => m.role === 'tool');
 		expect(JSON.stringify(failed)).toContain('page unavailable');
@@ -289,15 +283,13 @@ describe('authored inference tool loop', () => {
 		const infer = inferOp(
 			EffectId.make('inference-long-research'),
 			generateWith(
-				(request, turn) =>
-					request.output._tag === 'Object'
-						? AIGenerationResult.cases.Object.make({ value: { rate: 1 } })
-						: AIGenerationResult.cases.Message.make({
-								message:
-									turn < 13
-										? assistant([toolCall(`c${turn}`, 'next_page', {})])
-										: assistant('Enough evidence.')
-							}),
+				(_request, turn) =>
+					AIGenerationResult.cases.Message.make({
+						message:
+							turn < 13
+								? assistant([toolCall(`c${turn}`, 'next_page', {})])
+								: submit({ rate: 1 })
+					}),
 				requests
 			)
 		);
@@ -317,14 +309,71 @@ describe('authored inference tool loop', () => {
 			})
 		);
 		expect(output).toEqual({ rate: 1 });
-		expect(requests).toHaveLength(15);
+		expect(requests).toHaveLength(14);
+	});
+
+	it('gives a reason-only turn another chance instead of forcing the answer out', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(
+			EffectId.make('inference-pause'),
+			generateWith(
+				(request, turn) =>
+					turn === 0
+						? AIGenerationResult.cases.Message.make({
+								message: assistant('Let me think about this carefully.')
+							})
+						: AIGenerationResult.cases.Message.make({ message: submit({ rate: 9 }) }),
+				requests
+			)
+		);
+		const output = await Effect.runPromise(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({ rate: Schema.Number }),
+				prompt: 'Think first.',
+				tools: []
+			})
+		);
+		expect(output).toEqual({ rate: 9 });
+		expect(requests).toHaveLength(2);
+		const second = requests[1];
+		if (second?._tag !== 'Generate') throw new Error('second');
+		expect(JSON.stringify(second.messages)).toContain('return_result');
+	});
+
+	it('sends a stated system directive as the leading message', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(
+			EffectId.make('inference-system'),
+			generateWith(
+				() => AIGenerationResult.cases.Message.make({ message: submit({ rate: 1 }) }),
+				requests
+			)
+		);
+		const output = await Effect.runPromise(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({ rate: Schema.Number }),
+				system: 'Check the sealed state against the sources.',
+				prompt: 'Return the rate.',
+				tools: []
+			})
+		);
+		expect(output).toEqual({ rate: 1 });
+		const first = requests[0];
+		if (first?._tag !== 'Generate') throw new Error('turn');
+		expect(first.messages[0]).toMatchObject({
+			role: 'system',
+			content: expect.stringContaining('Check the sealed state')
+		});
+		expect(first.messages[1]).toMatchObject({ role: 'user' });
 	});
 
 	it('refuses an ill-formed tool list before any provider call', async () => {
 		const requests: Array<AIRequest> = [];
 		const infer = inferOp(
 			EffectId.make('inference-bad-tools'),
-			generateWith(() => AIGenerationResult.cases.Object.make({ value: {} }), requests)
+			generateWith(() => AIGenerationResult.cases.Message.make({ message: submit({}) }), requests)
 		);
 		const exit = await Effect.runPromiseExit(
 			infer({
@@ -334,6 +383,31 @@ describe('authored inference tool loop', () => {
 				tools: [
 					{
 						name: 'Bad Name',
+						description: 'x',
+						input: Schema.Struct({}),
+						run: () => Effect.succeed(null)
+					}
+				]
+			})
+		);
+		expect(exit._tag).toBe('Failure');
+		expect(requests).toHaveLength(0);
+	});
+
+	it('refuses an authored tool that steals the reserved submission name', async () => {
+		const requests: Array<AIRequest> = [];
+		const infer = inferOp(
+			EffectId.make('inference-reserved-name'),
+			generateWith(() => AIGenerationResult.cases.Message.make({ message: submit({}) }), requests)
+		);
+		const exit = await Effect.runPromiseExit(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({}),
+				prompt: 'x',
+				tools: [
+					{
+						name: 'return_result',
 						description: 'x',
 						input: Schema.Struct({}),
 						run: () => Effect.succeed(null)
@@ -368,15 +442,10 @@ describe('authored inference decode refusal', () => {
 				requests.push(request);
 				return Effect.succeed(
 					AIResponse.cases.Generated.make({
-						result: AIGenerationResult.cases.Object.make({
-							value: { leave: { eligibility: null } }
+						result: AIGenerationResult.cases.Message.make({
+							message: submit({ leave: { eligibility: null } })
 						}),
-						observation: ProviderObservation.make({
-							callId: request.callId,
-							provider: 'test',
-							model: request.modelId,
-							operation: 'language'
-						})
+						observation: observation(request)
 					})
 				);
 			},

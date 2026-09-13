@@ -205,7 +205,9 @@ describe('Bolt architecture boundaries', () => {
 		// NOT EXISTS alone leaves existing tenants without the new framework column.
 		// 17,974 -> 17,977: Task dispatch carries the actual task ID/attempt to the durable
 		// agent driver; public command input cannot supply or impersonate this claim.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_977);
+		// 17,977 -> 17,979: `api.infer` takes an optional system directive, so the authored
+		// inference can state the goal and current state instead of folding them into the prompt.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_979);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`

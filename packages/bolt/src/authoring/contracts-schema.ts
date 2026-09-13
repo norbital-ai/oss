@@ -838,6 +838,8 @@ export interface InferenceTool<Input = unknown> {
  */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
+	/** Standing directive: who the model is, the current state, and the goal it must pursue. */
+	readonly system?: string;
 	readonly prompt: string;
 	readonly model?: string;
 	readonly images?: ReadonlyArray<{
