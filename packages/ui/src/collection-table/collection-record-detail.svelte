@@ -24,7 +24,8 @@
 	import {
 		getOptionalCollectionClientGetter,
 		getCollectionSurfaceRuntime,
-		resolveCollectionSurface
+		resolveCollectionSurface,
+		setCollectionRecordNoticeContext
 	} from '#lib/collection-runtime';
 	import { approvalRequestIdForRecord } from './approval-anchor.js';
 	import { approvalActionsFor } from './approval-actions.js';
@@ -65,6 +66,16 @@
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, collectionName)
 	);
+	/**
+	 * The header slot a mounted form publishes its record-state notice into. State, not context
+	 * value: the form registers after this surface mounts, and the header has to re-render then.
+	 */
+	let headerNotice = $state<Snippet | null>(null);
+	setCollectionRecordNoticeContext({
+		registerNotice: (notice) => {
+			headerNotice = notice;
+		}
+	});
 	const definition = $derived(
 		client?.collections[collectionName] as CollectionDefinition<ErasedCollection> | undefined // stupidity: boundary-cast — the generated client and the URL stack share collection keys.
 	);
@@ -408,6 +419,7 @@
 		found={Boolean(record)}
 		{actions}
 		banner={collectionSurface?.banner ?? null}
+		notice={headerNotice}
 		ui={uiDetails}
 		approval={approvalDetails}
 	/>

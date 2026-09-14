@@ -4,7 +4,7 @@ import type {
 	ErasedCollectionRegistry
 } from '@norbital-ai/std/collection';
 import { Predicate, Schema } from 'effect';
-import type { Component as CollectionRepresentationComponent } from 'svelte';
+import type { Component as CollectionRepresentationComponent, Snippet } from 'svelte';
 import { getContext, hasContext, setContext } from 'svelte';
 // Imported above rather than only re-exported: a bare `export type { … } from` does not bind the
 // name locally, so `CollectionSurface` below could not name the type it declares.
@@ -140,6 +140,28 @@ export function setCollectionRecordScope(scope: () => string | undefined): void 
 export function getCollectionRecordScope(): (() => string | undefined) | undefined {
 	return hasContext(COLLECTION_RECORD_SCOPE_CONTEXT)
 		? getContext<() => string | undefined>(COLLECTION_RECORD_SCOPE_CONTEXT)
+		: undefined;
+}
+
+const COLLECTION_RECORD_NOTICE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-record-notice');
+
+/**
+ * The slot a record detail's header offers its descendant form for the record-state notice — the
+ * read-only lock, a pending approval. The form owns the resolved metadata and hands its notice up
+ * through this registry; the header owns placement, so the notice sits in the chrome instead of
+ * scrolling away with the form.
+ */
+export interface CollectionRecordNoticeRegistry {
+	registerNotice(notice: Snippet | null): void;
+}
+
+export function setCollectionRecordNoticeContext(registry: CollectionRecordNoticeRegistry): void {
+	setContext(COLLECTION_RECORD_NOTICE_CONTEXT, registry);
+}
+
+export function getOptionalCollectionRecordNoticeContext(): CollectionRecordNoticeRegistry | undefined {
+	return hasContext(COLLECTION_RECORD_NOTICE_CONTEXT)
+		? getContext<CollectionRecordNoticeRegistry>(COLLECTION_RECORD_NOTICE_CONTEXT)
 		: undefined;
 }
 

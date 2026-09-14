@@ -5,6 +5,7 @@ import {
 	AgentId,
 	DirectiveMode,
 	DirectivePriority,
+	EnvoyDelivery,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
@@ -86,7 +87,7 @@ const definition = workspace({
 	requiredFacilities: []
 });
 
-const delivery = (messageId: string, text: string): Envoys.EnvoyDelivery => ({
+const delivery = (messageId: string, text: string): EnvoyDelivery => ({
 	conversationId: '6591234567@s.whatsapp.net',
 	conversationKind: 'dm',
 	messageId,
@@ -139,18 +140,26 @@ describe('Envoy inbound queue', () => {
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(harness.effectId('receive:one'), 'field_ops_whatsapp', delivery('one', 'Start.'))
-			)).status
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:one'),
+						'field_ops_whatsapp',
+						delivery('one', 'Start.')
+					)
+				)
+			).status
 		).toBe('buffered');
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(
-					harness.effectId('receive:two'),
-					'field_ops_whatsapp',
-					delivery('two', 'Also include the pump reading.')
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:two'),
+						'field_ops_whatsapp',
+						delivery('two', 'Also include the pump reading.')
+					)
 				)
-			)).status
+			).status
 		).toBe('buffered');
 
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
@@ -175,7 +184,7 @@ describe('Envoy inbound queue', () => {
 		]);
 		expect(
 			await harness.database.query(
-				`select external_message_id, status from bolt_envoy_inbound
+				`select external_message_id, status from bolt_envoy_messages
 				 where conversation_id = $1 order by external_message_id`,
 				[conversationId]
 			)
@@ -186,12 +195,12 @@ describe('Envoy inbound queue', () => {
 		// One chat, one conversation — the second message continues the first, it does not open a
 		// second one.
 		expect(
-			await harness.database.query(
-				`select status, agent_id, audience from conversation`
-			)
+			await harness.database.query(`select status, agent_id, audience from conversation`)
 		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
 		expect(
-			await harness.database.query(`select priority from conversation_message where state is not null`)
+			await harness.database.query(
+				`select priority from conversation_message where state is not null`
+			)
 		).toEqual([{ priority: 'steer' }, { priority: 'steer' }]);
 	});
 
@@ -228,7 +237,7 @@ describe('Envoy inbound queue', () => {
 			sender: string,
 			displayName: string,
 			text: string
-		): Envoys.EnvoyDelivery => ({
+		): EnvoyDelivery => ({
 			conversationId: '120363000000000000@g.us',
 			conversationKind: 'group',
 			messageId,
@@ -239,22 +248,26 @@ describe('Envoy inbound queue', () => {
 			attachments: []
 		});
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(
-					harness.effectId('receive:sam'),
-					'field_ops_whatsapp',
-					groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam', 'Pump done.')
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:sam'),
+						'field_ops_whatsapp',
+						groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam', 'Pump done.')
+					)
 				)
-			)).status
+			).status
 		).toBe('buffered');
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(
-					harness.effectId('receive:alex'),
-					'field_ops_whatsapp',
-					groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex', 'Valve done.')
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:alex'),
+						'field_ops_whatsapp',
+						groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex', 'Valve done.')
+					)
 				)
-			)).status
+			).status
 		).toBe('buffered');
 		const conversationId = 'field_ops_whatsapp:group:120363000000000000@g.us';
 		expect(
@@ -318,18 +331,26 @@ describe('Envoy inbound queue', () => {
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		const text = 'Handle the safety alarm first.';
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(harness.effectId('receive:first'), 'field_ops_whatsapp', delivery('priority', text))
-			)).status
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:first'),
+						'field_ops_whatsapp',
+						delivery('priority', text)
+					)
+				)
+			).status
 		).toBe('buffered');
 		expect(
-			(await harness.runtime.runPromise(
-				envoys.receive(
-					harness.effectId('receive:duplicate'),
-					'field_ops_whatsapp',
-					delivery('priority', text)
+			(
+				await harness.runtime.runPromise(
+					envoys.receive(
+						harness.effectId('receive:duplicate'),
+						'field_ops_whatsapp',
+						delivery('priority', text)
+					)
 				)
-			)).status
+			).status
 		).toBe('duplicate');
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
 		await harness.runtime.runPromise(
@@ -338,7 +359,9 @@ describe('Envoy inbound queue', () => {
 		expect(generations).toHaveLength(1);
 		expect(JSON.stringify(generations[0]?.messages)).toContain(text);
 		expect(
-			await harness.database.query(`select priority from conversation_message where state is not null`)
+			await harness.database.query(
+				`select priority from conversation_message where state is not null`
+			)
 		).toEqual([{ priority: 'steer' }]);
 	});
 });

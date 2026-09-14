@@ -2,6 +2,7 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+	EnvoyDelivery,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
@@ -79,7 +80,7 @@ const definition = workspace({
 	requiredFacilities: []
 });
 
-const delivery = (): Envoys.EnvoyDelivery => ({
+const delivery = (): EnvoyDelivery => ({
 	conversationId: '6591234567@s.whatsapp.net',
 	conversationKind: 'dm',
 	messageId: 'message-1',
@@ -91,6 +92,7 @@ const delivery = (): Envoys.EnvoyDelivery => ({
 		{
 			provider: 'whatsapp',
 			attachmentId: 'message-1:image:0',
+			kind: 'image',
 			mimeType: 'image/png',
 			fileName: 'whatsapp-message-1.png',
 			byteLength: 3,
@@ -143,8 +145,8 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('Envoy Task-scoped attachments', () => {
-	it('stages inbound bytes, materializes one Task document, and supplies its descriptor to Generate', async () => {
+describe('Envoy channel attachments', () => {
+	it('materializes inbound bytes at ingest and supplies the descriptor to Generate', async () => {
 		const files = memoryFiles();
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const sends: Array<CommunicationRequest> = [];
@@ -172,10 +174,28 @@ describe('Envoy Task-scoped attachments', () => {
 		await harness.runtime.runPromise(
 			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', delivery())
 		);
-		const stagedKey = [...files.objects.keys()][0];
-		if (stagedKey === undefined) throw new Error('attachment was not staged');
-		expect(stagedKey).toMatch(/^envoy-inbound\//);
-		expect(Array.from(files.objects.get(stagedKey) ?? [])).toEqual([137, 80, 78]);
+		const materialized = [...files.objects.keys()];
+		expect(materialized).toEqual([expect.stringMatching(/^agent-tasks\/.+\/.+\.png$/)]);
+		expect(Array.from(files.objects.get(materialized[0]!) ?? [])).toEqual([137, 80, 78]);
+		expect(
+			await harness.database.query(
+				`select attachments from bolt_envoy_messages where direction = 'inbound'`
+			)
+		).toEqual([
+			{
+				attachments: [
+					{
+						provider: 'whatsapp',
+						attachmentId: 'message-1:image:0',
+						kind: 'image',
+						mimeType: 'image/png',
+						fileName: 'whatsapp-message-1.png',
+						size: 3,
+						key: materialized[0]
+					}
+				]
+			}
+		]);
 
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
 		expect(
@@ -187,7 +207,7 @@ describe('Envoy Task-scoped attachments', () => {
 		if (request === undefined) throw new Error('Envoy Task did not generate');
 		expect(request.imageAssets).toEqual([
 			expect.objectContaining({
-				key: expect.stringMatching(/^agent-tasks\//),
+				key: materialized[0],
 				name: 'whatsapp-message-1.png',
 				mimeType: 'image/png',
 				size: 3
@@ -196,48 +216,66 @@ describe('Envoy Task-scoped attachments', () => {
 		expect(JSON.stringify(request.messages)).toContain('message-1:image:0');
 		expect(JSON.stringify(request.messages)).toContain('whatsapp-message-1.png');
 		expect(JSON.stringify(request.messages)).not.toContain('iVBO');
-		expect(files.objects.has(stagedKey)).toBe(false);
-		expect([...files.objects.keys()]).toEqual([
-			expect.stringMatching(/^agent-tasks\/.+\/.+\.png$/)
-		]);
+		expect([...files.objects.keys()]).toEqual(materialized);
 		expect(sends).toEqual([
 			expect.objectContaining({ _tag: 'Send', payload: { text: 'Recorded.' } })
 		]);
 	});
 
-	it('leaves the inbound row pending when staged bytes disappear before admission', async () => {
+	it('records media the provider could not hand over without failing the turn', async () => {
 		const files = memoryFiles();
-		let generationCount = 0;
+		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
 				if (request._tag !== 'Generate') throw new Error('expected language generation');
-				generationCount += 1;
-				return { _tag: 'Success', value: generated(request, 'Must not run.') };
+				generations.push(request);
+				return { _tag: 'Success', value: generated(request, 'Recorded.') };
 			}
 		};
-		harness = await makeBoltTestRuntime(definition, { ai, files: files.binding });
+		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+			call: async () => ({ _tag: 'Success', value: {} })
+		};
+		harness = await makeBoltTestRuntime(definition, { ai, communication, files: files.binding });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		await harness.runtime.runPromise(
-			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', delivery())
+			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', {
+				...delivery(),
+				attachments: [
+					{
+						provider: 'whatsapp',
+						attachmentId: 'message-1:image:0',
+						kind: 'image',
+						mimeType: 'image/png',
+						fileName: 'whatsapp-message-1.png',
+						byteLength: 3,
+						bytesBase64: 'iVBO'
+					},
+					{
+						provider: 'whatsapp',
+						attachmentId: 'message-1:video:1',
+						kind: 'video',
+						mimeType: 'video/mp4',
+						fileName: 'clip.mp4',
+						byteLength: 4096
+					}
+				]
+			})
 		);
-		files.objects.clear();
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
-		await expect(
-			harness.runtime.runPromise(
+		expect(
+			await harness.runtime.runPromise(
 				envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
 			)
-		).rejects.toMatchObject({ _tag: 'Bolt.Envoys.Error' });
-		expect(generationCount).toBe(0);
-		expect(
-			await harness.database.query(
-				`select status from bolt_envoy_inbound where conversation_id = $1`,
-				[conversationId]
-			)
-		).toEqual([{ status: 'pending' }]);
-		expect(await harness.database.query(`select count(*)::int as count from conversation`)).toEqual([
-			{ count: 0 }
-		]);
+		).toMatchObject({ drained: 1, status: 'answered' });
+		expect(generations[0]?.imageAssets).toHaveLength(1);
+		const replicated = await harness.database.query(
+			`select attachments from bolt_envoy_messages where direction = 'inbound'`
+		);
+		const serialized = JSON.stringify(replicated);
+		expect(serialized).toContain('"kind":"video"');
+		expect(serialized).toContain('clip.mp4');
+		expect(serialized).not.toContain('"key":null');
 	});
 });

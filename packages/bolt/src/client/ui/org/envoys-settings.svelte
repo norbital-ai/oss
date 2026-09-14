@@ -69,6 +69,8 @@
 		pairedAs: Schema.optionalKey(Schema.String),
 		pairing: Schema.optionalKey(Schema.String),
 		pairingExpiresAt: Schema.optionalKey(Schema.Number),
+		/** How an unpaired envoy is paired: scan a QR, or submit a credential. */
+		pairingKind: Schema.optionalKey(Schema.Literals(['qr', 'credential'])),
 		/** True only while the host is automatically reopening a recoverable connection. */
 		retrying: Schema.optionalKey(Schema.Boolean),
 		/** Operator-readable context for a non-terminal connection transition. */
@@ -134,6 +136,8 @@
 	let pairingBusy = $state<Record<string, boolean>>({});
 	let unpairingBusy = $state<Record<string, boolean>>({});
 	let pairingTarget = $state<DeclaredEnvoy | undefined>(undefined);
+	/** The token being typed for a credential-paired transport, per envoy. */
+	let credentialInput = $state<Record<string, string>>({});
 	let pairingReconnects = $state<Record<string, boolean>>({});
 	const connectionRequestVersions = new Map<string, number>();
 	const pairingOpens = new Map<string, Promise<void>>();
@@ -184,7 +188,8 @@
 		envoy: string,
 		provider: string,
 		operation: 'pair' | 'status' | 'observe' | 'unpair',
-		afterRevision?: number
+		afterRevision?: number,
+		credential?: string
 	): Effect.Effect<void> =>
 		Effect.suspend(() => {
 			const requestVersion = (connectionRequestVersions.get(envoy) ?? 0) + 1;
@@ -199,7 +204,8 @@
 								operation,
 								envoy,
 								provider,
-								...(afterRevision === undefined ? {} : { afterRevision })
+								...(afterRevision === undefined ? {} : { afterRevision }),
+								...(credential === undefined ? {} : { credential })
 							},
 							signal
 						)
@@ -331,11 +337,32 @@
 	$effect(() => {
 		const target = pairingTarget;
 		if (target === undefined) return;
+		// A credential transport waits for the operator: opening it without a secret would only
+		// publish a failure the person has not had a chance to prevent.
+		const connection = connections[target.name];
+		if (connection?.pairingKind === 'credential' && connection.stored !== true) return;
 		const fiber = Effect.runFork(followPairing(target));
 		return () => {
 			Effect.runFork(Fiber.interrupt(fiber));
 		};
 	});
+
+	const submitCredential = (envoy: DeclaredEnvoy): void => {
+		const credential = credentialInput[envoy.name]?.trim();
+		if (credential === undefined || credential === '' || pairingBusy[envoy.name] === true) return;
+		pairingBusy[envoy.name] = true;
+		Effect.runFork(
+			runPairingRequest(envoy.name, envoy.transport, 'pair', undefined, credential).pipe(
+				Effect.ensuring(
+					Effect.sync(() => {
+						pairingBusy[envoy.name] = false;
+						delete credentialInput[envoy.name];
+					})
+				),
+				Effect.andThen(observePairing(envoy))
+			)
+		);
+	};
 
 	/**
 	 * The clock behind the pairing countdown, ticking only while the dialog shows a code.
@@ -661,6 +688,29 @@
 					<IconWrapper name="lucide:circle-alert" class="size-8 text-destructive" />
 					<p class="text-sm font-medium text-foreground">The transport could not open</p>
 					<p class="text-xs text-destructive" role="alert">{failure}</p>
+				</Stack>
+			{:else if connection?.pairingKind === 'credential' && connection.stored !== true}
+				<Stack gap="sm" class="rounded-lg border p-4">
+					<p class="text-sm font-medium text-foreground">Transport credential</p>
+					<p class="text-meta">
+						{target.transport === 'telegram'
+							? 'Create a bot with BotFather (/newbot) and paste its token. The host seals it and points the bot at this host.'
+							: `Paste the ${target.transport} credential. The host seals it before opening the session.`}
+					</p>
+					<input
+						type="password"
+						class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"
+						placeholder="Token"
+						aria-label="Transport credential"
+						value={credentialInput[target.name] ?? ''}
+						oninput={(event) => (credentialInput[target.name] = event.currentTarget.value)}
+					/>
+					<Button
+						onclick={() => submitCredential(target)}
+						disabled={pairingBusy[target.name] === true}
+					>
+						{pairingBusy[target.name] === true ? 'Registering…' : 'Register credential'}
+					</Button>
 				</Stack>
 			{:else if connection?.state === 'connected'}
 				<Stack gap="sm" align="center" class="rounded-lg border border-success/30 p-6 text-center">

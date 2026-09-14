@@ -7,12 +7,21 @@
 		row: Record<string, unknown> & { __matrixRowId: string };
 		column: MatrixColumn<TRow>;
 		disabled: boolean;
+		readonly?: boolean;
 		borderless: boolean;
 		onValueChange: (value: unknown) => void;
 		onRowChange: (patch: Record<string, unknown>) => void;
 	}
 
-	let { row, column, disabled, borderless, onValueChange, onRowChange }: Props = $props();
+	let {
+		row,
+		column,
+		disabled,
+		readonly = false,
+		borderless,
+		onValueChange,
+		onRowChange
+	}: Props = $props();
 	const className = $derived(
 		cn('w-full min-w-0', borderless && 'border-0 bg-transparent shadow-none')
 	);
@@ -24,7 +33,7 @@
 	id={`matrix-${row.__matrixRowId}-${column.key}`}
 	field={column.field}
 	{value}
-	mode={readOnly ? 'display' : 'edit'}
+	mode={readonly || readOnly ? 'display' : 'edit'}
 	disabled={disabled || readOnly}
 	placeholder={column.placeholder}
 	{row}

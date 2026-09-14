@@ -200,10 +200,51 @@ one sender's, every member the host verifies acts under the envoy's declared pol
 sender's id stays the durable owner, and admission and execution both accept any subject holding
 exactly those policies.
 
+### The channel replica
+
+`bolt_envoy_messages` is the chat as the channel showed it: every inbound message and every
+outbound send, both directions, in `(sent_at, id)` order. It is a replica, not a drain buffer — a
+row is appended once and keyed by the provider's own message identity, so a redelivery, a webhook
+retry, or a sync overlap is a no-op. `origin` records where a row came from (`live`, `sync`,
+`backfill`, `send`); media bytes are materialized into conversation assets at ingest, and a
+descriptor whose bytes the provider could not hand over is still listed. A provider-reported edit
+updates the replica row and sets `edited_at`; an admitted transcript row is never rewritten.
+
+Addressed rows also queue as work. Ambient rows never do: they sit in the replica for
+`read_messages` to serve.
+
+### `read_messages` and the unread preempt
+
+`read_messages` is a platform tool, declared only for an envoy agent. It returns the conversation's
+unread ambient messages oldest first, marks them read by the tool call's own effect id (so a crash
+between marking and answering replays the same batch), and reports where the replica begins — its
+floor timestamps and how many synced rows predate the first live arrival. The result carries the
+honest caveat: content is what the channel last reported, a sender may have edited or deleted a
+message since, and messages from before the replica's floor cannot be retrieved.
+
+On every provider iteration an envoy conversation appends a trailing system note with the unread
+count, so the model knows to look before answering. The note rides after the transcript, never at
+the head, so the cached prompt prefix is untouched when the count changes.
+
 Assistant text parts are delivered as they close. Everything before the final part is posted to the
 transport as a short update the moment it is written; the final part is the turn's answer, sent
-when the turn settles. Tool calls and reasoning never leave the workspace: they stay in
-`conversation_message` rows, which the web variant of the transcript renders.
+when the turn settles, and each send's provider receipt (message id and rendered body) becomes the
+outbound half of the replica. The host renders the model's markdown into the channel's own
+formatting from one AST — WhatsApp markup, Telegram HTML, or plain text. Tool calls and reasoning
+never leave the workspace: they stay in `conversation_message` rows, which the web variant of the
+transcript renders.
+
+### History floors
+
+A channel can only show what it has seen, and the replica says so. WhatsApp's `syncFullHistory`
+backfill lands as `origin=sync`, pre-read rows that never wake a turn; its floor is the pairing
+moment, and rows that predate the first live arrival are counted in the horizon report. A
+transport with no history API simply starts at its first live message.
+
+Which channels exist is the host's contract, not the runtime's: a transport either holds an
+outbound connection (WhatsApp over Baileys) or accepts verified webhooks (Telegram), and both
+paths arrive as the same `envoys.receive` delivery — already authenticated by the host and
+carrying no claimed authority.
 
 ---
 
@@ -407,10 +448,11 @@ nothing has to be threaded through the call. Messages entering a child from its 
 ## Capabilities and tools
 
 Platform tools, in the order the catalogue offers them: `todo`, `compact`, `describe_workspace`,
-`list_skills`, `read_skill`, `search_task_history`, `use_image`, `read_collection`,
-`write_collection`, and `subagent`. All but `compact` answer from within the tool call; `compact`
-records the intent and the turn's own loop writes the checkpoint at its next step, because
-compaction rewrites the projection the loop is about to send.
+`list_skills`, `read_skill`, `search_task_history`, `read_messages`, `use_image`, `read_collection`,
+`write_collection`, and `subagent`. `read_messages` is declared only for an envoy agent, where a
+chat replica exists to read; every other agent gets it off its list. All but `compact` answer from
+within the tool call; `compact` records the intent and the turn's own loop writes the checkpoint at
+its next step, because compaction rewrites the projection the loop is about to send.
 
 Each run stores an immutable snapshot of qualified Tool, Skill, and MCP capability IDs and content
 digests. Implemented capabilities come from system, host, and tenant tiers, are filtered by the current

@@ -59,6 +59,12 @@ export interface CollectionFormFieldProps<
 	 * then becomes clutter the next time a reader passes it.
 	 */
 	description?: string;
+	/**
+	 * Richer body for the same tooltip, below the description sentence: a compile-fault note, the
+	 * members an expression may read. The sentence stays the sentence; this is what would have
+	 * been a paragraph or a link under the control.
+	 */
+	descriptionExtra?: Snippet<[]>;
 	class?: string;
 	/** Registered without a visual control; custom composition or a collection hook owns the value. */
 	hidden?: boolean;
@@ -143,6 +149,17 @@ export interface CollectionFormProps<
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];
 	disabled?: boolean;
+	/**
+	 * Display-only: every field renders its display branch, and the footer — save, clear, delete —
+	 * is absent. Distinct from `disabled`, which keeps the form's controls and mutes them.
+	 */
+	readonly?: boolean;
+	/**
+	 * Where the resolved record-state notice (read-only lock, pending approval) renders. `inline`
+	 * keeps it at the top of the form; `header` hands it to the record sheet's header when one is
+	 * mounted above.
+	 */
+	notice?: 'inline' | 'header';
 	loading?: boolean;
 	skeletonRows?: number;
 	class?: string;

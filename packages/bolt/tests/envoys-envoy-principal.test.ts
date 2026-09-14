@@ -262,7 +262,7 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 		for (const created of [
 			'collection:bolt_channel_links',
 			'collection:bolt_envoy_receipts',
-			'collection:bolt_envoy_inbound'
+			'collection:bolt_envoy_messages'
 		])
 			expect(ids).toContain(created);
 		expect(ids).not.toContain('collection:bolt_envoy_registrations');
@@ -298,20 +298,24 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 			'"agent_id" text not null',
 			'"audience" text not null',
 			'"parent_id" uuid',
-			'"status" text not null',
+			'"status" text not null'
 		])
 			expect(task).toContain(field);
 		expect(task).not.toContain('"transport_conversation_id"');
 		expect(task).not.toContain('"external_message_id"');
 		expect(task).not.toContain('"receipt_key"');
 
-		const inbound = steps.find(({ id }) => id === 'collection:bolt_envoy_inbound')?.sql ?? '';
+		const inbound = steps.find(({ id }) => id === 'collection:bolt_envoy_messages')?.sql ?? '';
 		for (const field of [
 			'"envoy_name" text not null',
 			'"conversation_id" text not null',
 			'"transport_conversation_id" text not null',
+			'"direction" text not null',
+			'"origin" text default \'live\' not null',
 			'"external_message_id" text not null',
 			'"receipt_key" text not null',
+			'"read_by" text',
+			'"edited_at" timestamp with time zone',
 			'"status" text default \'pending\' not null',
 			'"answered_at" timestamp with time zone'
 		])

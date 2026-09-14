@@ -18,7 +18,8 @@
 		actions,
 		ui,
 		approval,
-		banner = null
+		banner = null,
+		notice = null
 	}: {
 		title: string;
 		description: string;
@@ -30,6 +31,8 @@
 		approval: Snippet;
 		/** Full-width image above the sheet header, from the collection's `+representation.svelte`. */
 		banner?: string | null;
+		/** Record-state notice published by the mounted form, rendered under the header title. */
+		notice?: Snippet | null;
 	} = $props();
 
 	const config = $derived([
@@ -78,6 +81,9 @@
 					{description}
 				</Sheet.Description>
 				<Sheet.Title class="truncate text-sm leading-5 font-semibold">{title}</Sheet.Title>
+				{#if notice}
+					<div class="mt-1.5">{@render notice()}</div>
+				{/if}
 			</Stack>
 			<Inline gap="sm" shrink={false}>
 				{@render list()}

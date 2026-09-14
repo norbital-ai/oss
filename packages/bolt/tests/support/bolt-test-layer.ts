@@ -210,6 +210,7 @@ import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
+import * as EnvoyInbox from '../../src/runtime/envoys/inbox.js';
 import * as Integrations from '../../src/runtime/integrations/integrations.js';
 import * as Notifications from '../../src/runtime/notifications/notifications.js';
 import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
@@ -680,7 +681,7 @@ export const makeBoltTestRuntime = async (
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
 	const agents = Layer.provideMerge(
-		Agents.layer,
+		Layer.merge(Agents.layer, EnvoyInbox.layer),
 		Layer.mergeAll(remotes, taskQueue, facilities, budget)
 	);
 	const surfaces = Layer.provideMerge(

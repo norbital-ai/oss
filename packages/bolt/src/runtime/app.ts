@@ -20,6 +20,7 @@ import * as Automations from '#lib/runtime/automations/automations.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import type { Declaration } from '#lib/runtime/tasks/queue.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
+import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
@@ -208,7 +209,7 @@ const InvocationLayers = {
 			// automation would be the second shape of authored code rather than the same one.
 			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
-		const agents = Agents.layer.pipe(
+		const agents = Layer.merge(Agents.layer, EnvoyInbox.layer).pipe(
 			Layer.provide(
 				Layer.mergeAll(
 					workspaceLayer,

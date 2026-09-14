@@ -10,7 +10,7 @@ import {
 	type InputRequiredResult,
 	type StandardSchemaV1
 } from '@modelcontextprotocol/client';
-import { Effect, Schema, SchemaIssue } from 'effect';
+import { Effect, Option, Schema, SchemaIssue } from 'effect';
 import type { Context as EffectContext } from 'effect/Context';
 import { Prompt } from 'effect/unstable/ai';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
@@ -31,6 +31,7 @@ import * as Collections from '#lib/runtime/collections/collections.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
 import type { ConnectorInterface, HostToolsInterface } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
+import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from '@norbital-ai/bolt-protocol';
@@ -151,6 +152,7 @@ const SystemToolNames = Schema.Literals([
 	'list_skills',
 	'read_skill',
 	'search_task_history',
+	'read_messages',
 	'use_image',
 	'read_collection',
 	'write_collection'
@@ -269,6 +271,15 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 		inputSchema: objectInput({
 			scope: { type: 'string', enum: ['this_task', 'workbench'] },
 			query: { type: 'string' },
+			limit: { type: 'integer', minimum: 1, maximum: 50 }
+		})
+	},
+	{
+		name: 'read_messages',
+		description:
+			'Read unread messages in this chat that did not address you — group messages nobody mentioned you in — oldest first, and mark them read. Content is what the channel last reported: a sender may have edited or deleted a message since, and this chat is only visible from the point the channel began recording. Messages before that point cannot be retrieved. Attachments are descriptors; images can be admitted with use_image.',
+		command: 'platform:read_messages',
+		inputSchema: objectInput({
 			limit: { type: 'integer', minimum: 1, maximum: 50 }
 		})
 	},
@@ -614,6 +625,61 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 					message
 				}));
 			return { scope, messages };
+		}
+		case 'read_messages': {
+			const parsed = yield* decode(
+				name,
+				Schema.Struct({
+					limit: Schema.optionalKey(
+						Schema.Number.check(
+							Schema.isInt(),
+							Schema.isGreaterThanOrEqualTo(1),
+							Schema.isLessThanOrEqualTo(50)
+						)
+					)
+				}),
+				input
+			);
+			const inbox = yield* Effect.serviceOption(EnvoyInbox.Service);
+			if (Option.isNone(inbox))
+				return yield* new ToolNotAllowed({ agent: context.agentId, tool: name });
+			const result = yield* inbox.value.read(
+				context.effectId,
+				context.conversationId,
+				context.effectId,
+				parsed.limit ?? 20
+			);
+			const floor = result.horizon.floorAt;
+			return {
+				messages: result.messages.map(
+					({
+						sent_at,
+						sender_external_id,
+						sender_display_name,
+						invocation,
+						text,
+						attachments
+					}) => ({
+						sentAt: sent_at,
+						...(sender_external_id === null ? {} : { senderId: sender_external_id }),
+						...(sender_display_name === null ? {} : { senderName: sender_display_name }),
+						invocation,
+						text,
+						attachments: attachments.map(({ key, fileName, mimeType, size, provider }) => ({
+							...(key === undefined ? {} : { key }),
+							name: fileName,
+							mimeType,
+							size,
+							provider
+						}))
+					})
+				),
+				unreadAfter: result.unreadAfter,
+				horizon: result.horizon,
+				note: `Messages are shown as the channel last reported them; a sender may have edited or deleted one since. This chat history is visible from ${
+					floor ?? 'the start of the recording'
+				}${result.horizon.prePairing > 0 ? `, including ${result.horizon.prePairing} messages synced from before this tenant paired the account` : ''}. Earlier messages cannot be retrieved from this channel.`
+			};
 		}
 		case 'use_image': {
 			const asset = yield* decode(name, ImageAsset, input);

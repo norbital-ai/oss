@@ -255,23 +255,36 @@ const AutomationStopInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString
 });
-const MaxInboundAttachmentBytes = 8 * 1024 * 1024;
-const InboundAttachment = Schema.Struct({
+/**
+ * The hard wire bound on one attachment crossing the host boundary.
+ *
+ * Per-kind caps live in the transport — this is the outer ceiling that keeps one invocation from
+ * carrying an unbounded payload. Bytes are absent when the provider could not supply them (an
+ * over-cap video, an expired document), which is recorded rather than dropped.
+ */
+const MaxInboundAttachmentBytes = 32 * 1024 * 1024;
+export const InboundAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,
 	attachmentId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-	mimeType: Schema.Literals(['image/jpeg', 'image/png']),
+	kind: Schema.Literals(['image', 'video', 'audio', 'document', 'sticker', 'other']),
+	mimeType: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
 	fileName: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
 	byteLength: Schema.Number.check(
 		Schema.isInt(),
 		Schema.isBetween({ minimum: 1, maximum: MaxInboundAttachmentBytes })
 	),
-	bytesBase64: Schema.String.check(
-		Schema.isMinLength(1),
-		Schema.isMaxLength(Math.ceil(MaxInboundAttachmentBytes / 3) * 4),
-		Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+	bytesBase64: Schema.optionalKey(
+		Schema.String.check(
+			Schema.isMinLength(1),
+			Schema.isMaxLength(Math.ceil(MaxInboundAttachmentBytes / 3) * 4),
+			Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+		)
 	)
 });
-const EnvoyDelivery = Schema.Struct({
+export interface InboundAttachment extends Schema.Schema.Type<typeof InboundAttachment> {}
+
+/** One message a host took off a transport: wire facts, no claimed authority. */
+export const EnvoyDelivery = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	conversationKind: Schema.Literals(['dm', 'group']),
 	messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
@@ -285,13 +298,19 @@ const EnvoyDelivery = Schema.Struct({
 			(attachments) => attachments.length <= 8 || 'at most 8 inbound attachments are accepted'
 		)
 	),
+	/** Backfilled or synced history: recorded in the replica, never a turn. */
+	historical: Schema.optionalKey(Schema.Boolean),
+	/** A provider-reported edit of an already-seen message. */
+	edited: Schema.optionalKey(Schema.Boolean),
 	sender: Schema.optionalKey(
 		Schema.Struct({
 			id: Schema.NonEmptyString,
-			displayName: Schema.optionalKey(Schema.NonEmptyString)
+			displayName: Schema.optionalKey(Schema.NonEmptyString),
+			username: Schema.optionalKey(Schema.NonEmptyString)
 		})
 	)
 });
+export interface EnvoyDelivery extends Schema.Schema.Type<typeof EnvoyDelivery> {}
 const NotificationInput = Schema.Struct({
 	id: Schema.NonEmptyString,
 	recipient: Schema.NonEmptyString,

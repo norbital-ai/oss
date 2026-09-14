@@ -48,6 +48,7 @@
 	import { toast } from 'svelte-sonner';
 	import {
 		getCollectionClientForSurface,
+		getOptionalCollectionRecordNoticeContext,
 		setCollectionClientContext
 	} from '#lib/collection-runtime';
 	import {
@@ -151,6 +152,8 @@
 		deleteAction,
 		recordMetadata = [],
 		disabled = false,
+		readonly = false,
+		notice = 'inline',
 		loading = false,
 		skeletonRows = 4,
 		class: className,
@@ -193,6 +196,20 @@
 	const deleteRestriction = $derived(
 		recordId ? collectionRecordRestriction(resolvedRecordMetadata, 'delete') : null
 	);
+	/**
+	 * The record-state notice normally sits at the top of the form. `notice="header"` hands it to
+	 * the record sheet's header instead, when one is mounted above the form — the lock then reads
+	 * in the chrome rather than scrolling away with the fields.
+	 */
+	const noticeContext = getOptionalCollectionRecordNoticeContext();
+	const noticeInHeader = $derived(
+		notice === 'header' && noticeContext != null && resolvedRecordMetadata.length > 0
+	);
+	$effect(() => {
+		if (!noticeInHeader || noticeContext == null) return;
+		noticeContext.registerNotice(metadataNotice);
+		return () => noticeContext.registerNotice(null);
+	});
 	// One field lookup per definition, so validation never re-searches the field list per row.
 	const fieldByName = $derived(
 		new Map(definition.fields.map((field) => [field.name, field] as const))
@@ -248,7 +265,7 @@
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
-		disabled: () => loading || disabled || updateRestriction != null,
+		disabled: () => loading || disabled || readonly || updateRestriction != null,
 		submitSuccessBehavior: () => (lastSubmissionKind === 'pendingApproval' ? 'none' : 'commit'),
 		successMessage: null,
 		translate: t,
@@ -321,6 +338,7 @@
 		dirty: (name) => form.hasChangesForPath(name),
 		errors: (name) => form.getFieldErrors(name),
 		disabled: () => form.disabled || submissionPending,
+		readonly: () => readonly,
 		historyAvailable: () => Boolean(recordId && workspaceClient.history),
 		loadHistory,
 		history: () => historyQuery?.current ?? [],
@@ -407,6 +425,10 @@
 	});
 </script>
 
+{#snippet metadataNotice()}
+	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" />
+{/snippet}
+
 {#snippet formFooter()}
 	<Stack as="footer" gap="sm" class="border-t" aria-label={t('form.actionsLabel')}>
 		{#if form.errorMessage}
@@ -483,9 +505,11 @@
 	class={className}
 	aria-busy={loading || submissionPending}
 	onsubmit={submit}
-	bottom={sendMode === 'manual' ? formFooter : undefined}
+	bottom={sendMode === 'manual' && !readonly ? formFooter : undefined}
 >
-	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />
+	{#if !noticeInHeader}
+		<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />
+	{/if}
 	<Scroll name={t('form.fieldsRegion', { name: String(collection) })}>
 		<div class="flex min-h-full min-w-0 flex-col pb-4">
 			{#if loading}

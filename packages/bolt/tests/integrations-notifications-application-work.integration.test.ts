@@ -86,7 +86,7 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 		const ids = buildSchemaPlan(envoyedWorkspace()).steps.map(({ id }) => id);
 		expect(ids).toContain('collection:bolt_channel_links');
 		expect(ids).toContain('collection:bolt_envoy_receipts');
-		expect(ids).toContain('collection:bolt_envoy_inbound');
+		expect(ids).toContain('collection:bolt_envoy_messages');
 	});
 
 	/**

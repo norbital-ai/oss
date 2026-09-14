@@ -629,7 +629,7 @@
 				{/if}
 			</Inline>
 
-			{@const canResize = layout.canResize && !disabled}
+			{@const canResize = layout.canResize}
 			{@const { id: columnId } = inst}
 			{@const isResizing = resizer.activeColumnId === columnId}
 			{#if canResize}

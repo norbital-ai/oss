@@ -50,6 +50,11 @@ export interface MatrixRendererBaseProps<TRow extends MatrixRow> {
 	rows: TRow[];
 	columns: readonly MatrixColumn<TRow>[];
 	disabled?: boolean;
+	/**
+	 * Display-only: every cell renders its display branch instead of a muted disabled control.
+	 * `disabled` keeps the controls on screen, greyed; a readonly form renders the values.
+	 */
+	readonly?: boolean;
 	emptyMessage?: string;
 	class?: string;
 	/** When false, grow with content and let a parent own scrolling (avoids nested scroll traps). */
@@ -68,7 +73,8 @@ export interface MatrixRendererBaseProps<TRow extends MatrixRow> {
 
 export type MatrixRendererAddRowsProps<TRow extends MatrixRow> =
 	| {
-			allowAddRows?: true;
+			/** A boolean so a caller can gate it (`allowAddRows={!disabled}`); true unless false. */
+			allowAddRows?: boolean;
 			createRow: () => TRow;
 			addRowDisabled?: boolean;
 	  }

@@ -13,6 +13,7 @@
 		dirty: (name: string) => boolean;
 		errors: (name: string) => string[];
 		disabled: () => boolean;
+		readonly: () => boolean;
 		historyAvailable: () => boolean;
 		loadHistory: () => void;
 		history: () => readonly CollectionRecordHistoryEntry[];
@@ -42,9 +43,10 @@
 		name,
 		label,
 		description,
+		descriptionExtra,
 		class: className,
 		hidden = false,
-		readonly = false,
+		readonly: readonlyProp,
 		disabled: disabledProp,
 		placeholder,
 		relationOptions,
@@ -56,6 +58,7 @@
 	const field = $derived(context.field(name));
 	const value = $derived(context.value(name));
 	const disabled = $derived((disabledProp ?? false) || context.disabled());
+	const readonly = $derived(readonlyProp ?? context.readonly());
 	const fieldId = $derived(`${context.collectionName()}-${name}`);
 	const dirty = $derived(context.dirty(name));
 	const errors = $derived(context.errors(name));
@@ -87,8 +90,17 @@
 				error={context.historyError()}
 				load={context.loadHistory}
 			/>
-			{#if description}
-				<Tooltip delayDuration={200} side="bottom" align="start" sideOffset={6}>
+			{#if description || descriptionExtra}
+				<Tooltip
+					delayDuration={200}
+					side="bottom"
+					align="start"
+					sideOffset={6}
+					contentClass={descriptionExtra
+						? 'max-w-[38rem] border bg-popover text-popover-foreground'
+						: 'max-w-72 border bg-popover text-popover-foreground'}
+					arrowClasses="text-popover"
+				>
 					{#snippet trigger({ props })}
 						<button
 							{...props}
@@ -100,9 +112,14 @@
 						</button>
 					{/snippet}
 					{#snippet content()}
-						<p class="max-w-72 px-2.5 py-2 text-left text-xs text-muted-foreground">
-							{description}
-						</p>
+						<div class="px-2.5 py-2 text-left text-xs text-muted-foreground">
+							{#if description}
+								<p>{description}</p>
+							{/if}
+							{#if descriptionExtra}
+								<div class="mt-2">{@render descriptionExtra()}</div>
+							{/if}
+						</div>
 					{/snippet}
 				</Tooltip>
 			{/if}

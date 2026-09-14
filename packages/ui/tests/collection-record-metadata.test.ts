@@ -70,14 +70,31 @@ test('an empty protected approval field injects no system metadata', () => {
 	assert.deepEqual(resolveCollectionRecordMetadata({ approval_id: '' }, undefined, copy), []);
 });
 
-test('warning metadata produces the same leading accent for every collection surface', () => {
-	const metadata = resolveCollectionRecordMetadata(
+test('the leading accent marks locked and in-approval records, and nothing else', () => {
+	const flagged = resolveCollectionRecordMetadata(
 		{},
 		[{ kind: 'flag', tone: 'warning', label: 'Suspicious', description: 'Review this record.' }],
 		copy
 	);
-	assert.deepEqual(collectionRecordLeadingAccent(metadata), {
-		markerClass: 'w-1 bg-warning',
-		tooltip: 'Review this record.'
+	assert.equal(
+		collectionRecordLeadingAccent(flagged),
+		null,
+		'a flag is a label, not a state of the record'
+	);
+
+	const locked = resolveCollectionRecordMetadata(
+		{},
+		[{ kind: 'restriction', operations: ['update', 'delete'], reason: 'Payroll consumed it.' }],
+		copy
+	);
+	assert.deepEqual(collectionRecordLeadingAccent(locked), {
+		markerClass: 'inset-y-1 w-1 rounded-r-full bg-warning',
+		tooltip: 'Payroll consumed it.'
+	});
+
+	const inApproval = resolveCollectionRecordMetadata({ approval_id: 'approval-1' }, undefined, copy);
+	assert.deepEqual(collectionRecordLeadingAccent(inApproval), {
+		markerClass: 'inset-y-1 w-1 rounded-r-full bg-brand',
+		tooltip: copy.pendingApprovalReason
 	});
 });

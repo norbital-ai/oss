@@ -566,11 +566,23 @@ const envoyReceiptModel = defineModel(
 	}
 );
 
-const envoyInboundModel = defineModel(
+/**
+ * The channel replica: every message the chat shows, both directions, in arrival-independent order.
+ *
+ * This is not a drain buffer. A row is appended once, keyed by the provider's own message identity,
+ * and stays durable: addressed rows are also admitted to the agent transcript, ambient rows are read
+ * on demand through `read_messages`, and outbound rows are written from the send receipt. Sync and
+ * backfill append with `origin` set and land pre-read, so the unread count is live ambient only.
+ */
+const envoyMessageModel = defineModel(
 	{
 		envoy_name: text().notNull(),
+		/** The agent conversation this chat projects to; the read tool and preempt query by it. */
 		conversation_id: text().notNull(),
 		transport_conversation_id: text().notNull(),
+		direction: text().notNull(),
+		/** `live` | `sync` | `backfill` | `send`. */
+		origin: text().notNull().default('live'),
 		external_message_id: text().notNull(),
 		receipt_key: text().notNull().unique(),
 		sender_external_id: text(),
@@ -583,6 +595,9 @@ const envoyInboundModel = defineModel(
 			.default(sql`'[]'::jsonb`),
 		subject: jsonb().notNull(),
 		addressed: boolean().notNull(),
+		/** Null is unread; `sync` for history, the tool call's effect id for an on-demand read. */
+		read_by: text(),
+		edited_at: instant(),
 		status: text().notNull().default('pending'),
 		answered_at: instant()
 	},
@@ -590,7 +605,15 @@ const envoyInboundModel = defineModel(
 		history: false,
 		indexes: [
 			{
-				name: 'bolt_envoy_inbound_pending',
+				name: 'bolt_envoy_messages_order',
+				columns: ['conversation_id', 'direction', 'sent_at']
+			},
+			{
+				name: 'bolt_envoy_messages_unread',
+				columns: ['conversation_id', 'direction', 'read_by', 'sent_at']
+			},
+			{
+				name: 'bolt_envoy_messages_pending',
 				columns: ['conversation_id', 'status', 'sent_at']
 			}
 		]
@@ -871,7 +894,7 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_approvals: approvalStateModel,
 	bolt_audit: auditModel,
 	bolt_envoy_receipts: envoyReceiptModel,
-	bolt_envoy_inbound: envoyInboundModel,
+	bolt_envoy_messages: envoyMessageModel,
 	bolt_integrations: integrationModel,
 	bolt_integration_inbox: integrationInboxModel,
 	bolt_integration_outbox: integrationOutboxModel,

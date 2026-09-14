@@ -218,7 +218,9 @@ export { Activation, Invocation, InvocationScope, PluginTrustedContext } from '.
 export {
 	ApprovalState,
 	DataBrowserCommandContract,
+	EnvoyDelivery,
 	EnvoyStatus,
+	InboundAttachment,
 	SecretsStatus,
 	SystemCommandContracts,
 	ConversationControlRequest,

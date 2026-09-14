@@ -49,6 +49,7 @@
 		rows = $bindable(),
 		columns,
 		disabled = false,
+		readonly = false,
 		emptyMessage = t('dataRenderer.noRows'),
 		class: className,
 		bounded = true,
@@ -227,6 +228,7 @@
 		row={tableRow}
 		{column}
 		disabled={cellDisabled}
+		{readonly}
 		{borderless}
 		onValueChange={(value) => updateCell(tableRow.__matrixRowId, column, value)}
 		onRowChange={(patch) => patchRow(tableRow.__matrixRowId, patch)}
