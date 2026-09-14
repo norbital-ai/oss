@@ -283,6 +283,10 @@ export interface RelationDefinition {
 	 * over attendance — and a declaration that reads as meaningful meant nothing at all.
 	 */
 	readonly cascade?: boolean;
+	/** Deleting the target clears this relation's key (`ON DELETE SET NULL`). */
+	readonly setNull?: boolean;
+	/** This key's existence check defers to commit (`DEFERRABLE INITIALLY DEFERRED`). */
+	readonly deferrable?: boolean;
 }
 
 /** The renderer vocabulary retained from the authored column builder. */
@@ -414,7 +418,13 @@ export interface CollectionCatalogEntry {
 	readonly name: string;
 	readonly recordLabel?: string;
 	readonly fields: ReadonlyArray<CollectionCatalogField>;
-	readonly relationships: ReadonlyArray<CollectionCatalogRelation & { readonly cascade?: true }>;
+	readonly relationships: ReadonlyArray<
+		CollectionCatalogRelation & {
+			readonly cascade?: true;
+			readonly setNull?: true;
+			readonly deferrable?: true;
+		}
+	>;
 }
 /** Owns collection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const collection = <const Fields extends Readonly<Record<string, FieldDefinition>>>(

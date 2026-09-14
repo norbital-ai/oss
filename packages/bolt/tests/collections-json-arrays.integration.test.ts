@@ -12,7 +12,7 @@ import {
 	emptyAuthoredRuntime
 } from '../src/runtime/collections/authored.js';
 import * as Database from '../src/runtime/facilities/database.js';
-import { AI, Connector, Files, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
+import { AI, Connector, Files, HostTools, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import * as Workspace from '../src/runtime/workspace.js';
 import * as TaskQueue from '../src/runtime/tasks/tasks.js';
@@ -174,6 +174,7 @@ const testLayer = (
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
 				Connector.layer(undefined, context),
+				HostTools.layer(undefined, context),
 				secrets,
 				taskQueue,
 				automations,

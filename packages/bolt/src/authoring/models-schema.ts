@@ -695,6 +695,7 @@ export type CustomTypeFactoryOptions<
 > = D['schema'] extends (options: infer O) => Schema.Top ? O : never;
 
 const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete');
+const relationshipDeferred = Symbol.for('@norbital-ai/bolt/relationship-deferrable');
 /**
  * Owns custom declaration validation and non-enumerable relationship metadata.
  *
@@ -727,6 +728,34 @@ const CustomTypeAuthoring = {
 	cascade: <T extends object>(relationship: T): T => {
 		Reflect.defineProperty(relationship, relationshipDelete, {
 			value: 'cascade',
+			enumerable: false
+		});
+		return relationship;
+	},
+	/**
+	 * The nullable end of a relation: deleting the target clears the key rather than deleting the
+	 * row or refusing the delete. The RFC's `payslip_id` is the reason this exists — a draft's
+	 * deletion releases what it pinned without erasing the record that was pinned.
+	 */
+	setNull: <T extends object>(relationship: T): T => {
+		Reflect.defineProperty(relationship, relationshipDelete, {
+			value: 'set null',
+			enumerable: false
+		});
+		return relationship;
+	},
+	/**
+	 * Defers this key's existence check to commit (`DEFERRABLE INITIALLY DEFERRED`).
+	 *
+	 * A relation whose referenced row is written in the same transaction, after the referencing
+	 * one, needs the check deferred: `payroll_runs` pins its entries before its payslips insert,
+	 * and the pins must still be verified before the transaction commits. Composes with
+	 * `cascade(...)` and `setNull(...)`, which decide what deletion does; this decides when the
+	 * reference is checked.
+	 */
+	deferrable: <T extends object>(relationship: T): T => {
+		Reflect.defineProperty(relationship, relationshipDeferred, {
+			value: true,
 			enumerable: false
 		});
 		return relationship;
@@ -779,10 +808,16 @@ export const platformCustomTypes = Object.freeze({
 });
 
 export const cascade = CustomTypeAuthoring.cascade;
+export const setNull = CustomTypeAuthoring.setNull;
+export const deferrable = CustomTypeAuthoring.deferrable;
 
 /** Read only by authoring introspection after the relationship declaration has executed. */
 export const relationshipCascades = (value: unknown): boolean =>
 	isRecord(value) && Reflect.get(value, relationshipDelete) === 'cascade';
+export const relationshipSetsNull = (value: unknown): boolean =>
+	isRecord(value) && Reflect.get(value, relationshipDelete) === 'set null';
+export const relationshipDeferrables = (value: unknown): boolean =>
+	isRecord(value) && Reflect.get(value, relationshipDeferred) === true;
 
 /**
  * What a `group()` declaration may say about a group of apps.

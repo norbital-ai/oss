@@ -833,8 +833,12 @@ export interface InferenceTool<Input = unknown> {
 
 /**
  * A structured inference: one prompt, optionally some tools the model may use on the way, and a
- * schema the answer must decode to. Without `tools` it is a single provider turn; with them the
+ * schema the answer must decode to. Without tools it is a single provider turn; with them the
  * model researches with tool turns for as long as it needs, then answers.
+ *
+ * `hostTools` names host capabilities (the browser an agent drives, for instance) the runtime
+ * resolves from the host's own catalogue and dispatches itself; `tools` are closures the author
+ * writes. A name the host does not advertise is a refusal, never a silently missing tool.
  */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
@@ -847,6 +851,7 @@ interface StructuredInferenceInput<Output> {
 		readonly detail?: 'auto' | 'low' | 'high';
 	}>;
 	readonly tools?: ReadonlyArray<InferenceTool>;
+	readonly hostTools?: ReadonlyArray<string>;
 }
 
 type AuthoredReadDatabase<S extends AnySchema> = {

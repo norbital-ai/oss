@@ -333,7 +333,9 @@ const authoredForeignKey = (
 	// `ON DELETE CASCADE` only where the workspace asked for it with `cascade(...)`. Without this the
 	// wrapper was decorative and every key was `NO ACTION`, so deleting a parent that owned children
 	// was refused by the database — a payroll run could not be deleted once it had written a payslip.
-	return relation.cascade === true ? constraint.onDelete('cascade') : constraint;
+	if (relation.cascade === true) return constraint.onDelete('cascade');
+	if (relation.setNull === true) return constraint.onDelete('set null');
+	return constraint;
 };
 
 /**
@@ -560,6 +562,34 @@ const restoreGeneratedColumnNotNull = (
 };
 
 /**
+ * Append `DEFERRABLE INITIALLY DEFERRED` to the keys a relation asked for it with `deferrable(...)`.
+ *
+ * The clause has no Drizzle builder to carry it (rc.4's `ForeignKeyBuilder` exposes only
+ * `onDelete`/`onUpdate`), and drizzle-kit emits the constraint text itself, so the statement is
+ * repaired at the same boundary as the generated-column repair below. The constraint name is the
+ * one `authoredForeignKey` declares, so a flagged relation is matched by name, never by heuristic.
+ */
+const markDeferrableConstraints = (
+	statements: ReadonlyArray<string>,
+	relations: ReadonlyArray<RelationDefinition>
+): ReadonlyArray<string> => {
+	const deferred = new Set(
+		relations.flatMap((relation) => {
+			const { from, to } = relation;
+			if (relation.deferrable !== true || from === undefined || to === undefined) return [];
+			return [`${from.collection}_${from.column}_${to.collection}_fk`];
+		})
+	);
+	if (deferred.size === 0) return statements;
+	return statements.map((statement) => {
+		const matched = /^(ALTER TABLE .* ADD CONSTRAINT "([^"]+)" FOREIGN KEY .*);$/.exec(statement);
+		const name = matched?.[2];
+		if (matched?.[1] === undefined || name === undefined || !deferred.has(name)) return statement;
+		return `${matched[1]} DEFERRABLE INITIALLY DEFERRED;`;
+	});
+};
+
+/**
  * The identity drizzle-kit's differ itself uses to pair one DDL entity across two snapshots.
  *
  * Reproduced from its `getCompositeKey` — `schema`, `table`, `name`, `entityType` — because the
@@ -626,9 +656,12 @@ export const planWorkspaceMigration = (
 			try: () => generateMigration(intermediate, snapshot),
 			catch: toError
 		});
-		const statements = restoreGeneratedColumnNotNull(
-			orderGeneratedColumnDependencies([...removals, ...additions]),
-			snapshot
+		const statements = markDeferrableConstraints(
+			restoreGeneratedColumnNotNull(
+				orderGeneratedColumnDependencies([...removals, ...additions]),
+				snapshot
+			),
+			input.authoring.relationships
 		);
 		if (statements.length === 0) return undefined;
 		return { tag: migrationTag(input.name ?? 'auto', input.at), statements, snapshot };

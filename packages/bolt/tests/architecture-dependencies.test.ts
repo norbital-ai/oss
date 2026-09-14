@@ -155,7 +155,10 @@ describe('Bolt architecture boundaries', () => {
 		// 9,015 -> 9,038: app identity reads `<AppShell>` literal props (icon, banner,
 		// thumbnail) because translated titles/descriptions are runtime-only; the legacy
 		// head-tag path stays for shell-less apps.
-		expect(total).toBeLessThanOrEqual(9_038);
+		// 9,038 -> 9,126: `setNull(...)`/`deferrable(...)` relation grammar, carried from the
+		// authoring schema through introspection, and the deferred-key clause the compiler has to
+		// append itself — drizzle-kit exposes no builder for `DEFERRABLE INITIALLY DEFERRED`.
+		expect(total).toBeLessThanOrEqual(9_126);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -207,7 +210,10 @@ describe('Bolt architecture boundaries', () => {
 		// agent driver; public command input cannot supply or impersonate this claim.
 		// 17,977 -> 17,979: `api.infer` takes an optional system directive, so the authored
 		// inference can state the goal and current state instead of folding them into the prompt.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_979);
+		// 17,979 -> 17,992: `api.infer` names host tools (`browser_*`) and the runtime resolves,
+		// refusal-checks, and dispatches them from the host's own catalogue, so the collections
+		// layer carries the `HostTools` requirement.
+		expect(amendedAggregate).toBeLessThanOrEqual(17_992);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -226,7 +232,9 @@ describe('Bolt architecture boundaries', () => {
 		// 4,897 -> 4,930: concurrent approved resumes replay the exact committed browser ledger
 		// before a losing invocation can conflict the request; settlement failures remain visible.
 		// The shared replay check also avoids rerunning hooks on later delivery.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_930);
+		// 4,930 -> 4,932: authored inference resolves host tools through the collections layer, which
+		// now carries the `HostTools` service to the invoke boundary.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_932);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work

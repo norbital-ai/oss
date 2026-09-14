@@ -34,6 +34,8 @@ import {
 	isReferenceBuilder,
 	platformCustomTypes,
 	relationshipCascades,
+	relationshipSetsNull,
+	relationshipDeferrables,
 	referenceStorageColumn,
 	vector,
 	type AnyModelFieldBuilder,
@@ -595,7 +597,9 @@ const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefin
 				name,
 				source,
 				...described,
-				...(relationshipCascades(value) ? { cascade: true } : {})
+				...(relationshipCascades(value) ? { cascade: true } : {}),
+				...(relationshipSetsNull(value) ? { setNull: true } : {}),
+				...(relationshipDeferrables(value) ? { deferrable: true } : {})
 			});
 		}
 	}
@@ -603,6 +607,8 @@ const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefin
 		relations.map((relation) => {
 			let { from, to } = relation;
 			let cascade = relation.cascade === true;
+			let setNull = relation.setNull === true;
+			let deferred = relation.deferrable === true;
 			if (from === undefined || to === undefined) {
 				if (relation.cardinality === 'one')
 					throw new TypeError(`Relationship ${relation.source}.${relation.name} has no endpoints.`);
@@ -622,10 +628,14 @@ const compileRelationships = (declaration: unknown): ReadonlyArray<RelationDefin
 				from = resolved.from;
 				to = resolved.to;
 				cascade ||= resolved.cascade === true;
+				setNull ||= resolved.setNull === true;
+				deferred ||= resolved.deferrable === true;
 			}
 			return {
 				...relation,
 				...(cascade ? { cascade: true } : {}),
+				...(setNull ? { setNull: true } : {}),
+				...(deferred ? { deferrable: true } : {}),
 				...orderedRelationshipEndpoints(relation, from, to)
 			};
 		})
@@ -795,7 +805,9 @@ export const collectionCatalogEntry = (
 			name: relation.name,
 			target: relation.target,
 			cardinality: relation.cardinality,
-			...(relation.cascade === true ? { cascade: true as const } : {})
+			...(relation.cascade === true ? { cascade: true as const } : {}),
+			...(relation.setNull === true ? { setNull: true as const } : {}),
+			...(relation.deferrable === true ? { deferrable: true as const } : {})
 		}))
 });
 

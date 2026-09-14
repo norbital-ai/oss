@@ -693,9 +693,7 @@ const generatePlanVerdict = Effect.fn('Agents.generatePlanVerdict')(function* (
 		...(input.toolOutputLimit === undefined ? {} : { toolOutputLimit: input.toolOutputLimit }),
 		modelId: input.modelId,
 		messages: [...input.messages],
-		...(input.maxOutputTokens === undefined
-			? {}
-			: { maxOutputTokens: input.maxOutputTokens }),
+		...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
 		output: { _tag: 'PlanVerdict' }
 	});
 	if (
@@ -3612,9 +3610,7 @@ export const layer = Layer.effect(
 												'workspace_search',
 												'agent_output_read',
 												'list_personal_skills',
-												'read_personal_skill',
-												'web_search',
-												'web_fetch'
+												'read_personal_skill'
 											].includes(tool.name))
 								)
 							]

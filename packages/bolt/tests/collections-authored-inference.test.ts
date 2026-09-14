@@ -1,7 +1,9 @@
 import {
 	AIGenerationResult,
 	AIResponse,
+	ConversationId,
 	EffectId,
+	HostToolResponse,
 	ProviderObservation,
 	type AIRequest
 } from '@norbital-ai/bolt-protocol';
@@ -10,6 +12,7 @@ import { Prompt } from 'effect/unstable/ai';
 import { describe, expect, it } from 'vitest';
 import { inferOp } from '../src/runtime/inference.js';
 import type { InferenceTool } from '../src/authoring/index.js';
+import { Subject } from '../src/runtime/identity/identity.js';
 
 const observation = (request: Extract<AIRequest, { _tag: 'Generate' }>) =>
 	ProviderObservation.make({
@@ -417,6 +420,112 @@ describe('authored inference tool loop', () => {
 		);
 		expect(exit._tag).toBe('Failure');
 		expect(requests).toHaveLength(0);
+	});
+});
+
+describe('authored inference host tools', () => {
+	const subject = Subject.make({
+		userId: 'admin-1',
+		tenantId: 'tenant-1',
+		teamPath: [],
+		policies: []
+	});
+	const catalogue = HostToolResponse.make({
+		output: {
+			tools: [
+				{
+					name: 'browser_read_page',
+					description: 'Read the page currently open.',
+					inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+					readOnly: true
+				}
+			]
+		}
+	});
+	const hostOf = (calls: Array<{ tool: string; input: unknown; sessionId?: string }>) => ({
+		effectId: EffectId.make('inference-host'),
+		subject,
+		conversationId: ConversationId.make('2f0a3b1c-9a5f-4b7e-8c2d-1a2b3c4d5e6f'),
+		hostTools: {
+			execute: (
+				_effectId: unknown,
+				request: { tool: string; input: unknown; sessionId?: string }
+			) => {
+				calls.push(request);
+				return Effect.succeed(
+					request.tool === 'capability_catalog'
+						? catalogue
+						: HostToolResponse.make({ output: { text: 'the open page' } })
+				);
+			}
+		}
+	});
+
+	it('declares a named host tool, dispatches it with the conversation and returns its result', async () => {
+		const requests: Array<AIRequest> = [];
+		const calls: Array<{ tool: string; input: unknown; sessionId?: string }> = [];
+		const infer = inferOp(
+			EffectId.make('inference-host'),
+			generateWith(
+				(_request, turn) =>
+					turn === 0
+						? AIGenerationResult.cases.Message.make({
+								message: assistant([toolCall('call-1', 'browser_read_page', {})])
+							})
+						: AIGenerationResult.cases.Message.make({ message: submit({ rate: 7.5 }) }),
+				requests
+			),
+			hostOf(calls)
+		);
+		const output = await Effect.runPromise(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({ rate: Schema.Number }),
+				prompt: 'Check the open page.',
+				hostTools: ['browser_read_page']
+			})
+		);
+		expect(output).toEqual({ rate: 7.5 });
+		expect(calls.map(({ tool }) => tool)).toEqual(['capability_catalog', 'browser_read_page']);
+		expect(calls[1]?.sessionId).toBe('2f0a3b1c-9a5f-4b7e-8c2d-1a2b3c4d5e6f');
+		const first = requests[0];
+		if (first?._tag !== 'Generate' || first.output._tag !== 'Message') throw new Error('turn');
+		expect(first.output.tools).toEqual([
+			{
+				name: 'browser_read_page',
+				description: 'Read the page currently open.',
+				inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+			},
+			expect.objectContaining({ name: 'return_result' })
+		]);
+		const closing = requests[1];
+		if (closing?._tag !== 'Generate') throw new Error('closing');
+		const toolMessage = closing.messages[2];
+		if (typeof toolMessage?.content === 'string') throw new Error('tool content');
+		expect((toolMessage?.content[0] as { result: unknown }).result).toEqual({
+			text: 'the open page'
+		});
+	});
+
+	it('refuses a host tool the host does not advertise, before any provider call', async () => {
+		const requests: Array<AIRequest> = [];
+		const calls: Array<{ tool: string; input: unknown; sessionId?: string }> = [];
+		const infer = inferOp(
+			EffectId.make('inference-host-missing'),
+			generateWith(() => AIGenerationResult.cases.Message.make({ message: submit({}) }), requests),
+			hostOf(calls)
+		);
+		const exit = await Effect.runPromiseExit(
+			infer({
+				model: 'provider/research',
+				schema: Schema.Struct({}),
+				prompt: 'x',
+				hostTools: ['web_fetch']
+			})
+		);
+		expect(exit._tag).toBe('Failure');
+		expect(requests).toHaveLength(0);
+		expect(calls.map(({ tool }) => tool)).toEqual(['capability_catalog']);
 	});
 });
 

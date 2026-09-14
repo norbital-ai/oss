@@ -192,6 +192,7 @@ const InvocationLayers = {
 					ai,
 					taskQueue,
 					syncCommit,
+					hostTools,
 					authoredLayer
 				)
 			)

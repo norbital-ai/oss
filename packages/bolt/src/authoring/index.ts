@@ -74,6 +74,8 @@ export {
 	platformCustomTypes,
 	reference,
 	refuse,
+	setNull,
+	deferrable,
 	text,
 	vector
 } from './models-schema.js';

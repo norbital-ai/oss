@@ -59,6 +59,8 @@ export type CollectionCatalogRelation = Readonly<{
 	readonly cardinality: 'one' | 'many';
 	/** Whether deleting an owner recursively deletes records reached through this edge. */
 	readonly cascade?: true;
+	readonly setNull?: true;
+	readonly deferrable?: true;
 }>;
 
 export type CollectionCatalogEntry = Readonly<{

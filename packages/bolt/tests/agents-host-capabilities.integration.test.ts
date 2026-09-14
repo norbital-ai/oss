@@ -33,7 +33,6 @@ const catalog: HostToolCatalog = {
 	tools: [
 		...[
 			['sandbox_bash', false],
-			['web_fetch', true],
 			['list_personal_skills', true],
 			['read_personal_skill', true],
 			['save_personal_skill', false]
@@ -171,7 +170,7 @@ describe('host capability discovery and execution', () => {
 			expect(first?.output._tag).toBe('Message');
 			if (first?.output._tag !== 'Message') throw new Error('Expected tool-capable generation');
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_read')).toBe(true);
-			for (const tool of ['web_fetch', 'list_personal_skills', 'read_personal_skill'])
+			for (const tool of ['list_personal_skills', 'read_personal_skill'])
 				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(true);
 			for (const tool of ['sandbox_bash', 'save_personal_skill'])
 				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(mode === 'agent');

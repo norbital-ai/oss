@@ -4,14 +4,17 @@ import { getErrorMessage } from '@norbital-ai/std';
 import {
 	AIRequest,
 	EffectId,
+	HostToolCatalog,
 	ImageAsset,
 	ModelId,
 	ProviderCallId,
 	type EffectId as EffectIdType
 } from '@norbital-ai/bolt-protocol';
+import type { ConversationId } from '@norbital-ai/bolt-protocol/facilities';
 import type { FileRef } from '#lib/authoring/models-schema.js';
-import type { AIInterface } from '#lib/runtime/facilities/services.js';
+import type { AIInterface, HostToolsInterface } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
 
 /**
  * The authored `api.infer`: a structured inference that may research with tools first.
@@ -45,6 +48,24 @@ export type InferenceRequest = Readonly<{
 	readonly model: string;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
 	readonly tools?: ReadonlyArray<AuthoredInferenceTool>;
+	/**
+	 * Host capabilities the turn may call, named as the host advertises them.
+	 *
+	 * The runtime resolves each name against the host's own catalogue and dispatches the call
+	 * itself, so an authored handler drives the same browser/tool surface an agent does without
+	 * the host tool's internals leaking into the workspace. A name the host does not advertise is
+	 * a refusal, never a silently missing tool.
+	 */
+	readonly hostTools?: ReadonlyArray<string>;
+}>;
+
+/** What an invocation must carry for an authored inference to call host tools. */
+export type InferenceHostToolContext = Readonly<{
+	readonly effectId: EffectIdType;
+	readonly subject: Identity.Subject;
+	/** The conversation the call belongs to, when there is one; the host scopes sessions by it. */
+	readonly conversationId?: ConversationId;
+	readonly hostTools: HostToolsInterface;
 }>;
 
 /**
@@ -196,7 +217,11 @@ const inferenceImageAssets = (
  * The authored schema remains the local decode authority. The provider receives one encoded Effect
  * message and the host resolves any image descriptors before its provider call.
  */
-export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
+export const inferOp = (
+	effectId: EffectIdType,
+	ai: AIInterface,
+	host?: InferenceHostToolContext
+) => {
 	let sequence = 0;
 	return (input: InferenceRequest): Effect.Effect<unknown, Database.FacilityError> =>
 		Effect.gen(function* () {
@@ -218,7 +243,8 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					key !== 'prompt' &&
 					key !== 'model' &&
 					key !== 'images' &&
-					key !== 'tools'
+					key !== 'tools' &&
+					key !== 'hostTools'
 			);
 			if (unsupportedKeys.length > 0) {
 				return yield* refusal(
@@ -266,6 +292,82 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					);
 				toolNames.add(tool.name);
 			}
+			/**
+			 * Resolve the host tools the request names against the host's own catalogue.
+			 *
+			 * A name the host does not advertise refuses here rather than reaching the provider as a
+			 * tool the model can call and the loop cannot dispatch: a browser read the host does not
+			 * offer must read as an authoring mistake, not as an answer researched without it.
+			 */
+			const requestedHostTools = [...new Set(input.hostTools ?? [])];
+			let hostTools: ReadonlyArray<{
+				readonly name: string;
+				readonly description: string;
+				readonly inputSchema: Schema.JsonObject;
+			}> = [];
+			if (requestedHostTools.length > 0) {
+				if (host === undefined)
+					return yield* refusal(
+						'ai.request_invalid',
+						'api.infer was asked for host tools, but this invocation has no host tool binding: only automation and hook work carries one.'
+					);
+				const catalogue = yield* host.hostTools
+					.execute(EffectId.make(`${inferenceId}:catalog`), {
+						tool: 'capability_catalog',
+						input: {}
+					})
+					.pipe(
+						Effect.mapError((error) =>
+							refusal('ai.host_tools_unavailable', getErrorMessage(error))
+						),
+						Effect.flatMap(({ output }) =>
+							Schema.decodeUnknownEffect(HostToolCatalog)(output).pipe(
+								Effect.mapError(() =>
+									refusal('ai.host_tools_unavailable', 'The host tool catalogue could not be read.')
+								)
+							)
+						)
+					);
+				hostTools = requestedHostTools.flatMap((name) => {
+					const tool = catalogue.tools.find((candidate) => candidate.name === name);
+					return tool === undefined ? [] : [tool];
+				});
+				const unknown = requestedHostTools.filter(
+					(name) => !hostTools.some((tool) => tool.name === name)
+				);
+				if (unknown.length > 0)
+					return yield* refusal(
+						'ai.request_invalid',
+						`This host advertises no ${unknown.map((name) => `"${name}"`).join(', ')} tool.`
+					);
+				for (const tool of hostTools) {
+					if (toolNames.has(tool.name))
+						return yield* refusal(
+							'ai.request_invalid',
+							`api.infer names "${tool.name}" both as an authored tool and as a host tool; keep one.`
+						);
+					toolNames.add(tool.name);
+				}
+			}
+			/** One host tool call, dispatched with the invocation's own identity. */
+			const callHostTool = (
+				context: InferenceHostToolContext,
+				call: Readonly<{ id: string; name: string; params: unknown }>
+			) => {
+				const requested = context.hostTools
+					.execute(EffectId.make(`${inferenceId}:host:${call.id}`), {
+						tool: call.name,
+						input: call.params as Schema.Json,
+						...(context.conversationId === undefined ? {} : { sessionId: context.conversationId })
+					})
+					.pipe(
+						Effect.map((response) => response.output),
+						Effect.mapError((error) => getErrorMessage(error))
+					);
+				return context.subject.system !== true && context.subject.policies.length === 0
+					? requested.pipe(Effect.provideService(Identity.CurrentSubject, context.subject))
+					: requested;
+			};
 			const conversation: Array<Prompt.MessageEncoded> = [
 				...(system === undefined ? [] : [system]),
 				message
@@ -319,6 +421,11 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 					name: tool.name,
 					description: tool.description,
 					inputSchema: Schema.toJsonSchemaDocument(tool.input).schema
+				})),
+				...hostTools.map((tool) => ({
+					name: tool.name,
+					description: tool.description,
+					inputSchema: tool.inputSchema
 				})),
 				{
 					name: INFERENCE_RESULT_TOOL,
@@ -409,9 +516,15 @@ export const inferOp = (effectId: EffectIdType, ai: AIInterface) => {
 				conversation.push(turn.result.message);
 				for (const call of calls) {
 					const tool = tools.find(({ name }) => name === call.name);
-					const outcome =
-						tool === undefined
-							? Exit.fail(`Unknown tool "${call.name}". Available: ${[...toolNames, INFERENCE_RESULT_TOOL].join(', ')}.`)
+					const isHostTool = hostTools.some(({ name }) => name === call.name);
+					const outcome = isHostTool
+						? host === undefined
+							? Exit.fail('This invocation has no host tool binding.')
+							: yield* Effect.exit(callHostTool(host, call))
+						: tool === undefined
+							? Exit.fail(
+									`Unknown tool "${call.name}". Available: ${[...toolNames, INFERENCE_RESULT_TOOL].join(', ')}.`
+								)
 							: yield* Effect.exit(
 									Schema.decodeUnknownEffect(tool.input)(call.params).pipe(
 										Effect.mapError(

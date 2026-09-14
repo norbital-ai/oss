@@ -65,7 +65,7 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { refusalOf } from '#lib/authoring/refusal.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { AI, Connector, Files, SyncCommit } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, Files, HostTools, SyncCommit } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -898,6 +898,7 @@ type LayerServices = Context.Service.Identifier<
 	| typeof TaskQueue.Service
 	| typeof Automations.Service
 	| typeof SyncCommit.Service
+	| typeof HostTools.Service
 	| typeof AuthoredRuntimeService
 >;
 
@@ -923,6 +924,7 @@ export const layerWith = (
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const syncCommit = yield* SyncCommit.Service;
+			const hostTools = yield* HostTools.Service;
 			const authored = yield* AuthoredRuntimeService;
 			const authoringCollectionNames = new Set([
 				...workspace.definition.collections
@@ -1751,7 +1753,7 @@ export const layerWith = (
 					return findNearest;
 				}
 			};
-			const authoringWritePorts = (effectId: EffectId) => ({
+			const authoringWritePorts = (effectId: EffectId, subject: Identity.Subject) => ({
 				...authoringReadPorts,
 				mutate,
 				delete: (
@@ -1776,7 +1778,7 @@ export const layerWith = (
 						}
 					),
 				startAutomation,
-				infer: inferOp(effectId, ai),
+				infer: inferOp(effectId, ai, { effectId, subject, hostTools }),
 				readFileAsset: (
 					file: Parameters<AuthoringOps<Database.FacilityError>['readFileAsset']>[0]
 				) => readFileAsset(effectId, files, file)
@@ -1788,7 +1790,7 @@ export const layerWith = (
 				staged?: HookWriteOps<StagedE>
 			) =>
 				makeAuthoringApi(
-					buildOpsService(authoringWritePorts(effectId), effectId, subject, depth, staged)
+					buildOpsService(authoringWritePorts(effectId, subject), effectId, subject, depth, staged)
 				);
 			const authoringReadOps = (effectId: EffectId, subject: Identity.Subject) =>
 				buildReadOpsService(authoringReadPorts, effectId, subject);
@@ -1829,7 +1831,7 @@ export const layerWith = (
 						makeAuthoringApi(
 							guardAuthoringOps(
 								buildOpsService(
-									authoringWritePorts(turnEffectId),
+									authoringWritePorts(turnEffectId, admitted.bolt_run_as),
 									turnEffectId,
 									admitted.bolt_run_as,
 									0,

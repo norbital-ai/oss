@@ -21,7 +21,7 @@ import {
 	emptyAuthoredRuntime
 } from '../src/runtime/collections/authored.js';
 import * as Database from '../src/runtime/facilities/database.js';
-import { AI, Connector, Files, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
+import { AI, Connector, Files, HostTools, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
 import * as TenantScope from '../src/runtime/tenant.js';
 import * as InvocationBudget from '../src/runtime/budget.js';
 import { Subject } from '../src/runtime/identity/identity.js';
@@ -702,6 +702,7 @@ const testLayer = (recorded: Array<string> = []) => {
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
 				Connector.layer(undefined, context),
+				HostTools.layer(undefined, context),
 				secrets,
 				taskQueue,
 				automations,
