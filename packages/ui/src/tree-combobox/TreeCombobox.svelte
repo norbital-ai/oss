@@ -77,7 +77,7 @@
 			aria-haspopup="tree"
 			aria-label={ariaLabel}
 			class={cn(
-				'flex h-8 w-full items-center gap-2 rounded border border-input bg-background p-1 pl-2 text-left shadow-xs hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
+				'flex h-9 w-full items-center gap-2 rounded border border-input bg-background p-1 pl-2 text-left shadow-xs hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
 				triggerClass,
 				{
 					'cursor-default': readonly,

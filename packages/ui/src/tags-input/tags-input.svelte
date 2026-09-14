@@ -326,7 +326,7 @@
 {:else}
 	<div
 		class={cn(
-			'flex h-8 w-full flex-nowrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
+			'flex h-9 w-full flex-nowrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
 			SCROLL_AXIS_CLASSES.x,
 			{ 'cursor-not-allowed opacity-50': disabled },
 			className

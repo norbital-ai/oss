@@ -608,7 +608,7 @@
 			aria-expanded={open}
 			aria-haspopup="listbox"
 			class={cn(
-				'flex min-h-8 w-full items-center rounded-md border border-input bg-background py-1 pr-2 pl-2',
+				'flex min-h-9 w-full items-center rounded-md border border-input bg-background py-1 pr-2 pl-2',
 				'hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset'
 			)}
 			role="combobox"

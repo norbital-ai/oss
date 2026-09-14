@@ -184,7 +184,7 @@
 		cn(
 			'flex min-w-0 w-full items-center gap-2 rounded-md p-1 pl-2',
 			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset',
-			truncate || !multiple ? baseHeight : 'min-h-8',
+			truncate || !multiple ? baseHeight : 'min-h-9',
 			{
 				'cursor-pointer justify-start overflow-hidden hover:bg-muted': readonly,
 				'border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground':

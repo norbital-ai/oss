@@ -91,7 +91,7 @@
 	/* STYLES                                                              */
 	/* ═══════════════════════════════════════════════════════════════════ */
 	const compactTextClass = 'text-xs';
-	const baseHeight = 'h-8';
+	const baseHeight = 'h-9';
 	const elementGap = 'gap-1';
 
 	/* ═══════════════════════════════════════════════════════════════════ */
