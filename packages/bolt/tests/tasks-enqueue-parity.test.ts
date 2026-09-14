@@ -140,12 +140,11 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			.filter((file) => TASK_ROW_WRITE.test(readFileSync(file, 'utf8')))
 			.map((file) => file.slice(RUNTIME.length + 1))
 			.toSorted();
-		// Agents no longer write the row themselves: every agent turn goes through the queue's
-		// claimed enqueue, which is the other reason it is not in this list.
+		// Agents and envoys no longer write the row themselves: every agent turn and every envoy drain
+		// goes through the queue's claimed enqueue, which is the other reason neither is in this list.
 		expect(writers).toEqual([
 			'approvals/approvals.ts',
 			'collections/collections.ts',
-			'envoys/envoys.ts',
 			'integrations/integrations.ts',
 			'tasks/queue.ts'
 		]);

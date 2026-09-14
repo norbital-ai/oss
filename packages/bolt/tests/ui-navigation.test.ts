@@ -22,7 +22,7 @@ const shellLabels: Readonly<Record<string, string>> = {
 	'bolt.shell.kiosk': 'Kiosk',
 	'bolt.shell.workspaceStudio': 'Workspace Studio',
 	'bolt.shell.organization': 'Organization',
-	'bolt.shell.agents': 'Agents',
+	'bolt.shell.envoys': 'Envoys',
 	'bolt.shell.secrets': 'Environment secrets'
 };
 const shellI18n = {

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import {
 	AgentId,
@@ -139,6 +139,94 @@ it('commits each part boundary before the provider finishes, then retains one co
 	expect(rows).toEqual([{ message: persisted[3]!.message, annotation: null }]);
 	// The settled row is the whole reply the provider produced, reasoning included.
 	expect(JSON.stringify(rows)).toContain('Reasoning finished.');
+});
+
+it('hands each completed non-final text part to the turn observer exactly once', async () => {
+	const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000123');
+	const encode = Schema.encodeSync(Prompt.Message);
+	const snapshots = [
+		encode(
+			Prompt.assistantMessage({
+				content: [
+					Prompt.reasoningPart({ text: 'None.' }),
+					Prompt.textPart({ text: 'Checking the pump.' })
+				]
+			})
+		),
+		encode(
+			Prompt.assistantMessage({
+				content: [
+					Prompt.reasoningPart({ text: 'None.' }),
+					Prompt.textPart({ text: 'Checking the pump.' }),
+					Prompt.textPart({ text: '' })
+				]
+			})
+		),
+		encode(
+			Prompt.assistantMessage({
+				content: [
+					Prompt.reasoningPart({ text: 'None.' }),
+					Prompt.textPart({ text: 'Checking the pump.' }),
+					Prompt.textPart({ text: 'All done.' })
+				]
+			})
+		)
+	];
+	harness = await makeBoltTestRuntime(undefined, {
+		ai: {
+			call: async (_metadata, request, _signal, onProgress) => {
+				if (request._tag === 'Catalog') return modelCatalogResponse();
+				if (request._tag !== 'Generate') throw new Error('Generate required');
+				for (const [sequence, message] of snapshots.entries()) {
+					await onProgress!(
+						Schema.decodeUnknownSync(Schema.Json)({
+							callId: request.callId,
+							sequence,
+							message,
+							activeParts: sequence === 2 ? [] : [sequence + 1]
+						})
+					);
+				}
+				return {
+					_tag: 'Success',
+					value: {
+						_tag: 'Generated',
+						result: { _tag: 'Message', message: snapshots[2]! },
+						observation: {
+							callId: request.callId,
+							provider: 'fixture',
+							model: request.modelId,
+							operation: 'language'
+						}
+					}
+				};
+			}
+		}
+	});
+	const agents = await harness.runtime.runPromise(Agents.Service);
+	await harness.runtime.runPromise(
+		agents.submit(harness.effectId('submit'), adminSubject, {
+			conversationId,
+			agentId: AgentId.make('web'),
+			message: Agents.userAgentInput('hi'),
+			mode: DirectiveMode.make('agent'),
+			priority: DirectivePriority.make('normal')
+		})
+	);
+	const streamed: Array<Agents.AssistantTextPart> = [];
+	const executed = await harness.runtime.runPromise(
+		agents.execute(harness.effectId('execute'), adminSubject, conversationId, (part) =>
+			Effect.sync(() => {
+				streamed.push(part);
+			})
+		)
+	);
+	// The closing part is the turn's answer, delivered from the result; everything before it was an
+	// update, handed over once while the turn was still running.
+	expect(streamed).toEqual([
+		expect.objectContaining({ index: 1, text: 'Checking the pump.' })
+	]);
+	expect(JSON.stringify(executed.output)).toContain('All done.');
 });
 
 it('keeps interrupted parts for display but excludes incomplete tool calls from the next conversation turn', async () => {

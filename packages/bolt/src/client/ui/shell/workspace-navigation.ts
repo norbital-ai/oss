@@ -22,7 +22,7 @@ type ShellMessageKey =
 	| 'bolt.shell.kiosk'
 	| 'bolt.shell.workspaceStudio'
 	| 'bolt.shell.organization'
-	| 'bolt.shell.agents'
+	| 'bolt.shell.envoys'
 	| 'bolt.shell.secrets';
 
 export type HostPlugin = Readonly<{
@@ -385,7 +385,7 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 				: plugin.key === 'organization'
 					? 'bolt.shell.organization'
 					: plugin.key === 'envoys'
-						? 'bolt.shell.agents'
+						? 'bolt.shell.envoys'
 						: plugin.key === 'environment_secrets'
 							? 'bolt.shell.secrets'
 							: undefined;

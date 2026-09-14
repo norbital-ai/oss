@@ -154,5 +154,9 @@ describe('Envoy on a grants-only policy', () => {
 				payload: { text: 'Recorded.' }
 			}
 		]);
+		const status = await harness.runtime.runPromise(
+			envoys.status(harness.effectId('status'), 'field_ops_whatsapp')
+		);
+		expect(status).toEqual({ envoy: 'field_ops_whatsapp', received: 1, replied: 1 });
 	});
 });

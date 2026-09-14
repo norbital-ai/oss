@@ -50,8 +50,7 @@ const PolicyCapabilities = Schema.Struct({
 	apps: Schema.optionalKey(Schema.Array(Schema.String)),
 	tools: Schema.optionalKey(Schema.Array(Schema.String)),
 	mcp: Schema.optionalKey(Schema.Array(Schema.String)),
-	skills: Schema.optionalKey(Schema.Array(Schema.String)),
-	envoyHistory: Schema.optionalKey(Schema.Literal('this_envoy'))
+	skills: Schema.optionalKey(Schema.Array(Schema.String))
 });
 const AuthoredRateLimitRule = Schema.Struct({
 	window: Schema.String,

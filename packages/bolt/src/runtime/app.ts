@@ -355,7 +355,6 @@ export const ActivationCommands = {
 			'integrations.pull',
 			'integrations.flush',
 			'envoys.receive',
-			'envoys.complete',
 			...workspace.automations.map(({ name }) => `automations.${name}`)
 		]
 			.filter((command, index, commands) => commands.indexOf(command) === index)

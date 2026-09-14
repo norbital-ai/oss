@@ -1160,21 +1160,12 @@ const BINDINGS = [
 		{ Command: session('envoy conversation object'), Task: task('envoy conversation object') },
 		(context, input) =>
 			Effect.flatMap(Envoys.Service, (envoys) =>
-				Effect.map(envoys.drain(context.effectId, input.envoy, input.conversationId), json)
-			)
-	),
-	binding(
-		'envoys.complete',
-		{ Command: session('envoy conversation object'), Task: task('envoy conversation object') },
-		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) =>
 				Effect.map(
-					envoys.complete(
+					envoys.drain(
 						context.effectId,
 						input.envoy,
 						input.conversationId,
-						input.output,
-						input.progressKey ?? null
+						context.scheduledTask
 					),
 					json
 				)

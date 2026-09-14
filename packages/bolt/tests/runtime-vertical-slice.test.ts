@@ -761,7 +761,6 @@ describe('runnable Bolt vertical slice', () => {
 				// `resume` because a rejection is followed up as deliberately as an approval is.
 				{ command: 'collections.discard' },
 				{ command: 'collections.resume' },
-				{ command: 'envoys.complete' },
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
@@ -772,6 +771,6 @@ describe('runnable Bolt vertical slice', () => {
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(6);
 	});
 });

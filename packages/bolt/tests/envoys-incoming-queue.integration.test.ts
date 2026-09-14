@@ -2,6 +2,9 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
@@ -10,8 +13,14 @@ import {
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
+import * as Agents from '../src/runtime/agents/agents.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import { envoySubject } from '../src/runtime/identity/static-identity.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	type BoltTestRuntime
+} from './support/bolt-test-layer.js';
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -88,6 +97,13 @@ const delivery = (messageId: string, text: string): Envoys.EnvoyDelivery => ({
 	attachments: []
 });
 
+/** What the host mints for a verified sender of this envoy: the declaration's policies, their id. */
+const envoySubjectForTest = envoySubject(
+	{ name: 'field_ops_whatsapp', policies: ['operator'] },
+	'test-tenant',
+	{ userId: 'contractor-7' }
+);
+
 const seedSender = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
 		`insert into "user" ("id", "name", "email", "tenantId", "channels")
@@ -101,8 +117,8 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('Envoy inbound Task queue', () => {
-	it('claims one deterministic batch, executes one Task, and settles only that batch', async () => {
+describe('Envoy inbound queue', () => {
+	it('queues each message as a steer on the chat conversation and answers the turn once', async () => {
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const sends: Array<CommunicationRequest> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
@@ -143,9 +159,10 @@ describe('Envoy inbound Task queue', () => {
 				envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
 			)
 		).toMatchObject({ drained: 2, status: 'answered' });
+		// Both messages are already waiting when the turn starts, so both steer it — no batch window,
+		// no second turn, and one answer written from the full picture.
 		expect(generations).toHaveLength(1);
 		const prompt = JSON.stringify(generations[0]?.messages);
-		expect(prompt).toContain('INBOUND BATCH');
 		expect(prompt).toContain('Start.');
 		expect(prompt).toContain('Also include the pump reading.');
 		expect(sends).toEqual([
@@ -166,14 +183,124 @@ describe('Envoy inbound Task queue', () => {
 			{ external_message_id: 'one', status: 'answered' },
 			{ external_message_id: 'two', status: 'answered' }
 		]);
+		// One chat, one conversation — the second message continues the first, it does not open a
+		// second one.
 		expect(
 			await harness.database.query(
 				`select status, agent_id, audience from conversation`
 			)
 		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
+		expect(
+			await harness.database.query(`select priority from conversation_message where state is not null`)
+		).toEqual([{ priority: 'steer' }, { priority: 'steer' }]);
 	});
 
-	it('deduplicates provider receipts and records /steer as Task priority without the command prefix', async () => {
+	it('keeps one conversation per group channel and lets every linked member steer it', async () => {
+		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
+		const sends: Array<CommunicationRequest> = [];
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				generations.push(request);
+				return { _tag: 'Success', value: generated(request, 'Group update recorded.') };
+			}
+		};
+		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+			call: async (_metadata, request) => {
+				sends.push(request);
+				return { _tag: 'Success', value: {} };
+			}
+		};
+		harness = await makeBoltTestRuntime(definition, { ai, communication });
+		await harness.database.query(
+			`insert into "user" ("id", "name", "email", "tenantId", "channels") values
+			 (md5('sam'::text)::uuid, 'Sam', 'sam@example.test', 'test-tenant', $1::jsonb),
+			 (md5('alex'::text)::uuid, 'Alex', 'alex@example.test', 'test-tenant', $2::jsonb)`,
+			[
+				JSON.stringify([{ type: 'whatsapp', address: '+65 9123 4567', verified: true }]),
+				JSON.stringify([{ type: 'whatsapp', address: '+65 9876 5432', verified: true }])
+			]
+		);
+		const envoys = await harness.runtime.runPromise(Envoys.Service);
+		const groupDelivery = (
+			messageId: string,
+			sender: string,
+			displayName: string,
+			text: string
+		): Envoys.EnvoyDelivery => ({
+			conversationId: '120363000000000000@g.us',
+			conversationKind: 'group',
+			messageId,
+			sentAt: '2026-08-31T04:00:00.000Z',
+			invocation: 'mention',
+			text,
+			sender: { id: sender, displayName },
+			attachments: []
+		});
+		expect(
+			(await harness.runtime.runPromise(
+				envoys.receive(
+					harness.effectId('receive:sam'),
+					'field_ops_whatsapp',
+					groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam', 'Pump done.')
+				)
+			)).status
+		).toBe('buffered');
+		expect(
+			(await harness.runtime.runPromise(
+				envoys.receive(
+					harness.effectId('receive:alex'),
+					'field_ops_whatsapp',
+					groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex', 'Valve done.')
+				)
+			)).status
+		).toBe('buffered');
+		const conversationId = 'field_ops_whatsapp:group:120363000000000000@g.us';
+		expect(
+			await harness.runtime.runPromise(
+				envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
+			)
+		).toMatchObject({ drained: 2, status: 'answered' });
+		// Two linked members, one channel, one conversation, one answer that covers both.
+		expect(
+			await harness.database.query(`select status, agent_id, audience from conversation`)
+		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
+		expect(generations).toHaveLength(1);
+		expect(JSON.stringify(generations[0]?.messages)).toContain('Pump done.');
+		expect(JSON.stringify(generations[0]?.messages)).toContain('Valve done.');
+		expect(sends).toHaveLength(1);
+	});
+
+	it('refuses a subject that does not hold the envoy policy', async () => {
+		harness = await makeBoltTestRuntime(definition);
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const envoyConversation = Agents.conversationIdFor(
+			'envoy:field_ops_whatsapp:dm:6591234567@s.whatsapp.net'
+		);
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('envoy-submit'), envoySubjectForTest, {
+				conversationId: envoyConversation,
+				agentId: AgentId.make('field_ops_whatsapp'),
+				message: Agents.userAgentInput('Start.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('steer')
+			})
+		);
+		await expect(
+			harness.runtime.runPromise(
+				agents.submit(harness.effectId('outsider-submit'), adminSubject, {
+					conversationId: envoyConversation,
+					agentId: AgentId.make('field_ops_whatsapp'),
+					message: Agents.userAgentInput('Another.'),
+					mode: DirectiveMode.make('agent'),
+					priority: DirectivePriority.make('steer')
+				})
+			)
+		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
+	});
+
+	it('deduplicates provider receipts and admits the message text verbatim', async () => {
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
@@ -189,23 +316,27 @@ describe('Envoy inbound Task queue', () => {
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
-		const steered = delivery('priority', '/steer Handle the safety alarm first.');
+		const text = 'Handle the safety alarm first.';
 		expect(
 			(await harness.runtime.runPromise(
-				envoys.receive(harness.effectId('receive:first'), 'field_ops_whatsapp', steered)
+				envoys.receive(harness.effectId('receive:first'), 'field_ops_whatsapp', delivery('priority', text))
 			)).status
 		).toBe('buffered');
 		expect(
 			(await harness.runtime.runPromise(
-				envoys.receive(harness.effectId('receive:duplicate'), 'field_ops_whatsapp', steered)
+				envoys.receive(
+					harness.effectId('receive:duplicate'),
+					'field_ops_whatsapp',
+					delivery('priority', text)
+				)
 			)).status
 		).toBe('duplicate');
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
 		await harness.runtime.runPromise(
 			envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
 		);
-		expect(JSON.stringify(generations[0]?.messages)).toContain('Handle the safety alarm first.');
-		expect(JSON.stringify(generations[0]?.messages)).not.toContain('/steer');
+		expect(generations).toHaveLength(1);
+		expect(JSON.stringify(generations[0]?.messages)).toContain(text);
 		expect(
 			await harness.database.query(`select priority from conversation_message where state is not null`)
 		).toEqual([{ priority: 'steer' }]);

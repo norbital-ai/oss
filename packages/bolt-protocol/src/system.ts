@@ -648,16 +648,6 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({
-		name: 'envoys.complete',
-		input: Schema.Struct({
-			envoy: Schema.NonEmptyString,
-			conversationId: Schema.NonEmptyString,
-			output: Schema.Json,
-			progressKey: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString))
-		}),
-		responses: [ok(Schema.Json)]
-	}),
-	commandContract({
 		name: 'envoys.status',
 		input: Schema.Struct({ envoy: Schema.NonEmptyString }),
 		responses: [ok(EnvoyStatus)],

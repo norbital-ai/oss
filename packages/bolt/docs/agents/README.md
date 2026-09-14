@@ -184,6 +184,29 @@ every descendant in the root conversation's workbench.
 
 ---
 
+## Envoys
+
+A transport chat is one conversation: one direct message and one group channel each map to exactly
+one `conversation`, for as long as the workspace lives. The host authenticates the wire and posts
+each inbound message to `envoys.receive`, which buffers it and wakes a claimed `envoys.drain`
+occurrence immediately — there is no batch window. The drain admits every addressed message as a
+`steer`, with its `submissionId` derived from the transport message id so a redelivery is the same
+message, then runs turns on the chat's conversation until nothing is left queued. A drain that
+finds another turn still working defers its own claim instead of polling.
+
+A message written mid-turn is consumed before the next model step; one written while the assistant
+is idle starts the next turn on the same transcript. Because the conversation is the chat's and not
+one sender's, every member the host verifies acts under the envoy's declared policies — the first
+sender's id stays the durable owner, and admission and execution both accept any subject holding
+exactly those policies.
+
+Assistant text parts are delivered as they close. Everything before the final part is posted to the
+transport as a short update the moment it is written; the final part is the turn's answer, sent
+when the turn settles. Tool calls and reasoning never leave the workspace: they stay in
+`conversation_message` rows, which the web variant of the transcript renders.
+
+---
+
 ## Five durable collections
 
 These ordinary Bolt system collections are the complete logical agent store:

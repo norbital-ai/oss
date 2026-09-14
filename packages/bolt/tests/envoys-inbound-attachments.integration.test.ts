@@ -205,7 +205,7 @@ describe('Envoy Task-scoped attachments', () => {
 		]);
 	});
 
-	it('restores the claimed inbound row when staged bytes disappear before Task admission', async () => {
+	it('leaves the inbound row pending when staged bytes disappear before admission', async () => {
 		const files = memoryFiles();
 		let generationCount = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {

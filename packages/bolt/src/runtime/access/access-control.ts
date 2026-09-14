@@ -335,7 +335,6 @@ type SubjectCapabilities = Readonly<{
 	readonly tools: ReadonlySet<string>;
 	readonly mcp: ReadonlySet<string>;
 	readonly skills: ReadonlySet<string>;
-	readonly envoyHistory: boolean;
 }>;
 
 /** The `NonEmptyString` predicate, built once: it is evaluated for every team-tree row. */
@@ -790,8 +789,7 @@ export const layer = Layer.effect(
 								mcp === undefined ? [] : [mcp.server]
 							)
 						),
-						skills: new Set(workspace.definition.skills.map(({ name }) => name)),
-						envoyHistory: true
+						skills: new Set(workspace.definition.skills.map(({ name }) => name))
 					};
 				}
 				const holds = held(subject);
@@ -799,16 +797,14 @@ export const layer = Layer.effect(
 				const tools = new Set<string>();
 				const mcp = new Set<string>();
 				const skills = new Set<string>();
-				let envoyHistory = false;
 				for (const policy of workspace.definition.policies) {
 					if (!subjectHasPolicy(policy, subject, holds)) continue;
 					for (const name of policy.capabilities?.apps ?? []) apps.add(name);
 					for (const name of policy.capabilities?.tools ?? []) tools.add(name);
 					for (const name of policy.capabilities?.mcp ?? []) mcp.add(name);
 					for (const name of policy.capabilities?.skills ?? []) skills.add(name);
-					if (policy.capabilities?.envoyHistory === 'this_envoy') envoyHistory = true;
 				}
-				return { apps, tools, mcp, skills, envoyHistory };
+				return { apps, tools, mcp, skills };
 			},
 			/**
 			 * The merged rate rules for one subject.

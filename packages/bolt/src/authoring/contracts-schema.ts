@@ -1886,8 +1886,6 @@ export interface PolicyCapabilities {
 	readonly tools?: ReadonlyArray<DeclaredToolName>;
 	readonly mcp?: ReadonlyArray<McpServerName>;
 	readonly skills?: ReadonlyArray<DeclaredSkillName>;
-	/** Allows an envoy to reach other sessions owned by the same declaration through history search. */
-	readonly envoyHistory?: 'this_envoy';
 }
 
 /**
