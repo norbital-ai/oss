@@ -35,7 +35,7 @@ import {
 	makeBoundAuthoringOps,
 	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
-import { AI, Connector, Files } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, Files, HostTools } from '#lib/runtime/facilities/services.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -353,6 +353,7 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const ai = yield* AI.Service;
 	const files = yield* Files.Service;
 	const automations = yield* Automations.Service;
+	const hostTools = yield* HostTools.Service;
 	const guard = Automations.stoppageGuard(automations, context.effectId, input.bolt_task_id);
 	const ops = guardAuthoringOps(
 		makeBoundAuthoringOps(
@@ -372,7 +373,8 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 						...options,
 						...(input.bolt_depth === undefined ? {} : { parentDepth: input.bolt_depth })
 					}
-				)
+				),
+			hostTools
 		),
 		guard
 	);

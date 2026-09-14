@@ -21,7 +21,8 @@ import {
 	AI,
 	Files,
 	type AIInterface,
-	type FilesInterface
+	type FilesInterface,
+	type HostToolsInterface
 } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
@@ -490,7 +491,12 @@ export const makeBoundAuthoringOps = <RunE = never>(
 			| Automations.AutomationContinuationUnchanged
 			| RunE
 		>['runAutomation']
-	>
+	>,
+	/**
+	 * The host capabilities an authored `api.infer` may name. Absent for integrations and remotes:
+	 * only automation and hook work carries a host tool binding, and a request without one refuses.
+	 */
+	hostTools?: HostToolsInterface
 ): AuthoringOps<
 	| QueryError
 	| BatchMutationError
@@ -558,7 +564,11 @@ export const makeBoundAuthoringOps = <RunE = never>(
 				? collections.runAutomation(childEffectId, name, input, {}, options)
 				: runAutomation(childEffectId, name, input, options);
 		},
-		infer: inferOp(effectId, ai),
+		infer: inferOp(
+			effectId,
+			ai,
+			hostTools === undefined ? undefined : { effectId, subject, hostTools }
+		),
 		readFileAsset: readAsset
 	};
 };

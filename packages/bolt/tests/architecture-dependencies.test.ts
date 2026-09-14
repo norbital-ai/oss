@@ -213,7 +213,9 @@ describe('Bolt architecture boundaries', () => {
 		// 17,979 -> 17,992: `api.infer` names host tools (`browser_*`) and the runtime resolves,
 		// refusal-checks, and dispatches them from the host's own catalogue, so the collections
 		// layer carries the `HostTools` requirement.
-		expect(amendedAggregate).toBeLessThanOrEqual(17_992);
+		// 17,992 -> 18,002: the automation command path binds that host tool service into the
+		// authored ops, so a drift automation researches through the same browser an agent drives.
+		expect(amendedAggregate).toBeLessThanOrEqual(18_002);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`

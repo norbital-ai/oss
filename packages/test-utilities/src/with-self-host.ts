@@ -75,6 +75,12 @@ export type WithSelfHostInput = {
 	 * recording double here and reads the `Send` requests back instead of talking to WhatsApp.
 	 */
 	readonly communication?: FacilityBindings['communication'];
+	/**
+	 * The host capabilities an authored `api.infer` or agent may name — the browser a drift run
+	 * drives, for instance. Absent, a request that names one refuses rather than silently
+	 * researching without it.
+	 */
+	readonly hostTools?: FacilityBindings['hostTools'];
 };
 
 export type SelfHostSession = {
@@ -318,6 +324,7 @@ export const startSelfHostSession = async (
 			ai: input.ai ?? catalogAi(),
 			connector: input.connector ?? makeDefaultConnectorBinding(),
 			...(input.communication !== undefined ? { communication: input.communication } : {}),
+			...(input.hostTools !== undefined ? { hostTools: input.hostTools } : {}),
 			...(held.files !== undefined ? { files: held.files.binding } : {}),
 			config: makeConfigBinding({
 				[GATEWAY_SECRET_VARIABLE]: gatewaySecret,
