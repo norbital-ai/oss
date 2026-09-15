@@ -929,43 +929,45 @@
 </script>
 
 <Stack gap="none" fill class="min-h-0 bg-card">
-	<Inline align="center" gap="sm" class="shrink-0 border-b border-border px-3 py-2">
-		<div class="shrink-0" data-testid="workspace-agent-orb">
-			<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
-		</div>
-		<span class="shrink-0 text-sm font-semibold">Norbius</span>
-		<div class="min-w-0 flex-1">
-			<TaskSelector
-				model={taskSelector}
-				value={activeConversationId}
-				placeholder="No conversations yet"
-				searchPlaceholder="Search conversations…"
-				ariaLabel="Select conversation"
-				emptyLabel="Conversation is not available"
-				onValueChange={selectTask}
-			/>
-		</div>
-		<Button
-			variant="ghost"
-			size="icon"
-			class="size-8"
-			aria-label="New conversation"
-			onclick={beginNewTask}
-		>
-			<Icon icon="lucide:plus" class="size-4" />
-		</Button>
-		{#if onclose}
+	<div class="shrink-0 border-b border-border">
+		<Inline align="center" gap="sm" class="mx-auto w-full max-w-3xl px-4 py-2">
+			<div class="shrink-0" data-testid="workspace-agent-orb">
+				<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
+			</div>
+			<span class="shrink-0 text-sm font-semibold">Norbius</span>
+			<div class="min-w-0 flex-1">
+				<TaskSelector
+					model={taskSelector}
+					value={activeConversationId}
+					placeholder="No conversations yet"
+					searchPlaceholder="Search conversations…"
+					ariaLabel="Select conversation"
+					emptyLabel="Conversation is not available"
+					onValueChange={selectTask}
+				/>
+			</div>
 			<Button
 				variant="ghost"
 				size="icon"
 				class="size-8"
-				aria-label={t('bolt.agent.closePanel')}
-				onclick={onclose}
+				aria-label="New conversation"
+				onclick={beginNewTask}
 			>
-				<Icon icon="lucide:x" class="size-4" />
+				<Icon icon="lucide:plus" class="size-4" />
 			</Button>
-		{/if}
-	</Inline>
+			{#if onclose}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="size-8"
+					aria-label={t('bolt.agent.closePanel')}
+					onclick={onclose}
+				>
+					<Icon icon="lucide:x" class="size-4" />
+				</Button>
+			{/if}
+		</Inline>
+	</div>
 
 	<Scroll
 		class="min-h-0 flex-1"
@@ -1144,7 +1146,7 @@
 	</Scroll>
 
 	{#if draftingPlan}
-		<div class="min-w-0 shrink-0 px-3 pb-3" data-draft-plan>
+		<div class="mx-auto w-full max-w-3xl min-w-0 shrink-0 px-4 pb-3" data-draft-plan>
 			<AgentContextSegment
 				plan={activePlan}
 				runs={rootRuns}
@@ -1167,314 +1169,315 @@
 		</div>
 	{/if}
 
-	<Stack
-		gap="sm"
-		class="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+	<div
+		class="shrink-0 border-t border-border bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]"
 		data-agent-composer
 	>
-		<AgentMessageQueue
-			messages={queuedMessages}
-			pendingText={activeTask?.status === 'running' ? visibleAdmission?.message : undefined}
-			busy={queuePending}
-			onsteer={(messageId) => updateQueue({ action: 'steer', messageId })}
-			onremove={(messageId) => updateQueue({ action: 'remove', messageId })}
-			onreorder={(messageIds) => updateQueue({ action: 'reorder', messageIds })}
-		/>
-		{#if revisedMessage !== null}
-			<Inline
-				align="center"
-				gap="sm"
-				class="rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2"
-			>
-				<Icon icon="lucide:message-square-pen" class="size-3.5 shrink-0 text-primary" />
-				<p class="m-0 min-w-0 flex-1 text-tiny text-muted-foreground">
-					Revising message {revisedMessage.sequence + 1}. The original remains in the durable
-					transcript; this appends a revision that supersedes it.
-				</p>
-				<button
-					type="button"
-					class="rounded px-1.5 py-1 text-tiny font-medium hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					onclick={cancelRevision}
-				>
-					Cancel
-				</button>
-			</Inline>
-		{/if}
-		{#if activeTask?.status === 'failed'}
-			<p class="text-xs text-muted-foreground">
-				The last turn failed. Retry it or send a follow-up here.
-			</p>
-		{:else if canResume}
-			<p class="text-xs text-muted-foreground">
-				Resume the previous turn or send a follow-up here.
-			</p>
-		{/if}
-		{#if modelQuery.error !== undefined}
-			<p class="text-xs text-destructive" role="alert">{getErrorMessage(modelQuery.error)}</p>
-		{:else if modelQuery.current !== undefined && !modelAvailable}
-			<p class="text-xs text-destructive" role="alert">{t('bolt.agent.modelUnavailable')}</p>
-		{/if}
-		{#if sendFailure !== null}
-			<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
-		{/if}
-		{#if (planning && !draftingPlan) || activeCommand === 'compact'}
-			<p class="text-tiny text-muted-foreground">
-				{activeCommand === 'compact'
-					? 'Summarize this conversation and keep its transcript available.'
-					: 'Discuss the approach here. Expand the draft Plan above the prompt to review it.'}
-			</p>
-		{/if}
-		<Stack
-			as="form"
-			gap="none"
-			class="relative rounded-[1.25rem] border-0 bg-transparent text-popover-foreground shadow-none"
-			onsubmit={(event) => {
-				event.preventDefault();
-				activatePrimaryAction();
-			}}
-		>
-			{#if commandMenuOpen && commandTrigger !== null}
-				<AgentMentionMenu
-					items={commandItems}
-					highlightIndex={commandHighlight}
-					loading={false}
-					query={commandTrigger.query}
-					scope={null}
-					onselect={selectCommand}
-					onhighlight={(index) => (commandHighlight = index)}
-					onclearscope={() => (commandMenuDismissed = true)}
-				/>
-			{/if}
-			{#if commandMode !== null}
-				<Inline align="center" gap="xs" class="px-2.5 pt-2">
-					<Badge variant="outline" class="gap-1.5 pr-1 pl-2 font-mono">
-						<Icon
-							icon={commandMode === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text'}
-							class="size-3 shrink-0"
-						/>
-						<span>/{commandMode}</span>
-						<button
-							type="button"
-							class="rounded-full opacity-70 transition-opacity hover:opacity-100"
-							aria-label={`Remove /${commandMode}`}
-							onclick={clearCommandMode}
-						>
-							<Icon icon="lucide:x" class="size-3" />
-						</button>
-					</Badge>
-				</Inline>
-			{/if}
-			<label class="sr-only" for="agent-task-composer">Message</label>
-			<Textarea
-				id="agent-task-composer"
-				bind:ref={composer}
-				bind:value={draft}
-				onkeydown={onComposerKeydown}
-				oninput={syncCaret}
-				onkeyup={syncCaret}
-				onclick={syncCaret}
-				aria-controls={commandMenuOpen ? 'agent-mention-menu' : undefined}
-				aria-expanded={commandMenuOpen}
-				onpaste={onComposerPaste}
-				rows={2}
-				placeholder="Ask anything, or type /plan or /compact"
-				class="max-h-40 min-h-14 resize-none border-0 bg-transparent px-4 py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
-				disabled={composerLocked}
+		<Stack gap="sm" class="mx-auto w-full max-w-3xl px-4 pt-2">
+			<AgentMessageQueue
+				messages={queuedMessages}
+				pendingText={activeTask?.status === 'running' ? visibleAdmission?.message : undefined}
+				busy={queuePending}
+				onsteer={(messageId) => updateQueue({ action: 'steer', messageId })}
+				onremove={(messageId) => updateQueue({ action: 'remove', messageId })}
+				onreorder={(messageIds) => updateQueue({ action: 'reorder', messageIds })}
 			/>
-			{#if pendingAttachments.length > 0}
-				<Inline gap="xs" class="px-2.5">
-					{#each pendingAttachments as image (image.id)}
-						<button
-							type="button"
-							class="relative flex h-10 max-w-48 items-center gap-2 rounded-md border border-border/70 px-2 text-xs"
-							style="overflow: hidden"
-							aria-label={`Remove ${image.file.name}`}
-							onclick={() => removePendingAttachment(image.id)}
-						>
-							{#if image.previewUrl !== null}
-								<img src={image.previewUrl} alt="" class="size-8 rounded object-cover" />
-							{:else}
-								<Icon icon="lucide:file-text" class="size-4 shrink-0" />
-							{/if}
-							<span class="truncate">{image.file.name}</span>
-							<Icon icon="lucide:x" class="size-3 shrink-0" />
-						</button>
-					{/each}
+			{#if revisedMessage !== null}
+				<Inline
+					align="center"
+					gap="sm"
+					class="rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2"
+				>
+					<Icon icon="lucide:message-square-pen" class="size-3.5 shrink-0 text-primary" />
+					<p class="m-0 min-w-0 flex-1 text-tiny text-muted-foreground">
+						Revising message {revisedMessage.sequence + 1}. The original remains in the durable
+						transcript; this appends a revision that supersedes it.
+					</p>
+					<button
+						type="button"
+						class="rounded px-1.5 py-1 text-tiny font-medium hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						onclick={cancelRevision}
+					>
+						Cancel
+					</button>
 				</Inline>
 			{/if}
-			<Inline align="center" gap="xs" class="px-2.5 pb-2">
-				<input
-					bind:this={filePicker}
-					type="file"
-					accept="image/*,text/*,application/pdf,application/json,application/xml,.docx,.xlsx,.md,.csv,.tsv,.log,.yaml,.yml"
-					multiple
-					class="sr-only"
-					onchange={onFilePicked}
-				/>
-				<button
-					type="button"
-					aria-label="Attach media or files"
-					disabled={composerLocked}
-					onclick={() => filePicker?.click()}
-					class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-				>
-					<Icon icon="lucide:plus" class="size-5" />
-				</button>
-				<Popover.Root>
-					<Popover.Trigger
-						data-agent-usage
-						class="flex h-7 cursor-pointer list-none items-center gap-1 rounded px-1 text-xs tabular-nums hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label={`${t('bolt.agent.contextWindowUsed')}: ${contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / ${contextCapacity === undefined ? '—' : formatAgentTokens(contextCapacity)}; ${costLabel}; ${tokenCount} tokens`}
-					>
-						<Icon icon="lucide:chart-pie" class="size-3.5" />
-						<span>{contextPercent === undefined ? '—' : `${Math.round(contextPercent)}%`}</span>
-						<span>· {costLabel || '—'}</span>
-					</Popover.Trigger>
-					<Popover.Content
-						side="top"
-						align="start"
-						class="w-72 max-w-[calc(100vw-3rem)] p-0 text-xs"
-					>
-						<Scroll name="Context and usage" style="height: auto; max-height: min(24rem, 60dvh)">
-							<Stack gap="sm" class="p-3">
-								<Stack gap="xs" class="border-b border-border pb-3">
-									<Inline justify="between" gap="sm" class="text-xs tabular-nums">
-										<span>{t('bolt.agent.contextWindowUsed')}</span>
-										<span
-											>{contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / {contextCapacity ===
-											undefined
-												? '—'
-												: formatAgentTokens(contextCapacity)}</span
-										>
-									</Inline>
-									<Progress
-										value={contextPercent ?? 0}
-										aria-label={t('bolt.agent.contextWindowUsed')}
-										class="h-1"
-									/>
-									<p class="text-micro text-muted-foreground">
-										{t('bolt.agent.contextReceiptNote')}
-									</p>
-								</Stack>
-								<p>{t('bolt.agent.usageScope')}</p>
-								<dl class="grid grid-cols-2 gap-1 tabular-nums">
-									<dt>{t('bolt.agent.totalTokens')}</dt>
-									<dd class="text-right">{tokenCount}</dd>
-									<dt>{t('bolt.agent.totalCost')}</dt>
-									<dd class="text-right">{costLabel || '—'}</dd>
-								</dl>
-								<dl class="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
-									<dt>{t('bolt.agent.inputTokens')}</dt>
-									<dd class="text-right">{taskTokens.input.toLocaleString()}</dd>
-									<dt>{t('bolt.agent.cachedInput')}</dt>
-									<dd class="text-right">{taskTokens.cacheRead.toLocaleString()}</dd>
-									<dt>{t('bolt.agent.outputTokens')}</dt>
-									<dd class="text-right">{taskTokens.output.toLocaleString()}</dd>
-									<dt>{t('bolt.agent.reasoningTokens')}</dt>
-									<dd class="text-right">{taskTokens.reasoning.toLocaleString()}</dd>
-								</dl>
-								{#if usageIncomplete}<p>{t('bolt.agent.usagePartialNote')}</p>{/if}
-							</Stack>
-						</Scroll>
-					</Popover.Content>
-				</Popover.Root>
-				<span class="flex-1"></span>
-				<Combobox
-					options={modelOptions}
-					value={modelId ?? null}
-					ariaLabel={t('bolt.agent.model')}
-					searchPlaceholder={t('bolt.agent.searchModels')}
-					emptyPlaceholder={modelQuery.loading
-						? t('bolt.agent.loadingModels')
-						: t('bolt.agent.selectModel')}
-					searchable
-					allowClear={false}
-					disabled={composerLocked || modelQuery.loading}
-					onValueChange={(value) => {
-						if (typeof value === 'string') selectedModelId = value;
-					}}
-					class="w-auto min-w-0 max-w-[45%]"
-					triggerClass="h-7 border-0 bg-transparent px-1.5 text-xs font-normal shadow-none hover:bg-muted"
-				/>
-				<Tooltip
-					text={draftingPlan
-						? 'A draft plan is active. Execute it from the plan header, or delete it to return to Agent mode.'
-						: activePlan?.status === 'active' || activePlan?.status === 'stalled'
-							? 'This conversation has an active plan. Revise or delete the plan using its actions.'
-							: activeRun?.mode === 'plan' && activeRun.status === 'running'
-								? 'The agent is preparing the plan. Wait for the response or stop it before switching modes.'
-								: composerLocked
-									? 'Wait for the current message to be accepted before switching modes.'
-									: 'Switch between Agent and Plan (Tab)'}
-					contentClass="max-w-64 text-xs"
-				>
-					{#snippet trigger({ props })}
-						<button
-							{...props}
-							type="button"
-							aria-pressed={planning}
-							aria-keyshortcuts="Tab"
-							aria-disabled={composerLocked || planLocksMode}
-							onclick={() => {
-								if (!composerLocked && !planLocksMode) planMode = !planning;
-							}}
-							class="rounded-md px-1.5 py-0.5 text-xs font-normal {planning
-								? 'bg-primary/10 text-primary'
-								: 'text-muted-foreground hover:bg-muted'}"
-						>
-							{planning ? 'Plan' : 'Agent'}
-						</button>
-					{/snippet}
-				</Tooltip>
-				{#if taskWorking && !draftSendable(parsedDraft)}
-					<Button
-						type="button"
-						size="icon"
-						class="size-8 shrink-0 rounded-full"
-						disabled={!canStop}
-						aria-label={t('bolt.agent.stop')}
-						title={t('bolt.agent.stop')}
-						onclick={() => (confirmingStop = true)}
-					>
-						<Icon icon="lucide:square" class="size-3.5 fill-current" />
-					</Button>
-				{:else if canResume && !draftSendable(parsedDraft)}
-					<Button
-						type="button"
-						size="icon"
-						class="size-8 shrink-0 rounded-full"
-						disabled={controlPending || !modelAvailable}
-						aria-label="Resume conversation"
-						onclick={() => control('resume')}
-					>
-						<Icon icon="lucide:play" class="size-4" />
-					</Button>
-				{:else}
-					<Button
-						type="submit"
-						size="icon"
-						class="size-8 shrink-0 rounded-full"
-						disabled={!canSend}
-						aria-label={revisedMessage !== null
-							? 'Send revised message'
-							: taskWorking
-								? t('bolt.agent.queueMessage')
-								: t('bolt.agent.send')}
-						title={taskWorking ? t('bolt.agent.queueMessage') : t('bolt.agent.send')}
-					>
-						{#if admissionPending}<Spinner
-								class="size-4"
-								label={t(agentOrbBusyStatusKey(orbState))}
-							/>
-						{:else}<Icon
-								icon={taskWorking ? 'lucide:list-plus' : 'lucide:arrow-up'}
-								class="size-4"
-							/>{/if}
-					</Button>
+			{#if activeTask?.status === 'failed'}
+				<p class="text-xs text-muted-foreground">
+					The last turn failed. Retry it or send a follow-up here.
+				</p>
+			{:else if canResume}
+				<p class="text-xs text-muted-foreground">
+					Resume the previous turn or send a follow-up here.
+				</p>
+			{/if}
+			{#if modelQuery.error !== undefined}
+				<p class="text-xs text-destructive" role="alert">{getErrorMessage(modelQuery.error)}</p>
+			{:else if modelQuery.current !== undefined && !modelAvailable}
+				<p class="text-xs text-destructive" role="alert">{t('bolt.agent.modelUnavailable')}</p>
+			{/if}
+			{#if sendFailure !== null}
+				<p class="text-xs text-destructive" role="alert">{sendFailure}</p>
+			{/if}
+			{#if (planning && !draftingPlan) || activeCommand === 'compact'}
+				<p class="text-tiny text-muted-foreground">
+					{activeCommand === 'compact'
+						? 'Summarize this conversation and keep its transcript available.'
+						: 'Discuss the approach here. Expand the draft Plan above the prompt to review it.'}
+				</p>
+			{/if}
+			<Stack
+				as="form"
+				gap="none"
+				class="relative rounded-[1.25rem] border-0 bg-transparent text-popover-foreground shadow-none"
+				onsubmit={(event) => {
+					event.preventDefault();
+					activatePrimaryAction();
+				}}
+			>
+				{#if commandMenuOpen && commandTrigger !== null}
+					<AgentMentionMenu
+						items={commandItems}
+						highlightIndex={commandHighlight}
+						loading={false}
+						query={commandTrigger.query}
+						scope={null}
+						onselect={selectCommand}
+						onhighlight={(index) => (commandHighlight = index)}
+						onclearscope={() => (commandMenuDismissed = true)}
+					/>
 				{/if}
-			</Inline>
+				{#if commandMode !== null}
+					<Inline align="center" gap="xs" class="pt-2">
+						<Badge variant="outline" class="gap-1.5 pr-1 pl-2 font-mono">
+							<Icon
+								icon={commandMode === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text'}
+								class="size-3 shrink-0"
+							/>
+							<span>/{commandMode}</span>
+							<button
+								type="button"
+								class="rounded-full opacity-70 transition-opacity hover:opacity-100"
+								aria-label={`Remove /${commandMode}`}
+								onclick={clearCommandMode}
+							>
+								<Icon icon="lucide:x" class="size-3" />
+							</button>
+						</Badge>
+					</Inline>
+				{/if}
+				<label class="sr-only" for="agent-task-composer">Message</label>
+				<Textarea
+					id="agent-task-composer"
+					bind:ref={composer}
+					bind:value={draft}
+					onkeydown={onComposerKeydown}
+					oninput={syncCaret}
+					onkeyup={syncCaret}
+					onclick={syncCaret}
+					aria-controls={commandMenuOpen ? 'agent-mention-menu' : undefined}
+					aria-expanded={commandMenuOpen}
+					onpaste={onComposerPaste}
+					rows={2}
+					placeholder="Ask anything, or type /plan or /compact"
+					class="max-h-40 min-h-14 resize-none border-0 bg-transparent py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
+					disabled={composerLocked}
+				/>
+				{#if pendingAttachments.length > 0}
+					<Inline gap="xs">
+						{#each pendingAttachments as image (image.id)}
+							<button
+								type="button"
+								class="relative flex h-10 max-w-48 items-center gap-2 rounded-md border border-border/70 px-2 text-xs"
+								style="overflow: hidden"
+								aria-label={`Remove ${image.file.name}`}
+								onclick={() => removePendingAttachment(image.id)}
+							>
+								{#if image.previewUrl !== null}
+									<img src={image.previewUrl} alt="" class="size-8 rounded object-cover" />
+								{:else}
+									<Icon icon="lucide:file-text" class="size-4 shrink-0" />
+								{/if}
+								<span class="truncate">{image.file.name}</span>
+								<Icon icon="lucide:x" class="size-3 shrink-0" />
+							</button>
+						{/each}
+					</Inline>
+				{/if}
+				<Inline align="center" gap="xs" class="pb-2">
+					<input
+						bind:this={filePicker}
+						type="file"
+						accept="image/*,text/*,application/pdf,application/json,application/xml,.docx,.xlsx,.md,.csv,.tsv,.log,.yaml,.yml"
+						multiple
+						class="sr-only"
+						onchange={onFilePicked}
+					/>
+					<button
+						type="button"
+						aria-label="Attach media or files"
+						disabled={composerLocked}
+						onclick={() => filePicker?.click()}
+						class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<Icon icon="lucide:plus" class="size-5" />
+					</button>
+					<Popover.Root>
+						<Popover.Trigger
+							data-agent-usage
+							class="flex h-7 cursor-pointer list-none items-center gap-1 rounded px-1 text-xs tabular-nums hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label={`${t('bolt.agent.contextWindowUsed')}: ${contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / ${contextCapacity === undefined ? '—' : formatAgentTokens(contextCapacity)}; ${costLabel}; ${tokenCount} tokens`}
+						>
+							<Icon icon="lucide:chart-pie" class="size-3.5" />
+							<span>{contextPercent === undefined ? '—' : `${Math.round(contextPercent)}%`}</span>
+							<span>· {costLabel || '—'}</span>
+						</Popover.Trigger>
+						<Popover.Content
+							side="top"
+							align="start"
+							class="w-72 max-w-[calc(100vw-3rem)] p-0 text-xs"
+						>
+							<Scroll name="Context and usage" style="height: auto; max-height: min(24rem, 60dvh)">
+								<Stack gap="sm" class="p-3">
+									<Stack gap="xs" class="border-b border-border pb-3">
+										<Inline justify="between" gap="sm" class="text-xs tabular-nums">
+											<span>{t('bolt.agent.contextWindowUsed')}</span>
+											<span
+												>{contextTokens === undefined ? '—' : formatAgentTokens(contextTokens)} / {contextCapacity ===
+												undefined
+													? '—'
+													: formatAgentTokens(contextCapacity)}</span
+											>
+										</Inline>
+										<Progress
+											value={contextPercent ?? 0}
+											aria-label={t('bolt.agent.contextWindowUsed')}
+											class="h-1"
+										/>
+										<p class="text-micro text-muted-foreground">
+											{t('bolt.agent.contextReceiptNote')}
+										</p>
+									</Stack>
+									<p>{t('bolt.agent.usageScope')}</p>
+									<dl class="grid grid-cols-2 gap-1 tabular-nums">
+										<dt>{t('bolt.agent.totalTokens')}</dt>
+										<dd class="text-right">{tokenCount}</dd>
+										<dt>{t('bolt.agent.totalCost')}</dt>
+										<dd class="text-right">{costLabel || '—'}</dd>
+									</dl>
+									<dl class="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+										<dt>{t('bolt.agent.inputTokens')}</dt>
+										<dd class="text-right">{taskTokens.input.toLocaleString()}</dd>
+										<dt>{t('bolt.agent.cachedInput')}</dt>
+										<dd class="text-right">{taskTokens.cacheRead.toLocaleString()}</dd>
+										<dt>{t('bolt.agent.outputTokens')}</dt>
+										<dd class="text-right">{taskTokens.output.toLocaleString()}</dd>
+										<dt>{t('bolt.agent.reasoningTokens')}</dt>
+										<dd class="text-right">{taskTokens.reasoning.toLocaleString()}</dd>
+									</dl>
+									{#if usageIncomplete}<p>{t('bolt.agent.usagePartialNote')}</p>{/if}
+								</Stack>
+							</Scroll>
+						</Popover.Content>
+					</Popover.Root>
+					<span class="flex-1"></span>
+					<Combobox
+						options={modelOptions}
+						value={modelId ?? null}
+						ariaLabel={t('bolt.agent.model')}
+						searchPlaceholder={t('bolt.agent.searchModels')}
+						emptyPlaceholder={modelQuery.loading
+							? t('bolt.agent.loadingModels')
+							: t('bolt.agent.selectModel')}
+						searchable
+						allowClear={false}
+						disabled={composerLocked || modelQuery.loading}
+						onValueChange={(value) => {
+							if (typeof value === 'string') selectedModelId = value;
+						}}
+						class="w-auto min-w-0 max-w-[45%]"
+						triggerClass="h-7 border-0 bg-transparent px-1.5 text-xs font-normal shadow-none hover:bg-muted"
+					/>
+					<Tooltip
+						text={draftingPlan
+							? 'A draft plan is active. Execute it from the plan header, or delete it to return to Agent mode.'
+							: activePlan?.status === 'active' || activePlan?.status === 'stalled'
+								? 'This conversation has an active plan. Revise or delete the plan using its actions.'
+								: activeRun?.mode === 'plan' && activeRun.status === 'running'
+									? 'The agent is preparing the plan. Wait for the response or stop it before switching modes.'
+									: composerLocked
+										? 'Wait for the current message to be accepted before switching modes.'
+										: 'Switch between Agent and Plan (Tab)'}
+						contentClass="max-w-64 text-xs"
+					>
+						{#snippet trigger({ props })}
+							<button
+								{...props}
+								type="button"
+								aria-pressed={planning}
+								aria-keyshortcuts="Tab"
+								aria-disabled={composerLocked || planLocksMode}
+								onclick={() => {
+									if (!composerLocked && !planLocksMode) planMode = !planning;
+								}}
+								class="rounded-md px-1.5 py-0.5 text-xs font-normal {planning
+									? 'bg-primary/10 text-primary'
+									: 'text-muted-foreground hover:bg-muted'}"
+							>
+								{planning ? 'Plan' : 'Agent'}
+							</button>
+						{/snippet}
+					</Tooltip>
+					{#if taskWorking && !draftSendable(parsedDraft)}
+						<Button
+							type="button"
+							size="icon"
+							class="size-8 shrink-0 rounded-full"
+							disabled={!canStop}
+							aria-label={t('bolt.agent.stop')}
+							title={t('bolt.agent.stop')}
+							onclick={() => (confirmingStop = true)}
+						>
+							<Icon icon="lucide:square" class="size-3.5 fill-current" />
+						</Button>
+					{:else if canResume && !draftSendable(parsedDraft)}
+						<Button
+							type="button"
+							size="icon"
+							class="size-8 shrink-0 rounded-full"
+							disabled={controlPending || !modelAvailable}
+							aria-label="Resume conversation"
+							onclick={() => control('resume')}
+						>
+							<Icon icon="lucide:play" class="size-4" />
+						</Button>
+					{:else}
+						<Button
+							type="submit"
+							size="icon"
+							class="size-8 shrink-0 rounded-full"
+							disabled={!canSend}
+							aria-label={revisedMessage !== null
+								? 'Send revised message'
+								: taskWorking
+									? t('bolt.agent.queueMessage')
+									: t('bolt.agent.send')}
+							title={taskWorking ? t('bolt.agent.queueMessage') : t('bolt.agent.send')}
+						>
+							{#if admissionPending}<Spinner
+									class="size-4"
+									label={t(agentOrbBusyStatusKey(orbState))}
+								/>
+							{:else}<Icon
+									icon={taskWorking ? 'lucide:list-plus' : 'lucide:arrow-up'}
+									class="size-4"
+								/>{/if}
+						</Button>
+					{/if}
+				</Inline>
+			</Stack>
 		</Stack>
-	</Stack>
+	</div>
 </Stack>
 
 <AlertDialog.Root bind:open={confirmingStop}>

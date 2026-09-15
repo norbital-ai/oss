@@ -158,7 +158,7 @@
 
 {#snippet payload(label: string, value: unknown)}
 	<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-	<div class="max-h-56 overflow-hidden rounded-md border bg-background">
+	<div class="max-h-56 overflow-auto rounded-md border bg-background">
 		<CodeEditor
 			value={diagnostic(value)}
 			language={diagnosticLanguage(value)}
@@ -217,7 +217,6 @@
 			</Inline>
 		</summary>
 		<Tabs
-			variant="chip"
 			animate={false}
 			contentPadding={false}
 			class="mt-1 h-auto w-full"

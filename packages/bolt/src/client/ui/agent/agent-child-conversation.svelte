@@ -114,7 +114,7 @@
 			</summary>
 			<Stack gap="xs" class="mt-1">
 				<!-- repository-health:allow UI22 -- this box clips a growing CodeEditor under max-h-56; Bound always imposes one of its named height contracts, which would change the region's intrinsic height -->
-				<div class="max-h-56 overflow-hidden rounded-md border bg-background">
+				<div class="max-h-56 overflow-auto rounded-md border bg-background">
 					<CodeEditor
 						value={diagnostic(link.raw.params)}
 						language={diagnosticLanguage(link.raw.params)}
@@ -126,7 +126,7 @@
 				</div>
 				{#if link.raw.result !== undefined}
 					<!-- repository-health:allow UI22 -- same clipped CodeEditor box as the call above -->
-					<div class="max-h-56 overflow-hidden rounded-md border bg-background">
+					<div class="max-h-56 overflow-auto rounded-md border bg-background">
 						<CodeEditor
 							value={diagnostic(link.raw.result)}
 							language={diagnosticLanguage(link.raw.result)}
