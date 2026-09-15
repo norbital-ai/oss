@@ -99,6 +99,9 @@ const httpStatusOf = (cause: unknown): number | undefined => {
 	return undefined;
 };
 
+/** How long a push may run before the client probes the server for its outcome. */
+export const PUSH_PROBE_AFTER_MS = 60_000;
+
 const attachmentError = (cause: unknown): SyncAttachmentError => {
 	if (cause instanceof SyncAttachmentError) return cause;
 	if (cause instanceof SyncHttpError) {
@@ -337,19 +340,25 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 	};
 
 	/**
-	 * Writes whose HTTP request has not returned. The Machine re-pushes a write it has not seen
-	 * settled after `STALE_WRITE_MS`, which is right when the request is gone (a dropped socket)
-	 * and wrong while it is still running: a payroll run that builds for twenty seconds would be
-	 * sent again, answered `mutation_in_progress`, and that answer surfaced as the run's failure
-	 * while the first request went on to succeed. A push in flight is not stale.
+	 * Writes whose HTTP request has not returned, by when it left. The Machine re-pushes a write it
+	 * has not seen settled after `STALE_WRITE_MS`, which is right when the request is gone (a dropped
+	 * socket) and wrong while it is still running: a payroll run that builds for twenty seconds
+	 * would be sent again and answered `mutation_in_progress`. A push in flight is not stale — for
+	 * `PUSH_PROBE_AFTER_MS`. Past that it is probed: a second request for the same key is safe, because
+	 * the server answers it with "still running", with the outcome it persisted, or with expiry, and
+	 * never evaluates the write twice. The probe is what settles a write whose answer was lost in a
+	 * connection that dropped after the server had committed it, which used to be a spinner that
+	 * never stopped over a run that was already in the list.
 	 */
-	const inFlight = new Set<CollectionMutationIdempotencyKey>();
+	const inFlight = new Map<CollectionMutationIdempotencyKey, number>();
 	const runPush = (writeId: CollectionMutationIdempotencyKey): void => {
 		const attachment = activeAttachment;
 		const write = state.writes.get(writeId);
 		if (attachment === undefined || write === undefined || state.link !== 'live') return;
-		if (inFlight.has(writeId)) return;
-		inFlight.add(writeId);
+		const startedAt = inFlight.get(writeId);
+		if (startedAt !== undefined && Date.now() - startedAt < PUSH_PROBE_AFTER_MS) return;
+		// A probe restarts the window: a request that never returns is asked about once a minute.
+		inFlight.set(writeId, Date.now());
 		void attachment.value
 			.push(write.request, attachment.abort.signal)
 			.catch((cause) => {
@@ -358,7 +367,11 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 				report(failure);
 				if (failure.kind === 'terminal') disconnectAttachment(attachment, failure);
 			})
-			.finally(() => inFlight.delete(writeId));
+			.finally(() => {
+				// The first request owns the entry. A probe that returns while it is still out leaves the
+				// window running; once the write is settled nobody re-pushes it and the entry goes.
+				if (startedAt === undefined || !state.writes.has(writeId)) inFlight.delete(writeId);
+			});
 	};
 
 	const runEffect = (effect: ClientEffect): void => {

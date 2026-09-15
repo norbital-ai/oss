@@ -21,7 +21,7 @@ import { createBrowserSyncBroker, type BrowserSyncScope } from './sync/sse-drive
 import { createSyncHttpDriver } from './sync/http-driver.js';
 import {
 	mutationSettlementOf,
-	rejectedSyncOutcome,
+	pushFailureOutcome,
 	syncOutcomeFromMutateCommand
 } from './mutation-settlement.js';
 import type { ClientState } from './sync/machine.js';
@@ -164,13 +164,15 @@ export const createBrowserWorkspaceRuntime = (
 					);
 					if (outcome !== null) acceptSettlements([outcome]);
 				} catch (cause) {
-					acceptSettlements([
-						rejectedSyncOutcome(
-							request.idempotencyKey,
-							getErrorMessage(cause),
-							request.schemaFingerprint
-						)
-					]);
+					const outcome = pushFailureOutcome(
+						request.idempotencyKey,
+						cause,
+						request.schemaFingerprint
+					);
+					if (outcome !== null) acceptSettlements([outcome]);
+					// A probe answered "still running" is the expected answer, not a fault to report.
+					if (typeof cause === 'object' && cause !== null && Reflect.get(cause, 'status') === 425)
+						return;
 					throw cause;
 				}
 			}

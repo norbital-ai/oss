@@ -1,3 +1,4 @@
+import { getErrorMessage } from '@norbital-ai/std';
 import { Option, Schema } from 'effect';
 import type { CollectionMutationIdempotencyKey, SyncOutcome } from '@norbital-ai/bolt-protocol';
 import type { MutationSettlement } from './contracts.js';
@@ -95,6 +96,33 @@ export const rejectedSyncOutcome = (
 		schemaFingerprint
 	}
 });
+
+/** Statuses that are no verdict on the write: the server is busy, throttling, or still running it. */
+const NON_VERDICT_STATUSES = new Set([408, 425, 429]);
+
+/**
+ * What a failed push says about the write — or nothing.
+ *
+ * Only a 4xx the server meant as a verdict rejects the write. A dropped socket, a proxy timeout, a
+ * 5xx or a `425 mutation_in_progress` say the request failed, not the mutation: the server may be
+ * building it still, or have committed it while the answer was lost. Reporting those as refusals
+ * was a payroll run that succeeded on the server and failed on the screen. The write stays
+ * pending; a later probe answers the persisted outcome, or `mutation_retry_expired` once the
+ * server's retry horizon has passed — which is the bound.
+ */
+export const pushFailureOutcome = (
+	id: CollectionMutationIdempotencyKey,
+	cause: unknown,
+	schemaFingerprint: string
+): SyncOutcome | null => {
+	const status =
+		typeof cause === 'object' && cause !== null && typeof Reflect.get(cause, 'status') === 'number'
+			? (Reflect.get(cause, 'status') as number)
+			: undefined;
+	if (status === undefined || status < 400 || status >= 500 || NON_VERDICT_STATUSES.has(status))
+		return null;
+	return rejectedSyncOutcome(id, getErrorMessage(cause), schemaFingerprint);
+};
 
 export const mutationSettlementOf = (outcome: SyncOutcome, at: number): MutationSettlement => {
 	const status = outcome.status;

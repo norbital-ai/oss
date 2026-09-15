@@ -6,7 +6,11 @@ import {
 	type CollectionMutateRequest
 } from '@norbital-ai/bolt-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSyncClient, type SyncWorkspaceAttachment } from '../src/client/sync/client.js';
+import {
+	PUSH_PROBE_AFTER_MS,
+	createSyncClient,
+	type SyncWorkspaceAttachment
+} from '../src/client/sync/client.js';
 import { STALE_WRITE_MS } from '../src/client/sync/machine.js';
 import type { BrowserSyncScope } from '../src/client/sync/sse-driver.js';
 
@@ -77,5 +81,38 @@ describe('push in flight', () => {
 		finish?.();
 		await vi.advanceTimersByTimeAsync(STALE_WRITE_MS + 1);
 		expect(pushes).toBe(2);
+	});
+
+	/**
+	 * A request that never returns — the socket dropped after the server committed, the proxy
+	 * swallowed the response — used to hold the in-flight guard forever: a spinner over a run that
+	 * was already in the list. Past PUSH_PROBE_AFTER_MS the write is probed; the server answers a
+	 * repeat of the same key with its persisted outcome, and the probe settles it.
+	 */
+	it('probes a write whose request has been out longer than PUSH_PROBE_AFTER_MS', async () => {
+		let pushes = 0;
+		const client = createSyncClient({ scope });
+		clients.push(client);
+		client.attach(
+			attachment(
+				() =>
+					new Promise<void>(() => {
+						pushes += 1;
+					})
+			)
+		);
+		client.start();
+		await vi.advanceTimersByTimeAsync(0);
+		client.enqueue(request);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(pushes).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(PUSH_PROBE_AFTER_MS - STALE_WRITE_MS);
+		expect(pushes).toBe(1);
+		await vi.advanceTimersByTimeAsync(STALE_WRITE_MS * 2);
+		expect(pushes).toBe(2);
+		// The probe restarts the window: one a minute, not one a stale tick.
+		await vi.advanceTimersByTimeAsync(PUSH_PROBE_AFTER_MS);
+		expect(pushes).toBe(3);
 	});
 });
