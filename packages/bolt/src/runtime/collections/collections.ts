@@ -3115,8 +3115,9 @@ export const layerWith = (
 								}
 							]
 				);
-				const recordAssertions = reviewedRows.map((row) =>
-					row.action === 'delete'
+				const recordAssertions = reviewedRows.map((row) => {
+					const snapshot = JSON.parse(row.snapshot) as Record<string, unknown>;
+					return row.action === 'delete'
 						? transactionSql(
 								`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(row.collection)} where id = $1 for update) as bolt_delete_row), $2)`,
 								[
@@ -3128,12 +3129,12 @@ export const layerWith = (
 							// whether the row moved since it was prepared. Comparing the whole row shipped the
 							// row back to the database: 2,500 pinned attendance rows carried 1.7 MB of their own
 							// snapshots into one write to prove nothing had changed.
-							typeof row.snapshot['row_version'] === 'number'
+							typeof snapshot['row_version'] === 'number'
 							? transactionSql(
 									`select bolt_assert((select row_version from ${quoteIdentifier(row.collection)} where id = $1) = $2, $3)`,
 									[
 										row.id,
-										row.snapshot['row_version'],
+										snapshot['row_version'],
 										`${row.collection} ${row.id} changed while its mutation graph was prepared`
 									]
 								)
@@ -3144,8 +3145,8 @@ export const layerWith = (
 										row.snapshot,
 										`${row.collection} ${row.id} changed while its mutation graph was prepared`
 									]
-								)
-				);
+								);
+				});
 				const relationshipAssertions = relationshipSnapshots
 					.map(reviewedRelationshipOf)
 					.map((snapshot) =>
