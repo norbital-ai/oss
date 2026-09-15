@@ -6,6 +6,7 @@ import {
 	ConversationId
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
+import { scriptedTranscript } from './agents-canonical-ai-fixture.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -21,7 +22,7 @@ afterEach(async () => {
 
 describe('Task admission projection', () => {
 	it('commits one Task, message, and directive and deduplicates the same admission', async () => {
-		harness = await makeBoltTestRuntime(testWorkspace());
+		harness = await makeBoltTestRuntime(testWorkspace(), { ai: scriptedTranscript([]).ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000401');
 		const request = {
@@ -48,7 +49,7 @@ describe('Task admission projection', () => {
 					(select count(*)::int from turn where conversation_id = $1) as runs`,
 				[conversationId]
 			)
-		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 0 }]);
+		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 1 }]);
 		const followUp = await harness.runtime.runPromise(
 			agents.submit(harness.effectId('task-admission:follow-up'), adminSubject, {
 				...request,

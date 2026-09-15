@@ -59,11 +59,28 @@ const writesTo = (statements: ReadonlyArray<string>, table: string): ReadonlyArr
 			statement.startsWith(`insert into "${table}" `) || statement.startsWith(`update "${table}" `)
 	);
 
+/** A commit is a run of writes uninterrupted by the graph read that precedes the next one. */
+const commits = (statements: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> => {
+	const groups: Array<Array<string>> = [];
+	let current: Array<string> | undefined;
+	for (const statement of statements) {
+		const write = /^(?:insert into|update) "([a-z_]+)"/.exec(statement)?.[1];
+		if (write === undefined) {
+			if (statement.includes('__bolt_graph_ordinal')) current = undefined;
+			continue;
+		}
+		if (current === undefined) groups.push((current = []));
+		current.push(write);
+	}
+	return groups;
+};
+
 const runTurn = async (name: string) => {
 	harness = await makeBoltTestRuntime(undefined, { ai: cassetteAi(cassette(name)) });
 	const runtime = harness;
 	const agents = await runtime.runtime.runPromise(Agents.Service);
 	const conversationId = ConversationId.make(recordId(`cost-${name}`));
+	runtime.database.forget();
 	await runtime.runtime.runPromise(
 		agents.submit(runtime.effectId(`submit:${name}`), adminSubject, {
 			conversationId,
@@ -73,19 +90,30 @@ const runTurn = async (name: string) => {
 			priority: DirectivePriority.make('normal')
 		})
 	);
-	// Only the turn is measured. Admission is its own invocation and is §4's business.
+	const admission = [...runtime.database.statements];
+	// The turn is measured on its own. Admission is its own invocation and is §4's business.
 	runtime.database.forget();
 	const result = await runtime.runtime.runPromise(
 		agents.execute(runtime.effectId(`execute:${name}`), adminSubject, conversationId)
 	);
-	return { conversationId, result, statements: [...runtime.database.statements] };
+	return { conversationId, result, admission, statements: [...runtime.database.statements] };
 };
 
 describe('what one agent turn costs the database', () => {
+	/**
+	 * Admission into an idle conversation is one commit that already starts the turn: the
+	 * conversation, the message it answers — consumed, never queued — and the run, together. A
+	 * client reading the conversation over sync sees a running turn, not a message waiting for one.
+	 */
+	it('admits a message into an idle conversation and starts its turn in one commit', async () => {
+		const { admission } = await runTurn('agents-admission-hello');
+		expect(commits(admission)).toEqual([['conversation', 'conversation_message', 'turn']]);
+	});
+
 	it('does not read siblings back to restate ids it is not changing', async () => {
 		const { result, statements } = await runTurn('agents-admission-hello');
 		expect(result.status).toBe('done');
-		expect(writesTo(statements, 'conversation_message')).toHaveLength(2);
+		expect(writesTo(statements, 'conversation_message')).toHaveLength(1);
 
 		/**
 		 * None. Every row a turn writes — the message, the turn, its usage, a plan — is now addressed
@@ -99,9 +127,10 @@ describe('what one agent turn costs the database', () => {
 	it('does not re-read the whole transcript once per streamed part', async () => {
 		const { statements } = await runTurn('agents-admission-hello');
 
-		// Three history reads plus six queue checks, including Plan revision at both boundaries.
-		// The streaming suite asserts the same count with eight provider part boundaries.
-		expect(transcriptReads(statements)).toHaveLength(9);
+		// Two history reads plus five queue checks, including Plan revision at both boundaries. The
+		// admission started the turn, so nothing is read to claim one. The streaming suite asserts
+		// the same count with eight provider part boundaries.
+		expect(transcriptReads(statements)).toHaveLength(7);
 	});
 
 	it('writes each row once, to its own collection', async () => {
@@ -111,11 +140,11 @@ describe('what one agent turn costs the database', () => {
 			conversation_message: writesTo(statements, 'conversation_message').length,
 			conversation: writesTo(statements, 'conversation').length,
 			turn_usage: writesTo(statements, 'turn_usage').length
-		}).toEqual({ turn: 2, conversation_message: 2, conversation: 2, turn_usage: 1 });
+		}).toEqual({ turn: 1, conversation_message: 1, conversation: 1, turn_usage: 1 });
 	});
 
 	/**
-	 * Seven rows, four commits, and the collections a row lives in do not decide which is which.
+	 * Four rows, three commits, and the collections a row lives in do not decide which is which.
 	 *
 	 * A mutate is one transaction and publishes one commit, and a commit crosses to the host — so
 	 * the unit worth counting is the call. The engine always grouped roots by collection and
@@ -123,28 +152,14 @@ describe('what one agent turn costs the database', () => {
 	 * field naming a root's collection, so no caller could write across two.
 	 *
 	 * What that field buys is here: starting a turn creates the run, marks the message it answers
-	 * answered and moves the conversation to `running` in **one** statement, and settling it writes
-	 * the run and the conversation in one more. Without it those are five commits instead of two,
-	 * and — the reason it matters beyond the count — a crash between them leaves a conversation
-	 * `running` with no run, or a run nothing points at.
+	 * answered and moves the conversation to `running` in **one** statement — the admission's own,
+	 * measured above — and settling it writes the run and the conversation in one more. Without it
+	 * those are five commits instead of two, and — the reason it matters beyond the count — a crash
+	 * between them leaves a conversation `running` with no run, or a run nothing points at.
 	 */
-	it('commits four times, whatever collections the rows are in', async () => {
+	it('commits three times, whatever collections the rows are in', async () => {
 		const { statements } = await runTurn('agents-admission-hello');
-		// A commit is a run of writes uninterrupted by the graph read that precedes the next one.
-		const groups: Array<Array<string>> = [];
-		let current: Array<string> | undefined;
-		for (const statement of statements) {
-			const write = /^(?:insert into|update) "([a-z_]+)"/.exec(statement)?.[1];
-			if (write === undefined) {
-				if (statement.includes('__bolt_graph_ordinal')) current = undefined;
-				continue;
-			}
-			if (current === undefined) groups.push((current = []));
-			current.push(write);
-		}
-		expect(groups).toEqual([
-			// startRun: the input message, the conversation, the run.
-			['conversation_message', 'conversation', 'turn'],
+		expect(commits(statements)).toEqual([
 			// recordUsage: the provider call, alone, changing nothing else.
 			['turn_usage'],
 			// The assistant reply.
@@ -158,12 +173,12 @@ describe('what one agent turn costs the database', () => {
 		const { statements } = await runTurn('agents-admission-hello');
 
 		/**
-		 * Two, and — the property that matters — independent of how many parts stream, because no
-		 * conversation write carries a passenger any more. They are the two transitions the row
-		 * actually makes: `running` when the turn starts, and its settled status when it ends. Usage,
-		 * steering delivery and a recall used to write it a third, fourth and fifth time to restate
-		 * columns they were not changing; those writes are gone rather than folded.
+		 * One, and — the property that matters — independent of how many parts stream, because no
+		 * conversation write carries a passenger any more. It is the one transition the row makes
+		 * during the turn: its settled status when it ends (`running` is the admission's). Usage,
+		 * steering delivery and a recall used to write it again to restate columns they were not
+		 * changing; those writes are gone rather than folded.
 		 */
-		expect(writesTo(statements, 'conversation')).toHaveLength(2);
+		expect(writesTo(statements, 'conversation')).toHaveLength(1);
 	});
 });

@@ -45,9 +45,17 @@ const assistant = (text: string) =>
 
 describe('Task directive queue', () => {
 	it('refuses removal when a pending message is claimed after the queue read', async () => {
-		harness = await makeBoltTestRuntime();
+		harness = await makeBoltTestRuntime(undefined, { ai: scriptedTranscript([]).ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000507');
+		// The first message into an idle conversation starts its turn; the second is what queues.
+		await harness.runtime.runPromise(
+			agents.submit(
+				harness.effectId('race:head'),
+				adminSubject,
+				taskRequest(conversationId, 'Running head.')
+			)
+		);
 		const sent = await harness.runtime.runPromise(
 			agents.submit(
 				harness.effectId('race:submit'),
@@ -97,7 +105,7 @@ describe('Task directive queue', () => {
 	});
 
 	it('reorders and removes pending messages without rewriting history or executing removed work', async () => {
-		const twin = scriptedTranscript([assistant('Third answered.'), assistant('First answered.')]);
+		const twin = scriptedTranscript([assistant('First answered.'), assistant('Third answered.')]);
 		harness = await makeBoltTestRuntime(undefined, { ai: twin.ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000504');
@@ -112,10 +120,8 @@ describe('Task directive queue', () => {
 		await harness.runtime.runPromise(
 			agents.updateQueue(harness.effectId('reorder'), adminSubject, {
 				conversationId,
-				change: {
-					action: 'reorder',
-					messageIds: [sent[2]!.messageId, sent[1]!.messageId, sent[0]!.messageId]
-				}
+				// The first request already runs; the queue behind it is what reorders.
+				change: { action: 'reorder', messageIds: [sent[2]!.messageId, sent[1]!.messageId] }
 			})
 		);
 		await harness.runtime.runPromise(
@@ -128,12 +134,12 @@ describe('Task directive queue', () => {
 			agents.answerQueued(harness.effectId('answer'), adminSubject, conversationId)
 		);
 		expect(twin.requests).toHaveLength(2);
-		expect(JSON.stringify(twin.requests[0]?.messages)).toContain('Third request.');
-		expect(JSON.stringify(twin.requests[0]?.messages)).not.toContain('First request.');
-		expect(JSON.stringify(twin.requests[1]?.messages)).toContain('First request.');
+		expect(JSON.stringify(twin.requests[0]?.messages)).toContain('First request.');
+		expect(JSON.stringify(twin.requests[0]?.messages)).not.toContain('Third request.');
+		expect(JSON.stringify(twin.requests[1]?.messages)).toContain('Third request.');
 		const continued = JSON.stringify(twin.requests[1]?.messages);
-		expect(continued.indexOf('First request.')).toBeGreaterThan(
-			continued.indexOf('Third answered.')
+		expect(continued.indexOf('Third request.')).toBeGreaterThan(
+			continued.indexOf('First answered.')
 		);
 		expect(JSON.stringify(twin.requests)).not.toContain('Removed request.');
 		expect(
@@ -157,7 +163,7 @@ describe('Task directive queue', () => {
 	});
 
 	it('refuses duplicate, incomplete, and foreign queue changes', async () => {
-		harness = await makeBoltTestRuntime();
+		harness = await makeBoltTestRuntime(undefined, { ai: scriptedTranscript([]).ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000505');
 		const first = await harness.runtime.runPromise(
@@ -339,7 +345,7 @@ describe('Task directive queue', () => {
 		expect(JSON.stringify(generated[1]?.messages)).toContain('newly queued detail');
 	});
 
-	it('claims a steering directive ahead of an older normal directive', async () => {
+	it('delivers a steering directive into the turn the older normal directive started', async () => {
 		const twin = cassetteTranscript(cassette('agents-queue-steer'));
 		const generated = twin.requests;
 		harness = await makeBoltTestRuntime(undefined, { ai: twin.ai });
@@ -367,13 +373,18 @@ describe('Task directive queue', () => {
 		expect(JSON.stringify(generated[0]?.messages)).toContain('Do this first.');
 		expect(
 			await harness.database.query(
-				`select id, sequence, priority, state
+				`select id, sequence, priority, state, turn_id
 				 from conversation_message where conversation_id = $1 and state is not null order by sequence`,
 				[conversationId]
 			)
 		).toEqual([
-			expect.objectContaining({ sequence: 1, priority: 'normal', state: 'queued' }),
-			{ id: steering.messageId, sequence: 2, priority: 'steer', state: 'consumed' }
+			expect.objectContaining({ sequence: 1, priority: 'normal', state: 'consumed' }),
+			expect.objectContaining({
+				id: steering.messageId,
+				sequence: 2,
+				priority: 'steer',
+				state: 'consumed'
+			})
 		]);
 	});
 });

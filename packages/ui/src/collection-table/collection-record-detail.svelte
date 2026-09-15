@@ -71,9 +71,13 @@
 	 * value: the form registers after this surface mounts, and the header has to re-render then.
 	 */
 	let headerNotice = $state<Snippet | null>(null);
+	let headerLeading = $state<Snippet | null>(null);
 	setCollectionRecordNoticeContext({
 		registerNotice: (notice) => {
 			headerNotice = notice;
+		},
+		registerLeading: (leading) => {
+			headerLeading = leading;
 		}
 	});
 	const definition = $derived(
@@ -420,6 +424,7 @@
 		{actions}
 		banner={collectionSurface?.banner ?? null}
 		notice={headerNotice}
+		leading={headerLeading}
 		ui={uiDetails}
 		approval={approvalDetails}
 	/>

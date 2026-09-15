@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import {
@@ -68,11 +69,20 @@ describe('steering admitted during an active run', () => {
 			agents.execute(harness.effectId('execute:first'), adminSubject, conversationId)
 		);
 		await generationStarted;
+		/**
+		 * A driver is told apart from the one running the turn by the task lease it holds. The
+		 * execute above holds none and so continues the admission-started turn as its own occurrence
+		 * would; these answer calls arrive as a different occurrence, and must defer to it.
+		 */
+		const anotherDriver = <A, E>(effect: Effect.Effect<A, E, string>) =>
+			harness!.runtime.runPromise(
+				effect.pipe(Effect.provideService(Agents.ExecutionOwner, 'another-driver'))
+			);
 		try {
 			await submit('follow-up', 'Include the newly queued detail.');
 			expect(
 				(
-					await harness.runtime.runPromise(
+					await anotherDriver(
 						agents.answerQueued(harness.effectId('answer:follow-up'), adminSubject, conversationId)
 					)
 				).status
@@ -86,7 +96,7 @@ describe('steering admitted during an active run', () => {
 			);
 			expect(
 				(
-					await harness.runtime.runPromise(
+					await anotherDriver(
 						agents.answerQueued(harness.effectId('answer:steer'), adminSubject, conversationId)
 					)
 				).status

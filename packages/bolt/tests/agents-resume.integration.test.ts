@@ -98,7 +98,10 @@ describe('Task resume control', () => {
 		).toEqual([{ state: 'cancelled' }, { state: 'cancelled' }]);
 		expect(
 			await harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, {
+					conversationId,
+					action: 'resume'
+				})
 			)
 		).toEqual({ conversationId, status: 'ready' });
 
@@ -115,10 +118,13 @@ describe('Task resume control', () => {
 			await harness.database.query(
 				`select task.status, run.status as run_status
 				 from conversation task join turn run on run.conversation_id = task.id
-				 where task.id = $1`,
+				 where task.id = $1 order by run.created_at`,
 				[conversationId]
 			)
-		).toEqual([{ status: 'done', run_status: 'succeeded' }]);
+		).toEqual([
+			{ status: 'done', run_status: 'stopped' },
+			{ status: 'done', run_status: 'succeeded' }
+		]);
 	});
 
 	it('persists the run failure as a transcript message and resumes from failed', async () => {
@@ -150,7 +156,9 @@ describe('Task resume control', () => {
 			})
 		);
 		await expect(
-			harness.runtime.runPromise(agents.execute(harness.effectId('execute'), adminSubject, conversationId))
+			harness.runtime.runPromise(
+				agents.execute(harness.effectId('execute'), adminSubject, conversationId)
+			)
 		).rejects.toMatchObject({ message: expect.stringContaining('PROBE_FAILURE_REASON') });
 		expect(
 			await harness.database.query(
@@ -169,7 +177,10 @@ describe('Task resume control', () => {
 		]);
 		expect(
 			await harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, {
+					conversationId,
+					action: 'resume'
+				})
 			)
 		).toEqual({ conversationId, status: 'ready' });
 	});
@@ -190,7 +201,10 @@ describe('Task resume control', () => {
 		);
 		await expect(
 			harness.runtime.runPromise(
-				agents.control(harness.effectId('resume'), adminSubject, { conversationId, action: 'resume' })
+				agents.control(harness.effectId('resume'), adminSubject, {
+					conversationId,
+					action: 'resume'
+				})
 			)
 		).rejects.toMatchObject({ _tag: 'Bolt.AccessControl.AccessDenied' });
 	});

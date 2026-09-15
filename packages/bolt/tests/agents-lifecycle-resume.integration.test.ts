@@ -56,7 +56,12 @@ const generated = (
 	};
 };
 
-const submit = (agents: Agents.Interface, runtime: BoltTestRuntime, conversationId: ConversationId, text: string) =>
+const submit = (
+	agents: Agents.Interface,
+	runtime: BoltTestRuntime,
+	conversationId: ConversationId,
+	text: string
+) =>
 	agents.submit(runtime.effectId(`submit:${conversationId}`), adminSubject, {
 		conversationId,
 		agentId: AgentId.make('web'),
@@ -117,7 +122,10 @@ describe('Task stop and run-fence boundaries', () => {
 			)
 		).toEqual([{ task_status: 'stopped', run_status: 'stopped' }]);
 		expect(
-			await harness.database.query('select state from conversation_message where conversation_id = $1 and state is not null', [conversationId])
+			await harness.database.query(
+				'select state from conversation_message where conversation_id = $1 and state is not null',
+				[conversationId]
+			)
 		).toEqual([{ state: 'cancelled' }]);
 		expect(
 			await harness.database.query(
@@ -204,7 +212,7 @@ describe('Task stop and run-fence boundaries', () => {
 				'select state from conversation_message where conversation_id = $1 and state is not null order by sequence',
 				[conversationId]
 			)
-		).toEqual([{ state: 'cancelled' }, { state: 'queued' }]);
+		).toEqual([{ state: 'cancelled' }, { state: 'consumed' }]);
 		expect(
 			await harness.runtime.runPromise(
 				agents.execute(harness.effectId('follow-up'), adminSubject, conversationId)

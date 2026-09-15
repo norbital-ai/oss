@@ -1,5 +1,5 @@
 import { Clock, Effect, Schema } from 'effect';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, notExists, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, notExists, or, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { composer, dbNow, executeBuilt } from '#lib/runtime/persistence.js';
 import { EffectId, ConversationId, MessageId } from '@norbital-ai/bolt-protocol';
@@ -12,14 +12,25 @@ const command = 'conversations.answer';
 const messages = SYSTEM_MODEL_TABLES.conversation_message;
 const conversations = SYSTEM_MODEL_TABLES.conversation;
 const tasks = SYSTEM_MODEL_TABLES.bolt_task;
+const turns = SYSTEM_MODEL_TABLES.turn;
 const authority = sql<string>`${messages.annotation}->>'executionAuthority'`;
-const taskIdFor = (id: string) => `agent:${id}`;
+const taskIdFor = Agents.executionTaskId;
+/**
+ * The message's own turn: started at admission under the task named by the message, and now the
+ * conversation's active turn. Such a message has left the queue but its task has not run yet.
+ */
+const ownsActiveTurn = and(
+	eq(messages.state, 'consumed'),
+	eq(conversations.active_turn_id, messages.turn_id),
+	eq(sql`${turns.capability_snapshot}->>'executionOwner'`, sql`'agent:' || ${messages.id}::text`)
+);
 const Candidate = Schema.Struct({ id: MessageId });
 const StoredExecution = Schema.Struct({
 	conversation_id: ConversationId,
 	subject_id: Schema.String,
 	authority: Schema.String,
-	status: Schema.String
+	status: Schema.String,
+	owned: Schema.Boolean
 });
 
 /** A crash after admission but before enqueue is repaired by the startup scan below. */
@@ -35,10 +46,11 @@ export const schedule = Effect.fn('AgentDriver.schedule')(function* (
 			.select({ id: messages.id })
 			.from(messages)
 			.innerJoin(conversations, eq(conversations.id, messages.conversation_id))
+			.leftJoin(turns, eq(turns.id, messages.turn_id))
 			.where(
 				and(
 					eq(messages.id, messageId),
-					eq(messages.state, 'queued'),
+					or(eq(messages.state, 'queued'), ownsActiveTurn),
 					isNull(conversations.parent_id),
 					inArray(conversations.status, ['ready', 'running']),
 					isNotNull(authority)
@@ -69,11 +81,14 @@ export const recover = Effect.fn('AgentDriver.recover')(function* (
 				.select({ id: messages.id })
 				.from(messages)
 				.innerJoin(conversations, eq(conversations.id, messages.conversation_id))
+				.leftJoin(turns, eq(turns.id, messages.turn_id))
 				.where(
 					and(
-						eq(messages.state, 'queued'),
+						or(
+							and(eq(messages.state, 'queued'), eq(conversations.status, 'ready')),
+							and(ownsActiveTurn, eq(conversations.status, 'running'))
+						),
 						isNull(conversations.parent_id),
-						eq(conversations.status, 'ready'),
 						isNotNull(authority),
 						after === '' ? undefined : gt(messages.id, after),
 						conversationId === undefined ? undefined : eq(conversations.id, conversationId),
@@ -124,11 +139,13 @@ export function run(
 					conversation_id: messages.conversation_id,
 					subject_id: conversations.subject_id,
 					status: conversations.status,
-					authority: authority.as('authority')
+					authority: authority.as('authority'),
+					owned: sql<boolean>`coalesce(${ownsActiveTurn}, false)`.as('owned')
 				})
 				.from(tasks)
 				.innerJoin(messages, eq(messages.id, messageId))
 				.innerJoin(conversations, eq(conversations.id, messages.conversation_id))
+				.leftJoin(turns, eq(turns.id, messages.turn_id))
 				.where(
 					and(
 						eq(tasks.effect_id, claim.id),
@@ -169,7 +186,12 @@ export function run(
 					)
 				)
 			);
-		if (owner.status === 'running') {
+		/**
+		 * A turn started at admission under this task is this occurrence's to continue; the first
+		 * attempt walks straight into it. A later attempt means the lease lapsed with the turn open,
+		 * which is the recovery below, exactly as for a turn this driver claimed itself.
+		 */
+		if (owner.status === 'running' && !(owner.owned && claim.attempt === 1)) {
 			// A single driver owns the root and its synchronous children. After lease expiry, close the
 			// interrupted children before the parent decides whether to retry their uncertain work.
 			if (claim.attempt > 1) {
@@ -196,14 +218,17 @@ export function run(
 						claim.id
 					);
 			}
+			// Recovery resumes under this claim's lease: the turn it starts is this occurrence's to run.
 			const recovered =
 				claim.attempt > 1 &&
-				(yield* agents.recoverExecution(
-					EffectId.make(`${effectId}:recover`),
-					subject,
-					owner.conversation_id,
-					claim.id
-				));
+				(yield* agents
+					.recoverExecution(
+						EffectId.make(`${effectId}:recover`),
+						subject,
+						owner.conversation_id,
+						claim.id
+					)
+					.pipe(Effect.provideService(Agents.ExecutionOwner, claim.id)));
 			if (!recovered) {
 				yield* (yield* TaskQueue.Service).defer(
 					EffectId.make(`${effectId}:busy`),

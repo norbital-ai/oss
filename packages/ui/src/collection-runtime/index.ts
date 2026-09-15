@@ -146,13 +146,14 @@ export function getCollectionRecordScope(): (() => string | undefined) | undefin
 const COLLECTION_RECORD_NOTICE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-record-notice');
 
 /**
- * The slot a record detail's header offers its descendant form for the record-state notice — the
- * read-only lock, a pending approval. The form owns the resolved metadata and hands its notice up
- * through this registry; the header owns placement, so the notice sits in the chrome instead of
- * scrolling away with the form.
+ * The slots a record detail's header offers its descendants. The form hands up its record-state
+ * notice (the read-only lock, a pending approval) and a `RecordShell` hands up its state icon and
+ * pill, which lead the record label; the header owns placement, so record state sits in the
+ * chrome instead of scrolling away with the body.
  */
 export interface CollectionRecordNoticeRegistry {
 	registerNotice(notice: Snippet | null): void;
+	registerLeading(leading: Snippet | null): void;
 }
 
 export function setCollectionRecordNoticeContext(registry: CollectionRecordNoticeRegistry): void {

@@ -267,7 +267,7 @@ describe('canonical Task admission vertical slice', () => {
 		).toEqual([{ status: 'succeeded' }, { status: 'succeeded' }, { status: 'succeeded' }]);
 	});
 
-	it('admits one queued message and mints no work occurrence for it', async () => {
+	it('admits a message into an idle conversation as a started turn and mints no work occurrence for it', async () => {
 		harness = await makeBoltTestRuntime(undefined, {
 			ai: cassetteTranscript(cassette('agents-admission-hello')).ai
 		});
@@ -294,9 +294,10 @@ describe('canonical Task admission vertical slice', () => {
 					(select count(*)::int from turn where conversation_id = $1) as runs`,
 				[conversationId]
 			)
-		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 0 }]);
+		).toEqual([{ tasks: 1, messages: 1, directives: 1, runs: 1 }]);
 		// Admitting a message mints no work occurrence. A conversation is not a task, and the caller
-		// that admits the message is the caller that answers it.
+		// that admits the message is the caller that answers it. Nothing was running, so the turn
+		// that answers it starts in the same write: the message is consumed, never observed queued.
 		expect(
 			await harness.database.query(
 				`select command from bolt_task where input->>'conversationId' = $1`,
@@ -306,14 +307,24 @@ describe('canonical Task admission vertical slice', () => {
 		expect(
 			await harness.database.query(
 				`select task.status, message.message->>'role' as role,
-					inbox.state, inbox.turn_id as turn_id
+					inbox.state, inbox.turn_id = task.active_turn_id as owns_turn,
+					run.capability_snapshot->>'executionOwner' as owner
 				 from conversation task
 				 join conversation_message message on message.conversation_id = task.id
 				 join conversation_message inbox on inbox.conversation_id = task.id and inbox.state is not null
+				 join turn run on run.id = task.active_turn_id
 				 where task.id = $1`,
 				[conversationId]
 			)
-		).toEqual([{ status: 'ready', role: 'user', state: 'queued', turn_id: null }]);
+		).toEqual([
+			{
+				status: 'running',
+				role: 'user',
+				state: 'consumed',
+				owns_turn: true,
+				owner: Agents.executionTaskId(admitted.messageId)
+			}
+		]);
 
 		const executed = await harness.runtime.runPromise(
 			agents.execute(harness.effectId('task-execute'), adminSubject, conversationId)

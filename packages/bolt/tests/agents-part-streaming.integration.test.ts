@@ -125,13 +125,14 @@ it('commits each part boundary before the provider finishes, then retains one co
 	);
 	expect(observed).toHaveLength(4);
 
-	// Eight boundaries cost the same nine reads as an ordinary two-part reply: three history
-	// reads and six queue checks (including Plan revision before generation and at completion).
+	// Eight boundaries cost the same seven reads as an ordinary two-part reply: two history reads
+	// and five queue checks (including Plan revision before generation and at completion). The
+	// turn was started by the admission, so `execute` claims nothing and reads nothing to claim.
 	const transcriptReads = harness.database.statements.filter(
 		(statement) =>
 			statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
 	);
-	expect(transcriptReads).toHaveLength(9);
+	expect(transcriptReads).toHaveLength(7);
 	const rows = await harness.database.query(
 		"select message, annotation from conversation_message where conversation_id = $1 and message->>'role' = 'assistant'",
 		[conversationId]
@@ -223,9 +224,7 @@ it('hands each completed non-final text part to the turn observer exactly once',
 	);
 	// The closing part is the turn's answer, delivered from the result; everything before it was an
 	// update, handed over once while the turn was still running.
-	expect(streamed).toEqual([
-		expect.objectContaining({ index: 1, text: 'Checking the pump.' })
-	]);
+	expect(streamed).toEqual([expect.objectContaining({ index: 1, text: 'Checking the pump.' })]);
 	expect(JSON.stringify(executed.output)).toContain('All done.');
 });
 

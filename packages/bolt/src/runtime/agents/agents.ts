@@ -116,6 +116,9 @@ export {
 /** Supplied only by the durable task route; children inherit the same execution owner. */
 export const ExecutionOwner = Context.Service<string>('@norbital-ai/bolt/AgentExecutionOwner');
 
+/** The durable task that answers `messageId`: one per admitted message, named by it. */
+export const executionTaskId = (messageId: MessageId): string => `agent:${messageId}`;
+
 /** Compare persisted authorization with current membership without storing credentials. */
 export const executionAuthority = (subject: Identity.Subject): string =>
 	JSON.stringify([
@@ -1122,7 +1125,7 @@ const contextOverflow = () =>
 
 /** Keep an executed Plan's archive boundary when revision/deletion removes its active projection. */
 const preservePlanBoundary = (
-	task: Conversation,
+	task: Pick<Conversation, 'id'>,
 	plan: Plan,
 	messages: ReadonlyArray<ConversationMessage>,
 	id: MessageId
@@ -1795,6 +1798,43 @@ export const layer = Layer.effect(
 				]);
 				return { messageId };
 			}
+			/**
+			 * A message nobody is ahead of, in a conversation nothing is running, is answered now: the
+			 * turn starts in the same write that admits it, so the row is never observed queued behind
+			 * an idle conversation. Only a message that will be scheduled qualifies — a root
+			 * conversation, an author with execution authority — since the occurrence that arrives
+			 * for it is what continues the turn. Everything else queues: a message sent while a turn
+			 * runs is taken at that turn's next boundary, and a child's messages are driven by its
+			 * parent.
+			 */
+			const answerNow =
+				input.parent === undefined &&
+				existing?.parent_id == null &&
+				existing?.status !== 'running' &&
+				'executionAuthority' in message.annotation &&
+				canClaimInput(message, plan) &&
+				!messages.some((row) => row.state === 'queued' && canClaimInput(row, plan));
+			const start = answerNow
+				? yield* turnStart(
+						EffectId.make(`${effectId}:start`),
+						subject,
+						{ id: input.conversationId, agent_id: input.agentId, parent_id: null },
+						{ id: messageId, mode: input.mode, model_id: input.modelId ?? null },
+						[...messages, yield* Schema.decodeUnknownEffect(ConversationMessageRow)(message)],
+						plan
+					)
+				: undefined;
+			const admitted =
+				start === undefined
+					? message
+					: {
+							...message,
+							...start.directive,
+							annotation: {
+								...message.annotation,
+								consumedAfterSequence: start.consumedAfterSequence
+							}
+						};
 			if (existing === undefined) {
 				const workbenchId = input.parent?.workbench_id ?? WorkbenchId.make(input.conversationId);
 				const titleText = messageText(input.message)
@@ -1802,40 +1842,46 @@ export const layer = Layer.effect(
 					.replace(/\s+/g, ' ')
 					.trim();
 				const title = (titleText.split(/[.!?。！？](?:\s|$)/, 1)[0] ?? '').slice(0, 80).trimEnd();
-				yield* writeConversation(
-					effectId,
-					subject,
+				yield* writeGraph(effectId, subject, [
 					{
-						id: input.conversationId,
-						workbench_id: workbenchId,
-						subject_id: SubjectId.make(subject.userId),
-						agent_id: input.agentId,
-						audience: agent.audience,
-						title: title || 'Attached files',
-						...(input.parent === undefined ? {} : { parent_id: input.parent.id }),
-						status: 'ready',
-						messages: [message]
-					},
-					'create'
-				);
-			} else {
-				if (transition === undefined) yield* writeMessage(effectId, subject, message, 'create');
-				else
-					yield* writeGraph(effectId, subject, [
-						{ collection: 'conversation_message', row: message, action: 'create' },
-						{
-							collection: 'conversation',
-							expectedVersion: existing.row_version,
-							row: { id: existing.id, status: continueConversation ? 'ready' : existing.status }
+						collection: 'conversation',
+						action: 'create',
+						row: {
+							id: input.conversationId,
+							workbench_id: workbenchId,
+							subject_id: SubjectId.make(subject.userId),
+							agent_id: input.agentId,
+							audience: agent.audience,
+							title: title || 'Attached files',
+							...(input.parent === undefined ? {} : { parent_id: input.parent.id }),
+							status: 'ready',
+							...start?.conversation
 						}
-					]);
-				// The conversation only changes when this admission reopens it; otherwise it is untouched.
-				if (transition === undefined && (input.resume || continueConversation))
-					yield* writeConversation(EffectId.make(`${effectId}:reopen`), subject, {
-						id: input.conversationId,
-						status: 'ready',
-						active_turn_id: null
-					});
+					},
+					{ collection: 'conversation_message', action: 'create', row: admitted },
+					...(start?.writes ?? [])
+				]);
+			} else {
+				// The conversation changes when this admission reopens it or starts its turn; otherwise it is untouched.
+				const reopen = transition === undefined && (input.resume || continueConversation);
+				yield* writeGraph(effectId, subject, [
+					{ collection: 'conversation_message', row: admitted, action: 'create' },
+					...(start?.writes ?? []),
+					...(start === undefined && !reopen && transition === undefined
+						? []
+						: [
+								{
+									collection: 'conversation',
+									expectedVersion: existing.row_version,
+									row: {
+										id: existing.id,
+										status: continueConversation || reopen ? 'ready' : existing.status,
+										...(reopen ? { active_turn_id: null } : {}),
+										...start?.conversation
+									}
+								}
+							])
+				]);
 			}
 			return { messageId } satisfies ConversationSendResult;
 		});
@@ -2083,79 +2129,67 @@ export const layer = Layer.effect(
 			return depth;
 		});
 
-		const claim = Effect.fn('Agents.claim')(function* (
+		/**
+		 * Everything that begins a turn answering `directive`, minus the write.
+		 *
+		 * Two callers start turns: admission, when nothing is running and the message it is writing
+		 * can be answered now, and `claim`, when a driver finds a queued head. Both take the same
+		 * pieces — plan adjustments, the turn row, the patch that marks the directive consumed by it
+		 * and the patch that marks the conversation running it — and fold them into the one write
+		 * they are already making, so a turn's start is a single commit from either side.
+		 *
+		 * `messages` is the transcript the turn starts after, the directive included.
+		 */
+		const turnStart = Effect.fn('Agents.turnStart')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: Conversation
+			conversation: Readonly<{
+				id: ConversationId;
+				agent_id: AgentId;
+				parent_id?: ConversationId | null | undefined;
+			}>,
+			directive: Readonly<{ id: MessageId; mode: DirectiveMode; model_id?: ModelId | null }>,
+			messages: ReadonlyArray<ConversationMessage>,
+			plan: Plan | undefined
 		) {
-			// The claimed turn owns this loop. Other drivers defer while it is running.
-			if (task.status !== 'ready') return undefined;
-			const currentPlan = yield* activePlan(
-				EffectId.make(`${effectId}:current-plan`),
-				subject,
-				task
-			);
-			const rows = (yield* queuedRows(effectId, subject, task.id))
-				.filter((row) => canClaimInput(row, currentPlan))
-				.slice(0, 1);
-			const waiting = yield* decodeRows(
-				Schema.Struct({
-					id: MessageId,
-					priority: DirectivePriority,
-					row_version: Schema.Natural,
-					sequence: Schema.Number.check(Schema.isInt()),
-					mode: DirectiveMode,
-					model_id: Schema.optionalKey(Schema.NullOr(ModelId))
-				}),
-				rows
-			);
-			const directive = waiting[0];
-			if (directive === undefined) return undefined;
-			const agent = yield* resolveAgent(task.agent_id);
+			const agent = yield* resolveAgent(conversation.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
 			const model = yield* selectModel(
 				EffectId.make(`${effectId}:model`),
 				directive.model_id ?? undefined
-			).pipe(
-				Effect.tapError(() =>
-					writeConversation(effectId, subject, { id: task.id, status: 'attention' })
-				)
 			);
 			const tools = yield* allowedTools(
 				EffectId.make(`${effectId}:host-capabilities`),
 				subject,
 				agent,
-				task.parent_id != null
+				conversation.parent_id != null
 			);
-			const runId = runIdFor(`${task.id}:${directive.id}`);
-			const messages = yield* messageRows(effectId, subject, task.id);
+			const runId = runIdFor(`${conversation.id}:${directive.id}`);
+			/**
+			 * The durable task whose lease fences this turn. Inside a driver that is the claim being
+			 * run; outside one — admission from a send — it is the task that send enqueues next, whose
+			 * id is a function of the message, so the occurrence that arrives finds a turn it owns.
+			 */
+			const executionOwner = Option.getOrElse(yield* Effect.serviceOption(ExecutionOwner), () =>
+				executionTaskId(directive.id)
+			);
 			const run = {
 				id: runId,
-				conversation_id: task.id,
+				conversation_id: conversation.id,
 				input_message_id: directive.id,
 				mode: directive.mode,
 				phase: 'model',
 				input_through_sequence: lastSequence(messages),
 				model_id: model.id,
 				context_window_tokens: model.contextWindowTokens,
-				capability_snapshot: {
-					...capabilitySnapshot(subject, agent, tools),
-					...Option.match(yield* Effect.serviceOption(ExecutionOwner), {
-						onNone: () => ({}),
-						onSome: (executionOwner) => ({ executionOwner })
-					})
-				},
+				capability_snapshot: { ...capabilitySnapshot(subject, agent, tools), executionOwner },
 				status: 'running'
 			};
-			const directiveMessage = messages.find(({ id }) => id === directive.id);
-			const plan = currentPlan;
 			// Starting execution seals the draft and archives planning atomically with the input claim.
 			const executeDraft = directive.mode === 'agent' && plan?.status === 'draft';
 			const revisePlan = directive.mode === 'plan' && plan !== undefined && plan.status !== 'draft';
 			const verifyAgain = directive.mode === 'agent' && plan?.status === 'stalled';
-			// Starting a turn is one write: the run exists, the message it answers has left the queue,
-			// and the conversation is running — three collections, one statement, one commit.
-			yield* writeGraph(effectId, subject, [
+			const writes: GraphWrite[] = [
 				...(verifyAgain ? [{ collection: 'plan', row: { id: plan.id, status: 'active' } }] : []),
 				...(revisePlan
 					? [
@@ -2164,7 +2198,7 @@ export const layer = Layer.effect(
 								collection: 'conversation_message',
 								action: 'create' as const,
 								row: preservePlanBoundary(
-									task,
+									conversation,
 									plan,
 									messages,
 									messageIdFor(`${directive.id}:boundary`)
@@ -2180,20 +2214,115 @@ export const layer = Layer.effect(
 							}
 						]
 					: []),
-				{ collection: 'turn', row: run, action: 'create' },
+				{ collection: 'turn', row: run, action: 'create' }
+			];
+			return {
+				run: yield* Schema.decodeUnknownEffect(TurnRow)(run),
+				writes,
+				directive: { turn_id: runId, state: 'consumed' as const },
+				consumedAfterSequence: lastSequence(messages) + (revisePlan ? 1 : 0),
+				conversation: { status: 'running' as const, active_turn_id: runId }
+			};
+		});
+
+		/** Whether `turn` was started under `owner`'s lease; the snapshot is not in the public projection. */
+		const ownsTurn = Effect.fn('Agents.ownsTurn')(function* (
+			effectId: EffectId,
+			turnId: TurnId,
+			owner: string
+		) {
+			const turns = SYSTEM_MODEL_TABLES.turn;
+			const ownership = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ id: turns.id })
+					.from(turns)
+					.where(
+						and(
+							eq(turns.id, turnId),
+							jsonTextEquals(turns.capability_snapshot, 'executionOwner', owner)
+						)
+					)
+			);
+			return ownership.rows.length > 0;
+		});
+
+		const claim = Effect.fn('Agents.claim')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			task: Conversation
+		) {
+			/**
+			 * A running conversation is owned by one turn. This driver continues that turn when it is
+			 * the turn's own — started at admission under the task this driver is now running, or by
+			 * this driver's earlier claim — and defers to whoever holds it otherwise.
+			 */
+			if (task.status === 'running') {
+				if (task.active_turn_id == null) return undefined;
+				const current = yield* runById(
+					EffectId.make(`${effectId}:current`),
+					subject,
+					task.active_turn_id
+				);
+				if (current === undefined || current.status !== 'running') return undefined;
+				const owner = Option.getOrElse(yield* Effect.serviceOption(ExecutionOwner), () =>
+					executionTaskId(current.input_message_id)
+				);
+				return (yield* ownsTurn(EffectId.make(`${effectId}:owner`), current.id, owner))
+					? current
+					: undefined;
+			}
+			if (task.status !== 'ready') return undefined;
+			const currentPlan = yield* activePlan(
+				EffectId.make(`${effectId}:current-plan`),
+				subject,
+				task
+			);
+			const rows = (yield* queuedRows(effectId, subject, task.id))
+				.filter((row) => canClaimInput(row, currentPlan))
+				.slice(0, 1);
+			const waiting = yield* decodeRows(
+				Schema.Struct({
+					id: MessageId,
+					row_version: Schema.Natural,
+					mode: DirectiveMode,
+					model_id: Schema.optionalKey(Schema.NullOr(ModelId))
+				}),
+				rows
+			);
+			const directive = waiting[0];
+			if (directive === undefined) return undefined;
+			const messages = yield* messageRows(effectId, subject, task.id);
+			const start = yield* turnStart(
+				effectId,
+				subject,
+				task,
+				directive,
+				messages,
+				currentPlan
+			).pipe(
+				Effect.tapError(() =>
+					writeConversation(effectId, subject, { id: task.id, status: 'attention' })
+				)
+			);
+			const directiveMessage = messages.find(({ id }) => id === directive.id);
+			// Starting a turn is one write: the run exists, the message it answers has left the queue,
+			// and the conversation is running — three collections, one statement, one commit.
+			yield* writeGraph(effectId, subject, [
+				...start.writes,
 				{
 					collection: 'conversation_message',
 					expectedVersion: directive.row_version,
 					row: {
 						id: directive.id,
-						turn_id: runId,
-						state: 'consumed',
+						...start.directive,
 						...(directiveMessage?.annotation == null || directiveMessage.annotation.tag === 'input'
 							? {
 									annotation: {
 										...directiveMessage?.annotation,
 										tag: 'input',
-										consumedAfterSequence: lastSequence(messages) + (revisePlan ? 1 : 0)
+										consumedAfterSequence: start.consumedAfterSequence
 									}
 								}
 							: {})
@@ -2202,10 +2331,10 @@ export const layer = Layer.effect(
 				{
 					collection: 'conversation',
 					expectedVersion: task.row_version,
-					row: { id: task.id, status: 'running', active_turn_id: runId }
+					row: { id: task.id, ...start.conversation }
 				}
 			]);
-			return yield* Schema.decodeUnknownEffect(TurnRow)(run);
+			return start.run;
 		});
 
 		const fencedConversation = Effect.fn('Agents.fencedConversation')(function* (
@@ -2828,23 +2957,7 @@ export const layer = Layer.effect(
 				task.active_turn_id
 			);
 			if (previous === undefined) return false;
-			// Capability snapshots are intentionally absent from the public collection projection.
-			const turns = SYSTEM_MODEL_TABLES.turn;
-			const ownership = yield* executeBuilt(
-				EffectId.make(`${effectId}:owner`),
-				database,
-				composer
-					.select({ id: turns.id })
-					.from(turns)
-					.where(
-						and(
-							eq(turns.id, previous.id),
-							eq(turns.conversation_id, task.id),
-							jsonTextEquals(turns.capability_snapshot, 'executionOwner', owner)
-						)
-					)
-			);
-			if (ownership.rows.length === 0) return false;
+			if (!(yield* ownsTurn(EffectId.make(`${effectId}:owner`), previous.id, owner))) return false;
 			const history = yield* messageRows(effectId, subject, task.id);
 			const unknown = unresolvedToolCalls(history);
 			yield* writeGraph(EffectId.make(`${effectId}:interrupt`), subject, [

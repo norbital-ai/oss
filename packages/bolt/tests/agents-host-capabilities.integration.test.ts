@@ -202,25 +202,24 @@ describe('host capability discovery and execution', () => {
 		const runtime = harness;
 		const agents = await runtime.runtime.runPromise(Agents.Service);
 		const conversationId = ConversationId.make(recordId('invalid-host-catalog'));
-		await runtime.runtime.runPromise(
-			agents.submit(runtime.effectId('submit'), adminSubject, {
-				conversationId,
-				agentId: AgentId.make('web'),
-				message: Agents.userAgentInput('Inspect source.'),
-				mode: DirectiveMode.make('agent'),
-				priority: DirectivePriority.make('normal')
-			})
-		);
+		// The turn starts with the admission, so the catalogue is read there: nothing is admitted.
 		await expect(
 			runtime.runtime.runPromise(
-				agents.execute(runtime.effectId('execute'), adminSubject, conversationId)
+				agents.submit(runtime.effectId('submit'), adminSubject, {
+					conversationId,
+					agentId: AgentId.make('web'),
+					message: Agents.userAgentInput('Inspect source.'),
+					mode: DirectiveMode.make('agent'),
+					priority: DirectivePriority.make('normal')
+				})
 			)
 		).rejects.toThrow();
 		expect(twin.requests).toEqual([]);
 		expect(
-			await runtime.database.query('select id from turn where conversation_id = $1', [
-				conversationId
-			])
-		).toEqual([]);
+			await runtime.database.query(
+				'select (select count(*)::int from turn where conversation_id = $1) as turns, (select count(*)::int from conversation where id = $1) as conversations',
+				[conversationId]
+			)
+		).toEqual([{ turns: 0, conversations: 0 }]);
 	});
 });

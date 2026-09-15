@@ -286,7 +286,22 @@ describe('Envoy inbound queue', () => {
 	});
 
 	it('refuses a subject that does not hold the envoy policy', async () => {
-		harness = await makeBoltTestRuntime(definition);
+		// The first admission starts the chat's turn, which selects its model from the catalog.
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) =>
+				request._tag === 'Catalog'
+					? { _tag: 'Success', value: catalog }
+					: {
+							_tag: 'Failure',
+							error: {
+								code: 'unsupported',
+								message: 'no generation here',
+								retryable: false,
+								outcome: 'known'
+							}
+						}
+		};
+		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const envoyConversation = Agents.conversationIdFor(
 			'envoy:field_ops_whatsapp:dm:6591234567@s.whatsapp.net'

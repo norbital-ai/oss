@@ -131,12 +131,17 @@ describe('per-directive agent model selection', () => {
 
 	it('does not silently switch a queued turn when its selected model is removed', async () => {
 		const { runtime, requests, submit, execute, catalog } = await fixture();
+		// The head starts its turn at admission with `first`; the choice of `second` is what queues.
+		await submit('head first', first);
 		await submit('selected second', second);
 		catalog([first], first);
+		await execute('head');
 		await expect(execute('removed choice')).rejects.toThrow(/unavailable/);
-		expect(requests).toEqual([]);
+		expect(requests.map((request) => request.modelId)).toEqual([first]);
 		expect(
-			await runtime.database.query('select status from conversation where id = $1', [conversationId])
+			await runtime.database.query('select status from conversation where id = $1', [
+				conversationId
+			])
 		).toEqual([{ status: 'attention' }]);
 	});
 

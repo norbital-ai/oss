@@ -19,7 +19,8 @@
 		ui,
 		approval,
 		banner = null,
-		notice = null
+		notice = null,
+		leading = null
 	}: {
 		title: string;
 		description: string;
@@ -33,6 +34,8 @@
 		banner?: string | null;
 		/** Record-state notice published by the mounted form, rendered under the header title. */
 		notice?: Snippet | null;
+		/** Record-state icon and pill published by the mounted `RecordShell`, leading the title block. */
+		leading?: Snippet | null;
 	} = $props();
 
 	const config = $derived([
@@ -76,6 +79,9 @@
 			shrink={false}
 			class={cn('border-b bg-background py-2.5', INSET_X_CLASS)}
 		>
+			{#if leading}
+				{@render leading()}
+			{/if}
 			<Stack gap="none" grow class="min-w-0">
 				<Sheet.Description class="truncate text-micro leading-4 text-muted-foreground">
 					{description}
