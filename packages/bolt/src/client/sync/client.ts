@@ -336,16 +336,29 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 		);
 	};
 
+	/**
+	 * Writes whose HTTP request has not returned. The Machine re-pushes a write it has not seen
+	 * settled after `STALE_WRITE_MS`, which is right when the request is gone (a dropped socket)
+	 * and wrong while it is still running: a payroll run that builds for twenty seconds would be
+	 * sent again, answered `mutation_in_progress`, and that answer surfaced as the run's failure
+	 * while the first request went on to succeed. A push in flight is not stale.
+	 */
+	const inFlight = new Set<CollectionMutationIdempotencyKey>();
 	const runPush = (writeId: CollectionMutationIdempotencyKey): void => {
 		const attachment = activeAttachment;
 		const write = state.writes.get(writeId);
 		if (attachment === undefined || write === undefined || state.link !== 'live') return;
-		void attachment.value.push(write.request, attachment.abort.signal).catch((cause) => {
-			if (!isActive(attachment)) return;
-			const failure = attachmentError(cause);
-			report(failure);
-			if (failure.kind === 'terminal') disconnectAttachment(attachment, failure);
-		});
+		if (inFlight.has(writeId)) return;
+		inFlight.add(writeId);
+		void attachment.value
+			.push(write.request, attachment.abort.signal)
+			.catch((cause) => {
+				if (!isActive(attachment)) return;
+				const failure = attachmentError(cause);
+				report(failure);
+				if (failure.kind === 'terminal') disconnectAttachment(attachment, failure);
+			})
+			.finally(() => inFlight.delete(writeId));
 	};
 
 	const runEffect = (effect: ClientEffect): void => {
