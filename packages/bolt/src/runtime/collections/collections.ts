@@ -2315,7 +2315,7 @@ export const layerWith = (
 						and(
 							compiled,
 							searched.predicate,
-							AccessControl.predicateExpression(visibility),
+							AccessControl.predicateExpression(visibility, { qualifier: ROOT_ALIAS }),
 							seek
 						) ?? always(),
 					ordering,
@@ -3116,6 +3116,7 @@ export const layerWith = (
 							]
 				);
 				const recordAssertions = reviewedRows.map((row) => {
+					// The snapshot is the row's JSON as it was prepared (`graph-read`), one string per row.
 					const snapshot = JSON.parse(row.snapshot) as Record<string, unknown>;
 					return row.action === 'delete'
 						? transactionSql(
@@ -4147,8 +4148,11 @@ export const layerWith = (
 					// of installing a prefix as though it were the complete answer.
 					const read = yield* readRelational(effectId, subject, input.collection, policy, {
 						where:
-							and(compiled, searched.predicate, AccessControl.predicateExpression(visibility)) ??
-							always(),
+							and(
+								compiled,
+								searched.predicate,
+								AccessControl.predicateExpression(visibility, { qualifier: ROOT_ALIAS })
+							) ?? always(),
 						ordering: compileOrderTerms(workspace.definition, input.collection, input.orderBy),
 						searchOrdering:
 							searched.mode === 'lexical'

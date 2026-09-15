@@ -473,7 +473,9 @@ export const SystemCommandContracts = [
 	commandContract({
 		name: 'identity.invitation.accept',
 		input: Schema.Struct({ invitationId: Schema.NonEmptyString }),
-		responses: [ok(Schema.Json)]
+		responses: [ok(Schema.Json)],
+		clientPath: ['identity', 'invitation', 'accept'],
+		clientMode: 'operation'
 	}),
 	commandContract({
 		name: 'approvals.decide',
@@ -659,7 +661,9 @@ export const SystemCommandContracts = [
 		name: 'envoys.registration.redeem',
 		input: Schema.Struct({ claimId: Schema.NonEmptyString }),
 		responses: [ok(Schema.Json)],
-		budgetKey: 'envoys.registration'
+		budgetKey: 'envoys.registration',
+		clientPath: ['envoys', 'registration', 'redeem'],
+		clientMode: 'operation'
 	}),
 	commandContract({
 		name: 'envoys.drain',

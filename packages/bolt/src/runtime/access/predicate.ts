@@ -101,16 +101,7 @@ export type RowPredicateExpression =
 			readonly valueType: 'string' | 'number' | 'boolean' | 'instant' | 'json';
 			readonly transform?: 'case-fold';
 			readonly operator:
-				| 'eq'
-				| 'ne'
-				| 'gt'
-				| 'gte'
-				| 'lt'
-				| 'lte'
-				| 'in'
-				| 'notIn'
-				| 'isNull'
-				| 'isNotNull';
+				'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'notIn' | 'isNull' | 'isNotNull';
 			readonly values: ReadonlyArray<Schema.Json>;
 	  }>
 	| Readonly<{
@@ -205,8 +196,8 @@ const jsonPathValue = (
 			: expression.valueType === 'boolean'
 				? sql`case when ${text} in ('true', 'false') then (${text})::boolean else null end`
 				: expression.valueType === 'json'
-						? sql`(${source} #> ${path})`
-						: text;
+					? sql`(${source} #> ${path})`
+					: text;
 	return expression.transform === 'case-fold' ? sql`lower(${value}::text)` : value;
 };
 
@@ -262,11 +253,12 @@ const compileExpression = (expression: RowPredicateExpression, qualifier?: strin
 					expression.values.map(operand),
 					sql`, `
 				)})`;
-			const operator = expression.operator === 'eq'
-				? 'is not distinct from'
-				: expression.operator === 'ne'
-					? 'is distinct from'
-					: comparisonSql[expression.operator];
+			const operator =
+				expression.operator === 'eq'
+					? 'is not distinct from'
+					: expression.operator === 'ne'
+						? 'is distinct from'
+						: comparisonSql[expression.operator];
 			return sql`${value} ${sql.raw(operator)} ${operand(expression.values[0] ?? null)}`;
 		}
 		case 'json-array-some': {
@@ -275,8 +267,7 @@ const compileExpression = (expression: RowPredicateExpression, qualifier?: strin
 				expression.path.length === 0 ? source : sql`(${source} #> ${jsonPath(expression.path)})`;
 			if (expression.values.length === 0) return sql`false`;
 			const member = sql`${sql.identifier(expression.alias)}.${sql.identifier('value')}`;
-			const comparedMember =
-				expression.transform === 'case-fold' ? sql`lower(${member})` : member;
+			const comparedMember = expression.transform === 'case-fold' ? sql`lower(${member})` : member;
 			const comparisons = expression.values.map((value) =>
 				expression.transform === 'case-fold'
 					? sql`${comparedMember} = lower(${value}::text)`
@@ -287,7 +278,13 @@ const compileExpression = (expression: RowPredicateExpression, qualifier?: strin
 		case 'relation': {
 			const target = sql.identifier(expression.targetCollection);
 			const alias = sql.identifier(expression.alias);
-			const joined = sql`${alias}.${sql.identifier(expression.targetField)} = ${predicateColumn(expression.sourceField, qualifier)}`;
+			/**
+			 * The outer column is qualified even at the root. Bare `"id"` inside the subquery binds to
+			 * the nearest table that has one — the related table itself — so a relation whose source
+			 * field shares a name with a target column (`conversation.id` against
+			 * `conversation_message.id`) compared the related row to itself and matched nothing.
+			 */
+			const joined = sql`${alias}.${sql.identifier(expression.targetField)} = ${predicateColumn(expression.sourceField, qualifier ?? expression.sourceCollection)}`;
 			const nested = compileExpression(expression.expression, expression.alias);
 			const visibility =
 				expression.visibility === undefined

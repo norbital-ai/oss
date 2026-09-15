@@ -279,20 +279,7 @@ export type CommunicationRequest = typeof CommunicationRequest.Type;
  * re-templates has its own shapes.
  */
 export const ChannelSendPayload = Schema.Struct({
-	text: Schema.NonEmptyString,
-	/**
-	 * An action link the host renders against its public origin.
-	 *
-	 * Bolt owns the claim and its lifetime; Colony owns the address at which its browser surface is
-	 * served. Keeping those two facts separate prevents a tenant bundle from guessing a deployment
-	 * hostname while still preventing the host from minting or extending a claim.
-	 */
-	registration: Schema.optionalKey(
-		Schema.Struct({
-			claimId: Schema.NonEmptyString,
-			expiresInMinutes: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
-		})
-	)
+	text: Schema.NonEmptyString
 });
 export type ChannelSendPayload = Schema.Schema.Type<typeof ChannelSendPayload>;
 export const CommunicationResponse = Schema.Struct({ receipt: Schema.optionalKey(Schema.Json) });

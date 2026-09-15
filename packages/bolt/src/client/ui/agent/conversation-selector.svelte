@@ -26,26 +26,35 @@
 		icon?: string;
 	} = $props();
 
-	const options = $derived.by(() => {
-		const rows = model.agents.flatMap((agent) => model.rowsByAgent[agent.id] ?? []);
-		const groupLabel = new Map<string, string>();
-		for (const row of rows) {
-			if (row.kind === 'heading') groupLabel.set(row.id.split(':').at(-1) ?? '', row.label);
-		}
-		return rows.flatMap((row) => {
-			if (row.kind !== 'task') return [];
-			const type = groupLabel.get(row.audience);
-			return [
-				{
-					value: row.id,
-					label: row.title,
-					icon: row.icon,
-					search_term: row.searchText,
-					...(type === undefined ? {} : { type })
-				}
-			];
-		});
-	});
+	/** One agent groups by audience; several agents group by agent, the audience as a suffix. */
+	const options = $derived.by(() =>
+		model.agents.flatMap((agent) => {
+			const rows = model.rowsByAgent[agent.id] ?? [];
+			const groupLabel = new Map<string, string>();
+			for (const row of rows) {
+				if (row.kind === 'heading') groupLabel.set(row.id.split(':').at(-1) ?? '', row.label);
+			}
+			return rows.flatMap((row) => {
+				if (row.kind !== 'task') return [];
+				const audience = groupLabel.get(row.audience);
+				const type =
+					model.agents.length > 1
+						? audience === undefined
+							? agent.label
+							: `${agent.label} · ${audience}`
+						: audience;
+				return [
+					{
+						value: row.id,
+						label: row.title,
+						icon: row.icon,
+						search_term: row.searchText,
+						...(type === undefined ? {} : { type })
+					}
+				];
+			});
+		})
+	);
 </script>
 
 <Inline align="center" gap="xs" class="w-full min-w-0">

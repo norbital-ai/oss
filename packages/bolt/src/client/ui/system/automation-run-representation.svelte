@@ -5,10 +5,7 @@
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Root as Progress } from '@norbital-ai/ui/progress';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import {
-		presentAutomationStatus,
-		type AutomationRunStatus
-	} from './automation-presentation.js';
+	import AutomationStatusRenderer from './automation-status.renderer.svelte';
 
 	let { record }: { record: Record<string, unknown> | null; close: () => void } = $props();
 	const { t } = useI18n();
@@ -31,19 +28,10 @@
 		};
 	});
 	const status = $derived(text('status') ?? 'unknown');
-	const statusLabel = $derived(
-		status === 'pending' || status === 'running' || status === 'done' || status === 'failed'
-			? t(presentAutomationStatus(status satisfies AutomationRunStatus).messageKey)
-			: t('bolt.automations.status.unknown')
-	);
 	const result = $derived(record?.['result']);
 	const error = $derived(text('error'));
 	const printableResult = $derived(
-		result == null
-			? undefined
-			: isString(result)
-				? result
-				: JSON.stringify(result, null, 2)
+		result == null ? undefined : isString(result) ? result : JSON.stringify(result, null, 2)
 	);
 	const resultLanguage = $derived.by((): 'json' | 'plaintext' => {
 		if (printableResult === undefined) return 'plaintext';
@@ -83,17 +71,7 @@
 			<span class="text-xs font-semibold tabular-nums text-foreground"
 				>{progress?.percent ?? 0}%</span
 			>
-			<span
-				class="rounded-full px-2 py-0.5 text-xs font-semibold capitalize {status === 'done'
-					? 'bg-success/10 text-success'
-					: status === 'running'
-						? 'bg-brand/10 text-brand'
-						: status === 'failed'
-							? 'bg-destructive/10 text-destructive'
-							: 'bg-muted text-muted-foreground'}"
-			>
-				{statusLabel}
-			</span>
+			<AutomationStatusRenderer value={status} row={record ?? {}} class="capitalize" />
 		</Inline>
 	</Inline>
 

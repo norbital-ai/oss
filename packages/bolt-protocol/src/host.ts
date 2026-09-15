@@ -21,6 +21,18 @@ export const commandContract = <const Contract extends CommandContract>(
 	contract: Contract
 ): Contract => contract;
 
+/**
+ * Where a registration link lands, on every host. A Bolt browser path: the workspace shell renders
+ * the claim, so the runtime can mint a working link without knowing which host serves it.
+ */
+export const ENVOY_REGISTRATION_PATH = '/envoy-registration';
+/** Where a workspace invitation link lands, on every host: the shell accepts it for the signed-in person. */
+export const INVITATION_PATH = '/invitation';
+/**
+ * The host configuration key naming the public URL the workspace shell is served at — origin and
+ * mount prefix, e.g. `https://core.example/__bolt`. Registration links are minted beneath it.
+ */
+export const PUBLIC_WORKSPACE_ROOT_CONFIG_KEY = 'BOLT_PUBLIC_WORKSPACE_ROOT';
 export const HOST_RECOVER_COMMAND = 'host.recover';
 export const HOST_SCHEDULE_DISCOVER_COMMAND = 'host.schedules.discover';
 export const HOST_SCHEDULE_SETTLE_COMMAND = 'host.schedules.settle';

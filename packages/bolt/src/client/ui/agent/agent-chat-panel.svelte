@@ -113,10 +113,13 @@
 		runtime.client.db.conversation.findMany({ orderBy: { updated_at: 'desc' }, limit: 500 })
 	);
 	const allTasks = $derived(projectConversations(taskQuery.current ?? []));
-	const rootTasks = $derived(
-		allTasks.filter((task) => task.parent_id === null && task.agent_id === runtime.agentId)
-	);
-	const defaultTask = $derived(rootTasks[0]);
+	/**
+	 * Every root conversation the policy lets this viewer read, whatever agent it belongs to: an
+	 * envoy's WhatsApp chat is one conversation with the envoy as its agent, and filtering the list
+	 * to this panel's own agent hid every one of them from the person who owned it.
+	 */
+	const rootTasks = $derived(allTasks.filter((task) => task.parent_id === null));
+	const defaultTask = $derived(rootTasks.find((task) => task.agent_id === runtime.agentId));
 	const activeConversationId = $derived(
 		composingNew ? undefined : (selectedConversationId ?? defaultTask?.id)
 	);
@@ -312,14 +315,21 @@
 				activeTask?.status === 'attention' ||
 				activeTask?.status === 'failed')
 	);
+	/**
+	 * Only the viewer's own conversation with this panel's agent takes a message. Another agent's
+	 * chat and another person's chat are readable here — the policy decides which — never written:
+	 * task identity is immutable, and the server refuses the send anyway.
+	 */
 	const taskAcceptsSubmission = $derived(
 		activeTask === undefined ||
-			activeTask.status === 'ready' ||
-			activeTask.status === 'running' ||
-			activeTask.status === 'done' ||
-			activeTask.status === 'failed' ||
-			activeTask.status === 'stopped' ||
-			activeTask.status === 'attention'
+			(activeTask.agent_id === runtime.agentId &&
+				activeTask.subject_id === runtime.subject.userId &&
+				(activeTask.status === 'ready' ||
+					activeTask.status === 'running' ||
+					activeTask.status === 'done' ||
+					activeTask.status === 'failed' ||
+					activeTask.status === 'stopped' ||
+					activeTask.status === 'attention'))
 	);
 	const parsedDraft = $derived(parseTaskSlashCommand(draft));
 	function draftSendable(parsed: ReturnType<typeof parseTaskSlashCommand>): boolean {

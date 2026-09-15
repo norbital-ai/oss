@@ -158,7 +158,9 @@ describe('Bolt architecture boundaries', () => {
 		// 9,038 -> 9,126: `setNull(...)`/`deferrable(...)` relation grammar, carried from the
 		// authoring schema through introspection, and the deferred-key clause the compiler has to
 		// append itself — drizzle-kit exposes no builder for `DEFERRABLE INITIALLY DEFERRED`.
-		expect(total).toBeLessThanOrEqual(9_126);
+		// 9,126 -> 9,152: the conversation read policy is built per workspace (own, participant,
+		// public-envoy) and the administrator read bypass covers the chat collections.
+		expect(total).toBeLessThanOrEqual(9_152);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -222,7 +224,9 @@ describe('Bolt architecture boundaries', () => {
 		// statement per batch rather than one recursive prune per written row.
 		// 18,050 -> 18,051: the prepared snapshot is the row's JSON string, parsed once before its
 		// `row_version` is read; indexed as an object it never matched, and lint refused the file.
-		expect(amendedAggregate).toBeLessThanOrEqual(18_051);
+		// 18,051 -> 18,075: a relation subquery qualifies its outer join column at the root, and the
+		// relational reads render the visibility predicate under the root alias they select from.
+		expect(amendedAggregate).toBeLessThanOrEqual(18_075);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -246,7 +250,9 @@ describe('Bolt architecture boundaries', () => {
 		// 4,932 -> 4,945: an update's snapshot assert compares `row_version` where the collection has
 		// one; the full-row JSON compare stays for collections without it.
 		// 4,945 -> 4,946: the prepared snapshot is parsed once before its `row_version` is read.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_946);
+		// 4,946 -> 4,950: the relational reads render the visibility predicate under the root alias
+		// they select from, so a relation subquery's outer column resolves to the root row.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_950);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work

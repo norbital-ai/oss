@@ -185,8 +185,8 @@ describe('Envoy inbound queue', () => {
 		expect(
 			await harness.database.query(
 				`select external_message_id, status from bolt_envoy_messages
-				 where conversation_id = $1 order by external_message_id`,
-				[conversationId]
+				 where transport_conversation_id = $1 and direction = 'inbound' order by external_message_id`,
+				['6591234567@s.whatsapp.net']
 			)
 		).toEqual([
 			{ external_message_id: 'one', status: 'answered' },

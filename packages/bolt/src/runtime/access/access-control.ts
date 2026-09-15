@@ -5,7 +5,10 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import { asc, ilike, inArray } from 'drizzle-orm';
 import type { PolicyDeclaration, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
-import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
+import {
+	CONVERSATION_COLLECTIONS,
+	SYSTEM_COLLECTION_NAMES
+} from '#lib/runtime/schema/system-collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -571,12 +574,20 @@ export const layer = Layer.effect(
 				.filter(({ name }) => !SYSTEM_COLLECTION_NAMES.has(name))
 				.map(({ name }) => name)
 		);
+		/**
+		 * An administrator also reads every conversation in the workspace, whoever opened it and
+		 * whichever agent it belongs to — reading only; sending into one stays with its owner. A
+		 * second built-in grant could not say this: one holder gets one grant per coordinate.
+		 */
 		const administratorBypasses = (
 			subject: Identity.Subject,
 			action: string,
 			resource: string
 		): boolean =>
-			isAdministrator(subject) && (action === 'agent' || authoredCollections.has(resource));
+			isAdministrator(subject) &&
+			(action === 'agent' ||
+				authoredCollections.has(resource) ||
+				(action === 'read' && CONVERSATION_COLLECTIONS.has(resource)));
 		/**
 		 * An envoy's declared policies authorize its own agent.
 		 *
@@ -616,7 +627,13 @@ export const layer = Layer.effect(
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
 						: (declaredEnvoyAgent(action, resource, subjectHeld) ??
-							decidePolicies(workspace.definition.policies, subject, action, resource, subjectHeld)),
+							decidePolicies(
+								workspace.definition.policies,
+								subject,
+								action,
+								resource,
+								subjectHeld
+							)),
 				predicate: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
@@ -774,7 +791,13 @@ export const layer = Layer.effect(
 				administratorBypasses(subject, action, resource)
 					? administratorPredicate()
 					: (declaredEnvoyAgent(action, resource, held(subject)) ??
-						decidePolicies(workspace.definition.policies, subject, action, resource, held(subject))),
+						decidePolicies(
+							workspace.definition.policies,
+							subject,
+							action,
+							resource,
+							held(subject)
+						)),
 			capabilities: (subject) => {
 				if (isAdministrator(subject)) {
 					return {

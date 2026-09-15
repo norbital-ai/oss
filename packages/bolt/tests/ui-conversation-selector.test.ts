@@ -14,6 +14,7 @@ describe('projectConversations', () => {
 			{
 				...root,
 				title: null,
+				subject_id: null,
 				parent_id: null,
 				active_plan_id: null,
 				active_turn_id: null

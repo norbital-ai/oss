@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
-import { EffectId, EnvoyDelivery } from '@norbital-ai/bolt-protocol';
+import { EffectId, ENVOY_REGISTRATION_PATH, EnvoyDelivery } from '@norbital-ai/bolt-protocol';
 import {
 	AgentId,
 	DirectiveMode,
@@ -29,6 +29,7 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import { canonicalTransportIdentity } from '#lib/runtime/envoys/transport-identity.js';
 import { ReplicaAttachment } from '#lib/runtime/envoys/inbox.js';
+import { workspaceLink } from '#lib/runtime/host-links.js';
 import { envoyPrincipalId, envoySubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import {
@@ -283,6 +284,24 @@ export const layerWith = (
 				return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 			};
 
+			/** The whole notice, link included: see `workspaceLink` for where the link comes from. */
+			const registrationNotice = Effect.fn('Envoys.registrationNotice')(function* (
+				text: string,
+				claimId: string
+			) {
+				const link = yield* workspaceLink(tenant.tenantId, ENVOY_REGISTRATION_PATH, {
+					claim: claimId
+				});
+				return [
+					text,
+					'',
+					'Complete registration:',
+					link,
+					'',
+					`This link expires in ${ENVOY_REGISTRATION_EXPIRES_SECONDS / 60} minutes.`
+				].join('\n');
+			});
+
 			const taskFailure = (envoyName: string, operation: string) =>
 				Effect.mapError(
 					(failure: unknown) =>
@@ -472,6 +491,14 @@ export const layerWith = (
 				if (claim === undefined) return { state: 'invalid' as const };
 				const inspected = yield* inspectRegistration(EffectId.make(`${effectId}:inspect`), claimId);
 				if (inspected.state !== 'ready') {
+					// Opening one's own redeemed link again is not a failure: the number is registered,
+					// which is what the person came to make true. Only somebody else's consumed link is.
+					if (inspected.state === 'registered' && claim.claimed_by === subject.userId)
+						return {
+							state: 'already_registered' as const,
+							envoy: claim.envoy,
+							transport: claim.transport
+						};
 					return inspected.state === 'registered'
 						? { state: 'used' as const }
 						: { state: inspected.state };
@@ -808,11 +835,7 @@ export const layerWith = (
 						const delivered =
 							claimId !== undefined &&
 							(yield* deliver(effectId, envoy, internal, senderId, {
-								text,
-								registration: {
-									claimId,
-									expiresInMinutes: ENVOY_REGISTRATION_EXPIRES_SECONDS / 60
-								}
+								text: yield* registrationNotice(text, claimId)
 							}));
 						return {
 							status: 'registration_required' as const,
@@ -1073,6 +1096,22 @@ export const layerWith = (
 					let remaining = rows.length;
 					let answerOwed = false;
 					let delivered = false;
+					/**
+					 * A turn that dies owes the sender a sentence. The failure is recorded on the
+					 * conversation for whoever reads the transcript; the person on the transport sees
+					 * none of that, and a chat that answers "Let me look that up" and then nothing is
+					 * indistinguishable from one that was never delivered.
+					 */
+					const notifyFailure = (turn: number, reason: string) =>
+						recipient === undefined
+							? Effect.void
+							: deliver(
+									EffectId.make(`${effectId}:failure:${turn}`),
+									envoy,
+									conversationId,
+									recipient,
+									{ text: `Sorry, I could not finish that: ${reason.slice(0, 500)}` }
+								).pipe(Effect.ignore, Effect.asVoid);
 					const runTurns = Effect.gen(function* () {
 						for (let turn = 0; turn < MAX_DRAIN_TURNS; turn += 1) {
 							const subject = rows[turn]?.subject ?? rows.at(-1)!.subject;
@@ -1083,7 +1122,12 @@ export const layerWith = (
 									internal,
 									onAssistantText
 								)
-								.pipe(taskFailure(envoyName, 'Task execution'));
+								.pipe(
+									Effect.tapError((failure) => notifyFailure(turn, getErrorMessage(failure))),
+									taskFailure(envoyName, 'Task execution')
+								);
+							if (executed.status === 'failed')
+								yield* notifyFailure(turn, 'the request could not be completed.');
 							if (executed.output !== undefined) {
 								const answer = finalAnswerText(executed.output).trim();
 								if (answer !== '' && recipient !== undefined) {

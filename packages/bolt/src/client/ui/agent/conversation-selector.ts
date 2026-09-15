@@ -15,6 +15,8 @@ const Conversation = Schema.Struct({
 	id: ConversationId,
 	agent_id: AgentId,
 	audience: ConversationAudience,
+	/** The durable owner: whoever opened it. Absent only on a row synced before the column was read. */
+	subject_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
 	title: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	status: ConversationStatus,
@@ -27,6 +29,7 @@ export type Conversation = Readonly<{
 	id: typeof ConversationId.Type;
 	agent_id: typeof AgentId.Type;
 	audience: typeof ConversationAudience.Type;
+	subject_id: string | null;
 	parent_id: typeof ConversationId.Type | null;
 	title?: string | null;
 	status: typeof ConversationStatus.Type;
@@ -48,6 +51,7 @@ export function projectConversations(rows: readonly unknown[]): Conversation[] {
 				id: task.id,
 				agent_id: task.agent_id,
 				audience: task.audience,
+				subject_id: task.subject_id ?? null,
 				parent_id: task.parent_id ?? null,
 				title: task.title ?? null,
 				status: task.status,

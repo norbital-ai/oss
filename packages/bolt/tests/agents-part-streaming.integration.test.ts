@@ -130,7 +130,9 @@ it('commits each part boundary before the provider finishes, then retains one co
 	// turn was started by the admission, so `execute` claims nothing and reads nothing to claim.
 	const transcriptReads = harness.database.statements.filter(
 		(statement) =>
-			statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
+			// The transcript is read straight off its table; queue checks go through the relational reader.
+			(statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')) ||
+			statement.includes('"conversation_message"."sequence" > ')
 	);
 	expect(transcriptReads).toHaveLength(7);
 	const rows = await harness.database.query(

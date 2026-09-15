@@ -50,7 +50,9 @@ const siblingAggregations = (statements: ReadonlyArray<string>): ReadonlyArray<s
 const transcriptReads = (statements: ReadonlyArray<string>): ReadonlyArray<string> =>
 	statements.filter(
 		(statement) =>
-			statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')
+			// The transcript is read straight off its table; queue checks go through the relational reader.
+			(statement.startsWith('select "d0"."id"') && statement.includes('"conversation_message"')) ||
+			statement.includes('"conversation_message"."sequence" > ')
 	);
 
 const writesTo = (statements: ReadonlyArray<string>, table: string): ReadonlyArray<string> =>

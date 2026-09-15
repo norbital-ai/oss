@@ -112,6 +112,7 @@ describe('scripted agent pipeline transcript', () => {
 			'list_skills',
 			'read_skill',
 			'search_task_history',
+			'read_messages',
 			'use_image',
 			'read_collection',
 			'write_collection'
@@ -133,8 +134,10 @@ describe('scripted agent pipeline transcript', () => {
 		 * suite, because it is the one system tool whose effect lands in the loop rather than in a
 		 * tool result.
 		 */
+		// `read_messages` is an envoy's tool — a chat replica exists only there — so the web agent
+		// is never offered it and the recording could not have called it.
 		expect(toolNamesFrom(requests[1]!).toSorted()).toEqual(
-			SYSTEM_TOOLS.filter((name) => name !== 'compact').toSorted()
+			SYSTEM_TOOLS.filter((name) => name !== 'compact' && name !== 'read_messages').toSorted()
 		);
 		expect(lastToolResult(requests[1]!)).toMatchObject({
 			key: IMAGE_KEY,
@@ -148,7 +151,7 @@ describe('scripted agent pipeline transcript', () => {
 		const output = requests[0]?.output;
 		if (output?._tag !== 'Message') throw new Error('Expected tool-capable generation');
 		expect(output.tools?.map(({ name }) => name).toSorted()).toEqual(
-			[...SYSTEM_TOOLS, 'subagent'].toSorted()
+			[...SYSTEM_TOOLS.filter((name) => name !== 'read_messages'), 'subagent'].toSorted()
 		);
 		expect(output.tools?.every(({ inputSchema }) => inputSchema['type'] === 'object')).toBe(true);
 		expect(

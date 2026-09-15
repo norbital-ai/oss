@@ -5,17 +5,16 @@
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { FormattedValueRenderer } from '@norbital-ai/ui/data-renderer';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import { Bound, Cover, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import AutomationProgressRenderer from './automation-progress.renderer.svelte';
+	import AutomationStatusRenderer from './automation-status.renderer.svelte';
 	import {
 		canShowAutomationSource,
 		presentAutomationStatus,
-		useStudioSourceEntitlement,
-		type AutomationRunStatus
+		useStudioSourceEntitlement
 	} from './automation-presentation.js';
 	import type { AutomationRunsClient } from '../studio/workspace-client.js';
 	import type { WorkspaceManifest } from '../studio/studio-state.js';
@@ -65,12 +64,6 @@
 	);
 	const running = $derived(activeConversationId !== undefined || (execution?.pending ?? 0) > 0);
 
-	const AutomationRunStatusValue = Schema.Literals(['pending', 'running', 'done', 'failed']);
-	const automationRunStatus = (value: unknown): AutomationRunStatus | undefined =>
-		Schema.is(AutomationRunStatusValue)(value) ? value : undefined;
-	const formatAutomationStatus = ({ value }: { value: unknown }): string =>
-		t(presentAutomationStatus(automationRunStatus(value)).messageKey);
-
 	const run = (): Effect.Effect<void> => {
 		if (execution === undefined) {
 			return Effect.sync(() => {
@@ -111,21 +104,6 @@
 		browserReady = true;
 	});
 </script>
-
-{#snippet stopAction({ row }: { row: { status?: unknown; task_id?: unknown } })}
-	{#if (row.status === 'pending' || row.status === 'running') && typeof row.task_id === 'string'}
-		{@const taskId = row.task_id}
-		<Button
-			size="sm"
-			variant="outline"
-			aria-label={t('bolt.automations.stop')}
-			onclick={() => void Effect.runPromise(stop(taskId))}
-		>
-			<Icon icon="lucide:square" class="size-3.5" />
-			{t('bolt.automations.stop')}
-		</Button>
-	{/if}
-{/snippet}
 
 <Cover gap="none" class="bg-background">
 	{#snippet top()}
@@ -235,7 +213,6 @@
 					orderBy: { created_at: 'desc' }
 				}}
 				class="min-h-0"
-				rowActions={[stopAction]}
 			>
 				{#snippet columns({ Column })}
 					<Column name="name" label={t('bolt.automations.column.automation')} card="title" />
@@ -243,8 +220,8 @@
 						name="status"
 						label={t('bolt.automations.column.status')}
 						card="badge"
-						renderer={FormattedValueRenderer}
-						rendererProps={{ format: formatAutomationStatus }}
+						renderer={AutomationStatusRenderer}
+						rendererProps={{ onStop: (taskId: string) => void Effect.runPromise(stop(taskId)) }}
 					/>
 					<Column
 						name="progress"

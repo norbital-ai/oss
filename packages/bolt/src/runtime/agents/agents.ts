@@ -1,6 +1,5 @@
 import {
 	Cause,
-	Clock,
 	Context,
 	Effect,
 	ExecutionPlan,
@@ -10,7 +9,7 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { composer, executeBuilt, jsonTextEquals } from '#lib/runtime/persistence.js';
 import { AiError, Prompt, Tool, Toolkit } from 'effect/unstable/ai';
@@ -1339,15 +1338,27 @@ export const layer = Layer.effect(
 			return selected;
 		});
 
+		/**
+		 * The row itself, not the subject's policy-filtered view of it.
+		 *
+		 * Every caller decides authority on the row it gets back — `subject_id`, or the envoy the
+		 * subject speaks as — so the read policy is not what protects it here. It used to be, and
+		 * that made the read policy load-bearing for admission: a group's second sender could not see
+		 * the conversation the first one opened, so their message tried to open a new one under the
+		 * same id and was refused. Narrowing what a *person* may list must not narrow what a turn can find.
+		 */
 		const conversationById = Effect.fn('Agents.conversationById')(function* (
 			effectId: EffectId,
-			subject: Identity.Subject,
+			_subject: Identity.Subject,
 			conversationId: ConversationId
 		) {
-			const row = yield* collections.findFirst(effectId, subject, {
-				collection: 'conversation',
-				where: { id: { eq: conversationId } }
-			});
+			const conversations = SYSTEM_MODEL_TABLES.conversation;
+			const found = yield* executeBuilt(
+				effectId,
+				database,
+				composer.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1)
+			);
+			const row = found.rows[0];
 			if (row === undefined) return undefined;
 			return yield* Schema.decodeUnknownEffect(ConversationRow)(row).pipe(
 				Effect.mapError(
@@ -1402,26 +1413,34 @@ export const layer = Layer.effect(
 			return task;
 		});
 
+		/**
+		 * The whole transcript, as the conversation holds it — see `conversationById` for why this is
+		 * not the subject's policy-filtered view. The next sequence number and the model's context are
+		 * both computed from it, and a sender who cannot yet see the other members' messages would
+		 * otherwise write over sequence 1 and answer with no memory of the chat.
+		 */
 		const messageRows = Effect.fn('Agents.messageRows')(function* (
 			effectId: EffectId,
-			subject: Identity.Subject,
+			_subject: Identity.Subject,
 			conversationId: ConversationId
 		) {
-			let rows = yield* collections.findMany(effectId, subject, {
-				collection: 'conversation_message',
-				where: { conversation_id: { eq: conversationId } },
-				orderBy: { sequence: 'asc' },
-				limit: 500
-			});
+			const table = SYSTEM_MODEL_TABLES.conversation_message;
+			const page = (pageEffectId: EffectId, after: number) =>
+				executeBuilt(
+					pageEffectId,
+					database,
+					composer
+						.select()
+						.from(table)
+						.where(and(eq(table.conversation_id, conversationId), gt(table.sequence, after)))
+						.orderBy(asc(table.sequence))
+						.limit(500)
+				);
+			let rows = (yield* page(effectId, -1)).rows;
 			const messages = yield* decodeRows(ConversationMessageRow, rows);
 			while (rows.length === 500) {
 				const after = messages.at(-1)!.sequence;
-				rows = yield* collections.findMany(EffectId.make(`${effectId}:after:${after}`), subject, {
-					collection: 'conversation_message',
-					where: { conversation_id: { eq: conversationId }, sequence: { gt: after } },
-					orderBy: { sequence: 'asc' },
-					limit: 500
-				});
+				rows = (yield* page(EffectId.make(`${effectId}:after:${after}`), after)).rows;
 				messages.push(...(yield* decodeRows(ConversationMessageRow, rows)));
 			}
 			return messages;
@@ -2225,6 +2244,69 @@ export const layer = Layer.effect(
 			};
 		});
 
+		/**
+		 * The settled status of the host task that was running `turnId`, or nothing while that task
+		 * is still pending or running — or was never recorded, which a test harness leaves and which
+		 * this must not read as death.
+		 */
+		const abandonedTurn = Effect.fn('Agents.abandonedTurn')(function* (
+			effectId: EffectId,
+			turnId: TurnId
+		) {
+			const turns = SYSTEM_MODEL_TABLES.turn;
+			const tasks = SYSTEM_MODEL_TABLES.bolt_task;
+			const found = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ status: tasks.status })
+					.from(turns)
+					.innerJoin(
+						tasks,
+						eq(tasks.effect_id, sql`${turns.capability_snapshot}->>'executionOwner'`)
+					)
+					.where(eq(turns.id, turnId))
+					.limit(1)
+			);
+			const status = (found.rows[0] as { status?: unknown } | undefined)?.status;
+			return typeof status === 'string' && status !== 'pending' && status !== 'running'
+				? status
+				: undefined;
+		});
+
+		/** Closes a turn whose worker ended without settling it, and reopens its conversation. */
+		const closeAbandonedTurn = Effect.fn('Agents.closeAbandonedTurn')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			task: Conversation,
+			turn: Turn,
+			taskStatus: string
+		) {
+			const history = yield* messageRows(effectId, subject, task.id);
+			yield* writeGraph(effectId, subject, [
+				{ collection: 'turn', row: { id: turn.id, status: 'failed' } },
+				{
+					collection: 'conversation',
+					expectedVersion: task.row_version,
+					row: { id: task.id, status: 'ready', active_turn_id: null }
+				},
+				{
+					collection: 'conversation_message',
+					action: 'create',
+					row: {
+						id: messageIdFor(`${effectId}:abandoned`),
+						semantic_hash: semanticHash(`${effectId}:abandoned`),
+						conversation_id: task.id,
+						sequence: lastSequence(history) + 1,
+						author: { kind: 'system' },
+						message: systemMessage(
+							`Task failed: the worker running the previous turn stopped before it finished (task ${taskStatus}). Continuing from the next message.`
+						)
+					}
+				}
+			]);
+		});
+
 		/** Whether `turn` was started under `owner`'s lease; the snapshot is not in the public projection. */
 		const ownsTurn = Effect.fn('Agents.ownsTurn')(function* (
 			effectId: EffectId,
@@ -2251,8 +2333,9 @@ export const layer = Layer.effect(
 		const claim = Effect.fn('Agents.claim')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			task: Conversation
+			claimed: Conversation
 		) {
+			let task = claimed;
 			/**
 			 * A running conversation is owned by one turn. This driver continues that turn when it is
 			 * the turn's own — started at admission under the task this driver is now running, or by
@@ -2269,9 +2352,32 @@ export const layer = Layer.effect(
 				const owner = Option.getOrElse(yield* Effect.serviceOption(ExecutionOwner), () =>
 					executionTaskId(current.input_message_id)
 				);
-				return (yield* ownsTurn(EffectId.make(`${effectId}:owner`), current.id, owner))
-					? current
-					: undefined;
+				if (yield* ownsTurn(EffectId.make(`${effectId}:owner`), current.id, owner)) return current;
+				/**
+				 * A running turn whose worker has already ended is a corpse, not a competitor.
+				 *
+				 * The worker is the host task named in the turn's snapshot. When that task has settled
+				 * — failed past its retries, or killed with its isolate so that nothing here ever ran
+				 * `onExit` — the conversation stays `running` forever and every later message is queued
+				 * behind it, deferred by each drain that finds "another driver" holding the chat. A person
+				 * sending "hello?" into that silence is exactly the driver that should take it over: the
+				 * dead turn is closed as failed, the conversation reopens, and the claim below answers
+				 * the message they just sent.
+				 */
+				const ended = yield* abandonedTurn(EffectId.make(`${effectId}:abandoned`), current.id);
+				if (ended === undefined) return undefined;
+				yield* closeAbandonedTurn(
+					EffectId.make(`${effectId}:close`),
+					subject,
+					task,
+					current,
+					ended
+				);
+				task = yield* requireOwnedConversation(
+					EffectId.make(`${effectId}:reopened`),
+					subject,
+					task.id
+				);
 			}
 			if (task.status !== 'ready') return undefined;
 			const currentPlan = yield* activePlan(

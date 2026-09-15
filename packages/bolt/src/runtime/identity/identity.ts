@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId, INVITATION_PATH } from '@norbital-ai/bolt-protocol';
+import { workspaceLink } from '#lib/runtime/host-links.js';
 import { decodeNumber } from '@norbital-ai/std/json';
 import { and, asc, count, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
@@ -941,6 +942,9 @@ export const layerWith = (
 							})
 							.onConflictDoNothing({ target: invitationsTable.invitation_id })
 					);
+					// The invitation is written here, link included, so the host's mailer only sends it:
+					// what an invitee reads is part of what a workspace is, not of who delivers it.
+					const link = yield* workspaceLink(tenantId, INVITATION_PATH, { claim: invitationId });
 					yield* communication.execute(effectId, {
 						_tag: 'Notify',
 						recipient: normalizedEmail,
@@ -948,7 +952,16 @@ export const layerWith = (
 							kind: 'workspace_invitation',
 							invitationId,
 							tenantId,
-							expiresInDays: INVITATION_EXPIRES_SECONDS / 86_400
+							expiresInDays: INVITATION_EXPIRES_SECONDS / 86_400,
+							subject: `You have been invited to ${tenantId}`,
+							text: [
+								`You have been invited to the ${tenantId} workspace.`,
+								'',
+								'Accept invitation:',
+								link,
+								'',
+								`Sign in with this email address to accept. The invitation expires in ${INVITATION_EXPIRES_SECONDS / 86_400} days.`
+							].join('\n')
 						}
 					});
 					yield* identityHooks.emit(effectId, {
