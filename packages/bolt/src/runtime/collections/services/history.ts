@@ -78,58 +78,83 @@ type HistoryPruneTarget = Readonly<{
 	readonly definition: Readonly<{ readonly history?: boolean }>;
 }>;
 
+/**
+ * One statement bounds the history of every record a batch touched.
+ *
+ * `$1` is the JSON list of `{collection_name, record_id}` pairs, `$2` the horizon. Only records
+ * whose log has outgrown the horizon enter the recursive fold — the common case, a record with a
+ * handful of entries, costs one indexed count and nothing else. The earlier form was this same
+ * walk emitted verbatim once per record: a payroll that pinned 2,500 rows sent 2,500 copies of a
+ * 1.4 KB statement — 3.5 MB of a write whose own rows were a tenth of that.
+ */
 const HISTORY_PRUNE_SQL = `with recursive
+							targets as materialized (
+								select distinct collection_name, record_id
+								from jsonb_to_recordset($1::jsonb) as target(collection_name text, record_id text)
+							),
 							ordered as materialized (
-								select sequence, operation, coalesce(snapshot, '{}'::jsonb) as snapshot,
-									row_number() over (order by sequence) as ordinal,
-									count(*) over () as total
-								from bolt_collection_history
-								where collection_name = $1 and record_id = $2
+								select history.collection_name, history.record_id, history.sequence, history.operation,
+									coalesce(history.snapshot, '{}'::jsonb) as snapshot,
+									row_number() over (partition by history.collection_name, history.record_id order by history.sequence) as ordinal,
+									count(*) over (partition by history.collection_name, history.record_id) as total
+								from bolt_collection_history as history
+								join targets on targets.collection_name = history.collection_name
+									and targets.record_id = history.record_id
 							),
 							fold as (
-								select sequence, operation, snapshot, ordinal, total
-								from ordered where ordinal = 1
+								select collection_name, record_id, sequence, operation, snapshot, ordinal, total
+								from ordered where ordinal = 1 and total > $2
 								union all
-								select next.sequence, next.operation,
+								select next.collection_name, next.record_id, next.sequence, next.operation,
 									case when next.operation = 'update'
 										then previous.snapshot || next.snapshot
 										else next.snapshot end,
 									next.ordinal, next.total
 								from fold as previous
-								join ordered as next on next.ordinal = previous.ordinal + 1
+								join ordered as next on next.collection_name = previous.collection_name
+									and next.record_id = previous.record_id
+									and next.ordinal = previous.ordinal + 1
 							),
 							boundary as materialized (
-								select sequence, snapshot from fold
-								where total > $3 and ordinal = total - $3 + 1
+								select collection_name, record_id, sequence, snapshot from fold
+								where ordinal = total - $2 + 1
 							),
 							rewritten as (
 								update bolt_collection_history as history
 								set snapshot = boundary.snapshot
 								from boundary
-								where history.sequence = boundary.sequence
-								returning history.sequence
+								where history.collection_name = boundary.collection_name
+									and history.record_id = boundary.record_id
+									and history.sequence = boundary.sequence
+								returning history.collection_name, history.record_id, history.sequence
 							)
 						delete from bolt_collection_history as history
 						using boundary
-						where history.collection_name = $1 and history.record_id = $2
+						where history.collection_name = boundary.collection_name
+							and history.record_id = boundary.record_id
 							and history.sequence < boundary.sequence
-							and exists(select 1 from rewritten)`;
+							and exists(
+								select 1 from rewritten
+								where rewritten.collection_name = history.collection_name
+									and rewritten.record_id = history.record_id
+							)`;
 
-/** One prune per distinct history-bearing record; later writes reuse the same bounded log. */
+/** One prune for the batch's distinct history-bearing records; later writes reuse the same bounded log. */
 export const historyPruneStatements = (
 	operations: ReadonlyArray<HistoryPruneTarget>,
 	horizon: number = DEFAULT_HISTORY_HORIZON
-): ReadonlyArray<HistoryStatement> =>
-	[
+): ReadonlyArray<HistoryStatement> => {
+	const targets = [
 		...new Map(
 			operations
 				.filter((operation) => operation.definition.history)
 				.map((operation) => [`${operation.collection}\u0000${operation.id}`, operation])
 		).values()
-	].map((operation) => ({
-		sql: HISTORY_PRUNE_SQL,
-		parameters: [operation.collection, operation.id, horizon]
-	}));
+	].map((operation) => ({ collection_name: operation.collection, record_id: operation.id }));
+	return targets.length === 0
+		? []
+		: [{ sql: HISTORY_PRUNE_SQL, parameters: [JSON.stringify(targets), horizon] }];
+};
 
 export const PersistedCollectionHistoryRow = Schema.Struct({
 	sequence: Schema.Number,

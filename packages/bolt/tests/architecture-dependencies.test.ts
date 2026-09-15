@@ -215,7 +215,12 @@ describe('Bolt architecture boundaries', () => {
 		// layer carries the `HostTools` requirement.
 		// 17,992 -> 18,002: the automation command path binds that host tool service into the
 		// authored ops, so a drift automation researches through the same browser an agent drives.
-		expect(amendedAggregate).toBeLessThanOrEqual(18_002);
+		// 18,002 -> 18,012: a root read's `columns` narrow its SELECT, not only its JavaScript
+		// projection, so a `{ id, code }` read no longer moves every row whole into the guest.
+		// 18,012 -> 18,050: an update's snapshot assert compares `row_version` where the collection
+		// has one instead of the full stored row as JSON, and history pruning is one set-based
+		// statement per batch rather than one recursive prune per written row.
+		expect(amendedAggregate).toBeLessThanOrEqual(18_050);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -236,7 +241,9 @@ describe('Bolt architecture boundaries', () => {
 		// The shared replay check also avoids rerunning hooks on later delivery.
 		// 4,930 -> 4,932: authored inference resolves host tools through the collections layer, which
 		// now carries the `HostTools` service to the invoke boundary.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_932);
+		// 4,932 -> 4,945: an update's snapshot assert compares `row_version` where the collection has
+		// one; the full-row JSON compare stays for collections without it.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_945);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work

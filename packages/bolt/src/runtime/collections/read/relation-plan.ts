@@ -358,8 +358,7 @@ const readRow = (
 			continue;
 		}
 		const handle = record[attachment.field];
-		if (!isObject(handle) || handle['kind'] !== attachment.tag || !isString(handle['id']))
-			continue;
+		if (!isObject(handle) || handle['kind'] !== attachment.tag || !isString(handle['id'])) continue;
 		record[attachment.field] = {
 			kind: attachment.tag,
 			id: handle['id'],
@@ -425,7 +424,18 @@ export const readRelational = Effect.fn('Collections.readRelational')(function* 
 		});
 	}
 	const planned = yield* planRelations(ports.planContext, collection, config.with, config.columns);
+	// The root's `columns` narrow the SELECT itself, as a related level's already do. Until now
+	// they were applied only after the read, so every row crossed the facility bridge whole: a
+	// `{ id, code }` read of sixteen statutory rows moved 1.5 MB of rules into the guest and
+	// decoded them, and a payroll run paid that three times over.
+	const rootSelection = physicalSelection(
+		fieldsOf(ports.planContext.definition, collection),
+		config.columns
+	);
 	const query = builder.findMany({
+		...(rootSelection === undefined || Object.keys(rootSelection).length === 0
+			? {}
+			: { columns: rootSelection }),
 		where: { RAW: config.where },
 		orderBy: (table: unknown) => [
 			...(config.searchOrdering === undefined ? [] : [config.searchOrdering]),

@@ -117,3 +117,44 @@ describe('collection history', () => {
 		]);
 	});
 });
+
+describe('collection history horizon', () => {
+	it('folds a record’s log to the horizon with one prune per batch', async () => {
+		harness = await makeBoltTestRuntime();
+		const recordId = '00000000-0000-4000-8000-000000000073';
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.mutate(
+					harness!.effectId('horizon-create'),
+					adminSubject,
+					'people',
+					[{ id: recordId, name: 'Ada', team: 'T0' }],
+					0,
+					{ roots: [{ id: recordId, action: 'create' }] }
+				);
+				for (let step = 1; step <= 260; step += 1)
+					yield* collections.mutate(
+						harness!.effectId(`horizon-update-${step}`),
+						adminSubject,
+						'people',
+						[{ id: recordId, team: `T${step}` }],
+						0,
+						{ roots: [{ id: recordId, action: 'update' }] }
+					);
+			})
+		);
+		const rows = await harness.database.query(
+			'select operation, snapshot from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence',
+			['people', recordId]
+		);
+		// 261 entries were written; the log holds the horizon, and its oldest survivor carries the
+		// folded state of everything pruned before it.
+		expect(rows.length).toBeLessThanOrEqual(256);
+		expect(rows.length).toBeGreaterThan(200);
+		const oldest = rows[0]?.['snapshot'] as Record<string, unknown>;
+		expect(oldest['name']).toBe('Ada');
+		expect(String(oldest['team'])).toMatch(/^T\d+$/);
+		expect(rows.at(-1)?.['snapshot']).toEqual({ team: 'T260' });
+	});
+});

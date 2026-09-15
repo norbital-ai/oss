@@ -3124,14 +3124,27 @@ export const layerWith = (
 									`${row.collection} ${row.id} changed while its mutation graph was prepared`
 								]
 							)
-						: transactionSql(
-								`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
-								[
-									row.id,
-									row.snapshot,
-									`${row.collection} ${row.id} changed while its mutation graph was prepared`
-								]
-							)
+						: // Every write this engine composes bumps `row_version`, so the version alone says
+							// whether the row moved since it was prepared. Comparing the whole row shipped the
+							// row back to the database: 2,500 pinned attendance rows carried 1.7 MB of their own
+							// snapshots into one write to prove nothing had changed.
+							typeof row.snapshot['row_version'] === 'number'
+							? transactionSql(
+									`select bolt_assert((select row_version from ${quoteIdentifier(row.collection)} where id = $1) = $2, $3)`,
+									[
+										row.id,
+										row.snapshot['row_version'],
+										`${row.collection} ${row.id} changed while its mutation graph was prepared`
+									]
+								)
+							: transactionSql(
+									`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
+									[
+										row.id,
+										row.snapshot,
+										`${row.collection} ${row.id} changed while its mutation graph was prepared`
+									]
+								)
 				);
 				const relationshipAssertions = relationshipSnapshots
 					.map(reviewedRelationshipOf)
