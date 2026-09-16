@@ -200,6 +200,11 @@ interface CollectionTableBaseProps<
 	bounded?: boolean;
 	title?: string;
 	description?: string;
+	/**
+	 * Leads the toolbar, before the title: the scope a surface steps its rows by (a pay period, a
+	 * month), so the control sits with the rows it narrows rather than in the app header.
+	 */
+	navigation?: Snippet;
 	features?: CollectionTableFeatures;
 	exportPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];
 	importPipelines?: readonly CollectionPipeline<NoInfer<TRow>>[];

@@ -521,6 +521,95 @@ export const groupedInsertStatements = (
 	return statements;
 };
 
+export type PlannedUpdate = Readonly<{
+	readonly table: string;
+	readonly id: string;
+	/** The assigned columns in name order; `parameters` are bound for a lone row, `values` raw for a batch. */
+	readonly columns: ReadonlyArray<string>;
+	readonly casts: ReadonlyArray<string>;
+	readonly parameters: ReadonlyArray<Schema.Json>;
+	readonly values: ReadonlyArray<Schema.Json>;
+	readonly clearLock: boolean;
+}>;
+
+/** Rows per grouped update. One jsonb parameter carries them, so the bound is payload size, not `$n` count. */
+const MAX_GROUPED_UPDATE_ROWS = 2_000;
+
+/**
+ * Updates of one shape — one table, one set of assigned columns, one lock treatment — are one
+ * statement. `jsonb_populate_recordset(null::table, $1)` types every column the way the table
+ * does, so a batch needs no per-column cast, and a payroll pinning two and a half thousand source
+ * rows across six collections is six round trips rather than two and a half thousand. A shape
+ * with a single row keeps the plain `update … where id = $n` it always had.
+ */
+export const groupedUpdateStatements = (
+	rows: ReadonlyArray<PlannedUpdate>
+): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+	const groups = new Map<string, Array<PlannedUpdate>>();
+	for (const row of rows) {
+		const key = `${row.table}\u0000${row.clearLock ? 'unlock' : 'keep'}\u0000${row.columns
+			.map((column, index) => `${column}${row.casts[index] ?? ''}`)
+			.join(',')}`;
+		const group = groups.get(key);
+		if (group === undefined) groups.set(key, [row]);
+		else group.push(row);
+	}
+	const statements: Array<{
+		readonly sql: string;
+		readonly parameters: ReadonlyArray<Schema.Json>;
+	}> = [];
+	for (const group of groups.values()) {
+		const first = group[0];
+		if (first === undefined) continue;
+		const table = quoteIdentifier(first.table);
+		const bookkeeping = [
+			'updated_at = now()',
+			'row_version = row_version + 1',
+			...(first.clearLock ? ['approval_id = null'] : [])
+		];
+		if (group.length === 1) {
+			const assignments = [
+				...first.columns.map(
+					(column, index) => `${quoteIdentifier(column)} = $${index + 1}${first.casts[index] ?? ''}`
+				),
+				...bookkeeping
+			];
+			statements.push(
+				transactionSql(
+					`update ${table} set ${assignments.join(', ')} where id = $${first.columns.length + 1}`,
+					[...first.parameters, first.id]
+				)
+			);
+			continue;
+		}
+		// The populated recordset carries the table's every column, so the bookkeeping reads
+		// `row_version` from the target row by alias or the reference is ambiguous.
+		const assignments = [
+			...first.columns.map((column) => `${quoteIdentifier(column)} = v.${quoteIdentifier(column)}`),
+			...bookkeeping.map((clause) => clause.replace('= row_version + 1', '= t.row_version + 1'))
+		];
+		for (let start = 0; start < group.length; start += MAX_GROUPED_UPDATE_ROWS) {
+			const slice = group.slice(start, start + MAX_GROUPED_UPDATE_ROWS);
+			statements.push(
+				transactionSql(
+					`update ${table} as t set ${assignments.join(', ')} from jsonb_populate_recordset(null::${table}, $1::jsonb) as v where t.id = v.id`,
+					[
+						JSON.stringify(
+							slice.map((row) =>
+								Object.fromEntries([
+									['id', row.id],
+									...row.columns.map((column, index) => [column, row.values[index] ?? null])
+								])
+							)
+						)
+					]
+				)
+			);
+		}
+	}
+	return statements;
+};
+
 const quoteStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 /**
@@ -2682,33 +2771,42 @@ export const layerWith = (
 				return isNonEmptyString(held) ? held : null;
 			};
 
-			const updateStatements = (
+			/**
+			 * One update as the row a grouped statement is built from, beside the bookkeeping that
+			 * stays per row (history, outbox). The graph write collects rows across operations and
+			 * groups them; a single-row caller gets the same statement it always had.
+			 */
+			const plannedUpdate = (
 				effectId: EffectId,
 				subject: Identity.Subject,
 				input: MutationInput,
 				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
-				_visibility: AccessControl.RowPredicate,
 				clearLock: boolean,
 				previous: Readonly<Record<string, unknown>> | undefined
-			): ReadonlyArray<{
-				readonly sql: string;
-				readonly parameters: ReadonlyArray<Schema.Json>;
+			): Readonly<{
+				readonly row: PlannedUpdate | null;
+				readonly extras: ReadonlyArray<{
+					readonly sql: string;
+					readonly parameters: ReadonlyArray<Schema.Json>;
+				}>;
 			}> => {
 				const values = encodeMutationValues(input.values, definition.fields);
 				const writable = writableValues(values, definition);
 				const entries = Object.entries(writable).sort(([left], [right]) =>
 					left.localeCompare(right)
 				);
-				if (entries.length === 0 && !clearLock) return [];
-				const assignments = [
-					...entries.map(
-						([name, value], index) =>
-							`${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`
+				if (entries.length === 0 && !clearLock) return { row: null, extras: [] };
+				const row: PlannedUpdate = {
+					table: input.collection,
+					id: input.id,
+					columns: entries.map(([name]) => name),
+					casts: entries.map(([name, value]) =>
+						boundPlaceholder(definition, name, value, 0).replace('$0', '')
 					),
-					'updated_at = now()',
-					'row_version = row_version + 1',
-					...(clearLock ? ['approval_id = null'] : [])
-				];
+					parameters: entries.map(([name, value]) => boundParameter(definition, name, value)),
+					values: entries.map(([, value]) => value),
+					clearLock
+				};
 				const history = definition.history
 					? [
 							toStatement(
@@ -2727,22 +2825,43 @@ export const layerWith = (
 							)
 						]
 					: [];
-				return [
-					transactionSql(
-						`update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where id = $${entries.length + 1}`,
-						[...entries.map(([name, value]) => boundParameter(definition, name, value)), input.id]
-					),
-					...history,
-					...outboxStatements(
-						effectId,
-						subject,
-						input.collection,
-						input.id,
-						'update',
-						values,
-						previous
-					)
-				];
+				return {
+					row,
+					extras: [
+						...history,
+						...outboxStatements(
+							effectId,
+							subject,
+							input.collection,
+							input.id,
+							'update',
+							values,
+							previous
+						)
+					]
+				};
+			};
+			const updateStatements = (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				input: MutationInput,
+				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				_visibility: AccessControl.RowPredicate,
+				clearLock: boolean,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): ReadonlyArray<{
+				readonly sql: string;
+				readonly parameters: ReadonlyArray<Schema.Json>;
+			}> => {
+				const { row, extras } = plannedUpdate(
+					effectId,
+					subject,
+					input,
+					definition,
+					clearLock,
+					previous
+				);
+				return row === null ? [] : [...groupedUpdateStatements([row]), ...extras];
 			};
 			/** The delete twin of `updateStatements`, shared by single-row and graph execution. */
 			const deleteStatements = (
@@ -3115,39 +3234,74 @@ export const layerWith = (
 								}
 							]
 				);
-				const recordAssertions = reviewedRows.map((row) => {
-					// The snapshot is the row's JSON as it was prepared (`graph-read`), one string per row.
-					const snapshot = JSON.parse(row.snapshot) as Record<string, unknown>;
-					return row.action === 'delete'
-						? transactionSql(
-								`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(row.collection)} where id = $1 for update) as bolt_delete_row), $2)`,
-								[
-									row.id,
-									`${row.collection} ${row.id} changed while its mutation graph was prepared`
-								]
-							)
-						: // Every write this engine composes bumps `row_version`, so the version alone says
-							// whether the row moved since it was prepared. Comparing the whole row shipped the
-							// row back to the database: 2,500 pinned attendance rows carried 1.7 MB of their own
-							// snapshots into one write to prove nothing had changed.
-							typeof snapshot['row_version'] === 'number'
+				// Version guards of one collection are one statement: the prepared versions ride in as a
+				// recordset typed by the table, and the count of rows still at their version must be the
+				// count prepared. One guard per row was the other half of a bulk update's round trips.
+				const versionedByCollection = new Map<string, Array<{ id: string; row_version: number }>>();
+				for (const row of reviewedRows) {
+					if (row.action === 'delete') continue;
+					const version = (JSON.parse(row.snapshot) as Record<string, unknown>)['row_version'];
+					if (typeof version !== 'number') continue;
+					const group = versionedByCollection.get(row.collection) ?? [];
+					group.push({ id: row.id, row_version: version });
+					versionedByCollection.set(row.collection, group);
+				}
+				const groupedVersionAssertions = [...versionedByCollection.entries()]
+					.filter(([, rows]) => rows.length > 1)
+					.map(([collection, rows]) =>
+						transactionSql(
+							`select bolt_assert((select count(*) from jsonb_populate_recordset(null::${quoteIdentifier(collection)}, $1::jsonb) as v join ${quoteIdentifier(collection)} as r on r.id = v.id and r.row_version = v.row_version) = $2, $3)`,
+							[
+								JSON.stringify(rows),
+								rows.length,
+								`${collection}: ${rows.length} rows changed while its mutation graph was prepared`
+							]
+						)
+					);
+				const groupedVersionIds = new Set(
+					[...versionedByCollection.entries()]
+						.filter(([, rows]) => rows.length > 1)
+						.flatMap(([collection, rows]) => rows.map((row) => `${collection}\u0000${row.id}`))
+				);
+				const perRowAssertions = reviewedRows.filter(
+					(row) => !groupedVersionIds.has(`${row.collection}\u0000${row.id}`)
+				);
+				const recordAssertions = [
+					...groupedVersionAssertions,
+					...perRowAssertions.map((row) => {
+						// The snapshot is the row's JSON as it was prepared (`graph-read`), one string per row.
+						const snapshot = JSON.parse(row.snapshot) as Record<string, unknown>;
+						return row.action === 'delete'
 							? transactionSql(
-									`select bolt_assert((select row_version from ${quoteIdentifier(row.collection)} where id = $1) = $2, $3)`,
+									`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(row.collection)} where id = $1 for update) as bolt_delete_row), $2)`,
 									[
 										row.id,
-										snapshot['row_version'],
 										`${row.collection} ${row.id} changed while its mutation graph was prepared`
 									]
 								)
-							: transactionSql(
-									`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
-									[
-										row.id,
-										row.snapshot,
-										`${row.collection} ${row.id} changed while its mutation graph was prepared`
-									]
-								);
-				});
+							: // Every write this engine composes bumps `row_version`, so the version alone says
+								// whether the row moved since it was prepared. Comparing the whole row shipped the
+								// row back to the database: 2,500 pinned attendance rows carried 1.7 MB of their own
+								// snapshots into one write to prove nothing had changed.
+								typeof snapshot['row_version'] === 'number'
+								? transactionSql(
+										`select bolt_assert((select row_version from ${quoteIdentifier(row.collection)} where id = $1) = $2, $3)`,
+										[
+											row.id,
+											snapshot['row_version'],
+											`${row.collection} ${row.id} changed while its mutation graph was prepared`
+										]
+									)
+								: transactionSql(
+										`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
+										[
+											row.id,
+											row.snapshot,
+											`${row.collection} ${row.id} changed while its mutation graph was prepared`
+										]
+									);
+					})
+				];
 				const relationshipAssertions = relationshipSnapshots
 					.map(reviewedRelationshipOf)
 					.map((snapshot) =>
@@ -3190,9 +3344,19 @@ export const layerWith = (
 						);
 				}
 				statements.push(...readConsistencyStatements(readSnapshots, statementPlan.collections));
-				for (const expectation of statementPlan.before)
+				for (const expectation of statementPlan.before) {
+					// The same rule as the after-insert guard below: an unrestricted predicate proves only
+					// that the row exists, and the capture asserts that already. A per-row `bolt_assert` here
+					// doubled every bulk update's statement count.
+					if (AccessControl.predicateIsUnrestricted(expectation.operation.visibility)) continue;
 					statements.push(assertionStatement(expectation));
+				}
 				statements.push(...recordAssertions, ...relationshipAssertions);
+				const plannedUpdates: Array<PlannedUpdate> = [];
+				const updateExtras: Array<{
+					readonly sql: string;
+					readonly parameters: ReadonlyArray<Schema.Json>;
+				}> = [];
 				for (const operation of operations) {
 					if (operation.action === 'delete')
 						statements.push(
@@ -3209,23 +3373,24 @@ export const layerWith = (
 					if (
 						operation.action === 'update' &&
 						(Object.keys(operation.values).length > 0 || operation.clearLock === true)
-					)
-						statements.push(
-							...updateStatements(
-								operation.taskScope,
-								subject,
-								{
-									collection: operation.collection,
-									id: operation.id,
-									values: operation.values
-								},
-								operation.definition,
-								operation.visibility,
-								operation.clearLock === true,
-								operation.previous
-							)
+					) {
+						const planned = plannedUpdate(
+							operation.taskScope,
+							subject,
+							{
+								collection: operation.collection,
+								id: operation.id,
+								values: operation.values
+							},
+							operation.definition,
+							operation.clearLock === true,
+							operation.previous
 						);
+						if (planned.row !== null) plannedUpdates.push(planned.row);
+						updateExtras.push(...planned.extras);
+					}
 				}
+				statements.push(...groupedUpdateStatements(plannedUpdates), ...updateExtras);
 				if (creates.length > 0)
 					statements.push(
 						...createStatements(effectId, subject, creates.map(createNodeFor), approvalRequestId)

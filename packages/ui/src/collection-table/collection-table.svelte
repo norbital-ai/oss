@@ -138,6 +138,7 @@
 		emptyPlaceholder,
 		title,
 		description,
+		navigation,
 		features = {},
 		exportPipelines = [],
 		importPipelines = [],
@@ -663,6 +664,7 @@
 		{collection}
 		query={queryState}
 		{title}
+		{navigation}
 		about={showAbout
 			? { description, ...(query?.where ? { appliedContent: appliedFilters } : {}) }
 			: undefined}

@@ -226,7 +226,9 @@ describe('Bolt architecture boundaries', () => {
 		// `row_version` is read; indexed as an object it never matched, and lint refused the file.
 		// 18,051 -> 18,075: a relation subquery qualifies its outer join column at the root, and the
 		// relational reads render the visibility predicate under the root alias they select from.
-		expect(amendedAggregate).toBeLessThanOrEqual(18_075);
+		// 18,075 -> 18,240 (2026-09-16): same-shape updates are one grouped statement and the
+		// unrestricted before-write assertion is not repeated per row; see collections.ts ledger.
+		expect(amendedAggregate).toBeLessThanOrEqual(18_240);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -252,7 +254,10 @@ describe('Bolt architecture boundaries', () => {
 		// 4,945 -> 4,946: the prepared snapshot is parsed once before its `row_version` is read.
 		// 4,946 -> 4,950: the relational reads render the visibility predicate under the root alias
 		// they select from, so a relation subquery's outer column resolves to the root row.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_950);
+		// 4,950 -> 5,115: updates of one shape are one `jsonb_populate_recordset` statement, their
+		// version guards are one statement per collection, and the unrestricted before-write
+		// assertion is skipped per row, as the after-insert one already was.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(5_115);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work
