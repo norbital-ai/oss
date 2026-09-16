@@ -25,7 +25,8 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { INSET_CLASS, PAD_CLASSES } from '#lib/layout/layout.shared';
+	import { setContext } from 'svelte';
+	import { INSET_CLASS, LAYOUT_INSET_CONTEXT, PAD_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',
@@ -39,6 +40,8 @@
 		children,
 		...restProps
 	}: BoundProps = $props();
+	// Read at init, like every context: an inset is a layout fact, not a toggled state.
+	if (inset) setContext(LAYOUT_INSET_CONTEXT, true);
 	const sizeClasses: Record<BoundSize, string> = {
 		compact: 'h-72',
 		standard: 'h-[28rem]',

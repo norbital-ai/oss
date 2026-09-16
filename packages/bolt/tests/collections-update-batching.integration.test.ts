@@ -7,6 +7,7 @@ import {
 	groupedUpdateStatements,
 	type PlannedUpdate
 } from '../src/runtime/collections/collections.js';
+import { readConsistencyStatements } from '../src/runtime/collections/read-consistency.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
 import {
 	adminSubject,
@@ -113,6 +114,12 @@ describe('the statements a batch of updates is', () => {
 		const guards = statements.filter((statement) => statement.startsWith('select bolt_assert'));
 		expect(guards).toHaveLength(1);
 		expect(guards[0]).toContain('jsonb_populate_recordset(null::"notes", $1::jsonb) as v join');
+		// The forty history rows are one insert too: per-row bookkeeping was the second half of the
+		// payroll run's statement count after the updates themselves were grouped.
+		const history = statements.filter((statement) =>
+			statement.startsWith('insert into "bolt_collection_history"')
+		);
+		expect(history).toHaveLength(1);
 		expect(changes.filter((change) => change.operation === 'update')).toHaveLength(40);
 		expect(rows.map((row) => row['title']).toSorted()).toEqual(
 			Array.from({ length: 40 }, (_, index) => `t${index}`).toSorted()
@@ -160,5 +167,70 @@ describe('the bounds a grouped update is built against', () => {
 		);
 		expect(statement?.sql).toContain('approval_id = null');
 		expect(statement?.sql).toContain('row_version = t.row_version + 1');
+	});
+});
+
+describe('the statements a batch of deletes is', () => {
+	it('deletes rows of one table as one statement, locks them as one, and writes one history row set', async () => {
+		harness = await makeBoltTestRuntime(definition);
+		const statements = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const created = yield* collections.mutate(
+					EffectId.make('seed'),
+					adminSubject,
+					'notes',
+					Array.from({ length: 40 }, (_, index) => ({ body: `note ${index}` }))
+				);
+				yield* (yield* SyncCommit.Service).drainChanges;
+				harness!.database.forget();
+				yield* collections.delete(
+					EffectId.make('batch'),
+					adminSubject,
+					'notes',
+					created.records.map((row) => String(row['id']))
+				);
+				return [...harness!.database.statements];
+			})
+		);
+		const deletes = statements.filter((statement) => statement.startsWith('delete from "notes"'));
+		expect(deletes).toHaveLength(1);
+		expect(deletes[0]).toContain('jsonb_populate_recordset(null::"notes", $1::jsonb)');
+		const locks = statements.filter(
+			(statement) => statement.startsWith('select bolt_assert') && statement.includes('for update')
+		);
+		expect(locks).toHaveLength(1);
+		const history = statements.filter((statement) =>
+			statement.startsWith('insert into "bolt_collection_history"')
+		);
+		expect(history).toHaveLength(1);
+	}, 60_000);
+});
+
+describe('the statements a write opens with', () => {
+	it('locks every table in one statement and checks every read in one assertion', () => {
+		const statements = readConsistencyStatements(
+			[
+				{
+					sql: 'select 1 from "a" where x = $1',
+					parameters: [1],
+					fingerprint: 'fa',
+					tables: ['a']
+				},
+				{
+					sql: 'select 1 from "b" where y = $1 and z = $2',
+					parameters: [2, 3],
+					fingerprint: 'fb',
+					tables: ['b']
+				}
+			],
+			['c']
+		);
+		expect(statements).toHaveLength(2);
+		expect(statements[0]!.sql).toBe('lock table "a", "b", "c" in share row exclusive mode');
+		expect(statements[1]!.sql).toContain('where x = $1');
+		expect(statements[1]!.sql).toContain('where y = $3 and z = $4');
+		expect(statements[1]!.sql).toContain('= $2 and (');
+		expect(statements[1]!.parameters).toEqual([1, 'fa', 2, 3, 'fb', expect.any(String)]);
 	});
 });

@@ -228,7 +228,10 @@ describe('Bolt architecture boundaries', () => {
 		// relational reads render the visibility predicate under the root alias they select from.
 		// 18,075 -> 18,240 (2026-09-16): same-shape updates are one grouped statement and the
 		// unrestricted before-write assertion is not repeated per row; see collections.ts ledger.
-		expect(amendedAggregate).toBeLessThanOrEqual(18_240);
+		// 18,240 -> 18,391 (2026-09-16): deletes of one table are one statement with one row lock,
+		// update and delete history rows are one insert per batch, the read-consistency prologue is
+		// one lock and one assertion, and every committed write logs its statement count.
+		expect(amendedAggregate).toBeLessThanOrEqual(18_391);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -257,7 +260,9 @@ describe('Bolt architecture boundaries', () => {
 		// 4,950 -> 5,115: updates of one shape are one `jsonb_populate_recordset` statement, their
 		// version guards are one statement per collection, and the unrestricted before-write
 		// assertion is skipped per row, as the after-insert one already was.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(5_115);
+		// 5,115 -> 5,249: grouped deletes and delete locks, history as planned inserts, the
+		// per-write statement log.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(5_249);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work

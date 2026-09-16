@@ -61,7 +61,14 @@ export const executeObservedRead = (
 		return { ...result, rows: observed.rows };
 	});
 
-/** Brief ordered locks prevent phantoms between revalidation and the write's atomic commit. */
+/**
+ * Brief ordered locks prevent phantoms between revalidation and the write's atomic commit.
+ *
+ * One `lock table` naming every table, and one assertion over every distinct read: a run that
+ * read twenty-three collections used to open its write with forty-eight statements that proved
+ * nothing had moved, one round trip each. The reads keep their own placeholders, renumbered onto
+ * one parameter list, and the assertion fails with the one read-conflict sentence either way.
+ */
 export function readConsistencyStatements(
 	snapshots: ReadonlyArray<ReadSnapshot>,
 	writeTables: ReadonlyArray<string>
@@ -70,15 +77,25 @@ export function readConsistencyStatements(
 	const unique = new Map(
 		snapshots.map((read) => [JSON.stringify([read.sql, read.parameters, read.fingerprint]), read])
 	);
+	const lock =
+		tables.length === 0
+			? []
+			: [
+					transactionSql(
+						`lock table ${tables.map((table) => quote(table)).join(', ')} in share row exclusive mode`
+					)
+				];
+	const parameters: Schema.Json[] = [];
+	const checks = [...unique.values()].map((read) => {
+		const offset = parameters.length;
+		parameters.push(...read.parameters, read.fingerprint);
+		const sql = read.sql.replace(/\$(\d+)\b/g, (_, index: string) => `$${Number(index) + offset}`);
+		return `(select ${fingerprint('bolt_observed_row')} from (${sql}) as bolt_observed_row) = $${offset + read.parameters.length + 1}`;
+	});
+	if (checks.length === 0) return lock;
+	parameters.push(READ_CONFLICT_MESSAGE);
 	return [
-		...tables.map((table) =>
-			transactionSql(`lock table ${quote(table)} in share row exclusive mode`)
-		),
-		...[...unique.values()].map((read) =>
-			transactionSql(
-				`select bolt_assert((select ${fingerprint('bolt_observed_row')} from (${read.sql}) as bolt_observed_row) = $${read.parameters.length + 1}, $${read.parameters.length + 2})`,
-				[...read.parameters, read.fingerprint, READ_CONFLICT_MESSAGE]
-			)
-		)
+		...lock,
+		transactionSql(`select bolt_assert(${checks.join(' and ')}, $${parameters.length})`, parameters)
 	];
 }

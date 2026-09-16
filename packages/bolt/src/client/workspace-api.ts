@@ -186,10 +186,27 @@ const decodedCommandEffect = <Name extends FixedCommandName, Output extends Sche
 		catch: toError
 	});
 
-const pendingGraphs = (
-	state: ClientState
+/**
+ * The pending writes a live read paints over the server's answer.
+ *
+ * A create is painted only where the row the browser sent is the row the server will write. A
+ * collection that declares an `input` narrower than its record is engine-authored: the server
+ * derives the rest, or the whole record graph beneath it. Painting the input as a row put an
+ * empty payroll run on the list, "0/0 paid", twenty seconds before its payslips existed. Such a
+ * write stays pending and invisible until the server answers; sync then delivers the real rows.
+ * Updates and deletes are painted as before: the row already exists and the change is the caller's.
+ */
+export const pendingGraphs = (
+	state: ClientState,
+	catalog?: CollectionCatalog
 ): ReadonlyArray<{ readonly graph: CollectionMutationGraph }> =>
-	[...state.writes.values()].map((write) => ({ graph: write.request.graph }));
+	[...state.writes.values()].flatMap((write) => {
+		const graph = write.request.graph;
+		if (graph.action !== 'mutate' || catalog?.[graph.collection]?.inputColumns === undefined)
+			return [{ graph }];
+		const [first, ...rest] = graph.rows.filter((row) => row.action !== 'create');
+		return first === undefined ? [] : [{ graph: { ...graph, rows: [first, ...rest] } }];
+	});
 
 const rowVersionOf = (row: StoredRecord): number | undefined => {
 	const value = row['row_version'];
@@ -320,6 +337,7 @@ const withMutationVersions = (
 const pageQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
+	catalog: CollectionCatalog | undefined,
 	input: Schema.Json = {},
 	options?: CollectionFilterOptions
 ): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
@@ -337,7 +355,7 @@ const pageQueryOf = (
 					commandEffectOf(runtime, 'collections.findMany', request).pipe(
 						Effect.map((page) => {
 							nextCursor = page.nextCursor;
-							return project(page.rows, pendingGraphs(runtime.sync.current()), collection);
+							return project(page.rows, pendingGraphs(runtime.sync.current(), catalog), collection);
 						})
 					),
 				JsonRows
@@ -370,7 +388,9 @@ const pageQueryOf = (
 			const mounted = runtime.sync.mount(request);
 			const query = createMachineQuery(runtime.sync, mounted, (state) => {
 				const rows = queryAt(state, mounted.key)?.prefix?.rows;
-				return rows === undefined ? undefined : project(rows, pendingGraphs(state), collection);
+				return rows === undefined
+					? undefined
+					: project(rows, pendingGraphs(state, catalog), collection);
 			});
 			return {
 				get current() {
@@ -397,6 +417,7 @@ const pageQueryOf = (
 const firstQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
+	catalog: CollectionCatalog | undefined,
 	input: Schema.Json = {}
 ): RemoteQuery<Schema.Json | undefined> => {
 	const requestFields: Readonly<Record<string, Schema.Json>> = {
@@ -434,7 +455,7 @@ const firstQueryOf = (
 				(state, key) => {
 					const rows = queryAt(state, key)?.prefix?.rows;
 					if (rows === undefined) return undefined;
-					return project(rows, pendingGraphs(state), collection)[0];
+					return project(rows, pendingGraphs(state, catalog), collection)[0];
 				}
 			);
 		default: {
@@ -447,6 +468,7 @@ const firstQueryOf = (
 const countQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
+	catalog: CollectionCatalog | undefined,
 	input: Schema.Json = {},
 	options?: CollectionFilterOptions
 ): RemoteQuery<number> =>
@@ -464,6 +486,7 @@ const countQueryOf = (
 const groupedQueryOf = (
 	runtime: WorkspaceClientRuntime,
 	collection: string,
+	catalog: CollectionCatalog | undefined,
 	input: Schema.Json,
 	options?: CollectionFilterOptions
 ): RemoteQuery<Readonly<Record<string, ReadonlyArray<Schema.Json>>>> =>
@@ -481,7 +504,7 @@ const groupedQueryOf = (
 			Effect.map((answer) => {
 				const groups: Record<string, ReadonlyArray<Schema.Json>> = {};
 				for (const [name, rows] of Object.entries(answer)) {
-					groups[name] = project(rows, pendingGraphs(runtime.sync.current()), collection);
+					groups[name] = project(rows, pendingGraphs(runtime.sync.current(), catalog), collection);
 				}
 				return groups;
 			})
@@ -636,12 +659,12 @@ const ClientDatabase = {
 		const mutation = new CollectionMutationState();
 		return {
 			findMany: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
-				pageQueryOf(runtime, collection, input, options),
-			findFirst: (input: Schema.Json = {}) => firstQueryOf(runtime, collection, input),
+				pageQueryOf(runtime, collection, catalog, input, options),
+			findFirst: (input: Schema.Json = {}) => firstQueryOf(runtime, collection, catalog, input),
 			findGrouped: (input: Schema.Json, options?: CollectionFilterOptions) =>
-				groupedQueryOf(runtime, collection, input, options),
+				groupedQueryOf(runtime, collection, catalog, input, options),
 			count: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
-				countQueryOf(runtime, collection, input, options),
+				countQueryOf(runtime, collection, catalog, input, options),
 			/**
 			 * Submits one batch — always an array of `input` records — and resolves immediately with
 			 * the optimistic first row. The authority settles the write asynchronously through the
@@ -907,7 +930,7 @@ const WorkspaceApis = {
 			records: {
 				findMany: (collection: string, input: Schema.Json = {}) => {
 					assertCollectionAllowed(collection);
-					return pageQueryOf(runtime, collection, asJsonRecord(input));
+					return pageQueryOf(runtime, collection, catalog, asJsonRecord(input));
 				}
 			},
 			pending: {

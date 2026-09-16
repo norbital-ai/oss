@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Predicate, Schema } from 'effect';
 	import { IconWrapper } from '#lib/icon-wrapper';
-	import { Cluster, Inline, INSET_MX_CLASS } from '#lib/layout';
+	import { Cluster, Inline, INSET_MX_CLASS, LAYOUT_INSET_CONTEXT } from '#lib/layout';
+	import { getContext } from 'svelte';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import { Tabs as TabsPrimitive } from 'bits-ui';
@@ -73,10 +74,16 @@
 	);
 	// A vertical strip is always the underline rail: the pill chrome is a horizontal idiom.
 	const resolvedVariant = $derived(resolvedLayout === 'vertical' ? 'underline' : variant);
+	// A page that owns its inset (`Bound inset`, every `page` AppShell) already aligns the strip
+	// with the content; the default chrome supplies the inset only on a full-bleed page.
+	const insideInset = getContext<boolean | undefined>(LAYOUT_INSET_CONTEXT) === true;
 	const resolvedListClass = $derived(
-		// `responsive` lists are width-full. The default chrome also owns horizontal margins, so it
-		// must return to auto width or its 100% width plus both margins overhangs the PageHeader inset.
-		listClass ?? (resolvedVariant === 'default' ? cn(INSET_MX_CLASS, 'w-auto') : undefined)
+		// `responsive` lists are width-full. The default chrome returns to auto width, or its 100%
+		// width plus both margins overhangs the PageHeader inset.
+		listClass ??
+			(resolvedVariant === 'default'
+				? cn(insideInset ? undefined : INSET_MX_CLASS, 'w-auto')
+				: undefined)
 	);
 </script>
 

@@ -467,6 +467,16 @@ const insertSignature = (row: PlannedInsert): string =>
  * alone, and a batch whose rows disagree degrades to one statement per shape rather than losing the
  * distinction.
  */
+/** A plan's statements tallied by their first two words: `update "notes"=1 insert into=2 …`. */
+const statementShapes = (statements: ReadonlyArray<{ readonly sql: string }>): string => {
+	const tally = new Map<string, number>();
+	for (const statement of statements) {
+		const shape = statement.sql.trim().split(/\s+/).slice(0, 2).join(' ');
+		tally.set(shape, (tally.get(shape) ?? 0) + 1);
+	}
+	return [...tally].map(([shape, count]) => `${shape}=${count}`).join(' ');
+};
+
 export const groupedInsertStatements = (
 	rows: ReadonlyArray<PlannedInsert>
 ): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
@@ -542,6 +552,33 @@ const MAX_GROUPED_UPDATE_ROWS = 2_000;
  * rows across six collections is six round trips rather than two and a half thousand. A shape
  * with a single row keeps the plain `update … where id = $n` it always had.
  */
+/** One row a grouped delete is built from. */
+export type PlannedDelete = Readonly<{ readonly table: string; readonly id: string }>;
+
+/**
+ * Deletes of one table as one statement, the ids typed through the table's own recordset like a
+ * grouped update. A lone row keeps `delete … where id = $1`.
+ */
+export const groupedDeleteStatements = (
+	rows: ReadonlyArray<PlannedDelete>
+): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+	const byTable = new Map<string, Array<string>>();
+	for (const row of rows) byTable.set(row.table, [...(byTable.get(row.table) ?? []), row.id]);
+	return [...byTable.entries()].flatMap(([table, ids]) => {
+		if (ids.length === 1)
+			return [transactionSql(`delete from ${quoteIdentifier(table)} where id = $1`, [ids[0]!])];
+		const chunks: Array<ReadonlyArray<string>> = [];
+		for (let start = 0; start < ids.length; start += MAX_GROUPED_UPDATE_ROWS)
+			chunks.push(ids.slice(start, start + MAX_GROUPED_UPDATE_ROWS));
+		return chunks.map((chunk) =>
+			transactionSql(
+				`delete from ${quoteIdentifier(table)} where id in (select v.id from jsonb_populate_recordset(null::${quoteIdentifier(table)}, $1::jsonb) as v)`,
+				[JSON.stringify(chunk.map((id) => ({ id })))]
+			)
+		);
+	});
+};
+
 export const groupedUpdateStatements = (
 	rows: ReadonlyArray<PlannedUpdate>
 ): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
@@ -2772,9 +2809,11 @@ export const layerWith = (
 			};
 
 			/**
-			 * One update as the row a grouped statement is built from, beside the bookkeeping that
-			 * stays per row (history, outbox). The graph write collects rows across operations and
-			 * groups them; a single-row caller gets the same statement it always had.
+			 * One update as the row a grouped statement is built from, beside its bookkeeping: the
+			 * history row as a planned insert the caller groups with every other row's (one statement
+			 * per batch, not one per record — two and a half thousand of these were the second half of
+			 * the payroll run's twenty seconds), and the outbox deliveries that stay per row. A
+			 * single-row caller gets the same statements it always had.
 			 */
 			const plannedUpdate = (
 				effectId: EffectId,
@@ -2785,6 +2824,7 @@ export const layerWith = (
 				previous: Readonly<Record<string, unknown>> | undefined
 			): Readonly<{
 				readonly row: PlannedUpdate | null;
+				readonly history: ReadonlyArray<PlannedInsert>;
 				readonly extras: ReadonlyArray<{
 					readonly sql: string;
 					readonly parameters: ReadonlyArray<Schema.Json>;
@@ -2795,7 +2835,7 @@ export const layerWith = (
 				const entries = Object.entries(writable).sort(([left], [right]) =>
 					left.localeCompare(right)
 				);
-				if (entries.length === 0 && !clearLock) return { row: null, extras: [] };
+				if (entries.length === 0 && !clearLock) return { row: null, history: [], extras: [] };
 				const row: PlannedUpdate = {
 					table: input.collection,
 					id: input.id,
@@ -2807,28 +2847,37 @@ export const layerWith = (
 					values: entries.map(([, value]) => value),
 					clearLock
 				};
-				const history = definition.history
+				const history: ReadonlyArray<PlannedInsert> = definition.history
 					? [
-							toStatement(
-								composer
-									.insert(collectionHistoryTable)
-									.values({
-										collection_name: input.collection,
-										record_id: input.id,
-										operation: 'update',
-										subject_id: subject.userId,
-										effect_id: effectId,
-										approval_id: governingRequest(previous),
-										snapshot: encodedJsonb(values)
-									})
-									.toSQL()
-							)
+							{
+								table: 'bolt_collection_history',
+								layer: 0,
+								columns: [
+									'collection_name',
+									'record_id',
+									'operation',
+									'subject_id',
+									'effect_id',
+									'approval_id',
+									'snapshot'
+								],
+								casts: ['', '', '', '', '', '', '::jsonb'],
+								parameters: [
+									input.collection,
+									input.id,
+									'update',
+									subject.userId,
+									effectId,
+									governingRequest(previous),
+									encodedJsonb(values as Exclude<Schema.Json, null>)
+								]
+							}
 						]
 					: [];
 				return {
 					row,
+					history,
 					extras: [
-						...history,
 						...outboxStatements(
 							effectId,
 							subject,
@@ -2853,7 +2902,7 @@ export const layerWith = (
 				readonly sql: string;
 				readonly parameters: ReadonlyArray<Schema.Json>;
 			}> => {
-				const { row, extras } = plannedUpdate(
+				const { row, history, extras } = plannedUpdate(
 					effectId,
 					subject,
 					input,
@@ -2861,8 +2910,63 @@ export const layerWith = (
 					clearLock,
 					previous
 				);
-				return row === null ? [] : [...groupedUpdateStatements([row]), ...extras];
+				return row === null
+					? []
+					: [...groupedUpdateStatements([row]), ...groupedInsertStatements(history), ...extras];
 			};
+			/**
+			 * One delete as the row a grouped statement is built from, beside its bookkeeping: the
+			 * history row as a planned insert the caller groups, and the outbox deliveries that stay per
+			 * row. The same shape as `plannedUpdate`, for the same reason: deleting a run's ninety
+			 * payslips arrived as ninety deletes and ninety history inserts.
+			 */
+			const plannedDelete = (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				id: string,
+				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): Readonly<{
+				readonly row: PlannedDelete;
+				readonly history: ReadonlyArray<PlannedInsert>;
+				readonly extras: ReadonlyArray<{
+					readonly sql: string;
+					readonly parameters: ReadonlyArray<Schema.Json>;
+				}>;
+			}> => ({
+				row: { table: collection, id },
+				history: definition.history
+					? [
+							{
+								table: 'bolt_collection_history',
+								layer: 0,
+								columns: [
+									'collection_name',
+									'record_id',
+									'operation',
+									'subject_id',
+									'effect_id',
+									'approval_id',
+									'snapshot'
+								],
+								casts: ['', '', '', '', '', '', '::jsonb'],
+								parameters: [
+									collection,
+									id,
+									'delete',
+									subject.userId,
+									effectId,
+									governingRequest(previous),
+									// The row as it was, so a rejected delete has something to restore. Serialised
+									// the same way the approval path serialises its snapshot.
+									JSON.stringify(deleteHistoryIdentity(previous))
+								]
+							}
+						]
+					: [],
+				extras: outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
+			});
 			/** The delete twin of `updateStatements`, shared by single-row and graph execution. */
 			const deleteStatements = (
 				effectId: EffectId,
@@ -2876,31 +2980,15 @@ export const layerWith = (
 				readonly sql: string;
 				readonly parameters: ReadonlyArray<Schema.Json>;
 			}> => {
-				const history = definition.history
-					? [
-							toStatement(
-								composer
-									.insert(collectionHistoryTable)
-									.values({
-										collection_name: collection,
-										record_id: id,
-										operation: 'delete',
-										subject_id: subject.userId,
-										effect_id: effectId,
-										approval_id: governingRequest(previous),
-										// The row as it was, so a rejected delete has something to restore. Serialised
-										// the same way the approval path serialises its snapshot.
-										snapshot: JSON.stringify(deleteHistoryIdentity(previous))
-									})
-									.toSQL()
-							)
-						]
-					: [];
-				return [
-					transactionSql(`delete from ${quoteIdentifier(collection)} where id = $1`, [id]),
-					...history,
-					...outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
-				];
+				const { row, history, extras } = plannedDelete(
+					effectId,
+					subject,
+					collection,
+					id,
+					definition,
+					previous
+				);
+				return [...groupedDeleteStatements([row]), ...groupedInsertStatements(history), ...extras];
 			};
 			/**
 			 * Releases only the exact lock owned by a refused canonical approval request.
@@ -3238,8 +3326,15 @@ export const layerWith = (
 				// recordset typed by the table, and the count of rows still at their version must be the
 				// count prepared. One guard per row was the other half of a bulk update's round trips.
 				const versionedByCollection = new Map<string, Array<{ id: string; row_version: number }>>();
+				const deletedByCollection = new Map<string, Array<{ id: string }>>();
 				for (const row of reviewedRows) {
-					if (row.action === 'delete') continue;
+					if (row.action === 'delete') {
+						deletedByCollection.set(row.collection, [
+							...(deletedByCollection.get(row.collection) ?? []),
+							{ id: row.id }
+						]);
+						continue;
+					}
 					const version = (JSON.parse(row.snapshot) as Record<string, unknown>)['row_version'];
 					if (typeof version !== 'number') continue;
 					const group = versionedByCollection.get(row.collection) ?? [];
@@ -3258,8 +3353,21 @@ export const layerWith = (
 							]
 						)
 					);
+				// The rows a delete takes, locked and counted as one statement per collection.
+				const groupedDeleteAssertions = [...deletedByCollection.entries()]
+					.filter(([, rows]) => rows.length > 1)
+					.map(([collection, rows]) =>
+						transactionSql(
+							`select bolt_assert((select count(*) from (select r.id from jsonb_populate_recordset(null::${quoteIdentifier(collection)}, $1::jsonb) as v join ${quoteIdentifier(collection)} as r on r.id = v.id for update) as bolt_delete_rows) = $2, $3)`,
+							[
+								JSON.stringify(rows),
+								rows.length,
+								`${collection}: ${rows.length} rows changed while its mutation graph was prepared`
+							]
+						)
+					);
 				const groupedVersionIds = new Set(
-					[...versionedByCollection.entries()]
+					[...versionedByCollection.entries(), ...deletedByCollection.entries()]
 						.filter(([, rows]) => rows.length > 1)
 						.flatMap(([collection, rows]) => rows.map((row) => `${collection}\u0000${row.id}`))
 				);
@@ -3268,6 +3376,7 @@ export const layerWith = (
 				);
 				const recordAssertions = [
 					...groupedVersionAssertions,
+					...groupedDeleteAssertions,
 					...perRowAssertions.map((row) => {
 						// The snapshot is the row's JSON as it was prepared (`graph-read`), one string per row.
 						const snapshot = JSON.parse(row.snapshot) as Record<string, unknown>;
@@ -3353,23 +3462,26 @@ export const layerWith = (
 				}
 				statements.push(...recordAssertions, ...relationshipAssertions);
 				const plannedUpdates: Array<PlannedUpdate> = [];
+				const plannedDeletes: Array<PlannedDelete> = [];
+				const updateHistory: Array<PlannedInsert> = [];
 				const updateExtras: Array<{
 					readonly sql: string;
 					readonly parameters: ReadonlyArray<Schema.Json>;
 				}> = [];
 				for (const operation of operations) {
-					if (operation.action === 'delete')
-						statements.push(
-							...deleteStatements(
-								operation.taskScope,
-								subject,
-								operation.collection,
-								operation.id,
-								operation.definition,
-								operation.visibility,
-								operation.previous
-							)
+					if (operation.action === 'delete') {
+						const planned = plannedDelete(
+							operation.taskScope,
+							subject,
+							operation.collection,
+							operation.id,
+							operation.definition,
+							operation.previous
 						);
+						plannedDeletes.push(planned.row);
+						updateHistory.push(...planned.history);
+						updateExtras.push(...planned.extras);
+					}
 					if (
 						operation.action === 'update' &&
 						(Object.keys(operation.values).length > 0 || operation.clearLock === true)
@@ -3387,10 +3499,19 @@ export const layerWith = (
 							operation.previous
 						);
 						if (planned.row !== null) plannedUpdates.push(planned.row);
+						updateHistory.push(...planned.history);
 						updateExtras.push(...planned.extras);
 					}
 				}
-				statements.push(...groupedUpdateStatements(plannedUpdates), ...updateExtras);
+				// Deletes and updates as one statement per shape, their history as one insert per batch,
+				// then what stays per row. Deletes go first: a row deleted and re-created in one graph
+				// must not be updated between.
+				statements.push(
+					...groupedDeleteStatements(plannedDeletes),
+					...groupedUpdateStatements(plannedUpdates),
+					...groupedInsertStatements(updateHistory),
+					...updateExtras
+				);
 				if (creates.length > 0)
 					statements.push(
 						...createStatements(effectId, subject, creates.map(createNodeFor), approvalRequestId)
@@ -3438,7 +3559,20 @@ export const layerWith = (
 						)
 					);
 				}
+				// One line per committed write: how many statements the plan became and what the database
+				// took. A plan that grows with the batch (one statement per row) is the regression this
+				// runtime has had twice; the count is what catches the third before a network database does.
+				const executionStartedAt = Date.now();
 				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements }).pipe(
+					Effect.tap(() =>
+						// A single row's plan is a constant; a batch's is where growth hides.
+						operations.length > 1
+							? Effect.log(
+									`[bolt-write] ${operations[0]?.collection ?? 'graph'} rows=${operations.length} statements=${statements.length} ` +
+										`db=${Date.now() - executionStartedAt}ms ${statementShapes(statements)}`
+								)
+							: Effect.void
+					),
 					Effect.catch((error): Effect.Effect<never, Database.FacilityError | AuthoredRefusal> => {
 						if (error.message.includes(READ_CONFLICT_MESSAGE))
 							return Effect.fail(new AuthoredRefusal({ message: READ_CONFLICT_MESSAGE }));

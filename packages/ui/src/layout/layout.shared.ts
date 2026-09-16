@@ -83,6 +83,12 @@ export const PAD_CLASSES: Record<LayoutPad, string> = {
 
 /** The one app inset: content regions. The only legal consumer is the single inset owner. */
 export const INSET_CLASS = 'px-4 py-2 sm:px-6';
+/**
+ * Set by a `Bound inset` for its subtree: the page already owns the horizontal inset, so chrome
+ * that would otherwise supply its own (a default tab strip) aligns with the content instead of
+ * stepping in a second time.
+ */
+export const LAYOUT_INSET_CONTEXT = Symbol('layout.inset');
 /** Full-bleed chrome with its own vertical rhythm (`PageHeader`). */
 export const INSET_X_CLASS = 'px-4 sm:px-6';
 /** Chrome that draws its own background and so cannot pad itself (tab list). */

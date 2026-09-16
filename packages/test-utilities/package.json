@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/test-utilities",
-	"version": "0.0.48",
+	"version": "0.0.49",
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
