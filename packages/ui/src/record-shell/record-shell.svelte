@@ -30,6 +30,12 @@
 		 * owns placement, animation, and spacing so every record reads the same.
 		 */
 		tabs?: TabConfig[];
+		/**
+		 * Height contract from the caller, on the shell's own column. A record whose body owns its
+		 * scrollport passes `h-full` so that body can take the height its host grants it; without
+		 * one the column stays content-sized and the host's scrollport scrolls the whole record.
+		 */
+		class?: string;
 		/** Content when `tabs` is omitted (for example a create form or a message body). */
 		children?: Snippet;
 	}
@@ -42,7 +48,17 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { Tabs } from '#lib/tabs';
 
-	let { title, subtitle, icon, badge, hint, actions, tabs, children }: RecordShellProps = $props();
+	let {
+		title,
+		subtitle,
+		icon,
+		badge,
+		hint,
+		actions,
+		tabs,
+		class: className,
+		children
+	}: RecordShellProps = $props();
 
 	const hasState = $derived(icon != null || (badge != null && badge !== ''));
 	/**
@@ -83,7 +99,7 @@
 	carries what the chrome does not, and inside the record sheet the pill moves up into
 	that chrome. Spacing belongs to the parent Stack, never margins on content.
 -->
-<Stack gap="md">
+<Stack gap="md" class={className}>
 	{#if title != null || subtitle != null || actions || (hasState && !stateInHeader)}
 		<Inline align="start" justify="between" gap="md">
 			<Inline align="center" gap="sm" class="min-w-0">
