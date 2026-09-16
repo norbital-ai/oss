@@ -199,7 +199,8 @@
 	/**
 	 * The record-state notice normally sits at the top of the form. `notice="header"` hands it to
 	 * the record sheet's header instead, when one is mounted above the form — the lock then reads
-	 * in the chrome rather than scrolling away with the fields.
+	 * as a pill trailing the record label (its sentence on hover) rather than scrolling away with
+	 * the fields.
 	 */
 	const noticeContext = getOptionalCollectionRecordNoticeContext();
 	const noticeInHeader = $derived(
@@ -426,7 +427,7 @@
 </script>
 
 {#snippet metadataNotice()}
-	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" />
+	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="compact" />
 {/snippet}
 
 {#snippet formFooter()}

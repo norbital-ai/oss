@@ -153,14 +153,15 @@ const COLLECTION_RECORD_NOTICE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-
  */
 export interface CollectionRecordNoticeRegistry {
 	registerNotice(notice: Snippet | null): void;
-	registerLeading(leading: Snippet | null): void;
+	registerTrailing(trailing: Snippet | null): void;
 }
 
 export function setCollectionRecordNoticeContext(registry: CollectionRecordNoticeRegistry): void {
 	setContext(COLLECTION_RECORD_NOTICE_CONTEXT, registry);
 }
 
-export function getOptionalCollectionRecordNoticeContext(): CollectionRecordNoticeRegistry | undefined {
+export function getOptionalCollectionRecordNoticeContext():
+	CollectionRecordNoticeRegistry | undefined {
 	return hasContext(COLLECTION_RECORD_NOTICE_CONTEXT)
 		? getContext<CollectionRecordNoticeRegistry>(COLLECTION_RECORD_NOTICE_CONTEXT)
 		: undefined;

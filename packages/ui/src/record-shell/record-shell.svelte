@@ -11,16 +11,18 @@
 		/** One muted line under the heading (state, owner, summary). */
 		subtitle?: string;
 		/**
-		 * Leading Iconify icon (for example a lock on a read-only record). Inside the record
-		 * sheet it leads the sheet's own header, beside the record label; elsewhere it leads the
-		 * shell's heading row. Muted either way: the shell stays subordinate to the chrome.
+		 * Iconify icon inside the state pill (for example a lock on a read-only record). Inside the
+		 * record sheet the pill trails the sheet's own record label; elsewhere it trails the shell's
+		 * heading. Muted either way: the shell stays subordinate to the chrome.
 		 */
 		icon?: string;
 		/**
-		 * Short state pill beside the icon (for example the framework's read-only label). Placed
-		 * with the icon. The caller passes the translated string; the shell only places it.
+		 * Short state pill carrying the icon (for example the framework's read-only label). The
+		 * caller passes the translated string; the shell only places it.
 		 */
 		badge?: string;
+		/** One sentence behind the pill, shown on hover: what the state means and what to do instead. */
+		hint?: string;
 		/** Right-aligned header actions (for example a Process button). */
 		actions?: Snippet;
 		/**
@@ -40,7 +42,7 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { Tabs } from '#lib/tabs';
 
-	let { title, subtitle, icon, badge, actions, tabs, children }: RecordShellProps = $props();
+	let { title, subtitle, icon, badge, hint, actions, tabs, children }: RecordShellProps = $props();
 
 	const hasState = $derived(icon != null || (badge != null && badge !== ''));
 	/**
@@ -51,36 +53,40 @@
 	const stateInHeader = $derived(sheetHeader != null && hasState);
 	$effect(() => {
 		if (!stateInHeader || sheetHeader == null) return;
-		sheetHeader.registerLeading(recordState);
-		return () => sheetHeader.registerLeading(null);
+		sheetHeader.registerTrailing(recordState);
+		return () => sheetHeader.registerTrailing(null);
 	});
 </script>
 
 {#snippet recordState()}
-	<Inline gap="sm" shrink={false}>
-		{#if icon != null}
-			<Icon icon={icon} class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-		{/if}
-		{#if badge != null && badge !== ''}
-			<Badge variant="outline" class="shrink-0">{badge}</Badge>
-		{/if}
-	</Inline>
+	{#if badge != null && badge !== ''}
+		<Badge
+			variant="outline"
+			class="shrink-0 gap-1"
+			title={hint}
+			aria-label={hint ? `${badge}: ${hint}` : undefined}
+		>
+			{#if icon != null}
+				<Icon {icon} class="size-3 shrink-0" aria-hidden="true" />
+			{/if}
+			{badge}
+		</Badge>
+	{:else if icon != null}
+		<Icon {icon} class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+	{/if}
 {/snippet}
 
 <!--
-	Record detail composition: one compact header row (optional icon, heading, state pill,
+	Record detail composition: one compact header row (heading, trailing state pill,
 	optional actions) then the tab strip or plain content. The header stays subordinate to
 	the framework dialog chrome (record label, UI/Approval tabs, expand, close) — it only
-	carries what the chrome does not, and inside the record sheet the icon and pill move up
-	into that chrome. Spacing belongs to the parent Stack, never margins on content.
+	carries what the chrome does not, and inside the record sheet the pill moves up into
+	that chrome. Spacing belongs to the parent Stack, never margins on content.
 -->
 <Stack gap="md">
 	{#if title != null || subtitle != null || actions || (hasState && !stateInHeader)}
 		<Inline align="start" justify="between" gap="md">
 			<Inline align="center" gap="sm" class="min-w-0">
-				{#if icon != null && !stateInHeader}
-					<Icon icon={icon} class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-				{/if}
 				{#if title != null || (subtitle != null && subtitle !== '')}
 					<Stack gap="xs" class="min-w-0">
 						{#if title != null}
@@ -91,8 +97,8 @@
 						{/if}
 					</Stack>
 				{/if}
-				{#if badge != null && badge !== '' && !stateInHeader}
-					<Badge variant="outline" class="shrink-0">{badge}</Badge>
+				{#if !stateInHeader}
+					{@render recordState()}
 				{/if}
 			</Inline>
 			{#if actions}
