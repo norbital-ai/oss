@@ -20,7 +20,10 @@ export const statementPlanFor = (
 	prepared: ReadonlyArray<GraphPreparedOperation>,
 	options: Readonly<{ readonly ledgerClaim?: unknown }> = {}
 ): WriteStatementPlan => {
-	const groups = Map.groupBy(prepared, (operation) => `${operation.depth}\u0000${operation.collection}`);
+	const groups = Map.groupBy(
+		prepared,
+		(operation) => `${operation.depth}\u0000${operation.collection}`
+	);
 	const orderedGroups = [...groups.values()].toSorted(
 		([left], [right]) => (left?.depth ?? 0) - (right?.depth ?? 0)
 	);

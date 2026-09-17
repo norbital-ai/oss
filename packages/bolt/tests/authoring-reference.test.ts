@@ -195,8 +195,8 @@ describe('polymorphic reference authoring', () => {
 			perceptual_embedding: [0.25, -1, 2.5],
 			record_embedding: [3, 4, 5]
 		});
-		expect(() =>
-			decodeReferenceRow({ perceptual_embedding: '[0,"bad",2]' }, fields)
-		).toThrow('Vector integrity violation');
+		expect(() => decodeReferenceRow({ perceptual_embedding: '[0,"bad",2]' }, fields)).toThrow(
+			'Vector integrity violation'
+		);
 	});
 });

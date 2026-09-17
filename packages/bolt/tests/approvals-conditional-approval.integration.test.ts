@@ -2,7 +2,6 @@ import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { approveBy, noApproval } from '../src/authoring/approval-flow.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
 import {
 	approvalConfigurationId,
 	describePolicy,
@@ -10,15 +9,13 @@ import {
 	type PolicyRuntimeFunction
 } from '../src/authoring/policy-introspection.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import {
-	emptyAuthoredRuntime,
-	type AuthoredRuntime
-} from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	makeBoltTestRuntime,
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { unwrapMutationPhase } from './support/mutation-phase.js';
 import { field } from '../src/authoring/workspace-schema.js';
 
 const writer = {
@@ -61,50 +58,7 @@ const definitionFor = (policy: ReturnType<typeof describedPolicy>) =>
 		teams: { writers: ['entry_writer'], Reviewers: [], 'Review Leads': [] }
 	});
 
-/**
- * The fixture collection as a schema, so the hooks below are typed the way a compiled workspace's
- * are: `CollectionHooks` reads handler contexts off `tables`, making `input`, `existing` and
- * `api.db.entries` inferred rather than reflected.
- *
- * `normalized` is optional in the insert because the hook derives it — the honest statement of
- * what a create must carry.
- */
-interface EntriesSchema {
-	readonly tables: {
-		readonly entries: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly label: string;
-				readonly normalized: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly label: string;
-				readonly normalized?: string;
-			};
-		};
-	};
-	readonly relations: Record<string, never>;
-}
-
-const entriesHooks: CollectionHooks<EntriesSchema, 'entries'> = {
-	mutate: {
-		perRecord: {
-			before: {
-				description: 'Normalizes the candidate before policy code runs.',
-				handler: (context) => {
-					const { input } = context;
-					if (context.existing !== undefined) return input;
-					return {
-						...input,
-						normalized: String(input['label']).trim().toLocaleLowerCase()
-					};
-				}
-			}
-		}
-	}
-};
-
+/** The transform derives `normalized`; policy code is asked of the payload the engine will write. */
 const authoredFor = (
 	policy: ReturnType<typeof describedPolicy>,
 	functions = policyRuntimeFunctionsFor([policy])
@@ -112,21 +66,33 @@ const authoredFor = (
 	...emptyAuthoredRuntime,
 	policyAuthorizations: functions.authorizations,
 	approvalFlows: functions.approvalFlows,
-	hooks: { entries: authoredHooks(entriesHooks) }
+	collections: {
+		entries: {
+			create: { input: { columns: { label: true } } },
+			transform: (inputs: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+				Effect.succeed(
+					inputs.map((input) => ({
+						...input,
+						normalized: String(input['label']).trim().toLocaleLowerCase()
+					}))
+				)
+		}
+	}
 });
 
-const mutate = (runtime: BoltTestRuntime, effectId: string, label: string) =>
+const create = (runtime: BoltTestRuntime, effectId: string, labels: ReadonlyArray<string>) =>
 	runtime.runtime.runPromise(
 		Effect.gen(function* () {
-			return yield* (yield* Collections.Service).mutate(
-				EffectId.make(effectId),
-				writer,
-				'entries',
-				[{ label }],
-				0,
-				{}
-			);
+			return yield* (yield* Collections.Service).write(EffectId.make(effectId), writer, [
+				{ collection: 'entries', action: 'create', inputs: labels.map((label) => ({ label })) }
+			]);
 		})
+	);
+
+const failureOf = (promise: Promise<unknown>) =>
+	promise.then(
+		() => undefined,
+		(cause: unknown) => unwrapMutationPhase(cause)
 	);
 
 let harness: BoltTestRuntime | undefined;
@@ -150,7 +116,7 @@ describe('routed policy approvals', () => {
 		expect(policyRuntimeFunctionsFor([policy]).approvalFlows[id]).toEqual(expect.any(Function));
 	});
 
-	it('uses Effect and plain TypeScript over the post-hook candidate and a read-only api', async () => {
+	it('uses Effect and plain TypeScript over the transformed payload and a read-only api', async () => {
 		const seen: Array<unknown> = [];
 		const exposedWrites: Array<boolean> = [];
 		const policy = describedPolicy((context, api) =>
@@ -176,66 +142,40 @@ describe('routed policy approvals', () => {
 		);
 		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
 
-		const committed = await mutate(harness, 'approval-none', ' Ordinary ');
+		const committed = await create(harness, 'approval-none', [' Ordinary ']);
 		expect(committed.records).toHaveLength(1);
 		expect(committed.records[0]).toMatchObject({ normalized: 'ordinary' });
-		await expect(mutate(harness, 'approval-review', ' REVIEW ')).rejects.toBeInstanceOf(
-			Collections.PendingApproval
-		);
+		expect(committed.pendingApproval).toBeUndefined();
+		const reviewed = await create(harness, 'approval-review', [' REVIEW ']);
+		expect(reviewed.pendingApproval?.requestId).toBeTypeOf('string');
 		expect(seen).toEqual(['ordinary', 'review']);
 		expect(exposedWrites).toEqual([false, false]);
 	});
 
-	it('holds only gated roots while committing and returning ordinary roots deterministically', async () => {
+	it('holds the whole batch under the one route its gated root resolves', async () => {
 		const policy = describedPolicy((context) =>
 			Reflect.get(Reflect.get(context as object, 'record') as object, 'normalized') === 'review'
 				? approveBy('Reviewers')
 				: noApproval
 		);
 		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
-		const committedId = '00000000-0000-4000-8000-000000000231';
-		const heldId = '00000000-0000-4000-8000-000000000232';
 
-		const result = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).mutate(
-					EffectId.make('approval-mixed-roots'),
-					writer,
-					'entries',
-					[
-						{ id: committedId, label: ' Ordinary ' },
-						{ id: heldId, label: ' REVIEW ' }
-					],
-					0,
-					{
-						roots: [
-							{ id: committedId, action: 'create' },
-							{ id: heldId, action: 'create' }
-						]
-					}
-				);
-			})
-		);
-
-		// The batch result is the commit: the settled records in batch order, held roots present as
-		// their bare id because nothing was written for them.
-		expect(result.records).toEqual([
-			expect.objectContaining({ id: committedId, normalized: 'ordinary' }),
-			{ id: heldId }
-		]);
-		expect(await harness.database.query('select id from entries order by id')).toEqual([
-			{ id: committedId }
-		]);
+		const result = await create(harness, 'approval-mixed-roots', [' Ordinary ', ' REVIEW ']);
+		const requestId = result.pendingApproval?.requestId;
+		expect(requestId).toBeTypeOf('string');
+		expect(result.records.map((record) => record['normalized'])).toEqual(['ordinary', 'review']);
+		// One batch, one route: both rows are committed provisionally under the same hold.
 		expect(
 			await harness.database.query(
-				'select record_id, status from approval_request order by record_id'
+				'select normalized, approval_id from entries order by normalized'
 			)
-		).toEqual([{ record_id: heldId, status: 'ONGOING' }]);
-		expect(
-			await harness.database.query(
-				"select record_id from bolt_collection_history where collection_name = 'entries' order by record_id"
-			)
-		).toEqual([{ record_id: committedId }]);
+		).toEqual([
+			{ normalized: 'ordinary', approval_id: requestId },
+			{ normalized: 'review', approval_id: requestId }
+		]);
+		expect(await harness.database.query('select record_id, status from approval_request')).toEqual([
+			{ record_id: result.records[1]?.['id'], status: 'ONGOING' }
+		]);
 	});
 
 	it('runs write authorization against the same prepared object and accepts only true', async () => {
@@ -246,11 +186,10 @@ describe('routed policy approvals', () => {
 		);
 		harness = await makeBoltTestRuntime(definitionFor(policy), { authored: authoredFor(policy) });
 
-		const allowed = await mutate(harness, 'authorization-allow', ' ALLOWED ');
+		const allowed = await create(harness, 'authorization-allow', [' ALLOWED ']);
 		expect(allowed.records).toHaveLength(1);
-		await expect(mutate(harness, 'authorization-deny', ' denied ')).rejects.toMatchObject({
-			_tag: 'Bolt.Collections.MutationPhaseFailure',
-			cause: { _tag: 'Bolt.AccessControl.AccessDenied' }
+		expect(await failureOf(create(harness, 'authorization-deny', [' denied ']))).toMatchObject({
+			_tag: 'Bolt.AccessControl.AccessDenied'
 		});
 	});
 
@@ -280,9 +219,8 @@ describe('routed policy approvals', () => {
 			)
 		});
 
-		await expect(mutate(harness, `flow-failure:${_label}`, 'ordinary')).rejects.toMatchObject({
-			_tag: 'Bolt.Collections.MutationPhaseFailure',
-			cause: { _tag: 'Bolt.AccessControl.AccessDenied' }
+		expect(await failureOf(create(harness, `flow-failure:${_label}`, ['ordinary']))).toMatchObject({
+			_tag: 'Bolt.AccessControl.AccessDenied'
 		});
 		expect(await harness.database.query('select id from entries')).toEqual([]);
 	});

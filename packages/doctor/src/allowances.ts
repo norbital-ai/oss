@@ -100,9 +100,7 @@ export function applyAllowances(
 		// file they read, and whichever side that is, it counts.
 		const candidates = PAIR_OWNERS.exec(finding.location);
 		const files =
-			candidates === null
-				? [LOCATION.exec(finding.location)?.[1]]
-				: [candidates[1], candidates[2]];
+			candidates === null ? [LOCATION.exec(finding.location)?.[1]] : [candidates[1], candidates[2]];
 		const line = candidates === null ? Number(LOCATION.exec(finding.location)?.[2] ?? 1) : 1;
 		for (const file of files) {
 			if (file === undefined) continue;

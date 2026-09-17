@@ -9,10 +9,8 @@ import {
 import { field } from '../src/authoring/workspace-schema.js';
 import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import {
-	advanceActivePrefix,
-	resolveInitialPrefix
-} from '../src/runtime/sync/delta-engine.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { advanceActivePrefix, resolveInitialPrefix } from '../src/runtime/sync/delta-engine.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -33,6 +31,17 @@ const workspace = testWorkspace({
 	]
 });
 
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		people: {
+			create: { input: { columns: { name: true, team: true, seq: true } } },
+			update: { input: { columns: { name: true, team: true, seq: true } } },
+			delete: {}
+		}
+	}
+};
+
 const mulberry32 =
 	(seed: number): (() => number) =>
 	() => {
@@ -45,18 +54,14 @@ const mulberry32 =
 const pick = <T>(random: () => number, values: ReadonlyArray<T>): T =>
 	values[Math.floor(random() * values.length)] as T;
 
-const integer = (random: () => number, maximum: number): number =>
-	Math.floor(random() * maximum);
+const integer = (random: () => number, maximum: number): number => Math.floor(random() * maximum);
 
 type WriteOperation =
 	| Readonly<{ readonly kind: 'insert' }>
 	| Readonly<{ readonly kind: 'update'; readonly id: string }>
 	| Readonly<{ readonly kind: 'delete'; readonly id: string }>;
 
-const nextOperation = (
-	random: () => number,
-	ids: ReadonlyArray<string>
-): WriteOperation => {
+const nextOperation = (random: () => number, ids: ReadonlyArray<string>): WriteOperation => {
 	const roll = random();
 	if (ids.length === 0 || roll < 0.35) return { kind: 'insert' };
 	return roll < 0.8
@@ -73,41 +78,38 @@ const commitWrite = (
 	Effect.gen(function* () {
 		const collections = yield* Collections.Service;
 		if (operation.kind === 'insert')
-			return yield* collections.mutate(
-				harness.effectId(`insert:${step}`),
-				adminSubject,
-				'people',
-				[
-					{
-						name: `person-${step}-${integer(random, 100)}`,
-						team: pick(random, ['core', 'edge']),
-						seq: integer(random, 20)
-					}
-				],
-				0
-			);
+			return yield* collections.write(harness.effectId(`insert:${step}`), adminSubject, [
+				{
+					collection: 'people',
+					action: 'create',
+					inputs: [
+						{
+							name: `person-${step}-${integer(random, 100)}`,
+							team: pick(random, ['core', 'edge']),
+							seq: integer(random, 20)
+						}
+					]
+				}
+			]);
 		if (operation.kind === 'update')
-			return yield* collections.mutate(
-				harness.effectId(`update:${step}`),
-				adminSubject,
-				'people',
-				[
-					random() < 0.5
-						? { id: operation.id, seq: integer(random, 20) }
-						: {
-								id: operation.id,
-								name: `renamed-${step}-${integer(random, 100)}`,
-								team: pick(random, ['core', 'edge'])
-							}
-				],
-				0
-			);
-		return yield* collections.delete(
-			harness.effectId(`delete:${step}`),
-			adminSubject,
-			'people',
-			[operation.id]
-		);
+			return yield* collections.write(harness.effectId(`update:${step}`), adminSubject, [
+				{
+					collection: 'people',
+					action: 'update',
+					inputs: [
+						random() < 0.5
+							? { id: operation.id, seq: integer(random, 20) }
+							: {
+									id: operation.id,
+									name: `renamed-${step}-${integer(random, 100)}`,
+									team: pick(random, ['core', 'edge'])
+								}
+					]
+				}
+			]);
+		return yield* collections.write(harness.effectId(`delete:${step}`), adminSubject, [
+			{ collection: 'people', action: 'delete', inputs: [{ id: operation.id }] }
+		]);
 	});
 
 type QueryState = {
@@ -139,11 +141,7 @@ const toFindManyInput = (input: SyncQueryInput): Collections.QueryInput => {
 	};
 };
 
-const queryRows = (
-	harness: BoltTestRuntime,
-	input: SyncQueryInput,
-	effect: string
-) =>
+const queryRows = (harness: BoltTestRuntime, input: SyncQueryInput, effect: string) =>
 	harness.runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
 			collections.findMany(harness.effectId(effect), adminSubject, toFindManyInput(input))
@@ -158,22 +156,22 @@ afterEach(async () => {
 
 describe('sync engine property: apply(delta) equals fresh query', () => {
 	it('holds across deterministic insert, update, move, filter and delete batches', async () => {
-		const h = await makeBoltTestRuntime(workspace);
+		const h = await makeBoltTestRuntime(workspace, { authored });
 		harness = h;
 		const random = mulberry32(0x5eed2026);
 		const seeded = await h.runtime.runPromise(
 			Effect.flatMap(Collections.Service, (collections) =>
-				collections.mutate(
-					h.effectId('seed'),
-					adminSubject,
-					'people',
-					Array.from({ length: 24 }, (_, index) => ({
-						name: `person-${index.toString().padStart(2, '0')}`,
-						team: index % 3 === 0 ? 'edge' : 'core',
-						seq: (index * 7) % 20
-					})),
-					0
-				)
+				collections.write(h.effectId('seed'), adminSubject, [
+					{
+						collection: 'people',
+						action: 'create',
+						inputs: Array.from({ length: 24 }, (_, index) => ({
+							name: `person-${index.toString().padStart(2, '0')}`,
+							team: index % 3 === 0 ? 'edge' : 'core',
+							seq: (index * 7) % 20
+						}))
+					}
+				])
 			)
 		);
 		const liveIds = new Set(

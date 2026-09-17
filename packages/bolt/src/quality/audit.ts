@@ -332,20 +332,29 @@ type ClientWrapperFinding = Readonly<{
 	readonly call: string;
 }>;
 
-type HooklessMutationFinding = Readonly<{
+type UndeclaredWriteFinding = Readonly<{
 	readonly collection: string;
 	readonly file: string;
 	readonly line: number;
-	readonly expectedHooks: string;
+	readonly expectedDeclaration: string;
 }>;
+
+const COLLECTION_WRITE_NAMES: ReadonlySet<string> = new Set([
+	'create',
+	'createMany',
+	'update',
+	'updateMany',
+	'delete',
+	'deleteMany'
+]);
 
 /**
  * A named helper that performs a write the author should have made onsite.
  *
- * Writes are `client.db.<collection>.mutate|delete` and `client.invoke.<fn>` — the calls a
- * surface makes because it was interacted with. Reads (`findMany`, `findFirst`, `count`,
- * `pending`) belong in helpers, `$derived` and loaders; flagging them would ban the query
- * layer the framework exists to serve. `pending` in particular is state, not a write.
+ * Writes are `client.collection.<collection>.create|createMany|update|updateMany|delete|deleteMany`
+ * and `client.invoke.<fn>` — the calls a surface makes because it was interacted with. Reads
+ * (`client.db.*`, `pending`) belong in helpers, `$derived` and loaders; flagging them would ban
+ * the query layer the framework exists to serve. `pending` in particular is state, not a write.
  *
  * Judged on the TypeScript syntax tree, in expression position only. Type references and
  * imports use different node kinds (`TypeReference`, `QualifiedName`, `ImportDeclaration`),
@@ -404,8 +413,8 @@ const ClientWrapperAudit = {
 	/**
 	 * The dotted call when a `client`-rooted chain is a write, otherwise undefined.
 	 *
-	 * `client.db` only counts with `.mutate`/`.delete` further along the chain — `pending`
-	 * and every read (`findMany`, `findFirst`, `count`, …) stay silent. `client.invoke.*`
+	 * `client.collection` only counts with a write name further along the chain — `pending`
+	 * stays silent, and `client.db` is reads (`findMany`, `findFirst`, `count`, …). `client.invoke.*`
 	 * is always effectful so any named call counts. `client.automations.*` counts for
 	 * `.run`/`.stop` and stays silent for `.pending`/`.latest` reads. `client.records`,
 	 * `client.history` and `client.collections` are reads and metadata, so they are
@@ -415,8 +424,8 @@ const ClientWrapperAudit = {
 		if (chain.length < 3 || chain[0] !== 'client') return undefined;
 		const second = chain[1];
 		if (second === 'invoke') return chain.join('.');
-		if (second === 'db')
-			return chain.slice(2).includes('mutate') || chain.slice(2).includes('delete')
+		if (second === 'collection')
+			return chain.slice(2).some((segment) => COLLECTION_WRITE_NAMES.has(segment))
 				? chain.join('.')
 				: undefined;
 		if (second === 'automations')
@@ -458,7 +467,7 @@ const ClientWrapperAudit = {
 	/**
 	 * The nearest named function holding a node, skipping anonymous arrows.
 	 *
-	 * The skip is the thunk case: `function save() { submit(() => client.db.x.mutate()) }`
+	 * The skip is the thunk case: `function save() { submit(() => client.collection.x.create()) }`
 	 * still performs its write inside the named `save` — the inner arrow is how the
 	 * settlement API takes the write, not a second onsite position. Markup arrows and
 	 * `$derived` callbacks have no named holder above them, so they stay silent.
@@ -562,18 +571,20 @@ export const auditAuthoredClientWrappers = (
 };
 
 /**
- * Reports collections granted `mutate.*` that ship no `+hooks.ts`.
+ * Reports collections granted `mutate.*` that ship no `+collection.ts`.
  *
- * Reads `src/access/policies/*.ts` under the workspace root for direct `grantOn` /
- * `grantsOn` pairs or literal policy `grants` objects and checks `src/collections/<collection>/+hooks.ts` presence. Only
+ * A grant on a collection with no declaration grants a write nobody can make: the runtime refuses
+ * every operation the collection does not declare. Reads `src/access/policies/*.ts` under the
+ * workspace root for direct `grantOn` / `grantsOn` pairs or literal policy `grants` objects and
+ * checks `src/collections/<collection>/+collection.ts` presence. Only
  * literal collection/action pairs count — an action list held in a variable, or a grant
  * composed through a helper like `peopleGrants('read')`, is not resolved. One finding per
  * collection, at its first `mutate` grant site; `read`/`delete`-only collections stay
  * silent. Paths in findings are workspace-relative POSIX paths.
  */
-export const auditHooklessMutations = (
+export const auditUndeclaredWrites = (
 	workspaceRoot: string
-): ReadonlyArray<HooklessMutationFinding> => {
+): ReadonlyArray<UndeclaredWriteFinding> => {
 	const policiesDir = join(workspaceRoot, 'src', 'access', 'policies');
 	let entries: ReadonlyArray<string>;
 	// repository-health:allow EFF1 -- a missing policies directory degrades to no findings; this is a sync workspace probe, not Effect error control.
@@ -681,17 +692,18 @@ export const auditHooklessMutations = (
 		};
 		visit(sourceFile);
 	}
-	const findings: Array<HooklessMutationFinding> = [];
+	const findings: Array<UndeclaredWriteFinding> = [];
 	for (const collection of [...firstGrant.keys()].sort()) {
 		const site = firstGrant.get(collection);
 		if (site === undefined) continue;
-		// repository-health:allow IO1 -- same sync audit scanner contract; a hooks-file existence probe.
-		if (existsSync(join(workspaceRoot, 'src', 'collections', collection, '+hooks.ts'))) continue;
+		// repository-health:allow IO1 -- same sync audit scanner contract; a declaration-file existence probe.
+		if (existsSync(join(workspaceRoot, 'src', 'collections', collection, '+collection.ts')))
+			continue;
 		findings.push({
 			collection,
 			file: site.file,
 			line: site.line,
-			expectedHooks: ['src', 'collections', collection, '+hooks.ts'].join('/')
+			expectedDeclaration: ['src', 'collections', collection, '+collection.ts'].join('/')
 		});
 	}
 	return findings;

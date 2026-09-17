@@ -19,13 +19,12 @@ export {
 	CollectionGroupedQueryRequest,
 	CollectionGroupedQueryRequestFields,
 	CollectionMutationBaseVersion,
-	CollectionMutationGraph,
+	CollectionHistoryAnchor,
+	CollectionWriteGraph,
 	CollectionMutationPush,
-	mutationGraphDeleteIds,
 	CollectionMutationSettlement,
 	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
-	CollectionMutateRequest,
 	CollectionMutationIdempotencyKey,
 	CollectionAnchoredPage,
 	CollectionQueryRequest,
@@ -171,6 +170,7 @@ export {
 	DatabaseRequest,
 	DatabaseResponse,
 	facilityCallFor,
+	runTransactionInOneRoundTrip,
 	FileRequest,
 	FileResponse,
 	HostToolRequest,
@@ -212,9 +212,17 @@ export {
 	ConversationId,
 	ConversationStatus,
 	UsageObservation,
-	WorkbenchId
+	WorkbenchId,
+	NotificationChannels,
+	NotificationRecipient,
+	NOTIFICATION_CHANNELS
 } from './facilities.js';
-export type { FacilityBinding, FacilityBindings } from './facilities.js';
+export type {
+	FacilityBinding,
+	FacilityBindings,
+	NotificationChannel,
+	TransactionStatement
+} from './facilities.js';
 
 export { Activation, Invocation, InvocationScope, PluginTrustedContext } from './invocation.js';
 

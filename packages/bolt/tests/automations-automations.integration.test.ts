@@ -24,6 +24,7 @@ import { makeBoltTestRuntime, testCallContext } from './support/bolt-test-layer.
 import {
 	afterMillisOf,
 	emptyAuthoredRuntime,
+	type AuthoredRuntime,
 	type RuntimeAuthoringApi
 } from '../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
@@ -585,8 +586,9 @@ describe('Automations owner', () => {
 			requiredFacilities: []
 		});
 		const observed: Array<unknown> = [];
-		const authored = {
+		const authored: AuthoredRuntime = {
 			...emptyAuthoredRuntime,
+			collections: { notes: { create: { input: { columns: { body: true } } } } },
 			automations: {
 				on_note: {
 					name: 'on_note',
@@ -604,16 +606,13 @@ describe('Automations owner', () => {
 			harness.tasks.forget();
 			await harness.runtime.runPromise(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						EffectId.make('create-note'),
-						adminSubject,
-						'notes',
-						[{ id: '10000000-0000-4000-8000-000000000001', body: 'direct trigger' }],
-						0,
+					yield* (yield* Collections.Service).write(EffectId.make('create-note'), adminSubject, [
 						{
-							roots: [{ id: '10000000-0000-4000-8000-000000000001', action: 'create' }]
+							collection: 'notes',
+							action: 'create',
+							inputs: [{ id: '10000000-0000-4000-8000-000000000001', body: 'direct trigger' }]
 						}
-					);
+					]);
 				})
 			);
 

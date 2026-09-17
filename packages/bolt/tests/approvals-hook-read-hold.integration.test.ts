@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { approveBy } from '../src/authoring/approval-flow.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
 import {
 	describePolicy,
 	policyRuntimeFunctionsFor
@@ -9,8 +8,8 @@ import {
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { PendingApproval } from '../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import type { AuthoredCollectionModule } from '../src/authoring/collection-schema.js';
 import { Subject } from '../src/runtime/identity/identity.js';
 import {
 	adminSubject,
@@ -18,41 +17,16 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { unwrapMutationPhase } from './support/mutation-phase.js';
 
 /**
- * A held write whose before-hook read another collection.
+ * A held write whose transform read another collection.
  *
  * The read is fingerprinted during preparation, so the hold is persisted inside a transaction that
  * revalidates it first. Colony's database binding answers a transaction with every statement's rows,
  * so the `bolt_assert` row of that revalidation precedes the request row. Under that binding the hold
- * committed but the reply was quarantined, and the ledger it left behind made the approved resume
- * conflict. serial-pcn's `recommendations` before-hook reads six collections; `categories` reads none.
+ * once committed but the reply was quarantined, and the ledger it left behind made the approved
+ * resume conflict.
  */
-
-interface Schema {
-	readonly tables: {
-		readonly recommendations: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly unit_price: string | null;
-				readonly breakdown: unknown;
-				readonly fae_state: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly unit_price?: string | null;
-				readonly breakdown?: unknown;
-				readonly fae_state: string;
-			};
-		};
-		readonly issues: {
-			readonly $inferSelect: { readonly id: string; readonly title: string };
-			readonly $inferInsert: { readonly id?: string; readonly title: string };
-		};
-	};
-	readonly relations: Record<string, never>;
-}
 
 const policy = describePolicy('controller', {
 	description: 'A recommendation decision is a proposal until the FAE approves it.',
@@ -92,30 +66,22 @@ const definition = workspace({
 });
 
 const observed: Array<string> = [];
-const hooks: CollectionHooks<Schema, 'recommendations'> = {
-	mutate: {
-		perRecord: {
-			before: {
-				description: 'A decision applies only against the current issue.',
-				handler: ({ input, api }) =>
-					Effect.gen(function* () {
-						const issues = yield* api.db.issues.findMany({ limit: 10 });
-						observed.push(`before:${issues.length}`);
-						return input;
-					})
-			},
-			after: {
-				description: 'Reads the settled row back.',
-				handler: ({ record, api }) =>
-					Effect.gen(function* () {
-						const stored = yield* api.db.recommendations.findFirst({
-							where: { id: { eq: record.id } }
-						});
-						observed.push(`after:${String(stored?.fae_state)}`);
-					})
-			}
-		}
-	}
+const recommendations: AuthoredCollectionModule = {
+	update: { input: { columns: { fae_state: true } } },
+	transform: (
+		inputs: ReadonlyArray<Readonly<Record<string, unknown>>>,
+		context: Readonly<{ db: unknown }>
+	) =>
+		Effect.gen(function* () {
+			const db = context.db as Readonly<{
+				issues: Readonly<{
+					findMany: (input: { limit: number }) => Effect.Effect<ReadonlyArray<unknown>>;
+				}>;
+			}>;
+			const issues = yield* db.issues.findMany({ limit: 10 });
+			observed.push(`transform:${issues.length}`);
+			return inputs;
+		})
 };
 
 const functions = policyRuntimeFunctionsFor([policy]);
@@ -134,16 +100,16 @@ afterEach(async () => {
 	observed.length = 0;
 });
 
-describe('a hold whose preparation read other collections', () => {
+describe('a hold whose transform read other collections', () => {
 	for (const transactionRows of ['last', 'every'] as const) {
-		it(`is held and then committed by the decision (binding answers ${transactionRows} rows)`, async () => {
+		it(`is held and then sealed by the decision (binding answers ${transactionRows} rows)`, async () => {
 			harness = await makeBoltTestRuntime(definition, {
 				transactionRows,
 				authored: {
 					...emptyAuthoredRuntime,
 					policyAuthorizations: functions.authorizations,
 					approvalFlows: functions.approvalFlows,
-					hooks: { recommendations: authoredHooks(hooks) }
+					collections: { recommendations }
 				}
 			});
 			const { runtime, effectId, database } = harness;
@@ -157,42 +123,34 @@ describe('a hold whose preparation read other collections', () => {
 				[id, '12.50', JSON.stringify({ savings: 3.25, notes: ['a'] }), 'pending']
 			);
 
-			const failure = await runtime.runPromise(
-				Effect.flip(
-					Effect.gen(function* () {
-						const collections = yield* Collections.Service;
-						return yield* collections.mutate(
-							effectId('decide'),
-							controller,
-							'recommendations',
-							[{ id, fae_state: 'approved' }],
-							0,
-							{ roots: [{ id, action: 'update' }] }
-						);
-					})
-				)
+			const commit = await runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).write(effectId('decide'), controller, [
+						{
+							collection: 'recommendations',
+							action: 'update',
+							inputs: [{ id, fae_state: 'approved' }]
+						}
+					]);
+				})
 			);
-			const held = unwrapMutationPhase(failure);
-			expect(held, held instanceof Error ? held.message : String(held)).toBeInstanceOf(
-				PendingApproval
-			);
-			if (!(held instanceof PendingApproval)) throw new Error('write was not held');
+			const requestId = commit.pendingApproval?.requestId ?? '';
+			expect(requestId).not.toBe('');
 			expect(
-				await database.query(
-					'select fae_state, approval_id from recommendations where id = $1',
-					[id]
-				)
-			).toEqual([{ fae_state: 'pending', approval_id: held.requestId }]);
-			expect(observed).toEqual(['before:1']);
+				await database.query('select fae_state, approval_id from recommendations where id = $1', [
+					id
+				])
+			).toEqual([{ fae_state: 'approved', approval_id: requestId }]);
+			expect(observed).toEqual(['transform:1']);
 
 			await runtime.runPromise(
 				Effect.gen(function* () {
 					const approvals = yield* Approvals.Service;
-					const pending = yield* approvals.status(effectId('status'), held.requestId);
+					const pending = yield* approvals.status(effectId('status'), requestId);
 					if (pending?._tag !== 'Pending')
 						throw new Error(`expected Pending, received ${String(pending?._tag)}`);
 					yield* approvals.decide(effectId('approve'), fae, pending, 'approve');
-					yield* (yield* Collections.Service).resume(effectId('resume'), held.requestId);
+					yield* (yield* Collections.Service).resume(effectId('resume'), requestId);
 				})
 			);
 			expect(
@@ -211,10 +169,11 @@ describe('a hold whose preparation read other collections', () => {
 			expect(
 				await database.query(
 					'select status, applied_at is not null as applied from approval_request where id = $1',
-					[held.requestId]
+					[requestId]
 				)
 			).toEqual([{ status: 'APPROVED', applied: true }]);
-			expect(observed).toEqual(['before:1', 'before:1', 'after:approved']);
+			// The seal re-applies nothing, so the transform ran once.
+			expect(observed).toEqual(['transform:1']);
 		});
 	}
 });

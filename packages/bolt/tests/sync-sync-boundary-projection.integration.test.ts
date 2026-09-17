@@ -8,6 +8,7 @@ import {
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Sync from '../src/runtime/sync/sync.js';
 import {
 	advanceActivePrefix,
@@ -96,6 +97,22 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		shifts: {
+			create: { input: { columns: { started_at: true, label: true } } },
+			update: { input: { columns: { started_at: true, label: true } } }
+		},
+		sites: {
+			create: { input: { columns: { name: true } } },
+			update: { input: { columns: { name: true } } }
+		},
+		visits: { create: { input: { columns: { site_id: true, note: true } } } }
+	}
+};
+
+/** One declared write: rows naming an id are an update, the rest a create. */
 const mutate = (
 	h: BoltTestRuntime,
 	name: string,
@@ -104,7 +121,13 @@ const mutate = (
 ) =>
 	h.runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.mutate(EffectId.make(name), adminSubject, target, payloads, 0)
+			collections.write(EffectId.make(name), adminSubject, [
+				{
+					collection: target,
+					action: payloads.every((payload) => 'id' in payload) ? 'update' : 'create',
+					inputs: payloads
+				}
+			])
 		)
 	);
 
@@ -138,7 +161,7 @@ const inDayLabels = ['midnight', 'noon', 'last'];
 
 describe('live day-boundary queries resolve against storage-wire values (S5)', () => {
 	it('an initially empty live query grows within its requested window after creates', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		const opened = await h.runtime.runPromise(
 			Effect.flatMap(Sync.Service, (sync) =>
@@ -178,7 +201,7 @@ describe('live day-boundary queries resolve against storage-wire values (S5)', (
 	});
 
 	it('admits exactly the instants inside the day and keys the prefix on the stored value', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		await seedShifts(h);
 
@@ -206,7 +229,7 @@ describe('live day-boundary queries resolve against storage-wire values (S5)', (
 	});
 
 	it('extends a day-bounded prefix across the stored instant cursor without skipping or repeating', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		await seedShifts(h);
 		const opened = await h.runtime.runPromise(
@@ -245,7 +268,7 @@ describe('live day-boundary queries resolve against storage-wire values (S5)', (
 	});
 
 	it('moves a row in at the inclusive edge and out at the exclusive edge in one batch', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		const seeded = await seedShifts(h);
 		const idOf = (label: string): string => {
@@ -323,7 +346,7 @@ describe('live projections carry the fields they join on (S5-adjacent)', () => {
 	};
 
 	it('keeps a masked join column as an internal requirement of the plan', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		const plan = await h.runtime.runPromise(describeSyncQuery(adminSubject, maskedJoin));
 
@@ -346,7 +369,7 @@ describe('live projections carry the fields they join on (S5-adjacent)', () => {
 	});
 
 	it('resolves the relation for real under the mask rather than returning a null join', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		await seedVisits(h);
 
@@ -365,7 +388,7 @@ describe('live projections carry the fields they join on (S5-adjacent)', () => {
 	});
 
 	it('routes a change to the joined collection into a delta on the projecting query', async () => {
-		const h = await makeBoltTestRuntime(definition);
+		const h = await makeBoltTestRuntime(definition, { authored });
 		harness = h;
 		const { kismis } = await seedVisits(h);
 		const opened = await h.runtime.runPromise(

@@ -487,7 +487,7 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	} catch (cause) {
 		error = cause;
 	}
-	mutation.mutate(input);
+	client.collection.things.create(input);
 	void saving;
 }
 `,

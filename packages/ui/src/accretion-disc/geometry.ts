@@ -1,11 +1,4 @@
-import {
-	TAU,
-	clamp,
-	pitchAcross,
-	smooth,
-	type DotGeometry,
-	type DotPoint
-} from '#lib/dot-field';
+import { TAU, clamp, pitchAcross, smooth, type DotGeometry, type DotPoint } from '#lib/dot-field';
 
 /** A dot on the disc or on the photon ring. */
 export type DiscSeed = {
@@ -33,7 +26,10 @@ export function discLayout(size: number): DiscSeed[] {
 	const pxPerUnit = (size * 0.46) / DISC_REACH;
 	const pitchPx = pitchAcross(size);
 	const pitch = pitchPx / pxPerUnit;
-	const rings = Math.max(4, Math.round(((DISC_REACH - DISC_INNER) * pxPerUnit) / (pitchPx * 1.2)) + 1);
+	const rings = Math.max(
+		4,
+		Math.round(((DISC_REACH - DISC_INNER) * pxPerUnit) / (pitchPx * 1.2)) + 1
+	);
 	const seeds: DiscSeed[] = [];
 	for (let k = 0; k < rings; k += 1) {
 		const r = DISC_INNER + (DISC_REACH - DISC_INNER) * (k / (rings - 1));

@@ -77,9 +77,10 @@ export function complexityOf(body: ts.Node): { cyclomatic: number; nesting: numb
 	return { cyclomatic, nesting: maximumNesting };
 }
 
-function directClassComplexity(
-	node: ts.ClassDeclaration | ts.ClassExpression
-): { cyclomatic: number; nesting: number } {
+function directClassComplexity(node: ts.ClassDeclaration | ts.ClassExpression): {
+	cyclomatic: number;
+	nesting: number;
+} {
 	const metrics = node.members
 		.map((member) => (member as { body?: ts.Node }).body)
 		.filter((body): body is ts.Node => body !== undefined)
@@ -181,12 +182,10 @@ function transparentForwardedCall(candidate: TopLevelFunction): string | null {
 	const call = returned && ts.isCallExpression(returned) ? returned : null;
 	if (!call || call.arguments.length !== parameters.length) return null;
 	const callee = call.expression;
-	if (
-		!(
-			ts.isIdentifier(callee) ||
-			(ts.isPropertyAccessExpression(callee) && !ts.isCallExpression(callee.expression))
-		)
-	)
+	if (!(
+		ts.isIdentifier(callee) ||
+		(ts.isPropertyAccessExpression(callee) && !ts.isCallExpression(callee.expression))
+	))
 		return null;
 	if (
 		!call.arguments.every(
@@ -200,11 +199,7 @@ function transparentForwardedCall(candidate: TopLevelFunction): string | null {
 function tokenCount(text: string): number {
 	const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
 	let count = 0;
-	for (
-		let token = scanner.scan();
-		token !== ts.SyntaxKind.EndOfFileToken;
-		token = scanner.scan()
-	)
+	for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan())
 		count += 1;
 	return count;
 }
@@ -344,7 +339,8 @@ function inlineEvidence(
 		if (!forwardedTo && expression !== null && nameEarnsExpression(candidate.name, expression))
 			continue;
 		const callbackProxy =
-			forwardedTo !== null && /^(?:on[A-Z]|handle[A-Z]|callback|listener|handler)/.test(candidate.name);
+			forwardedTo !== null &&
+			/^(?:on[A-Z]|handle[A-Z]|callback|listener|handler)/.test(candidate.name);
 		inlineCandidates.push({
 			name: candidate.name,
 			line: file.getLineAndCharacterOfPosition(candidate.nameNode.getStart(file)).line + 1,
@@ -537,7 +533,8 @@ const INDIRECTION = {
 	Q4: {
 		severity: 'hint',
 		confidence: 'medium',
-		summary: 'private function has one same-file direct call and a small mutation-free single expression'
+		summary:
+			'private function has one same-file direct call and a small mutation-free single expression'
 	}
 } as const;
 

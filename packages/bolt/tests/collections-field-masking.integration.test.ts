@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect, Exit, Option } from 'effect';
 import { describePolicy } from '../src/authoring/policy-introspection.js';
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import {
@@ -62,26 +61,20 @@ const fieldWorker: Identity.Subject = {
 	policies: []
 };
 
-/** The fixture as a schema, so the hooks are typed the way a compiled workspace's are. */
-interface MaskingSchema {
-	readonly tables: {
-		readonly assignments: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly title: string;
-				readonly controller_note: string;
-				readonly source: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly title: string;
-				readonly controller_note?: string;
-				readonly source?: string;
-			};
-		};
-	};
-	readonly relations: Record<string, never>;
-}
+/** Every column is declared writable; the policy field grant is what narrows a caller. */
+const declared: AuthoredRuntime['collections']['assignments'] = {
+	create: { input: { columns: { title: true, controller_note: true, source: true } } },
+	update: { input: { columns: { title: true, controller_note: true, source: true } } }
+};
+type Payload = Readonly<Record<string, unknown>>;
+type Transform = (
+	inputs: ReadonlyArray<Payload>,
+	context: Readonly<{ existing: ReadonlyArray<Payload | undefined> }>
+) => ReadonlyArray<Payload>;
+const authoredWith = (transform?: Transform): AuthoredRuntime => ({
+	...emptyAuthoredRuntime,
+	collections: { assignments: { ...declared, ...(transform === undefined ? {} : { transform }) } }
+});
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -89,23 +82,30 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+const write = (
+	runtime: BoltTestRuntime,
+	effectId: string,
+	subject: Identity.Subject,
+	action: 'create' | 'update',
+	input: Payload
+) =>
+	runtime.runtime.runPromise(
+		Effect.gen(function* () {
+			yield* (yield* Collections.Service).write(runtime.effectId(effectId), subject, [
+				{ collection: 'assignments', action, inputs: [input] }
+			]);
+		})
+	);
+
 describe('authored policy field masks', () => {
 	it('omits forbidden fields from collection reads', async () => {
-		harness = await makeBoltTestRuntime(definition);
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
 		const id = recordId('masked-assignment');
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					harness!.effectId('create'),
-					adminSubject,
-					'assignments',
-					[{ id, title: 'Inspect site', controller_note: 'Do not disclose' }],
-					0,
-					{ roots: [{ id, action: 'create' }] }
-				);
-			})
-		);
+		await write(harness, 'create', adminSubject, 'create', {
+			id,
+			title: 'Inspect site',
+			controller_note: 'Do not disclose'
+		});
 
 		const rows = await harness.runtime.runPromise(
 			Effect.gen(function* () {
@@ -122,64 +122,28 @@ describe('authored policy field masks', () => {
 		expect(JSON.stringify(rows)).not.toContain('Do not disclose');
 	});
 
-	it('checks caller fields before update hooks and permits server-derived fields', async () => {
-		const assignmentHooks: CollectionHooks<MaskingSchema, 'assignments'> = {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Attempts to add a controller-only note.',
-						handler: (context) =>
-							context.existing === undefined
-								? context.input
-								: { ...context.input, controller_note: 'injected by hook' }
-					}
-				}
-			}
-		};
+	it('checks caller fields before the update transform and permits server-derived fields', async () => {
 		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: { assignments: authoredHooks(assignmentHooks) }
-			}
+			authored: authoredWith((inputs, { existing }) =>
+				inputs.map((input, index) =>
+					existing[index] === undefined
+						? input
+						: { ...input, controller_note: 'injected by transform' }
+				)
+			)
 		});
 		const id = recordId('hooked-assignment');
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('create'),
-					adminSubject,
-					'assignments',
-					[{ id, title: 'Original', controller_note: 'Private' }],
-					0,
-					{ roots: [{ id, action: 'create' }] }
-				);
-			})
-		);
+		await write(harness, 'create', adminSubject, 'create', {
+			id,
+			title: 'Original',
+			controller_note: 'Private'
+		});
 
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('restricted-update'),
-					fieldWorker,
-					'assignments',
-					[{ id, title: 'Changed' }],
-					0,
-					{ roots: [{ id, action: 'update' }] }
-				);
-			})
-		);
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('restricted-declarative-update'),
-					fieldWorker,
-					'assignments',
-					[{ id, title: 'Changed through graph' }],
-					0,
-					{ roots: [{ id, action: 'update' }] }
-				);
-			})
-		);
+		await write(harness, 'restricted-update', fieldWorker, 'update', { id, title: 'Changed' });
+		await write(harness, 'restricted-declarative-update', fieldWorker, 'update', {
+			id,
+			title: 'Changed through graph'
+		});
 
 		const [record] = await harness.runtime.runPromise(
 			Effect.gen(function* () {
@@ -192,69 +156,42 @@ describe('authored policy field masks', () => {
 		);
 		expect(record).toMatchObject({
 			title: 'Changed through graph',
-			controller_note: 'injected by hook'
+			controller_note: 'injected by transform'
 		});
 	});
 
-	it('rejects forged create fields before hooks while allowing server-computed fields', async () => {
+	it('rejects forged create fields before the transform while allowing server-computed fields', async () => {
 		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					assignments: authoredHooks<MaskingSchema, 'assignments'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Owns the controller-only provenance field.',
-									handler: (context) =>
-										context.existing === undefined
-											? { title: String(context.input.title), source: 'server-computed' }
-											: context.input
-								}
-							}
-						}
-					})
-				}
-			}
+			authored: authoredWith((inputs, { existing }) =>
+				inputs.map((input, index) =>
+					existing[index] === undefined
+						? { title: String(input['title']), source: 'server-computed' }
+						: input
+				)
+			)
 		});
 
-		const forgedId = recordId('forged-create');
 		const forged = await harness.runtime.runPromiseExit(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('forged-create'),
-					fieldWorker,
-					'assignments',
-					[{ id: forgedId, title: 'Forged', source: 'caller-forged' }],
-					0,
-					{ roots: [{ id: forgedId, action: 'create' }] }
-				);
+				yield* (yield* Collections.Service).write(harness!.effectId('forged-create'), fieldWorker, [
+					{
+						collection: 'assignments',
+						action: 'create',
+						inputs: [{ title: 'Forged', source: 'caller-forged' }]
+					}
+				]);
 			})
 		);
 		const refusal = Option.getOrUndefined(Exit.findErrorOption(forged));
-		// The field grant is a PREPARE refusal, so the batch reports it under its prepare phase; the
-		// grant sentence itself is the unwrapped failure underneath.
-		expect(refusal).toBeInstanceOf(Collections.MutationPhaseFailure);
-		expect(refusal).toMatchObject({ phase: 'prepare' });
+		// The caller is judged on what it submitted, before the transform runs (RFC §6).
 		expect(unwrapMutationPhase(refusal)).toMatchObject({
 			action: 'create',
 			resource: 'assignments',
 			reason: 'create includes fields outside the matching policy grant'
 		});
+		expect(await harness.database.query('select id from assignments')).toEqual([]);
 
-		const allowedId = recordId('allowed-create');
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('allowed-create'),
-					fieldWorker,
-					'assignments',
-					[{ id: allowedId, title: 'Allowed' }],
-					0,
-					{ roots: [{ id: allowedId, action: 'create' }] }
-				);
-			})
-		);
+		await write(harness, 'allowed-create', fieldWorker, 'create', { title: 'Allowed' });
 		const rows = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).findMany(
@@ -266,7 +203,6 @@ describe('authored policy field masks', () => {
 		);
 		expect(rows).toEqual([
 			expect.objectContaining({
-				id: allowedId,
 				title: 'Allowed',
 				source: 'server-computed'
 			})

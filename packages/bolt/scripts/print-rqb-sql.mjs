@@ -212,17 +212,13 @@ const render = (label, collection, withSpec) => {
 	);
 };
 
-render(
-	'employments, with their time entries, each with its employment',
-	'employments',
-	{
-		employment_time_entries: {
-			columns: { work_date: true },
-			limit: 20,
-			with: { time_entry_employment: { columns: { code: true } } }
-		}
+render('employments, with their time entries, each with its employment', 'employments', {
+	employment_time_entries: {
+		columns: { work_date: true },
+		limit: 20,
+		with: { time_entry_employment: { columns: { code: true } } }
 	}
-);
+});
 
 render('payslip_sources, with both arms of its polymorphic reference hydrated', 'payslip_sources', {
 	source: true

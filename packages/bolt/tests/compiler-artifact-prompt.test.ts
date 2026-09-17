@@ -44,7 +44,7 @@ const artifactWithPrompt = (prompt: string): string =>
 			customTypeReferences: [],
 			capabilities: { skills: [], mcp: [] }
 		},
-		collectionHooks: [],
+		collectionFiles: [],
 		apps: [],
 		policies: [],
 		functions: [],
@@ -138,7 +138,7 @@ describe('the workspace system prompt', () => {
 					mcp: []
 				}
 			},
-			collectionHooks: [],
+			collectionFiles: [],
 			apps: [],
 			policies: [],
 			functions: [],

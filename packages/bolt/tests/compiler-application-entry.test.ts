@@ -34,7 +34,7 @@ describe('workspace application entry', () => {
 		expect(() =>
 			transform.call(
 				context,
-				'<script>function save() { return client.db.rows.mutate([]); }</script>',
+				'<script>function save() { return client.collection.rows.createMany([]); }</script>',
 				'/workspace/src/apps/+rows.svelte'
 			)
 		).toThrow(/save wraps/);

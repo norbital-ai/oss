@@ -29,7 +29,7 @@ export interface CollectionRecordDeletion<TRow extends object, E = Error> {
 	readonly getDisabledReason?: (selectedRows: readonly TRow[]) => string | null;
 	/**
 	 * Override the collection `delete` batch. Absent, the table submits one
-	 * `client.db[collection].delete(ids)` — same write path as mutate, not N single-row loops.
+	 * `client.collection[collection].deleteMany(ids)`, not N single-row loops.
 	 */
 	readonly run?: (context: CollectionPipelineContext<TRow>) => Effect.Effect<unknown, E>;
 }

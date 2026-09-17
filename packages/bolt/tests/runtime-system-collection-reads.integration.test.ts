@@ -9,13 +9,15 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
+import { describePolicy } from '../src/authoring/policy-introspection.js';
+import { approveBy } from '../src/authoring/approval-flow.js';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as AccessControl from '../src/runtime/access/access-control.js';
 import { decidePolicies } from '../src/runtime/access/access-control.js';
 import { systemSubject } from '../src/runtime/access/system-principal.js';
 import * as Identity from '../src/runtime/identity/identity.js';
 import { ADMIN_STATUS } from '../src/runtime/identity/identity.js';
-import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import {
@@ -78,22 +80,19 @@ const CONTRACTOR_TEAM = 'Field Operations Contractors';
 const MUTATION_SCHEMA_FINGERPRINT = 'sha256:system-collection-reads-fixture';
 
 /**
- * The approval the contractor's `create` grant carries, named after the team that may decide it.
+ * The approval the contractor's `create` grant routes to, named after the team that may decide it.
  *
  * `approvers` and `team.name` are the same string — that is the whole binding, and it is what
  * the approver leg of the read predicate resolves through. Written here rather than in a fixture
- * helper because the *name* is what both halves of every assertion below turn on.
+ * helper because the *name* is what both halves of every assertion below turn on. A job whose
+ * title says so routes past the controllers instead, which is the negative control below.
  */
-const jobApproval = {
-	id: '019f6f10-0001-7000-8000-000000000003',
-	steps: [
-		{
-			id: '019f6f10-0001-7000-8000-000000000103',
-			approvers: [CONTROLLER_TEAM]
-		}
-	],
-	superceded_by: []
-};
+const jobFlow = (context: unknown) =>
+	String(Reflect.get(Reflect.get(context as object, 'record') as object, 'title')).startsWith(
+		'Other'
+	)
+		? approveBy('Other Reviewers')
+		: approveBy(CONTROLLER_TEAM);
 
 /** The template's own shape: authored grants on authored collections, and nothing else. */
 const fieldOpsWorkspace = workspace({
@@ -134,17 +133,16 @@ const fieldOpsWorkspace = workspace({
 		/**
 		 * The party who raises an approval, and the reason there is a second policy here at all.
 		 *
-		 * `Approvals.gate` embeds the configuration carried by a grant *this subject's team holds*
+		 * The gate embeds the route resolved from a grant *this subject's team holds*
 		 * into the durable state, so an approval only ever names approvers because the requestor's own
 		 * policy said so. A fixture that raised one as the controller would prove nothing about the
 		 * two-sided rule — which is also why `jobs create` is owned here and not by the controller:
 		 * the gated create belongs to the party, and the controller is the side that decides it.
 		 */
-		policy({
-			name: 'field_ops_contractor',
-			effect: 'allow',
+		describePolicy('field_ops_contractor', {
+			description: 'The party who raises a job for the controllers to decide.',
 			capabilities: { apps: ['field_ops_contractor'] },
-			grants: [{ collection: 'jobs', action: 'create', approval: jobApproval }]
+			grants: { jobs: { mutate: { new: { approval: { flow: jobFlow, superceded_by: [] } } } } }
 		})
 	],
 	teams: {
@@ -160,6 +158,12 @@ const fieldOpsWorkspace = workspace({
 	requiredFacilities: [],
 	schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT
 });
+
+/** The declared write contract of `jobs`; the policy functions ride in from the definition. */
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: { jobs: { create: { input: { columns: { title: true, user_id: true } } } } }
+};
 
 /** A seeded non-admin in the controller team — `foo_suan_wood@bca.gov.sg`'s standing in the seed. */
 const seedController = async (runtime: BoltTestRuntime) => {
@@ -206,37 +210,34 @@ const contractorSubject: Identity.Subject = {
 	policies: []
 };
 
-const APPROVAL_EFFECT_ID = EffectId.make('approval-system-collection-read');
-const APPROVAL_ROOT = {
-	collection: 'jobs',
-	id: '019f6f10-0003-7000-8000-000000000001',
-	action: 'create'
-} as const;
-const REQUEST_ID = Approvals.approvalRequestId(APPROVAL_ROOT, APPROVAL_EFFECT_ID);
+/** The request the fixture write opened; set by `raiseApproval`. */
+let REQUEST_ID = '';
 
 /**
- * One approval, raised the only way approvals are ever raised.
+ * One approval, raised the only way approvals are ever raised: a policy-routed write.
  *
- * The approval gate is the sole owner of all three rows this suite reads — the `bolt_approvals`
+ * The write path is the sole owner of all three rows this suite reads — the `bolt_approvals`
  * state that carries the approver names, the `approval_request` projection, and the `requestor` row
  * that is the only record of who raised it. Seeding them by hand would let the fixture describe a
  * shape the runtime does not actually write, which is exactly the failure this predicate had to be
  * rewritten to avoid: `approval_request.steps` looks like it holds approvers and holds `[{step: n}]`.
  */
-const raiseApproval = (harness: BoltTestRuntime) =>
+const raiseJob = (harness: BoltTestRuntime, effectId: string, title: string) =>
 	harness.runtime.runPromise(
 		Effect.gen(function* () {
-			return yield* (yield* Approvals.Service).gate({
-				effectId: APPROVAL_EFFECT_ID,
-				subject: contractorSubject,
-				root: APPROVAL_ROOT,
-				storedGraph: { version: 1, ...APPROVAL_ROOT },
-				proposedValues: { title: 'Extra scaffolding' },
-				approval: jobApproval,
-				review: undefined
-			});
+			const commit = yield* (yield* Collections.Service).write(
+				EffectId.make(effectId),
+				contractorSubject,
+				[{ collection: 'jobs', action: 'create', inputs: [{ title }] }]
+			);
+			const requestId = commit.pendingApproval?.requestId;
+			if (requestId === undefined) throw new Error('the job create was not routed to approval');
+			return requestId;
 		})
 	);
+const raiseApproval = async (harness: BoltTestRuntime) => {
+	REQUEST_ID = await raiseJob(harness, 'approval-system-collection-read', 'Extra scaffolding');
+};
 
 /** The `id`s a subject actually gets back, which is where a narrowing shows and a grant does not. */
 const readIds = async (
@@ -306,7 +307,7 @@ const RUNTIME_OWNED = [
  */
 describe('reading runtime-owned collections as an ordinary member', () => {
 	it('serves every runtime-owned collection to a member holding only an authored policy', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedController(harness);
 
 		for (const name of RUNTIME_OWNED) {
@@ -328,7 +329,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	 * other authenticated user. Status does not bypass that policy or its row predicates.
 	 */
 	it('serves the explicitly granted system collections to an administrator', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedAdministrator(harness);
 
 		for (const name of RUNTIME_OWNED) {
@@ -339,7 +340,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 
 	/** The authored half, unchanged: what the member's own policy grants still reaches them. */
 	it('still serves the collection the member is authored a grant on', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedController(harness);
 
 		const outcome = await readAs(harness, 'controller-token', 'jobs');
@@ -354,7 +355,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	it.each(['user', 'team'])(
 		'masks the %s directory down to id and name for a member',
 		async (collectionName) => {
-			harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+			harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 			await seedController(harness);
 
 			const outcome = await readAs(harness, 'controller-token', collectionName);
@@ -398,7 +399,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 
 describe('notifications are live system collections scoped to their recipient', () => {
 	it('reads only the subject notifications and permits only their read flag to change', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedController(harness);
 		await seedBystander(harness);
 		const ownId = '00000000-0000-5000-8000-000000000001';
@@ -428,9 +429,9 @@ describe('notifications are live system collections scoped to their recipient', 
 			partitionKey: MUTATION_PARTITION_KEY,
 			schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT,
 			graph: {
-				action: 'mutate',
+				action: 'update',
 				collection: 'bolt_notifications',
-				rows: [{ action: 'update', values: { id, ...values } }]
+				inputs: [{ id, ...values }]
 			},
 			baseVersions: [
 				{ row: { collection: 'bolt_notifications', recordId: id }, rowVersion: baseVersion }
@@ -440,7 +441,7 @@ describe('notifications are live system collections scoped to their recipient', 
 		const markOwn = await harness.runtime.runPromise(
 			dispatchInvocation(
 				command(
-					'collections.mutate',
+					'collections.write',
 					'controller-token',
 					updateNotification('mark-own-notification-read', ownId, 1, { read: true })
 				)
@@ -454,7 +455,7 @@ describe('notifications are live system collections scoped to their recipient', 
 		const markOther = await harness.runtime.runPromise(
 			dispatchInvocation(
 				command(
-					'collections.mutate',
+					'collections.write',
 					'controller-token',
 					updateNotification('mark-other-notification-read', otherId, 1, { read: true })
 				)
@@ -467,7 +468,7 @@ describe('notifications are live system collections scoped to their recipient', 
 		const refusedField = await harness.runtime.runPromise(
 			dispatchInvocation(
 				command(
-					'collections.mutate',
+					'collections.write',
 					'controller-token',
 					updateNotification('rewrite-own-notification-payload', ownId, 2, {
 						payload: { text: 'Rewritten' }
@@ -507,7 +508,7 @@ describe('notifications are live system collections scoped to their recipient', 
  */
 describe('approval requests are scoped to their parties and approvers', () => {
 	it('shows a request to the party who raised it', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await raiseApproval(harness);
 
@@ -522,7 +523,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	 * `true`, by the collection being refused outright, or by there being nothing to find.
 	 */
 	it('hides it from a member who is neither a party nor an approver', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedBystander(harness);
 		await raiseApproval(harness);
@@ -532,7 +533,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	});
 
 	it('shows it to a member of the team named among its approvers', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedController(harness);
 		await raiseApproval(harness);
@@ -541,7 +542,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	});
 
 	it('uses an impersonated subject team instead of the actor persisted on the user row', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedBystander(harness);
 		await raiseApproval(harness);
@@ -573,33 +574,11 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	 * on the controller's team.
 	 */
 	it('does not show an approver a request their team is not named on', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedController(harness);
 		await raiseApproval(harness);
-		const unroutedEffectId = EffectId.make('approval-unrouted');
-		const unroutedRoot = {
-			collection: 'people',
-			id: '019f6f10-0003-7000-8000-000000000002',
-			action: 'create'
-		} as const;
-		const unroutedRequestId = Approvals.approvalRequestId(unroutedRoot, unroutedEffectId);
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).gate({
-					effectId: unroutedEffectId,
-					subject: contractorSubject,
-					root: unroutedRoot,
-					storedGraph: { version: 1, ...unroutedRoot },
-					approval: {
-						id: 'people:create',
-						steps: [{ id: 'people:create:stage:1', approvers: ['Other Reviewers'] }],
-						superceded_by: []
-					},
-					review: undefined
-				});
-			})
-		);
+		const unroutedRequestId = await raiseJob(harness, 'approval-unrouted', 'Other scaffolding');
 
 		expect(await readIds(harness, 'controller-token', 'approval_request')).toEqual([REQUEST_ID]);
 		expect((await readIds(harness, 'contractor-token', 'approval_request')).toSorted()).toEqual(
@@ -609,7 +588,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 
 	/** The join table follows the request, for both readings of "may read it". */
 	it('scopes the requestor join table by the same rule', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedController(harness);
 		await seedBystander(harness);
@@ -628,7 +607,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 
 	/** Administrators can discover every request they may supersede, without tenant-data grants. */
 	it('shows requests and their requestors to an administrator', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 		await seedAdministrator(harness);
 		await raiseApproval(harness);
@@ -649,7 +628,7 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	 * cannot survive the manifest round-trip as an unconditional grant.
 	 */
 	it('leaves no unconditional grant beside the narrowed ones', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
 		await seedContractor(harness);
 
 		for (const name of ['approval_request', 'requestor']) {

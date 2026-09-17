@@ -1497,7 +1497,9 @@ const projectionPlan = (
 	// ordered by `effective_range`, sat on "Reconnecting to live updates" with no sentence anywhere.
 	// Refusing here names the field, and a refusal is terminal for the client, so the page shows it.
 	if (enforceLive) {
-		const compound = order.find(({ field }) => fieldsOf(definition, collection)?.[field]?.type === 'json');
+		const compound = order.find(
+			({ field }) => fieldsOf(definition, collection)?.[field]?.type === 'json'
+		);
 		if (compound !== undefined) {
 			const declared = fieldsOf(definition, collection)?.[compound.field]?.customType ?? 'json';
 			return diagnostic(
@@ -1564,10 +1566,7 @@ const projectionPlan = (
 			if (
 				enforceLive &&
 				limit !== undefined &&
-				(!isNumber(limit) ||
-					!Number.isInteger(limit) ||
-					limit < 1 ||
-					limit > MAX_SYNC_LOADED_KEYS)
+				(!isNumber(limit) || !Number.isInteger(limit) || limit < 1 || limit > MAX_SYNC_LOADED_KEYS)
 			)
 				return diagnostic(
 					'unsupported-live-shape',
@@ -1696,7 +1695,9 @@ export const compileEffectiveQueryPlan = (
 	const requestedLimit = input.kind === 'findFirst' ? 1 : (input.limit ?? DEFAULT_LIVE_PREFIX);
 	if (
 		mode === 'live-prefix' &&
-		(!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_SYNC_LOADED_KEYS)
+		(!Number.isInteger(requestedLimit) ||
+			requestedLimit < 1 ||
+			requestedLimit > MAX_SYNC_LOADED_KEYS)
 	)
 		return diagnostic(
 			'unsupported-live-shape',

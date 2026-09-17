@@ -4,7 +4,13 @@ import { Option, Schema } from 'effect';
 import { LANGUAGE_HEALTH_PROFILE, type HealthProfile } from '../health-profile.js';
 import { collectSourceFiles, describeRoots, isTestPath, lineCounts } from './inventory.js';
 import type { LineCounts, RootDescription } from './inventory.js';
-import { moduleMappings, packageFor, resolveImport, stronglyConnected, testReach } from './graph.js';
+import {
+	moduleMappings,
+	packageFor,
+	resolveImport,
+	stronglyConnected,
+	testReach
+} from './graph.js';
 import type { PackageOwner } from './graph.js';
 import {
 	buildPillars,
@@ -156,10 +162,7 @@ function normalizeOptions(options: AssembleOptions): NormalizedOptions {
 	const overlapOnly = options.overlapOnly === true;
 	if (failOnRegression && options.baseline === undefined)
 		throw new Error('--fail-on-regression requires --baseline');
-	if (
-		overlapOnly &&
-		(receipts.length > 0 || options.baseline !== undefined || failOnRegression)
-	)
+	if (overlapOnly && (receipts.length > 0 || options.baseline !== undefined || failOnRegression))
 		throw new Error('--overlap-only does not accept receipts or baseline gates');
 	return {
 		roots,
@@ -255,20 +258,17 @@ export function assembleReport(options: AssembleOptions): AssembleResult {
 	}
 	const report = analyze(normalized.roots, normalized.receipts, normalized.healthProfile);
 	if (normalized.baseline)
-		report.comparison = compare(
-			report,
-			decodeBaseline(readFileSync(normalized.baseline, 'utf8'))
-		);
+		report.comparison = compare(report, decodeBaseline(readFileSync(normalized.baseline, 'utf8')));
 	report.verdict =
 		normalized.receipts.length === 0 ||
 		(report.quality?.coverage?.unscannedProductionFiles ?? 0) > 0 ||
 		(normalized.requireTypeAware && !(report.quality?.coverage?.tiers.typeAware ?? false))
 			? 'incomplete'
-			: ((report.quality?.totals.error ?? 0) + (report.quality?.totals.warning ?? 0) > 0
+			: (report.quality?.totals.error ?? 0) + (report.quality?.totals.warning ?? 0) > 0
 				? 'fail'
 				: normalized.failOnRegression && (report.comparison?.regressions.length ?? 0) > 0
 					? 'regression'
-					: 'pass');
+					: 'pass';
 	const json = `${JSON.stringify(report, null, 2)}\n`;
 	const brief = `${markdown(report as HealthReport)}\n`;
 	const { stdout, wrote } = publish(
@@ -438,9 +438,10 @@ function analyze(
 	let crossConceptEdges = 0;
 	const importLocalities = emptyLocality();
 	const byPath = new Map(records.map((record) => [record.path, record]));
-	const catalogues =
-		receiptPaths.length > 0 ? scannerCatalogues(receiptPaths, roots) : null;
-	const quality: WorkingQuality | null = catalogues ? staticFindings(catalogues, byPath, rootByPath) : null;
+	const catalogues = receiptPaths.length > 0 ? scannerCatalogues(receiptPaths, roots) : null;
+	const quality: WorkingQuality | null = catalogues
+		? staticFindings(catalogues, byPath, rootByPath)
+		: null;
 	if (quality && catalogues) {
 		const covered = new Set(
 			catalogues.flatMap(({ receipt, inventory }) =>
@@ -476,7 +477,9 @@ function analyze(
 		}
 	const cycles = stronglyConnected(productionSet, productionAdjacency);
 	const cyclicModules = new Set(cycles.flat()).size;
-	const fanOut = production.map((record) => (productionAdjacency.get(record.path) ?? new Set()).size);
+	const fanOut = production.map(
+		(record) => (productionAdjacency.get(record.path) ?? new Set()).size
+	);
 	const fanIn = production.map((record) => incoming.get(record.path) ?? 0);
 	const fanOutStats = distribution(fanOut);
 	const topHubCount = Math.max(1, Math.ceil(production.length * 0.1));
@@ -484,9 +487,9 @@ function analyze(
 		internalEdges === 0
 			? 0
 			: [...fanIn]
-						.sort((a, b) => b - a)
-						.slice(0, topHubCount)
-						.reduce((sum, value) => sum + value, 0) / internalEdges;
+					.sort((a, b) => b - a)
+					.slice(0, topHubCount)
+					.reduce((sum, value) => sum + value, 0) / internalEdges;
 	const coupling =
 		100 *
 		(0.4 * (crossConceptEdges / Math.max(internalEdges, 1)) +
@@ -641,7 +644,9 @@ function analyze(
 		.reduce((sum, record) => sum + record.lines.code, 0);
 	const qualityCode = quality
 		? production
-				.filter((record) => !(quality.coverage?.unscannedFiles.includes(record.displayPath) ?? false))
+				.filter(
+					(record) => !(quality.coverage?.unscannedFiles.includes(record.displayPath) ?? false)
+				)
 				.reduce((sum, record) => sum + record.lines.code, 0)
 		: 0;
 	if (quality && quality.coverage) quality.coverage.productionCodeLoc = qualityCode;

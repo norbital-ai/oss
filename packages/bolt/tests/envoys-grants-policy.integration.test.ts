@@ -120,9 +120,9 @@ describe('Envoy on a grants-only policy', () => {
 		};
 		expect(access.explain(principal, 'agent', 'field_ops_whatsapp').allowed).toBe(true);
 		expect(access.explain(principal, 'agent', 'web').allowed).toBe(false);
-		expect(access.explain({ ...principal, policies: [] }, 'agent', 'field_ops_whatsapp').allowed).toBe(
-			false
-		);
+		expect(
+			access.explain({ ...principal, policies: [] }, 'agent', 'field_ops_whatsapp').allowed
+		).toBe(false);
 
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		const received = await harness.runtime.runPromise(

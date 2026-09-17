@@ -32,10 +32,12 @@ import {
 	guardAuthoringOps,
 	makeAutomationApi,
 	makeAuthoringApi,
-	makeBoundAuthoringOps,
+	makeAuthoringOps,
 	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
 import { AI, Connector, Files, HostTools } from '#lib/runtime/facilities/services.js';
+import { readFileAsset } from '#lib/runtime/collections/file-assets.js';
+import { inferOp } from '#lib/runtime/inference.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -43,7 +45,8 @@ import { ADMIN_STATUS, Subject } from '#lib/runtime/identity/identity.js';
 import {
 	automationPrincipalId,
 	envoyPrincipalId,
-	SEED_PRINCIPAL_ID
+	SEED_PRINCIPAL_ID,
+	seedSubject
 } from '#lib/runtime/identity/static-identity.js';
 import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
@@ -284,7 +287,6 @@ const workspaceManifest = Effect.fn('Bolt.command.workspaceManifest')(function* 
 			...declared.get(collection.name),
 			name: collection.name,
 			history: collection.history,
-			hooks: [...(collection.hooks ?? [])],
 			...jsonObject({
 				description: collection.description,
 				icon: collection.icon,
@@ -356,25 +358,26 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const hostTools = yield* HostTools.Service;
 	const guard = Automations.stoppageGuard(automations, context.effectId, input.bolt_task_id);
 	const ops = guardAuthoringOps(
-		makeBoundAuthoringOps(
+		makeAuthoringOps(
+			{
+				allowedCollections: collections.authoringCollectionNames,
+				findMany: collections.findMany,
+				count: collections.count,
+				findNearest: collections.findNearest,
+				history: collections.history,
+				write: collections.write,
+				startAutomation: (childEffectId, nestedName, nestedInput, scope, options) =>
+					collections.runAutomation(childEffectId, nestedName, nestedInput, scope, options),
+				infer: inferOp(context.effectId, ai, {
+					effectId: context.effectId,
+					subject: runAs,
+					hostTools
+				}),
+				readFileAsset: (file) => readFileAsset(context.effectId, files, file)
+			},
 			context.effectId,
 			runAs,
-			collections,
-			ai,
-			files,
-			automations,
-			(childEffectId, nestedName, nestedInput, options) =>
-				collections.runAutomation(
-					childEffectId,
-					nestedName,
-					nestedInput,
-					{},
-					{
-						...options,
-						...(input.bolt_depth === undefined ? {} : { parentDepth: input.bolt_depth })
-					}
-				),
-			hostTools
+			{ name, args: input.args, depth: input.bolt_depth ?? 0 }
 		),
 		guard
 	);
@@ -870,6 +873,23 @@ const BINDINGS = [
 			Effect.map(collections.embedRecords(context.effectId), json)
 		)
 	),
+	/**
+	 * The seed loader of RFC seeding.md: a host materialises the fixture tree and invokes this
+	 * command once. It runs as the administrator, so policy and approval routing are bypassed by
+	 * authority while the transform, history, sync capture and change events stay real.
+	 */
+	binding('seed.apply', { Command: system('administrator seed plan') }, (context, input) =>
+		Effect.flatMap(Collections.Service, (collections) =>
+			Effect.map(
+				collections.seedApply(
+					context.effectId,
+					{ ...seedSubject(principal(context).tenantId), admin: true },
+					input.fixtures
+				),
+				json
+			)
+		)
+	),
 	binding(
 		'conversations.models',
 		{ Command: session('agent-authorized language model catalogue') },
@@ -956,13 +976,23 @@ const BINDINGS = [
 		(context, input) =>
 			Effect.flatMap(Collections.Service, (collections) =>
 				Effect.map(
-					collections.history(context.effectId, principal(context), input.collection, input.id),
+					collections.history(
+						context.effectId,
+						principal(context),
+						input.collection,
+						input.id,
+						input.at
+					),
 					json
 				)
 			)
 	),
+	/**
+	 * One browser write (RFC §4.2): the declared inputs under the idempotent push envelope, judged
+	 * on their own shape before the transform runs; the committed settlement returns to the caller.
+	 */
 	binding(
-		'collections.mutate',
+		'collections.write',
 		{ Command: session('collection action, row, and field policy') },
 		(context, input) =>
 			Effect.flatMap(Collections.Service, (collections) =>
@@ -1163,12 +1193,7 @@ const BINDINGS = [
 		(context, input) =>
 			Effect.flatMap(Envoys.Service, (envoys) =>
 				Effect.map(
-					envoys.drain(
-						context.effectId,
-						input.envoy,
-						input.conversationId,
-						context.scheduledTask
-					),
+					envoys.drain(context.effectId, input.envoy, input.conversationId, context.scheduledTask),
 					json
 				)
 			)

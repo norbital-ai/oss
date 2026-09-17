@@ -1,7 +1,7 @@
 import type {
-	CollectionMutationGraph,
+	CollectionWriteGraph,
 	CollectionMutationIdempotencyKey,
-	CollectionMutateRequest,
+	CollectionMutationPush,
 	StoredRecord,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
@@ -24,8 +24,8 @@ const writeId = (value: string): CollectionMutationIdempotencyKey =>
 
 const mutationRequest = (
 	id: CollectionMutationIdempotencyKey,
-	graph: CollectionMutationGraph
-): CollectionMutateRequest => ({
+	graph: CollectionWriteGraph
+): CollectionMutationPush => ({
 	protocolVersion: 2,
 	idempotencyKey: id,
 	issuedAtEpochMs: 1,
@@ -65,16 +65,16 @@ describe('live query identity and projection', () => {
 			[
 				{
 					graph: {
-						action: 'mutate',
+						action: 'update',
 						collection: 'tasks',
-						rows: [{ action: 'update', values: { id: 'b', title: 'changed' } }]
+						inputs: [{ id: 'b', title: 'changed' }]
 					}
 				},
 				{
 					graph: {
-						action: 'mutate',
+						action: 'create',
 						collection: 'tasks',
-						rows: [{ action: 'create', values: { id: 'outside', title: 'pending create' } }]
+						inputs: [{ id: 'outside', title: 'pending create' }]
 					}
 				}
 			],
@@ -152,9 +152,9 @@ describe('Sync v2 prefix Machine', () => {
 			kind: 'writeEnqueued',
 			at: 2,
 			request: mutationRequest(id, {
-				action: 'mutate',
+				action: 'update',
 				collection: 'tasks',
-				rows: [{ action: 'update', values: { id: 'a', title: 'new' } }]
+				inputs: [{ id: 'a', title: 'new' }]
 			})
 		});
 
@@ -352,7 +352,7 @@ describe('Sync v2 prefix Machine', () => {
 		[state] = step(state, {
 			kind: 'writeEnqueued',
 			at: 10,
-			request: mutationRequest(id, { action: 'delete', collection: 'tasks', ids: ['a'] })
+			request: mutationRequest(id, { action: 'delete', collection: 'tasks', inputs: [{ id: 'a' }] })
 		});
 		const [, effects] = step(state, { kind: 'tick', now: 10 + STALE_WRITE_MS });
 

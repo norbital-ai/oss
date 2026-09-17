@@ -19,7 +19,13 @@ import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import { jsonRecord } from './manifest.js';
 import { defineRule, type Examples, type Matcher } from './pattern.js';
-import { PRINCIPLE_ORDER, type Confidence, type Principle, type Rule, type Severity } from './rules.js';
+import {
+	PRINCIPLE_ORDER,
+	type Confidence,
+	type Principle,
+	type Rule,
+	type Severity
+} from './rules.js';
 
 type LoadedPatterns = Readonly<{
 	/** Rules ready to feed runRules() alongside pack/authored rules. */
@@ -53,9 +59,7 @@ const SKIPPED =
 /** Authored doctor extensions live here; the rest of `.norbital` is generated output. */
 function isDoctorConfigTree(local: string): boolean {
 	return (
-		local === '.norbital' ||
-		local === '.norbital/config' ||
-		local.startsWith('.norbital/config/')
+		local === '.norbital' || local === '.norbital/config' || local.startsWith('.norbital/config/')
 	);
 }
 
@@ -82,11 +86,7 @@ function readString(file: string, field: string, value: unknown): string {
 	return value;
 }
 
-function readStringArray(
-	file: string,
-	field: string,
-	value: unknown
-): ReadonlyArray<string> {
+function readStringArray(file: string, field: string, value: unknown): ReadonlyArray<string> {
 	if (!isStringArray(value) || value.length === 0)
 		fail(file, `"${field}" must be a non-empty array of strings`);
 	return value as ReadonlyArray<string>;
@@ -122,9 +122,13 @@ function patternToRegExp(pattern: string): RegExp {
 
 /** One directory read through Effect: the walk owns its failure message. */
 function readDirectory(directory: string): ReadonlyArray<Dirent> {
-	const read = Effect.runSync(Effect.result(Effect.try(() => readdirSync(directory, { withFileTypes: true }))));
+	const read = Effect.runSync(
+		Effect.result(Effect.try(() => readdirSync(directory, { withFileTypes: true })))
+	);
 	return Result.getOrElse(read, (error) => {
-		throw new Error(`norbital-doctor: cannot walk ${directory} for rule files: ${getErrorMessage(error)}`);
+		throw new Error(
+			`norbital-doctor: cannot walk ${directory} for rule files: ${getErrorMessage(error)}`
+		);
 	});
 }
 
@@ -210,7 +214,8 @@ function readExamples(file: string, value: unknown): Examples {
 		const files =
 			fixture === undefined
 				? {}
-				: (jsonRecord(fixture) ?? fail(file, '"examples.fixture" must be a mapping of path to content'));
+				: (jsonRecord(fixture) ??
+					fail(file, '"examples.fixture" must be a mapping of path to content'));
 		for (const [path, content] of Object.entries(files))
 			if (!isString(content))
 				fail(file, `"examples.fixture.${path}" must be file content as a string`);
@@ -233,7 +238,9 @@ function loadFile(
 ): void {
 	let document: unknown;
 	{
-		const read = Effect.runSync(Effect.result(Effect.try(() => parseYaml(readFileSync(absolute, 'utf8')))));
+		const read = Effect.runSync(
+			Effect.result(Effect.try(() => parseYaml(readFileSync(absolute, 'utf8'))))
+		);
 		Result.match(read, {
 			onFailure: (error) => fail(file, `invalid YAML: ${getErrorMessage(error)}`),
 			onSuccess: (parsed) => {
@@ -243,7 +250,9 @@ function loadFile(
 	}
 	// The YAML document is decoded at its boundary: one mapping of fields, or the file is not a
 	// rule file at all.
-	const yaml = jsonRecord(document) ?? fail(file, 'expected one rule per file, written as a mapping of fields');
+	const yaml =
+		jsonRecord(document) ??
+		fail(file, 'expected one rule per file, written as a mapping of fields');
 	for (const field of Object.keys(yaml))
 		if (!FIELDS.includes(field))
 			fail(file, `unknown field "${field}"; known fields are ${FIELDS.join(', ')}`);
@@ -263,12 +272,14 @@ function loadFile(
 	const principles = readPrinciples(file, required(file, yaml, 'principles'));
 
 	if (yaml.confidence !== undefined && yaml.confidence !== 'high' && yaml.confidence !== 'medium')
-		fail(file, `"confidence" must be "high" or "medium", received ${JSON.stringify(yaml.confidence)}`);
+		fail(
+			file,
+			`"confidence" must be "high" or "medium", received ${JSON.stringify(yaml.confidence)}`
+		);
 	const confidence = yaml.confidence as Confidence | undefined;
 
 	if (yaml.rule === undefined) fail(file, '"rule" is required');
-	if (!isMatcherValue(yaml.rule))
-		fail(file, '"rule" must be a pattern string or a matcher object');
+	if (!isMatcherValue(yaml.rule)) fail(file, '"rule" must be a pattern string or a matcher object');
 
 	const common = {
 		id,

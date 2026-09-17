@@ -35,7 +35,7 @@ const artifactWithOneTool = (): string =>
 			customTypeReferences: [],
 			capabilities: { skills: [], mcp: [] }
 		},
-		collectionHooks: [],
+		collectionFiles: [],
 		apps: [],
 		policies: [],
 		functions: [],

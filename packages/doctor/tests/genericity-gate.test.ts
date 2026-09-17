@@ -4,7 +4,15 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	cpSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -91,7 +99,9 @@ test('genericity gate: no-framework fixture yields a complete receipt and zero f
 		services: ReadonlyArray<unknown>;
 		cycles: ReadonlyArray<unknown>;
 		colocation: Record<string, unknown>;
-		quality: { coverage?: { tiers: { syntactic: boolean; graph: boolean; typeAware: boolean } } } | null;
+		quality: {
+			coverage?: { tiers: { syntactic: boolean; graph: boolean; typeAware: boolean } };
+		} | null;
 		verdict?: string;
 	};
 	assert.ok(report.totals.files >= 2);
@@ -135,6 +145,8 @@ test('genericity gate: no-framework fixture yields a complete receipt and zero f
 	]
 		.join('\n')
 		.replace(/\.norbital\/diagnosis[^\s"]*/g, '');
-	const hits = [...scanned.matchAll(new RegExp(PRODUCT.source, 'gi'))].map((match) => match[0] ?? '');
+	const hits = [...scanned.matchAll(new RegExp(PRODUCT.source, 'gi'))].map(
+		(match) => match[0] ?? ''
+	);
 	assert.deepEqual(hits, [], `product vocabulary in output: ${hits.join(', ')}`);
 });

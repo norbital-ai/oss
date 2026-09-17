@@ -170,6 +170,9 @@
 	const operations = $derived(
 		client.db[collection] as unknown as CollectionOperations<TableCollection> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row override; the client key remains constrained by TName.
 	);
+	// Batch deletion and the create action ride the declared write surface; absent, both are off.
+	const writes = $derived(client.collection[collection]);
+	const writePending = $derived((writes?.pending ?? 0) > 0);
 	const resolvedDeletion = $derived(
 		deletion == null
 			? undefined
@@ -179,7 +182,7 @@
 						deletion.run ??
 						(({ selectedRows }) =>
 							collectionDeleteBatch(
-								operations,
+								writes,
 								selectedRows.flatMap((row) => {
 									const id = Reflect.get(row, 'id');
 									return isString(id) && id.length > 0 ? [id] : [];
@@ -364,7 +367,10 @@
 		)
 	);
 
-	const createEnabled = $derived(features.create !== false);
+	// A create action needs a declared create input; without one there is no form to open.
+	const createEnabled = $derived(
+		features.create !== false && definition.write?.create !== undefined
+	);
 	const operationsEnabled = $derived(
 		collectionOperationsAvailable({
 			exportCount: exportPipelines.length,
@@ -642,7 +648,7 @@
 			label={createLabel}
 			icon="lucide:plus"
 			variant="default"
-			pending={operations.pending > 0}
+			pending={writePending}
 			unavailable={disabled ? t('table.viewDisabled') : undefined}
 			onRun={() => {
 				createOpen = true;
@@ -680,7 +686,7 @@
 					integrations,
 					deletion: resolvedDeletion,
 					selectedRows: selectedRecords,
-					disabled: operations.pending > 0
+					disabled: writePending
 				}
 			: undefined}
 		actions={toolbarActions}

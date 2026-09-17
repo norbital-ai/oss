@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { asRecord, mutationResolution, pageOf, requireAccepted, rowsOf } from '../src/guest-http.ts';
+import {
+	asRecord,
+	mutationResolution,
+	pageOf,
+	requireAccepted,
+	rowsOf
+} from '../src/guest-http.ts';
 
 test('asRecord refuses arrays and null', () => {
 	assert.deepEqual(asRecord({ id: '1' }, 'row'), { id: '1' });

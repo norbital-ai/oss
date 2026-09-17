@@ -717,12 +717,11 @@ const CustomTypeAuthoring = {
 			throw new Error(`Custom type name "${definition.name}" must be lower_snake_case.`);
 		if (definition.description.trim() === '')
 			throw new Error(`Custom type "${definition.name}" requires a non-empty description.`);
-		const schema =
-			Predicate.isFunction(definition.schema)
-				? definition.schema
-				: Schema.toStandardSchemaV1(definition.schema, {
-						parseOptions: { onExcessProperty: 'error' }
-					});
+		const schema = Predicate.isFunction(definition.schema)
+			? definition.schema
+			: Schema.toStandardSchemaV1(definition.schema, {
+					parseOptions: { onExcessProperty: 'error' }
+				});
 		return Object.freeze({ ...definition, schema });
 	},
 	cascade: <T extends object>(relationship: T): T => {

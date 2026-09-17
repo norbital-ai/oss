@@ -22,7 +22,7 @@ import { createSyncHttpDriver } from './sync/http-driver.js';
 import {
 	mutationSettlementOf,
 	pushFailureOutcome,
-	syncOutcomeFromMutateCommand
+	syncOutcomeFromWriteCommand
 } from './mutation-settlement.js';
 import type { ClientState } from './sync/machine.js';
 import { workspaceSession } from './session.js';
@@ -47,7 +47,7 @@ export {
 
 /**
  * The promise side of the write path. Every observable write phase stays in the Machine; these
- * resolvers only wake the `mutate()` caller when the Machine deletes a settled write on an outcome.
+ * resolvers only wake the `client.collection.<name>.*` caller when the Machine deletes a settled write on an outcome.
  */
 const createMutationSettlements = (machine: () => SyncClient): MutationSettlements => {
 	const waiters = new Map<string, Array<(settlement: MutationSettlement) => void>>();
@@ -154,22 +154,22 @@ export const createBrowserWorkspaceRuntime = (
 			authorization: () => `Bearer ${workspaceSession().credential}`,
 			push: async ({ connectionId, ...request }, signal) => {
 				try {
-					const value = await session.transport.command('collections.mutate', request, signal, {
+					const value = await session.transport.command('collections.write', request, signal, {
 						[SYNC_CONNECTION_HEADER]: connectionId
 					});
-					const outcome = syncOutcomeFromMutateCommand(
+					const outcome = syncOutcomeFromWriteCommand(
 						request.idempotencyKey,
 						value,
 						request.schemaFingerprint
 					);
-					if (outcome !== null) acceptSettlements([outcome]);
+					if (outcome !== null) machine.answer(outcome);
 				} catch (cause) {
 					const outcome = pushFailureOutcome(
 						request.idempotencyKey,
 						cause,
 						request.schemaFingerprint
 					);
-					if (outcome !== null) acceptSettlements([outcome]);
+					if (outcome !== null) machine.answer(outcome);
 					// A probe answered "still running" is the expected answer, not a fault to report.
 					if (typeof cause === 'object' && cause !== null && Reflect.get(cause, 'status') === 425)
 						return;

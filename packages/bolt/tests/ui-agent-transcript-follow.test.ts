@@ -81,7 +81,10 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 	it('changes its signature for every arrival a reader would want to see', () => {
 		const rows = (extra: ReadonlyArray<Parameters<typeof canonicalAgentRows>[0][number]>) =>
 			projectConversationMessages(
-				canonicalAgentRows([{ conversationId, message: { role: 'user', content: 'Count them' } }, ...extra])
+				canonicalAgentRows([
+					{ conversationId, message: { role: 'user', content: 'Count them' } },
+					...extra
+				])
 			);
 		const empty = transcriptTailSignature([], false);
 		const userOnly = transcriptTailSignature(rows([]), false);
@@ -108,7 +111,10 @@ describe('AGENT-UI5 the transcript follows its tail', () => {
 		);
 		const settled = transcriptTailSignature(
 			rows([
-				{ conversationId, message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty-nine' }] } }
+				{
+					conversationId,
+					message: { role: 'assistant', content: [{ type: 'text', text: 'Fifty-nine' }] }
+				}
 			]),
 			false
 		);

@@ -19,6 +19,7 @@ import {
 	collection,
 	type CollectionCatalogEntry,
 	type CompiledAuthoring,
+	type CompiledCollectionWrite,
 	type CompiledTenantCapabilities,
 	McpRegistrationDefinition,
 	type RelationDefinition,
@@ -26,8 +27,10 @@ import {
 } from '../authoring/workspace-schema.js';
 import { platformCustomTypes } from '../authoring/models-schema.js';
 import { SYSTEM_COLLECTION_MODELS } from '../authoring/system-models.js';
+import { SYSTEM_COLLECTION_WRITES } from '../runtime/schema/system-collections.js';
 import {
 	collectionCatalogEntry,
+	compileCollectionWrite,
 	compileModel,
 	compileWorkspaceAuthoring
 } from '../authoring/model-introspection.js';
@@ -303,9 +306,13 @@ const resolveMutationRelation = (
 };
 
 export const systemCollectionCatalog = (): ReadonlyArray<CollectionCatalogEntry> =>
-	Object.entries(SYSTEM_COLLECTION_MODELS).map(([name, declaration]) =>
-		collectionCatalogEntry(compileModel(collection({ name, fields: {} }), declaration), [])
-	);
+	Object.entries(SYSTEM_COLLECTION_MODELS).map(([name, declaration]) => {
+		const write = SYSTEM_COLLECTION_WRITES[name];
+		return {
+			...collectionCatalogEntry(compileModel(collection({ name, fields: {} }), declaration), []),
+			...(write === undefined ? {} : { write })
+		};
+	});
 
 type TenantReleaseAssets = TenantRelease['assets'];
 
@@ -317,7 +324,14 @@ const decodeServerAssetDeclaration = Schema.decodeUnknownEffect(
 type RenderArtifactInput = Readonly<{
 	readonly metadata: PackageMetadata;
 	readonly compiledAuthoring: CompiledAuthoring;
-	readonly collectionHooks: ReadonlyArray<{
+	/**
+	 * The `+collection.ts` modules, imported live into the artifact.
+	 *
+	 * The serializable half of each declaration already rides on `compiledAuthoring.collections`;
+	 * this list exists so the artifact can carry the module itself — its transform and its
+	 * notification builders — under `authoredRuntime.collections`.
+	 */
+	readonly collectionFiles: ReadonlyArray<{
 		readonly name: string;
 		readonly path: string;
 	}>;
@@ -462,7 +476,7 @@ class WorkspaceCompiler {
 	};
 
 	static readonly renderCollectionCatalogDeclaration = (): string =>
-		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly array?: boolean; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string>; readonly currencies?: ReadonlyArray<string>; readonly precision?: 'day' | 'minute'; readonly mimeTypes?: ReadonlyArray<string>; readonly relation?: { readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many' } }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true; readonly setNull?: true; readonly deferrable?: true }>;\n\treadonly inputColumns?: ReadonlyArray<string>;\n}>>;\nexport declare const publicCollectionNames: ReadonlyArray<string>;\n`;
+		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly array?: boolean; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string>; readonly currencies?: ReadonlyArray<string>; readonly precision?: 'day' | 'minute'; readonly mimeTypes?: ReadonlyArray<string>; readonly relation?: { readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many' } }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true; readonly setNull?: true; readonly deferrable?: true }>;\n\treadonly write?: import('@norbital-ai/std/collection').CollectionWriteContract;\n}>>;\nexport declare const publicCollectionNames: ReadonlyArray<string>;\n`;
 
 	static readonly renderRelationTypes = (relations: ReadonlyArray<RelationDefinition>): string => {
 		const byCollection = new Map<string, Array<string>>();
@@ -828,21 +842,23 @@ export const renderWorkspaceTypes = (relations: ReadonlyArray<RelationDefinition
 	`import type { Api as AuthoringApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations };\nexport type Api = AuthoringApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n`;
 
 export const renderCollectionTypes = (name: string): string =>
-	`import type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+	`import type { CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { CollectionClientInput } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = CollectionClientInput<${JSON.stringify(name)}, 'create'>;\nexport type UpdateInput = CollectionClientInput<${JSON.stringify(name)}, 'update'>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
 export const renderWorkspaceAuthoring = (): string =>
-	`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceInputs } from '../generated/inputs.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName; readonly inputs: WorkspaceInputs } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
+	`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceCollections } from '../generated/declared-collections.js';\nimport type { Models } from '../generated/models.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly models: Models; readonly collections: WorkspaceCollections; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
 
-/** Declared write shapes, one `typeof import` per hooks module (`never` when none is declared). */
-const renderInputsDeclaration = (hookFiles: ReadonlyArray<string>, root: string): string => {
-	const entries = hookFiles
+/** One `typeof import` per `+collection.ts`: the declarations every write surface is typed from. */
+const renderCollectionsDeclaration = (
+	collectionFiles: ReadonlyArray<string>,
+	root: string
+): string => {
+	const entries = collectionFiles
 		.filter((path) => WorkspaceCompiler.posix(path).includes('/collections/'))
 		.map(
 			(path) =>
-				`\treadonly ${JSON.stringify(basename(dirname(path)))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default extends { readonly input: infer Declared } ? Declared : never;`
-		)
-		.join('\n');
-	return `export type WorkspaceInputs = {\n${entries}\n};\n`;
+				`\treadonly ${JSON.stringify(basename(dirname(path)))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
+		);
+	return `export type WorkspaceCollections = {\n${entries.join('\n')}\n};\n`;
 };
 
 export const renderClientDeclaration = (
@@ -857,13 +873,13 @@ export const renderClientDeclaration = (
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-	return `import type { CollectionRegistryFor, InvokeClientApi, PublicPlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { RemoteQuery } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype AutomationRegistry = {\n${entries(automations)}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema>;\ntype PlatformCollections = CollectionRegistryFor<PublicPlatformSchema>;\ntype Collections = TenantCollections & PlatformCollections;\ntype BaseClient = CollectionClient<Collections>;\ntype PublicCollectionName = keyof Collections & string;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: Omit<CollectionClient<PlatformCollections>['db'][N], 'mutate' | 'pending'> };\ntype PublicRecords = { readonly findMany: (collectionName: PublicCollectionName, query?: Parameters<BaseClient['records']['findMany']>[1]) => ReturnType<BaseClient['records']['findMany']> };\ntype PublicHistory = { readonly findMany: (collectionName: PublicCollectionName, recordId: string, limit?: number) => ReturnType<NonNullable<BaseClient['history']>['findMany']> };\ntype Invoke = {\n${entries(functions)}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<BaseClient, 'db' | 'records' | 'history'> & { readonly db: TenantDatabase & PlatformDatabase; readonly records: PublicRecords; readonly history?: PublicHistory; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke>; readonly pending: { readonly findMany: (collectionName: PublicCollectionName, query?: Pick<NonNullable<Parameters<BaseClient['records']['findMany']>[1]>, 'where' | 'limit'>) => RemoteQuery<ReadonlyArray<Readonly<Record<string, unknown>>>> } };\nexport declare const client: Client;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRenderer>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string; readonly kiosk?: boolean }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
+	return `import type { CollectionRegistryFor, InvokeClientApi, PublicPlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { WorkspaceCollections as DeclaredCollections } from './declared-collections.js';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype AutomationRegistry = {\n${entries(automations)}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema>;\ntype PlatformCollections = CollectionRegistryFor<PublicPlatformSchema>;\ntype Collections = TenantCollections & PlatformCollections;\ntype BaseClient = CollectionClient<Collections>;\ntype PublicCollectionName = keyof Collections & string;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype DeclaredName = keyof DeclaredCollections & keyof TenantCollections;\ntype TenantWrites = { readonly [N in DeclaredName]: CollectionClient<TenantCollections>['collection'][N] };\ntype TenantHistory = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['collection_history'][N] };\ntype PublicRecords = { readonly findMany: (collectionName: PublicCollectionName, query?: Parameters<BaseClient['records']['findMany']>[1]) => ReturnType<BaseClient['records']['findMany']> };\ntype Invoke = {\n${entries(functions)}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type Client = Omit<BaseClient, 'db' | 'collection' | 'collection_history' | 'records'> & { readonly db: TenantDatabase & PlatformDatabase; readonly collection: TenantWrites; readonly collection_history: TenantHistory; readonly records: PublicRecords; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke> };\nexport declare const client: Client;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRenderer>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string; readonly kiosk?: boolean }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 };
 
 const renderArtifactImports = (imports: ReadonlyArray<string>): string =>
 	[
 		"import { buildManifest, makeBundle } from '@norbital-ai/bolt/runtime';",
-		"import { describeEnvoy, describeHooks, describeIntegrations, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';",
+		"import { describeEnvoy, describeIntegrations, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';",
 		...imports
 	]
 		.filter((line) => line !== '')
@@ -871,7 +887,6 @@ const renderArtifactImports = (imports: ReadonlyArray<string>): string =>
 
 const renderCompiledDeclarations = (input: {
 	readonly policyEntries: string;
-	readonly hookEntries: string;
 	readonly customTypeEntries: string;
 	readonly envoyEntries: string;
 	readonly pipelineEntries: string;
@@ -883,7 +898,6 @@ const renderCompiledDeclarations = (input: {
 	readonly teamsEntry: string;
 }): string => `const authoredPolicies = {${input.policyEntries}};
 const policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));
-const declaredHooks = {${input.hookEntries}};
 const declaredCustomTypes = { ...platformCustomTypes, ${input.customTypeEntries} };
 const declaredEnvoys = {${input.envoyEntries}};
 const declaredPipelines = {${input.pipelineEntries}};
@@ -891,10 +905,7 @@ const declaredIntegrationModules = {${input.integrationEntries}};
 const describedIntegrations = describeIntegrations(declaredIntegrationModules);
 const declaredAutomations = Object.fromEntries([${input.automationEntries}].map((automation) => [automation.name, automation]));
 const declaredWorkspace = ${JSON.stringify(input.workspace, null, 2)};
-const collections = declaredWorkspace.collections.map((collection) => {
-	const hooks = describeHooks(declaredHooks[collection.name]);
-	return hooks.length === 0 ? collection : { ...collection, hooks };
-});
+const collections = declaredWorkspace.collections;
 const envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));
 const automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));
 const workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${input.environmentEntry}${input.rateLimitEntry}${input.teamsEntry} };`;
@@ -907,10 +918,15 @@ const renderArtifactManifest = (input: {
 const serverAssets = ${JSON.stringify(input.assets.server)};
 const manifestValue = { ...buildManifest(workspace, { artifactId: ${JSON.stringify(`${input.metadata.name}:local`)} }), requiredFacilities: ${JSON.stringify(input.facilities)}, browserAssets, serverAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };`;
 
-const renderArtifactHandlers = (remoteEntries: string, toolEntries: string): string =>
+const renderArtifactHandlers = (
+	remoteEntries: string,
+	toolEntries: string,
+	collectionEntries: string
+): string =>
 	`const remoteHandlers = {\n\t${remoteEntries}\n};
 const toolHandlers = {\n\t${toolEntries}\n};
-const authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };`;
+const declaredCollections = {${collectionEntries}};
+const authoredRuntime = { collections: declaredCollections, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };`;
 
 const renderArtifactExports =
 	(): string => `const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);
@@ -925,7 +941,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 	const {
 		metadata,
 		compiledAuthoring,
-		collectionHooks,
+		collectionFiles,
 		apps,
 		policies,
 		functions,
@@ -988,8 +1004,8 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		automationSourcePaths: Object.fromEntries(
 			automationFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
 		),
-		hookSourcePaths: Object.fromEntries(
-			collectionHooks.map(({ name, path }) => [name, relativeSourcePath(path)])
+		collectionSourcePaths: Object.fromEntries(
+			collectionFiles.map(({ name, path }) => [name, relativeSourcePath(path)])
 		),
 		pipelineSourcePaths: Object.fromEntries(
 			pipelineFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
@@ -1037,14 +1053,14 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		schemaFingerprint,
 		manifestProjection
 	};
-	const hookImports = collectionHooks
+	const collectionImports = collectionFiles
 		.map(
 			(collection, index) =>
-				`import hooks${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, collection.path))};`
+				`import collection${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, collection.path))};`
 		)
 		.join('\n');
-	const hookEntriesByCollection = collectionHooks
-		.map((collection, index) => `${JSON.stringify(collection.name)}: hooks${index}`)
+	const collectionEntriesByCollection = collectionFiles
+		.map((collection, index) => `${JSON.stringify(collection.name)}: collection${index}`)
 		.join(', ');
 	const policyImports = policies
 		.map(
@@ -1149,7 +1165,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		.join(',\n\t');
 	return [
 		renderArtifactImports([
-			hookImports,
+			collectionImports,
 			policyImports,
 			functionImports,
 			toolImports,
@@ -1164,7 +1180,6 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		]),
 		renderCompiledDeclarations({
 			policyEntries,
-			hookEntries: hookEntriesByCollection,
 			customTypeEntries,
 			envoyEntries,
 			pipelineEntries: pipelineEntriesByCollection,
@@ -1176,7 +1191,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			teamsEntry
 		}),
 		renderArtifactManifest({ metadata, facilities: manifestFacilities, assets: assetIndex }),
-		renderArtifactHandlers(functionEntries, toolEntries),
+		renderArtifactHandlers(functionEntries, toolEntries, collectionEntriesByCollection),
 		renderArtifactExports()
 	].join('\n');
 };
@@ -1491,7 +1506,18 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		const teamsFile = files.find(
 			(path) => basename(path) === '+teams.ts' && inDirectory(path, 'access')
 		);
-		const hookFiles = files.filter((path) => basename(path) === '+hooks.ts').sort();
+		const collectionFiles = files.filter((path) => basename(path) === '+collection.ts').sort();
+		const modelDirectories = new Set(models.map((path) => dirname(path)));
+		const orphans = collectionFiles
+			.filter((path) => !modelDirectories.has(dirname(path)))
+			.map((path) => compiler.posix(relative(root, path)));
+		if (orphans.length > 0) {
+			return yield* Effect.fail(
+				new Error(
+					`Bolt sync found ${orphans.length === 1 ? 'a collection declaration' : `${orphans.length} collection declarations`} with no model:\n  - ${orphans.join('\n  - ')}\n\nA +collection.ts writes the +model.ts beside it, so the two live in one directory. Add the missing model or delete the declaration.`
+				)
+			);
+		}
 		const pipelineFiles = files.filter((path) => basename(path) === '+pipelines.ts').sort();
 		const integrationFiles = files
 			.filter(
@@ -1520,7 +1546,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			...appFiles,
 			...policyFiles,
 			...functionFiles,
-			...hookFiles,
+			...collectionFiles,
 			...pipelineFiles,
 			...integrationFiles,
 			...representationFiles,
@@ -1552,6 +1578,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 						'',
 						'A "+" prefix means the compiler reads this file, so one it cannot place is a promise the tree does not keep. Every authored path is src/<kind>/+<name>.<ext>:',
 						'  a table                       collections/<name>/+model.ts',
+						'  a collection                  collections/<name>/+collection.ts',
 						'  a field type                  datatypes/+<name>.ts',
 						'  a permission                  access/policies/+<name>.ts',
 						'  a team                        access/+teams.ts',
@@ -1594,7 +1621,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			policies,
 			functionFiles,
 			functions,
-			hookFiles,
+			collectionFiles,
 			integrationFiles,
 			representationFiles,
 			customRendererFiles,
@@ -1618,99 +1645,6 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 	});
 };
 
-/**
- * The columns a hooks file's declared `input` names, read off the source.
- *
- * Two grammars declare inputs and both are read here, syntactically: the projection form
- * `input: schema('<collection>', { columns: { … } })`, where only the `true` members are the
- * contract, and the plain struct form — an inline `Schema.Struct({ … })` or a same-file `const`
- * holding one, where every member is a column. A third form is deliberately unread: importing
- * the module would drag the whole hooks chain (server-typed, sometimes host-coupled) into the
- * sync process for one key set. Anything the extractor cannot see yields `undefined`, which
- * every consumer reads as "the whole collection is writable" — the same fallback the runtime
- * decode uses, so under-reading is safe and the declaration is still authoritative at run time.
- */
-export const declaredHookInputColumns = (source: string): readonly string[] | undefined => {
-	const sourceFile = ts.createSourceFile('+hooks.ts', source, ts.ScriptTarget.Latest, true);
-	const structKeys = (literal: ts.Expression): readonly string[] | undefined =>
-		ts.isObjectLiteralExpression(literal)
-			? literal.properties.flatMap((property) =>
-					ts.isPropertyAssignment(property) &&
-					(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
-						? [property.name.text]
-						: []
-				)
-			: undefined;
-	/** A same-file `const <name> = Schema.Struct({ … })`, read once the identifier names it. */
-	const structConst = (name: string): readonly string[] | undefined => {
-		let columns: readonly string[] | undefined;
-		const seek = (node: ts.Node): void => {
-			if (columns !== undefined) return;
-			if (
-				ts.isVariableDeclaration(node) &&
-				ts.isIdentifier(node.name) &&
-				node.name.text === name &&
-				node.initializer !== undefined &&
-				ts.isCallExpression(node.initializer) &&
-				structCallOf(node.initializer)
-			) {
-				columns = structKeys(node.initializer.arguments[0]!);
-				return;
-			}
-			ts.forEachChild(node, seek);
-		};
-		seek(sourceFile);
-		return columns;
-	};
-	const structCallOf = (call: ts.CallExpression): boolean =>
-		ts.isPropertyAccessExpression(call.expression) &&
-		ts.isIdentifier(call.expression.expression) &&
-		call.expression.expression.text === 'Schema' &&
-		call.expression.name.text === 'Struct';
-
-	let columns: readonly string[] | undefined;
-	const visit = (node: ts.Node): void => {
-		if (columns !== undefined || !ts.isPropertyAssignment(node)) {
-			ts.forEachChild(node, visit);
-			return;
-		}
-		if (!ts.isIdentifier(node.name) || node.name.text !== 'input') {
-			ts.forEachChild(node, visit);
-			return;
-		}
-		const initializer = node.initializer;
-		if (ts.isIdentifier(initializer)) {
-			columns = structConst(initializer.text);
-			return;
-		}
-		if (ts.isCallExpression(initializer)) {
-			if (structCallOf(initializer)) {
-				columns = structKeys(initializer.arguments[0]!);
-				return;
-			}
-			const config = initializer.arguments[1];
-			if (config === undefined || !ts.isObjectLiteralExpression(config)) return;
-			const declaredColumns = config.properties.find(
-				(property): property is ts.PropertyAssignment =>
-					ts.isPropertyAssignment(property) &&
-					ts.isIdentifier(property.name) &&
-					property.name.text === 'columns'
-			);
-			if (declaredColumns === undefined) return;
-			if (!ts.isObjectLiteralExpression(declaredColumns.initializer)) return;
-			columns = declaredColumns.initializer.properties.flatMap((property) =>
-				ts.isPropertyAssignment(property) &&
-				property.initializer.kind === ts.SyntaxKind.TrueKeyword &&
-				(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
-					? [property.name.text]
-					: []
-			);
-		}
-	};
-	visit(sourceFile);
-	return columns;
-};
-
 const WorkspaceSynchronization = {
 	sync: (workspaceRoot = process.cwd()) => {
 		const compiler = WorkspaceCompiler;
@@ -1726,7 +1660,7 @@ const WorkspaceSynchronization = {
 				policies,
 				functionFiles,
 				functions,
-				hookFiles,
+				collectionFiles,
 				integrationFiles,
 				representationFiles,
 				customRendererFiles,
@@ -1748,6 +1682,7 @@ const WorkspaceSynchronization = {
 			} = yield* discoverAuthoredSource(workspaceRoot);
 			const {
 				importWorkspaceModels,
+				importWorkspaceCollections,
 				importWorkspaceRelationships,
 				validateWorkspaceMigrationLineage
 			} = yield* Effect.tryPromise({
@@ -1755,23 +1690,24 @@ const WorkspaceSynchronization = {
 				catch: toError
 			});
 			const authoredModels = yield* importWorkspaceModels(models);
+			const authoredCollections = yield* importWorkspaceCollections(collectionFiles);
 			const authoredRelationships = yield* importWorkspaceRelationships(
 				join(root, 'src', 'collections', '+relationship.ts')
 			);
 			const capabilities = yield* compileTenantCapabilities(root, mcpFiles);
 			/**
-			 * The declared write shapes, narrowed to the columns each `input` names, projected into
-			 * the browser catalog. This is how `client.db` knows a collection's write contract: the
-			 * form's mutation mask, its unknown-key rejection and its registration assertion all
-			 * narrow to these, and a collection that declares no input narrows to nothing at all —
-			 * the whole collection stays writable.
+			 * The declared write contracts, projected into the workspace definition and the browser
+			 * catalog. This is how `client.collection` knows what it may submit: the form's mask, its
+			 * unknown-key rejection and its registration assertion all narrow to these, and a
+			 * collection with no `+collection.ts` has no write surface at all.
 			 */
-			const declaredInputColumns = new Map<string, readonly string[]>();
-			for (const path of hookFiles) {
-				if (!compiler.posix(path).includes('/collections/')) continue;
-				const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
-				const columns = declaredHookInputColumns(source);
-				if (columns !== undefined) declaredInputColumns.set(basename(dirname(path)), columns);
+			const writes: Record<string, CompiledCollectionWrite | undefined> = {};
+			for (const path of collectionFiles) {
+				const name = basename(dirname(path));
+				const declaration = authoredCollections[name];
+				if (declaration === undefined)
+					return yield* Effect.fail(new Error(`Could not read ${path}.`));
+				writes[name] = compileCollectionWrite(declaration);
 			}
 			const compiledAuthoring = compileWorkspaceAuthoring({
 				models: authoredModels,
@@ -1779,6 +1715,7 @@ const WorkspaceSynchronization = {
 					models.map((path) => [basename(dirname(path)), compiler.posix(relative(root, path))])
 				),
 				relationships: authoredRelationships,
+				writes,
 				capabilities,
 				customTypeNames: datatypeNames
 			});
@@ -1793,7 +1730,7 @@ const WorkspaceSynchronization = {
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
 			const collectionCatalog = compiledAuthoring.collections.map((entry) =>
-				collectionCatalogEntry(entry, relations, declaredInputColumns.get(entry.name))
+				collectionCatalogEntry(entry, relations)
 			);
 			const appMetaEntries = yield* Effect.all(
 				appFiles.map((path) =>
@@ -1914,7 +1851,10 @@ const WorkspaceSynchronization = {
 						join(generated, 'client.d.ts'),
 						renderClientDeclaration(functionFiles, root, automationFiles)
 					),
-					compiler.write(join(generated, 'inputs.d.ts'), renderInputsDeclaration(hookFiles, root)),
+					compiler.write(
+						join(generated, 'declared-collections.d.ts'),
+						renderCollectionsDeclaration(collectionFiles, root)
+					),
 					compiler.write(
 						join(generated, 'client.js'),
 						compiler.renderClientRuntime(
@@ -2015,7 +1955,7 @@ const WorkspaceSynchronization = {
 				),
 				{ concurrency: 'unbounded' }
 			);
-			const collectionHooks = hookFiles.map((path) => ({
+			const collectionDeclarations = collectionFiles.map((path) => ({
 				name: basename(dirname(path)),
 				path
 			}));
@@ -2025,7 +1965,7 @@ const WorkspaceSynchronization = {
 				renderArtifact({
 					metadata,
 					compiledAuthoring,
-					collectionHooks,
+					collectionFiles: collectionDeclarations,
 					apps: appDescriptors,
 					appGroups: groupEntries,
 					policies: policyFiles,

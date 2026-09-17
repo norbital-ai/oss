@@ -1,15 +1,7 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
-import { sha256Text } from '@norbital-ai/std/reckon/hash';
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
-import {
-	readConsistencyStatements,
-	READ_CONFLICT_MESSAGE,
-	type ReadSnapshot
-} from '#lib/runtime/collections/read-consistency.js';
 import { ApprovalState, EffectId, type SyncChange } from '@norbital-ai/bolt-protocol';
-import { and, asc, desc, eq, exists, isNull, notExists } from 'drizzle-orm';
-import { compileModelTable } from '#lib/authoring/model-introspection.js';
-import { defineModel } from '#lib/authoring/models-schema.js';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { canonicalJson } from '#lib/canonical-json.js';
@@ -27,7 +19,8 @@ import {
 	increment,
 	rowJson,
 	jsonTextEquals,
-	toStatement
+	toStatement,
+	type Statement
 } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -37,9 +30,7 @@ const {
 	requestor: requestorTable,
 	bolt_approvals: approvalStateTable,
 	bolt_audit: auditTable,
-	bolt_notifications: notificationTable,
-	bolt_task: taskTable,
-	bolt_collection_history: collectionHistoryTable
+	bolt_task: taskTable
 } = SYSTEM_MODEL_TABLES;
 
 type ApprovalProjection = Readonly<{
@@ -50,7 +41,6 @@ type ApprovalProjection = Readonly<{
 	readonly steps: Schema.Json;
 	readonly approverTeams: Schema.Json;
 	readonly supersederTeams: Schema.Json;
-	readonly proposedValues: Schema.Json;
 	readonly closedAt: string | null;
 	readonly closedBy: string | null;
 }>;
@@ -59,11 +49,6 @@ type ApprovalFollowup = Readonly<{
 	readonly command: string;
 	readonly effectId: string;
 	readonly input: Schema.Json;
-}>;
-
-type ApprovalNotification = Readonly<{
-	readonly id: string;
-	readonly payload: Schema.Json;
 }>;
 
 /** The `approval_request.status` vocabulary authored reports filter on. */
@@ -133,10 +118,8 @@ const isObjectLike = Schema.is(
 );
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
-const jsonObjectEquivalent = Schema.toEquivalence(JsonObject);
 /** The requestor schema predicate, built once for reviewer-safe approval projections. */
 const isSubject = Schema.is(Identity.Subject);
-const subjectEquivalent = Schema.toEquivalence(Identity.Subject);
 
 /** Carries approval conflict through the typed approvals failure channel without losing diagnostic context. */
 export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()(
@@ -246,56 +229,58 @@ type ApprovalRoot = Readonly<{
 	readonly action: 'create' | 'update' | 'delete';
 }>;
 
-type ApprovedGate = Readonly<{
-	readonly requestId: string;
-	/** Exact digest supplied by `resume`; a re-prepared graph must reproduce it byte-for-byte. */
-	readonly expectedReview: string;
-}>;
+/** One row the hold covers: stamped `approval_id`, restored on refusal. */
+export type ApprovalLockedRow = Readonly<{ readonly collection: string; readonly id: string }>;
 
 /**
- * The engine's complete coupling to approvals at the end of PREPARE.
+ * What the engine hands over when policy routes a write to approval (RFC §4.8).
  *
- * One plan is one mutation root, even when `storedGraph` contains descendants or hook-issued writes.
- * A batch calls `gate` independently for each root, so held roots are excised while unrelated roots
- * can commit. The engine remains the only owner of graph execution.
+ * The graph is committed provisionally by the engine in the same transaction the request row is
+ * written in; this plan is the request's durable half: who asked, for what root, under which
+ * resolved flow, and which rows the hold covers.
  */
-type ApprovalGatePlan = Readonly<{
+type ApprovalHoldPlan = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
 	readonly root: ApprovalRoot;
-	readonly storedGraph: Schema.Json;
-	readonly proposedValues?: Readonly<Record<string, Schema.Json>>;
-	readonly readSnapshots?: ReadonlyArray<ReadSnapshot>;
 	readonly approval: Schema.Json | undefined;
-	readonly review: Schema.Json | undefined;
-	readonly approved?: ApprovedGate;
-}>;
-
-type ApprovalGateDecision =
-	| Readonly<{ readonly _tag: 'Proceed'; readonly governingRequest?: string }>
-	| Readonly<{ readonly _tag: 'Hold'; readonly requestId: string }>;
-
-/** The payload a resume dispatcher feeds back through the collection engine's public mutate path. */
-type ApprovalResume = Readonly<{
-	readonly requestId: string;
-	readonly subject: Identity.Subject;
-	readonly storedGraph: Schema.Json;
-	readonly approved: true;
-	readonly expectedReview: string;
-}>;
-
-type ApprovalDiscard = Readonly<{
-	readonly requestId: string;
-	readonly root: ApprovalRoot;
-	readonly resolution: 'rejected' | 'changes_requested' | 'withdrawn';
+	readonly lockSet: ReadonlyArray<ApprovalLockedRow>;
 	readonly browserMutation?: Schema.Json;
 }>;
 
-const StoredApprovalGraph = Schema.Struct({
-	version: Schema.Literal(1),
+/** The request id and the one statement that persists it inside the engine's transaction. */
+type ApprovalHold = Readonly<{
+	readonly requestId: string;
+	readonly statement: Statement;
+}>;
+
+/** The seal: an approved request, its lock set, and who asked. */
+type ApprovalResume = Readonly<{
+	readonly requestId: string;
+	readonly subject: Identity.Subject;
+	readonly root: ApprovalRoot;
+	readonly lockSet: ReadonlyArray<ApprovalLockedRow>;
+	readonly browserMutation?: Schema.Json;
+}>;
+
+/** The restore: a refused request and the rows to unwind. */
+type ApprovalDiscard = Readonly<{
+	readonly requestId: string;
+	readonly subject: Identity.Subject;
+	readonly root: ApprovalRoot;
+	readonly resolution: 'rejected' | 'changes_requested' | 'withdrawn';
+	readonly lockSet: ReadonlyArray<ApprovalLockedRow>;
+	readonly browserMutation?: Schema.Json;
+}>;
+
+const StoredApprovalOperation = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	action: Schema.Literals(['create', 'update', 'delete']),
+	subject: Identity.Subject,
+	lockSet: Schema.Array(
+		Schema.Struct({ collection: Schema.NonEmptyString, id: Schema.NonEmptyString })
+	),
 	browserMutation: Schema.optionalKey(Schema.Json)
 });
 
@@ -303,78 +288,22 @@ const StoredApprovalGraph = Schema.Struct({
 export const approvalRequestId = (root: ApprovalRoot, effectId: EffectId): string =>
 	deriveRecordId(`${root.collection}:${root.id}:${effectId}`);
 
-/** Hashes the exact JSON bytes reviewed by the requestor, including snapshot strings verbatim. */
-export const approvalReviewDigest = (review: Schema.Json | undefined): string =>
-	`sha256:${sha256Text(JSON.stringify(review ?? null))}`;
-
-const maskSnapshot = (
-	invocation: AccessControl.Invocation,
-	subject: Identity.Subject,
-	collection: string,
-	snapshot: string
-): string => {
-	try {
-		const decoded: unknown = JSON.parse(snapshot);
-		if (Array.isArray(decoded)) {
-			return JSON.stringify(
-				decoded.map((entry) =>
-					isJsonObject(entry) ? invocation.mask(subject, 'read', collection, entry) : {}
-				)
-			);
-		}
-		return JSON.stringify(
-			isJsonObject(decoded) ? invocation.mask(subject, 'read', collection, decoded) : {}
-		);
-	} catch {
-		// A malformed prepared snapshot cannot be allowed to carry arbitrary bytes into the reviewer
-		// surface. The original digest still makes resume fail when the engine re-prepares it.
-		return '{}';
-	}
-};
-
-/** Masks every stored row-shaped review snapshot under the requestor's frozen read grant. */
-export const maskApprovalReview = (
-	review: Schema.Json | undefined,
-	invocation: AccessControl.Invocation,
-	subject: Identity.Subject
-): Schema.Json | undefined => {
-	// `Schema.is` under this effect release does not narrow a union operand well enough for a spread,
-	// so the object is decoded once and the typed record is what the rest of the function touches.
-	const source = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(review));
-	if (source === undefined) return review;
-	const rows = Array.isArray(source['rows'])
-		? source['rows'].map((value) => {
-				const entry = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(value));
-				if (entry === undefined) return value;
-				const collection = entry['collection'];
-				const snapshot = entry['snapshot'];
-				return isString(collection) && isString(snapshot)
-					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
-					: value;
-			})
-		: source['rows'];
-	const relationships = Array.isArray(source['relationships'])
-		? source['relationships'].map((value) => {
-				const entry = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(value));
-				if (entry === undefined) return value;
-				const collection = entry['childCollection'];
-				const snapshot = entry['snapshot'];
-				return isString(collection) && isString(snapshot)
-					? { ...entry, snapshot: maskSnapshot(invocation, subject, collection, snapshot) }
-					: value;
-			})
-		: source['relationships'];
-	return {
-		...source,
-		...(rows === undefined ? {} : { rows }),
-		...(relationships === undefined ? {} : { relationships })
-	};
-};
-
 export type Interface = Readonly<{
-	readonly gate: (
-		plan: ApprovalGatePlan
-	) => Effect.Effect<ApprovalGateDecision, Database.FacilityError | ApprovalConflict>;
+	/** Prepares the request row for the engine's transaction; nothing is written here. */
+	readonly hold: (
+		plan: ApprovalHoldPlan
+	) => Effect.Effect<ApprovalHold, Database.FacilityError | ApprovalConflict>;
+	/** Publishes the request's inbox projection once the engine has committed it. */
+	readonly announce: (
+		effectId: EffectId,
+		requestId: string
+	) => Effect.Effect<void, Database.FacilityError | ApprovalConflict>;
+	/** Whether the subject may write under this request's hold (RFC §4.8). */
+	readonly participant: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		requestId: string
+	) => Effect.Effect<boolean, Database.FacilityError | ApprovalConflict>;
 	readonly resume: (
 		effectId: EffectId,
 		requestId: string
@@ -401,7 +330,7 @@ export type Interface = Readonly<{
 		ApprovalState,
 		ApprovalConflict | AccessControl.AccessDenied | Database.FacilityError
 	>;
-	/** Terminates an approved request whose reviewed graph can no longer be applied. */
+	/** Marks a refused request whose restore could not apply; the hold stays for an administrator. */
 	readonly conflict: (
 		effectId: EffectId,
 		requestId: string,
@@ -516,35 +445,16 @@ export const layer = Layer.effect(
 			return yield* decodeState(requestId, state);
 		});
 		const publicState = (state: ApprovalState): ApprovalState => {
-			// Decoded once so the projection below spreads a typed record rather than a `Json` union.
 			const stored = Option.getOrUndefined(Schema.decodeUnknownOption(JsonObject)(state.operation));
 			if (stored === undefined) return state;
-			const requestor = isSubject(stored['subject']) ? stored['subject'] : undefined;
-			const collection = isString(stored['collection']) ? stored['collection'] : undefined;
-			const policy = requestor === undefined ? undefined : access.invocation();
-			const review =
-				requestor === undefined || policy === undefined
-					? stored['review']
-					: maskApprovalReview(stored['review'], policy, requestor);
-			const values =
-				requestor === undefined ||
-				policy === undefined ||
-				collection === undefined ||
-				!isJsonObject(stored['values'])
-					? stored['values']
-					: policy.mask(requestor, 'read', collection, stored['values']);
 			const operation: Schema.Json = Object.fromEntries(
-				Object.entries({
-					...stored,
-					...(review === undefined ? {} : { review }),
-					...(values === undefined ? {} : { values })
-				}).filter(
-					([field]) => field !== 'storedGraph' && field !== 'subject' && field !== 'reviewDigest'
+				Object.entries(stored).filter(
+					([field]) => field !== 'subject' && field !== 'browserMutation'
 				)
 			);
 			return { ...state, operation };
 		};
-		/** Reviewer-facing status masks snapshots and never carries engine-only resume material. */
+		/** Reviewer-facing status never carries the requestor's subject. */
 		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
 			const state = yield* rawStatus(effectId, requestId);
 			return state === undefined ? undefined : publicState(state);
@@ -667,7 +577,7 @@ export const layer = Layer.effect(
 				composer
 					.select({
 						kind: auditTable.kind,
-						subjectId: auditTable.subject_id,
+						subjectId: aliased(auditTable.subject_id, 'subjectId'),
 						payload: auditTable.payload
 					})
 					.from(auditTable)
@@ -687,42 +597,6 @@ export const layer = Layer.effect(
 			}
 			return events;
 		});
-		/**
-		 * The version this record must return to if the request is rejected.
-		 *
-		 * The newest history sequence *strictly before* the request opens - so a rejection lands on the
-		 * state that existed before any of this began, not on whatever the last revision produced. A
-		 * record with no history did not exist, which is why `null` is the honest answer and why
-		 * rejecting a create deletes rather than restores.
-		 *
-		 * Sequence, never a timestamp: writes inside one transaction share `now()`, and the whole point
-		 * is to separate the version before the request from the versions it produced.
-		 */
-		const anchorFor = Effect.fn('Approvals.anchorFor')(function* (
-			effectId: EffectId,
-			collection: string,
-			recordId: string
-		) {
-			const result = yield* executeBuilt(
-				effectId,
-				database,
-				composer
-					.select({ sequence: collectionHistoryTable.sequence })
-					.from(collectionHistoryTable)
-					.where(
-						and(
-							eq(collectionHistoryTable.collection_name, collection),
-							eq(collectionHistoryTable.record_id, recordId)
-						)
-					)
-					.orderBy(desc(collectionHistoryTable.sequence))
-					.limit(1)
-			);
-			const row = result.rows[0];
-			const sequence = isObjectLike(row) ? Reflect.get(row, 'sequence') : undefined;
-			return isNumber(sequence) ? sequence : null;
-		});
-
 		const projectionOf = Effect.fn('Approvals.projectionOf')(function* (
 			state: ApprovalState,
 			closedBy?: string
@@ -748,7 +622,6 @@ export const layer = Layer.effect(
 					state._tag === 'Pending'
 						? (configuration?.superceded_by ?? []).map((team: string) => team.toLocaleLowerCase())
 						: [],
-				proposedValues: fields['values'] ?? {},
 				closedAt: state._tag === 'Pending' ? null : instantLabel(nowEpochMs),
 				closedBy: closedBy ?? null
 			};
@@ -763,8 +636,7 @@ export const layer = Layer.effect(
 			actor: string,
 			auditKind: string,
 			projection: ApprovalProjection,
-			followup?: ApprovalFollowup,
-			notification?: ApprovalNotification
+			followup?: ApprovalFollowup
 		) => {
 			const updated = composer.$with('updated').as(
 				composer
@@ -807,7 +679,6 @@ export const layer = Layer.effect(
 								steps: aliased(jsonb(projection.steps), 'steps'),
 								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
 								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
-								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
 								closed_by: aliased(bound(projection.closedBy), 'closed_by')
 							})
@@ -820,7 +691,6 @@ export const layer = Layer.effect(
 							steps: excluded(approvalRequestTable.steps),
 							approver_teams: excluded(approvalRequestTable.approver_teams),
 							superseder_teams: excluded(approvalRequestTable.superseder_teams),
-							proposed_values: excluded(approvalRequestTable.proposed_values),
 							closed_at: excluded(approvalRequestTable.closed_at),
 							closed_by: excluded(approvalRequestTable.closed_by),
 							updated_at: dbNow(),
@@ -850,26 +720,6 @@ export const layer = Layer.effect(
 								.onConflictDoNothing({ target: taskTable.effect_id })
 								.returning({ id: taskTable.id })
 						);
-			const notified =
-				notification === undefined
-					? undefined
-					: composer.$with('notified').as(
-							composer
-								.insert(notificationTable)
-								.select(
-									composer
-										.select({
-											id: aliased(bound(notification.id), 'id'),
-											recipient: requestorTable.user_id,
-											payload: aliased(jsonb(notification.payload), 'payload'),
-											read: aliased(bound(false), 'read')
-										})
-										.from(requestorTable)
-										.innerJoin(updated, eq(requestorTable.approval_request_id, requestId))
-								)
-								.onConflictDoNothing({ target: notificationTable.id })
-								.returning({ id: notificationTable.id })
-						);
 			if (queued === undefined) {
 				return composer
 					.with(updated, audited, projected)
@@ -882,20 +732,8 @@ export const layer = Layer.effect(
 					.innerJoin(projected, always())
 					.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			}
-			if (notified === undefined) {
-				return composer
-					.with(updated, audited, projected, queued)
-					.select({
-						state: updated.state,
-						before: aliased(rowJson('approval_request'), 'before'),
-						after: projected.after
-					})
-					.from(updated)
-					.innerJoin(projected, always())
-					.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
-			}
 			return composer
-				.with(updated, audited, projected, queued, notified)
+				.with(updated, audited, projected, queued)
 				.select({
 					state: updated.state,
 					before: aliased(rowJson('approval_request'), 'before'),
@@ -911,21 +749,23 @@ export const layer = Layer.effect(
 			reason: string
 		) {
 			const current = yield* rawStatus(effectId, requestId);
-			if (current?._tag !== 'Approved')
+			if (
+				current?._tag !== 'Rejected' &&
+				current?._tag !== 'ChangesRequested' &&
+				current?._tag !== 'Withdrawn'
+			)
 				return yield* new ApprovalConflict({
 					requestId,
-					reason: 'only an approved request may be marked conflicted'
+					reason: 'only a refused request may be marked conflicted'
 				});
+			const closedBy = current._tag === 'Withdrawn' ? current.withdrawnBy : current.decidedBy;
 			const next: ApprovalState = {
 				_tag: 'Conflicted',
 				requestId,
 				reason,
 				...(current.operation === undefined ? {} : { operation: current.operation })
 			};
-			const projection = yield* projectionOf(next, current.decidedBy);
-			const operation = isJsonObject(current.operation) ? current.operation : {};
-			const collection = isString(operation['collection']) ? operation['collection'] : undefined;
-			const recordId = isString(operation['id']) ? operation['id'] : undefined;
+			const projection = yield* projectionOf(next, closedBy);
 			const updatedState = composer.$with('updated').as(
 				composer
 					.update(approvalStateTable)
@@ -933,7 +773,7 @@ export const layer = Layer.effect(
 					.where(
 						and(
 							eq(approvalStateTable.request_id, requestId),
-							jsonTextEquals(approvalStateTable.state, '_tag', 'Approved')
+							jsonTextEquals(approvalStateTable.state, '_tag', current._tag)
 						)
 					)
 					.returning({ state: approvalStateTable.state })
@@ -945,7 +785,7 @@ export const layer = Layer.effect(
 						composer
 							.select({
 								kind: aliased(bound('approval_conflicted'), 'kind'),
-								subject_id: aliased(bound(current.decidedBy), 'subject_id'),
+								subject_id: aliased(bound(closedBy), 'subject_id'),
 								request_id: aliased(bound(requestId), 'request_id'),
 								payload: aliased(jsonb(publicState(next)), 'payload')
 							})
@@ -967,7 +807,6 @@ export const layer = Layer.effect(
 								steps: aliased(jsonb(projection.steps), 'steps'),
 								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
 								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
-								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
 								closed_by: aliased(bound(projection.closedBy), 'closed_by')
 							})
@@ -980,7 +819,6 @@ export const layer = Layer.effect(
 							steps: excluded(approvalRequestTable.steps),
 							approver_teams: excluded(approvalRequestTable.approver_teams),
 							superseder_teams: excluded(approvalRequestTable.superseder_teams),
-							proposed_values: excluded(approvalRequestTable.proposed_values),
 							closed_at: excluded(approvalRequestTable.closed_at),
 							closed_by: excluded(approvalRequestTable.closed_by),
 							updated_at: dbNow(),
@@ -992,47 +830,16 @@ export const layer = Layer.effect(
 						after: aliased(rowJson('approval_request'), 'after')
 					})
 			);
-			const released =
-				collection === undefined || recordId === undefined
-					? undefined
-					: (() => {
-							const target = compileModelTable(collection, defineModel({}));
-							return composer.$with('released').as(
-								composer
-									.update(target)
-									.set({ approval_id: null })
-									.where(
-										and(
-											eq(target.approval_id, requestId),
-											eq(target.id, recordId),
-											exists(composer.select({ state: updatedState.state }).from(updatedState))
-										)
-									)
-									.returning({ id: target.id })
-							);
-						})();
-			const transition =
-				released === undefined
-					? composer
-							.with(updatedState, audited, projected)
-							.select({
-								state: updatedState.state,
-								before: aliased(rowJson('approval_request'), 'before'),
-								after: projected.after
-							})
-							.from(updatedState)
-							.innerJoin(projected, always())
-							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId))
-					: composer
-							.with(updatedState, audited, projected, released)
-							.select({
-								state: updatedState.state,
-								before: aliased(rowJson('approval_request'), 'before'),
-								after: projected.after
-							})
-							.from(updatedState)
-							.innerJoin(projected, always())
-							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
+			const transition = composer
+				.with(updatedState, audited, projected)
+				.select({
+					state: updatedState.state,
+					before: aliased(rowJson('approval_request'), 'before'),
+					after: projected.after
+				})
+				.from(updatedState)
+				.innerJoin(projected, always())
+				.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
 			const updated = yield* executeBuilt(effectId, database, transition);
 			if (updated.rows.length === 0)
 				return yield* new ApprovalConflict({
@@ -1042,76 +849,51 @@ export const layer = Layer.effect(
 			yield* publishProjection(effectId, updated.rows);
 			return next;
 		});
-		const persistRequest = Effect.fn('Approvals.persistRequest')(function* (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			requestId: string,
-			operation: Schema.Json,
-			lock?: ApprovalRecordLock,
-			readSnapshots: ReadonlyArray<ReadSnapshot> = []
-		) {
-			const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
-			if (
-				operationObject._tag === 'None' ||
-				!isResolvedApprovalConfiguration(operationObject.value['approval'])
-			)
+		/**
+		 * The one statement that opens a request: durable state, audit, the inbox projection and the
+		 * requestor link, each reading from the inserted state so a rejoined request writes nothing
+		 * twice. The engine runs it inside the transaction that commits the held graph (RFC §4.8).
+		 */
+		const hold = Effect.fn('Approvals.hold')(function* (plan: ApprovalHoldPlan) {
+			if (!isResolvedApprovalConfiguration(plan.approval))
+				return yield* new ApprovalConflict({
+					requestId: approvalRequestId(plan.root, plan.effectId),
+					reason: 'approval requires one concrete resolved approval flow'
+				});
+			const requestId = approvalRequestId(plan.root, plan.effectId);
+			const pending = yield* pendingForRecord(
+				EffectId.make(`${plan.effectId}:approval-root-lock`),
+				plan.root.collection,
+				plan.root.id
+			);
+			if (pending !== undefined && pending.requestId !== requestId)
 				return yield* new ApprovalConflict({
 					requestId,
-					reason: 'approval requests require one concrete embedded approval flow'
+					reason: `${plan.root.collection} ${plan.root.id} is held by another approval request`
 				});
-			const durableOperation = operationObject.value;
-			const state: ApprovalState = {
-				_tag: 'Pending',
-				requestId,
-				step: 0,
-				operation: durableOperation
+			// The held row is the proposal (§4.8): the request carries what it governs, never a copy of
+			// the values, which a participant's edit under the hold would only leave stale.
+			const operation: Schema.Json = {
+				collection: plan.root.collection,
+				id: plan.root.id,
+				action: plan.root.action,
+				subject: plan.subject,
+				approval: plan.approval,
+				lockSet: plan.lockSet,
+				...(plan.browserMutation === undefined ? {} : { browserMutation: plan.browserMutation })
 			};
+			const state: ApprovalState = { _tag: 'Pending', requestId, step: 0, operation };
 			const projection = yield* projectionOf(state);
-			const requestorId = deriveRecordId(`${requestId}:${subject.userId}`);
-			const locked =
-				lock === undefined
-					? undefined
-					: (() => {
-							const target = compileModelTable(lock.collection, defineModel({}));
-							return composer.$with('locked').as(
-								composer
-									.update(target)
-									.set({ approval_id: requestId })
-									.where(
-										and(
-											eq(target.id, lock.id),
-											isNull(target.approval_id),
-											notExists(
-												composer
-													.select({ id: approvalStateTable.id })
-													.from(approvalStateTable)
-													.where(eq(approvalStateTable.request_id, requestId))
-											)
-										)
-									)
-									.returning({ id: target.id })
-							);
-						})();
-			const insertedState = composer.$with('inserted').as(
-				(lock === undefined || locked === undefined
-					? composer.insert(approvalStateTable).values({
-							request_id: requestId,
-							tenant_id: subject.tenantId,
-							state
-						})
-					: composer.insert(approvalStateTable).select(
-							composer
-								.select({
-									request_id: aliased(bound(requestId), 'request_id'),
-									tenant_id: aliased(bound(subject.tenantId), 'tenant_id'),
-									state: aliased(jsonb(state), 'state')
-								})
-								.from(locked)
-						)
-				)
-					.onConflictDoNothing({ target: approvalStateTable.request_id })
-					.returning({ state: approvalStateTable.state })
-			);
+			const requestorId = deriveRecordId(`${requestId}:${plan.subject.userId}`);
+			const insertedState = composer
+				.$with('inserted')
+				.as(
+					composer
+						.insert(approvalStateTable)
+						.values({ request_id: requestId, tenant_id: plan.subject.tenantId, state })
+						.onConflictDoNothing({ target: approvalStateTable.request_id })
+						.returning({ state: approvalStateTable.state })
+				);
 			const audited = composer.$with('audited').as(
 				composer
 					.insert(auditTable)
@@ -1119,7 +901,7 @@ export const layer = Layer.effect(
 						composer
 							.select({
 								kind: aliased(bound('approval_requested'), 'kind'),
-								subject_id: aliased(bound(subject.userId), 'subject_id'),
+								subject_id: aliased(bound(plan.subject.userId), 'subject_id'),
 								request_id: aliased(bound(requestId), 'request_id'),
 								payload: aliased(jsonb(publicState(state)), 'payload')
 							})
@@ -1141,30 +923,13 @@ export const layer = Layer.effect(
 								steps: aliased(jsonb(projection.steps), 'steps'),
 								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
 								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
-								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
 								closed_by: aliased(bound(projection.closedBy), 'closed_by')
 							})
 							.from(insertedState)
 					)
-					.onConflictDoUpdate({
-						target: approvalRequestTable.id,
-						set: {
-							status: excluded(approvalRequestTable.status),
-							steps: excluded(approvalRequestTable.steps),
-							approver_teams: excluded(approvalRequestTable.approver_teams),
-							superseder_teams: excluded(approvalRequestTable.superseder_teams),
-							proposed_values: excluded(approvalRequestTable.proposed_values),
-							closed_at: excluded(approvalRequestTable.closed_at),
-							closed_by: excluded(approvalRequestTable.closed_by),
-							updated_at: dbNow(),
-							row_version: increment(approvalRequestTable.row_version)
-						}
-					})
-					.returning({
-						id: approvalRequestTable.id,
-						after: aliased(rowJson('approval_request'), 'after')
-					})
+					.onConflictDoNothing({ target: approvalRequestTable.id })
+					.returning({ id: approvalRequestTable.id })
 			);
 			const requestorProjected = composer.$with('requestor_projected').as(
 				composer
@@ -1174,97 +939,76 @@ export const layer = Layer.effect(
 							.select({
 								id: aliased(bound(requestorId), 'id'),
 								approval_request_id: aliased(bound(requestId), 'approval_request_id'),
-								user_id: aliased(bound(subject.userId), 'user_id')
+								user_id: aliased(bound(plan.subject.userId), 'user_id')
 							})
 							.from(insertedState)
 							.innerJoin(projected, always())
 					)
 					.onConflictDoNothing({ target: requestorTable.id })
-					.returning({
-						id: requestorTable.id,
+					.returning({ id: requestorTable.id })
+			);
+			const requestQuery = composer
+				.with(insertedState, audited, projected, requestorProjected)
+				.select({ state: insertedState.state })
+				.from(insertedState);
+			return { requestId, statement: toStatement(requestQuery.toSQL()) };
+		});
+		/** The inbox projection of one request, published as the inserts the hold statement made. */
+		const announce = Effect.fn('Approvals.announce')(function* (
+			effectId: EffectId,
+			requestId: string
+		) {
+			const rows = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						before: aliased(sql`null::jsonb`, 'before'),
+						after: aliased(rowJson('approval_request'), 'after'),
 						requestor_after: aliased(rowJson('requestor'), 'requestor_after')
 					})
+					.from(approvalRequestTable)
+					.leftJoin(requestorTable, eq(requestorTable.approval_request_id, requestId))
+					.where(eq(approvalRequestTable.id, requestId))
 			);
-			const requestQuery =
-				locked === undefined
-					? composer
-							.with(insertedState, audited, projected, requestorProjected)
-							.select({
-								state: insertedState.state,
-								before: aliased(rowJson('approval_request'), 'before'),
-								after: projected.after,
-								requestor_after: requestorProjected.requestor_after
-							})
-							.from(insertedState)
-							.innerJoin(projected, always())
-							.leftJoin(requestorProjected, always())
-							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId))
-					: composer
-							.with(locked, insertedState, audited, projected, requestorProjected)
-							.select({
-								state: insertedState.state,
-								before: aliased(rowJson('approval_request'), 'before'),
-								after: projected.after,
-								requestor_after: requestorProjected.requestor_after
-							})
-							.from(insertedState)
-							.innerJoin(projected, always())
-							.leftJoin(requestorProjected, always())
-							.leftJoin(approvalRequestTable, eq(approvalRequestTable.id, requestId));
-			const inserted =
-				readSnapshots.length === 0
-					? yield* executeBuilt(effectId, database, requestQuery)
-					: yield* database
-							.execute(effectId, {
-								_tag: 'Transaction',
-								statements: [
-									...readConsistencyStatements(readSnapshots, [
-										'approval_request',
-										...(lock == null ? [] : [lock.collection])
-									]),
-									toStatement(requestQuery.toSQL())
-								]
-							})
-							.pipe(
-								Effect.catch(
-									(error): Effect.Effect<never, Database.FacilityError | ApprovalConflict> =>
-										error.message.includes(READ_CONFLICT_MESSAGE)
-											? Effect.fail(
-													new ApprovalConflict({ requestId, reason: READ_CONFLICT_MESSAGE })
-												)
-											: Effect.fail(error)
-								)
-							);
-			// pg and PGlite answer a transaction with its final statement's rows; Colony's binding
-			// answers with every statement's, so the read revalidation's `bolt_assert` rows precede the
-			// request row. The request row is the one carrying the projection, whichever binding replied.
-			const requestRows = inserted.rows.filter((row) => isJsonObject(row) && 'after' in row);
-			if (requestRows.length > 0) {
-				yield* publishProjection(effectId, requestRows);
-				return state;
-			}
-			const existing = yield* rawStatus(effectId, requestId);
-			if (
-				existing !== undefined &&
-				isJsonObject(existing.operation) &&
-				jsonObjectEquivalent(existing.operation, durableOperation)
-			)
-				return existing;
-			if (existing !== undefined)
+			if (rows.rows.length === 0)
 				return yield* new ApprovalConflict({
 					requestId,
-					reason: 'deterministic approval request id is already bound to another operation'
+					reason: 'the held request was not written with its graph'
 				});
-			if (lock !== undefined)
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: `${lock.collection} ${lock.id} could not be locked for approval`
-				});
-			return yield* new ApprovalConflict({
-				requestId,
-				reason: 'approval request conflicted without a durable state'
-			});
+			yield* publishProjection(effectId, rows.rows);
 		});
+		/**
+		 * Who may write under a hold (RFC §4.8): the requestor, an approver of the current step, a
+		 * team named in `superceded_by`, or an administrator. Nobody else, and nobody may open a
+		 * second request on a held row — that refusal is the engine's, before this is asked.
+		 */
+		const participant = Effect.fn('Approvals.participant')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			requestId: string
+		) {
+			if (subject.admin === true) return true;
+			const current = yield* rawStatus(effectId, requestId);
+			if (current?._tag !== 'Pending') return false;
+			const operation = isJsonObject(current.operation) ? current.operation : undefined;
+			const requestor = operation === undefined ? undefined : operation['subject'];
+			if (isSubject(requestor) && requestor.userId === subject.userId) return true;
+			return (
+				decisionCapability(subject, current).allowed ||
+				supersedeCapability(subject, current).allowed
+			);
+		});
+		const storedOperation = (requestId: string, state: ApprovalState) =>
+			Schema.decodeUnknownEffect(StoredApprovalOperation)(state.operation).pipe(
+				Effect.mapError(
+					() =>
+						new ApprovalConflict({
+							requestId,
+							reason: 'the request does not carry the engine plan it was opened with'
+						})
+				)
+			);
 		const resume = Effect.fn('Approvals.resume')(function* (effectId: EffectId, requestId: string) {
 			const current = yield* rawStatus(effectId, requestId);
 			if (current?._tag !== 'Approved')
@@ -1272,17 +1016,14 @@ export const layer = Layer.effect(
 					requestId,
 					reason: 'approval has not been approved'
 				});
-			const operation = isJsonObject(current.operation) ? current.operation : undefined;
-			const storedGraph = operation?.['storedGraph'];
-			const expectedReview = operation?.['reviewDigest'];
-			const storedSubject = operation?.['subject'];
-			const subject = isSubject(storedSubject) ? storedSubject : undefined;
-			if (storedGraph === undefined || !isString(expectedReview) || subject === undefined)
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: 'approved request does not contain a resumable engine plan'
-				});
-			return { requestId, subject, storedGraph, approved: true as const, expectedReview };
+			const stored = yield* storedOperation(requestId, current);
+			return {
+				requestId,
+				subject: stored.subject,
+				root: { collection: stored.collection, id: stored.id, action: stored.action },
+				lockSet: stored.lockSet,
+				...(stored.browserMutation === undefined ? {} : { browserMutation: stored.browserMutation })
+			};
 		});
 		const discard = Effect.fn('Approvals.discard')(function* (
 			effectId: EffectId,
@@ -1298,146 +1039,25 @@ export const layer = Layer.effect(
 					requestId,
 					reason: 'approval was not refused'
 				});
-			const operation = isJsonObject(current.operation) ? current.operation : undefined;
-			const stored = yield* Schema.decodeUnknownEffect(StoredApprovalGraph)(
-				operation?.['storedGraph']
-			).pipe(
-				Effect.mapError(
-					() =>
-						new ApprovalConflict({
-							requestId,
-							reason: 'refused request does not contain a discardable engine plan'
-						})
-				)
-			);
-			if (
-				operation?.['collection'] !== stored.collection ||
-				operation?.['id'] !== stored.id ||
-				operation?.['action'] !== stored.action
-			)
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: 'refused request engine plan governs a different mutation root'
-				});
+			const stored = yield* storedOperation(requestId, current);
 			return {
 				requestId,
-				root: {
-					collection: stored.collection,
-					id: stored.id,
-					action: stored.action
-				},
+				subject: stored.subject,
+				root: { collection: stored.collection, id: stored.id, action: stored.action },
 				resolution:
 					current._tag === 'Rejected'
 						? ('rejected' as const)
 						: current._tag === 'ChangesRequested'
 							? ('changes_requested' as const)
 							: ('withdrawn' as const),
+				lockSet: stored.lockSet,
 				...(stored.browserMutation === undefined ? {} : { browserMutation: stored.browserMutation })
 			};
 		});
-		const gate = Effect.fn('Approvals.gate')(function* (plan: ApprovalGatePlan) {
-			if (plan.approval === undefined) {
-				if (plan.approved !== undefined)
-					return yield* new ApprovalConflict({
-						requestId: plan.approved.requestId,
-						reason: 'the reviewed mutation no longer resolves to an approval route'
-					});
-				return { _tag: 'Proceed' as const };
-			}
-			if (!isResolvedApprovalConfiguration(plan.approval)) {
-				const requestId = plan.approved?.requestId ?? approvalRequestId(plan.root, plan.effectId);
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: 'approval gate requires one concrete resolved approval flow'
-				});
-			}
-			if (plan.approved !== undefined) {
-				const current = yield* rawStatus(plan.effectId, plan.approved.requestId);
-				if (current?._tag !== 'Approved')
-					return yield* new ApprovalConflict({
-						requestId: plan.approved.requestId,
-						reason: 'approval has not been approved'
-					});
-				const operation = isJsonObject(current.operation) ? current.operation : undefined;
-				const storedSubject = operation?.['subject'];
-				if (
-					operation?.['collection'] !== plan.root.collection ||
-					operation?.['id'] !== plan.root.id ||
-					operation?.['action'] !== plan.root.action ||
-					!isSubject(storedSubject) ||
-					!subjectEquivalent(storedSubject, plan.subject)
-				)
-					return yield* new ApprovalConflict({
-						requestId: plan.approved.requestId,
-						reason: 'approved request governs a different mutation root'
-					});
-				const storedDigest = operation['reviewDigest'];
-				const preparedDigest = approvalReviewDigest(plan.review);
-				if (
-					!isString(storedDigest) ||
-					storedDigest !== plan.approved.expectedReview ||
-					preparedDigest !== plan.approved.expectedReview
-				)
-					return yield* new ApprovalConflict({
-						requestId: plan.approved.requestId,
-						reason: 'the reviewed mutation graph changed while approval was pending'
-					});
-				return { _tag: 'Proceed' as const, governingRequest: plan.approved.requestId };
-			}
-
-			const requestId = approvalRequestId(plan.root, plan.effectId);
-			const pending = yield* pendingForRecord(
-				EffectId.make(`${plan.effectId}:approval-root-lock`),
-				plan.root.collection,
-				plan.root.id
-			);
-			if (pending !== undefined && pending.requestId !== requestId)
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: `${plan.root.collection} ${plan.root.id} is held by another approval request`
-				});
-			const reviewDigest = approvalReviewDigest(plan.review);
-			const policy = access.invocation();
-			const maskedReview = maskApprovalReview(plan.review, policy, plan.subject);
-			const maskedProposedValues = policy.mask(
-				plan.subject,
-				'read',
-				plan.root.collection,
-				plan.proposedValues ?? {}
-			);
-			const operation: Schema.Json = {
-				collection: plan.root.collection,
-				id: plan.root.id,
-				action: plan.root.action,
-				// The inbox projection is a reviewer-facing snapshot too. The engine input remains whole in
-				// `storedGraph`, which is consumed only by `resume` and never projected to approvers.
-				values: maskedProposedValues,
-				subject: plan.subject,
-				approval: plan.approval,
-				mode: 'declarative',
-				storedGraph: plan.storedGraph,
-				...(maskedReview === undefined ? {} : { review: maskedReview }),
-				reviewDigest
-			};
-			const state = yield* persistRequest(
-				plan.effectId,
-				plan.subject,
-				requestId,
-				operation,
-				plan.root.action === 'create'
-					? undefined
-					: { collection: plan.root.collection, id: plan.root.id },
-				plan.readSnapshots
-			);
-			if (state._tag !== 'Pending')
-				return yield* new ApprovalConflict({
-					requestId,
-					reason: 'approval gate rejoined a request that is no longer pending'
-				});
-			return { _tag: 'Hold' as const, requestId };
-		});
 		return Service.of({
-			gate,
+			hold,
+			announce,
+			participant,
 			resume,
 			discard,
 			decide: Effect.fn('Approvals.decide')(function* (
@@ -1487,26 +1107,6 @@ export const layer = Layer.effect(
 									input: { requestId: next.requestId }
 								}
 							: undefined;
-				const notification =
-					next._tag === 'Approved' || next._tag === 'Rejected' || next._tag === 'ChangesRequested'
-						? {
-								id: deriveRecordId(`${next.requestId}:decision:${next._tag}`),
-								payload: {
-									text:
-										next._tag === 'Approved'
-											? next.superseded === true
-												? `Approval superseded for ${projection.collectionName} ${projection.recordId}: ${next.reason}`
-												: `Approval approved for ${projection.collectionName} ${projection.recordId}.`
-											: next._tag === 'Rejected'
-												? `Approval rejected for ${projection.collectionName} ${projection.recordId}.`
-												: `Changes requested for ${projection.collectionName} ${projection.recordId}: ${next.reason}`,
-									approvalRequestId: next.requestId,
-									collection: projection.collectionName,
-									recordId: projection.recordId,
-									status: projection.status
-								} satisfies Schema.Json
-							}
-						: undefined;
 				const updated = yield* executeBuilt(
 					effectId,
 					database,
@@ -1518,8 +1118,7 @@ export const layer = Layer.effect(
 							? 'approval_superseded'
 							: 'approval_decided',
 						projection,
-						followup,
-						notification
+						followup
 					)
 				);
 				if (updated.rows.length === 0)

@@ -33,8 +33,7 @@ const fakeSource = () => {
 	};
 	return {
 		source,
-		emit: (type: string, value: unknown) =>
-			listeners.get(type)?.({ data: JSON.stringify(value) }),
+		emit: (type: string, value: unknown) => listeners.get(type)?.({ data: JSON.stringify(value) }),
 		fail: (cause: unknown) => errors?.(cause),
 		closed: () => closed
 	};
@@ -117,9 +116,11 @@ class FakeLockNamespace {
 			this.release(name);
 			return;
 		}
-		void Promise.resolve(result).then(request.resolve, request.reject).finally(() => {
-			this.release(name);
-		});
+		void Promise.resolve(result)
+			.then(request.resolve, request.reject)
+			.finally(() => {
+				this.release(name);
+			});
 	}
 
 	private release(name: string): void {
@@ -160,9 +161,7 @@ class FakeBroadcastNamespace {
 	}
 }
 
-const broadcastChannelClass = (
-	namespace: FakeBroadcastNamespace
-): typeof BroadcastChannel =>
+const broadcastChannelClass = (namespace: FakeBroadcastNamespace): typeof BroadcastChannel =>
 	class {
 		readonly name: string;
 		private readonly listeners = new Set<(event: MessageEvent<unknown>) => void>();
@@ -187,10 +186,7 @@ const broadcastChannelClass = (
 			if (!this.closed) namespace.post(this.peer, value);
 		}
 
-		addEventListener(
-			type: string,
-			listener: (event: MessageEvent<unknown>) => void
-		): void {
+		addEventListener(type: string, listener: (event: MessageEvent<unknown>) => void): void {
 			if (type === 'message') this.listeners.add(listener);
 		}
 
@@ -260,10 +256,14 @@ describe('sync drivers', () => {
 				push: async () => undefined
 			});
 		const empty = { queries: [], detached: [], pending: [] };
-		const refused: unknown = await driverFor(400).register('c', empty).catch((cause) => cause);
+		const refused: unknown = await driverFor(400)
+			.register('c', empty)
+			.catch((cause) => cause);
 		expect(refused).toBeInstanceOf(SyncHttpError);
 		expect(refused).toMatchObject({ status: 400, terminal: true, message: 'answered 400' });
-		const failed: unknown = await driverFor(500).register('c', empty).catch((cause) => cause);
+		const failed: unknown = await driverFor(500)
+			.register('c', empty)
+			.catch((cause) => cause);
 		expect(failed).toMatchObject({ status: 500, terminal: false, message: 'answered 500' });
 	});
 
@@ -278,13 +278,13 @@ describe('sync drivers', () => {
 				const payload =
 					target === '/sync/extend'
 						? {
-							queryKey: 'query-1',
-							version: 3,
-							fromPrefix: 1,
-							toPrefix: 2,
-							rows: [{ id: 'b' }],
-							retainedBytes: syncRetainedPrefixBytes([{ id: 'a' }, { id: 'b' }])
-						}
+								queryKey: 'query-1',
+								version: 3,
+								fromPrefix: 1,
+								toPrefix: 2,
+								rows: [{ id: 'b' }],
+								retainedBytes: syncRetainedPrefixBytes([{ id: 'a' }, { id: 'b' }])
+							}
 						: { queries: [], outcomes: [] };
 				return new Response(JSON.stringify(payload), {
 					status: 200,
@@ -309,7 +309,6 @@ describe('sync drivers', () => {
 		);
 		expect(calls[1]?.url).toBe('/sync/extend');
 	});
-
 });
 
 describe('a browser Sync broker', () => {
@@ -318,8 +317,7 @@ describe('a browser Sync broker', () => {
 	beforeEach(() => {
 		let nextId = 0;
 		vi.stubGlobal('crypto', {
-			randomUUID: () =>
-				`00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}`
+			randomUUID: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}`
 		});
 	});
 

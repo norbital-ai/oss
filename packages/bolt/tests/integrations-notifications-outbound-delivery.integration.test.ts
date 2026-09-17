@@ -42,6 +42,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { foldedWrites, writtenTables } from './support/folded-write.js';
 
 /**
  * Outbound delivery, against a real HTTP server on a real socket.
@@ -257,7 +258,17 @@ const build = async (
 	harness = await makeBoltTestRuntime(definitionFor(described.declarations), {
 		// The real connector, not a script: this is the file that has to prove bytes leave the process.
 		connector: makeHttpConnectorBinding(),
-		authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+		authored: {
+			...emptyAuthoredRuntime,
+			integrations: described.authored,
+			collections: {
+				orders: {
+					create: { input: { columns: { external_id: true, status: true, amount: true } } },
+					update: { input: { columns: { external_id: true, status: true, amount: true } } },
+					delete: {}
+				}
+			}
+		}
 	});
 	if (options.token !== null) {
 		await harness.runtime.runPromise(
@@ -287,35 +298,27 @@ const create = (
 ) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.mutate(
-				EffectId.make(`create:${name}`),
-				subject,
-				'orders',
-				[{ ...values, id: recordId(name) }],
-				0,
-				{ roots: [{ id: recordId(name), action: 'create' }] }
-			)
+			collections.write(EffectId.make(`create:${name}`), subject, [
+				{ collection: 'orders', action: 'create', inputs: [{ ...values, id: recordId(name) }] }
+			])
 		)
 	);
 
 const update = (name: string, run: string, values: Readonly<Record<string, Schema.Json>>) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.mutate(
-				EffectId.make(`update:${run}`),
-				adminSubject,
-				'orders',
-				[{ ...values, id: recordId(name) }],
-				0,
-				{ roots: [{ id: recordId(name), action: 'update' }] }
-			)
+			collections.write(EffectId.make(`update:${run}`), adminSubject, [
+				{ collection: 'orders', action: 'update', inputs: [{ ...values, id: recordId(name) }] }
+			])
 		)
 	);
 
 const remove = (name: string, run: string) =>
 	current().runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.delete(EffectId.make(`delete:${run}`), adminSubject, 'orders', [recordId(name)])
+			collections.write(EffectId.make(`delete:${run}`), adminSubject, [
+				{ collection: 'orders', action: 'delete', inputs: [{ id: recordId(name) }] }
+			])
 		)
 	);
 
@@ -451,11 +454,10 @@ describe('a write queues a delivery and does not wait for it', () => {
 		await build(ordersModule);
 		current().database.forget();
 		await create('order-tx', { external_id: 'A-TX', status: 'placed', amount: 1 });
-		const statements = current().database.statements;
-		const rowInsert = statements.findIndex((sql) => sql.includes('insert into "orders"'));
-		const queueInsert = statements.findIndex((sql) => sql.includes('bolt_integration_outbox'));
-		expect(rowInsert).toBeGreaterThanOrEqual(0);
-		expect(queueInsert).toBeGreaterThan(rowInsert);
+		// The same statement writes both: the record's piece and the queue's.
+		const written = writtenTables(foldedWrites(current().database.statements)[0] ?? '');
+		expect(written.indexOf('orders')).toBeGreaterThanOrEqual(0);
+		expect(written.indexOf('bolt_integration_outbox')).toBeGreaterThan(written.indexOf('orders'));
 	});
 
 	/** An update that changed nothing the binding cares about is not an event. */
@@ -480,11 +482,12 @@ describe('a write queues a delivery and does not wait for it', () => {
 		await create(
 			'order-mirror',
 			{ external_id: 'A-M', status: 'placed', amount: 2 },
+			// A static identity: it holds its policies directly, which is what lets it name the row's id.
 			{
 				userId: 'integration:orders.partner',
 				tenantId: 'system',
-				teamPath: ['admin'],
-				policies: []
+				teamPath: [],
+				policies: ['admin']
 			}
 		);
 		expect(await outbox()).toEqual([]);
@@ -891,11 +894,9 @@ describe('a write queues the drain that will deliver it', () => {
 		]);
 		// And it commits with the record, not after it: the two cannot disagree on whether the
 		// delivery exists.
-		const statements = current().database.statements;
-		const rowInsert = statements.findIndex((sql) => sql.includes('insert into "orders"'));
-		const taskInsert = statements.findIndex((sql) => sql.includes('insert into "bolt_task"'));
-		expect(rowInsert).toBeGreaterThanOrEqual(0);
-		expect(taskInsert).toBeGreaterThan(rowInsert);
+		const written = writtenTables(foldedWrites(current().database.statements)[0] ?? '');
+		expect(written.indexOf('orders')).toBeGreaterThanOrEqual(0);
+		expect(written.indexOf('bolt_task')).toBeGreaterThan(written.indexOf('orders'));
 	});
 
 	/**

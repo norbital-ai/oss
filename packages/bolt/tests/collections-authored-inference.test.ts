@@ -31,7 +31,8 @@ const assistant = (content: Array<Prompt.AssistantMessagePart> | string) =>
 const toolCall = (id: string, name: string, params: Record<string, unknown>) =>
 	Prompt.toolCallPart({ id, name, params, providerExecuted: false });
 /** The reserved submission tool every `api.infer` advertises, carrying the structured answer. */
-const submit = (value: Record<string, unknown>) => assistant([toolCall('result', 'return_result', value)]);
+const submit = (value: Record<string, unknown>) =>
+	assistant([toolCall('result', 'return_result', value)]);
 const generateWith = (
 	script: (
 		request: Extract<AIRequest, { _tag: 'Generate' }>,
@@ -289,9 +290,7 @@ describe('authored inference tool loop', () => {
 				(_request, turn) =>
 					AIGenerationResult.cases.Message.make({
 						message:
-							turn < 13
-								? assistant([toolCall(`c${turn}`, 'next_page', {})])
-								: submit({ rate: 1 })
+							turn < 13 ? assistant([toolCall(`c${turn}`, 'next_page', {})]) : submit({ rate: 1 })
 					}),
 				requests
 			)

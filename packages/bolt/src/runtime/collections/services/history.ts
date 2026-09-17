@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
 
-type HistoryOperation = 'create' | 'update' | 'delete';
+/** `hold` and `restore` are the approval machine's revisions (RFC §4.8): a restore point and its return. */
+type HistoryOperation = 'create' | 'update' | 'delete' | 'hold' | 'restore';
 type HistoryRow = Readonly<Record<string, Schema.Json>>;
 
 export type HistoryPatch = Readonly<{
@@ -8,6 +9,8 @@ export type HistoryPatch = Readonly<{
 	readonly operation: HistoryOperation;
 	readonly snapshot: HistoryRow;
 	readonly createdAt: string;
+	/** The approval request this revision was written under, when one held the record. */
+	readonly approvalId: string | null;
 }>;
 
 type HistoryRevision = Readonly<{
@@ -26,6 +29,8 @@ const reconstructHistory = (
 	let current: HistoryRow = {};
 	const revisions: Array<HistoryRevision> = [];
 	for (const patch of patches.toSorted((left, right) => left.sequence - right.sequence)) {
+		// A hold restates the row as it stood (or its absence), so it changes nothing the log has said.
+		if (patch.operation === 'hold') continue;
 		current = patch.operation === 'update' ? { ...current, ...patch.snapshot } : patch.snapshot;
 		revisions.push({
 			sequence: patch.sequence,
@@ -81,22 +86,26 @@ type HistoryPruneTarget = Readonly<{
 /**
  * One statement bounds the history of every record a batch touched.
  *
- * `$1` is the JSON list of `{collection_name, record_id}` pairs, `$2` the horizon. Only records
- * whose log has outgrown the horizon enter the recursive fold — the common case, a record with a
- * handful of entries, costs one indexed count and nothing else. The earlier form was this same
+ * `$1` is the JSON list of `{collection_name, record_id, pending}` rows, `$2` the horizon. The
+ * prune runs inside the write's own statement and so reads the log as it stood when the statement
+ * began; `pending` is how many revisions the write is appending to that record in the same
+ * statement, so the fold counts them and the log is exactly at the horizon once the statement
+ * commits. Only records whose log has outgrown the horizon enter the recursive fold — the common
+ * case, a record with a handful of entries, costs one indexed count and nothing else. The earlier form was this same
  * walk emitted verbatim once per record: a payroll that pinned 2,500 rows sent 2,500 copies of a
  * 1.4 KB statement — 3.5 MB of a write whose own rows were a tenth of that.
  */
 const HISTORY_PRUNE_SQL = `with recursive
 							targets as materialized (
-								select distinct collection_name, record_id
-								from jsonb_to_recordset($1::jsonb) as target(collection_name text, record_id text)
+								select collection_name, record_id, sum(pending)::integer as pending
+								from jsonb_to_recordset($1::jsonb) as target(collection_name text, record_id text, pending integer)
+								group by collection_name, record_id
 							),
 							ordered as materialized (
 								select history.collection_name, history.record_id, history.sequence, history.operation,
 									coalesce(history.snapshot, '{}'::jsonb) as snapshot,
 									row_number() over (partition by history.collection_name, history.record_id order by history.sequence) as ordinal,
-									count(*) over (partition by history.collection_name, history.record_id) as total
+									count(*) over (partition by history.collection_name, history.record_id) + targets.pending as total
 								from bolt_collection_history as history
 								join targets on targets.collection_name = history.collection_name
 									and targets.record_id = history.record_id
@@ -139,18 +148,21 @@ const HISTORY_PRUNE_SQL = `with recursive
 									and rewritten.record_id = history.record_id
 							)`;
 
-/** One prune for the batch's distinct history-bearing records; later writes reuse the same bounded log. */
+/**
+ * One prune for the batch's history-bearing records. `operations` lists one entry per revision
+ * the statement appends — a held update is its `hold` and its `update` — so the fold counts them.
+ */
 export const historyPruneStatements = (
 	operations: ReadonlyArray<HistoryPruneTarget>,
 	horizon: number = DEFAULT_HISTORY_HORIZON
 ): ReadonlyArray<HistoryStatement> => {
-	const targets = [
-		...new Map(
-			operations
-				.filter((operation) => operation.definition.history)
-				.map((operation) => [`${operation.collection}\u0000${operation.id}`, operation])
-		).values()
-	].map((operation) => ({ collection_name: operation.collection, record_id: operation.id }));
+	const targets = operations
+		.filter((operation) => operation.definition.history)
+		.map((operation) => ({
+			collection_name: operation.collection,
+			record_id: operation.id,
+			pending: 1
+		}));
 	return targets.length === 0
 		? []
 		: [{ sql: HISTORY_PRUNE_SQL, parameters: [JSON.stringify(targets), horizon] }];
@@ -159,8 +171,9 @@ export const historyPruneStatements = (
 export const PersistedCollectionHistoryRow = Schema.Struct({
 	sequence: Schema.Number,
 	created_at: Schema.String,
-	operation: Schema.Literals(['create', 'update', 'delete']),
-	snapshot: Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
+	operation: Schema.Literals(['create', 'update', 'delete', 'hold', 'restore']),
+	snapshot: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
+	approval_id: Schema.NullOr(Schema.String)
 });
 export type PersistedCollectionHistoryRow = typeof PersistedCollectionHistoryRow.Type;
 
@@ -180,7 +193,7 @@ export const collectionHistoryReadStatement = (
 	id: string
 ): HistoryStatement => ({
 	// repository-health:allow SQL1 -- fixed system table; collection and id are bound.
-	sql: `select sequence, created_at, operation, snapshot from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence`,
+	sql: `select sequence, created_at, operation, snapshot, approval_id::text as approval_id from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence`,
 	parameters: [collection, id]
 });
 
@@ -212,7 +225,8 @@ export const historyPatchesFromRows = (
 		sequence: row.sequence,
 		operation: row.operation,
 		snapshot: row.snapshot ?? {},
-		createdAt: row.created_at
+		createdAt: row.created_at,
+		approvalId: row.approval_id
 	}));
 
 type PresentedHistoryRevision = Readonly<{

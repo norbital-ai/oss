@@ -7,6 +7,7 @@ import {
 	DatabaseResponse,
 	EffectId,
 	InvocationId,
+	runTransactionInOneRoundTrip,
 	type FacilityBinding,
 	type FacilityBindings
 } from '@norbital-ai/bolt-protocol';
@@ -127,44 +128,23 @@ export const makePostgresDatabase = ({
 		input: Extract<DatabaseRequest, { _tag: 'Transaction' }>
 	) =>
 		Effect.gen(function* () {
-			const client = new Client(clientOptions);
+			if (signal.aborted) return yield* Effect.fail(signal.reason);
+			// `pipeline: true` is the driver half of the round-trip budget: the helper writes every
+			// statement of the request in one burst, so the transaction is one round trip (§5.1).
+			const client = new Client({ ...clientOptions, pipeline: true });
 			yield* Effect.acquireRelease(
 				Effect.tryPromise(() => client.connect()),
 				() => Effect.tryPromise(() => client.end()).pipe(Effect.ignore)
 			);
-			const completed = yield* Effect.gen(function* () {
-				yield* Effect.tryPromise(() => client.query('begin'));
-				const initial: {
-					readonly rows: ReadonlyArray<QueryResultRow>;
-					readonly affectedRows: number;
-				} = { rows: [], affectedRows: 0 };
-				const settled = yield* Effect.forEach(input.statements, (statement) =>
-					Effect.gen(function* () {
-						if (signal.aborted) return yield* Effect.fail(signal.reason);
-						const result = yield* Effect.tryPromise(() =>
-							client.query<QueryResultRow>(statement.sql, Array.from(statement.parameters))
-						);
-						return { rows: result.rows, affectedRows: result.rowCount ?? 0 };
-					})
-				);
-				yield* Effect.tryPromise(() => client.query('commit'));
-				return {
-					rows: settled.at(-1)?.rows ?? initial.rows,
-					affectedRows: settled.reduce(
-						(total, entry) => total + entry.affectedRows,
-						initial.affectedRows
-					)
-				};
-			}).pipe(
-				Effect.catch((cause) =>
-					Effect.tryPromise(() => client.query('rollback'))
-						.pipe(Effect.ignore)
-						.pipe(Effect.andThen(() => Effect.fail(cause)))
+			const settled = yield* Effect.tryPromise(() =>
+				runTransactionInOneRoundTrip(
+					(sql, parameters) => client.query<QueryResultRow>(sql, Array.from(parameters)),
+					input.statements
 				)
 			);
 			return {
-				rows: completed.rows.map(jsonSafe),
-				affectedRows: completed.affectedRows
+				rows: (settled.at(-1)?.rows ?? []).map(jsonSafe),
+				affectedRows: settled.reduce((total, result) => total + (result.rowCount ?? 0), 0)
 			};
 		});
 

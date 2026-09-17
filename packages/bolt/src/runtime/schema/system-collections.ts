@@ -9,6 +9,8 @@ import {
 	type RelationDefinition
 } from '#lib/authoring/workspace-schema.js';
 import { COLONY_SYSTEM_POLICY } from '#lib/runtime/access/system-principal.js';
+import type { AuthoredCollectionModule } from '#lib/authoring/collection-schema.js';
+import { refuse } from '#lib/authoring/refusal.js';
 
 /**
  * Platform models enter through the same model-to-collection compiler as tenant-authored models.
@@ -21,6 +23,77 @@ const collections = Object.freeze(
 		compileModel(collection({ name, fields: {} }), declaration)
 	)
 );
+
+/**
+ * The turn fence, in the write that carries it.
+ *
+ * A turn holds a conversation while `active_turn_id` names it and the status is `running` or
+ * `ready`; `control stop` writes `stopped` and clears the turn. A write that keeps naming its
+ * turn — a streamed part restating `active_turn_id`, a boundary write that does not restate the
+ * status — must find the conversation still held, and is refused otherwise, in the same
+ * statement the row it carries would have committed in: there is no read between the check and
+ * the write for a stop to fall into. A write that installs a turn on an idle conversation, or
+ * clears one, states what it changes and passes.
+ */
+const conversationFence = (
+	inputs: ReadonlyArray<Readonly<Record<string, unknown>>>,
+	context: Readonly<{
+		readonly existing: ReadonlyArray<Readonly<Record<string, unknown>> | undefined>;
+	}>
+): ReadonlyArray<Readonly<Record<string, unknown>>> =>
+	inputs.map((input, index) => {
+		const stored = context.existing[index];
+		const claimed = input['active_turn_id'];
+		if (stored === undefined || claimed === null || claimed === undefined) return input;
+		const held = stored['active_turn_id'];
+		if (held !== null && held !== undefined && held !== claimed)
+			refuse('This turn no longer holds the conversation.');
+		const status = input['status'] ?? stored['status'];
+		if (held === claimed && status !== 'running' && status !== 'ready')
+			refuse('This turn no longer holds the conversation.');
+		return input;
+	});
+
+/**
+ * The runtime's own write contracts for the system collections it writes (RFC seeding.md §5).
+ *
+ * A system collection is a collection: the runtime submits declared inputs like any caller, and a
+ * seed populates it through the same door. The inputs are every authored column, with no transform;
+ * policy still decides who may reach them — a person writes `bolt_notifications.read` and nothing
+ * else, and the browser catalog says so. `approval_request` and `requestor` are the approval
+ * machine's projections, written only by it.
+ */
+export const systemCollectionModules: Readonly<Record<string, AuthoredCollectionModule>> =
+	Object.freeze(
+		Object.fromEntries(
+			Object.entries(collections)
+				.filter(([name]) => name !== 'approval_request' && name !== 'requestor')
+				.map(([name, definition]) => {
+					const columns = Object.fromEntries(
+						Object.keys(definition.fields).map((field) => [field, true as const])
+					);
+					return [
+						name,
+						Object.freeze({
+							create: { input: { columns } },
+							update: { input: { columns } },
+							delete: {},
+							...(name === 'conversation' ? { transform: conversationFence } : {})
+						}) satisfies AuthoredCollectionModule
+					];
+				})
+		)
+	);
+
+/** The browser's copy of a system collection's write contract: what a person may submit. */
+export const SYSTEM_COLLECTION_WRITES: Readonly<
+	Record<
+		string,
+		NonNullable<import('#lib/authoring/workspace-schema.js').CollectionCatalogEntry['write']>
+	>
+> = Object.freeze({
+	bolt_notifications: { update: { columns: { read: true } } }
+});
 
 /**
  * The collections authentication itself reads, and therefore the ones a host must create before it

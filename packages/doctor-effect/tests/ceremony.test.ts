@@ -69,7 +69,9 @@ test('every ceremony rule reports its positive example', () => {
 		const rule = ALL.find((candidate) => candidate.id === testCase.rule);
 		assert.ok(rule !== undefined, `${testCase.rule} is not in the ceremony pack`);
 		if (!scan(testCase.bad, file, [rule]).includes(testCase.rule))
-			missing.push(`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`);
+			missing.push(
+				`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`
+			);
 	}
 	assert.deepEqual(missing, [], missing.join('\n'));
 });

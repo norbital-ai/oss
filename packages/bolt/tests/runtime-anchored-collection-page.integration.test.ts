@@ -67,7 +67,8 @@ const inertSync = (): SyncClient => ({
 		extend: () => undefined,
 		detach: () => undefined
 	}),
-	enqueue: () => undefined
+	enqueue: () => undefined,
+	answer: () => undefined
 });
 
 let harness: BoltTestRuntime | undefined;

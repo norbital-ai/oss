@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/std",
-	"version": "0.0.50",
+	"version": "0.0.51",
 	"description": "Shared schema, date, CEL, finance, and utility modules for Norbital.",
 	"type": "module",
 	"sideEffects": false,

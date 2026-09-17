@@ -36,10 +36,7 @@
 	{#snippet top()}
 		{#if pathSegments.length > 0}
 			<Stack gap="none" shrink={false} class="border-b border-border/60 bg-muted/20">
-				<Breadcrumb.Root
-					class="{SCROLL_AXIS_CLASSES.x}"
-					data-testid="studio-file-breadcrumb"
-				>
+				<Breadcrumb.Root class={SCROLL_AXIS_CLASSES.x} data-testid="studio-file-breadcrumb">
 					<Breadcrumb.List class="h-7 flex-nowrap px-3 font-mono text-xs">
 						{#each pathSegments as segment, index (`${index}:${segment}`)}
 							<Breadcrumb.Item class="min-w-0 shrink-0 gap-1">
@@ -54,7 +51,10 @@
 					</Breadcrumb.List>
 				</Breadcrumb.Root>
 				{#if baselineKey !== undefined}
-					<p class="px-3 pb-1.5 text-micro text-muted-foreground" data-testid="studio-editor-baseline">
+					<p
+						class="px-3 pb-1.5 text-micro text-muted-foreground"
+						data-testid="studio-editor-baseline"
+					>
 						{t(baselineKey)}
 					</p>
 				{/if}
@@ -76,7 +76,9 @@
 			class="h-full min-h-0 divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0"
 		>
 			<Stack gap="none" class="min-h-0 min-w-0">
-				<span class="px-3 pt-3 text-micro font-medium text-foreground">{t('bolt.studio.before')}</span>
+				<span class="px-3 pt-3 text-micro font-medium text-foreground"
+					>{t('bolt.studio.before')}</span
+				>
 				{#if before === null}
 					<span class="px-3 pb-3 text-micro text-muted-foreground">∅</span>
 				{/if}
@@ -92,7 +94,9 @@
 				{/key}
 			</Stack>
 			<Stack gap="none" class="min-h-0 min-w-0">
-				<span class="px-3 pt-3 text-micro font-medium text-foreground">{t('bolt.studio.after')}</span>
+				<span class="px-3 pt-3 text-micro font-medium text-foreground"
+					>{t('bolt.studio.after')}</span
+				>
 				{#key path}
 					<CodeEditor
 						{value}

@@ -59,7 +59,7 @@ export const mutationPush = (
 
 export const mutationResolution = (
 	value: unknown,
-	label = 'collections.mutate'
+	label = 'collections.write'
 ): MutationResolution => {
 	const resolution = asRecord(value, label).resolution;
 	switch (resolution) {

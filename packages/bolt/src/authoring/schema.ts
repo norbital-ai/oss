@@ -43,7 +43,7 @@ import {
  * naming a column the shape does not is a type error at the call site rather than a refusal at run
  * time.
  *
- * **It resolves late.** `export const input = schema(…)` runs at module init in a `+hooks.ts`, which
+ * **It resolves late.** `export const input = schema(…)` runs at module init in a `+collection.ts`, which
  * a workspace may evaluate before the module that registers its collections. `Schema.suspend` is
  * what makes that a non-question: nothing is looked up until the schema is first used, so an author
  * never has to reason about import order to declare a shape.

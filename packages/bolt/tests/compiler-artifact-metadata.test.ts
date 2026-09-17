@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	defineModel,
-	text,
-	type ModelDeclaration
-} from '../src/authoring/models-schema.js';
+import { defineModel, text, type ModelDeclaration } from '../src/authoring/models-schema.js';
 import { compileWorkspaceAuthoring } from '../src/authoring/model-introspection.js';
 import { renderArtifact } from '../src/compiler/workspace-build.js';
 
@@ -33,9 +29,7 @@ const collectionDescriptors = (artifact: string): ReadonlyArray<Record<string, u
 	).collections;
 };
 
-const artifactFor = (
-	models: Readonly<Record<string, ModelDeclaration>>
-): string => {
+const artifactFor = (models: Readonly<Record<string, ModelDeclaration>>): string => {
 	const compiledAuthoring = compileWorkspaceAuthoring({
 		models,
 		sourcePaths: Object.fromEntries(
@@ -45,7 +39,7 @@ const artifactFor = (
 	return renderArtifact({
 		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
 		compiledAuthoring,
-		collectionHooks: [],
+		collectionFiles: [],
 		apps: [],
 		policies: [],
 		functions: [],

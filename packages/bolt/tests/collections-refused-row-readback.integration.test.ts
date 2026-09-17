@@ -13,23 +13,11 @@ import {
 } from '../src/authoring/workspace-schema.js';
 import { describeIntegrations } from '../src/authoring/integration-introspection.js';
 import { automation } from '../src/authoring/automations-schema.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { unwrapMutationPhase } from './support/mutation-phase.js';
-
-/** The fixture as a schema, so the hooks are typed the way a compiled workspace's are. */
-interface RefusedReadbackSchema {
-	readonly tables: {
-		readonly notes: {
-			readonly $inferSelect: { readonly id: string; readonly body: string };
-			readonly $inferInsert: { readonly id?: string; readonly body: string };
-		};
-	};
-	readonly relations: Record<string, never>;
-}
 
 /**
  * A create the subject's predicate refuses is a loud refusal, not a quiet omission.
@@ -37,7 +25,7 @@ interface RefusedReadbackSchema {
  * The create's row predicate is asserted in the same transaction that inserts the row: the
  * candidate is written first and `bolt_assert` then proves its stored row against the predicate,
  * so a refused row raises and rolls the whole graph back. Nothing in the workspace may act as
- * though a refused write happened — no `after` hook, no history, SyncChange, or delivery
+ * though a refused write happened — no change trigger, no history, SyncChange, or delivery
  * row — and the caller is told, not answered with a partial batch.
  *
  * The refusal is a mutation authorization over the prepared row. Aggregate quotas do not belong in
@@ -101,9 +89,6 @@ const definition = workspaceWith([]);
 /** A member of `writers`; its explicit policy is the only source of authority under test. */
 const writer = { userId: 'writer-1', tenantId: 'test-tenant', policies: [], teamPath: ['writers'] };
 
-/** Every record an `after` hook was handed, in the order the hooks happened to finish. */
-const afterRecords: Array<Readonly<Record<string, unknown>> | undefined> = [];
-
 /** The `incoming_record` body of every change-trigger the write announced, in run order. */
 const changeBodies: Array<string> = [];
 
@@ -136,27 +121,19 @@ const changeProbe = (api: unknown): Effect.Effect<'denied' | 'allowed'> =>
 		})
 	);
 
-const noteHooks: CollectionHooks<RefusedReadbackSchema, 'notes'> = {
-	mutate: {
-		perRecord: {
-			after: {
-				description: 'records which written row it was handed',
-				handler: ({ previous, record }) => {
-					if (previous !== undefined) return undefined;
-					afterRecords.push(record);
-					return undefined;
-				}
-			}
-		}
+const notesModule: AuthoredRuntime['collections'] = {
+	notes: {
+		create: { input: { columns: { body: true } } },
+		update: { input: { columns: { body: true } } }
 	}
 };
 
-const authored = {
+const authored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
+	collections: notesModule,
 	policyAuthorizations: {
 		[NOTE_CREATE_AUTHORIZATION]: authorizeUnlessBody('forbidden')
 	},
-	hooks: { notes: authoredHooks(noteHooks) },
 	automations: {
 		on_note: {
 			name: 'on_note',
@@ -181,7 +158,6 @@ const authored = {
 
 let harness: BoltTestRuntime | undefined;
 beforeEach(() => {
-	afterRecords.length = 0;
 	changeBodies.length = 0;
 });
 afterEach(async () => {
@@ -198,24 +174,22 @@ const refusalMessage = (failure: unknown): string => {
 	return cause instanceof Error ? cause.message : String(cause);
 };
 
+const write = (
+	effectId: string,
+	action: 'create' | 'update',
+	inputs: ReadonlyArray<Readonly<Record<string, unknown>>>
+) =>
+	Effect.gen(function* () {
+		const collections = yield* Collections.Service;
+		return yield* collections.write(EffectId.make(effectId), writer, [
+			{ collection: 'notes', action, inputs }
+		]);
+	});
+
 describe('a batch the subject may write only part of', () => {
 	it('runs a single-record change trigger only as its declared automation authority', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					EffectId.make('single-authority'),
-					writer,
-					'notes',
-					[{ id: '10000000-0000-4000-8000-000000000001', body: 'one note' }],
-					0,
-					{
-						roots: [{ id: '10000000-0000-4000-8000-000000000001', action: 'create' }]
-					}
-				);
-			})
-		);
+		await harness.runtime.runPromise(write('single-authority', 'create', [{ body: 'one note' }]));
 
 		// The change trigger answered the row it was told about, and its run row settled as a direct
 		// automation run — the durable half of the old `bolt_task` lifecycle row.
@@ -235,15 +209,12 @@ describe('a batch the subject may write only part of', () => {
 
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
-				Effect.gen(function* () {
-					const collections = yield* Collections.Service;
-					return yield* collections.mutate(EffectId.make('refused-1'), writer, 'notes', [
-						{ body: 'note 0' },
-						{ body: 'note 1' },
-						{ body: 'forbidden' },
-						{ body: 'note 3' }
-					]);
-				})
+				write('refused-1', 'create', [
+					{ body: 'note 0' },
+					{ body: 'note 1' },
+					{ body: 'forbidden' },
+					{ body: 'note 3' }
+				])
 			)
 		);
 
@@ -253,9 +224,8 @@ describe('a batch the subject may write only part of', () => {
 		if (outcome._tag === 'Failure')
 			expect(refusalMessage(outcome.failure)).toContain('authorization');
 
-		// Nothing was stored, and nothing acted as though it were: no hook, no change trigger run.
+		// Nothing was stored, and nothing acted as though it were: no change trigger run.
 		expect(await harness.database.query('select body from notes')).toEqual([]);
-		expect(afterRecords).toEqual([]);
 		expect(changeBodies).toEqual([]);
 	}, 60_000);
 
@@ -265,18 +235,11 @@ describe('a batch the subject may write only part of', () => {
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
 				Effect.gen(function* () {
-					const collections = yield* Collections.Service;
 					// Two separate writes satisfy the row-local decision.
-					yield* collections.mutate(EffectId.make('denied-1'), writer, 'notes', [
-						{ body: 'note 0' }
-					]);
-					yield* collections.mutate(EffectId.make('denied-2'), writer, 'notes', [
-						{ body: 'note 1' }
-					]);
+					yield* write('denied-1', 'create', [{ body: 'note 0' }]);
+					yield* write('denied-2', 'create', [{ body: 'note 1' }]);
 					// The third is refused on its own, loudly.
-					return yield* collections.mutate(EffectId.make('denied-3'), writer, 'notes', [
-						{ body: 'forbidden' }
-					]);
+					return yield* write('denied-3', 'create', [{ body: 'forbidden' }]);
 				})
 			)
 		);
@@ -288,10 +251,6 @@ describe('a batch the subject may write only part of', () => {
 		const stored = await harness.database.query('select body, row_version from notes');
 		expect(bodiesOf(stored)).toEqual(['note 0', 'note 1']);
 		for (const row of stored) expect(row['row_version']).toBe(1);
-		expect(afterRecords.map((record) => String(record?.['body'])).toSorted()).toEqual([
-			'note 0',
-			'note 1'
-		]);
 		expect(changeBodies.toSorted()).toEqual(['note 0', 'note 1']);
 	}, 60_000);
 
@@ -301,14 +260,11 @@ describe('a batch the subject may write only part of', () => {
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
 				Effect.gen(function* () {
-					const collections = yield* Collections.Service;
-					const created = yield* collections.mutate(EffectId.make('refused-2'), writer, 'notes', [
-						{ body: 'kept' }
-					]);
+					const created = yield* write('refused-2', 'create', [{ body: 'kept' }]);
 					const id = created.records[0]?.['id'];
 					// One update that lands and one that cannot: the second names an id no row carries, so
 					// its preparation cannot read a pre-image and the whole transaction never opens.
-					return yield* collections.mutate(EffectId.make('refused-3'), writer, 'notes', [
+					return yield* write('refused-3', 'update', [
 						{ id: String(id), body: 'kept, edited' },
 						{ id: '00000000-0000-4000-8000-000000000000', body: 'never existed' }
 					]);
@@ -318,74 +274,10 @@ describe('a batch the subject may write only part of', () => {
 
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
-			expect(refusalMessage(outcome.failure)).toContain('no longer exists');
+			expect(refusalMessage(outcome.failure)).toContain('does not exist');
 		// The batch is atomic: the update that could have landed rolls back with the one that could not.
 		expect(bodiesOf(await harness.database.query('select body from notes'))).toEqual(['kept']);
 	}, 60_000);
-});
-
-/**
- * The same guard, for a create a hook issued: it does not apply.
- *
- * A `before` hook's write is planned into the graph that issued it and commits with the root, and
- * it is the workspace's row: the caller's grant, its live `authorize` included, judges what the
- * caller submitted and nothing a hook derived. The writer's own `inner` create is refused by the
- * quota; the one the hook issues inside the writer's allowed write lands beside the row that issued
- * it. A refusal elsewhere in the same graph still takes the staged row down with it, which the
- * relationship-reconciliation suite observes (HA5).
- */
-describe('an authored create the caller could not have submitted', () => {
-	it('lands as the workspace beside the row that issued it, while the direct claim is refused', async () => {
-		const innerHooks: CollectionHooks<RefusedReadbackSchema, 'notes'> = {
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'issues one extra create through the authored mutation api',
-						handler: ({ input, existing, api }) =>
-							Effect.gen(function* () {
-								if (existing !== undefined) return input;
-								// Only the write that opened the graph issues the extra one. A staged create
-								// runs this hook too, so an unguarded issue enqueues itself until the host's
-								// nesting bound stops it.
-								if (input.body === 'inner') return input;
-								yield* api.db.notes.mutate([{ body: 'inner' }]);
-								return input;
-							})
-					}
-				}
-			}
-		};
-		const authoredInner = {
-			...emptyAuthoredRuntime,
-			policyAuthorizations: {
-				[NOTE_CREATE_AUTHORIZATION]: authorizeUnlessBody('inner')
-			},
-			hooks: { notes: authoredHooks(innerHooks) }
-		};
-
-		harness = await makeBoltTestRuntime(workspaceWith([]), { authored: authoredInner });
-		const collections = await harness.runtime.runPromise(Collections.Service);
-
-		const direct = await harness.runtime.runPromise(
-			collections
-				.mutate(EffectId.make('inner-direct'), writer, 'notes', [{ body: 'inner' }])
-				.pipe(Effect.result)
-		);
-		expect(direct._tag).toBe('Failure');
-		if (direct._tag === 'Failure') expect(refusalMessage(direct.failure)).toContain('authorization');
-		expect(await harness.database.query('select body from notes')).toEqual([]);
-
-		const outcome = await harness.runtime.runPromise(
-			collections
-				.mutate(EffectId.make('inner-1'), writer, 'notes', [{ body: 'outer' }])
-				.pipe(Effect.result)
-		);
-		expect(outcome._tag, 'the hook-issued row is the workspace\'s').toBe('Success');
-		expect(bodiesOf(await harness.database.query('select body from notes'))).toEqual([
-			'inner',
-			'outer'
-		]);
-	});
 });
 
 /**
@@ -419,20 +311,21 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 
 	it('writes history, sync and delivery rows for the stored records only', async () => {
 		harness = await makeBoltTestRuntime(workspaceWith(described.declarations), {
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				collections: notesModule,
+				integrations: described.authored
+			}
 		});
 
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
-				Effect.gen(function* () {
-					const collections = yield* Collections.Service;
-					return yield* collections.mutate(EffectId.make('bookkeeping-1'), writer, 'notes', [
-						{ body: 'note 0' },
-						{ body: 'note 1' },
-						{ body: 'forbidden' },
-						{ body: 'note 3' }
-					]);
-				})
+				write('bookkeeping-1', 'create', [
+					{ body: 'note 0' },
+					{ body: 'note 1' },
+					{ body: 'forbidden' },
+					{ body: 'note 3' }
+				])
 			)
 		);
 		expect(outcome._tag).toBe('Failure');
@@ -472,13 +365,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		});
 
 		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				return yield* collections.mutate(EffectId.make('bookkeeping-2'), writer, 'notes', [
-					{ body: 'note 0' },
-					{ body: 'note 1' }
-				]);
-			})
+			write('bookkeeping-2', 'create', [{ body: 'note 0' }, { body: 'note 1' }])
 		);
 
 		const stored = await harness.database.query('select id, body from notes');

@@ -1,10 +1,24 @@
-import { isSystemCollectionField, type CollectionField } from '@norbital-ai/std/collection';
+import {
+	isSystemCollectionField,
+	type CollectionField,
+	type CollectionWriteContract,
+	type CollectionWriteSelection
+} from '@norbital-ai/std/collection';
 
-/** The exact catalog-backed field set a collection form must declare. */
-export function collectionFormMutationFieldNames(fields: readonly CollectionField[]): string[] {
-	return fields
-		.filter((field) => !isSystemCollectionField(field.name) && !field.readOnly)
-		.map((field) => field.name);
+/**
+ * The selection a form writes through: `update` when it edits an existing record, `create` for a
+ * draft. Absent, the collection declares no such operation and the form is read-only.
+ */
+export function collectionFormWriteSelection(
+	write: CollectionWriteContract | undefined,
+	editing: boolean
+): CollectionWriteSelection | undefined {
+	return editing ? write?.update : write?.create;
+}
+
+/** The exact catalog-backed field set a collection form must declare: the selection's columns. */
+export function collectionFormWriteColumns(selection: CollectionWriteSelection): string[] {
+	return Object.keys(selection.columns ?? {});
 }
 
 /** Authored values visible to a form, including generated read-only facts but never system fields. */
@@ -52,23 +66,21 @@ export function pickCollectionFormValues(
 }
 
 /**
- * Keeps only values the collection form is allowed to send back to a mutation.
+ * Keeps only values the collection form is allowed to send back to a write.
  *
  * An edit form starts from a complete hydrated row so it can render field values and framework
- * metadata. The mutation boundary is deliberately narrower: the caller names the writable
- * columns — the collection's declared `input` when it has one, the catalog's mutable fields
- * otherwise — so a hook-derived column and an undeclared key alike can never become an
- * accidental graph mutation. Declared `many` relationships ride along when custom composition
- * set them (a matrix stating a schedule's complete desired set).
+ * metadata. The write boundary is deliberately narrower: the declared selection's columns, so an
+ * undeclared key can never reach the graph. The selection's `with` relations ride along when
+ * custom composition set them (a matrix stating a schedule's complete desired set).
  */
 export function pickWritableFormValues(
 	writableColumns: readonly string[],
 	values: Readonly<Record<string, unknown>>,
-	relationships: ReadonlyArray<{ readonly name: string }> = []
+	relations: readonly string[] = []
 ): Record<string, unknown> {
 	const names = [
 		...writableColumns,
-		...relationships.map(({ name }) => name).filter((name) => Reflect.get(values, name) !== undefined)
+		...relations.filter((name) => Reflect.get(values, name) !== undefined)
 	];
 	return Object.fromEntries(names.map((name) => [name, Reflect.get(values, name)]));
 }

@@ -16,6 +16,6 @@ rule:
             kind: YieldExpression
 examples:
   bad:
-    - "export const f = Effect.gen(function* () { return yield* Effect.succeed(1); });"
+    - 'export const f = Effect.gen(function* () { return yield* Effect.succeed(1); });'
   good:
-    - "export const f = Effect.succeed(1);"
+    - 'export const f = Effect.succeed(1);'

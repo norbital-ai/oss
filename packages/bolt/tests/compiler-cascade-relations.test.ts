@@ -15,9 +15,7 @@ const models = {
 const relationships = ((r) => ({
 	payroll_runs: { payslips: r.many.payslips() },
 	payslips: {
-		run: cascade(
-			r.one.payroll_runs({ from: r.payslips.payroll_run_id, to: r.payroll_runs.id })
-		),
+		run: cascade(r.one.payroll_runs({ from: r.payslips.payroll_run_id, to: r.payroll_runs.id })),
 		employment: r.one.employments({
 			from: r.payslips.employment_id,
 			to: r.employments.id

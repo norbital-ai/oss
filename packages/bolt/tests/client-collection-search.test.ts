@@ -59,6 +59,7 @@ const fakeSyncClient = () => {
 			};
 		},
 		enqueue: () => undefined,
+		answer: () => undefined,
 		publish: (
 			key: string,
 			rows: ReadonlyArray<StoredRecord>,

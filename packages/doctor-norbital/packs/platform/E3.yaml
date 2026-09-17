@@ -1,7 +1,7 @@
 id: E3
 summary: env get-or-throw or re-validation wrapper
 severity: error
-principles: [ simplicity, straightforwardness, no-bloat ]
+principles: [simplicity, straightforwardness, no-bloat]
 rule:
   any:
     - 'process.env[$NAME] ?? $FALLBACK'

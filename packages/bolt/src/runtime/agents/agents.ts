@@ -1,14 +1,4 @@
-import {
-	Cause,
-	Context,
-	Effect,
-	ExecutionPlan,
-	Exit,
-	Layer,
-	Option,
-	Schema,
-	Stream
-} from 'effect';
+import { Cause, Context, Effect, ExecutionPlan, Exit, Layer, Option, Schema, Stream } from 'effect';
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { composer, executeBuilt, jsonTextEquals } from '#lib/runtime/persistence.js';
@@ -1455,9 +1445,7 @@ export const layer = Layer.effect(
 			action: 'create' | 'update' = 'update'
 		) =>
 			// The task row is the runtime's own bookkeeping, written as the workspace: no grant, no route.
-			collections.mutate(effectId, workspaceSubject(subject), 'conversation', [mutation], 0, {
-				roots: [{ id: mutation.id, action }]
-			});
+			writeGraph(effectId, subject, [{ collection: 'conversation', row: mutation, action }]);
 
 		/**
 		 * Rows written where they live, rather than as passengers on the conversation.
@@ -1495,23 +1483,29 @@ export const layer = Layer.effect(
 			effectId: EffectId,
 			subject: Identity.Subject,
 			writes: ReadonlyArray<GraphWrite>
-		): Effect.Effect<void, Collections.BatchMutationError> =>
+		): Effect.Effect<void, Collections.BatchMutationError | Collections.QueryError> =>
 			writes.length === 0
 				? Effect.void
 				: collections
-						.mutate(
+						.write(
 							effectId,
 							workspaceSubject(subject),
-							writes[0]!.collection,
-							writes.map(({ row }) => row),
-							0,
+							[
+								...Map.groupBy(
+									writes,
+									({ collection, action }) => `${collection}\u0000${action ?? 'update'}`
+								).entries()
+							].map(([, group]) => ({
+								collection: group[0]!.collection,
+								action: group[0]!.action ?? ('update' as const),
+								inputs: group.map(({ row }) => row)
+							})),
 							{
-								roots: writes.map(({ collection, row, action, expectedVersion }) => ({
-									collection,
-									id: row.id,
-									action: action ?? 'update',
-									...(expectedVersion === undefined ? {} : { expectedVersion })
-								}))
+								baseVersions: writes.flatMap(({ collection, row, expectedVersion }) =>
+									expectedVersion === undefined
+										? []
+										: [{ row: { collection, recordId: row.id }, rowVersion: expectedVersion }]
+								)
 							}
 						)
 						.pipe(Effect.asVoid);
@@ -2047,28 +2041,23 @@ export const layer = Layer.effect(
 						message: 'This message uses a different mode. Leave it queued for its own turn.'
 					});
 			}
-			yield* collections.mutate(
+			yield* writeGraph(
 				effectId,
-				workspaceSubject(subject),
-				'conversation_message',
+				subject,
 				rows.map((message, index) => ({
-					id: message.id,
-					...(change.action === 'remove'
-						? { state: 'removed' }
-						: change.action === 'steer'
-							? { priority: 'steer' }
-							: {
-									annotation: { ...message.annotation, tag: 'input', queuePosition: index + 1 }
-								})
-				})),
-				0,
-				{
-					roots: rows.map((message) => ({
+					collection: 'conversation_message',
+					row: {
 						id: message.id,
-						action: 'update',
-						expectedVersion: message.row_version
-					}))
-				}
+						...(change.action === 'remove'
+							? { state: 'removed' }
+							: change.action === 'steer'
+								? { priority: 'steer' }
+								: {
+										annotation: { ...message.annotation, tag: 'input', queuePosition: index + 1 }
+									})
+					},
+					expectedVersion: message.row_version
+				}))
 			);
 			return { conversationId: request.conversationId };
 		});
@@ -2580,9 +2569,8 @@ export const layer = Layer.effect(
 					operation: 'generation',
 					message: 'Generation contains invalid active part indexes.'
 				});
-			const task = yield* fencedConversation(EffectId.make(`${effectId}:fence`), subject, run);
 			const fingerprint = semanticHash({ runId: run.id, callId: progress.callId });
-			const id = messageIdFor(`${task.id}:${fingerprint}`);
+			const id = messageIdFor(`${run.conversation_id}:${fingerprint}`);
 			const previous = transcript.byId(id);
 			if (previous !== undefined && previous.annotation?.tag !== 'generation')
 				return yield* new TaskRuntimeError({
@@ -2642,10 +2630,11 @@ export const layer = Layer.effect(
 			// Parts after the first continue the row they already have, and read nothing at all — that
 			// is the per-token-boundary cost this exists to remove.
 			const sequence =
-				previous?.sequence ?? lastSequence(yield* messageRows(effectId, subject, task.id)) + 1;
+				previous?.sequence ??
+				lastSequence(yield* messageRows(effectId, subject, run.conversation_id)) + 1;
 			const row = {
 				id,
-				conversation_id: task.id,
+				conversation_id: run.conversation_id,
 				sequence,
 				turn_id: run.id,
 				author: { kind: 'agent' as const, id: authorId },
@@ -2653,7 +2642,17 @@ export const layer = Layer.effect(
 				semantic_hash: fingerprint,
 				annotation
 			};
-			yield* writeMessage(effectId, subject, row, previous === undefined ? 'create' : 'update');
+			// The fence rides in the write: the conversation row is named with the turn it must still
+			// hold, and the conversation's own transform refuses the frame if a stop took it. No
+			// separate read, and no window between a fence and the write for a stop to fall into.
+			yield* writeGraph(effectId, subject, [
+				{
+					collection: 'conversation_message',
+					row,
+					action: previous === undefined ? 'create' : 'update'
+				},
+				{ collection: 'conversation', row: { id: run.conversation_id, active_turn_id: run.id } }
+			]);
 			transcript.record(yield* Schema.decodeUnknownEffect(ConversationMessageRow)(row));
 		});
 

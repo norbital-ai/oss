@@ -19,15 +19,13 @@ import { collection, field, policy, workspace } from '../src/authoring/workspace
 import * as AccessControl from '../src/runtime/access/access-control.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { PendingApproval } from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import { DispatchError } from '../src/runtime/workspace.js';
 import { FixedCommandBindings } from '../src/runtime/commands.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
-	recordId,
 	testWorkspace,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
@@ -172,7 +170,7 @@ const gatedWorkspace = workspace({
 });
 
 const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
-const gatedAuthored = {
+const gatedAuthored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
 	automations: {
 		nightly: {
@@ -185,7 +183,8 @@ const gatedAuthored = {
 		}
 	},
 	policyAuthorizations: gatedFunctions.authorizations,
-	approvalFlows: gatedFunctions.approvalFlows
+	approvalFlows: gatedFunctions.approvalFlows,
+	collections: { people: { create: { input: { columns: { name: true } } } } }
 };
 
 describe('invocation provenance', () => {
@@ -280,24 +279,15 @@ describe('invocation provenance', () => {
 	it('resumes an approved write on a task and refuses the same payload posted as a plugin', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-		const id = recordId('person-1');
-
 		const held = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id, name: 'Ada' }],
-						0,
-						{ roots: [{ id, action: 'create' }] }
-					);
-				})
-			)
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).write(effectId('create-held'), policySubject, [
+					{ collection: 'people', action: 'create', inputs: [{ name: 'Ada' }] }
+				]);
+			})
 		);
-		expect(held).toBeInstanceOf(PendingApproval);
-		const requestId = held instanceof PendingApproval ? held.requestId : '';
+		const requestId = held.pendingApproval?.requestId ?? '';
+		expect(requestId).not.toBe('');
 
 		const pending = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -309,8 +299,8 @@ describe('invocation provenance', () => {
 		// `Approvals.decide` is what enqueues the resume in production; it is driven here through the
 		// stored state because the Tasks facility is deliberately unavailable in this harness.
 		// Only the discriminant and the decider move. `status` answers the *public* projection, which
-		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
-		// replays from — so writing that projection back would approve a request nothing could resume.
+		// deliberately drops `subject` and the lock set — what the seal reads — so writing that
+		// projection back would approve a request nothing could resume.
 		await harness.database.query(
 			`update bolt_approvals
 			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))
@@ -318,13 +308,14 @@ describe('invocation provenance', () => {
 			[requestId, adminSubject.userId]
 		);
 
-		// A gated create stores its graph in the approval and writes no record, so the record settling
-		// is what tells a refused resume from an accepted one: nothing before, and still nothing after
-		// the post, which lands no row rather than landing one nobody approved.
+		// A gated create commits its row under the hold, so the stamp is what tells a refused resume
+		// from an accepted one: held before, and still held after the post, which seals nothing.
 		const beforePlugin = await harness.database.query('select approval_id from people');
-		expect(beforePlugin).toEqual([]);
+		expect(beforePlugin).toEqual([{ approval_id: requestId }]);
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
-		expect(await harness.database.query('select approval_id from people')).toEqual([]);
+		expect(await harness.database.query('select approval_id from people')).toEqual([
+			{ approval_id: requestId }
+		]);
 		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(DispatchError);
 		expect(posted._tag === 'Failure' ? posted.failure : undefined).toMatchObject({
 			code: 'unauthorized',

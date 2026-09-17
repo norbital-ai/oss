@@ -57,7 +57,10 @@ describe('AGENT-UI4 the / command menu', () => {
 
 	it('offers exactly the commands the send path parses', () => {
 		for (const command of COMPOSER_COMMANDS) {
-			expect(parseTaskSlashCommand(`/${command} x`)).toMatchObject({ kind: 'submission', mode: command });
+			expect(parseTaskSlashCommand(`/${command} x`)).toMatchObject({
+				kind: 'submission',
+				mode: command
+			});
 		}
 	});
 });

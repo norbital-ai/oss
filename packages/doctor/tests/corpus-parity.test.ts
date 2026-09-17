@@ -129,7 +129,8 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'POLICY1',
 		file: 'src/capacity.ts',
-		source: 'export const admit = (tenantId: string, enabled: boolean) => enabled ? tenantId : "none";',
+		source:
+			'export const admit = (tenantId: string, enabled: boolean) => enabled ? tenantId : "none";',
 		expect: 'fire'
 	},
 	{
@@ -190,8 +191,7 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'OPS1',
 		file: 'src/health.ts',
-		source:
-			"export const route = { status: dependencies.ready ? 'ready' : 'starting' };",
+		source: "export const route = { status: dependencies.ready ? 'ready' : 'starting' };",
 		expect: 'quiet'
 	},
 	{
@@ -367,7 +367,8 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'Q4',
 		file: 'src/probe.ts',
-		source: 'const helper = (name) => name.toLowerCase();\nexport const show = (name) => helper(name);',
+		source:
+			'const helper = (name) => name.toLowerCase();\nexport const show = (name) => helper(name);',
 		expect: 'fire'
 	},
 	{
@@ -499,7 +500,8 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	{
 		id: 'BOOT1',
 		file: 'scripts/server.mjs',
-		source: "function hydrate() { loadEnvFile('.env'); } hydrate(); const environment = process.env;",
+		source:
+			"function hydrate() { loadEnvFile('.env'); } hydrate(); const environment = process.env;",
 		expect: 'quiet'
 	},
 	{
@@ -773,7 +775,8 @@ const EXTRAS: ReadonlyArray<Observation> = [
 		id: 'IMP1',
 		file: 'src/feature/panel/probe.ts',
 		fixture: {
-			'tsconfig.json': '{ "compilerOptions": { "baseUrl": ".", "paths": { "#lib/*": ["src/lib/*"] } } }',
+			'tsconfig.json':
+				'{ "compilerOptions": { "baseUrl": ".", "paths": { "#lib/*": ["src/lib/*"] } } }',
 			'src/lib/value.ts': 'export const v = 1;'
 		},
 		source: "import { v } from '../../vendor/value.js';\nexport const x = v;",
@@ -883,7 +886,10 @@ const EXTRAS: ReadonlyArray<Observation> = [
 	}
 ];
 
-function observationsFor(id: string, docs: ReadonlyMap<string, Documented>): ReadonlyArray<Observation> {
+function observationsFor(
+	id: string,
+	docs: ReadonlyMap<string, Documented>
+): ReadonlyArray<Observation> {
 	const document = docs.get(id);
 	const fromYaml: Array<Observation> = [];
 	if (document !== undefined) {
@@ -911,7 +917,10 @@ function fires(rule: Rule, observation: Observation): boolean {
 	const file = observation.file ?? 'src/probe.ts';
 	const root = mkdtempSync(join(tmpdir(), 'doctor-d8-'));
 	try {
-		const files: Record<string, string> = { ...(observation.fixture ?? {}), [file]: observation.source };
+		const files: Record<string, string> = {
+			...(observation.fixture ?? {}),
+			[file]: observation.source
+		};
 		writeFileSync(join(root, 'package.json'), '{"name":"doctor-d8","type":"module"}');
 		for (const [path, contents] of Object.entries(files)) {
 			mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -973,12 +982,13 @@ test('the harness refuses a verdict below three discriminating observations', ()
 });
 
 test('every leftover structure rule with a discriminating harness is proven', () => {
-	const leftover = verdicts.filter((verdict) => (LEFTOVER as ReadonlyArray<string>).includes(verdict.id));
+	const leftover = verdicts.filter((verdict) =>
+		(LEFTOVER as ReadonlyArray<string>).includes(verdict.id)
+	);
 	const failures = leftover.flatMap((verdict) => verdict.failures);
 	assert.deepEqual(failures, [], failures.join('\n'));
 	const proven = leftover.filter((verdict) => verdict.proven).map((verdict) => verdict.id);
-	for (const id of LEFTOVER)
-		assert.ok(proven.includes(id), `${id} has extras and must prove`);
+	for (const id of LEFTOVER) assert.ok(proven.includes(id), `${id} has extras and must prove`);
 });
 
 test('first-sweep structure rules keep their existing proofs', () => {
@@ -1017,10 +1027,7 @@ const FIRST_SWEEP_MOVED = [
 
 test('leftover structure rules with visitor-era extras are the ones that move', () => {
 	const moved = verdicts.filter((verdict) => (MOVED as ReadonlyArray<string>).includes(verdict.id));
-	assert.deepEqual(
-		moved.map((verdict) => verdict.id).sort(),
-		[...MOVED].sort()
-	);
+	assert.deepEqual(moved.map((verdict) => verdict.id).sort(), [...MOVED].sort());
 	for (const verdict of moved)
 		assert.ok(
 			verdict.proven && verdict.observations >= FLOOR,
@@ -1033,8 +1040,7 @@ test('leftover structure rules with visitor-era extras are the ones that move', 
 
 test('first-sweep structure rules with visitor-era extras are the ones that move', () => {
 	const extrasById = new Map<string, number>();
-	for (const extra of EXTRAS)
-		extrasById.set(extra.id, (extrasById.get(extra.id) ?? 0) + 1);
+	for (const extra of EXTRAS) extrasById.set(extra.id, (extrasById.get(extra.id) ?? 0) + 1);
 	for (const id of FIRST_SWEEP_MOVED) {
 		const verdict = verdicts.find((row) => row.id === id);
 		assert.ok(verdict !== undefined, `${id} is missing`);

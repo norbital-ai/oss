@@ -55,7 +55,9 @@ const artifactWithEverything = (withMcp = true): string =>
 					: []
 			}
 		},
-		collectionHooks: [{ name: 'invoices', path: `${root}/src/collections/invoices/+hooks.ts` }],
+		collectionFiles: [
+			{ name: 'invoices', path: `${root}/src/collections/invoices/+collection.ts` }
+		],
 		apps: [
 			{
 				name: 'billing',
@@ -128,7 +130,11 @@ describe('emitted artifact bindings', () => {
 		expect(artifact).not.toContain('declaredMcpServers');
 		expect(artifact).not.toContain('agentTools');
 		expect(artifact).not.toContain('Use the approved workflow.');
+		expect(artifact).toContain('import collection0 from');
 		expect(artifact).toContain('"invoices": pipelines0');
+		expect(artifact).toContain('const declaredCollections = {"invoices": collection0};');
+		expect(artifact).toContain('collections: declaredCollections');
+		expect(artifact).not.toMatch(/declaredHooks|hookSourcePaths/);
 		expect(artifact).toContain('name: "nightly"');
 		expect(artifact).toContain('pipelines: declaredPipelines');
 		expect(artifact).toContain('automations: declaredAutomations');
@@ -145,7 +151,7 @@ describe('emitted artifact bindings', () => {
 		const artifact = artifactWithEverything();
 		for (const sourcePath of [
 			'src/collections/invoices/+model.ts',
-			'src/collections/invoices/+hooks.ts',
+			'src/collections/invoices/+collection.ts',
 			'src/collections/invoices/+pipelines.ts',
 			'src/collections/invoices/+integrations.ts',
 			'src/apps/+billing.svelte',

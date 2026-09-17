@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	captureFieldsForWorkspace,
 	projectLinkAndRouteValues,
@@ -73,40 +74,54 @@ afterEach(async () => {
 
 describe('sync engine database mutation capture', () => {
 	it('captures authoritative create, update, and delete link values after each commit', async () => {
-		harness = await makeBoltTestRuntime(definition);
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				collections: {
+					parents: { create: { input: { columns: { name: true } } } },
+					items: {
+						create: { input: { columns: { parent_id: true, label: true, payload: true } } },
+						update: { input: { columns: { label: true } } },
+						delete: {}
+					}
+				}
+			}
+		});
 		const marker = 'UNDECLARED-LARGE-BODY';
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
-				const parent = yield* collections.mutate(
-					EffectId.make('capture-parent'),
-					adminSubject,
-					'parents',
-					[{ name: 'Parent' }]
-				);
+				const parent = yield* collections.write(EffectId.make('capture-parent'), adminSubject, [
+					{ collection: 'parents', action: 'create', inputs: [{ name: 'Parent' }] }
+				]);
 				yield* syncCommit.drainChanges;
 				const parentId = String(parent.records[0]?.['id']);
-				const item = yield* collections.mutate(
-					EffectId.make('capture-insert'),
-					adminSubject,
-					'items',
-					[
-						{
-							parent_id: parentId,
-							label: marker.repeat(256),
-							payload: { marker, nested: Array.from({ length: 128 }, () => marker) }
-						}
-					]
-				);
+				const item = yield* collections.write(EffectId.make('capture-insert'), adminSubject, [
+					{
+						collection: 'items',
+						action: 'create',
+						inputs: [
+							{
+								parent_id: parentId,
+								label: marker.repeat(256),
+								payload: { marker, nested: Array.from({ length: 128 }, () => marker) }
+							}
+						]
+					}
+				]);
 				const itemId = String(item.records[0]?.['id']);
 				const inserted = yield* syncCommit.drainChanges;
-				yield* collections.mutate(EffectId.make('capture-update'), adminSubject, 'items', [
-					{ id: itemId, label: 'Updated label' }
+				yield* collections.write(EffectId.make('capture-update'), adminSubject, [
+					{
+						collection: 'items',
+						action: 'update',
+						inputs: [{ id: itemId, label: 'Updated label' }]
+					}
 				]);
 				const updated = yield* syncCommit.drainChanges;
-				yield* collections.delete(EffectId.make('capture-delete'), adminSubject, 'items', [
-					itemId
+				yield* collections.write(EffectId.make('capture-delete'), adminSubject, [
+					{ collection: 'items', action: 'delete', inputs: [{ id: itemId }] }
 				]);
 				const deleted = yield* syncCommit.drainChanges;
 				return { parentId, itemId, inserted, updated, deleted };

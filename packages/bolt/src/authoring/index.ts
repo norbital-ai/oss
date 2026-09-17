@@ -14,20 +14,37 @@ export { approveBy, noApproval } from './approval-flow.js';
 export { captureApproval } from './approval-outcome.js';
 export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './approval-flow.js';
 
+export { defineCollection } from './collection-schema.js';
+export type {
+	AnyCollectionDeclaration,
+	AuthoredCollectionModule,
+	CollectionDeclaration,
+	CollectionInputOf,
+	CollectionInputSelection,
+	CollectionLifecycleEvent,
+	CollectionNotificationEvent,
+	CollectionNotificationRule,
+	CollectionNotifications,
+	CollectionOperationDeclaration,
+	CollectionPatchPayload,
+	CollectionPayload,
+	CollectionRelationAction,
+	CollectionRelationActions,
+	CollectionRelationSelection,
+	CollectionSelectedColumns,
+	CollectionSelectedRelations,
+	CollectionTransform,
+	CollectionTransformDatabase
+} from './collection-schema.js';
+
 export type {
 	AnySchema,
 	AppName,
 	Api,
 	CollectionSearch,
-	CollectionMutationValues,
-	CollectionHooks,
-	DeleteAfterContext,
-	DeleteBeforeContext,
-	DeletePrepareContext,
-	MutateAfterContext,
-	MutateBeforeContext,
-	MutateEditContext,
-	MutatePrepareContext,
+	CollectionHistoryAnchor,
+	CollectionRevision,
+	CollectionWriteApi,
 	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,

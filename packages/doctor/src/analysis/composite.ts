@@ -92,7 +92,8 @@ export function compare(report: ComparisonSide, baseline: ComparisonSide): Compa
 		if (report.scorePrecision[key] !== null && baseline.scorePrecision[key] !== null)
 			deltas[key] =
 				Math.round(
-					((report.scorePrecision[key] ?? Number.NaN) - (baseline.scorePrecision[key] ?? Number.NaN)) *
+					((report.scorePrecision[key] ?? Number.NaN) -
+						(baseline.scorePrecision[key] ?? Number.NaN)) *
 						1_000_000_000
 				) / 1_000_000_000;
 	for (const key of [
@@ -115,8 +116,7 @@ export function compare(report: ComparisonSide, baseline: ComparisonSide): Compa
 		'staticWarnings'
 	])
 		if (report.totals[key] !== null && baseline.totals[key] !== null)
-			deltas[key] =
-				(report.totals[key] ?? Number.NaN) - (baseline.totals[key] ?? Number.NaN);
+			deltas[key] = (report.totals[key] ?? Number.NaN) - (baseline.totals[key] ?? Number.NaN);
 	const regressions: Array<string> = [];
 	if ((deltas.coupling ?? 0) > 0) regressions.push(`coupling +${deltas.coupling}`);
 	for (const key of [

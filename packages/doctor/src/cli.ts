@@ -142,8 +142,6 @@ async function main(): Promise<void> {
 }
 
 await main().catch((error: unknown) => {
-	process.stderr.write(
-		`norbital-doctor: ${getErrorMessage(error)}\n`
-	);
+	process.stderr.write(`norbital-doctor: ${getErrorMessage(error)}\n`);
 	process.exitCode = 2;
 });

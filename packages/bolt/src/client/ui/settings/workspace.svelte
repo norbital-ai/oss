@@ -272,7 +272,7 @@
 			collection={MEMBERS_COLLECTION}
 			view="workspace-settings:people"
 			title="Members"
-			description="Open a member to change their administrator status or team. Membership rows are a projection, not a collection mutate."
+			description="Open a member to change their administrator status or team. Membership rows are a projection, not a collection write."
 			features={{ create: false }}
 			query={{ orderBy: { name: 'asc' } }}
 		>

@@ -48,7 +48,9 @@
 	onclick={handleClick}
 	data-dismiss-mobile-sheet
 	data-testid="workspace-agent-trigger"
-	class="rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'}"
+	class="rounded-md text-xs hover:bg-accent data-[state=open]:bg-accent {expanded
+		? 'h-8 px-2'
+		: 'size-8 justify-center p-0'}"
 >
 	<!--
 		The same chip every other top-level sidebar item wears, so the orb sits on the same

@@ -16,17 +16,16 @@ const isVectorField = (field: FieldDefinition | undefined): boolean =>
 /** Restores the public `readonly number[]` contract from pgvector's text wire value. */
 const decodeVectorValue = (field: string, value: unknown): unknown => {
 	if (value == null) return value;
-	const decoded =
-		isString(value)
-			? (() => {
-					try {
-						return JSON.parse(value) as unknown;
-					} catch {
-						/* best effort */
-						return undefined;
-					}
-				})()
-			: value;
+	const decoded = isString(value)
+		? (() => {
+				try {
+					return JSON.parse(value) as unknown;
+				} catch {
+					/* best effort */
+					return undefined;
+				}
+			})()
+		: value;
 	if (
 		Array.isArray(decoded) &&
 		decoded.length > 0 &&

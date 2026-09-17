@@ -1,7 +1,7 @@
 id: PERF3
 summary: three or more eager collection traversals are chained
 severity: error
-principles: [ simplicity, efficiency, no-bloat ]
+principles: [simplicity, efficiency, no-bloat]
 rule:
   all:
     - pattern: $S.$A($X).$B($Y).$C($Z)

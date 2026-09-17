@@ -41,7 +41,7 @@ describe('system collection catalog', () => {
 		const approval = byName.get('approval_request');
 		expect(approval).toBeDefined();
 		const fields = approval?.fields.map(({ name }) => name) ?? [];
-		for (const column of ['collection_name', 'action', 'record_id', 'status', 'proposed_values']) {
+		for (const column of ['collection_name', 'action', 'record_id', 'status', 'applied_at']) {
 			expect(fields).toContain(column);
 		}
 	});

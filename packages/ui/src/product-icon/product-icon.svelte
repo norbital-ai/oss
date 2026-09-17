@@ -99,7 +99,7 @@
 			<circle cx="12" cy="12" r="8" />
 			<path d="M12 7v5" />
 			<path d="m12 12 3 2" class="accent-stroke" />
-		{:else if name === 'hooks'}
+		{:else if name === 'writes'}
 			<path d="M6 8v5a6 6 0 0 0 12 0v-1" />
 			<path d="M6 4v4" class="accent-stroke" />
 		{:else if name === 'pipelines'}

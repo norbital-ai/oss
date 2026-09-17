@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { CollectionMutateRequest, CollectionQueryRequest } from '../src/index.js';
+import { CollectionMutationPush, CollectionQueryRequest } from '../src/index.js';
 
-/** The sole declarative collection mutation request accepted by both protocol endpoints. */
-describe('the declarative mutation request', () => {
+/** The one write the browser pushes: a collection, a root action and its declared inputs. */
+describe('the collection mutation push', () => {
 	const common = {
 		protocolVersion: 2,
 		idempotencyKey: 'mutation-1',
@@ -13,22 +13,19 @@ describe('the declarative mutation request', () => {
 		baseVersions: []
 	} as const;
 
-	it('accepts a mutation push with client-minted record identities at every graph level', () => {
+	it('accepts a create batch whose inputs carry relation actions', () => {
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				...common,
 				graph: {
-					action: 'mutate',
 					collection: 'orders',
-					rows: [
+					action: 'create',
+					inputs: [
 						{
-							action: 'create',
-							values: {
-								id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42310',
-								reference: 'ORD-1',
-								order_line_order: [{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }]
-							}
-						}
+							reference: 'ORD-1',
+							order_lines: { create: [{ sku: 'a-1' }] }
+						},
+						{ reference: 'ORD-2' }
 					]
 				}
 			})
@@ -37,12 +34,12 @@ describe('the declarative mutation request', () => {
 
 	it('accepts a whole-row base vector for every existing row touched by the graph', () => {
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				...common,
 				graph: {
-					action: 'mutate',
 					collection: 'orders',
-					rows: [{ action: 'update', values: { id: 'order-1', reference: 'ORD-2' } }]
+					action: 'update',
+					inputs: [{ id: 'order-1', reference: 'ORD-2' }]
 				},
 				baseVersions: [
 					{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 4 },
@@ -52,9 +49,9 @@ describe('the declarative mutation request', () => {
 		).toBe(true);
 	});
 
-	it('rejects the removed pre-v2 request shape', () => {
+	it('rejects a flat single-record request', () => {
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				action: 'create',
 				collection: 'orders',
 				idempotencyKey: 'mutation-3',
@@ -68,79 +65,49 @@ describe('the declarative mutation request', () => {
 	it('requires the version, physical partition and schema identity', () => {
 		const create = {
 			...common,
-			graph: {
-				action: 'mutate',
-				collection: 'orders',
-				rows: [{ action: 'create', values: { id: 'order-1' } }]
-			}
+			graph: { collection: 'orders', action: 'create', inputs: [{ reference: 'ORD-1' }] }
 		} as const;
-		expect(Schema.is(CollectionMutateRequest)({ ...create, protocolVersion: 1 })).toBe(false);
-		expect(Schema.is(CollectionMutateRequest)({ ...create, partitionKey: '' })).toBe(false);
-		expect(Schema.is(CollectionMutateRequest)({ ...create, schemaFingerprint: '' })).toBe(false);
+		expect(Schema.is(CollectionMutationPush)({ ...create, protocolVersion: 1 })).toBe(false);
+		expect(Schema.is(CollectionMutationPush)({ ...create, partitionKey: '' })).toBe(false);
+		expect(Schema.is(CollectionMutationPush)({ ...create, schemaFingerprint: '' })).toBe(false);
 		expect(
-			Schema.is(CollectionMutateRequest)({
-				...create,
-				graph: { ...create.graph, collection: '' }
-			})
+			Schema.is(CollectionMutationPush)({ ...create, graph: { ...create.graph, collection: '' } })
 		).toBe(false);
 	});
 
-	it('accepts a mutate batch of write rows', () => {
+	it('admits one root action per push and refuses an empty batch', () => {
+		for (const action of ['create', 'update', 'delete'] as const) {
+			expect(
+				Schema.is(CollectionMutationPush)({
+					...common,
+					graph: { collection: 'orders', action, inputs: [{ id: 'order-1' }] }
+				})
+			).toBe(true);
+		}
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				...common,
-				graph: {
-					action: 'mutate',
-					collection: 'orders',
-					rows: [
-						{ action: 'create', values: { id: 'order-1', reference: 'ORD-1' } },
-						{ action: 'update', values: { id: 'order-2', reference: 'ORD-2' } }
-					]
-				}
-			})
-		).toBe(true);
-	});
-
-	it('accepts a delete batch of unique ids and rejects a single-id graph', () => {
-		expect(
-			Schema.is(CollectionMutateRequest)({
-				...common,
-				graph: { action: 'delete', collection: 'orders', ids: ['order-1', 'order-2'] }
-			})
-		).toBe(true);
-		expect(
-			Schema.is(CollectionMutateRequest)({
-				...common,
-				graph: { action: 'delete', collection: 'orders', id: 'order-1' }
+				graph: { collection: 'orders', action: 'mutate', inputs: [{ id: 'order-1' }] }
 			})
 		).toBe(false);
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				...common,
-				graph: { action: 'delete', collection: 'orders', ids: [] }
-			})
-		).toBe(false);
-		expect(
-			Schema.is(CollectionMutateRequest)({
-				...common,
-				graph: { action: 'delete', collection: 'orders', ids: ['order-1', 'order-1'] }
+				graph: { collection: 'orders', action: 'delete', inputs: [] }
 			})
 		).toBe(false);
 	});
 
 	it('bounds the attacker-controlled idempotency key', () => {
+		const graph = { collection: 'orders', action: 'create', inputs: [{}] } as const;
 		expect(
-			Schema.is(CollectionMutateRequest)({
-				...common,
-				idempotencyKey: 'x'.repeat(257),
-				graph: { action: 'mutate', collection: 'orders', rows: [{ action: 'create', values: {} }] }
-			})
+			Schema.is(CollectionMutationPush)({ ...common, idempotencyKey: 'x'.repeat(257), graph })
 		).toBe(false);
 		expect(
-			Schema.is(CollectionMutateRequest)({
+			Schema.is(CollectionMutationPush)({
 				...common,
 				idempotencyKey: 'mutation\u0000injected',
-				graph: { action: 'mutate', collection: 'orders', rows: [{ action: 'create', values: {} }] }
+				graph
 			})
 		).toBe(false);
 	});

@@ -29,16 +29,28 @@ function fixture(): string {
 	// 2 code lines at the checkpoint; gains one code line on disc.
 	writeFileSync(join(root, 'src/hosting/a.ts'), 'export const a = 1;\nexport const b = 2;\n');
 	// Removed on disc entirely.
-	writeFileSync(join(root, 'src/hosting/b.ts'), 'export const gone = 1;\nexport const also = 2;\nexport const third = 3;\n');
+	writeFileSync(
+		join(root, 'src/hosting/b.ts'),
+		'export const gone = 1;\nexport const also = 2;\nexport const third = 3;\n'
+	);
 	// Comment-only edit on disc: changed content, zero code-LOC movement.
 	writeFileSync(join(root, 'src/ui/c.ts'), 'export const c = 1;\n');
 	// A test file, out of scope by default.
-	writeFileSync(join(root, 'tests/hosting/a.test.ts'), 'import assert from "node:assert/strict";\n');
+	writeFileSync(
+		join(root, 'tests/hosting/a.test.ts'),
+		'import assert from "node:assert/strict";\n'
+	);
 	git(root, ['add', '.']);
 	git(root, ['commit', '-q', '-m', 'checkpoint']);
-	writeFileSync(join(root, 'src/hosting/a.ts'), 'export const a = 1;\nexport const b = 2;\nexport const added = 3;\n');
+	writeFileSync(
+		join(root, 'src/hosting/a.ts'),
+		'export const a = 1;\nexport const b = 2;\nexport const added = 3;\n'
+	);
 	rmSync(join(root, 'src/hosting/b.ts'));
-	writeFileSync(join(root, 'src/ui/c.ts'), '// a comment that must not count as code\nexport const c = 1;\n');
+	writeFileSync(
+		join(root, 'src/ui/c.ts'),
+		'// a comment that must not count as code\nexport const c = 1;\n'
+	);
 	writeFileSync(join(root, 'src/hosting/d.ts'), 'export const d = 1;\nexport const e = 2;\n');
 	return root;
 }
@@ -53,7 +65,10 @@ test('delta moves files and code LOC per pillar between checkpoint and working t
 		assert.equal(delta.includeTests, false);
 		const hosting = delta.pillars.find(({ pillar }) => pillar.endsWith(':hosting'));
 		assert.ok(hosting, 'hosting is its own pillar');
-		assert.ok(hosting.added.some((path) => path.endsWith('src/hosting/d.ts')), `added lists d.ts: ${JSON.stringify(hosting.added)}`);
+		assert.ok(
+			hosting.added.some((path) => path.endsWith('src/hosting/d.ts')),
+			`added lists d.ts: ${JSON.stringify(hosting.added)}`
+		);
 		assert.ok(hosting.removed.some((path) => path.endsWith('src/hosting/b.ts')));
 		assert.ok(hosting.changed.some((path) => path.endsWith('src/hosting/a.ts')));
 		assert.equal(hosting.base.files, 2);
@@ -75,7 +90,10 @@ test('delta moves files and code LOC per pillar between checkpoint and working t
 		assert.equal(ui.delta.physicalLoc, 1);
 		// Pillar rows and the totals describe the same inventory.
 		const sum = delta.pillars.reduce(
-			(totals, { delta: row }) => ({ files: totals.files + row.files, codeLoc: totals.codeLoc + row.codeLoc }),
+			(totals, { delta: row }) => ({
+				files: totals.files + row.files,
+				codeLoc: totals.codeLoc + row.codeLoc
+			}),
 			{ files: 0, codeLoc: 0 }
 		);
 		assert.equal(delta.totals.delta.files, sum.files);
@@ -101,35 +119,41 @@ test('tests stay out of scope by default and enter it with includeTests', () => 
 	}
 });
 
-	test('rows sort most-reduced first and the summary prints a totals line', () => {
-		const root = fixture();
-		try {
-			const delta = computeCheckpointDelta({ root, against: 'HEAD' });
-			for (let index = 1; index < delta.pillars.length; index += 1) {
-				const left = delta.pillars[index - 1];
-				const right = delta.pillars[index];
-				assert.ok(
-					left.delta.codeLoc < right.delta.codeLoc ||
-						(left.delta.codeLoc === right.delta.codeLoc && left.pillar.localeCompare(right.pillar) <= 0),
-					'pillars sort by delta codeLoc, ties by id'
-				);
-			}
-			const summary = deltaSummary(delta);
-			assert.match(summary, /^norbital-doctor delta: HEAD \(/);
-			assert.match(summary, /production only/);
-			assert.match(summary, /totals/);
-			assert.match(summary, /pillar \(sub tree\)/);
-			const withTests = deltaSummary(computeCheckpointDelta({ root, against: 'HEAD', includeTests: true }));
-			assert.match(withTests, /including tests/);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
+test('rows sort most-reduced first and the summary prints a totals line', () => {
+	const root = fixture();
+	try {
+		const delta = computeCheckpointDelta({ root, against: 'HEAD' });
+		for (let index = 1; index < delta.pillars.length; index += 1) {
+			const left = delta.pillars[index - 1];
+			const right = delta.pillars[index];
+			assert.ok(
+				left.delta.codeLoc < right.delta.codeLoc ||
+					(left.delta.codeLoc === right.delta.codeLoc &&
+						left.pillar.localeCompare(right.pillar) <= 0),
+				'pillars sort by delta codeLoc, ties by id'
+			);
 		}
-	});
+		const summary = deltaSummary(delta);
+		assert.match(summary, /^norbital-doctor delta: HEAD \(/);
+		assert.match(summary, /production only/);
+		assert.match(summary, /totals/);
+		assert.match(summary, /pillar \(sub tree\)/);
+		const withTests = deltaSummary(
+			computeCheckpointDelta({ root, against: 'HEAD', includeTests: true })
+		);
+		assert.match(withTests, /including tests/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test('invalid evidence fails loudly instead of returning an empty delta', () => {
 	const root = fixture();
 	try {
-		assert.throws(() => computeCheckpointDelta({ root, against: 'no-such-ref' }), /unknown git checkpoint/);
+		assert.throws(
+			() => computeCheckpointDelta({ root, against: 'no-such-ref' }),
+			/unknown git checkpoint/
+		);
 		const plain = mkdtempSync(join(tmpdir(), 'doctor-delta-nogit-'));
 		try {
 			assert.throws(() => computeCheckpointDelta({ root: plain, against: 'HEAD' }), /failed in/);

@@ -216,7 +216,7 @@ describe('a host can read an integration out of the manifest', () => {
 		const artifact = renderArtifact({
 			metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
 			compiledAuthoring,
-			collectionHooks: [],
+			collectionFiles: [],
 			apps: [],
 			policies: [],
 			functions: [],
@@ -464,6 +464,13 @@ const scriptedConnector = (
 	};
 };
 
+/** The write contract an importable collection declares: the columns a pull may land. */
+const mirroredWrite = {
+	create: { input: { columns: { external_id: true, source: true, title: true } } },
+	update: { input: { columns: { external_id: true, source: true, title: true } } },
+	delete: {}
+} as const;
+
 let harness: BoltTestRuntime | undefined;
 
 afterEach(async () => {
@@ -511,7 +518,11 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		]);
 		harness = await makeBoltTestRuntime(definition, {
 			connector: connector.binding,
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				integrations: described.authored,
+				collections: { mirrored: mirroredWrite }
+			}
 		});
 		await pull('run-1', 'vendors');
 		await pull('run-2', 'vendors');
@@ -534,7 +545,11 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		]);
 		harness = await makeBoltTestRuntime(definition, {
 			connector: connector.binding,
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				integrations: described.authored,
+				collections: { mirrored: mirroredWrite }
+			}
 		});
 		await pull('run-invoices', 'invoices');
 		await pull('run-vendors', 'vendors');
@@ -554,7 +569,11 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		const connector = scriptedConnector([{ status: 200, body: { next: 'cursor-1', items: [] } }]);
 		harness = await makeBoltTestRuntime(definition, {
 			connector: connector.binding,
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				integrations: described.authored,
+				collections: { mirrored: mirroredWrite }
+			}
 		});
 		await harness.database.query(
 			"insert into bolt_integrations (name, enabled, cursor, lease_until) values ($1, true, null, now() + interval '5 minutes')",
@@ -574,7 +593,11 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		const connector = scriptedConnector([{ status: 200, body: { next: 'cursor-1', items: [] } }]);
 		harness = await makeBoltTestRuntime(definition, {
 			connector: connector.binding,
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				integrations: described.authored,
+				collections: { mirrored: mirroredWrite }
+			}
 		});
 		await harness.database.query(
 			"insert into bolt_integrations (name, enabled, cursor, lease_until) values ($1, true, null, now() - interval '1 minute')",
@@ -600,7 +623,11 @@ describe('a scheduled pull is safe to fire repeatedly', () => {
 		const connector = scriptedConnector([{ status: 200, body: { items: [] } }]);
 		harness = await makeBoltTestRuntime(definition, {
 			connector: connector.binding,
-			authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+			authored: {
+				...emptyAuthoredRuntime,
+				integrations: described.authored,
+				collections: { mirrored: mirroredWrite }
+			}
 		});
 		await expect(pull('run-stale', 'orders')).rejects.toThrow(/no receive binding named orders/);
 	});

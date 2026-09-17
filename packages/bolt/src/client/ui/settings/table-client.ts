@@ -48,8 +48,7 @@ const matchingRows = (
 				collectionTableRowMatchesWhere(row, query?.where) &&
 				// Lexical search re-filters locally; a semantic filter is the server's decision (the
 				// rows arrived already ranked against the corpus), so it constrains nothing here.
-				(!isString(query?.search) ||
-					collectionTableRowMatchesSearch(row, query.search)) &&
+				(!isString(query?.search) || collectionTableRowMatchesSearch(row, query.search)) &&
 				collectionTableRowMatchesFilters(row, filters)
 		)
 		.toSorted((left, right) => {
@@ -66,13 +65,7 @@ const matchingRows = (
 		});
 };
 
-/**
- * In-memory operations shared by every read-only tab.
- *
- * The settings views declare no editing actions, so their mutation capability is unreachable. It
- * still refuses explicitly if a future caller invokes it: these rows are projections of access
- * state and cannot be written back through the collection command surface.
- */
+/** In-memory reads shared by every read-only tab: projections of access state, never written back. */
 export const readOnly = (
 	rows: ReadonlyArray<CollectionRecord>
 ): CollectionOperations<CollectionType> => ({
@@ -99,10 +92,7 @@ export const readOnly = (
 		}
 		return settled(lanes);
 	},
-	count: (query, options) => settled(matchingRows(rows, query, options?.filters).length),
-	mutate: () => Effect.runPromise(Effect.fail(new Error('This in-memory collection is read-only'))),
-	delete: () => Effect.runPromise(Effect.fail(new Error('This in-memory collection is read-only'))),
-	pending: 0
+	count: (query, options) => settled(matchingRows(rows, query, options?.filters).length)
 });
 
 /**
@@ -121,6 +111,9 @@ export const inMemoryCollectionClient = (
 	}
 	return {
 		db: clients,
+		// No definition here declares a write, so no write or history surface exists for any of them.
+		collection: {},
+		collection_history: {},
 		collections: definitions,
 		// Addressed by name for the surfaces that hold a record rather than a collection.
 		records: {

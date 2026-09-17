@@ -64,9 +64,15 @@ test('no pack directory is present but unloaded', async () => {
 	const { effectPack, effectCeremonyPack } = await import('@norbital-ai/doctor-effect');
 	const { stringlyPack, overlapPack, graphPack } = await import('../build/index.js');
 	const loaded = new Set(
-		[norbitalPack, reactivePack, effectPack, effectCeremonyPack, stringlyPack, overlapPack, graphPack].flatMap(
-			(pack) => pack.rules.map((rule) => rule.id)
-		)
+		[
+			norbitalPack,
+			reactivePack,
+			effectPack,
+			effectCeremonyPack,
+			stringlyPack,
+			overlapPack,
+			graphPack
+		].flatMap((pack) => pack.rules.map((rule) => rule.id))
 	);
 	const unreachable = shippedRules()
 		.map((rule) => rule.id)

@@ -82,11 +82,11 @@ same config ships in a tenant workspace.
 
 ## Tiers
 
-| Pass         | Cost                                        | Runs   |
-| ------------ | ------------------------------------------- | ------ |
-| `syntactic`  | per file, pure                              | always |
-| `graph`      | whole repository, module graph              | always |
-| `typeAware`  | a TypeScript program per owning tsconfig    | always |
+| Pass        | Cost                                     | Runs   |
+| ----------- | ---------------------------------------- | ------ |
+| `syntactic` | per file, pure                           | always |
+| `graph`     | whole repository, module graph           | always |
+| `typeAware` | a TypeScript program per owning tsconfig | always |
 
 ## Scope with `.doctorignore`
 

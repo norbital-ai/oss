@@ -117,6 +117,7 @@ export {
 	type SessionGateway,
 	type SessionGatewayAddress,
 	type SessionGatewayDocument,
+	type SessionGatewayFiles,
 	type SessionGatewayInput,
 	type WorkspaceDocumentInput
 } from './session-gateway.js';

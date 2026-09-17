@@ -58,64 +58,64 @@ const prefixEntry = (key: string, count: number, loadedPrefix = count): SyncSubE
 };
 
 describe('clean-cut live query v2 protocol', () => {
-	it('routes pending proposals to matching scopes and retains conservative partial-update fanout', () => {
+	it('routes a change to the scopes its fields could match and fans out conservatively otherwise', () => {
 		const registry = new SyncRegistry<SyncRegistryConnection>({ hash });
 		for (let index = 0; index < 1000; index += 1) {
 			registry.attach(connection(`employee-${index}`), [
 				{
-					...prefixEntry(`pending-${index}`, 0, 100),
+					...prefixEntry(`requests-${index}`, 0, 100),
 					input: {
 						kind: 'findMany',
 						collection: 'leave_requests',
-						pendingOnly: true,
 						where: { employment_id: { eq: `employee-${index}` } },
 						limit: 100
 					},
-					planKey: `pending-employee-${index}`,
-					dependencies: ['leave_requests', 'approval_request'],
+					planKey: `requests-employee-${index}`,
+					dependencies: ['leave_requests', 'employments'],
 					routing: [{ field: 'employment_id', values: [`employee-${index}`] }]
 				}
 			]);
 		}
-		const after = {
-			collection_name: 'leave_requests',
-			record_id: 'leave',
-			proposed_values: { employment_id: 'employee-3' }
-		};
+		const after = { employment_id: 'employee-3', days: 1 };
 		expect(
 			registry.affectedStates([
-				{ collection: 'approval_request', id: 'approval', operation: 'insert', after }
+				{ collection: 'leave_requests', id: 'leave', operation: 'insert', after }
 			])
 		).toHaveLength(1);
 		expect(
 			registry.affectedStates([
 				{
-					collection: 'approval_request',
-					id: 'approval',
+					collection: 'leave_requests',
+					id: 'leave',
 					operation: 'update',
 					before: after,
-					after: { ...after, proposed_values: { employment_id: 'employee-4' } }
+					after: { ...after, employment_id: 'employee-4' }
 				}
 			])
 		).toHaveLength(2);
 		expect(
 			registry.affectedStates([
 				{
-					collection: 'approval_request',
-					id: 'approval',
-					operation: 'insert',
-					after: { ...after, collection_name: 'claims' }
+					collection: 'leave_requests',
+					id: 'leave',
+					operation: 'update',
+					before: after,
+					after: { ...after, days: 2 }
 				}
 			])
+		).toHaveLength(1);
+		expect(
+			registry.affectedStates([{ collection: 'claims', id: 'claim', operation: 'insert', after }])
 		).toEqual([]);
+		// A dependency that is not the query's own collection cannot be routed by its fields.
 		expect(
 			registry.affectedStates([
 				{
-					collection: 'approval_request',
-					id: 'approval',
+					collection: 'employments',
+					id: 'employee-3',
 					operation: 'update',
-					before: after,
-					after: { ...after, proposed_values: { days: 2 } }
+					before: { name: 'A' },
+					after: { name: 'B' }
 				}
 			])
 		).toHaveLength(1000);

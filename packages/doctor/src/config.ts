@@ -193,11 +193,9 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	}
 
 	const implicitPatterns = config.patterns === undefined;
-	const patterns = await loadPatternFiles(
-		root,
-		config.patterns ?? DEFAULT_PATTERN_GLOBS,
-		{ implicit: implicitPatterns }
-	);
+	const patterns = await loadPatternFiles(root, config.patterns ?? DEFAULT_PATTERN_GLOBS, {
+		implicit: implicitPatterns
+	});
 	rules.push(...patterns.rules);
 
 	const disabled = new Set(config.disable ?? []);

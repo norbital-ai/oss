@@ -94,7 +94,8 @@ test('vocabulary gate: product words only appear in the allowed forms', () => {
 	);
 	const leaks = hitsIn(files);
 	const health = leaks.filter(
-		(hit) => hit.file.startsWith(`metrics${join('/')}`) || hit.file.startsWith(`analysis${join('/')}`)
+		(hit) =>
+			hit.file.startsWith(`metrics${join('/')}`) || hit.file.startsWith(`analysis${join('/')}`)
 	);
 	assert.deepEqual(
 		health,

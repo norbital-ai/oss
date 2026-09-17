@@ -7,8 +7,12 @@ import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 import AgentStreamingView from './support/agent-streaming-view.svelte';
 
 // Exercise the mounted transcript and its part lifecycle; editor formatting is a separate surface.
-vi.mock('@norbital-ai/ui/code-editor', async () => ({ CodeEditor: (await import('./support/agent-streaming-content.svelte')).default }));
-vi.mock('@norbital-ai/ui/markdown-editor', async () => ({ ReadonlyMarkdown: (await import('./support/agent-streaming-content.svelte')).default }));
+vi.mock('@norbital-ai/ui/code-editor', async () => ({
+	CodeEditor: (await import('./support/agent-streaming-content.svelte')).default
+}));
+vi.mock('@norbital-ai/ui/markdown-editor', async () => ({
+	ReadonlyMarkdown: (await import('./support/agent-streaming-content.svelte')).default
+}));
 vi.mock('@norbital-ai/ui/layout', async () => {
 	const { default: Fragment } = await import('./support/finder-test-fragment.svelte');
 	return { Inline: Fragment, Stack: Fragment };
@@ -19,14 +23,34 @@ vi.mock('@norbital-ai/ui/tabs', async () => ({
 }));
 
 it('renders reasoning immediately, fills completed parts without replacing the row, and marks interrupted work', async () => {
-	const message = (reasoning: string, text: string | null, activeParts: number[], sequence: number) => projectConversationMessages(canonicalAgentRows([{
-		conversationId: '00000000-0000-4000-8000-000000000101', runId: '00000000-0000-4000-8000-000000000102',
-		message: { role: 'assistant', content: [{ type: 'reasoning', text: reasoning }, ...(text === null ? [] : [{ type: 'text' as const, text }])] },
-		annotation: { tag: 'generation', callId: 'fixture', sequence, activeParts }
-	}]))[0]!;
+	const message = (
+		reasoning: string,
+		text: string | null,
+		activeParts: number[],
+		sequence: number
+	) =>
+		projectConversationMessages(
+			canonicalAgentRows([
+				{
+					conversationId: '00000000-0000-4000-8000-000000000101',
+					runId: '00000000-0000-4000-8000-000000000102',
+					message: {
+						role: 'assistant',
+						content: [
+							{ type: 'reasoning', text: reasoning },
+							...(text === null ? [] : [{ type: 'text' as const, text }])
+						]
+					},
+					annotation: { tag: 'generation', callId: 'fixture', sequence, activeParts }
+				}
+			])
+		)[0]!;
 	const target = document.createElement('div');
 	document.body.append(target);
-	const component = mount(AgentStreamingView, { target, props: { initial: message('', null, [0], 0) } });
+	const component = mount(AgentStreamingView, {
+		target,
+		props: { initial: message('', null, [0], 0) }
+	});
 	try {
 		flushSync();
 		const row = target.querySelector('li');
@@ -44,5 +68,8 @@ it('renders reasoning immediately, fills completed parts without replacing the r
 		flushSync();
 		expect(row?.getAttribute('aria-busy')).toBe('false');
 		expect(target.textContent).toContain('Response interrupted');
-	} finally { await unmount(component); target.remove(); }
+	} finally {
+		await unmount(component);
+		target.remove();
+	}
 });

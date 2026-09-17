@@ -29,11 +29,11 @@ column is a type error where it is written. A page continued with `after` is one
 full `orderBy` vocabulary. Lexical search may be live;
 prefix continuation then needs an ordering cursor the search planner owns, or the wake resets.
 
-| Command              | Who calls it                         | Role                                                                                          |
-| -------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `sync.connect`       | Browser (and reconnect / reset)      | Resolve each requested prefix, return rows plus the plan the host will file.                  |
-| `sync.extendPrefix`  | Browser, monotonic grow              | Append rows past the viewer's loaded prefix without bumping version.                          |
-| `sync.advance`       | Host, after a commit                 | Re-evaluate filed prefixes against the commit's `SyncChange` list; return updates or resets.  |
+| Command             | Who calls it                    | Role                                                                                         |
+| ------------------- | ------------------------------- | -------------------------------------------------------------------------------------------- |
+| `sync.connect`      | Browser (and reconnect / reset) | Resolve each requested prefix, return rows plus the plan the host will file.                 |
+| `sync.extendPrefix` | Browser, monotonic grow         | Append rows past the viewer's loaded prefix without bumping version.                         |
+| `sync.advance`      | Host, after a commit            | Re-evaluate filed prefixes against the commit's `SyncChange` list; return updates or resets. |
 
 `sync.connect` carries `queries` (`queryKey`, `input`, `requestedPrefix`), `detached` keys, and
 `pending` write ids. `sync.extendPrefix` carries `queryKey`, `version`, `loadedPrefix`, and
@@ -111,13 +111,13 @@ link to `live`. Both hosts answer `Server-Timing: sync-connect;dur=…;desc="que
 and shares frames over BroadcastChannel. **One EventSource per browser profile** is shared across
 tabs and workspaces. Public Colony URLs:
 
-| URL                      | Verb | Job                                              |
-| ------------------------ | ---- | ------------------------------------------------ |
-| `/__bolt/sync/connect`   | POST | Register or re-register prefixes; settle pending |
-| `/__bolt/sync/extend`    | POST | Grow a viewer's loaded prefix                    |
-| `/__bolt/sync/stream`    | SSE  | `apply` frames (`updates`, `resets`, `outcomes`) |
+| URL                    | Verb | Job                                              |
+| ---------------------- | ---- | ------------------------------------------------ |
+| `/__bolt/sync/connect` | POST | Register or re-register prefixes; settle pending |
+| `/__bolt/sync/extend`  | POST | Grow a viewer's loaded prefix                    |
+| `/__bolt/sync/stream`  | SSE  | `apply` frames (`updates`, `resets`, `outcomes`) |
 
-Control posts send `x-bolt-sync-connection`. Writes go over `collections.mutate` with the same
+Control posts send `x-bolt-sync-connection`. Writes go over `collections.write` with the same
 header. A released query's prefix is retained for `DETACH_GRACE_MS` (30 s); a sent write
 unacknowledged for `STALE_WRITE_MS` (15 s) is retried.
 
@@ -130,9 +130,9 @@ Ceilings (`bolt-protocol/src/sync.ts`, `runtime/sync/delta-engine.ts`): `MAX_SYN
 
 ## Write path
 
-1. The browser enqueues one declarative graph into the Machine and posts it with the connection
+1. The browser enqueues one declared write into the Machine and posts it with the connection
    header. Durability is `'memory'` — the tab's queue — until the authority settles it.
-2. The guest runs the one mutation pipeline (hooks → policy → transaction → history → capture).
+2. The guest runs the one write pipeline (policy → transform → transaction → history → capture).
    Capture writes `SyncChange` facts and a `bolt_browser_mutation` ledger row in that same
    transaction.
 3. The host awaits `lane.committed`. The guest `sync.advance`s affected subscriptions. The lane

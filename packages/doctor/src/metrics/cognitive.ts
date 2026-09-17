@@ -64,8 +64,7 @@ function visit(node: ts.Node, depth: number, chain: string | undefined, score: S
 	if (ts.isIfStatement(node)) {
 		// The compiler has no else-clause node: an `else if` is literally an IfStatement wired
 		// into the parent's `elseStatement`, so "is this the else half" is answered by position.
-		const isElseBranch =
-			ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
+		const isElseBranch = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
 		score.total += isElseBranch ? 1 : 1 + depth;
 		visit(node.expression, depth, undefined, score);
 		visit(node.thenStatement, depth + 1, undefined, score);
@@ -106,8 +105,7 @@ function visit(node: ts.Node, depth: number, chain: string | undefined, score: S
 		visit(node.expression, depth, undefined, score);
 		for (const clause of node.caseBlock.clauses) {
 			if (ts.isCaseClause(clause)) score.total += 1;
-			for (const statement of clause.statements)
-				visit(statement, depth + 1, undefined, score);
+			for (const statement of clause.statements) visit(statement, depth + 1, undefined, score);
 		}
 		return;
 	}
@@ -124,10 +122,7 @@ function visit(node: ts.Node, depth: number, chain: string | undefined, score: S
 		visit(node.whenFalse, depth, undefined, score);
 		return;
 	}
-	if (
-		ts.isBinaryExpression(node) &&
-		LOGICAL_OPERATORS.has(node.operatorToken.getText())
-	) {
+	if (ts.isBinaryExpression(node) && LOGICAL_OPERATORS.has(node.operatorToken.getText())) {
 		const operator = node.operatorToken.getText();
 		if (chain !== operator) score.total += 1;
 		visit(node.left, depth, operator, score);

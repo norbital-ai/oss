@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 import { describeEnvironment } from '#lib/authoring/environment-schema.js';
+import type { AuthoredCollectionModule } from '#lib/authoring/collection-schema.js';
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import type { AuthoredRuntime } from '#lib/runtime/collections/authored.js';
 
@@ -45,37 +46,18 @@ const provenance = (sourcePath: string | undefined): Readonly<Record<string, Sch
 const entries = (value: unknown): ReadonlyArray<readonly [string, unknown]> =>
 	isObjectLike(value) ? Object.entries(value) : [];
 
-const authoredHookEntries = (
-	module: unknown,
+const authoredWriteEntries = (
+	module: AuthoredCollectionModule | undefined,
 	sourcePath: string | undefined
 ): ReadonlyArray<Readonly<Record<string, Schema.Json>>> => {
+	if (module === undefined) return [];
 	const declarations: Array<Readonly<Record<string, Schema.Json>>> = [];
-	for (const operation of ['mutate', 'delete'] as const) {
-		const operationDeclaration = property(module, operation);
-		// repository-health:allow GUARD2 -- an authored mutate.prepare hook is a function inside a dynamically loaded declaration module; no schema can recognize one.
-		if (operation === 'mutate' && typeof property(operationDeclaration, 'prepare') === 'function') {
-			declarations.push(
-				jsonObject({
-					name: 'mutate.prepare',
-					description: 'Prepares a create batch',
-					...provenance(sourcePath)
-				})
-			);
-		}
-		const perRecord = property(operationDeclaration, 'perRecord');
-		for (const phase of ['before', 'after'] as const) {
-			const declaration = property(perRecord, phase);
-			// repository-health:allow GUARD2 -- an authored per-record hook handler is a function inside a dynamically loaded declaration module; no schema can recognize one.
-			if (typeof property(declaration, 'handler') !== 'function') continue;
-			declarations.push(
-				jsonObject({
-					name: `${operation}.${phase}`,
-					description: text(property(declaration, 'description')),
-					...provenance(sourcePath)
-				})
-			);
-		}
-	}
+	for (const operation of ['create', 'update', 'delete'] as const)
+		if (module[operation] !== undefined)
+			declarations.push(jsonObject({ name: operation, ...provenance(sourcePath) }));
+	// repository-health:allow GUARD2 -- an authored transform is a function inside a dynamically loaded declaration module; no schema can recognize one.
+	if (typeof module.transform === 'function')
+		declarations.push(jsonObject({ name: 'transform', ...provenance(sourcePath) }));
 	return declarations;
 };
 
@@ -175,10 +157,9 @@ export const authoredManifestDeclarations = (
 		collections: definition.collections.map((collection) => ({
 			name: collection.name,
 			history: collection.history,
-			hooks: [...(collection.hooks ?? [])],
-			hookDeclarations: authoredHookEntries(
-				authoredRuntime.hooks[collection.name],
-				sourcePathFor(projection, 'hookSourcePaths', collection.name)
+			writes: authoredWriteEntries(
+				authoredRuntime.collections[collection.name],
+				sourcePathFor(projection, 'collectionSourcePaths', collection.name)
 			),
 			pipelines: authoredPipelineEntries(
 				authoredRuntime.pipelines[collection.name],

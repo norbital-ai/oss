@@ -5,13 +5,42 @@ import type { Distribution } from './composite.js';
 import { distribution, roundedRatio } from './composite.js';
 
 export const GENERIC_CALLS: ReadonlySet<string> = new Set([
-	'add', 'at', 'every', 'filter', 'find', 'flatMap', 'forEach', 'get', 'has', 'includes',
-	'join', 'map', 'push', 'reduce', 'set', 'slice', 'some', 'sort', 'trim'
+	'add',
+	'at',
+	'every',
+	'filter',
+	'find',
+	'flatMap',
+	'forEach',
+	'get',
+	'has',
+	'includes',
+	'join',
+	'map',
+	'push',
+	'reduce',
+	'set',
+	'slice',
+	'some',
+	'sort',
+	'trim'
 ]);
 
 const GENERIC_LABEL_WORDS: ReadonlySet<string> = new Set([
-	'anonymous', 'build', 'calculate', 'create', 'from', 'get', 'handle', 'load',
-	'make', 'of', 'process', 'run', 'set', 'to'
+	'anonymous',
+	'build',
+	'calculate',
+	'create',
+	'from',
+	'get',
+	'handle',
+	'load',
+	'make',
+	'of',
+	'process',
+	'run',
+	'set',
+	'to'
 ]);
 
 function genericLabelCalls(
@@ -122,7 +151,10 @@ export function containingClass(node: ts.Node): ts.ClassDeclaration | ts.ClassEx
 	return null;
 }
 
-export function className(node: ts.ClassDeclaration | ts.ClassExpression, file: ts.SourceFile): string {
+export function className(
+	node: ts.ClassDeclaration | ts.ClassExpression,
+	file: ts.SourceFile
+): string {
 	const name = rawName(node);
 	if (name && ts.isIdentifier(name)) return name.text;
 	if (
@@ -134,9 +166,7 @@ export function className(node: ts.ClassDeclaration | ts.ClassExpression, file: 
 	return `<class@${file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1}>`;
 }
 
-export function duplicateCallableKind(
-	node: ts.Node
-): 'function' | 'method' | null {
+export function duplicateCallableKind(node: ts.Node): 'function' | 'method' | null {
 	if (ts.isFunctionDeclaration(node) && rawName(node)) return 'function';
 	if (
 		ts.isMethodDeclaration(node) ||
@@ -148,10 +178,7 @@ export function duplicateCallableKind(
 	if (!(ts.isArrowFunction(node) || ts.isFunctionExpression(node))) return null;
 	if (ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name)) return 'function';
 	const parent = node.parent as ts.Node;
-	if (
-		(ts.isPropertyDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
-		rawName(parent)
-	)
+	if ((ts.isPropertyDeclaration(parent) || ts.isPropertyAssignment(parent)) && rawName(parent))
 		return 'method';
 	return null;
 }
@@ -172,24 +199,21 @@ export function duplicateCallableName(node: ts.Node, file: ts.SourceFile): strin
 	return declarationName(node);
 }
 
-export function pathwayHash(text: string): {
-	hash: string;
-	tokens: number;
-	shingles: Array<string>;
-} | undefined {
+export function pathwayHash(text: string):
+	| {
+			hash: string;
+			tokens: number;
+			shingles: Array<string>;
+	  }
+	| undefined {
 	const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
 	const exactTokens: Array<string> = [];
 	const structuralTokens: Array<string> = [];
 	let previousToken = ts.SyntaxKind.Unknown;
-	for (
-		let token = scanner.scan();
-		token !== ts.SyntaxKind.EndOfFileToken;
-		token = scanner.scan()
-	) {
+	for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
 		if (token === ts.SyntaxKind.Identifier || token === ts.SyntaxKind.PrivateIdentifier) {
 			const identifier = scanner.getTokenText();
-			const normalized =
-				previousToken === ts.SyntaxKind.DotToken ? `$member:${identifier}` : '$id';
+			const normalized = previousToken === ts.SyntaxKind.DotToken ? `$member:${identifier}` : '$id';
 			exactTokens.push(normalized);
 			structuralTokens.push(normalized);
 		} else if (
@@ -288,7 +312,10 @@ export function overlapProfile(body: ts.Node): { overlapBucket: string } | undef
 	return { overlapBucket: `${encode(calls)}|${encode(controls)}` };
 }
 
-export function shingleSimilarity(left: ReadonlyArray<string>, right: ReadonlyArray<string>): number {
+export function shingleSimilarity(
+	left: ReadonlyArray<string>,
+	right: ReadonlyArray<string>
+): number {
 	let leftIndex = 0;
 	let rightIndex = 0;
 	let intersection = 0;
@@ -522,8 +549,7 @@ export function pathwayEvidence(
 	const duplicatedClassOwners = new Set(
 		[...exactBuckets.values()]
 			.filter(
-				(group) =>
-					group[0]?.kind === 'class' && new Set(group.map((item) => item.file)).size > 1
+				(group) => group[0]?.kind === 'class' && new Set(group.map((item) => item.file)).size > 1
 			)
 			.flatMap((group) => group.map(({ ownerClassId }) => ownerClassId))
 	);

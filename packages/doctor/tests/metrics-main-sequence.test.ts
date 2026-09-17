@@ -4,7 +4,12 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { abstractness, countAbstractDeclarations, distanceFromMainSequence, instability } from '../build/metrics/index.js';
+import {
+	abstractness,
+	countAbstractDeclarations,
+	distanceFromMainSequence,
+	instability
+} from '../build/metrics/index.js';
 import { parse } from './fixtures/metrics/parse.ts';
 
 test('the main sequence is A + I = 1', () => {
@@ -20,7 +25,9 @@ test('the main sequence is A + I = 1', () => {
 test('both zones of pain measure symmetrically', () => {
 	assert.equal(distanceFromMainSequence({ abstractness: 0, instability: 0 }), 1);
 	assert.equal(distanceFromMainSequence({ abstractness: 1, instability: 1 }), 1);
-	assert.ok(Math.abs(distanceFromMainSequence({ abstractness: 0.9, instability: 0.4 }) - 0.3) < 1e-12);
+	assert.ok(
+		Math.abs(distanceFromMainSequence({ abstractness: 0.9, instability: 0.4 }) - 0.3) < 1e-12
+	);
 });
 
 test('ratios are their definitions, with nulls at empty denominators', () => {

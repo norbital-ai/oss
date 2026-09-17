@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseAst } from 'vite';
-import {
-	envoy,
-	type CompiledAuthoring
-} from '../src/authoring/workspace-schema.js';
+import { envoy, type CompiledAuthoring } from '../src/authoring/workspace-schema.js';
 import { describeEnvoy } from '../src/authoring/policy-introspection.js';
 import { renderArtifact } from '../src/compiler/workspace-build.js';
 
@@ -28,7 +25,7 @@ const renderInput = (envoyFiles: ReadonlyArray<string>) =>
 	({
 		metadata: { name: 'crm', version: '1.0.0', description: 'Bolt workspace' },
 		compiledAuthoring,
-		collectionHooks: [],
+		collectionFiles: [],
 		apps: [],
 		policies: [],
 		functions: [],

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { CHECKPOINT_WITHOUT_SUMMARY, checkpointContent } from '../src/runtime/agents/agents.js';
 
 const assistant = (content: string | ReadonlyArray<Record<string, unknown>>) =>
-	({ role: 'assistant', content, options: {} }) as unknown as Parameters<typeof checkpointContent>[0];
+	({ role: 'assistant', content, options: {} }) as unknown as Parameters<
+		typeof checkpointContent
+	>[0];
 
 describe('automatic checkpoint content', () => {
 	it('keeps only the prose of a summary that arrived with reasoning and a tool call', () => {

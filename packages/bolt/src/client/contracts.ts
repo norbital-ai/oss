@@ -36,7 +36,6 @@ export type BoltClient = Readonly<{
 }>;
 
 export type { RemoteQuery };
-export type { CollectionMutationValues } from '#lib/authoring/contracts-schema.js';
 
 /** Public settlement vocabulary projected one-to-one from the protocol's terminal write status. */
 export type MutationSettlement = Readonly<

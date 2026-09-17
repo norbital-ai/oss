@@ -19,7 +19,10 @@ test('comp²·(1−cov)³+cov over complexity 1..5 × coverage {1, 0.5, 0}', () 
 	EXPECTED.forEach((row, index) => {
 		const comp = index + 1;
 		assert.equal(crap(comp, 1), row[0], `comp=${comp}, cov=1`);
-		assert.ok(Math.abs((crap(comp, 0.5) ?? NaN) - (row[1] ?? NaN)) < 1e-12, `comp=${comp}, cov=0.5`);
+		assert.ok(
+			Math.abs((crap(comp, 0.5) ?? NaN) - (row[1] ?? NaN)) < 1e-12,
+			`comp=${comp}, cov=0.5`
+		);
 		assert.equal(crap(comp, 0), row[2], `comp=${comp}, cov=0`);
 	});
 });

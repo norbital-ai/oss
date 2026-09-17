@@ -104,8 +104,9 @@ export function walkImportSpecifiers(
 	extensions: readonly string[] = SOURCE_EXTENSIONS
 ): readonly ImportRecord[] {
 	// repository-health:allow IO1 -- same synchronous scanner contract; the source reads back the walkers' public sync API.
-	return listFiles(root, extensions).flatMap((file) =>
-		specifiersInSource(file, readFileSync(file, 'utf8')).map((specifier) => ({ file, specifier })) // repository-health:allow IO1 -- same synchronous scanner contract.
+	return listFiles(root, extensions).flatMap(
+		(file) =>
+			specifiersInSource(file, readFileSync(file, 'utf8')).map((specifier) => ({ file, specifier })) // repository-health:allow IO1 -- same synchronous scanner contract.
 	);
 }
 

@@ -1,10 +1,9 @@
-import { Effect, Result, Schema } from 'effect';
+import { Array as Array_, Effect, Result, Schema } from 'effect';
 import {
 	CollectionGroupedQueryRequest,
 	CollectionMutationIdempotencyKey,
-	CollectionMutateRequest,
+	CollectionMutationPush,
 	CollectionQueryRequest,
-	mutationGraphDeleteIds,
 	FixedCommandCatalogue,
 	SyncQueryInput,
 	WorkspaceInvokeContract,
@@ -12,11 +11,18 @@ import {
 	type FixedCommandContract,
 	type FixedCommandName,
 	type CollectionMutationBaseVersion,
-	type CollectionMutationGraph,
+	type CollectionWriteGraph,
 	type StoredRecord,
 	type SyncQueryInput as SyncQueryInputType
 } from '@norbital-ai/bolt-protocol';
-import type { CollectionFilter, CollectionFilterOptions } from '@norbital-ai/std/collection';
+import {
+	isSystemCollectionField,
+	type CollectionFilter,
+	type CollectionFilterOptions,
+	type CollectionHistoryAnchor,
+	type CollectionRecordHistoryEntry,
+	type CollectionWriteContract
+} from '@norbital-ai/std/collection';
 import { toError } from '@norbital-ai/std/error';
 import { decodeNumber } from '@norbital-ai/std/json';
 import type {
@@ -32,7 +38,7 @@ import {
 	isString
 } from '#lib/schema-decode.js';
 import type { ClientState, QueryState } from './sync/machine.js';
-import { project } from './live-query/project.js';
+import { project, type PendingProjectionWrite } from './live-query/project.js';
 import { createMachineQuery, createRemoteQuery } from './remote-query.svelte.js';
 import { CollectionMutationState } from './collection-mutation.svelte.js';
 import { AutomationExecutionState, AutomationTaskSnapshot } from './automation-client.svelte.js';
@@ -68,8 +74,8 @@ export type CollectionCatalogEntry = Readonly<{
 	readonly recordLabel?: string;
 	readonly fields: ReadonlyArray<CollectionCatalogField>;
 	readonly relationships?: ReadonlyArray<CollectionCatalogRelation>;
-	/** The declared `input`'s columns; absent, the whole collection is writable. */
-	readonly inputColumns?: readonly string[];
+	/** The declared write contract; absent, the collection is read-only in the browser. */
+	readonly write?: CollectionWriteContract;
 }>;
 
 export type CollectionCatalog = Readonly<Record<string, CollectionCatalogEntry>>;
@@ -144,16 +150,6 @@ const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => 
 	return record;
 };
 
-const asJsonRecords = (input: unknown): ReadonlyArray<Readonly<Record<string, Schema.Json>>> => {
-	if (!Array.isArray(input))
-		throw new TypeError('mutate takes an array of records matching the collection input schema.');
-	if (input.length === 0) throw new TypeError('mutate requires at least one record.');
-	return input.map((row, index) => {
-		if (!isRecord(row)) throw new TypeError(`mutate[${index}] must be a record.`);
-		return asJsonRecord(row);
-	});
-};
-
 const CollectionCount = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 const CollectionGroupedRows = Schema.Record(
 	Schema.String,
@@ -186,26 +182,95 @@ const decodedCommandEffect = <Name extends FixedCommandName, Output extends Sche
 		catch: toError
 	});
 
+type JsonRecord = Readonly<Record<string, Schema.Json>>;
+
+const relationOf = (
+	catalog: CollectionCatalog | undefined,
+	collection: string,
+	name: string
+): CollectionCatalogRelation | undefined =>
+	catalog?.[collection]?.relationships?.find((relation) => relation.name === name);
+
+/** The input without its relation keys: what an update paints, what a row's own columns are. */
+const scalarsOf = (
+	catalog: CollectionCatalog | undefined,
+	collection: string,
+	input: JsonRecord
+): JsonRecord =>
+	Object.fromEntries(
+		Object.entries(input).filter(([key]) => relationOf(catalog, collection, key) === undefined)
+	);
+
+/**
+ * Whether the input already is the row: every column the catalog requires is present, so the
+ * server has nothing left to derive. A required column with a default is absent from the input
+ * and keeps the create invisible, which is the conservative side.
+ */
+const carriesRequiredColumns = (entry: CollectionCatalogEntry, input: JsonRecord): boolean =>
+	entry.fields.every(
+		(field) =>
+			field.nullable ||
+			field.readOnly === true ||
+			isSystemCollectionField(field.name) ||
+			input[field.name] !== undefined
+	);
+
 /**
  * The pending writes a live read paints over the server's answer.
  *
- * A create is painted only where the row the browser sent is the row the server will write. A
- * collection that declares an `input` narrower than its record is engine-authored: the server
- * derives the rest, or the whole record graph beneath it. Painting the input as a row put an
- * empty payroll run on the list, "0/0 paid", twenty seconds before its payslips existed. Such a
- * write stays pending and invisible until the server answers; sync then delivers the real rows.
- * Updates and deletes are painted as before: the row already exists and the change is the caller's.
+ * An update paints its scalar input over the row it names; relation actions are the server's to
+ * resolve and are dropped. A delete removes the ids it names. A create is painted only when the
+ * collection declares one and the input carries every required column, so the row the browser
+ * sent is the row the server will write. The server allocates the id, so the painted row borrows
+ * the write's idempotency key until the frame that settles the write delivers the real row. A
+ * create that leaves a required column to the collection's transform stays invisible until then:
+ * painting the input as a row put an empty payroll run on the list, "0/0 paid", twenty seconds
+ * before its payslips existed.
  */
 export const pendingGraphs = (
 	state: ClientState,
 	catalog?: CollectionCatalog
-): ReadonlyArray<{ readonly graph: CollectionMutationGraph }> =>
+): ReadonlyArray<PendingProjectionWrite> =>
 	[...state.writes.values()].flatMap((write) => {
 		const graph = write.request.graph;
-		if (graph.action !== 'mutate' || catalog?.[graph.collection]?.inputColumns === undefined)
-			return [{ graph }];
-		const [first, ...rest] = graph.rows.filter((row) => row.action !== 'create');
-		return first === undefined ? [] : [{ graph: { ...graph, rows: [first, ...rest] } }];
+		const entry = catalog?.[graph.collection];
+		switch (graph.action) {
+			case 'delete':
+				return [{ graph }];
+			case 'update':
+				return [
+					{
+						graph: {
+							...graph,
+							inputs: Array_.map(graph.inputs, (input) =>
+								scalarsOf(catalog, graph.collection, input)
+							)
+						}
+					}
+				];
+			case 'create': {
+				if (
+					entry?.write?.create === undefined ||
+					!graph.inputs.every((input) => carriesRequiredColumns(entry, input))
+				)
+					return [];
+				return [
+					{
+						graph: {
+							...graph,
+							inputs: Array_.map(graph.inputs, (input, index) => ({
+								...scalarsOf(catalog, graph.collection, input),
+								id: `${write.request.idempotencyKey}:${index}`
+							}))
+						}
+					}
+				];
+			}
+			default: {
+				const _exhaustive: never = graph.action;
+				return _exhaustive;
+			}
+		}
 	});
 
 const rowVersionOf = (row: StoredRecord): number | undefined => {
@@ -219,6 +284,28 @@ const rowVersionOf = (row: StoredRecord): number | undefined => {
 const prefixRows = (query: QueryState): ReadonlyArray<StoredRecord> => query.prefix?.rows ?? [];
 
 /**
+ * Every row this browser currently renders, root and nested alike, with the collection it belongs
+ * to. Live prefixes carry relation rows inline, so a matrix's children are found on their parent.
+ */
+const visitLoadedRows = (
+	state: ClientState,
+	catalog: CollectionCatalog,
+	visit: (collection: string, row: StoredRecord) => void
+): void => {
+	const walk = (collection: string, rows: ReadonlyArray<StoredRecord>): void => {
+		for (const row of rows) {
+			visit(collection, row);
+			for (const relation of catalog[collection]?.relationships ?? []) {
+				const related = row[relation.name];
+				const children = Array.isArray(related) ? related : [related];
+				walk(relation.target, children.filter(isRecord).map(asJsonRecord));
+			}
+		}
+	};
+	for (const query of state.queries.values()) walk(query.input.collection, prefixRows(query));
+};
+
+/**
  * The newest whole-row version currently rendered by this browser for each mutation target.
  * Multiple live views may render the same row; choosing the greatest observed version avoids
  * manufacturing a conflict from a retained older page while the server still remains final.
@@ -228,69 +315,116 @@ const authoritativeVersions = (
 	catalog: CollectionCatalog
 ): ReadonlyMap<string, number> => {
 	const versions = new Map<string, number>();
-	const visit = (collection: string, rows: ReadonlyArray<StoredRecord>): void => {
-		for (const row of rows) {
-			const id = row['id'];
-			const version = rowVersionOf(row);
-			if (isNonEmptyString(id) && version !== undefined) {
-				const key = `${collection}\u0000${id}`;
-				versions.set(key, Math.max(versions.get(key) ?? 0, version));
-			}
-			for (const relation of catalog[collection]?.relationships ?? []) {
-				const related = row[relation.name];
-				const children = Array.isArray(related) ? related : [related];
-				visit(relation.target, children.filter(isRecord).map(asJsonRecord));
-			}
-		}
-	};
-	for (const query of state.queries.values()) {
-		visit(query.input.collection, prefixRows(query));
-	}
+	visitLoadedRows(state, catalog, (collection, row) => {
+		const id = row['id'];
+		const version = rowVersionOf(row);
+		if (!isNonEmptyString(id) || version === undefined) return;
+		const key = `${collection}\u0000${id}`;
+		versions.set(key, Math.max(versions.get(key) ?? 0, version));
+	});
 	return versions;
 };
 
-/** Builds the exact existing-row vector the protocol requires for a browser mutation graph. */
-const collectionMutationBaseVersions = (
+/**
+ * The children this tab has loaded under one parent's relation, or `undefined` when no rendered
+ * row carries that relation — in which case no delete may be inferred from their absence.
+ */
+const loadedChildren = (
 	state: ClientState,
-	graph: CollectionMutationGraph,
-	catalog: CollectionCatalog
+	catalog: CollectionCatalog,
+	collection: string,
+	parentId: string,
+	relation: string
+): ReadonlyArray<StoredRecord> | undefined => {
+	let loaded: ReadonlyArray<StoredRecord> | undefined;
+	visitLoadedRows(state, catalog, (candidate, row) => {
+		if (candidate !== collection || row['id'] !== parentId) return;
+		const children = row[relation];
+		if (Array.isArray(children)) loaded = children.filter(isRecord).map(asJsonRecord);
+	});
+	return loaded;
+};
+
+/**
+ * Set semantics for a form matrix (RFC §4.2): a relation given as a plain array of rows means
+ * "these are the parent's children". The wire never carries an omission, so the array is diffed
+ * here against the children this tab has loaded and sent as explicit actions — a row without an
+ * id is a `create`, a row with one is an `update`, and a loaded child the array no longer names is
+ * a `delete`. Children this tab never loaded cannot be deleted by their absence. A value that is
+ * already an actions object passes through, and only declared relation keys are touched.
+ */
+const withRelationActions = (
+	state: ClientState,
+	catalog: CollectionCatalog,
+	collection: string,
+	input: JsonRecord
+): JsonRecord => {
+	const parentId = input['id'];
+	const result: Record<string, Schema.Json> = { ...input };
+	for (const [key, value] of Object.entries(input)) {
+		const relation = relationOf(catalog, collection, key);
+		if (relation === undefined || !Array.isArray(value)) continue;
+		const rows = value.filter(isRecord).map(asJsonRecord);
+		const loaded = isNonEmptyString(parentId)
+			? loadedChildren(state, catalog, collection, parentId, key)
+			: undefined;
+		const named = new Set(rows.map((row) => row['id']).filter(isNonEmptyString));
+		const create = rows
+			.filter((row) => !isNonEmptyString(row['id']))
+			.map((row) => withRelationActions(state, catalog, relation.target, row));
+		// `set` is scalar only; a child's own relation actions sit beside it (RFC §4.3).
+		const update = rows.flatMap((row) => {
+			const { id, ...rest } = withRelationActions(state, catalog, relation.target, row);
+			if (!isNonEmptyString(id)) return [];
+			const set = scalarsOf(catalog, relation.target, rest);
+			const actions = Object.fromEntries(Object.entries(rest).filter(([name]) => !(name in set)));
+			return [{ id, set, ...actions }];
+		});
+		const remove = (loaded ?? []).flatMap((row) => {
+			const id = row['id'];
+			return isNonEmptyString(id) && !named.has(id) ? [{ id }] : [];
+		});
+		result[key] = {
+			...(create.length === 0 ? {} : { create }),
+			...(update.length === 0 ? {} : { update }),
+			...(remove.length === 0 ? {} : { delete: remove })
+		};
+	}
+	return result;
+};
+
+/**
+ * The observed row versions a declared input names (RFC §4.2), walked the way the engine's lowering
+ * walks it: every record an entry names gets its row version from what this browser renders, and
+ * relation actions recurse. Rows the browser has never rendered carry no version and are left to
+ * the server's own guard.
+ */
+const declaredBaseVersions = (
+	state: ClientState,
+	catalog: CollectionCatalog,
+	collection: string,
+	inputs: ReadonlyArray<JsonRecord>
 ): ReadonlyArray<CollectionMutationBaseVersion> => {
 	const authoritative = authoritativeVersions(state, catalog);
 	const versions = new Map<string, CollectionMutationBaseVersion>();
-	const addKnown = (collection: string, recordId: string): void => {
-		const key = `${collection}\u0000${recordId}`;
-		const rowVersion = authoritative.get(key);
-		if (rowVersion === undefined || versions.has(key)) return;
-		versions.set(key, { row: { collection, recordId }, rowVersion });
-	};
-	const walkManyRelations = (
-		collection: string,
-		values: Readonly<Record<string, Schema.Json>>
-	): void => {
-		for (const relation of catalog[collection]?.relationships ?? []) {
-			if (relation.cardinality !== 'many') continue;
-			const children = values[relation.name];
-			if (!Array.isArray(children)) continue;
-			for (const child of children) {
-				if (!isRecord(child)) continue;
-				const childValues = child as Readonly<Record<string, Schema.Json>>;
-				const childId = childValues['id'];
-				if (!isNonEmptyString(childId)) continue;
-				addKnown(relation.target, childId);
-				walkManyRelations(relation.target, childValues);
-			}
+	const visitRecord = (target: string, record: unknown): void => {
+		if (!isRecord(record)) return;
+		const recordId = record['id'];
+		if (isNonEmptyString(recordId)) {
+			const key = `${target}\u0000${recordId}`;
+			const rowVersion = authoritative.get(key);
+			if (rowVersion !== undefined && !versions.has(key))
+				versions.set(key, { row: { collection: target, recordId }, rowVersion });
+		}
+		for (const [name, nested] of Object.entries(record)) {
+			const relation = relationOf(catalog, target, name);
+			if (relation === undefined || !isRecord(nested)) continue;
+			for (const actionValue of Object.values(nested))
+				for (const entry of Array.isArray(actionValue) ? actionValue : [actionValue])
+					visitRecord(relation.target, entry);
 		}
 	};
-
-	if (graph.action === 'delete') {
-		for (const recordId of mutationGraphDeleteIds(graph)) addKnown(graph.collection, recordId);
-		return [...versions.values()];
-	}
-	for (const row of graph.rows) {
-		const rootId = row.values['id'];
-		if (row.action === 'update' && isNonEmptyString(rootId)) addKnown(graph.collection, rootId);
-		walkManyRelations(graph.collection, row.values);
-	}
+	for (const input of inputs) visitRecord(collection, input);
 	return [...versions.values()];
 };
 
@@ -651,41 +785,23 @@ const createSystemClient = (runtime: WorkspaceClientRuntime): SystemClientApi =>
 
 /** --- collection surfaces --- */
 
-const stripWrites = (member: PropertyKey): boolean =>
-	member === 'mutate' || member === 'delete' || member === 'pending';
-
 const ClientDatabase = {
-	collection: (runtime: WorkspaceClientRuntime, collection: string, catalog: CollectionCatalog) => {
-		const mutation = new CollectionMutationState();
-		return {
-			findMany: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
-				pageQueryOf(runtime, collection, catalog, input, options),
-			findFirst: (input: Schema.Json = {}) => firstQueryOf(runtime, collection, catalog, input),
-			findGrouped: (input: Schema.Json, options?: CollectionFilterOptions) =>
-				groupedQueryOf(runtime, collection, catalog, input, options),
-			count: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
-				countQueryOf(runtime, collection, catalog, input, options),
-			/**
-			 * Submits one batch — always an array of `input` records — and resolves immediately with
-			 * the optimistic first row. The authority settles the write asynchronously through the
-			 * returned handle; nothing is claimed saved before that outcome (durability is this tab's
-			 * memory).
-			 */
-			mutate: (input: Schema.Json) =>
-				mutation.run(
-					Effect.sync(() => enqueueMutation(runtime, catalog, collection, asJsonRecords(input)))
-				),
-			delete: (ids: readonly string[]) =>
-				mutation.run(Effect.sync(() => enqueueDeletion(runtime, catalog, collection, ids))),
-			get pending() {
-				return mutation.pending;
-			}
-		};
-	},
+	collection: (
+		runtime: WorkspaceClientRuntime,
+		collection: string,
+		catalog: CollectionCatalog
+	) => ({
+		findMany: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
+			pageQueryOf(runtime, collection, catalog, input, options),
+		findFirst: (input: Schema.Json = {}) => firstQueryOf(runtime, collection, catalog, input),
+		findGrouped: (input: Schema.Json, options?: CollectionFilterOptions) =>
+			groupedQueryOf(runtime, collection, catalog, input, options),
+		count: (input: Schema.Json = {}, options?: CollectionFilterOptions) =>
+			countQueryOf(runtime, collection, catalog, input, options)
+	}),
 	database: (
 		runtime: WorkspaceClientRuntime,
 		allowedCollections?: ReadonlySet<string>,
-		readOnlyCollections: ReadonlySet<string> = new Set(),
 		catalog: CollectionCatalog = {}
 	): Readonly<Record<string, unknown>> => {
 		const collections = new Map<string, unknown>();
@@ -698,17 +814,7 @@ const ClientDatabase = {
 						return undefined;
 					const existing = collections.get(property);
 					if (existing !== undefined) return existing;
-					const created = readOnlyCollections.has(property)
-						? new Proxy(ClientDatabase.collection(runtime, property, catalog), {
-								get: (target, member, receiver) =>
-									stripWrites(member) ? undefined : Reflect.get(target, member, receiver),
-								has: (target, member) => !stripWrites(member) && Reflect.has(target, member),
-								ownKeys: (target) =>
-									Reflect.ownKeys(target).filter((member) => !stripWrites(member)),
-								getOwnPropertyDescriptor: (target, member) =>
-									stripWrites(member) ? undefined : Reflect.getOwnPropertyDescriptor(target, member)
-							})
-						: ClientDatabase.collection(runtime, property, catalog);
+					const created = ClientDatabase.collection(runtime, property, catalog);
 					collections.set(property, created);
 					return created;
 				}
@@ -717,79 +823,138 @@ const ClientDatabase = {
 	}
 };
 
+const requireId = (collection: string, input: JsonRecord): string => {
+	const id = input['id'];
+	if (!isNonEmptyString(id)) throw new TypeError(`Write to ${collection} names no record id`);
+	return id;
+};
+
+/**
+ * One browser write: the declared inputs under the idempotent push envelope, queued on the Machine
+ * and settled asynchronously through the returned handle. Nothing is claimed saved before that
+ * outcome; durability is this tab's memory. The optimistic row is the first input as sent.
+ */
 const submitGraph = (
 	runtime: WorkspaceClientRuntime,
 	catalog: CollectionCatalog,
-	graph: CollectionMutationGraph,
-	row: Readonly<Record<string, Schema.Json>> | null
+	collection: string,
+	action: CollectionWriteGraph['action'],
+	inputs: ReadonlyArray<JsonRecord>
 ): MemoryMutationResult => {
+	const state = runtime.sync.current();
+	const declared = inputs.map((input) => withRelationActions(state, catalog, collection, input));
+	if (!Array_.isReadonlyArrayNonEmpty(declared))
+		throw new TypeError(`Write to ${collection} requires at least one input`);
+	if (action !== 'create') {
+		const ids = declared.map((input) => requireId(collection, input));
+		if (new Set(ids).size !== ids.length)
+			throw new TypeError(`Write to ${collection} names one record more than once`);
+	}
 	const idempotencyKey = CollectionMutationIdempotencyKey.make(crypto.randomUUID());
 	const settlement = runtime.settlements.create(idempotencyKey);
-	const request = Schema.decodeUnknownSync(CollectionMutateRequest)({
+	const request = Schema.decodeUnknownSync(CollectionMutationPush)({
 		protocolVersion: 2,
 		idempotencyKey,
 		issuedAtEpochMs: Date.now(),
 		partitionKey: runtime.mutation.partitionKey,
 		schemaFingerprint: runtime.mutation.schemaFingerprint,
-		graph,
-		baseVersions: collectionMutationBaseVersions(runtime.sync.current(), graph, catalog)
+		graph: { collection, action, inputs: declared },
+		baseVersions: declaredBaseVersions(state, catalog, collection, declared)
 	});
 	runtime.sync.enqueue(request);
-	return { durability: 'memory', pending: true, row, idempotencyKey, settlement };
+	return {
+		durability: 'memory',
+		pending: true,
+		row: action === 'delete' ? null : declared[0],
+		idempotencyKey,
+		settlement
+	};
 };
 
-const materializeWriteRow = (
-	collection: string,
-	values: Readonly<Record<string, Schema.Json>>
-): Readonly<{
-	readonly action: 'create' | 'update';
-	readonly values: Readonly<Record<string, Schema.Json>>;
-}> => {
-	const submittedId = values['id'];
-	if (submittedId !== undefined && (!isString(submittedId) || submittedId.trim() === ''))
-		throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	if (isString(submittedId)) return { action: 'update', values };
-	const id = crypto.randomUUID();
-	return { action: 'create', values: { ...values, id } };
-};
-
-const enqueueMutation = (
+/**
+ * `client.collection.<name>` (RFC §4.2): the collection's declared write surface. Every call is
+ * one graph — `createMany`, `updateMany` and `deleteMany` are a batch of the single-record input
+ * and run one transform in one transaction on the server.
+ */
+const collectionWrites = (
 	runtime: WorkspaceClientRuntime,
 	catalog: CollectionCatalog,
-	collection: string,
-	records: ReadonlyArray<Readonly<Record<string, Schema.Json>>>
-): MemoryMutationResult => {
-	const [first, ...rest] = records.map((values) => materializeWriteRow(collection, values));
-	if (first === undefined)
-		throw new TypeError(`Mutation ${collection} requires at least one record`);
-	return submitGraph(
-		runtime,
-		catalog,
-		{ action: 'mutate', collection, rows: [first, ...rest] },
-		first.values
-	);
+	collection: string
+) => {
+	const mutation = new CollectionMutationState();
+	const write = (action: CollectionWriteGraph['action'], inputs: ReadonlyArray<JsonRecord>) =>
+		mutation.run(Effect.sync(() => submitGraph(runtime, catalog, collection, action, inputs)));
+	const records = (inputs: unknown): ReadonlyArray<JsonRecord> => {
+		if (!Array.isArray(inputs)) throw new TypeError(`Write to ${collection} takes an array`);
+		return inputs.map(asJsonRecord);
+	};
+	return {
+		create: (input: Schema.Json) => write('create', [asJsonRecord(input)]),
+		createMany: (inputs: Schema.Json) => write('create', records(inputs)),
+		update: (id: string, input: Schema.Json) => write('update', [{ ...asJsonRecord(input), id }]),
+		updateMany: (inputs: Schema.Json) => write('update', records(inputs)),
+		delete: (id: string) => write('delete', [{ id }]),
+		deleteMany: (ids: readonly string[]) =>
+			write(
+				'delete',
+				ids.map((id) => ({ id }))
+			),
+		get pending() {
+			return mutation.pending;
+		}
+	};
 };
 
-const enqueueDeletion = (
-	runtime: WorkspaceClientRuntime,
-	catalog: CollectionCatalog,
-	collection: string,
-	ids: readonly string[]
-): MemoryMutationResult => {
-	if (ids.length === 0)
-		throw new TypeError(`Mutation ${collection} delete requires at least one id`);
-	for (const recordId of ids) {
-		if (recordId.trim() === '')
-			throw new TypeError(`Mutation ${collection} id must be a non-empty string`);
-	}
-	if (new Set(ids).size !== ids.length)
-		throw new TypeError(`Mutation ${collection} delete ids must be unique`);
-	return submitGraph(
-		runtime,
-		catalog,
-		{ action: 'delete', collection, ids: ids as [string, ...string[]] },
-		null
-	);
+const HistoryEntries = Schema.Array(
+	Schema.Struct({
+		values: Schema.Record(Schema.String, Schema.Json),
+		validFrom: Schema.String,
+		validTo: Schema.NullOr(Schema.String),
+		version: Schema.Number
+	})
+);
+
+/**
+ * `client.collection_history.<name>` (RFC §4.7): the record's revisions, or the row as it stood at
+ * an anchor. One-shot over the transport, never live; the same masked rows the live read returns.
+ */
+const collectionHistory = (runtime: WorkspaceClientRuntime, collection: string) => {
+	const contract = fixedContract('collections.history');
+	const read = (
+		id: string,
+		at?: CollectionHistoryAnchor
+	): RemoteQuery<ReadonlyArray<CollectionRecordHistoryEntry>> =>
+		commandQueryOf(
+			runtime,
+			'collections.history',
+			{ collection, id, ...(at === undefined ? {} : { at }) },
+			contract.input,
+			HistoryEntries
+		);
+	return {
+		revisions: (id: string) => read(id),
+		at: (
+			id: string,
+			anchor: CollectionHistoryAnchor
+		): RemoteQuery<CollectionRecordHistoryEntry['values'] | undefined> => {
+			const query = read(id, anchor);
+			return {
+				get current() {
+					return query.current?.[0]?.values;
+				},
+				get error() {
+					return query.error;
+				},
+				get loading() {
+					return query.loading;
+				},
+				then: (onfulfilled, onrejected) =>
+					Promise.resolve(query)
+						.then((entries) => entries[0]?.values)
+						.then(onfulfilled, onrejected)
+			};
+		}
+	};
 };
 
 /** --- automations --- */
@@ -898,8 +1063,21 @@ const WorkspaceApis = {
 			if (!collectionAllowed(collection))
 				throw new Error(`Collection ${JSON.stringify(collection)} is private to the Bolt runtime`);
 		};
+		const writable = (collection: string): boolean =>
+			collectionAllowed(collection) &&
+			!readOnlyCollections.has(collection) &&
+			catalog[collection]?.write !== undefined;
+		const surfaces = new Map<string, unknown>();
+		const memoized = (prefix: string, collection: string, create: () => unknown): unknown => {
+			const key = `${prefix}\u0000${collection}`;
+			const existing = surfaces.get(key);
+			if (existing !== undefined) return existing;
+			const created = create();
+			surfaces.set(key, created);
+			return created;
+		};
 		const publicApi = {
-			db: ClientDatabase.database(runtime, allowedCollections, readOnlyCollections, catalog),
+			db: ClientDatabase.database(runtime, allowedCollections, catalog),
 			automations: automationClient(runtime),
 			invoke: new Proxy<Record<string, InvokeMethod>>(
 				{},
@@ -927,32 +1105,32 @@ const WorkspaceApis = {
 					}
 				}
 			),
+			/**
+			 * The declared write surface (RFC §4.2). A collection the catalog declares no write for, or
+			 * one the shell publishes read-only, has no entry here.
+			 */
+			collection: new Proxy<Record<string, unknown>>(
+				{},
+				{
+					get: (_target, property) =>
+						isString(property) && writable(property)
+							? memoized('collection', property, () => collectionWrites(runtime, catalog, property))
+							: undefined
+				}
+			),
+			collection_history: new Proxy<Record<string, unknown>>(
+				{},
+				{
+					get: (_target, property) =>
+						isString(property) && collectionAllowed(property)
+							? memoized('history', property, () => collectionHistory(runtime, property))
+							: undefined
+				}
+			),
 			records: {
 				findMany: (collection: string, input: Schema.Json = {}) => {
 					assertCollectionAllowed(collection);
 					return pageQueryOf(runtime, collection, catalog, asJsonRecord(input));
-				}
-			},
-			pending: {
-				findMany: (collection: string, input: Schema.Json = {}) => {
-					assertCollectionAllowed(collection);
-					const mounted = runtime.sync.mount(
-						syncInputOf({ ...asJsonRecord(input), kind: 'findMany', collection, pendingOnly: true })
-					);
-					return createMachineQuery(
-						runtime.sync,
-						mounted,
-						(state) => queryAt(state, mounted.key)?.prefix?.rows
-					);
-				}
-			},
-			history: {
-				findMany: (collection: string, recordId: string) => {
-					assertCollectionAllowed(collection);
-					return commandQueryFromContract(runtime, 'collections.history', {
-						collection,
-						id: recordId
-					});
 				}
 			},
 			approvals: {

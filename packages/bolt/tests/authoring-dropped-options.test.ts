@@ -50,9 +50,7 @@ describe('file({ mimeTypes })', () => {
 			collection({ name: 'documents', fields: {} }),
 			defineModel({ contract: file({ mimeTypes: ['application/pdf'] }) })
 		);
-		expect(collectionCatalogEntry(compiled, []).fields[0]?.mimeTypes).toEqual([
-			'application/pdf'
-		]);
+		expect(collectionCatalogEntry(compiled, []).fields[0]?.mimeTypes).toEqual(['application/pdf']);
 	});
 });
 

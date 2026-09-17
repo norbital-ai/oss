@@ -8,7 +8,7 @@ export const PRODUCT_SUBMODULE_ICON_NAMES = [
 	'policies',
 	'approvals',
 	'audit',
-	'hooks',
+	'writes',
 	'pipelines',
 	'integrations',
 	'automations',

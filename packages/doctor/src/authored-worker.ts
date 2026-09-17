@@ -117,14 +117,13 @@ parentPort?.postMessage({
 		// rule-scoped exception is a statement about a family of findings wherever they were
 		// produced, and a cross-file finding that ignores the repository's own scoping would
 		// make the catalogue disagree with the configuration it was produced from.
-		findings: applyAllowances(request.root, [
-			...findings,
-			...crossFile,
-			...typeAware.findings
-		].filter((finding) => {
-			const [file] = finding.location.split(':');
-			return file === undefined || !ignoredRule(request.root, file, finding.rule);
-		})),
+		findings: applyAllowances(
+			request.root,
+			[...findings, ...crossFile, ...typeAware.findings].filter((finding) => {
+				const [file] = finding.location.split(':');
+				return file === undefined || !ignoredRule(request.root, file, finding.rule);
+			})
+		),
 		ruleCount: config.rules.length,
 		ruleSetDigest,
 		allFiles,

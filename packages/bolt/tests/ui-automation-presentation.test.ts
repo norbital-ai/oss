@@ -55,15 +55,17 @@ describe('system automation presentation', () => {
 	});
 
 	it('hides Source unless the shell proves Studio entitlement and a source exists', () => {
-		expect(canShowAutomationSource({ canEnterStudio: undefined, sourcePath: 'src/+daily.ts' })).toBe(
-			false
-		);
+		expect(
+			canShowAutomationSource({ canEnterStudio: undefined, sourcePath: 'src/+daily.ts' })
+		).toBe(false);
 		expect(canShowAutomationSource({ canEnterStudio: false, sourcePath: 'src/+daily.ts' })).toBe(
 			false
 		);
 		expect(canShowAutomationSource({ canEnterStudio: true, sourcePath: undefined })).toBe(false);
 		expect(canShowAutomationSource({ canEnterStudio: true, sourcePath: '   ' })).toBe(false);
-		expect(canShowAutomationSource({ canEnterStudio: true, sourcePath: 'src/+daily.ts' })).toBe(true);
+		expect(canShowAutomationSource({ canEnterStudio: true, sourcePath: 'src/+daily.ts' })).toBe(
+			true
+		);
 	});
 
 	it('shows Studio Source from projected entitlement even when the authored path is missing', () => {

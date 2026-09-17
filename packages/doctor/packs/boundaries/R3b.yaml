@@ -7,5 +7,5 @@ rule:
     - '$VALUE as unknown as $TARGET'
     - '$VALUE as never as $TARGET'
 examples:
-  bad: ["const n = text as unknown as number;"]
-  good: ["const n = Number(text);"]
+  bad: ['const n = text as unknown as number;']
+  good: ['const n = Number(text);']

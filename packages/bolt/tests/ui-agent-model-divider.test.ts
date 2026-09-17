@@ -43,7 +43,9 @@ describe('AGENT-UI3 model-change divider', () => {
 			runRow(runA, 'z-ai/glm-5.3-flash')
 		]);
 		const first = modelChangeDividers(runs, messages);
-		expect([...first.entries()]).toEqual([[messages[3]!.id, 'deepseek/deepseek-v4-flash-vision-exp']]);
+		expect([...first.entries()]).toEqual([
+			[messages[3]!.id, 'deepseek/deepseek-v4-flash-vision-exp']
+		]);
 		// Re-projecting the same rows (what a reload does) yields the same divider at the same message.
 		const again = modelChangeDividers(projectTurns(runs.map((run) => ({ ...run }))), transcript());
 		expect([...again.entries()]).toEqual([...first.entries()]);

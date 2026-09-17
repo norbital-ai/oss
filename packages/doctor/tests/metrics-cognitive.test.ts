@@ -13,9 +13,9 @@ import { arrowNamed, fnNamed } from './fixtures/metrics/parse.ts';
 
 const methodOf = (source: string): ts.MethodDeclaration => {
 	const file = ts.createSourceFile('fixture.ts', source, ts.ScriptTarget.Latest, true);
-	const found = file.statements.find(
-		(statement): statement is ts.ClassDeclaration => ts.isClassDeclaration(statement)
-	)?.members.find((member): member is ts.MethodDeclaration => ts.isMethodDeclaration(member));
+	const found = file.statements
+		.find((statement): statement is ts.ClassDeclaration => ts.isClassDeclaration(statement))
+		?.members.find((member): member is ts.MethodDeclaration => ts.isMethodDeclaration(member));
 	if (!found) throw new Error('fixture lost method');
 	return found;
 };

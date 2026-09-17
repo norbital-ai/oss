@@ -8,7 +8,6 @@ import {
 	policyRuntimeFunctionsFor
 } from '../src/authoring/policy-introspection.js';
 import { refuse, AuthoredRefusal } from '../src/authoring/refusal.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { MAX_ORDINARY_MUTATION_CHANGED_ROWS } from '../src/runtime/collections/write/plan.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
@@ -21,13 +20,12 @@ import {
 import { unwrapMutationPhase } from './support/mutation-phase.js';
 
 /**
- * Which of a batch's three phases failed, which is a different question from why.
+ * Which of a batch's phases failed, which is a different question from why.
  *
- * The three mean three different things to whoever is handling the failure, and until the phase was
- * tagged they were indistinguishable — a refusal from a `before` hook and a refusal from an `after`
- * hook arrived as the same `AuthoredRefusal`, and the caller had no way to tell "nothing was
- * written, retry the batch" from "the batch is already committed, do not retry it". The second is
- * the one that costs money: retrying a settled payroll run pays it twice.
+ * A refusal ahead of the transaction and a database failure inside it mean different things to
+ * whoever is handling the failure: "nothing was written, retry the batch" against "the batch is
+ * already committed, do not retry it". The second is the one that costs money: retrying a settled
+ * payroll run pays it twice.
  *
  * So each case asserts the phase **and** that the original failure survived the wrapper. Either
  * alone is satisfied by a wrong implementation: a wrapper that reported the phase and swallowed the
@@ -59,41 +57,15 @@ const definition = workspace({
 	]
 });
 
-/**
- * The fixture collection as a schema, so the hooks are typed the way a compiled workspace's are:
- * `CollectionHooks` reads handler contexts off `tables`, keeping `input`, `existing`, `previous`,
- * `record` and `api` inferred rather than untyped.
- *
- * A refusal terminates control flow (`refuse` throws), so a refusing handler needs no `context`:
- * the declared `never` return is what satisfies the hook's graph type without reflecting.
- */
-interface NotesSchema {
-	readonly tables: {
-		readonly notes: {
-			readonly $inferSelect: { readonly id: string; readonly body: string };
-			readonly $inferInsert: { readonly id?: string; readonly body: string };
-		};
-	};
-	readonly relations: Record<string, never>;
-}
-
-const refusalHook = (site: 'before' | 'after'): CollectionHooks<NotesSchema, 'notes'> => {
-	const described = {
-		description: `refuses in ${site}`,
-		handler: () => {
-			refuse('A note must name a subject.');
-		}
-	};
-	return {
-		mutate: {
-			perRecord: site === 'before' ? { before: described } : { after: described }
-		}
-	};
+const notesModule: AuthoredRuntime['collections']['notes'] = {
+	create: { input: { columns: { body: true } } }
 };
 
-const hooksRefusingIn = (site: 'before' | 'after'): AuthoredRuntime => ({
+const authoredWith = (
+	transform?: (inputs: ReadonlyArray<Readonly<Record<string, unknown>>>) => unknown
+): AuthoredRuntime => ({
 	...emptyAuthoredRuntime,
-	hooks: { notes: authoredHooks(refusalHook(site)) }
+	collections: { notes: { ...notesModule, ...(transform === undefined ? {} : { transform }) } }
 });
 
 const pendingDefinition = workspace({
@@ -125,7 +97,7 @@ const pendingDefinition = workspace({
 });
 const pendingFunctions = policyRuntimeFunctionsFor(pendingDefinition.policies);
 const pendingAuthored: AuthoredRuntime = {
-	...emptyAuthoredRuntime,
+	...authoredWith(),
 	policyAuthorizations: pendingFunctions.authorizations,
 	approvalFlows: pendingFunctions.approvalFlows
 };
@@ -141,16 +113,21 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const writeTwo = () =>
+const create = (
+	effectId: string,
+	inputs: ReadonlyArray<Readonly<Record<string, unknown>>>,
+	subject = adminSubject
+) =>
 	Effect.gen(function* () {
 		const collections = yield* Collections.Service;
-		return yield* collections.mutate(EffectId.make('phases-1'), adminSubject, 'notes', [
-			{ body: 'first' },
-			{ body: 'second' }
+		return yield* collections.write(EffectId.make(effectId), subject, [
+			{ collection: 'notes', action: 'create', inputs }
 		]);
 	});
 
-/** The failure a mutate raised, as the phase wrapper it now is. */
+const writeTwo = () => create('phases-1', [{ body: 'first' }, { body: 'second' }]);
+
+/** The failure a write raised. */
 const phaseFailureOf = async (runtime: BoltTestRuntime) => {
 	const outcome = await runtime.runtime.runPromise(Effect.result(writeTwo()));
 	if (outcome._tag !== 'Failure')
@@ -159,42 +136,26 @@ const phaseFailureOf = async (runtime: BoltTestRuntime) => {
 };
 
 describe('a batched write that fails', () => {
-	it('reports a before-hook refusal as prepare, with nothing committed', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored: hooksRefusingIn('before') });
+	it('reports a transform refusal ahead of the transaction, with nothing committed', async () => {
+		harness = await makeBoltTestRuntime(definition, {
+			authored: authoredWith(() => {
+				refuse('A note must name a subject.');
+			})
+		});
 
 		const failure = await phaseFailureOf(harness);
 
-		expect(failure).toBeInstanceOf(Collections.MutationPhaseFailure);
-		expect(failure).toMatchObject({ phase: 'prepare', collection: 'notes', committed: [] });
-		// The claim `committed: []` makes, checked against the database rather than taken on trust.
+		// Nothing was written, checked against the database rather than taken on trust.
 		expect(await harness.database.query('select id from notes')).toHaveLength(0);
-		// And the sentence the author wrote is still the failure underneath, not a casualty of it.
+		// And the sentence the author wrote is the failure, stamped with the site it came from.
 		const cause = unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
 		expect((cause as AuthoredRefusal).message).toBe('A note must name a subject.');
-		expect((cause as AuthoredRefusal).action).toBe('mutate.before');
-	}, 60_000);
-
-	it('reports an after-hook refusal as settle, naming the rows that are already facts', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored: hooksRefusingIn('after') });
-
-		const failure = await phaseFailureOf(harness);
-
-		expect(failure).toBeInstanceOf(Collections.MutationPhaseFailure);
-		expect(failure).toMatchObject({ phase: 'settle', collection: 'notes' });
-		// The transaction committed before the `after` hook ran, so the rows exist. This is exactly
-		// the case a caller must not retry, and `committed` is what lets it tell.
-		const stored = await harness.database.query('select id from notes');
-		expect(stored).toHaveLength(2);
-		const committed = (failure as Collections.MutationPhaseFailure).committed;
-		expect([...committed].toSorted()).toEqual(stored.map((row) => String(row['id'])).toSorted());
-		const cause = unwrapMutationPhase(failure);
-		expect(cause).toBeInstanceOf(AuthoredRefusal);
-		expect((cause as AuthoredRefusal).action).toBe('mutate.after');
+		expect((cause as AuthoredRefusal).action).toBe('transform');
 	}, 60_000);
 
 	it('leaves a successful batch untouched', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
 
 		const written = await harness.runtime.runPromise(writeTwo());
 
@@ -203,14 +164,14 @@ describe('a batched write that fails', () => {
 	}, 60_000);
 
 	it('emits no batch when the database transaction fails', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		// The transform hands the database a null it will not take: the failure is the commit's.
+		harness = await makeBoltTestRuntime(definition, {
+			authored: authoredWith((inputs) => inputs.map((input) => ({ ...input, body: null })))
+		});
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
-				const outcome = yield* Effect.result(
-					collections.mutate(EffectId.make('phases-commit-failure'), adminSubject, 'notes', [{}])
-				);
+				const outcome = yield* Effect.result(create('phases-commit-failure', [{ body: 'x' }]));
 				return { outcome, changes: yield* syncCommit.drainChanges };
 			})
 		);
@@ -222,26 +183,26 @@ describe('a batched write that fails', () => {
 		expect(await harness.database.query('select id from notes')).toEqual([]);
 	}, 60_000);
 
-	it('publishes approval metadata while holding the domain mutation for review', async () => {
+	it('commits a reviewed write provisionally under the hold and publishes the request beside it', async () => {
 		harness = await makeBoltTestRuntime(pendingDefinition, { authored: pendingAuthored });
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
-				const outcome = yield* Effect.result(
-					collections.mutate(EffectId.make('phases-pending-approval'), pendingSubject, 'notes', [
-						{ body: 'Held for review' }
-					])
+				const commit = yield* create(
+					'phases-pending-approval',
+					[{ body: 'Held for review' }],
+					pendingSubject
 				);
-				return { outcome, changes: yield* syncCommit.drainChanges };
+				return { commit, changes: yield* syncCommit.drainChanges };
 			})
 		);
 
-		expect(result.outcome._tag).toBe('Failure');
-		if (result.outcome._tag === 'Failure')
-			expect(result.outcome.failure).toBeInstanceOf(Collections.PendingApproval);
+		// RFC §4.8: the row is real, stamped with the request, and the request rides the same batch.
+		const requestId = result.commit.pendingApproval?.requestId;
+		expect(requestId).toBeDefined();
 		expect(result.changes.map((change) => change.collection).toSorted()).toEqual([
 			'approval_request',
+			'notes',
 			'requestor'
 		]);
 		expect(result.changes).toContainEqual(
@@ -251,34 +212,37 @@ describe('a batched write that fails', () => {
 				after: expect.objectContaining({
 					collection_name: 'notes',
 					status: 'ONGOING',
-					applied_at: null,
-					proposed_values: expect.objectContaining({ body: 'Held for review' })
+					applied_at: null
 				})
 			})
 		);
-		expect(await harness.database.query('select id from notes')).toEqual([]);
+		expect(await harness.database.query('select body, approval_id from notes')).toEqual([
+			{ body: 'Held for review', approval_id: requestId }
+		]);
+		// The restore point: a hold revision recording the row's absence before the proposal.
+		expect(
+			await harness.database.query(
+				`select snapshot from bolt_collection_history where collection_name = 'notes' and operation = 'hold' and approval_id = $1`,
+				[requestId]
+			)
+		).toEqual([{ snapshot: null }]);
 	}, 60_000);
 
 	it('admits the changed-row limit and refuses one more before commit', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
-				const admitted = yield* collections.mutate(
-					EffectId.make('phases-boundary-admitted'),
-					adminSubject,
-					'notes',
+				const admitted = yield* create(
+					'phases-boundary-admitted',
 					Array.from({ length: MAX_ORDINARY_MUTATION_CHANGED_ROWS }, (_, index) => ({
 						body: `admitted-${index}`
 					}))
 				);
 				const admittedChanges = yield* syncCommit.drainChanges;
 				const refused = yield* Effect.result(
-					collections.mutate(
-						EffectId.make('phases-boundary-refused'),
-						adminSubject,
-						'notes',
+					create(
+						'phases-boundary-refused',
 						Array.from({ length: MAX_ORDINARY_MUTATION_CHANGED_ROWS + 1 }, (_, index) => ({
 							body: `refused-${index}`
 						}))
@@ -309,8 +273,8 @@ describe('unwrapMutationPhase', () => {
 	});
 
 	it('keeps the innermost phase when one batch fails inside another', () => {
-		// A hook may write, and its write is a batch of its own. The inner batch is the one that knows
-		// what was committed, so wrapping it again would replace a true answer with a vaguer one.
+		// The inner batch is the one that knows what was committed, so wrapping it again would
+		// replace a true answer with a vaguer one.
 		const inner = new Collections.MutationPhaseFailure({
 			phase: 'settle',
 			collection: 'payslips',

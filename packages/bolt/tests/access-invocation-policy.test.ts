@@ -34,7 +34,9 @@ describe('invocation policy contracts', () => {
 		expect(workspace.userId).toBe(caller.userId);
 		expect(workspace.policies).toEqual([]);
 
-		const write = await Effect.runPromise(invocation.write(workspace, 'create', 'people', { any: 1 }));
+		const write = await Effect.runPromise(
+			invocation.write(workspace, 'create', 'people', { any: 1 })
+		);
 		expect(write).toEqual({
 			action: 'create',
 			resource: 'people',
@@ -56,7 +58,9 @@ describe('invocation policy contracts', () => {
 		});
 
 		// The caller the workspace was minted for is still judged on its own grants.
-		const denied = await Effect.runPromise(Effect.flip(invocation.write(caller, 'create', 'people', {})));
+		const denied = await Effect.runPromise(
+			Effect.flip(invocation.write(caller, 'create', 'people', {}))
+		);
 		expect(denied.reason).toBe('no matching allow policy');
 	});
 

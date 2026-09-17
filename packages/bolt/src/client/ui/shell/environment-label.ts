@@ -9,9 +9,7 @@
  * Duplicated — not shared — with Colony's `deployEnvironmentLabel`: the compiled tenant bundle
  * cannot import host code, and the host cannot import framework source. The two must agree.
  */
-export const workspaceEnvironmentLabel = (
-	environment: string | undefined
-): string | undefined => {
+export const workspaceEnvironmentLabel = (environment: string | undefined): string | undefined => {
 	if (environment === undefined) return undefined;
 	const normalized = environment.trim();
 	if (normalized.length === 0 || normalized === 'production') return undefined;

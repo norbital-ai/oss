@@ -18,6 +18,6 @@ rule:
         stopBy: end
 examples:
   bad:
-    - 'export const GET = () => Effect.gen(function* () { return error(400, ''bad''); });'
+    - "export const GET = () => Effect.gen(function* () { return error(400, 'bad'); });"
   good:
-    - 'export const GET = () => Effect.fail(''bad'');'
+    - "export const GET = () => Effect.fail('bad');"

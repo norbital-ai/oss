@@ -205,28 +205,27 @@ export function buildPillars(
 	const cycleModules = new Set(cycles.flat());
 	for (const record of production) {
 		const name = record.pillar.slice(record.owner.id.length + 1);
-		const current =
-			map.get(record.pillar) ?? {
-				pillar: record.pillar,
-				name,
-				label: `${record.owner.name}:${name}`,
-				package: record.owner.id,
-				packageName: record.owner.name,
-				files: [],
-				concepts: new Set<string>(),
-				codeLoc: 0,
-				services: 0,
-				functions: [],
-				namedFunctions: 0,
-				codeEntities: 0,
-				cyclicModules: 0,
-				localNamedCalls: 0,
-				inlineCandidates: [],
-				internalEdges: 0,
-				inboundEdges: 0,
-				outboundEdges: 0,
-				locality: emptyLocality()
-			};
+		const current = map.get(record.pillar) ?? {
+			pillar: record.pillar,
+			name,
+			label: `${record.owner.name}:${name}`,
+			package: record.owner.id,
+			packageName: record.owner.name,
+			files: [],
+			concepts: new Set<string>(),
+			codeLoc: 0,
+			services: 0,
+			functions: [],
+			namedFunctions: 0,
+			codeEntities: 0,
+			cyclicModules: 0,
+			localNamedCalls: 0,
+			inlineCandidates: [],
+			internalEdges: 0,
+			inboundEdges: 0,
+			outboundEdges: 0,
+			locality: emptyLocality()
+		};
 		current.files.push(record.displayPath);
 		current.concepts.add(record.concept);
 		current.codeLoc += record.lines.code;
@@ -259,8 +258,7 @@ export function buildPillars(
 	}
 	const findingCounts = new Map<string, number>();
 	for (const finding of quality?.findings ?? [])
-		if (finding.file)
-			findingCounts.set(finding.file, (findingCounts.get(finding.file) ?? 0) + 1);
+		if (finding.file) findingCounts.set(finding.file, (findingCounts.get(finding.file) ?? 0) + 1);
 	return [...map.values()]
 		.map((pillar): PillarReport => {
 			const cyclomatic = pillar.functions.map(({ cyclomatic }) => cyclomatic);
@@ -318,17 +316,10 @@ export function buildPillars(
 					callbackProxies: candidates.filter(({ kind }) => kind === 'callback-proxy').length,
 					singleUseExpressions: candidates.filter(({ kind }) => kind === 'single-use-expression')
 						.length,
-					perHundredNamedFunctions: roundedRatio(
-						candidates.length,
-						pillar.namedFunctions,
-						100
-					),
+					perHundredNamedFunctions: roundedRatio(candidates.length, pillar.namedFunctions, 100),
 					candidates
 				},
-				staticFindings: pillar.files.reduce(
-					(sum, file) => sum + (findingCounts.get(file) ?? 0),
-					0
-				)
+				staticFindings: pillar.files.reduce((sum, file) => sum + (findingCounts.get(file) ?? 0), 0)
 			};
 		})
 		.sort((left, right) => right.codeLoc - left.codeLoc || left.pillar.localeCompare(right.pillar));

@@ -18,13 +18,11 @@ import { collection, field, policy, workspace } from '../src/authoring/workspace
 import * as AccessControl from '../src/runtime/access/access-control.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { PendingApproval } from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
-	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
 
@@ -130,7 +128,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'workspace.manifest',
 	'workspace.authoringManifest',
 	'collections.history',
-	'collections.mutate',
+	'collections.write',
 	'collections.import',
 	'collections.export',
 	// Same `CollectionQueryRequest` input and the same read policy as `collections.export`, so it
@@ -214,10 +212,11 @@ const gatedWorkspace = workspace({
 });
 
 const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
-const gatedAuthored = {
+const gatedAuthored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
 	policyAuthorizations: gatedFunctions.authorizations,
-	approvalFlows: gatedFunctions.approvalFlows
+	approvalFlows: gatedFunctions.approvalFlows,
+	collections: { people: { create: { input: { columns: { name: true } } } } }
 };
 
 describe('payload-supplied identity', () => {
@@ -242,7 +241,7 @@ describe('payload-supplied identity', () => {
 	// the claim is refused on that tag too and not only on the one the issue named.
 	it('refuses the same claim arriving on a plugin that is not the data browser', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		for (const name of ['secrets.write', 'secrets.status', 'collections.mutate']) {
+		for (const name of ['secrets.write', 'secrets.status', 'collections.write']) {
 			const failure = await failureOf(
 				harness,
 				plugin(name, { subject: forgedSubject, name: 'GEOCODING_API_KEY', value: 'stolen' })
@@ -319,24 +318,16 @@ describe('payload-supplied identity', () => {
 	it('still runs the approval-resume task, whose authority is the stored approval', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-		const id = recordId('person-1');
 
 		const held = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id, name: 'Ada' }],
-						0,
-						{ roots: [{ id, action: 'create' }] }
-					);
-				})
-			)
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).write(effectId('create-held'), policySubject, [
+					{ collection: 'people', action: 'create', inputs: [{ name: 'Ada' }] }
+				]);
+			})
 		);
-		expect(held).toBeInstanceOf(PendingApproval);
-		const requestId = held instanceof PendingApproval ? held.requestId : '';
+		const requestId = held.pendingApproval?.requestId ?? '';
+		expect(requestId).not.toBe('');
 
 		const pending = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -346,8 +337,8 @@ describe('payload-supplied identity', () => {
 		if (pending?._tag !== 'Pending')
 			throw new Error(`expected a pending approval, got ${String(pending?._tag)}`);
 		// Only the discriminant and the decider move. `status` answers the *public* projection, which
-		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
-		// replays from — so writing that projection back would approve a request nothing could resume.
+		// deliberately drops `subject` and the lock set — what the seal reads — so writing that
+		// projection back would approve a request nothing could resume.
 		await harness.database.query(
 			`update bolt_approvals
 			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))
@@ -359,6 +350,8 @@ describe('payload-supplied identity', () => {
 			dispatchInvocation(task('collections.resume', { requestId }))
 		);
 		expect(resumed.value).toMatchObject({ resumed: true, requestId });
-		expect(await harness.database.query('select name from people')).toEqual([{ name: 'Ada' }]);
+		expect(await harness.database.query('select name, approval_id from people')).toEqual([
+			{ name: 'Ada', approval_id: null }
+		]);
 	});
 });

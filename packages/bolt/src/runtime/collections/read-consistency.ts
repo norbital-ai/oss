@@ -64,27 +64,27 @@ export const executeObservedRead = (
 /**
  * Brief ordered locks prevent phantoms between revalidation and the write's atomic commit.
  *
- * One `lock table` naming every table, and one assertion over every distinct read: a run that
- * read twenty-three collections used to open its write with forty-eight statements that proved
- * nothing had moved, one round trip each. The reads keep their own placeholders, renumbered onto
- * one parameter list, and the assertion fails with the one read-conflict sentence either way.
+ * One `lock table` naming every table — the one statement a write that read sends before its own,
+ * since a lock cannot live inside a `WITH` — and one assertion over every distinct read, folded
+ * into the write. The reads keep their own placeholders, renumbered onto one parameter list, and the
+ * assertion fails with the one read-conflict sentence either way.
  */
 export function readConsistencyStatements(
 	snapshots: ReadonlyArray<ReadSnapshot>,
 	writeTables: ReadonlyArray<string>
-): ReadonlyArray<Statement> {
+): Readonly<{ readonly lock: Statement | undefined; readonly check: Statement | undefined }> {
 	const tables = [...new Set([...writeTables, ...snapshots.flatMap((read) => read.tables)])].sort();
 	const unique = new Map(
 		snapshots.map((read) => [JSON.stringify([read.sql, read.parameters, read.fingerprint]), read])
 	);
+	// The lock exists for the reads: a write that read nothing has no phantom to fear, and its
+	// version guards ride inside its own statement. Such a write is exactly one statement.
 	const lock =
-		tables.length === 0
-			? []
-			: [
-					transactionSql(
-						`lock table ${tables.map((table) => quote(table)).join(', ')} in share row exclusive mode`
-					)
-				];
+		unique.size === 0
+			? undefined
+			: transactionSql(
+					`lock table ${tables.map((table) => quote(table)).join(', ')} in share row exclusive mode`
+				);
 	const parameters: Schema.Json[] = [];
 	const checks = [...unique.values()].map((read) => {
 		const offset = parameters.length;
@@ -92,10 +92,13 @@ export function readConsistencyStatements(
 		const sql = read.sql.replace(/\$(\d+)\b/g, (_, index: string) => `$${Number(index) + offset}`);
 		return `(select ${fingerprint('bolt_observed_row')} from (${sql}) as bolt_observed_row) = $${offset + read.parameters.length + 1}`;
 	});
-	if (checks.length === 0) return lock;
+	if (checks.length === 0) return { lock, check: undefined };
 	parameters.push(READ_CONFLICT_MESSAGE);
-	return [
-		...lock,
-		transactionSql(`select bolt_assert(${checks.join(' and ')}, $${parameters.length})`, parameters)
-	];
+	return {
+		lock,
+		check: transactionSql(
+			`select bolt_assert(${checks.join(' and ')}, $${parameters.length})`,
+			parameters
+		)
+	};
 }

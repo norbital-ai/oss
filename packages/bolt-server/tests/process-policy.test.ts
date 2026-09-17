@@ -83,7 +83,8 @@ describe('process policy', () => {
 	const hosts: Array<Host> = [];
 	afterEach(async () => {
 		for (const host of hosts.splice(0)) {
-			if (host.child.exitCode === null && host.child.signalCode === null) host.child.kill('SIGKILL');
+			if (host.child.exitCode === null && host.child.signalCode === null)
+				host.child.kill('SIGKILL');
 			await host.exited;
 		}
 	});
@@ -118,7 +119,9 @@ describe('process policy', () => {
 				await poll;
 				expect(exit.signal).toBe('SIGKILL');
 				expect(host.stderr()).toContain('failure escaped every boundary');
-				expect(host.stderr()).toContain(`injected ${fault === 'uncaught' ? 'uncaught exception' : 'unhandled rejection'}`);
+				expect(host.stderr()).toContain(
+					`injected ${fault === 'uncaught' ? 'uncaught exception' : 'unhandled rejection'}`
+				);
 				expect(observed.some((status) => status === 503 || status === 'refused')).toBe(true);
 			},
 			TEST_TIMEOUT_MILLIS
@@ -139,7 +142,9 @@ describe('process policy', () => {
 				'contained failure log'
 			);
 			expect(host.stdout()).toContain('facility Success');
-			expect(host.stderr()).toContain('failure escaped facility late-socket (effect late-1) and was contained');
+			expect(host.stderr()).toContain(
+				'failure escaped facility late-socket (effect late-1) and was contained'
+			);
 			expect(host.stderr()).toContain('late socket error');
 			await sleep(300);
 			expect(host.child.exitCode).toBeNull();

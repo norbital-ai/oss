@@ -1,9 +1,10 @@
 import type {
 	CollectionMutationIdempotencyKey,
-	CollectionMutateRequest,
+	CollectionMutationPush,
 	StoredRecord,
 	SyncConnectRequest,
 	SyncConnectResponse,
+	SyncOutcome,
 	SyncExtendPrefixRequest,
 	SyncExtendPrefixResponse,
 	SyncPrefixUpdate,
@@ -57,7 +58,7 @@ export type QueryState = Readonly<{
 }>;
 
 export type WriteState = Readonly<
-	{ readonly request: CollectionMutateRequest } & (
+	{ readonly request: CollectionMutationPush } & (
 		{ readonly phase: 'queued' } | { readonly phase: 'sent'; readonly sentAt: number }
 	)
 >;
@@ -94,9 +95,15 @@ export type ClientEvent = Readonly<
 	| { readonly kind: 'mounted'; readonly key: string; readonly input: SyncQueryInput }
 	| { readonly kind: 'detached'; readonly key: string; readonly at: number }
 	| { readonly kind: 'extendRequested'; readonly key: string; readonly requestedPrefix: number }
+	/**
+	 * The push itself answered. The command's reply is the write's settlement — a hold (202) as much
+	 * as a commit or a refusal — so the write leaves the outbox here and is never replayed. Replaying
+	 * an answered write under a later identity (a team preview) re-ran its transform as a stranger.
+	 */
+	| { readonly kind: 'writeAnswered'; readonly outcome: SyncOutcome }
 	| {
 			readonly kind: 'writeEnqueued';
-			readonly request: CollectionMutateRequest;
+			readonly request: CollectionMutationPush;
 			readonly at: number;
 	  }
 	| { readonly kind: 'tick'; readonly now: number }
@@ -705,6 +712,8 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			queries.set(event.key, extendedRequest);
 			return [{ ...state, queries }, []];
 		}
+		case 'writeAnswered':
+			return [{ ...state, writes: settleWrites(state.writes, [event.outcome]) }, []];
 		case 'writeEnqueued': {
 			const id = event.request.idempotencyKey;
 			if (state.writes.has(id) || state.link === 'closed') return [state, []];

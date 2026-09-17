@@ -29,7 +29,9 @@
 			<Inline
 				align="start"
 				gap="sm"
-				class="pointer-events-auto min-w-0 rounded-lg border border-l-4 bg-popover px-3 py-2.5 shadow-lg {toneClass(notice.tone)}"
+				class="pointer-events-auto min-w-0 rounded-lg border border-l-4 bg-popover px-3 py-2.5 shadow-lg {toneClass(
+					notice.tone
+				)}"
 				role={notice.tone === 'destructive' ? 'alert' : 'status'}
 				aria-live={notice.tone === 'destructive' ? 'assertive' : 'polite'}
 			>

@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-	makeTimekeeperCore,
-	MAX_TIMEKEEPER_TIMEOUT_MILLIS
-} from '../src/timekeeper-contract.js';
+import { makeTimekeeperCore, MAX_TIMEKEEPER_TIMEOUT_MILLIS } from '../src/timekeeper-contract.js';
 
 type CapturedTimer = Readonly<{
 	readonly callback: () => void;
@@ -81,9 +78,11 @@ describe('Timekeeper core', () => {
 		expect(first?.key).toBe('first');
 		expect(core.takeDue(100)).toBeUndefined();
 		core.announce('first', 'first', 130);
-		expect(
-			core.complete({ callbackAtEpochMs: 140, mergeAnnouncements: true })
-		).toEqual({ subject: 'first', at: 130, stale: false });
+		expect(core.complete({ callbackAtEpochMs: 140, mergeAnnouncements: true })).toEqual({
+			subject: 'first',
+			at: 130,
+			stale: false
+		});
 		expect(core.takeDue(100)?.key).toBe('second');
 	});
 
@@ -93,16 +92,20 @@ describe('Timekeeper core', () => {
 		core.announce('failed', 'failed', 100);
 		core.takeDue(100);
 		core.announce('failed', 'failed', 90);
-		expect(
-			core.complete({ callbackAtEpochMs: 500, mergeAnnouncements: false })
-		).toEqual({ subject: 'failed', at: 500, stale: false });
+		expect(core.complete({ callbackAtEpochMs: 500, mergeAnnouncements: false })).toEqual({
+			subject: 'failed',
+			at: 500,
+			stale: false
+		});
 
 		core.settle('failed', 'failed', 100);
 		core.takeDue(100);
 		expect(core.retire('failed')).toBe(false);
-		expect(
-			core.complete({ callbackAtEpochMs: 600, mergeAnnouncements: true })
-		).toEqual({ subject: 'failed', at: undefined, stale: true });
+		expect(core.complete({ callbackAtEpochMs: 600, mergeAnnouncements: true })).toEqual({
+			subject: 'failed',
+			at: undefined,
+			stale: true
+		});
 		expect(core.takeDue(1_000)).toBeUndefined();
 	});
 });

@@ -46,7 +46,7 @@ src/
   access/policies/+<name>.ts      grants/approvals/capabilities/limits
   collections/+relationship.ts    cross-collection relations
   collections/<name>/+model.ts    the collection's columns
-  collections/<name>/+hooks.ts    optional validation/write hooks
+  collections/<name>/+collection.ts  the declared write contract (inputs, transform, notifications)
   collections/<name>/+pipelines.ts optional import/export
   collections/<name>/+representation.svelte  required for user-facing create/edit/display
   datatypes/<name>/+definition.ts + +renderer.svelte  named domain values
@@ -201,7 +201,8 @@ scroll. Test the last action at a short viewport. A CollectionTable already owns
 
 Data is a single typed client: \`import { client } from '$bolt/client'\`. Reads are live reactive
 queries (\`client.db.<collection>.findMany({ where, orderBy, columns, with })\`); writes are
-\`client.db.<collection>.mutate([...])\`. There is no refetch/invalidate in the client.
+\`client.collection.<collection>.create(input)\`, \`.update(id, input)\` and \`.delete(id)\`, each
+taking the collection's declared input. There is no refetch/invalidate in the client.
 
 Apps use Svelte 5 runes: \`let selected = $state('')\`, \`const rows = $derived(query.current ?? [])\`,
 and \`onclick={handler}\`. Keep the query reactive; its first \`current\` may be empty while it loads.
@@ -218,12 +219,10 @@ unsaved input on every live-query emission; use an explicit Load action for save
 
 For a custom save action, import \`submitCollectionMutation\` from
 \`@norbital-ai/ui/collection-form\` and \`Effect\` from \`effect\`:
-\`await Effect.runPromise(submitCollectionMutation(() => client.db.documents.mutate([values])))\`.
-The result is a settlement with \`kind: 'committed' | 'pendingApproval'\`, not an array of rows.
-For a new record, omit \`id\`: the client generates it. Supplying \`id\` means UPDATE and requires
-an existing row in the live query. To retain a created id, capture \`handle.row?.id\` from the
-Promise returned by \`mutate\` inside the callback, return that handle, and retain the id only
-after a committed settlement. Report pending approval accurately.
+\`await Effect.runPromise(submitCollectionMutation(() => client.collection.documents.create(values)))\`
+or \`.update(record.id, values)\` for an existing row. The result is a settlement with
+\`kind: 'committed' | 'pendingApproval'\`, not an array of rows. The server allocates a created
+record's id; the live query delivers the row. Report pending approval accurately.
 
 To upload a browser File, import \`getDataRendererRuntimeContext\` from
 \`@norbital-ai/ui/data-renderer\` and capture \`const runtime = getDataRendererRuntimeContext()\`

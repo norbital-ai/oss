@@ -20,6 +20,45 @@ export const DatabaseResponse = Schema.Struct({
 });
 export interface DatabaseResponse extends Schema.Schema.Type<typeof DatabaseResponse> {}
 
+/** One statement of a `DatabaseRequest.Transaction`, as the wire carries it. */
+export type TransactionStatement = Extract<
+	DatabaseRequest,
+	{ readonly _tag: 'Transaction' }
+>['statements'][number];
+
+/**
+ * One `Transaction` request is one database round trip, and this is the one place a binding turns
+ * its statements into that call.
+ *
+ * `submit` must hand each statement to a connection that writes without waiting for an earlier
+ * statement's answer — a node-postgres client constructed with `pipeline: true` does — because the
+ * helper submits `begin`, every statement, and `commit` in one synchronous burst and only then
+ * awaits. A driver that answers each statement before the next one is written turns a request of N
+ * statements into N round trips; the conformance test beside this package measures that with an
+ * instrumented transport that counts write bursts.
+ *
+ * Results are one per statement, in request order; the transaction-control results are not
+ * returned. A failed statement rolls the transaction back and rejects with the driver's reason.
+ */
+export const runTransactionInOneRoundTrip = async <Result>(
+	submit: (sql: string, parameters: ReadonlyArray<Schema.Json>) => Promise<Result>,
+	statements: ReadonlyArray<TransactionStatement>
+): Promise<ReadonlyArray<Result>> => {
+	const settled = await Promise.allSettled([
+		submit('begin', []),
+		...statements.map((statement) => submit(statement.sql, statement.parameters)),
+		submit('commit', [])
+	]);
+	const failed = settled.find((outcome) => outcome.status === 'rejected');
+	if (failed?.status === 'rejected') {
+		await submit('rollback', []).catch(() => undefined);
+		throw failed.reason;
+	}
+	return settled
+		.slice(1, -1)
+		.flatMap((outcome) => (outcome.status === 'fulfilled' ? [outcome.value] : []));
+};
+
 // `Write` carried a `contentType` until it was noticed that nothing could ever honour it: no binding
 // persisted it, and `FileResponse` has no field to return it in, so the media type of a stored object
 // was unrecoverable by construction. Persisting it would mean a second field here, a matching field
@@ -271,6 +310,29 @@ export const CommunicationRequest = Schema.TaggedUnion({
 	Wake: { topic: Schema.NonEmptyString }
 });
 export type CommunicationRequest = typeof CommunicationRequest.Type;
+
+/**
+ * The notification channels a collection may declare rules on (RFC §4.5), typed per channel.
+ *
+ * `inbox` is the workspace notification ledger delivered through `Notify`: a recipient is a user
+ * id, or `{ team }` — every member of that team at commit time, resolved inside the write's own
+ * statement (an approval step's approvers are team names, and so is "the HR controllers"). The
+ * message is a title and a body. A rule naming a channel absent here is refused at sync; the
+ * catalogue is the intersection the deployment grants, and a rule cannot grant itself one.
+ */
+export const NotificationRecipient = Schema.Union([
+	Schema.NonEmptyString,
+	Schema.Struct({ team: Schema.NonEmptyString })
+]);
+export type NotificationRecipient = typeof NotificationRecipient.Type;
+export const NotificationChannels = {
+	inbox: {
+		recipients: Schema.Array(NotificationRecipient),
+		message: Schema.Struct({ title: Schema.NonEmptyString, body: Schema.String })
+	}
+} as const;
+export type NotificationChannel = keyof typeof NotificationChannels;
+export const NOTIFICATION_CHANNELS: ReadonlyArray<NotificationChannel> = ['inbox'];
 /**
  * The payload shape a workspace puts on a *channel* send, so the host reads the same field nobody
  * has to guess: the text.

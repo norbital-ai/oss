@@ -1,14 +1,18 @@
 import {
 	MAX_SYNC_LOADED_KEYS,
-	mutationGraphDeleteIds,
-	type CollectionMutationGraph,
+	type CollectionWriteGraph,
 	type StoredRecord,
 	type SyncPrefixDelta
 } from '@norbital-ai/bolt-protocol';
 import { isString } from '../../schema-decode.js';
 
+/**
+ * One pending write as it is painted: a graph whose inputs are already rows — scalars only, an id
+ * on every one. `pendingGraphs` in workspace-api.ts derives it from the wire graph and the catalog;
+ * the projection itself never consults a catalog.
+ */
 export type PendingProjectionWrite = Readonly<{
-	readonly graph: CollectionMutationGraph;
+	readonly graph: CollectionWriteGraph;
 }>;
 
 const recordIdOf = (row: StoredRecord): string | undefined => {
@@ -97,7 +101,12 @@ export const project = (
 
 		switch (graph.action) {
 			case 'delete': {
-				const removeIds = new Set(mutationGraphDeleteIds(graph));
+				const removeIds = new Set(
+					graph.inputs.flatMap((input) => {
+						const id = recordIdOf(input);
+						return id === undefined ? [] : [id];
+					})
+				);
 				if (removeIds.size === 0) continue;
 				const kept = rows.filter((row) => {
 					const id = recordIdOf(row);
@@ -112,13 +121,14 @@ export const project = (
 				}
 				break;
 			}
-			case 'mutate': {
-				for (const row of graph.rows) applyWriteRow(rows, indexes, row.values);
+			case 'create':
+			case 'update': {
+				for (const input of graph.inputs) applyWriteRow(rows, indexes, input);
 				break;
 			}
 			default: {
-				const _exhaustive: never = graph;
-				throw new Error(`unhandled mutation action: ${JSON.stringify(_exhaustive)}`);
+				const _exhaustive: never = graph.action;
+				throw new Error(`unhandled write action: ${JSON.stringify(_exhaustive)}`);
 			}
 		}
 	}

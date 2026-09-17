@@ -4,5 +4,5 @@ severity: error
 principles: [straightforwardness, type-safety, testability]
 rule: JSON.parse($TEXT) as $TARGET
 examples:
-  bad: ["const row = JSON.parse(body) as Row;"]
-  good: ["const row = decodeRow(body);"]
+  bad: ['const row = JSON.parse(body) as Row;']
+  good: ['const row = decodeRow(body);']

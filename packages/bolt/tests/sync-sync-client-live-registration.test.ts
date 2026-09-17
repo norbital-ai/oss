@@ -1,9 +1,11 @@
-import { EnvironmentName, ReleaseId, TenantId, syncRetainedPrefixBytes } from '@norbital-ai/bolt-protocol';
-import { afterEach, describe, expect, it } from 'vitest';
 import {
-	createSyncClient,
-	type SyncWorkspaceAttachment
-} from '../src/client/sync/client.js';
+	EnvironmentName,
+	ReleaseId,
+	TenantId,
+	syncRetainedPrefixBytes
+} from '@norbital-ai/bolt-protocol';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createSyncClient, type SyncWorkspaceAttachment } from '../src/client/sync/client.js';
 import { SyncHttpError } from '../src/client/sync/http-driver.js';
 import { stableKey } from '../src/client/live-query/stable-key.js';
 import type { BrowserSyncScope } from '../src/client/sync/sse-driver.js';
@@ -42,9 +44,7 @@ const accepted = (queryKey: string) => ({
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-const attachment = (
-	register: SyncWorkspaceAttachment['register']
-): SyncWorkspaceAttachment => ({
+const attachment = (register: SyncWorkspaceAttachment['register']): SyncWorkspaceAttachment => ({
 	scope,
 	register,
 	extend: async () => {

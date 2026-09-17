@@ -14,6 +14,8 @@ import type {
 	WebhookSignatureSpec
 } from './contracts-schema.js';
 import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
+import type { CollectionInputSelection } from './collection-schema.js';
+import type { CollectionWriteContract } from '@norbital-ai/std/collection';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
@@ -225,8 +227,6 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	 */
 	readonly description?: string;
 	readonly icon?: string;
-	/** Declared hook points, as `operation.phase` — what the Studio counts per collection. */
-	readonly hooks?: ReadonlyArray<string>;
 	/**
 	 * The `defineModel` metadata's EXCLUDE constraints, carried through because the schema plan is the
 	 * only thing that can render them: Drizzle has no entity for an exclusion, so unlike an index they
@@ -247,6 +247,8 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly search?: CollectionSearchDefinition;
 	/** Workspace-relative path of the authored model, so a host surface can link to its source. */
 	readonly sourcePath?: string;
+	/** The declared write contract, when the collection declares one. */
+	readonly write?: CompiledCollectionWrite;
 }
 
 interface CollectionOptions<Fields extends Readonly<Record<string, FieldDefinition>>> {
@@ -316,6 +318,22 @@ export interface CompiledFieldDefinition extends FieldDefinition {
 	 * `required` remains the write-contract fact; migration compilation consumes this one.
 	 */
 	readonly databaseNotNull?: true;
+}
+
+/**
+ * The declared write contract of one collection, compiled from its `+collection.ts`.
+ *
+ * Serializable projection only: the caller-facing selections build the runtime decode, and the
+ * notification channel names build the manifest. The live transform and message/recipient
+ * builders ride in `AuthoredRuntime.collections`.
+ */
+export interface CompiledCollectionWrite {
+	readonly create?: CollectionInputSelection;
+	readonly update?: CollectionInputSelection;
+	readonly delete?: true;
+	/** Rule channel names per lifecycle event, in declaration order. */
+	readonly notifications?: Readonly<Partial<Record<string, ReadonlyArray<string>>>>;
+	readonly hasTransform: boolean;
 }
 
 export interface CompiledCollection extends CollectionDefinition<
@@ -417,6 +435,8 @@ export interface CollectionCatalogField {
 export interface CollectionCatalogEntry {
 	readonly name: string;
 	readonly recordLabel?: string;
+	/** The declared write contract, absent for a read-only collection. */
+	readonly write?: CollectionWriteContract;
 	readonly fields: ReadonlyArray<CollectionCatalogField>;
 	readonly relationships: ReadonlyArray<
 		CollectionCatalogRelation & {

@@ -87,8 +87,7 @@ describe('withSelfHost (T2)', () => {
 							throw new Error('withSelfHost body failed');
 						}
 					),
-				(error: unknown) =>
-					error instanceof Error && error.message === 'withSelfHost body failed'
+				(error: unknown) => error instanceof Error && error.message === 'withSelfHost body failed'
 			);
 			assert.ok(baseUrl !== undefined);
 			await assert.rejects(() => fetch(`${baseUrl}/readyz`), isConnectionRefused);

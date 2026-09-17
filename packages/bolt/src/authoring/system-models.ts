@@ -43,8 +43,6 @@ const approvalRequestModel = defineModel(
 		superseder_teams: jsonb()
 			.notNull()
 			.default(sql`'[]'::jsonb`),
-		/** Exact scalar and explicitly included relationship graph the reviewer is deciding on. */
-		proposed_values: jsonb().notNull().default({}),
 		/** Written in the same transaction as the approved graph; approval alone is not settlement. */
 		applied_at: instant(),
 		closed_at: instant(),
@@ -173,7 +171,10 @@ const authUserModel = defineModel(
 		channels: jsonb().$type<ReadonlyArray<TransportIdentity>>()
 	},
 	{
-		history: false,
+		// People and teams are the two platform rows whose changes are somebody's decision — who
+		// administers, who belongs where — so they keep history like a tenant collection does. The
+		// rest of the platform (conversations, turns, runs, audit) is bookkeeping and keeps none.
+		history: true,
 		indexes: [systemIndex('tenantId'), systemIndex('team_id')]
 	}
 );
@@ -262,7 +263,7 @@ const teamModel = defineModel(
 		/** The parent in the hierarchy, or null at the root. See `resolveTeamPolicies`. */
 		parent_id: uuid()
 	},
-	{ history: false }
+	{ history: true }
 );
 
 /** A compiled cron declaration; the task runner is its only reader and writer. */

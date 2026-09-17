@@ -47,7 +47,10 @@ const LATEST_SENTINEL = 'latest';
 
 /** Base version of a range specifier: prefixes stripped, prerelease/build dropped. */
 export function parseRange(version: string): string | undefined {
-	const unprefixed = version.trim().replace(/^[~^<>=!*]+/, '').replace(/^v/i, '');
+	const unprefixed = version
+		.trim()
+		.replace(/^[~^<>=!*]+/, '')
+		.replace(/^v/i, '');
 	const base = unprefixed.split('-')[0]?.trim();
 	if (base === undefined || base === '') return undefined;
 	return base;
@@ -59,9 +62,7 @@ function ageInYears(isoDate: string, now: Date): number | undefined {
 	return (now.getTime() - time) / YEAR_MS;
 }
 
-function collectWanted(
-	manifests: ReadonlyArray<LibyearManifest>
-): ReadonlyMap<string, string> {
+function collectWanted(manifests: ReadonlyArray<LibyearManifest>): ReadonlyMap<string, string> {
 	const wanted = new Map<string, string>();
 	for (const entry of manifests.flatMap((manifest) => [
 		...(manifest.dependencies === undefined ? [] : Object.entries(manifest.dependencies)),
@@ -81,13 +82,10 @@ export async function computeLibyear(
 	const wanted = collectWanted(manifests);
 
 	const rows: Array<LibyearRow> = [];
-	for (const [pkg, current] of [...wanted].sort(([left], [right]) =>
-		left.localeCompare(right)
-	)) {
-		
+	for (const [pkg, current] of [...wanted].sort(([left], [right]) => left.localeCompare(right))) {
 		// repository-health:allow A6 -- registry views are resolved one dependency at a time;
 		// a single unstable snapshot serves the whole report.
-const registry = await resolve(pkg);
+		const registry = await resolve(pkg);
 		if (registry === undefined) continue;
 		const currentDate = registry.releaseDateOf(current);
 		const latestDate = registry.releaseDateOf(LATEST_SENTINEL);

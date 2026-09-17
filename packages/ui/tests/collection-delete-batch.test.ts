@@ -4,13 +4,13 @@ import test from 'node:test';
 import { Effect } from 'effect';
 import { collectionDeleteBatch } from '../src/collection-toolbar/collection-delete-batch.ts';
 
-test('collectionDeleteBatch submits one delete(ids) write', async () => {
+test('collectionDeleteBatch submits one deleteMany(ids) write', async () => {
 	/** @type {readonly string[][]} */
 	const calls = [];
 	await Effect.runPromise(
 		collectionDeleteBatch(
 			{
-				delete: async (ids) => {
+				deleteMany: async (ids) => {
 					calls.push([...ids]);
 					return {
 						settlement: {
@@ -32,7 +32,7 @@ test('collectionDeleteBatch refuses an empty selection instead of submitting', a
 			Effect.runPromise(
 				collectionDeleteBatch(
 					{
-						delete: async () => {
+						deleteMany: async () => {
 							called = true;
 							return {
 								settlement: {

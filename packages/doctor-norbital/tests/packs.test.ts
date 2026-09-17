@@ -2,13 +2,13 @@
  * Behavioral tests for the Norbital packs on real repositories: reactive ownership in .ts and
  * .svelte, the live-transport boundary, and the capability manifest that replaced QRY1.
  */
-import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import test from "node:test";
-import { runRules } from "@norbital-ai/doctor";
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import test from 'node:test';
+import { runRules } from '@norbital-ai/doctor';
 
 function repository(name: string, files: Readonly<Record<string, string>>): string {
 	const root = mkdtempSync(join(tmpdir(), `probe-${name}-`));
@@ -16,12 +16,12 @@ function repository(name: string, files: Readonly<Record<string, string>>): stri
 		mkdirSync(dirname(join(root, file)), { recursive: true });
 		writeFileSync(join(root, file), contents);
 	}
-	execFileSync("git", ["init", "-q"], { cwd: root });
-	execFileSync("git", ["add", "-A"], { cwd: root });
+	execFileSync('git', ['init', '-q'], { cwd: root });
+	execFileSync('git', ['add', '-A'], { cwd: root });
 	return root;
 }
 
-import { capabilityPack, platformRules, reactivePack } from "../build/index.js";
+import { capabilityPack, platformRules, reactivePack } from '../build/index.js';
 
 test('reactive rules fire identically in .ts and .svelte, with correct line numbers', async (context) => {
 	// Same statements at the same scope in both: a top-level memo, and a timer inside an effect that
@@ -71,12 +71,10 @@ test('the live transport rule reserves SSE for the canonical client sync driver'
 		'package.json': '{"name":"live-transport","type":"module"}',
 		'packages/bolt/src/client/sync/sse-driver.ts':
 			"export const source = new EventSource('/events');\nexport const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
-		'packages/bolt-server/src/server.ts':
-			"export const contentType = 'text/event-stream';\n",
+		'packages/bolt-server/src/server.ts': "export const contentType = 'text/event-stream';\n",
 		'apps/colony/src/routes/api/bolt/sync/stream/+server.ts':
 			"export const contentType = 'text/event-stream';\n",
-		'packages/bolt/src/client/other.ts':
-			"export const source = new EventSource('/events');\n",
+		'packages/bolt/src/client/other.ts': "export const source = new EventSource('/events');\n",
 		'src/api/bolt/sync/stream/+server.ts':
 			"export const contentType = 'text/event-stream';\nexport const protocol = 'sse';\n",
 		'src/browser-events.ts':
@@ -92,14 +90,10 @@ test('the live transport rule reserves SSE for the canonical client sync driver'
 
 	assert.ok(findings.some((finding) => finding.location.startsWith('src/browser-events.ts:')));
 	assert.ok(
-		findings.some((finding) =>
-			finding.location.startsWith('packages/bolt/src/client/other.ts:')
-		)
+		findings.some((finding) => finding.location.startsWith('packages/bolt/src/client/other.ts:'))
 	);
 	assert.ok(
-		!findings.some((finding) =>
-			finding.location.startsWith('src/api/bolt/sync/stream/+server.ts:')
-		)
+		!findings.some((finding) => finding.location.startsWith('src/api/bolt/sync/stream/+server.ts:'))
 	);
 	assert.ok(
 		!findings.some((finding) =>
@@ -118,7 +112,7 @@ test('the live transport rule reserves SSE for the canonical client sync driver'
 });
 
 test('SQL1 does not report Bolt query-compiler owners', async (context) => {
-	const sql = "export const q = sql`SELECT id FROM things WHERE tenant_id = ${id}`;";
+	const sql = 'export const q = sql`SELECT id FROM things WHERE tenant_id = ${id}`;';
 	const root = repository('sql-compiler', {
 		'package.json': '{"name":"sql-compiler","type":"module"}',
 		'packages/bolt/src/runtime/collections/read/search.ts': sql,
@@ -131,9 +125,7 @@ test('SQL1 does not report Bolt query-compiler owners', async (context) => {
 	const sqlRules = platformRules.filter((rule) => rule.id === 'SQL1');
 	const findings = runRules({ root, rules: sqlRules });
 	assert.ok(findings.some((finding) => finding.location.startsWith('src/app.ts:')));
-	assert.ok(
-		!findings.some((finding) => finding.location.includes('/runtime/collections/'))
-	);
+	assert.ok(!findings.some((finding) => finding.location.includes('/runtime/collections/')));
 	assert.ok(!findings.some((finding) => finding.location.includes('/runtime/access/')));
 	assert.ok(!findings.some((finding) => finding.location.includes('/runtime/identity/')));
 });
@@ -193,4 +185,3 @@ test('the capability manifest reports the case QRY1 missed, and survives renamin
 	const original = findings.find((f) => f.location.startsWith('src/original.svelte'));
 	assert.equal(original?.rule, 'CAP_QUERY');
 });
-

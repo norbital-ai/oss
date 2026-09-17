@@ -154,8 +154,9 @@ describe('Bolt compiler owners', () => {
 
 		expect(table).toContain('"effect_id" text');
 		expect(table).not.toContain('"effect_id" text not null');
-		expect(plan.steps.some(({ id }) => id.startsWith('collection:bolt_collection_history:column:')))
-			.toBe(false);
+		expect(
+			plan.steps.some(({ id }) => id.startsWith('collection:bolt_collection_history:column:'))
+		).toBe(false);
 	});
 
 	/**

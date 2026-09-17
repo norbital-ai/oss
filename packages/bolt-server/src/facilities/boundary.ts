@@ -77,7 +77,10 @@ export const guardBinding = <Input, Output>(
 								settle(
 									isFacilityResult(result)
 										? (result as FacilityResult<Output>)
-										: facilityFailure(facility, 'binding answered with something other than a facility result')
+										: facilityFailure(
+												facility,
+												'binding answered with something other than a facility result'
+											)
 								),
 							(cause: unknown) => settle(facilityFailure(facility, getErrorMessage(cause)))
 						);

@@ -3,7 +3,7 @@ import {
 	SyncConnectRequest,
 	SyncConnectResponse,
 	SyncExtendPrefixResponse,
-	type CollectionMutateRequest,
+	type CollectionMutationPush,
 	type SyncExtendPrefixRequest
 } from '@norbital-ai/bolt-protocol';
 import { Schema } from 'effect';
@@ -21,7 +21,7 @@ export class SyncHttpError extends Error {
 	}
 }
 
-export type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutateRequest>;
+export type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutationPush>;
 
 export type SyncHttpDriver = Readonly<{
 	readonly register: (

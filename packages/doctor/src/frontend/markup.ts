@@ -7,8 +7,7 @@ import { attach, createNode, walk, type Node } from '../model.js';
 
 const TAG_NAME = /^<([A-Za-z][\w:.-]*)/;
 const CLOSE = /^<\/([A-Za-z][\w:.-]*)>/;
-const ATTR =
-	/([:@A-Za-z_][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([\s\S]*?)\}|(\S+)))?/g;
+const ATTR = /([:@A-Za-z_][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([\s\S]*?)\}|(\S+)))?/g;
 const INTERPOLATION = /\{(?![:#@/])([\s\S]*?)\}/g;
 const BLOCK = /\{([#:/@][\s\S]*?)\}/g;
 const COMMENT = /<!--([\s\S]*?)-->/g;
@@ -19,8 +18,7 @@ const RAW_SQL =
 	/\b(?:SELECT\b[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]*\bSET\b|DELETE\s+FROM\b|MERGE\s+INTO\b|TRUNCATE\s+(?:TABLE\s+)?(?:"[\w$]+"|'[\w$]+'|[\w$]+)|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|ALTER\s+(?:TABLE|POLICY|VIEW)\b|DROP\s+(?:TABLE|INDEX|SCHEMA|TRIGGER|FUNCTION|POLICY|EXTENSION|VIEW)\b|BEGIN\b|COMMIT\b|ROLLBACK\b|START\s+TRANSACTION\b|SAVEPOINT\b)/i;
 const SQL_VERB =
 	/^(\s*)(SELECT|INSERT|UPDATE|DELETE|MERGE|TRUNCATE|CREATE|ALTER|DROP|BEGIN|COMMIT|ROLLBACK|START|SAVEPOINT)\b/i;
-const TRIVIA =
-	/<!--([\s\S]*?)-->|\/\*([\s\S]*?)\*\/|\/\/([^\n]*)/g;
+const TRIVIA = /<!--([\s\S]*?)-->|\/\*([\s\S]*?)\*\/|\/\/([^\n]*)/g;
 const NOT_A_FIELD: ReadonlySet<string> = new Set([
 	'parent',
 	'original',
@@ -70,7 +68,10 @@ function tagClose(source: string, from: number): number {
 	return -1;
 }
 
-function covered(intervals: ReadonlyArray<Readonly<{ start: number; end: number }>>, index: number): boolean {
+function covered(
+	intervals: ReadonlyArray<Readonly<{ start: number; end: number }>>,
+	index: number
+): boolean {
 	return intervals.some((span) => index >= span.start && index < span.end);
 }
 
@@ -87,7 +88,13 @@ function parseClassTokens(parent: Node, original: string, start: number, value: 
 	}
 }
 
-function parseDirective(element: Node, original: string, name: string, at: number, end: number): void {
+function parseDirective(
+	element: Node,
+	original: string,
+	name: string,
+	at: number,
+	end: number
+): void {
 	const directive = attach(
 		element,
 		createNode('svelte:Directive', 'svelte', original, { start: at, end }),
@@ -106,12 +113,7 @@ function parseDirective(element: Node, original: string, name: string, at: numbe
 	);
 }
 
-function parseStyleProperties(
-	attribute: Node,
-	original: string,
-	at: number,
-	quoted: string
-): void {
+function parseStyleProperties(attribute: Node, original: string, at: number, quoted: string): void {
 	for (const declaration of quoted.split(';')) {
 		const trimmed = declaration.trim();
 		if (trimmed === '') continue;
@@ -181,7 +183,13 @@ function fieldOf(parent: ts.Node, child: ts.Node): string | undefined {
 function projectTs(node: ts.Node, source: ts.SourceFile, original: string, offset: number): Node {
 	const start = offset + node.getStart(source);
 	const end = offset + node.getEnd();
-	const model = createNode(ts.SyntaxKind[node.kind] ?? 'Unknown', 'ts', original, { start, end }, node);
+	const model = createNode(
+		ts.SyntaxKind[node.kind] ?? 'Unknown',
+		'ts',
+		original,
+		{ start, end },
+		node
+	);
 	ts.forEachChild(node, (child) => {
 		attach(model, projectTs(child, source, original, offset), fieldOf(node, child));
 	});
@@ -212,7 +220,11 @@ function followingDeclaration(root: Node, after: number): Node | undefined {
 
 function attachTrivia(root: Node, original: string, from = 0, to = original.length): void {
 	TRIVIA.lastIndex = from;
-	for (let match = TRIVIA.exec(original); match !== null && match.index < to; match = TRIVIA.exec(original)) {
+	for (
+		let match = TRIVIA.exec(original);
+		match !== null && match.index < to;
+		match = TRIVIA.exec(original)
+	) {
 		const start = match.index;
 		const end = start + match[0].length;
 		const html = match[1] !== undefined;
@@ -241,7 +253,11 @@ function attachTrivia(root: Node, original: string, from = 0, to = original.leng
 		for (const tag of ts.getJSDocTags(origin)) {
 			const start = tag.getStart();
 			const end = tag.getEnd();
-			if (node.children.some((child) => child.kind === 'trivia:JSDocTag' && child.range.start === start))
+			if (
+				node.children.some(
+					(child) => child.kind === 'trivia:JSDocTag' && child.range.start === start
+				)
+			)
 				continue;
 			attach(
 				node,
@@ -267,13 +283,11 @@ function attachSql(root: Node, original: string): void {
 		if (node.language === 'sql' || node.fields.has('sql')) return;
 		const origin = node.origin;
 		if (origin === undefined) return;
-		if (
-			!(
-				ts.isStringLiteral(origin) ||
-				ts.isNoSubstitutionTemplateLiteral(origin) ||
-				ts.isTemplateExpression(origin)
-			)
-		)
+		if (!(
+			ts.isStringLiteral(origin) ||
+			ts.isNoSubstitutionTemplateLiteral(origin) ||
+			ts.isTemplateExpression(origin)
+		))
 			return;
 		const text = node.text.replace(/^[\s'"`]+|[\s'"`]+$/g, '');
 		if (!RAW_SQL.test(text) && !isTaggedSql(origin)) return;
@@ -298,7 +312,11 @@ function projectStyle(original: string, span: Readonly<{ start: number; end: num
 	for (let match = CSS_RULE.exec(body); match !== null; match = CSS_RULE.exec(body)) {
 		const ruleStart = span.start + match.index;
 		const ruleEnd = ruleStart + match[0].length;
-		const rule = attach(root, createNode('css:Rule', 'css', original, { start: ruleStart, end: ruleEnd }), 'rules');
+		const rule = attach(
+			root,
+			createNode('css:Rule', 'css', original, { start: ruleStart, end: ruleEnd }),
+			'rules'
+		);
 		const selectorText = match[1] ?? '';
 		attach(
 			rule,
@@ -365,7 +383,10 @@ function projectScript(
 }
 
 function projectMarkup(original: string, file: string): Node {
-	const root = createNode('svelte:Component', 'svelte', original, { start: 0, end: original.length });
+	const root = createNode('svelte:Component', 'svelte', original, {
+		start: 0,
+		end: original.length
+	});
 	const skipped: Array<{ start: number; end: number }> = [];
 	REGION.lastIndex = 0;
 	for (let match = REGION.exec(original); match !== null; match = REGION.exec(original)) {

@@ -16,7 +16,7 @@ Column order is positional contract; output is byte-stable across identical tree
   logical-operator sequence, with nesting increments for structures inside control flow. It
   measures human reading cost where cyclomatic measures path count.
 - **Maintainability Index** = clamp to [0,100] of `(171 − 5.2·ln HV − 0.23·V(G) − 16.2·ln LOC) ×
-  100 / 171`, from AST-derived Halstead volume; empty bodies score 100.
+100 / 171`, from AST-derived Halstead volume; empty bodies score 100.
 - **CRAP** = `V(G)² (1 − cov)³ + cov` per declaration when an istanbul-format coverage map is
   supplied (`--coverage <path>` or auto-detected `coverage-final.json`); without coverage the
   cell stays empty rather than pretending cov = 0.

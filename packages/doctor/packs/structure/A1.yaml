@@ -1,7 +1,7 @@
 id: A1
 summary: discarded timer requires cleanup review
 severity: error
-principles: [ straightforwardness, testability ]
+principles: [straightforwardness, testability]
 rule:
   all:
     - any:

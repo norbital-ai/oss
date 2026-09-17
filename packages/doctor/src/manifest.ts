@@ -19,10 +19,12 @@ const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
 
 /** Parse text into a JSON object, or `undefined` when it is not one. */
 export function readJsonObject(text: string): Readonly<Record<string, unknown>> | undefined {
-	const parsed = Effect.runSync(Effect.result(
+	const parsed = Effect.runSync(
+		Effect.result(
 			// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
 			Effect.try(() => JSON.parse(text))
-		));
+		)
+	);
 	return Result.match(parsed, {
 		onFailure: () => undefined,
 		onSuccess: (value) => decodeObject(value)

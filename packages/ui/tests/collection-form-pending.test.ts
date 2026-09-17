@@ -4,10 +4,7 @@ import test from 'node:test';
 import { collectionFormSubmissionPending } from '../src/collection-form/collection-form-pending.ts';
 
 test('create submit stays pending after enqueueMutation returns while FormState is still submitting', () => {
-	assert.equal(
-		collectionFormSubmissionPending({ isSubmitting: true, operationsPending: 0 }),
-		true
-	);
+	assert.equal(collectionFormSubmissionPending({ isSubmitting: true, operationsPending: 0 }), true);
 });
 
 test('operations.pending also marks the form pending', () => {

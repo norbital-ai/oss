@@ -12,10 +12,7 @@ import {
 	text,
 	uuid
 } from '../src/authoring/index.js';
-import {
-	collection,
-	workspace
-} from '../src/authoring/workspace-schema.js';
+import { collection, workspace } from '../src/authoring/workspace-schema.js';
 import {
 	compileWorkspaceAuthoring,
 	describeModelColumns

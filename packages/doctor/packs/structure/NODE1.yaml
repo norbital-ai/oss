@@ -1,7 +1,7 @@
 id: NODE1
 summary: source reimplements Node built-in environment parsing
 severity: error
-principles: [ simplicity, straightforwardness, no-bloat ]
+principles: [simplicity, straightforwardness, no-bloat]
 rule:
   all:
     - kind: SourceFile

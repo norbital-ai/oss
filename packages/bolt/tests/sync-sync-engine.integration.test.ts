@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { compactSyncChanges, type SyncAdvanceSubscription } from '@norbital-ai/bolt-protocol';
 import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	advanceActivePrefix,
 	extendActivePrefix,
@@ -21,20 +22,25 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: { people: { create: { input: { columns: { name: true, team: true } } } } }
+};
+
 const seedPeople = (h: BoltTestRuntime) =>
 	h.runtime.runPromise(
 		Effect.flatMap(Collections.Service, (collections) =>
-			collections.mutate(
-				h.effectId('seed'),
-				adminSubject,
-				'people',
-				[
-					{ name: 'Ada', team: 'core' },
-					{ name: 'Grace', team: 'core' },
-					{ name: 'Linus', team: 'edge' }
-				],
-				0
-			)
+			collections.write(h.effectId('seed'), adminSubject, [
+				{
+					collection: 'people',
+					action: 'create',
+					inputs: [
+						{ name: 'Ada', team: 'core' },
+						{ name: 'Grace', team: 'core' },
+						{ name: 'Linus', team: 'edge' }
+					]
+				}
+			])
 		)
 	);
 
@@ -69,7 +75,7 @@ describe('clean-cut sync engine', () => {
 	});
 
 	it('derives an exact bounded keyed delta from the committed ChangeBatch', async () => {
-		const h = await makeBoltTestRuntime(testWorkspace());
+		const h = await makeBoltTestRuntime(testWorkspace(), { authored });
 		harness = h;
 		await seedPeople(h);
 		const input = {
@@ -83,13 +89,9 @@ describe('clean-cut sync engine', () => {
 		);
 		const committed = await h.runtime.runPromise(
 			Effect.flatMap(Collections.Service, (collections) =>
-				collections.mutate(
-					h.effectId('insert'),
-					adminSubject,
-					'people',
-					[{ name: 'Aaron', team: 'core' }],
-					0
-				)
+				collections.write(h.effectId('insert'), adminSubject, [
+					{ collection: 'people', action: 'create', inputs: [{ name: 'Aaron', team: 'core' }] }
+				])
 			)
 		);
 		const state: SyncAdvanceSubscription = {
@@ -104,15 +106,11 @@ describe('clean-cut sync engine', () => {
 			authorityFingerprint: initial.plan.effectivePlan.authority.fingerprint
 		};
 		const update = await h.runtime.runPromise(
-			advanceActivePrefix(
-				h.effectId('advance'),
-				adminSubject,
-				state,
-				committed.batch
-			)
+			advanceActivePrefix(h.effectId('advance'), adminSubject, state, committed.batch)
 		);
 		expect(update).toBeDefined();
-		if (update === undefined) throw new Error('Expected the inserted row to change the live prefix');
+		if (update === undefined)
+			throw new Error('Expected the inserted row to change the live prefix');
 		const delta = update.deltas[0]?.delta;
 		expect(delta).toBeDefined();
 		const applied = applyPrefixDelta(initial.rows, delta ?? { removeIds: [], put: [] });
@@ -128,7 +126,7 @@ describe('clean-cut sync engine', () => {
 	});
 
 	it('does not advance a prefix when the authoritative answer is unchanged', async () => {
-		const h = await makeBoltTestRuntime(testWorkspace());
+		const h = await makeBoltTestRuntime(testWorkspace(), { authored });
 		harness = h;
 		await seedPeople(h);
 		const input = {
@@ -162,7 +160,7 @@ describe('clean-cut sync engine', () => {
 	});
 
 	it('extends a prefix monotonically without manufacturing a version', async () => {
-		const h = await makeBoltTestRuntime(testWorkspace());
+		const h = await makeBoltTestRuntime(testWorkspace(), { authored });
 		harness = h;
 		await seedPeople(h);
 		const input = {

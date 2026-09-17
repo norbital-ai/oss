@@ -1,15 +1,10 @@
 import type {
 	CollectionMutationPendingApproval,
 	CollectionMutationSettlement,
-	CollectionOperations,
-	CollectionType
+	MemoryCollectionMutationResult
 } from '@norbital-ai/std/collection';
 import { getErrorMessage } from '@norbital-ai/std';
 import { Cause, Effect } from 'effect';
-
-type CollectionWrite =
-	| CollectionOperations<CollectionType<object, object>>['mutate']
-	| CollectionOperations<CollectionType<object, object>>['delete'];
 
 export type CollectionMutationSubmission = Readonly<
 	| {
@@ -87,9 +82,9 @@ const submissionFromSettlement = (
 const preserving = (cause: unknown): Cause.UnknownError =>
 	new Cause.UnknownError(cause, getErrorMessage(cause));
 
-/** Runs a collection mutation through its authoritative terminal settlement. */
+/** Runs one `client.collection.<name>` write through its authoritative terminal settlement. */
 export function submitCollectionMutation(
-	mutation: () => ReturnType<CollectionWrite>
+	mutation: () => Promise<MemoryCollectionMutationResult<object>>
 ): Effect.Effect<CollectionMutationSubmission, Cause.UnknownError> {
 	return Effect.tryPromise({ try: () => mutation(), catch: preserving }).pipe(
 		Effect.flatMap((result) =>

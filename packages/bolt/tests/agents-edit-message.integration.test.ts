@@ -1,6 +1,12 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId, MessageId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId,
+	MessageId
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	adminSubject,

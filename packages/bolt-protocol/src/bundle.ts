@@ -373,8 +373,9 @@ const ManifestAuthoredEntryFields = {
 	sourcePath: Schema.optionalKey(Schema.NonEmptyString),
 	origin: Schema.optionalKey(ManifestOrigin)
 } as const;
-const ManifestHook = Schema.Struct({
-	name: Schema.NonEmptyString,
+/** One declared write of a collection: an operation it exposes, or its transform. */
+const ManifestWrite = Schema.Struct({
+	name: Schema.Literals(['create', 'update', 'delete', 'transform']),
 	description: Schema.optionalKey(Schema.String),
 	...ManifestAuthoredEntryFields
 });
@@ -413,8 +414,7 @@ const WorkspaceAuthoringManifestShape = Schema.Struct({
 		Schema.Struct({
 			name: Schema.NonEmptyString,
 			history: Schema.Boolean,
-			hooks: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
-			hookDeclarations: Schema.optionalKey(Schema.Array(ManifestHook)),
+			writes: Schema.optionalKey(Schema.Array(ManifestWrite)),
 			description: Schema.optionalKey(Schema.String),
 			icon: Schema.optionalKey(Schema.String),
 			...ManifestAuthoredEntryFields,
@@ -574,7 +574,7 @@ const authoredManifestSourcePathProblem = (
 	};
 	for (const collection of manifest.collections) {
 		requirePath('collection', collection);
-		for (const hook of collection.hookDeclarations ?? []) requirePath('hook', hook);
+		for (const write of collection.writes ?? []) requirePath('write', write);
 		for (const pipeline of collection.pipelines ?? []) requirePath('pipeline', pipeline);
 	}
 	for (const app of manifest.apps) requirePath('app', app);

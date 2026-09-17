@@ -11,7 +11,7 @@
 		useStudioSourceEntitlement
 	} from '#lib/client/ui/system/automation-presentation.js';
 	import {
-		hookSummaryKey,
+		writeSummaryKey,
 		integrationBindingSummary,
 		type ManifestCollection,
 		type WorkspaceManifest
@@ -31,7 +31,7 @@
 	const canEnterStudio = $derived(canShowStudioSource(studioSource().canEnterStudio));
 
 	let activeView = $state('model');
-	const hooks = $derived(collection.hookDeclarations ?? []);
+	const writes = $derived(collection.writes ?? []);
 	const pipelines = $derived(collection.pipelines ?? []);
 	const integrations = $derived(
 		manifest.integrations.filter((integration) => integration.collection === collection.name)
@@ -121,25 +121,20 @@
 	</Scroll>
 {/snippet}
 
-{#snippet hooksView()}
+{#snippet writesView()}
 	<Stack gap="sm">
-		{#if hooks.length === 0}
-			<p class="text-meta">{t('bolt.studio.noHooks')}</p>
+		{#if writes.length === 0}
+			<p class="text-meta">{t('bolt.studio.noWrites')}</p>
 		{:else}
 			<Stack as="ul" gap="none" class="divide-y divide-border/50 border-y border-border/50">
-				{#each hooks as hook (hook.name)}
+				{#each writes as write (write.name)}
 					<Inline as="li" gap="sm" align="start" class="flex-wrap px-1 py-2 text-xs sm:flex-nowrap">
-						<ProductIcon name="hooks" class="size-3.5 shrink-0 text-muted-foreground" />
+						<ProductIcon name="writes" class="size-3.5 shrink-0 text-muted-foreground" />
 						<Stack gap="none" grow class="min-w-0">
-							<span class="font-mono font-medium text-foreground">{hook.name}</span>
-							{@const summaryKey = hookSummaryKey(hook.name)}
-							{#if hook.description !== undefined || summaryKey !== undefined}
-								<span class="text-meta"
-									>{hook.description ?? (summaryKey === undefined ? '' : t(summaryKey))}</span
-								>
-							{/if}
+							<span class="font-mono font-medium text-foreground">{write.name}</span>
+							<span class="text-meta">{write.description ?? t(writeSummaryKey(write.name))}</span>
 						</Stack>
-						{@render sourceLink(hook.sourcePath, hook.name)}
+						{@render sourceLink(write.sourcePath, write.name)}
 					</Inline>
 				{/each}
 			</Stack>
@@ -236,7 +231,12 @@
 		animate={false}
 		config={[
 			{ name: 'model', label: t('bolt.studio.model'), icon: 'product:models', content: modelView },
-			{ name: 'hooks', label: t('bolt.studio.hooks'), icon: 'product:hooks', content: hooksView },
+			{
+				name: 'writes',
+				label: t('bolt.studio.writes'),
+				icon: 'product:writes',
+				content: writesView
+			},
 			{
 				name: 'pipelines',
 				label: t('bolt.studio.pipelines'),

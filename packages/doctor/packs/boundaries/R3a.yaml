@@ -9,5 +9,5 @@ rule:
     - '$VALUE as Record<string, Schema.Json>'
     - '$VALUE as Readonly<Record<string, Schema.Json>>'
 examples:
-  bad: ["const bag = value as Record<string, unknown>;"]
-  good: ["const bag = decode(value);"]
+  bad: ['const bag = value as Record<string, unknown>;']
+  good: ['const bag = decode(value);']

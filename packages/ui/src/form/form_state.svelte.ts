@@ -61,17 +61,15 @@ type StandardSchemaValidationResult =
  * Plain submit handler (sync or async). Framework-specific remote callables that
  * share this shape remain compatible at runtime.
  */
-export type FormSubmitFn<
+export type FormSubmitFn<Schema extends FormSchema, TReturn, E = Cause.UnknownError> = (
+	data: InferSchema<Schema>
+) => Effect.Effect<TReturn, E>;
+
+type RemoteFnGetter<
 	Schema extends FormSchema,
 	TReturn,
 	E = Cause.UnknownError
-> = (data: InferSchema<Schema>) => Effect.Effect<TReturn, E>;
-
-type RemoteFnGetter<Schema extends FormSchema, TReturn, E = Cause.UnknownError> = () => FormSubmitFn<
-	Schema,
-	TReturn,
-	E
-> | null;
+> = () => FormSubmitFn<Schema, TReturn, E> | null;
 
 export type AutoSubmitConfig = {
 	/** Enable auto-submit on data change */
@@ -848,9 +846,9 @@ export class FormState<Schema extends FormSchema, TReturn = unknown, E = Cause.U
 	 *
 	 * @param options - { silent?: boolean } - If true, don't show success toast
 	 */
-	submit = (
-		options?: { silent?: boolean }
-	): Effect.Effect<TReturn | null, E | Cause.UnknownError> => {
+	submit = (options?: {
+		silent?: boolean;
+	}): Effect.Effect<TReturn | null, E | Cause.UnknownError> => {
 		if (this.disabled || this.isSubmitting) {
 			return Effect.succeed(null);
 		}

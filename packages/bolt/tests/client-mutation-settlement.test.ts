@@ -4,7 +4,7 @@ import {
 	mutationSettlementOf,
 	pushFailureOutcome,
 	rejectedSyncOutcome,
-	syncOutcomeFromMutateCommand
+	syncOutcomeFromWriteCommand
 } from '../src/client/mutation-settlement.js';
 
 describe('browser mutation settlement projection', () => {
@@ -39,9 +39,9 @@ describe('browser mutation settlement projection', () => {
 		});
 	});
 
-	it('projects a mutate command pending-approval body onto a stream outcome', () => {
+	it('projects a write command pending-approval body onto a stream outcome', () => {
 		expect(
-			syncOutcomeFromMutateCommand(
+			syncOutcomeFromWriteCommand(
 				CollectionMutationIdempotencyKey.make('mutation-2'),
 				{
 					resolution: 'accepted',
@@ -70,7 +70,7 @@ describe('browser mutation settlement projection', () => {
 		});
 	});
 
-	it('turns a thrown mutate into a refused outcome', () => {
+	it('turns a thrown write into a refused outcome', () => {
 		expect(
 			rejectedSyncOutcome(
 				CollectionMutationIdempotencyKey.make('mutation-3'),

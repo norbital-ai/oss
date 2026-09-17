@@ -16,7 +16,7 @@ rule:
 examples:
   bad:
     - "export const load = () => fetch('/api/items');"
-    - "export const load = () => Effect.tryPromise(() => fetch(url));"
+    - 'export const load = () => Effect.tryPromise(() => fetch(url));'
   good:
     - "export const load = () => httpRequest(url, { operation: 'load' });"
     - "export const via = () => client.fetch('/api/items');"

@@ -19,7 +19,7 @@ import type {
  * the first, because two workspaces in one heap would be a bug in the host, not a case to support.
  *
  * Registration is deliberately late. `export const input = schema('payroll_runs', …)` runs at module
- * init in a `+hooks.ts`, which may be evaluated before the workspace module that registers, so
+ * init in a `+collection.ts`, which may be evaluated before the workspace module that registers, so
  * `schema()` reads nothing here until the schema it returns is first used — see `Schema.suspend` in
  * `schema.ts`. Import order is therefore not something an author has to know about.
  *

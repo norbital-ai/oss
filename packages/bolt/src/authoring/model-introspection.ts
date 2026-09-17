@@ -18,11 +18,13 @@ import {
 import { Predicate, Record as EffectRecord, Schema } from 'effect';
 import { isNumber, isObjectLike, isRecord, isString, isStringArray } from '../schema-decode.js';
 import { collection } from './workspace-schema.js';
+import type { CollectionInputSelection } from './collection-schema.js';
 import type {
 	CollectionCatalogEntry,
 	CollectionDefinition,
 	CompiledAuthoring,
 	CompiledCollection,
+	CompiledCollectionWrite,
 	CompiledFieldDefinition,
 	CompiledTenantCapabilities,
 	FieldDefinition,
@@ -389,7 +391,6 @@ export const describeModel = (
 ): Readonly<Record<string, CompiledFieldDefinition>> => describeModelColumns(declaration?.columns);
 
 type ModelCollectionOptions = Readonly<{
-	readonly hooks?: ReadonlyArray<string>;
 	readonly sourcePath?: string;
 }>;
 
@@ -457,7 +458,6 @@ export const compileModel = (
 		])
 	);
 	const structuredIndexes = indexes.filter((index) => simpleIndexColumn(index) === undefined);
-	const hooks = options.hooks ?? [];
 	const exclusions = metadata?.exclusions ?? [];
 	const lexicalFields = searchableColumns(described);
 	const authoredLabel = metadata?.recordLabel;
@@ -465,7 +465,6 @@ export const compileModel = (
 	return {
 		...base,
 		...(Object.keys(described).length === 0 ? {} : { fields: described }),
-		...(hooks.length === 0 ? {} : { hooks }),
 		...(exclusions.length === 0 ? {} : { exclusions }),
 		...(structuredIndexes.length === 0 ? {} : { indexes: structuredIndexes }),
 		...(metadata?.history === undefined ? {} : { history: metadata.history }),
@@ -646,15 +645,61 @@ type CompileWorkspaceAuthoringInput = Readonly<{
 	readonly models: Readonly<Record<string, ModelDeclaration>>;
 	readonly sourcePaths: Readonly<Record<string, string>>;
 	readonly relationships?: unknown;
-	readonly hooks?: Readonly<Record<string, ReadonlyArray<string>>>;
+	readonly writes?: Readonly<Record<string, CompiledCollectionWrite | undefined>>;
 	readonly capabilities?: CompiledTenantCapabilities;
 	readonly customTypeNames?: ReadonlyArray<string>;
 }>;
+
+/**
+ * The columns a `defineModel` physically declares: its builders' names, plus the nullable UUID
+ * column each reference field generates per arm.
+ *
+ * A `+collection.ts` names the model it writes, so a declaration left behind by a model edit is a
+ * write contract against columns that no longer exist. Comparing the two key sets here is what
+ * refuses it at sync, naming both lists, instead of admitting a selection nothing can decode.
+ */
+const physicalModelColumns = (declaration: ModelDeclaration): ReadonlyArray<string> => {
+	const columns = Object.entries(declaration.columns);
+	const referenceColumns = columns.flatMap(([name, builder]) =>
+		isReferenceBuilder(builder)
+			? Object.keys(builder.targets).map((tag) => referenceStorageColumn(name, tag))
+			: []
+	);
+	return [...columns.map(([name]) => name), ...referenceColumns].toSorted();
+};
+
+const columnKeys = (selection: unknown): ReadonlyArray<string> =>
+	isRecord(selection) && isRecord(Reflect.get(selection, 'columns'))
+		? Object.keys(Reflect.get(selection, 'columns') as Record<string, unknown>).toSorted()
+		: [];
+
+/** Refuses a declared write whose model is missing or whose selection names a column it lacks. */
+const assertWritesMatchModels = (input: CompileWorkspaceAuthoringInput): void => {
+	for (const [name, write] of Object.entries(input.writes ?? {})) {
+		if (write === undefined) continue;
+		const declaration = input.models[name];
+		if (declaration === undefined)
+			throw new TypeError(
+				`Collection ${name} declares src/collections/${name}/+collection.ts but no src/collections/${name}/+model.ts.`
+			);
+		const modelColumns = physicalModelColumns(declaration);
+		for (const operation of ['create', 'update'] as const) {
+			const missing = columnKeys(write[operation]).filter(
+				(column) => !modelColumns.includes(column)
+			);
+			if (missing.length > 0)
+				throw new TypeError(
+					`Collection ${name}.${operation}.input.columns names ${missing.join(', ')}, which +model.ts does not declare (its columns are ${modelColumns.join(', ') || '(none)'}).`
+				);
+		}
+	}
+};
 
 /** Produces the sole canonicalizable semantic value used by compiler consumers. */
 export const compileWorkspaceAuthoring = (
 	input: CompileWorkspaceAuthoringInput
 ): CompiledAuthoring => {
+	assertWritesMatchModels(input);
 	const collections = Object.keys(input.models)
 		.toSorted()
 		.map((name): CompiledCollection => {
@@ -662,15 +707,15 @@ export const compileWorkspaceAuthoring = (
 			const sourcePath = input.sourcePaths[name];
 			if (declaration === undefined || sourcePath === undefined)
 				throw new TypeError(`Collection ${name} is missing its declaration or source path.`);
-			const hooks = input.hooks?.[name];
+			const write = input.writes?.[name];
 			const compiled = compileModel(collection({ name, fields: {} }), declaration, {
-				sourcePath,
-				...(hooks === undefined ? {} : { hooks })
+				sourcePath
 			});
 			return {
 				...compiled,
 				sourcePath,
-				fields: { ...compiled.fields }
+				fields: { ...compiled.fields },
+				...(write === undefined ? {} : { write })
 			};
 		});
 	const relationships = compileRelationships(input.relationships);
@@ -756,12 +801,11 @@ const stringOption = (
 /** Projects a compiled collection into the existing client catalog contract. */
 export const collectionCatalogEntry = (
 	collection: CollectionDefinition<Readonly<Record<string, CompiledFieldDefinition>>>,
-	relationships: ReadonlyArray<RelationDefinition>,
-	inputColumns?: readonly string[]
+	relationships: ReadonlyArray<RelationDefinition>
 ): CollectionCatalogEntry => ({
 	name: collection.name,
 	...(collection.recordLabel === undefined ? {} : { recordLabel: collection.recordLabel }),
-	...(inputColumns === undefined ? {} : { inputColumns }),
+	...(collection.write === undefined ? {} : { write: catalogWriteContract(collection.write) }),
 	fields: Object.entries(collection.fields).map(([name, field]) => {
 		const relation = relationships.find(
 			(candidate) =>
@@ -973,32 +1017,75 @@ export const compileModelTables = <
 	) as CompiledModelTables<TModels>;
 
 /**
- * The operation/phase pairs an authored `+hooks.ts` actually declares.
+ * Projects one `+collection.ts` declaration into the serializable write contract.
  *
- * The Studio reports a hook count per collection, and counting files would say "1" for a module
- * declaring five handlers. The declaration is an ordinary object —
- * `{ mutate: { prepare, perRecord: { before: { handler } } } }` — so the leaves are countable
- * directly. `perRecord` is structural documentation, not part of the phase name exposed by the
- * runtime, hence `mutate.before` rather than `mutate.perRecord.before`.
+ * Selections are already plain JSON data. The two things that cannot cross into the workspace
+ * definition are dropped here: the live module's transform becomes the `hasTransform` flag, and
+ * each notification rule's `recipients`/`message` builders become the channel name the rule
+ * declares. The artifact carries the live module separately, in `authoredRuntime.collections`.
  */
-export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
-	if (!isRecord(declaration)) return [];
-	const named: Array<string> = [];
-	for (const operation of ['mutate', 'delete'] as const) {
-		const operationDeclaration = Reflect.get(declaration, operation);
-		if (!isRecord(operationDeclaration)) continue;
-		if (Predicate.isFunction(Reflect.get(operationDeclaration, 'prepare'))) {
-			named.push(`${operation}.prepare`);
-		}
-		const perRecord = Reflect.get(operationDeclaration, 'perRecord');
-		if (!isRecord(perRecord)) continue;
-		for (const phase of ['before', 'after'] as const) {
-			const hook = Reflect.get(perRecord, phase);
-			if (!isRecord(hook)) continue;
-			if (Predicate.isFunction(Reflect.get(hook, 'handler'))) {
-				named.push(`${operation}.${phase}`);
-			}
+export const compileCollectionWrite = (declaration: unknown): CompiledCollectionWrite => {
+	if (!isRecord(declaration))
+		throw new TypeError('A +collection.ts must default-export a defineCollection() declaration.');
+	if (!isRecord(declaration.model) || declaration.model.__kind !== 'model')
+		throw new TypeError('A collection declaration must name the model it writes.');
+	const notifications: Record<string, ReadonlyArray<string>> = {};
+	if (declaration.notifications !== undefined) {
+		if (!isRecord(declaration.notifications))
+			throw new TypeError('A collection declaration notifications must be an object.');
+		for (const [event, rules] of Object.entries(declaration.notifications)) {
+			if (!Array.isArray(rules))
+				throw new TypeError(`notifications.${event} must be an array of rules.`);
+			notifications[event] = rules.flatMap((rule) =>
+				isRecord(rule) && isString(rule.channel) ? [rule.channel] : []
+			);
 		}
 	}
-	return named.toSorted();
+	const create = declaration.create;
+	const update = declaration.update;
+	const createInput: CompiledCollectionWrite['create'] | undefined = isRecord(create)
+		? (create.input as CompiledCollectionWrite['create'])
+		: undefined;
+	const updateInput: CompiledCollectionWrite['update'] | undefined = isRecord(update)
+		? (update.input as CompiledCollectionWrite['update'])
+		: undefined;
+	return {
+		...(createInput === undefined ? {} : { create: createInput }),
+		...(updateInput === undefined ? {} : { update: updateInput }),
+		...(isRecord(declaration.delete) ? { delete: true as const } : {}),
+		...(Object.keys(notifications).length === 0 ? {} : { notifications }),
+		hasTransform: Predicate.isFunction(declaration.transform)
+	};
 };
+
+/** The browser's copy of a write contract: the selections and which operations exist. */
+const catalogWriteContract = (
+	write: CompiledCollectionWrite
+): NonNullable<CollectionCatalogEntry['write']> => ({
+	...(write.create === undefined ? {} : { create: catalogSelection(write.create) }),
+	...(write.update === undefined ? {} : { update: catalogSelection(write.update) }),
+	...(write.delete === true ? { delete: true as const } : {})
+});
+
+const catalogSelection = (
+	selection: CollectionInputSelection
+): NonNullable<NonNullable<CollectionCatalogEntry['write']>['create']> => ({
+	...(selection.columns === undefined ? {} : { columns: selection.columns }),
+	...(selection.with === undefined
+		? {}
+		: {
+				with: Object.fromEntries(
+					Object.entries(selection.with).map(([relation, actions]) => [
+						relation,
+						{
+							...(actions.create === undefined ? {} : { create: catalogSelection(actions.create) }),
+							...(actions.update === undefined ? {} : { update: catalogSelection(actions.update) }),
+							...(actions.upsert === undefined ? {} : { upsert: catalogSelection(actions.upsert) }),
+							...(actions.link === undefined ? {} : { link: catalogSelection(actions.link) }),
+							...(actions.unlink === undefined ? {} : { unlink: catalogSelection(actions.unlink) }),
+							...(actions.delete === undefined ? {} : { delete: true as const })
+						}
+					])
+				)
+			})
+});

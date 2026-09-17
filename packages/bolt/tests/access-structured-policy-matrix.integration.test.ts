@@ -337,14 +337,8 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		root: 'turn_usage',
 		where: { run: { some: { task: { some: { subject_id: { eq: SUBJECT_ID } } } } } },
 		dependencies: ['conversation', 'turn', 'turn_usage'],
-		reverse: reverse(
-			'turn:turn_usage.run',
-			'conversation:turn.task>turn_usage.run'
-		),
-		indexes: indexes(
-			'turn.conversation_id:relationship',
-			'turn_usage.turn_id:relationship'
-		),
+		reverse: reverse('turn:turn_usage.run', 'conversation:turn.task>turn_usage.run'),
+		indexes: indexes('turn.conversation_id:relationship', 'turn_usage.turn_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['usage-owned'],
 		deny: ['usage-other']
@@ -365,11 +359,11 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		root: 'sites',
 		where: ASSIGNED_SITE,
 		dependencies: ['job_assignments', 'jobs', 'sites'],
-		reverse: reverse('job_assignments:jobs.job_assignment_job>sites.site_jobs', 'jobs:sites.site_jobs'),
-		indexes: indexes(
-			'job_assignments.job_id:relationship',
-			'jobs.site_id:relationship'
+		reverse: reverse(
+			'job_assignments:jobs.job_assignment_job>sites.site_jobs',
+			'jobs:sites.site_jobs'
 		),
+		indexes: indexes('job_assignments.job_id:relationship', 'jobs.site_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['site-owned'],
 		deny: ['site-other']
@@ -391,9 +385,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		where: OWN_VARIATION,
 		dependencies: ['job_assignments', 'variation_requests'],
 		reverse: reverse('job_assignments:variation_requests.job_assignment_variations'),
-		indexes: indexes(
-			'variation_requests.job_assignment_id:relationship'
-		),
+		indexes: indexes('variation_requests.job_assignment_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['variation-owned'],
 		deny: ['variation-other']
@@ -423,9 +415,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		where: OWN_COMMUNICATION,
 		dependencies: ['communication_logs', 'job_assignments'],
 		reverse: reverse('job_assignments:communication_logs.job_assignment_communications'),
-		indexes: indexes(
-			'communication_logs.job_assignment_id:relationship'
-		),
+		indexes: indexes('communication_logs.job_assignment_id:relationship'),
 		sql: ['exists', 'is not distinct from'],
 		allow: ['communication-owned'],
 		deny: ['communication-other']
@@ -446,11 +436,11 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		root: 'sites',
 		where: UNCHECKED_SITE,
 		dependencies: ['job_assignments', 'jobs', 'sites'],
-		reverse: reverse('job_assignments:jobs.job_assignment_job>sites.site_jobs', 'jobs:sites.site_jobs'),
-		indexes: indexes(
-			'job_assignments.job_id:relationship',
-			'jobs.site_id:relationship'
+		reverse: reverse(
+			'job_assignments:jobs.job_assignment_job>sites.site_jobs',
+			'jobs:sites.site_jobs'
 		),
+		indexes: indexes('job_assignments.job_id:relationship', 'jobs.site_id:relationship'),
 		sql: ['exists', 'is null'],
 		allow: ['site-owned'],
 		deny: ['site-other']
@@ -461,9 +451,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		where: UNCHECKED_VARIATION,
 		dependencies: ['job_assignments', 'variation_requests'],
 		reverse: reverse('job_assignments:variation_requests.job_assignment_variations'),
-		indexes: indexes(
-			'variation_requests.job_assignment_id:relationship'
-		),
+		indexes: indexes('variation_requests.job_assignment_id:relationship'),
 		sql: ['exists', 'is null'],
 		allow: ['variation-owned'],
 		deny: ['variation-other']
@@ -493,9 +481,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 		where: { job_assignment_suspicions: { some: UNCHECKED_ASSIGNMENT } },
 		dependencies: ['job_assignments', 'suspicious_activity_logs'],
 		reverse: reverse('job_assignments:suspicious_activity_logs.job_assignment_suspicions'),
-		indexes: indexes(
-			'suspicious_activity_logs.job_assignment_id:relationship'
-		),
+		indexes: indexes('suspicious_activity_logs.job_assignment_id:relationship'),
 		sql: ['exists', 'is null'],
 		allow: ['suspicion-log-owned'],
 		deny: ['suspicion-log-other']
@@ -520,10 +506,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 			'employees:employments.employment_employee>payslips.payslip_employment',
 			'employments:payslips.payslip_employment'
 		),
-		indexes: indexes(
-			'employments.employee_id:relationship',
-			'payslips.employment_id:relationship'
-		),
+		indexes: indexes('employments.employee_id:relationship', 'payslips.employment_id:relationship'),
 		sql: ['exists', 'lower'],
 		allow: ['payslip-owned'],
 		deny: ['payslip-other']
@@ -565,10 +548,7 @@ const matrix: ReadonlyArray<MatrixRow> = [
 			'employees:employments.employment_employee>loans.loan_employment',
 			'employments:loans.loan_employment'
 		),
-		indexes: indexes(
-			'employments.employee_id:relationship',
-			'loans.employment_id:relationship'
-		),
+		indexes: indexes('employments.employee_id:relationship', 'loans.employment_id:relationship'),
 		sql: ['exists', 'lower'],
 		allow: ['loan-owned'],
 		deny: ['loan-other']

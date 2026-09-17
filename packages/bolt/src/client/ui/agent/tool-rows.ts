@@ -62,11 +62,15 @@ export type SubagentLink = Readonly<{
 }>;
 
 /** The child conversation a spawn row stands for, or `null` for any other tool call. */
-export function subagentLink(call: ToolCallPart, result: ToolResultPart | undefined): SubagentLink | null {
+export function subagentLink(
+	call: ToolCallPart,
+	result: ToolResultPart | undefined
+): SubagentLink | null {
 	if (!SUBAGENT_TOOL_NAMES.has(call.name)) return null;
 	const params = decodeSpawnParams(call.params);
 	if (Option.isNone(params)) return null;
-	const spawned = result === undefined || result.isFailure ? Option.none() : decodeSpawnResult(result.result);
+	const spawned =
+		result === undefined || result.isFailure ? Option.none() : decodeSpawnResult(result.result);
 	return {
 		toolCallId: call.id,
 		agentId: params.value.agentId ?? call.name,

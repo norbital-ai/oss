@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { deriveRecordId } from '../src/runtime/derive-record-id.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { writesTo } from './support/folded-write.js';
 
 const definition = workspace({
 	name: 'import-upsert',
@@ -42,6 +42,14 @@ const definition = workspace({
 	]
 });
 
+/** Import rows are declared creates (RFC §8.6); a row naming a stored id is that row's update. */
+const notesModule: AuthoredRuntime['collections'] = {
+	notes: {
+		create: { input: { columns: { body: true, source: true } } },
+		update: { input: { columns: { body: true, source: true } } }
+	}
+};
+
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
 	await harness?.dispose();
@@ -49,12 +57,13 @@ afterEach(async () => {
 });
 
 describe('collection import mutation rows', () => {
-	it('creates and updates through one pipeline result while retaining the derived create id', async () => {
+	it('creates and updates through one pipeline result', async () => {
 		const existingId = recordId('existing-note');
 		const importEffectId = 'mixed-import';
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
 				...emptyAuthoredRuntime,
+				collections: notesModule,
 				pipelines: {
 					notes: {
 						import: {
@@ -72,14 +81,13 @@ describe('collection import mutation rows', () => {
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					harness!.effectId('seed-existing'),
-					adminSubject,
-					'notes',
-					[{ id: existingId, body: 'old', source: 'seed' }],
-					0,
-					{ roots: [{ id: existingId, action: 'create' }] }
-				);
+				yield* collections.write(harness!.effectId('seed-existing'), adminSubject, [
+					{
+						collection: 'notes',
+						action: 'create',
+						inputs: [{ id: existingId, body: 'old', source: 'seed' }]
+					}
+				]);
 				const imported = yield* collections.import(
 					harness!.effectId(importEffectId),
 					adminSubject,
@@ -102,11 +110,7 @@ describe('collection import mutation rows', () => {
 		expect(result.imported).toBe(2);
 		expect(result.rows).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({
-					id: deriveRecordId(`notes:${importEffectId}:0`),
-					body: 'new',
-					source: 'pipeline'
-				}),
+				expect.objectContaining({ body: 'new', source: 'pipeline' }),
 				expect.objectContaining({
 					id: existingId,
 					body: 'changed',
@@ -117,7 +121,7 @@ describe('collection import mutation rows', () => {
 		expect(result.rows).toHaveLength(2);
 	}, 30_000);
 
-	it('keeps absolute pipeline row indices across fixed 100-row mutation chunks', async () => {
+	it('writes every pipeline row across fixed 100-row chunks, one insert per chunk', async () => {
 		const importEffectId = 'chunked-import';
 		const rows = Array.from({ length: 101 }, (_, index) => ({
 			body: `row ${index}`,
@@ -126,6 +130,7 @@ describe('collection import mutation rows', () => {
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
 				...emptyAuthoredRuntime,
+				collections: notesModule,
 				pipelines: {
 					notes: {
 						import: {
@@ -137,6 +142,7 @@ describe('collection import mutation rows', () => {
 			}
 		});
 
+		harness.database.forget();
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
@@ -162,17 +168,10 @@ describe('collection import mutation rows', () => {
 
 		expect(result.imported).toBe(101);
 		expect(result.stored).toHaveLength(101);
-		expect(result.stored).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					id: deriveRecordId(`notes:${importEffectId}:0`),
-					body: 'row 0'
-				}),
-				expect.objectContaining({
-					id: deriveRecordId(`notes:${importEffectId}:100`),
-					body: 'row 100'
-				})
-			])
+		expect(result.stored.map((row) => row['body'])).toEqual(
+			expect.arrayContaining(['row 0', 'row 100'])
 		);
+		// Two chunks, two writes, one insert piece each: rows of one shape are never one statement each.
+		expect(writesTo(harness.database.statements, 'notes')).toHaveLength(2);
 	}, 30_000);
 });

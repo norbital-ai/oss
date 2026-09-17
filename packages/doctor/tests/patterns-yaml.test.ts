@@ -67,10 +67,13 @@ test('a relational has rule finds the call anywhere in the function body', () =>
 
 test('every fixture loads once, with absolute sources for receipts', async () => {
 	const loaded = await loadPatternFiles(PACKAGE_ROOT, 'tests/fixtures/patterns/*.yml');
-	assert.deepEqual(
-		loaded.rules.map((rule) => rule.id).sort(),
-		['CLAMPKIT', 'EXPORTEDFETCH', 'HYBRIDSQL', 'LOOPEDAWAIT', 'RAWFETCH']
-	);
+	assert.deepEqual(loaded.rules.map((rule) => rule.id).sort(), [
+		'CLAMPKIT',
+		'EXPORTEDFETCH',
+		'HYBRIDSQL',
+		'LOOPEDAWAIT',
+		'RAWFETCH'
+	]);
 	assert.equal(loaded.sources.length, 5);
 	assert.ok(loaded.sources.every((source) => isAbsolute(source)));
 });
@@ -88,10 +91,10 @@ test('a loaded yaml rule reports against a repository like an authored one', asy
 	const loaded = await loadPatternFiles(root, '**/*.yml');
 
 	const findings = runRules({ root, rules: loaded.rules, files: ['src/app.ts'] });
-	assert.deepEqual(
-		[...new Set(findings.map((finding) => finding.rule))].sort(),
-		['TMPHYBRID', 'TMPRAW']
-	);
+	assert.deepEqual([...new Set(findings.map((finding) => finding.rule))].sort(), [
+		'TMPHYBRID',
+		'TMPRAW'
+	]);
 });
 
 test('a clamp YAML rule reports nested min/max', async (context) => {
@@ -168,7 +171,8 @@ test('bad input throws naming the file and the problem', async (context) => {
 		'patterns/unknown-kind.yml': `${plain('BADKIND')}pseudocode: something\n`,
 		'patterns/threshold-alone.yml': `${plain('BADALONE')}threshold: 0.5\n`,
 		'patterns/bad-id.yml': 'id: 9BAD\nsummary: x\nseverity: error\nprinciples: [simplicity]\n',
-		'patterns/bad-severity.yml': 'id: BADSEV\nsummary: x\nseverity: warn\nprinciples: [simplicity]\n',
+		'patterns/bad-severity.yml':
+			'id: BADSEV\nsummary: x\nseverity: warn\nprinciples: [simplicity]\n',
 		'patterns/self-dominates.yml': `${plain('BADDOM')}dominates: [BADDOM]\nrule: fetch($A)\n`
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -219,11 +223,17 @@ test('duplicate ids across two files throw naming the earlier declaration', asyn
 test('importsFrom is a file fact, not a node shape', () => {
 	const owned: Matcher = { all: [{ kind: 'TryStatement' }, { importsFrom: 'effect' }] };
 	assert.equal(
-		matchSource(owned, "import { Effect } from 'effect';\nexport const f = () => { try { go(); } catch { } };"),
+		matchSource(
+			owned,
+			"import { Effect } from 'effect';\nexport const f = () => { try { go(); } catch { } };"
+		),
 		true
 	);
 	assert.equal(
-		matchSource(owned, "import { Effect } from 'effect/Schema';\nexport const f = () => { try { go(); } catch { } };"),
+		matchSource(
+			owned,
+			"import { Effect } from 'effect/Schema';\nexport const f = () => { try { go(); } catch { } };"
+		),
 		true
 	);
 	assert.equal(matchSource(owned, 'export const f = () => { try { go(); } catch { } };'), false);

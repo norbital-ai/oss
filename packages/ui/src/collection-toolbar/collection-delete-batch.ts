@@ -9,23 +9,25 @@ type CollectionDeleteBatchSettlement = Readonly<
 >;
 
 type CollectionDeleteBatchClient = {
-	readonly delete: (ids: readonly string[]) => Promise<{
+	readonly deleteMany: (ids: readonly string[]) => Promise<{
 		readonly settlement: {
 			readonly wait: () => Promise<CollectionDeleteBatchSettlement>;
 		};
 	}>;
 };
 
-/** One `delete` write for the selected ids — the same batch path mutate uses. */
+/** One `deleteMany` write for the selected ids, never N single-row loops. */
 export const collectionDeleteBatch = (
-	operations: CollectionDeleteBatchClient,
+	writes: CollectionDeleteBatchClient | undefined,
 	ids: readonly string[]
 ) =>
 	Effect.gen(function* () {
+		if (writes === undefined)
+			return yield* Effect.fail(new Error('This collection declares no delete.'));
 		if (ids.length === 0)
 			return yield* Effect.fail(new Error('A delete batch must name at least one row.'));
 		const local = yield* Effect.tryPromise({
-			try: () => operations.delete(ids),
+			try: () => writes.deleteMany(ids),
 			catch: toError
 		});
 		const settlement = yield* Effect.tryPromise({

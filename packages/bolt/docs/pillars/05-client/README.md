@@ -14,13 +14,13 @@ Source: `src/client/sync/` (`machine.ts`, `client.ts`, `sse-driver.ts`, `http-dr
 
 ## The Machine
 
-| Piece            | Job                                                                                          |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| **Reducer**      | `step(state, event) → [state, effects]`; pure, no timers, no transport                       |
-| **Queries**      | One entry per stable query key: input, versioned prefix, requestedPrefix, phase (`pending` / `fresh` / `failed`), subscribers |
-| **Writes**       | One entry per idempotency key: graph, phase (`queued` / `sent`)                              |
-| **Link**         | `live` / `reconnecting` / `closed` — the Machine's own `ClientState`                         |
-| **Effects**      | `register` (connect / reconnect / reset), `extend` (grow a prefix), `push` (write), `restart` |
+| Piece       | Job                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Reducer** | `step(state, event) → [state, effects]`; pure, no timers, no transport                                                        |
+| **Queries** | One entry per stable query key: input, versioned prefix, requestedPrefix, phase (`pending` / `fresh` / `failed`), subscribers |
+| **Writes**  | One entry per idempotency key: graph, phase (`queued` / `sent`)                                                               |
+| **Link**    | `live` / `reconnecting` / `closed` — the Machine's own `ClientState`                                                          |
+| **Effects** | `register` (connect / reconnect / reset), `extend` (grow a prefix), `push` (write), `restart`                                 |
 
 The client wrapper (`client.ts`) owns the imperative edges: serialized control HTTP on a promise
 tail, a deadline-driven clock, and write pushes. **No timer asks the server what changed** —
@@ -49,19 +49,27 @@ write queue. There is no IndexedDB tenant database.
 ```ts
 import { client } from '$bolt/client';
 const employees = client.db.employees.findMany({ where, orderBy, with, limit, after });
-await client.db.claims.mutate(graph);
-client.db.claims.pending; // numeric in-flight write count
+await client.collection.claims.create(input); // createMany, update(id, input), updateMany, delete(id), deleteMany
+client.collection.claims.pending; // numeric in-flight write count
+client.collection_history.claims.revisions(id); // every revision, oldest first
+client.collection_history.claims.at(id, { revision: 2 }); // or { instant } | { before: approvalId }
 ```
 
 Reads: `findMany` / `findFirst` with a contiguous limit are **live** — a prefix registered with
-the host and pushed thereafter. `count`, `findGrouped`, an `after` cursor, and semantic search
-are **one-shot**: answered once over the transport and never filed live.
+the host and pushed thereafter. `count`, `findGrouped`, an `after` cursor, semantic search and
+`collection_history` are **one-shot**: answered once over the transport and never filed live.
 
-Writes: one verb `mutate` (plus `delete`) submits a declarative graph and resolves immediately
-with the optimistic row. Durability is `'memory'` — this tab's queue — and the returned handle
-exposes `settlement` / `status` / `wait`. Settlements are `accepted | rebased | rejected |
-quarantined`; nothing is claimed saved before its outcome. `project()` overlays pending graphs on
-the retained prefix so the UI updates same-frame.
+Writes: `client.collection.<name>` is the collection's declared write contract (`write` in the
+catalog; a collection without one has no entry). Each call is one `collections.write` graph —
+`{ collection, action, inputs }` — and resolves immediately with the optimistic row. A relation
+given as a plain array of rows is diffed against the children this tab has loaded and sent as
+explicit `create` / `update` / `delete` actions; nothing is deleted by omission. Durability is
+`'memory'` — this tab's queue — and the returned handle exposes `settlement` / `status` / `wait`.
+Settlements are `accepted | rebased | rejected | quarantined`; nothing is claimed saved before its
+outcome. `project()` overlays pending graphs on the retained prefix so the UI updates same-frame:
+updates paint their scalar input, deletes remove, and a create is painted only when its input
+carries every required column (the server derives nothing), under the write's idempotency key as
+its id until the real row lands.
 
 The shell (`src/client/ui/shell/`) owns workspace navigation, the agent panel, sync status, omni
 finder, and notifications.

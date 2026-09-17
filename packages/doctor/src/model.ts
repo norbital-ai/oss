@@ -141,7 +141,8 @@ type ModelCompiled = (node: Node, host: ModelHost) => boolean;
 
 function compileModel(matcher: Matcher): ModelCompiled {
 	if (isString(matcher))
-		return (node) => node.text.replace(/\s+/g, ' ').trim().includes(matcher.replace(/\s+/g, ' ').trim());
+		return (node) =>
+			node.text.replace(/\s+/g, ' ').trim().includes(matcher.replace(/\s+/g, ' ').trim());
 	if ('kind' in matcher) return (node) => kindMatches(matcher.kind, node);
 	if ('regex' in matcher) {
 		const expression = new RegExp(matcher.regex);
@@ -156,7 +157,9 @@ function compileModel(matcher: Matcher): ModelCompiled {
 			const scope = stop === 'neighbor' ? chain.slice(0, 1) : chain;
 			return scope.some(
 				(parent) =>
-					(field === undefined || node.field === field || parent.fields.get(field)?.includes(node)) &&
+					(field === undefined ||
+						node.field === field ||
+						parent.fields.get(field)?.includes(node)) &&
 					inner(parent, host)
 			);
 		};
@@ -168,8 +171,7 @@ function compileModel(matcher: Matcher): ModelCompiled {
 		return (node, host) => {
 			const scope = stop === 'neighbor' ? node.children : descendants(node);
 			return scope.some(
-				(child) =>
-					(field === undefined || child.field === field) && inner(child, host)
+				(child) => (field === undefined || child.field === field) && inner(child, host)
 			);
 		};
 	}
@@ -187,7 +189,8 @@ function compileModel(matcher: Matcher): ModelCompiled {
 	}
 	if ('matches' in matcher) return () => false;
 	if ('fact' in matcher) {
-		const described = matcher.fact as Readonly<{ name: string }> & Readonly<Record<string, unknown>>;
+		const described = matcher.fact as Readonly<{ name: string }> &
+			Readonly<Record<string, unknown>>;
 		const { name, ...params } = described;
 		return (node, host) => {
 			if (node.origin === undefined && name !== 'enclosingOwnerMatches') return false;

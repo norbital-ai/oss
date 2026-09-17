@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -16,8 +15,9 @@ import {
 	policyRuntimeFunctionsFor
 } from '../src/authoring/policy-introspection.js';
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
-import * as AccessControl from '../src/runtime/access/access-control.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import * as Approvals from '../src/runtime/approvals/approvals.js';
+import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { ADMIN_STATUS } from '../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import * as Workspace from '../src/runtime/workspace.js';
@@ -48,11 +48,6 @@ const command = (name: string, credential: string, input: unknown = {}, team?: s
 			...(team === undefined ? {} : { 'x-colony-impersonated-team': [team] })
 		}
 	});
-
-const rid = (name: string): string => {
-	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
-	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
-};
 
 const schemaFingerprint = async (runtime: BoltTestRuntime): Promise<string> => {
 	const workspace = await runtime.runtime.runPromise(Workspace.Service);
@@ -105,10 +100,13 @@ const impersonationWorkspace = workspace({
 });
 
 const policyFunctions = policyRuntimeFunctionsFor([hrControllerPolicy]);
-const authored = {
+const authored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
 	policyAuthorizations: policyFunctions.authorizations,
-	approvalFlows: policyFunctions.approvalFlows
+	approvalFlows: policyFunctions.approvalFlows,
+	collections: {
+		leave_requests: { create: { input: { columns: { employment_id: true, note: true } } } }
+	}
 };
 
 describe('team impersonation mutate', () => {
@@ -138,7 +136,7 @@ describe('team impersonation mutate', () => {
 		const created = await harness.runtime.runPromise(
 			dispatchInvocation(
 				command(
-					'collections.mutate',
+					'collections.write',
 					'admin-token',
 					{
 						protocolVersion: 2,
@@ -147,14 +145,9 @@ describe('team impersonation mutate', () => {
 						partitionKey: 'sha256:impersonation-mutate-partition',
 						schemaFingerprint: fingerprint,
 						graph: {
-							action: 'mutate',
+							action: 'create',
 							collection: 'leave_requests',
-							rows: [
-								{
-									action: 'create',
-									values: { id: rid('leave-1'), employment_id: rid('employment-1'), note: 'Annual' }
-								}
-							]
+							inputs: [{ employment_id: '00000000-0000-4000-8000-000000000101', note: 'Annual' }]
 						},
 						baseVersions: []
 					},
@@ -169,5 +162,39 @@ describe('team impersonation mutate', () => {
 				action: 'create'
 			}
 		});
+		const pending = (created.value as { pendingApproval: { requestId: string; id: string } })
+			.pendingApproval;
+		// The engine allocated the root's id; the row is committed provisionally under the hold.
+		expect(pending.id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(
+			await harness.database.query('select id, note, approval_id from leave_requests')
+		).toEqual([{ id: pending.id, note: 'Annual', approval_id: pending.requestId }]);
+		expect(
+			await harness.database.query("select outcome->>'_tag' as tag from bolt_browser_mutation")
+		).toEqual([{ tag: 'PendingApproval' }]);
+
+		// The seal settles the browser ledger as committed and lifts the stamp.
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const approvals = yield* Approvals.Service;
+				const state = yield* approvals.status(harness!.effectId('status'), pending.requestId);
+				if (state?._tag !== 'Pending') throw new Error('expected a pending request');
+				yield* approvals.decide(
+					harness!.effectId('approve'),
+					{ userId: 'manager-1', tenantId: 'test-tenant', teamPath: ['HR Manager'], policies: [] },
+					state,
+					'approve'
+				);
+				yield* (yield* Collections.Service).resume(harness!.effectId('resume'), pending.requestId);
+			})
+		);
+		expect(await harness.database.query('select approval_id from leave_requests')).toEqual([
+			{ approval_id: null }
+		]);
+		expect(
+			await harness.database.query(
+				"select outcome->>'_tag' as tag, outcome->>'id' as id from bolt_browser_mutation"
+			)
+		).toEqual([{ tag: 'Committed', id: pending.id }]);
 	});
 });

@@ -51,10 +51,7 @@ describe('command catalogue cutover', () => {
 		expect(names).not.toContain('agents.updateVerifier');
 		expect(names).not.toContain('identity.authenticate');
 
-		const dispatch = readFileSync(
-			new URL('../src/runtime/dispatch.ts', import.meta.url),
-			'utf8'
-		);
+		const dispatch = readFileSync(new URL('../src/runtime/dispatch.ts', import.meta.url), 'utf8');
 		expect(dispatch).not.toMatch(/\bcase\s+['"]/u);
 		expect(dispatch).not.toContain('Schema.Struct(');
 

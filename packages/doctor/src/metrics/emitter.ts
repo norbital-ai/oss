@@ -153,7 +153,9 @@ function afterClassOf(
 	fileCyclomatic: { value: number }
 ): void {
 	const methods = node.members.filter(
-		(member): member is ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration =>
+		(
+			member
+		): member is ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration =>
 			ts.isMethodDeclaration(member) ||
 			ts.isGetAccessorDeclaration(member) ||
 			ts.isSetAccessorDeclaration(member)
@@ -248,7 +250,10 @@ const percentile95 = (values: ReadonlyArray<number>): number => {
 };
 
 /** Build the whole table and its summary from the given sources. */
-export function buildMetrics(options: EmitMetricsOptions): { tsv: string; summary: MetricsSummary } {
+export function buildMetrics(options: EmitMetricsOptions): {
+	tsv: string;
+	summary: MetricsSummary;
+} {
 	const rows: Array<MetricsRow> = [];
 	const sources: Array<{ file: string; sourceFile: ts.SourceFile; raw: string }> = [];
 
@@ -286,10 +291,7 @@ export function buildMetrics(options: EmitMetricsOptions): { tsv: string; summar
 				// Pass the accumulator through the object: classes can move a lot of state without
 				// nesting the caller's visit loop any deeper, so the walk stays terminal at three.
 				afterClassOf(node, node.name, file, sourceFile, options.coverage, rows, fileCyclomatic);
-			} else if (
-				ts.isFunctionDeclaration(node) &&
-				node.body !== undefined
-			) {
+			} else if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
 				rows.push(
 					rowOf(
 						'function',
@@ -332,10 +334,7 @@ export function buildMetrics(options: EmitMetricsOptions): { tsv: string; summar
 			left.name.localeCompare(right.name)
 	);
 
-	const suppressions = sources.reduce(
-		(total, { raw }) => total + countSuppressions(raw).total,
-		0
-	);
+	const suppressions = sources.reduce((total, { raw }) => total + countSuppressions(raw).total, 0);
 	const codeLoc = Math.max(
 		sources.reduce((total, { raw }) => total + displayLoc(raw), 0),
 		1
@@ -359,10 +358,7 @@ export function buildMetrics(options: EmitMetricsOptions): { tsv: string; summar
 		values.length === 0 ? 0 : values.reduce((total, value) => total + value, 0) / values.length;
 
 	return {
-		tsv:
-			`${HEADER}\n` +
-			rows.map(renderRow).join('\n') +
-			(rows.length === 0 ? '' : '\n'),
+		tsv: `${HEADER}\n` + rows.map(renderRow).join('\n') + (rows.length === 0 ? '' : '\n'),
 		summary: {
 			functions: functions.length,
 			classes: classCount,

@@ -1,8 +1,8 @@
 id: A6
 summary: await inside a synchronous loop
 severity: error
-principles: [ efficiency, straightforwardness ]
-dominates: [ EFF3 ]
+principles: [efficiency, straightforwardness]
+dominates: [EFF3]
 rule:
   all:
     - kind: AwaitExpression

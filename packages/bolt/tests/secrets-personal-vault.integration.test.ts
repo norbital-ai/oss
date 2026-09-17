@@ -314,5 +314,4 @@ describe('personal secrets', () => {
 		expect(await readAs(harness, userA, 'github.cookie')).toBeNull();
 		expect(await harness.database.query('select 1 from bolt_personal_secrets')).toHaveLength(0);
 	});
-
 });

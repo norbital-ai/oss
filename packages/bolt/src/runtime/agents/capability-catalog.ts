@@ -314,7 +314,8 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'write_collection',
-		description: 'Create, update, or delete an authorized collection record.',
+		description:
+			'Create, update, or delete an authorized collection record through its declared input. A create names no id; an update or delete names the record.',
 		command: 'platform:write_collection',
 		inputSchema: objectInput(
 			{
@@ -323,7 +324,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 				id: { type: 'string', minLength: 1 },
 				values: { type: 'object', additionalProperties: true }
 			},
-			['collection', 'operation', 'id']
+			['collection', 'operation']
 		)
 	}
 ];
@@ -353,7 +354,7 @@ const CollectionReadInput = Schema.Struct({
 const CollectionWriteInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	operation: Schema.Literals(['create', 'update', 'delete']),
-	id: Schema.NonEmptyString,
+	id: Schema.optionalKey(Schema.NonEmptyString),
 	values: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
 });
 const TaskHistoryInput = Schema.Struct({
@@ -709,21 +710,25 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 					tool: `write_collection:${parsed.collection}`
 				});
 			}
-			if (parsed.operation === 'delete') {
-				yield* context.collections.delete(context.effectId, context.subject, parsed.collection, [
-					parsed.id
-				]);
-			} else {
-				yield* context.collections.mutate(
-					context.effectId,
-					context.subject,
-					parsed.collection,
-					[{ ...(parsed.values ?? {}), id: parsed.id }],
-					0,
-					{ roots: [{ id: parsed.id, action: parsed.operation }] }
-				);
-			}
-			return { collection: parsed.collection, id: parsed.id, operation: parsed.operation };
+			if (parsed.operation !== 'create' && parsed.id === undefined)
+				return yield* new ToolNotAllowed({
+					agent: context.agentId,
+					tool: `write_collection:${parsed.collection}:${parsed.operation} names no record`
+				});
+			const submitted =
+				parsed.operation === 'delete'
+					? { id: parsed.id }
+					: { ...(parsed.values ?? {}), ...(parsed.id === undefined ? {} : { id: parsed.id }) };
+			const commit = yield* context.collections.write(context.effectId, context.subject, [
+				{ collection: parsed.collection, action: parsed.operation, inputs: [submitted] }
+			]);
+			const written = commit.records[0];
+			return {
+				collection: parsed.collection,
+				id: parsed.id ?? (isString(written?.['id']) ? written['id'] : ''),
+				operation: parsed.operation,
+				...(commit.pendingApproval === undefined ? {} : { pendingApproval: commit.pendingApproval })
+			};
 		}
 		default: {
 			const exhaustive: never = name;

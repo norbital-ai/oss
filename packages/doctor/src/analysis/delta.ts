@@ -245,9 +245,7 @@ export function deltaSummary(delta: CheckpointDelta): string {
 		),
 		files: Math.max(
 			'files'.length,
-			...delta.pillars.map(
-				({ base, disc }) => `${width(base.files)} → ${width(disc.files)}`.length
-			)
+			...delta.pillars.map(({ base, disc }) => `${width(base.files)} → ${width(disc.files)}`.length)
 		),
 		deltaFiles: Math.max(
 			'Δfiles'.length,
@@ -296,6 +294,11 @@ export function deltaSummary(delta: CheckpointDelta): string {
 		`norbital-doctor delta: ${delta.checkpoint.ref} (${delta.checkpoint.commit.slice(0, 12)}) → working tree · ${scope}`,
 		header,
 		...delta.pillars.map(row),
-		row({ pillar: 'totals', base: delta.totals.base, disc: delta.totals.disc, delta: delta.totals.delta })
+		row({
+			pillar: 'totals',
+			base: delta.totals.base,
+			disc: delta.totals.disc,
+			delta: delta.totals.delta
+		})
 	].join('\n');
 }

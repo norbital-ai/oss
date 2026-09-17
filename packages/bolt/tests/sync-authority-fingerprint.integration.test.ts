@@ -24,7 +24,9 @@ import { makeBoltTestRuntime, testWorkspace, TEST_TENANT } from './support/bolt-
  */
 
 const teamScopedWorkspace = testWorkspace({
-	collections: [{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }],
+	collections: [
+		{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }
+	],
 	policies: [
 		policy({
 			name: 'people-reader',
@@ -36,7 +38,9 @@ const teamScopedWorkspace = testWorkspace({
 });
 
 const actorBoundWorkspace = testWorkspace({
-	collections: [{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }],
+	collections: [
+		{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }
+	],
 	policies: [
 		policy({
 			name: 'own-people',

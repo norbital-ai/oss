@@ -23,6 +23,7 @@ import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { buildManifest } from '../src/manifest/manifest.js';
 import { makeBundle } from '../src/runtime/app.js';
+import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant-1'),
@@ -86,9 +87,16 @@ const definition = workspace({
 	schemaFingerprint: 'sha256:vertical-slice-fixture'
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-fixture' });
-const bundle = makeBundle(definition, manifest, {
-	echo: (input) => Promise.resolve({ input, source: 'authored-remote' })
-});
+const bundle = makeBundle(
+	definition,
+	manifest,
+	{ echo: (input) => Promise.resolve({ input, source: 'authored-remote' }) },
+	{},
+	{
+		...emptyAuthoredRuntime,
+		collections: { employees: { update: { input: { columns: { name: true } } } } }
+	}
+);
 
 const employeeRecordId = '00000000-0000-5000-8000-000000000001';
 let browserMutationApplied = false;
@@ -684,16 +692,16 @@ describe('runnable Bolt vertical slice', () => {
 		// repeated invocation inherit a claimed key from an earlier execution in the same worker.
 		browserMutationLedger.clear();
 		browserMutationApplied = false;
-		const mutation = await invoke('collections.mutate', {
+		const mutation = await invoke('collections.write', {
 			protocolVersion: 2,
 			idempotencyKey: 'vertical-slice-update-employee',
 			issuedAtEpochMs: Date.now(),
 			partitionKey: 'sha256:vertical-slice-partition',
 			schemaFingerprint: 'sha256:vertical-slice-fixture',
 			graph: {
-				action: 'mutate',
+				action: 'update',
 				collection: 'employees',
-				rows: [{ action: 'update', values: { id: employeeRecordId, name: 'Grace' } }]
+				inputs: [{ id: employeeRecordId, name: 'Grace' }]
 			},
 			baseVersions: [
 				{ row: { collection: 'employees', recordId: employeeRecordId }, rowVersion: 1 }

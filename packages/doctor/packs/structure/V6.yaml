@@ -1,7 +1,7 @@
 id: V6
 summary: async IIFE in lifecycle code
 severity: error
-principles: [ straightforwardness, testability ]
+principles: [straightforwardness, testability]
 rule:
   any:
     - '(async () => $BODY)()'

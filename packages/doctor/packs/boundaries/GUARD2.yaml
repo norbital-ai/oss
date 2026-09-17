@@ -20,4 +20,4 @@ examples:
     - "export const pick = (style) => typeof style === 'string' ? style : style.context;"
   good:
     - 'export const label = (value) => getErrorMessage(value);'
-    - "export const pick = (style) => Schema.is(Schema.String)(style) ? style : style.context;"
+    - 'export const pick = (style) => Schema.is(Schema.String)(style) ? style : style.context;'

@@ -77,14 +77,17 @@ function gitFiles(root: string): Array<string> {
 
 function nonGitFiles(root: string): ReadonlyArray<string> {
 	const scanned = Effect.runSync(
-		Effect.result(Effect.try(() => execFileSync('rg', ['--files', '-0'], { cwd: root, encoding: 'utf8' })))
+		Effect.result(
+			Effect.try(() => execFileSync('rg', ['--files', '-0'], { cwd: root, encoding: 'utf8' }))
+		)
 	);
 	return Result.match(scanned, {
 		onSuccess: (out) => out.split('\0').filter(Boolean),
 		onFailure: (error) => {
 			// The caught error nests the spawn failure; ENOENT means "rg is not installed" and a
 			// status-1 exit means "no files", both of which are results rather than failures.
-			const cause = (error as { cause?: unknown })?.cause as { code?: string; status?: number } | undefined;
+			const cause = (error as { cause?: unknown })?.cause as
+				{ code?: string; status?: number } | undefined;
 			if (cause?.code === 'ENOENT') return walkedFiles(root);
 			if (cause?.status === 1) return [];
 			throw error;
@@ -283,7 +286,11 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 		const allowed = new Set(applicable);
 
 		const parsed = Effect.runSync(
-			Effect.result(Effect.try(() => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file))))
+			Effect.result(
+				Effect.try(() =>
+					ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file))
+				)
+			)
 		);
 		const sourceFile = Result.getOrElse(parsed, () => undefined);
 		if (sourceFile === undefined) continue;
@@ -359,24 +366,26 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 					const outcome = Effect.runSync(
 						Effect.result(Effect.try(() => rule.check(node, context)))
 					);
-				if (Result.isFailure(outcome))
-					// A defective rule must not take the audit down with it, and must not pass
-					// silently either — it becomes a finding against itself.
-					findings.push(Result.match(outcome, {
-						onFailure: (error) => {
-							const cause = (error as { cause?: unknown })?.cause ?? error;
-							const detail = getErrorMessage(cause);
-							return {
-								severity: 'error',
-								confidence: 'high',
-								rule: 'RULE',
-								summary: 'an authored rule threw while checking a node',
-								location: `${file}:1: ${rule.id} [${detail}]`,
-								principles: ['testability']
-							};
-						},
-						onSuccess: () => undefined
-					}) as never);
+					if (Result.isFailure(outcome))
+						// A defective rule must not take the audit down with it, and must not pass
+						// silently either — it becomes a finding against itself.
+						findings.push(
+							Result.match(outcome, {
+								onFailure: (error) => {
+									const cause = (error as { cause?: unknown })?.cause ?? error;
+									const detail = getErrorMessage(cause);
+									return {
+										severity: 'error',
+										confidence: 'high',
+										rule: 'RULE',
+										summary: 'an authored rule threw while checking a node',
+										location: `${file}:1: ${rule.id} [${detail}]`,
+										principles: ['testability']
+									};
+								},
+								onSuccess: () => undefined
+							}) as never
+						);
 					active = undefined;
 				}
 			}

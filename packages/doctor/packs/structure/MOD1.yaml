@@ -1,7 +1,7 @@
 id: MOD1
 summary: module imports or re-exports itself
 severity: error
-principles: [ simplicity, modularity, colocation, no-bloat ]
+principles: [simplicity, modularity, colocation, no-bloat]
 rule:
   all:
     - any:
@@ -20,7 +20,7 @@ rule:
               regex: 'import \*|import \{|import type'
 examples:
   fixture:
-    src/probe.ts: "export const value = 1;"
+    src/probe.ts: 'export const value = 1;'
   bad:
     - "import { value } from './probe.js';\nexport const echoed = value;"
   good:

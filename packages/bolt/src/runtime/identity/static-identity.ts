@@ -103,17 +103,17 @@ export const seedSubject = (tenantId: string): Identity.Subject => ({
  *
  * Two subjects take part in one write. The caller is judged once on the shape it submitted: allow
  * decision, row predicate, field grant, `authorize`, and the one approval route of the root
- * action. Everything a hook does is the workspace's own work: what it reads, what it returns
- * (including a relationship it replaced), what it writes through `api.db.*` in any phase, and the
- * omission deletes of the relations it returned are authorized as the workspace, with no decision,
- * no predicate, no field mask, no `authorize` and no approval route of their own, and commit in
- * the root's transaction. Every hook api is bound to this subject, and `AccessControl.Invocation`
- * answers it unrestricted at the top of each function.
+ * action. Everything a transform does is the workspace's own work: what it reads and every row of
+ * the payload it returns beyond the caller's submission are authorized as the workspace, with no
+ * decision, no predicate, no field mask, no `authorize` and no approval route of their own, and
+ * commit in the root's transaction. The transform's `db` and the runtime's own bookkeeping writes
+ * are bound to this subject, and `AccessControl.Invocation` answers it unrestricted at the top of
+ * each function.
  *
  * The mark is a symbol-keyed own property, not a schema field: a decoded payload cannot carry it,
  * so there is no route from a request to holding it, and an object spread keeps it, so the
  * invocation memo's frozen copy still answers. The caller's identity rides along so history and
- * audit still name the person whose write the hook ran inside.
+ * audit still name the person whose write the transform ran inside.
  */
 const WORKSPACE = Symbol('@norbital-ai/bolt/workspace-subject');
 

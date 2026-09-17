@@ -62,6 +62,7 @@ describe('authored collection export pipeline', () => {
 		harness = await makeBoltTestRuntime(definition, {
 			authored: {
 				...emptyAuthoredRuntime,
+				collections: { notes: { create: { input: { columns: { body: true } } } } },
 				pipelines: {
 					notes: {
 						export: {
@@ -98,12 +99,13 @@ describe('authored collection export pipeline', () => {
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				const seeded = yield* collections.mutate(
-					harness!.effectId('seed-notes'),
-					adminSubject,
-					'notes',
-					[{ body: 'Selected' }, { body: 'Other' }]
-				);
+				const seeded = yield* collections.write(harness!.effectId('seed-notes'), adminSubject, [
+					{
+						collection: 'notes',
+						action: 'create',
+						inputs: [{ body: 'Selected' }, { body: 'Other' }]
+					}
+				]);
 				const selectedId = seeded.records.find((record) => record['body'] === 'Selected')?.['id'];
 				if (typeof selectedId !== 'string') throw new Error('selected seed row has no id');
 				return yield* collections.export(harness!.effectId('export-notes'), adminSubject, {

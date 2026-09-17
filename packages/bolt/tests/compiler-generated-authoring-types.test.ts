@@ -35,8 +35,33 @@ describe('generated authoring unions', () => {
 			const root = await mkdtemp(join(tmpdir(), 'bolt-authoring-types-'));
 			roots.push(root);
 			await mkdir(join(root, 'src', 'access'), { recursive: true });
+			await mkdir(join(root, 'src', 'collections', 'records'), { recursive: true });
 			await mkdir(join(root, '.norbital', 'generated'), { recursive: true });
 			await mkdir(join(root, '.norbital', 'types'), { recursive: true });
+
+			await writeFile(
+				join(root, 'src', 'collections', 'records', '+model.ts'),
+				`import { defineModel, text } from '@norbital-ai/bolt/authoring';
+export default defineModel({ visible: text().notNull(), secret: text() });
+`
+			);
+			await writeFile(
+				join(root, 'src', 'collections', 'records', '+collection.ts'),
+				`import { defineCollection } from '@norbital-ai/bolt/authoring';
+import model from './+model.js';
+export default defineCollection({ model, create: { input: { columns: { visible: true } } }, delete: {} });
+`
+			);
+			await writeFile(
+				join(root, '.norbital', 'generated', 'models.ts'),
+				`export type Models = { readonly records: typeof import('../../src/collections/records/+model.js').default };
+`
+			);
+			await writeFile(
+				join(root, '.norbital', 'generated', 'declared-collections.d.ts'),
+				`export type WorkspaceCollections = { readonly records: typeof import('../../src/collections/records/+collection.js').default };
+`
+			);
 
 			await writeFile(
 				join(root, 'src', 'access', '+teams.ts'),
@@ -140,8 +165,16 @@ export default {
 } satisfies PolicyDefinition;
 declare const api: Api<WorkspaceSchema>;
 void api.db.records.findMany({ where: { visible: { eq: 'open' } } });
-void api.db.records.mutate([{ visible: 'open' }]);
-void api.db.records.mutate([{ id: 'record-id', visible: 'closed' }]);
+void api.collection.records.create({ visible: 'open' });
+void api.collection.records.createMany([{ visible: 'open' }]);
+void api.collection.records.deleteMany(['record-id']);
+void api.collection_history.records.revisions('record-id');
+// @ts-expect-error -- the declaration selects visible alone.
+void api.collection.records.create({ visible: 'open', secret: 's' });
+// @ts-expect-error -- the declaration exposes no update.
+void api.collection.records.update('record-id', { visible: 'closed' });
+// @ts-expect-error -- api.db is reads only; writes go through api.collection.
+void api.db.records.mutate;
 const invalidFieldPolicy = {
 	description: 'A field mask must name a real row field.',
 	grants: { records: { read: { fields: [
@@ -176,8 +209,12 @@ void removedUpdateGrant;
 			const program = ts.createProgram({
 				rootNames: [
 					join(root, 'src', 'access', '+teams.ts'),
+					join(root, 'src', 'collections', 'records', '+model.ts'),
+					join(root, 'src', 'collections', 'records', '+collection.ts'),
 					join(root, 'src', 'witness.ts'),
 					join(root, '.norbital', 'generated', 'authoring-types.ts'),
+					join(root, '.norbital', 'generated', 'models.ts'),
+					join(root, '.norbital', 'generated', 'declared-collections.d.ts'),
 					join(root, '.norbital', 'generated', 'types.ts'),
 					join(root, '.norbital', 'types', 'workspace-authoring.d.ts')
 				],

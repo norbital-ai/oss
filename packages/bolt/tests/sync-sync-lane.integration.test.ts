@@ -14,6 +14,7 @@ import {
 import { field } from '../src/authoring/workspace-schema.js';
 import { applyPrefixDelta } from '../src/client/live-query/project.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Identity from '../src/runtime/identity/identity.js';
 import * as Sync from '../src/runtime/sync/sync.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
@@ -91,7 +92,9 @@ const makeLaneHost = (harness: BoltTestRuntime) => {
 	let sequence = 0;
 	const nextId = (name: string): EffectId => EffectId.make(`${name}:${++sequence}`);
 	const subjectFor = (credential: string) =>
-		Effect.flatMap(Identity.Service, (identity) => identity.authenticate(nextId('auth'), credential));
+		Effect.flatMap(Identity.Service, (identity) =>
+			identity.authenticate(nextId('auth'), credential)
+		);
 
 	// Annotated because the `extendPrefix` callback reads `lane.registry`, and an inferred type would
 	// be circular through its own initializer.
@@ -161,10 +164,7 @@ const makeLaneHost = (harness: BoltTestRuntime) => {
 		 * Publishes a committed batch through the lane exactly as the host's `SyncCommit` facility
 		 * does — the changes come out of the write path, never out of the test.
 		 */
-		publish: (
-			changes: SyncAdvanceRequest['changes'],
-			writer?: Viewer
-		): Promise<void> =>
+		publish: (changes: SyncAdvanceRequest['changes'], writer?: Viewer): Promise<void> =>
 			lane.committed({
 				changes,
 				pending: [],
@@ -184,6 +184,17 @@ const definition = testWorkspace({
 		{ name: 'invoices', fields: { label: field.string({ required: true }) } }
 	]
 });
+
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		people: {
+			create: { input: { columns: { name: true, team: true } } },
+			update: { input: { columns: { name: true, team: true } } }
+		},
+		invoices: { create: { input: { columns: { label: true } } } }
+	}
+};
 
 const peopleQuery: SyncQueryInput = {
 	kind: 'findMany',
@@ -215,32 +226,27 @@ afterEach(async () => {
 
 /** Seeds people and invoices, plus a session token per named viewer. */
 const boot = async (tokens: ReadonlyArray<string>) => {
-	const h = await makeBoltTestRuntime(definition);
+	const h = await makeBoltTestRuntime(definition, { authored });
 	harness = h;
-	for (const token of tokens)
-		await seedSession(h, { token, user: `user-${token}`, team: 'admin' });
+	for (const token of tokens) await seedSession(h, { token, user: `user-${token}`, team: 'admin' });
 	await h.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			yield* collections.mutate(
-				EffectId.make('seed-people'),
-				adminSubject,
-				'people',
-				[
-					{ name: 'Ada', team: 'core' },
-					{ name: 'Grace', team: 'core' },
-					{ name: 'Linus', team: 'edge' },
-					{ name: 'Mia', team: 'edge' }
-				],
-				0
-			);
-			yield* collections.mutate(
-				EffectId.make('seed-invoices'),
-				adminSubject,
-				'invoices',
-				[{ label: 'INV-1' }],
-				0
-			);
+			yield* collections.write(EffectId.make('seed-people'), adminSubject, [
+				{
+					collection: 'people',
+					action: 'create',
+					inputs: [
+						{ name: 'Ada', team: 'core' },
+						{ name: 'Grace', team: 'core' },
+						{ name: 'Linus', team: 'edge' },
+						{ name: 'Mia', team: 'edge' }
+					]
+				}
+			]);
+			yield* collections.write(EffectId.make('seed-invoices'), adminSubject, [
+				{ collection: 'invoices', action: 'create', inputs: [{ label: 'INV-1' }] }
+			]);
 			// Setup writes are not the publication under test.
 			yield* (yield* SyncCommit.Service).drainChanges;
 		})
@@ -248,7 +254,10 @@ const boot = async (tokens: ReadonlyArray<string>) => {
 	return h;
 };
 
-/** Runs one mutation and hands back exactly the changes the runtime announced for it. */
+/**
+ * Runs one write and hands back exactly the changes the runtime announced for it. Rows naming an
+ * id are an update, the rest a create.
+ */
 const mutateAndDrain = (
 	h: BoltTestRuntime,
 	name: string,
@@ -257,13 +266,13 @@ const mutateAndDrain = (
 ) =>
 	h.runtime.runPromise(
 		Effect.gen(function* () {
-			yield* (yield* Collections.Service).mutate(
-				EffectId.make(name),
-				adminSubject,
-				collection,
-				payloads,
-				0
-			);
+			yield* (yield* Collections.Service).write(EffectId.make(name), adminSubject, [
+				{
+					collection,
+					action: payloads.every((payload) => 'id' in payload) ? 'update' : 'create',
+					inputs: payloads
+				}
+			]);
 			return yield* (yield* SyncCommit.Service).drainChanges;
 		})
 	);
@@ -476,9 +485,7 @@ describe('sync lane over the live runtime: version-fenced delta (S6)', () => {
 
 		expect(reader.frames).toHaveLength(1);
 		expect(reader.frames[0]?.updates).toEqual([]);
-		expect(reader.frames[0]?.resets).toEqual([
-			{ queryKey: 'people', reason: 'authority-changed' }
-		]);
+		expect(reader.frames[0]?.resets).toEqual([{ queryKey: 'people', reason: 'authority-changed' }]);
 		// A reset retires the plan, so the browser reopens from PostgreSQL truth.
 		expect(reader.connection.subscriptions.get('people')).toBeUndefined();
 	});

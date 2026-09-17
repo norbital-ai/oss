@@ -8,7 +8,7 @@ import { Effect, Result, Schema } from 'effect';
 import {
 	auditAuthoredClientWrappers,
 	auditAuthoredSystemColumns,
-	auditHooklessMutations
+	auditUndeclaredWrites
 } from '../quality/audit.js';
 import { SERVER_ASSET_DECLARATION_FILE_NAME, WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
@@ -125,10 +125,10 @@ export const boltPlugin = (options: BoltPluginOptions = {}): PluginOption => {
 		// position the moment the component is compiled.
 		enforce: 'pre',
 		buildStart() {
-			for (const finding of auditHooklessMutations(workspaceRoot))
+			for (const finding of auditUndeclaredWrites(workspaceRoot))
 				this.warn({
-					code: 'BOLT_HOOK_REVIEW',
-					message: `${finding.file}:${finding.line}: ${finding.collection} permits mutations without ${finding.expectedHooks}. Review whether its writes require domain validation.`,
+					code: 'BOLT_UNDECLARED_WRITE',
+					message: `${finding.file}:${finding.line}: ${finding.collection} is granted writes but declares no ${finding.expectedDeclaration}; the runtime refuses every write to it.`,
 					id: join(workspaceRoot, finding.file)
 				});
 		},

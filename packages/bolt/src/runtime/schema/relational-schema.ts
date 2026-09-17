@@ -31,7 +31,6 @@ export const collectionQueryTable = (
 	return pgTable(name, columns);
 };
 
-
 type ManyOrientation = Readonly<{
 	readonly parentColumn: string;
 	readonly childCollection: string;

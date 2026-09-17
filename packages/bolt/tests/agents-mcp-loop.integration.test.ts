@@ -1,7 +1,12 @@
 import { Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AIRequest, ConnectorRequest, ConnectorResponse } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
+} from '@norbital-ai/bolt-protocol';
 import type { FacilityBinding, FacilityResult } from '@norbital-ai/bolt-protocol';
 import { policy, workspace, type ToolDeclaration } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';

@@ -474,9 +474,21 @@ describe('workspace.manifest command', () => {
 		expect(outcome._tag).toBe('Failure');
 	});
 
-	it('reports declared hook points so a studio can count them per collection', async () => {
+	it('reports declared writes so a studio can count them per collection', async () => {
 		harness = await makeBoltTestRuntime(
-			testWorkspace({ collections: [{ name: 'people', fields: { name: field.string() } }] })
+			testWorkspace({ collections: [{ name: 'people', fields: { name: field.string() } }] }),
+			{
+				authored: {
+					...emptyAuthoredRuntime,
+					collections: {
+						people: {
+							create: { input: { columns: { name: true } } },
+							delete: {},
+							transform: (inputs: ReadonlyArray<unknown>) => inputs
+						}
+					}
+				}
+			}
 		);
 		await seedAdmin(harness);
 		const manifest = value(
@@ -484,11 +496,32 @@ describe('workspace.manifest command', () => {
 		);
 		const collections = manifest['collections'] as ReadonlyArray<{
 			name: string;
-			hooks: ReadonlyArray<string>;
+			writes: ReadonlyArray<{ name: string }>;
 		}>;
-		// A workspace with no `+hooks.ts` reports an empty list, never a missing key — the studio
-		// renders a count, and `undefined` would read as "unknown" rather than "none".
-		expect(collections.find(({ name }) => name === 'people')?.hooks).toEqual([]);
+		expect(collections.find(({ name }) => name === 'people')?.writes.map((w) => w.name)).toEqual([
+			'create',
+			'delete',
+			'transform'
+		]);
+	});
+
+	it('reports an empty write list for a collection with no +collection.ts', async () => {
+		harness = await makeBoltTestRuntime(
+			testWorkspace({ collections: [{ name: 'people', fields: { name: field.string() } }] }),
+			// Bound explicitly: an unbound authored runtime declares every collection writable.
+			{ authored: emptyAuthoredRuntime }
+		);
+		await seedAdmin(harness);
+		const manifest = value(
+			await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
+		);
+		const collections = manifest['collections'] as ReadonlyArray<{
+			name: string;
+			writes: ReadonlyArray<unknown>;
+		}>;
+		// A read-only collection reports an empty list, never a missing key — the studio renders a
+		// count, and `undefined` would read as "unknown" rather than "none".
+		expect(collections.find(({ name }) => name === 'people')?.writes).toEqual([]);
 	});
 
 	it('publishes exact policy grants and authored app presentation', async () => {

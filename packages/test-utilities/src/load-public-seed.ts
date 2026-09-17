@@ -117,13 +117,13 @@ const readDirectoryRows = async (
 			if (!Array.isArray(parsed)) {
 				throw new Error(`loadPublicSeed expected an array in ${filePath}`);
 			}
-		records[stage] = parsed.map((row, index) => {
-			const record = Schema.decodeUnknownOption(ROW_RECORD)(row);
-			if (Option.isNone(record)) {
-				throw new Error(`loadPublicSeed expected an object at ${filePath}[${index}]`);
-			}
-			return record.value;
-		});
+			records[stage] = parsed.map((row, index) => {
+				const record = Schema.decodeUnknownOption(ROW_RECORD)(row);
+				if (Option.isNone(record)) {
+					throw new Error(`loadPublicSeed expected an object at ${filePath}[${index}]`);
+				}
+				return record.value;
+			});
 		})
 	);
 	return records;

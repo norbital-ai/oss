@@ -36,9 +36,7 @@ describe('test suite split', () => {
 		const files = await testFiles(testsRoot);
 		const misfiled = await Promise.all(
 			files
-				.filter(
-					(file) => !file.endsWith('.integration.test.ts') && !file.endsWith(ruleFile)
-				)
+				.filter((file) => !file.endsWith('.integration.test.ts') && !file.endsWith(ruleFile))
 				.map(async (file) => ({ file, boots: bootsADatabase(await readFile(file, 'utf8')) }))
 		);
 		expect(

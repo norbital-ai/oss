@@ -14,6 +14,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { foldedWrites, writesTo, writtenTables } from './support/folded-write.js';
 
 /**
  * What one turn costs the database, asserted as a number rather than left to a profiler.
@@ -55,27 +56,11 @@ const transcriptReads = (statements: ReadonlyArray<string>): ReadonlyArray<strin
 			statement.includes('"conversation_message"."sequence" > ')
 	);
 
-const writesTo = (statements: ReadonlyArray<string>, table: string): ReadonlyArray<string> =>
-	statements.filter(
-		(statement) =>
-			statement.startsWith(`insert into "${table}" `) || statement.startsWith(`update "${table}" `)
+/** A commit is one folded write; its rows are the collections its pieces write, in piece order. */
+const commits = (statements: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> =>
+	foldedWrites(statements).map((statement) =>
+		writtenTables(statement).filter((table) => !table.startsWith('bolt_'))
 	);
-
-/** A commit is a run of writes uninterrupted by the graph read that precedes the next one. */
-const commits = (statements: ReadonlyArray<string>): ReadonlyArray<ReadonlyArray<string>> => {
-	const groups: Array<Array<string>> = [];
-	let current: Array<string> | undefined;
-	for (const statement of statements) {
-		const write = /^(?:insert into|update) "([a-z_]+)"/.exec(statement)?.[1];
-		if (write === undefined) {
-			if (statement.includes('__bolt_graph_ordinal')) current = undefined;
-			continue;
-		}
-		if (current === undefined) groups.push((current = []));
-		current.push(write);
-	}
-	return groups;
-};
 
 const runTurn = async (name: string) => {
 	harness = await makeBoltTestRuntime(undefined, { ai: cassetteAi(cassette(name)) });

@@ -1,7 +1,7 @@
 id: LIVE2
 summary: server-sent events are used outside the sync engine
 severity: error
-principles: [ simplicity, straightforwardness, modularity, testability ]
+principles: [simplicity, straightforwardness, modularity, testability]
 ignore:
   - 'packages/doctor/src/**'
   - 'packages/doctor-norbital/src/**'
@@ -17,7 +17,7 @@ rule:
         - any:
             - kind: StringLiteral
             - kind: NoSubstitutionTemplateLiteral
-        - regex: "text/event-stream|^['\"]sse['\"]$"
+        - regex: 'text/event-stream|^[''"]sse[''"]$'
         - not:
             inside:
               any:

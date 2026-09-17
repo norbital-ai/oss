@@ -47,11 +47,14 @@ export interface CollectionPageQuery<TRow extends object> extends RemoteQuery<TR
 
 export interface CollectionType<
 	TRow extends object = CollectionRecord,
-	TMutation extends object = CollectionRecord
+	TCreate extends object = CollectionRecord,
+	TUpdate extends object = CollectionRecord
 > {
 	readonly row: TRow;
-	/** Exact recursively generated graph accepted by the declarative browser mutation. */
-	readonly mutation: TMutation;
+	/** The declared create input: what `client.collection.<name>.create` accepts. */
+	readonly create: TCreate;
+	/** The declared update input: what `client.collection.<name>.update` accepts. */
+	readonly update: TUpdate;
 	/**
 	 * The columns a live prefix may be ordered by: every column but json, custom-typed and vector
 	 * ones. Type-only, generated per collection by the compiler from the same classification the
@@ -61,16 +64,17 @@ export interface CollectionType<
 	readonly scalarColumns?: string;
 }
 
-export type CollectionRegistry = Readonly<Record<string, CollectionType<CollectionRecord, object>>>;
+export type CollectionRegistry = Readonly<
+	Record<string, CollectionType<CollectionRecord, object, object>>
+>;
 export type ErasedCollectionRegistry = Readonly<Record<string, CollectionType>>;
 
-export type CollectionRow<TCollection extends CollectionType<object, object>> = TCollection['row'];
-export type CollectionFieldName<TCollection extends CollectionType<object, object>> = Extract<
-	keyof CollectionRow<TCollection>,
-	string
->;
+export type CollectionRow<TCollection extends CollectionType<object, object, object>> =
+	TCollection['row'];
+export type CollectionFieldName<TCollection extends CollectionType<object, object, object>> =
+	Extract<keyof CollectionRow<TCollection>, string>;
 /** The fields a live read may order by; every field when the registry declares no scalar set. */
-export type CollectionScalarFieldName<TCollection extends CollectionType<object, object>> =
+export type CollectionScalarFieldName<TCollection extends CollectionType<object, object, object>> =
 	TCollection extends { readonly scalarColumns: infer Scalar extends string }
 		? Scalar
 		: CollectionFieldName<TCollection>;
@@ -152,7 +156,7 @@ export interface CollectionRelationship {
 }
 
 export interface CollectionDefinition<
-	TCollection extends CollectionType<object, object> = CollectionType
+	TCollection extends CollectionType<object, object, object> = CollectionType
 > {
 	readonly name: string;
 	readonly recordLabel?: string | null;
@@ -160,12 +164,33 @@ export interface CollectionDefinition<
 	readonly fields: readonly CollectionField<CollectionFieldName<TCollection>>[];
 	readonly relationships?: readonly CollectionRelationship[];
 	/**
-	 * The columns the collection's declared `input` names, when it declares one. This is the
-	 * browser's copy of the server's write contract: the mutation mask, unknown-key rejection and
-	 * registration assertion all narrow to it. Absent, the whole writable collection is the
-	 * contract — the same fallback the runtime decode uses.
+	 * The collection's declared write contract, the browser's copy of its `+collection.ts`. A form
+	 * registers exactly the columns of the operation it performs; absent, the collection is
+	 * read-only and no write surface exists for it.
 	 */
-	readonly inputColumns?: readonly string[];
+	readonly write?: CollectionWriteContract;
+}
+
+/** One selection: `columns` names fields, `with` names relation actions. */
+export interface CollectionWriteSelection {
+	readonly columns?: Readonly<Record<string, true>>;
+	readonly with?: Readonly<Record<string, CollectionRelationSelection>>;
+}
+
+export interface CollectionRelationSelection {
+	readonly create?: CollectionWriteSelection;
+	readonly update?: CollectionWriteSelection;
+	readonly upsert?: CollectionWriteSelection;
+	readonly link?: CollectionWriteSelection;
+	readonly unlink?: CollectionWriteSelection;
+	readonly delete?: true;
+}
+
+/** Which operations a collection exposes and what each accepts. */
+export interface CollectionWriteContract {
+	readonly create?: CollectionWriteSelection;
+	readonly update?: CollectionWriteSelection;
+	readonly delete?: true;
 }
 
 export type CollectionWhere<_TRow extends object> = { readonly [field: string]: unknown };
@@ -195,17 +220,16 @@ export interface CollectionQuery<TRow extends object> extends CollectionBaseQuer
  * same rule stated as a type, so `orderBy: { effective_range: 'desc' }` on a range column fails
  * where it is written. A page continued with `after` is one-shot and keeps the wider vocabulary.
  */
-export type CollectionLiveOrderBy<TCollection extends CollectionType<object, object>> = Partial<
-	Readonly<Record<CollectionScalarFieldName<TCollection>, 'asc' | 'desc'>>
->;
-export type CollectionLiveQuery<TCollection extends CollectionType<object, object>> = Omit<
+export type CollectionLiveOrderBy<TCollection extends CollectionType<object, object, object>> =
+	Partial<Readonly<Record<CollectionScalarFieldName<TCollection>, 'asc' | 'desc'>>>;
+export type CollectionLiveQuery<TCollection extends CollectionType<object, object, object>> = Omit<
 	CollectionQuery<CollectionRow<TCollection>>,
 	'orderBy' | 'after'
 > & {
 	readonly orderBy?: CollectionLiveOrderBy<TCollection>;
 	readonly after?: undefined;
 };
-export type CollectionAnchoredQuery<TCollection extends CollectionType<object, object>> =
+export type CollectionAnchoredQuery<TCollection extends CollectionType<object, object, object>> =
 	CollectionQuery<CollectionRow<TCollection>> & { readonly after: string };
 
 export interface CollectionGroupedQuery<TRow extends object> extends CollectionBaseQuery<TRow> {
@@ -346,35 +370,63 @@ export interface MemoryCollectionMutationResult<TRow extends object> {
 	readonly settlement: CollectionMutationSettlementHandle;
 }
 
-export type CollectionOperations<TCollection extends CollectionType<object, object>> = Readonly<{
-	findMany(
-		query?: CollectionLiveQuery<TCollection> | CollectionAnchoredQuery<TCollection>,
-		options?: CollectionFilterOptions
-	): CollectionPageQuery<CollectionRow<TCollection>>;
-	findFirst(
-		query?: Omit<CollectionBaseQuery<CollectionRow<TCollection>>, 'orderBy'> & {
-			readonly orderBy?: CollectionLiveOrderBy<TCollection>;
-		}
-	): RemoteQuery<CollectionRow<TCollection> | undefined>;
-	findGrouped(
-		query: CollectionGroupedQuery<CollectionRow<TCollection>>,
-		options?: CollectionFilterOptions
-	): RemoteQuery<CollectionGroupedResult<CollectionRow<TCollection>>>;
-	count(
-		query?: CollectionBaseQuery<CollectionRow<TCollection>>,
-		options?: CollectionFilterOptions
-	): RemoteQuery<number>;
-	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
-	mutate(
-		values: ReadonlyArray<TCollection['mutation']>
-	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
-	// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
-	delete(
-		ids: readonly string[]
-	): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
-	/** Number of in-flight writes for this collection. */
-	readonly pending: number;
-}>;
+export type CollectionOperations<TCollection extends CollectionType<object, object, object>> =
+	Readonly<{
+		findMany(
+			query?: CollectionLiveQuery<TCollection> | CollectionAnchoredQuery<TCollection>,
+			options?: CollectionFilterOptions
+		): CollectionPageQuery<CollectionRow<TCollection>>;
+		findFirst(
+			query?: Omit<CollectionBaseQuery<CollectionRow<TCollection>>, 'orderBy'> & {
+				readonly orderBy?: CollectionLiveOrderBy<TCollection>;
+			}
+		): RemoteQuery<CollectionRow<TCollection> | undefined>;
+		findGrouped(
+			query: CollectionGroupedQuery<CollectionRow<TCollection>>,
+			options?: CollectionFilterOptions
+		): RemoteQuery<CollectionGroupedResult<CollectionRow<TCollection>>>;
+		count(
+			query?: CollectionBaseQuery<CollectionRow<TCollection>>,
+			options?: CollectionFilterOptions
+		): RemoteQuery<number>;
+	}>;
+
+/**
+ * The declared write surface of one collection: `client.collection.<name>`.
+ *
+ * Every call is one graph held in tab memory and painted over this tab's live reads until the
+ * authority settles it; the returned handle carries that settlement. Inputs are the collection's
+ * declared selections; a relation given as a plain array of rows is diffed against the children
+ * this tab has loaded and sent as explicit actions.
+ */
+export type CollectionWriteOperations<TCollection extends CollectionType<object, object, object>> =
+	Readonly<{
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		create(
+			input: TCollection['create']
+		): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		createMany(
+			inputs: ReadonlyArray<TCollection['create']>
+		): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		update(
+			id: string,
+			input: TCollection['update']
+		): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		updateMany(
+			inputs: ReadonlyArray<TCollection['update'] & { readonly id: string }>
+		): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		delete(id: string): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		// repository-health:allow EFF2 -- The public browser seam resolves at memory durability; authority settlement remains on the returned handle.
+		deleteMany(
+			ids: readonly string[]
+		): Promise<MemoryCollectionMutationResult<CollectionRow<TCollection>>>;
+		/** Number of in-flight writes for this collection. */
+		readonly pending: number;
+	}>;
 
 export interface CollectionApprovalRequest {
 	readonly id: string;
@@ -415,12 +467,16 @@ export interface CollectionRecordHistoryEntry {
 	readonly version: number;
 }
 
-export interface CollectionHistoryOperations {
-	findMany(
-		collectionName: string,
-		recordId: string,
-		limit?: number
-	): RemoteQuery<readonly CollectionRecordHistoryEntry[]>;
+/** Where a history read stands: an instant, a revision ordinal, or an approval's restore point. */
+export type CollectionHistoryAnchor =
+	{ readonly instant: string } | { readonly revision: number } | { readonly before: string };
+
+/** `client.collection_history.<name>`: the same rows as the live read, at a point in the log. */
+export interface CollectionHistoryOperations<TRow extends object = CollectionRecord> {
+	/** Every revision of one record, oldest first. */
+	revisions(recordId: string): RemoteQuery<readonly CollectionRecordHistoryEntry[]>;
+	/** The record as it stood at the anchor, or `undefined` when it did not exist yet. */
+	at(recordId: string, anchor: CollectionHistoryAnchor): RemoteQuery<TRow | undefined>;
 }
 
 /** Type-only witness that preserves the exact generated registry across structural client views. */
@@ -431,11 +487,18 @@ export interface CollectionClient<TCollections extends CollectionRegistry> {
 	readonly db: {
 		readonly [TName in keyof TCollections]: CollectionOperations<TCollections[TName]>;
 	};
+	readonly collection: {
+		readonly [TName in keyof TCollections]: CollectionWriteOperations<TCollections[TName]>;
+	};
+	readonly collection_history: {
+		readonly [TName in keyof TCollections]: CollectionHistoryOperations<
+			CollectionRow<TCollections[TName]>
+		>;
+	};
 	readonly collections: {
 		readonly [TName in keyof TCollections]: CollectionDefinition<TCollections[TName]>;
 	};
 	readonly records: CollectionRecordOperations;
-	readonly history?: CollectionHistoryOperations;
 	readonly approvals?: CollectionApprovalOperations;
 }
 
@@ -454,4 +517,8 @@ export interface CollectionDbClient<
 	readonly [collectionRegistryType]?: TCollections;
 	readonly db:
 		CollectionClient<TCollections>['db'] | Pick<CollectionClient<TCollections>['db'], TName>;
+	/** Absent for a collection with no declared write contract: the surface renders read-only. */
+	readonly collection:
+		| Partial<CollectionClient<TCollections>['collection']>
+		| Partial<Pick<CollectionClient<TCollections>['collection'], TName>>;
 }

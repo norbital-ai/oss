@@ -6,14 +6,17 @@ import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
 import type { AutomationProgression, AutomationApi } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
+import type { AuthoredCollectionModule } from '#lib/authoring/collection-schema.js';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import type {
 	BatchMutationError,
+	CollectionHistorySnapshot,
 	Interface as CollectionsInterface,
-	QueryError
+	QueryError,
+	WriteCommit
 } from './collections.contract.js';
 import * as Collections from './collections.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
@@ -28,7 +31,8 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import { readFileAsset, type FileAsset } from './file-assets.js';
 import { nearestQueryInput, queryInput } from './query-input.js';
-import { HookEffectIds } from './hooks/boundary.js';
+import type { CollectionHistoryAnchor } from '@norbital-ai/bolt-protocol';
+import * as InvocationBudget from '#lib/runtime/budget.js';
 import { inferOp, type InferenceRequest } from '#lib/runtime/inference.js';
 
 const isNumber = Schema.is(Schema.Number);
@@ -37,45 +41,12 @@ const isString = Schema.is(Schema.String);
 /**
  * The runtime carrier for a workspace's authored business logic.
  *
- * Hooks, pipelines, and automations are imported live into the artifact and handed to the runtime
- * here, exactly as remotes and tools are. The carrier is deliberately runtime-shaped — plain
+ * Collections, pipelines, and automations are imported live into the artifact and handed to the
+ * runtime here, exactly as remotes and tools are. The carrier is deliberately runtime-shaped — plain
  * objects with `handler` functions — so a compiled workspace's modules arrive without any schema
  * ceremony: the authoring *types* in `@norbital-ai/bolt/authoring` are the compile-time contract,
  * and this is where those shapes are read at run time.
  */
-
-/** One authored hook point: an optional description and the handler the runtime invokes. */
-type AuthoredHookPoint = Readonly<{
-	readonly description?: string;
-	/** One argument: the context carries the invocation api, so no second positional exists. */
-	readonly handler: (context: unknown) => unknown;
-}>;
-
-/** The per-record halves of one operation. Both run once per record, whatever the batch size. */
-type AuthoredPerRecord = Readonly<{
-	readonly before?: AuthoredHookPoint;
-	readonly after?: AuthoredHookPoint;
-}>;
-
-export type AuthoredCollectionHookModule = Readonly<{
-	/**
-	 * The collection's declared write shape — the `input` key of its `+hooks.ts` default export.
-	 *
-	 * One input for one write. A create must carry the record the shape names, an update carries
-	 * a patch of it, and everything the shape does not name is stripped before `prepare` runs.
-	 */
-	readonly input?: Schema.Codec<unknown, unknown>;
-	readonly mutate?: Readonly<{
-		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
-		readonly prepare?: (context: unknown) => unknown;
-		readonly perRecord?: AuthoredPerRecord;
-	}>;
-	readonly delete?: Readonly<{
-		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
-		readonly prepare?: (context: unknown) => unknown;
-		readonly perRecord?: AuthoredPerRecord;
-	}>;
-}>;
 
 type AuthoredPipelineModule = Readonly<{
 	readonly export?: Readonly<{
@@ -111,7 +82,13 @@ type AuthoredAutomationModule = Readonly<{
 
 /** Everything a workspace authored, carried beside the declaration so the runtime can run it. */
 export type AuthoredRuntime = Readonly<{
-	readonly hooks: Readonly<Record<string, AuthoredCollectionHookModule>>;
+	/**
+	 * The declared write contract of every `+collection.ts`, keyed by collection name.
+	 *
+	 * The serializable half — selections and notification channel names — rides on the compiled
+	 * collection; this carries the live transform and message builders the runtime invokes.
+	 */
+	readonly collections: Readonly<Record<string, AuthoredCollectionModule>>;
 	readonly pipelines: Readonly<Record<string, AuthoredPipelineModule>>;
 	readonly automations: Readonly<Record<string, AuthoredAutomationModule>>;
 	/** Server-only write decisions. Their serializable policy grant carries only a derived marker. */
@@ -129,7 +106,7 @@ export type AuthoredRuntime = Readonly<{
 }>;
 
 export const emptyAuthoredRuntime: AuthoredRuntime = {
-	hooks: {},
+	collections: {},
 	pipelines: {},
 	automations: {},
 	policyAuthorizations: {},
@@ -238,14 +215,21 @@ export type AuthoringReadOps<E = never> = Readonly<{
 /** Every operation an ordinary authored handler can reach, bound to the current invocation. */
 export type AuthoringOps<E = never> = AuthoringReadOps<E> &
 	Readonly<{
-		readonly mutate: (
+		/**
+		 * One declared collection write (RFC §4.2): the caller submits the collection's declared
+		 * inputs and the engine commits the transform's payload graph in one transaction.
+		 */
+		readonly write: (
 			collection: string,
-			values: ReadonlyArray<Readonly<Record<string, unknown>>>
-		) => Effect.Effect<void, E, never>;
-		readonly delete: (
+			action: 'create' | 'update' | 'delete',
+			inputs: ReadonlyArray<Readonly<Record<string, unknown>>>
+		) => Effect.Effect<WriteCommit, E, never>;
+		/** A record's revisions, oldest first, or the one revision an anchor names (RFC §4.7). */
+		readonly history: (
 			collection: string,
-			ids: ReadonlyArray<string>
-		) => Effect.Effect<void, E, never>;
+			id: string,
+			at?: CollectionHistoryAnchor
+		) => Effect.Effect<ReadonlyArray<CollectionHistorySnapshot>, E, never>;
 		/**
 		 * Starts a declared automation in the current I/O flow, or waits until an explicit delay.
 		 *
@@ -286,10 +270,12 @@ export const guardAuthoringOps = <E, G>(
 		guard(`db.${collection}.count`).pipe(Effect.andThen(ops.count(collection, input))),
 	findNearest: (collection, input) =>
 		guard(`db.${collection}.findNearest`).pipe(Effect.andThen(ops.findNearest(collection, input))),
-	mutate: (collection, values) =>
-		guard(`db.${collection}.mutate`).pipe(Effect.andThen(ops.mutate(collection, values))),
-	delete: (collection, ids) =>
-		guard(`db.${collection}.delete`).pipe(Effect.andThen(ops.delete(collection, ids))),
+	write: (collection, action, inputs) =>
+		guard(`collection.${collection}.${action}`).pipe(
+			Effect.andThen(ops.write(collection, action, inputs))
+		),
+	history: (collection, id, at) =>
+		guard(`collection_history.${collection}`).pipe(Effect.andThen(ops.history(collection, id, at))),
 	runAutomation: (name, input, options) =>
 		guard(`automations.${name}.run`).pipe(Effect.andThen(ops.runAutomation(name, input, options))),
 	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
@@ -299,6 +285,10 @@ export const guardAuthoringOps = <E, G>(
 /** The Effect-native capability object supplied to authored handlers after invocation binding. */
 export type RuntimeAuthoringApi<E = never> = Readonly<{
 	readonly db: object;
+	/** The declared write surface, keyed by collection name (RFC §4.2). */
+	readonly collection: object;
+	/** The record log, keyed by collection name (RFC §4.7). */
+	readonly collection_history: object;
 	readonly automations: Readonly<{
 		readonly run: (
 			name: string,
@@ -383,8 +373,6 @@ const collectionReadApi = <E>(
 	ops: AuthoringReadOps<E>,
 	collection: string
 ): Readonly<Record<string, unknown>> => ({
-	findPending: (input: Readonly<Record<string, unknown>> = {}) =>
-		ops.findMany(collection, { ...input, pendingOnly: true }),
 	findMany: (input: Readonly<Record<string, unknown>> = {}) => ops.findMany(collection, input),
 	findFirst: (input: Readonly<Record<string, unknown>> = {}) => ops.findFirst(collection, input),
 	count: (input: Readonly<Record<string, unknown>> = {}) => ops.count(collection, input),
@@ -403,21 +391,55 @@ const databaseApi = (
 		}
 	);
 
-export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E> => {
-	const database = databaseApi(ops.allowedCollections, (collection) => {
-		const reads = collectionReadApi(ops, collection);
-		return collection === 'approval_request'
-			? Object.freeze(reads)
-			: Object.freeze({
-					...reads,
-					mutate: (values: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
-						ops.mutate(collection, values),
-					delete: (ids: ReadonlyArray<string>) => ops.delete(collection, ids)
-				});
-	});
+/** The reads-only `db` a transform receives: the workspace's reads, no writes, no policy. */
+export const makeTransformDb = <E>(ops: AuthoringReadOps<E>): object =>
+	databaseApi(ops.allowedCollections, (collection) =>
+		Object.freeze(collectionReadApi(ops, collection))
+	);
 
+export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E> => {
+	const database = makeTransformDb(ops);
+	/**
+	 * The declared write surface: `api.collection.<name>.create(input)`, `.createMany(inputs)`,
+	 * `.update(id, input)`, `.updateMany(inputs)`, `.delete(id)` and `.deleteMany(ids)`. Which of
+	 * them exist is the collection's declaration; the runtime refuses the rest.
+	 */
+	const collections = databaseApi(ops.allowedCollections, (collection) =>
+		Object.freeze({
+			create: (input: Readonly<Record<string, unknown>> = {}) =>
+				ops.write(collection, 'create', [input]).pipe(Effect.map((commit) => commit.records[0])),
+			createMany: (inputs: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+				ops.write(collection, 'create', inputs).pipe(Effect.map((commit) => commit.records)),
+			update: (id: string, input: Readonly<Record<string, unknown>> = {}) =>
+				ops
+					.write(collection, 'update', [{ ...input, id }])
+					.pipe(Effect.map((commit) => commit.records[0])),
+			updateMany: (inputs: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
+				ops.write(collection, 'update', inputs).pipe(Effect.map((commit) => commit.records)),
+			delete: (id: string) => ops.write(collection, 'delete', [{ id }]).pipe(Effect.asVoid),
+			deleteMany: (ids: ReadonlyArray<string>) =>
+				ids.length === 0
+					? Effect.void
+					: ops
+							.write(
+								collection,
+								'delete',
+								ids.map((id) => ({ id }))
+							)
+							.pipe(Effect.asVoid)
+		})
+	);
+	const history = databaseApi(ops.allowedCollections, (collection) =>
+		Object.freeze({
+			revisions: (id: string) => ops.history(collection, id),
+			at: (id: string, anchor: CollectionHistoryAnchor) =>
+				ops.history(collection, id, anchor).pipe(Effect.map((revisions) => revisions[0]?.values))
+		})
+	);
 	return {
 		db: database,
+		collection: collections,
+		collection_history: history,
 		automations: {
 			run: (
 				name: string,
@@ -460,132 +482,194 @@ export const makeAutomationApi = <E, P, W, C>(
 	}
 ): RuntimeAutomationApi<E | P | W | C> => ({ ...api, progress, readUrl, runId, connection });
 
-/** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
-export const makeBoundAuthoringOps = <RunE = never>(
-	effectId: EffectIdType,
-	subject: Subject,
-	collections: CollectionsInterface,
-	ai: AIInterface,
-	files: FilesInterface,
-	automations: Automations.Interface,
-	runAutomation?: (
-		childEffectId: EffectIdType,
-		...args: Parameters<
-			AuthoringOps<
-				| QueryError
-				| BatchMutationError
-				| Schema.SchemaError
-				| Automations.AutomationStopped
-				| Automations.AutomationDeferredUnsupported
-				| Automations.AutomationContinuationUnchanged
-				| RunE
-			>['runAutomation']
-		>
-	) => ReturnType<
-		AuthoringOps<
-			| QueryError
-			| BatchMutationError
-			| Schema.SchemaError
-			| Automations.AutomationStopped
-			| Automations.AutomationDeferredUnsupported
-			| Automations.AutomationContinuationUnchanged
-			| RunE
-		>['runAutomation']
-	>,
-	/**
-	 * The host capabilities an authored `api.infer` may name. Absent for integrations and remotes:
-	 * only automation and hook work carries a host tool binding, and a request without one refuses.
-	 */
-	hostTools?: HostToolsInterface
-): AuthoringOps<
+/**
+ * How deep authored writes may nest before the chain is refused.
+ *
+ * An automation started from a transform's commit may write, which may start another; the shape
+ * has no natural floor. Checked on the way in, so the refusal names the collection whose chain went
+ * too deep, far above the real depths so it catches a loop, never a design.
+ */
+const WRITE_NESTING_LIMIT = 16;
+
+export const refuseRunawayWrites = (
+	action: string,
+	collection: string,
+	depth: number
+): Effect.Effect<void, InvocationBudget.NestingLimitExceeded> =>
+	depth > WRITE_NESTING_LIMIT
+		? Effect.fail(
+				InvocationBudget.NestingLimitExceeded.at(
+					`${action} on ${collection}, from authored code`,
+					depth,
+					WRITE_NESTING_LIMIT
+				)
+			)
+		: Effect.void;
+
+const effectLabel = (value: string): string => encodeURIComponent(value).replaceAll('%', '_');
+
+/**
+ * Invocation-local issuer for authored writes.
+ *
+ * The mutation engine derives a create's stable id from its effect id, so two writes sharing one id
+ * silently collapse into one. The ordinal is state owned by the boundary, not by an author who
+ * could accidentally reuse it, and the coordinate keeps the id readable in a ledger.
+ */
+export class WriteEffectIds {
+	#issued = 0;
+	readonly parent: EffectIdType;
+
+	constructor(parent: EffectIdType) {
+		this.parent = parent;
+	}
+
+	next(phase: string, collection: string): EffectIdType {
+		this.#issued += 1;
+		return EffectId.make(
+			[
+				this.parent,
+				'write',
+				effectLabel(phase),
+				effectLabel(collection),
+				String(this.#issued)
+			].join(':')
+		);
+	}
+}
+
+/** The automation holding this api (name, args, depth): a self-start with moved args continues it. */
+export type AutomationContinuation = Readonly<{
+	readonly name: string;
+	readonly args: Schema.Json;
+	readonly depth: number;
+}>;
+
+/** What the collections layer binds an authored api to, late-bound so the layer can build itself. */
+export type AuthoringPorts<E = never> = Readonly<{
+	readonly allowedCollections: ReadonlySet<string>;
+	readonly findMany: CollectionsInterface['findMany'];
+	readonly count: CollectionsInterface['count'];
+	readonly findNearest: CollectionsInterface['findNearest'];
+	readonly history: CollectionsInterface['history'];
+	readonly write: CollectionsInterface['write'];
+	readonly startAutomation: (
+		effectId: EffectIdType,
+		name: string,
+		input: Schema.Json,
+		scope: Readonly<Record<string, Schema.Json>>,
+		options?: Readonly<{
+			readonly after?: string | number;
+			readonly taskId?: string;
+			readonly parentDepth?: number;
+			readonly continuationOf?: AutomationContinuation;
+		}>
+	) => Effect.Effect<{ readonly taskId: string }, AuthoringError<E>>;
+	readonly infer: AuthoringOps<E>['infer'];
+	readonly readFileAsset: AuthoringOps<E>['readFileAsset'];
+}>;
+
+type AuthoringError<E> =
 	| QueryError
 	| BatchMutationError
 	| Schema.SchemaError
 	| Automations.AutomationStopped
 	| Automations.AutomationDeferredUnsupported
 	| Automations.AutomationContinuationUnchanged
-	| RunE
-> => {
-	const readAsset = (file: FileRef) => readFileAsset(effectId, files, file);
-	/**
-	 * A direct automation, integration, or remote may issue more than one write in one invocation.
-	 * The mutation engine derives a create's stable id from its effect id, so reusing the parent here
-	 * made every id-less create after the first collide with the first row. The same boundary issuer
-	 * used by collection hooks gives each authored write a replay-stable ordinal owned by the runtime.
-	 */
-	const writeEffectIds = new HookEffectIds(effectId);
+	| E;
+
+/** Read operations bound to one subject, shared by handlers, transforms and policy decisions. */
+export const makeAuthoringReadOps = <E>(
+	ports: Pick<AuthoringPorts<E>, 'allowedCollections' | 'findMany' | 'count' | 'findNearest'>,
+	effectId: EffectIdType,
+	subject: Subject
+): AuthoringReadOps<QueryError> => ({
+	allowedCollections: ports.allowedCollections,
+	findMany: (collection, input) => ports.findMany(effectId, subject, queryInput(collection, input)),
+	findFirst: (collection, input) =>
+		ports
+			.findMany(effectId, subject, { ...queryInput(collection, input), limit: 1 })
+			.pipe(Effect.map((rows) => rows[0])),
+	count: (collection, input) => ports.count(effectId, subject, queryInput(collection, input)),
+	findNearest: (collection, input) =>
+		ports.findNearest(effectId, subject, nearestQueryInput(collection, input))
+});
+
+/**
+ * Builds the invocation-bound authoring api from explicit ports.
+ *
+ * The api carries the subject it was built for and nothing else decides authority: the declared
+ * principal for an automation, the caller for a function or a pipeline. The vocabulary is the same
+ * in every context, and every write it issues is one declared collection write.
+ */
+export const makeAuthoringOps = <E>(
+	ports: AuthoringPorts<E>,
+	effectId: EffectIdType,
+	subject: Subject,
+	automation?: AutomationContinuation
+): AuthoringOps<AuthoringError<E>> => {
+	const writeEffectIds = new WriteEffectIds(effectId);
 	return {
-		allowedCollections: collections.authoringCollectionNames,
-		findMany: (collection, input) =>
-			collections.findMany(effectId, subject, queryInput(collection, input)),
-		findFirst: (collection, input) =>
-			collections.findFirst(effectId, subject, queryInput(collection, input)),
-		count: (collection, input) =>
-			collections.count(effectId, subject, queryInput(collection, input)),
-		findNearest: (collection, input) =>
-			collections.findNearest(effectId, subject, nearestQueryInput(collection, input)),
-		mutate: (collection, values) =>
-			collections
-				.mutate(
-					writeEffectIds.next({ phase: 'mutate', collection }),
-					subject,
-					collection,
-					values,
-					0
-				)
-				.pipe(Effect.asVoid),
-		delete: (collection, ids) => {
-			if (ids.length === 0) return Effect.void;
-			return collections
-				.delete(
-					writeEffectIds.next({ phase: 'delete.before', collection }),
-					subject,
-					collection,
-					ids
-				)
-				.pipe(Effect.asVoid);
-		},
-		/**
-		 * Runs a declared automation under its own declared subject.
-		 *
-		 * `after` accepts what Effect's `Duration` accepts — `'1 hour'`, `'30 seconds'`, or a number of
-		 * milliseconds — so an author writes the delay the way they would write any other duration in
-		 * this codebase rather than learning a second vocabulary for one field. Absent means this
-		 * invocation admits and executes the body directly; only a positive delay enters the timer.
-		 *
-		 * Delegated to Collections because it owns both the authored handler and the direct execution
-		 * path. The optional override is used by an already-running automation to carry its nesting
-		 * depth into a child; integrations and remotes take this same default rather than admitting a
-		 * row that no scheduler is allowed to execute.
-		 */
-		runAutomation: (name, input, options) => {
-			const childEffectId = writeEffectIds.next({ phase: 'automation', collection: name });
-			return runAutomation === undefined
-				? collections.runAutomation(childEffectId, name, input, {}, options)
-				: runAutomation(childEffectId, name, input, options);
-		},
-		infer: inferOp(
-			effectId,
-			ai,
-			hostTools === undefined ? undefined : { effectId, subject, hostTools }
-		),
-		readFileAsset: readAsset
+		...makeAuthoringReadOps(ports, effectId, subject),
+		write: (collection, action, inputs) =>
+			ports.write(writeEffectIds.next(action, collection), subject, [
+				{ collection, action, inputs }
+			]),
+		history: (collection, id, at) => ports.history(effectId, subject, collection, id, at),
+		runAutomation: (name, input, options) =>
+			ports.startAutomation(
+				writeEffectIds.next('automation', name),
+				name,
+				input,
+				{},
+				{
+					...options,
+					...(automation === undefined
+						? {}
+						: { parentDepth: automation.depth, continuationOf: automation })
+				}
+			),
+		infer: ports.infer,
+		readFileAsset: ports.readFileAsset
 	};
 };
 
+/** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
+export const makeBoundAuthoringOps = (
+	effectId: EffectIdType,
+	subject: Subject,
+	collections: CollectionsInterface,
+	ai: AIInterface,
+	files: FilesInterface,
+	/**
+	 * The host capabilities an authored `api.infer` may name. Absent for integrations and remotes:
+	 * only automation and collection work carries a host tool binding, and a request without one refuses.
+	 */
+	hostTools?: HostToolsInterface
+): AuthoringOps<AuthoringError<never>> =>
+	makeAuthoringOps(
+		{
+			allowedCollections: collections.authoringCollectionNames,
+			findMany: collections.findMany,
+			count: collections.count,
+			findNearest: collections.findNearest,
+			history: collections.history,
+			write: collections.write,
+			startAutomation: (childEffectId, name, input, scope, options) =>
+				collections.runAutomation(childEffectId, name, input, scope, options),
+			infer: inferOp(
+				effectId,
+				ai,
+				hostTools === undefined ? undefined : { effectId, subject, hostTools }
+			),
+			readFileAsset: (file) => readFileAsset(effectId, files, file)
+		},
+		effectId,
+		subject
+	);
+
 type RuntimeRemoteApi<E = never> = Pick<RuntimeAuthoringApi<E>, 'db' | 'infer' | 'readFileAsset'>;
 export type RuntimeRemoteHandler = ReturnType<
-	() => (
-		input: unknown,
-		api: RuntimeRemoteApi<
-			| QueryError
-			| BatchMutationError
-			| Schema.SchemaError
-			| Automations.AutomationStopped
-			| Automations.AutomationDeferredUnsupported
-			| Automations.AutomationContinuationUnchanged
-		>
-	) => unknown
+	() => (input: unknown, api: RuntimeRemoteApi<AuthoringError<never>>) => unknown
 >;
 
 /** Merges authored remotes and tools once; ambiguous exact membership is a bundle-construction error. */
@@ -638,7 +722,7 @@ export const remoteRegistryLayer = (handlers: Readonly<Record<string, RuntimeRem
 							message: `Unknown workspace command: ${name}`
 						});
 					const api = makeAuthoringApi(
-						makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
+						makeBoundAuthoringOps(effectId, subject, collections, ai, files)
 					);
 					const output = yield* runAuthoredHandler(() => handler(input, api)).pipe(
 						Effect.mapError((cause) =>

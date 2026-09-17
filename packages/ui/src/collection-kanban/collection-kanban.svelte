@@ -126,7 +126,9 @@
 	const definition = $derived(
 		workspaceClient.collections[String(collection)] as CollectionDefinition<TCollections[TName]> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
-	const operations = $derived(client.db[collection]);
+	// Lane moves are one `update` per card; a collection with no declared write has no surface here.
+	const writes = $derived(client.collection[collection]);
+	const writePending = $derived((writes?.pending ?? 0) > 0);
 	const recordIdField = 'id';
 	const effectiveSelectable = $derived(
 		selectable ||
@@ -311,7 +313,7 @@
 				}
 			: undefined
 	);
-	const actionsDisabled = $derived((query?.loading ?? false) || operations.pending > 0);
+	const actionsDisabled = $derived((query?.loading ?? false) || writePending);
 	const laneLayoutCount = $derived(
 		Math.max(groups.length, lanes?.length ?? derivedLanes.length, 1)
 	);
@@ -410,11 +412,15 @@
 			const id = Reflect.get(record, recordIdField);
 			if (id == null)
 				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
+			if (writes === undefined)
+				return yield* Effect.fail(
+					new Error(`Collection ${String(collection)} declares no update.`)
+				);
 			const mutation = yield* Effect.tryPromise({
-				try: () => operations.mutate([{ id: String(id), [groupBy]: toLane }]),
+				try: () => writes.update(String(id), { [groupBy]: toLane }),
 				catch: (cause) => toError(cause)
 			});
-			// `await mutate()` means only that this tab accepted the in-memory overlay. A board move is
+			// `await update()` means only that this tab accepted the in-memory overlay. A board move is
 			// complete only after the authority accepts (or successfully rebases) it; otherwise a rejected
 			// move looks successful until refresh and silently jumps back to its original lane.
 			const settlement = yield* Effect.tryPromise({
@@ -439,8 +445,7 @@
 		fromLane: string;
 		toLane: string;
 	}): void {
-		if (fromLane === toLane || operations.pending > 0 || updateRestrictedRecordIds.has(recordId))
-			return;
+		if (fromLane === toLane || writePending || updateRestrictedRecordIds.has(recordId)) return;
 		const record = recordById.get(recordId);
 		if (!record) return;
 		moveError = '';
@@ -586,7 +591,7 @@
 					movable={true}
 					selectable={effectiveSelectable}
 					{selectedRecordIds}
-					mutationPending={operations.pending > 0}
+					mutationPending={writePending}
 					{updateRestrictedRecordIds}
 					{updateRestrictionReasonById}
 					renderCard={kanbanCard}

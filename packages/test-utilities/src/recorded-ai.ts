@@ -4,10 +4,7 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { testAiCatalog } from './catalog-ai.js';
 
-export type RecordedGenerated = Extract<
-	typeof AIResponse.Encoded,
-	{ readonly _tag: 'Generated' }
->;
+export type RecordedGenerated = Extract<typeof AIResponse.Encoded, { readonly _tag: 'Generated' }>;
 
 /**
  * A recorded structured answer in the shape the agentic loop submits: a `return_result` tool call.

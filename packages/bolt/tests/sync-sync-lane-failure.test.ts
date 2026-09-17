@@ -366,9 +366,7 @@ describe('sync lane fail-closed delivery (S7)', () => {
 						resets: [],
 						outcomes: [
 							{
-								id: CollectionMutationIdempotencyKey.make(
-									'11111111-1111-5111-8111-111111111111'
-								),
+								id: CollectionMutationIdempotencyKey.make('11111111-1111-5111-8111-111111111111'),
 								status: { resolution: 'accepted' as const, schemaFingerprint: 'sha256:schema' }
 							}
 						]
@@ -391,7 +389,12 @@ describe('sync lane fail-closed delivery (S7)', () => {
 					queries: [
 						{
 							queryKey: 'people',
-							input: { kind: 'findMany', collection: 'people', orderBy: { rank: 'asc' }, limit: 10 },
+							input: {
+								kind: 'findMany',
+								collection: 'people',
+								orderBy: { rank: 'asc' },
+								limit: 10
+							},
 							requestedPrefix: 10
 						}
 					],
@@ -430,7 +433,8 @@ describe('sync lane fail-closed delivery (S7)', () => {
 	it('leaves an already-settled stream open when a later registration is refused', async () => {
 		const harness = makeLane();
 		const reader = await open(harness, 'reader', 'people', 'people', PEOPLE);
-		harness.connect = () => Promise.reject(new Error('Live projection must include ordering field id'));
+		harness.connect = () =>
+			Promise.reject(new Error('Live projection must include ordering field id'));
 
 		await expect(
 			harness.lane.connect({
@@ -477,7 +481,12 @@ describe('sync lane fail-closed delivery (S7)', () => {
 					queries: [
 						{
 							queryKey: 'people',
-							input: { kind: 'findMany', collection: 'people', orderBy: { rank: 'asc' }, limit: 10 },
+							input: {
+								kind: 'findMany',
+								collection: 'people',
+								orderBy: { rank: 'asc' },
+								limit: 10
+							},
 							requestedPrefix: 10
 						}
 					],

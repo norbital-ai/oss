@@ -43,9 +43,7 @@ const textField = (value: unknown, field: string): string | undefined => {
 const refusalMessage = (command: string, status: number, payload: unknown): string => {
 	const direct = textField(payload, 'message');
 	if (direct !== undefined) return direct;
-	const wire = isRecord(payload)
-		? (payload as { readonly error?: unknown }).error
-		: undefined;
+	const wire = isRecord(payload) ? (payload as { readonly error?: unknown }).error : undefined;
 	const nested = textField(wire, 'message');
 	if (nested !== undefined) {
 		const code = textField(wire, 'code');
@@ -83,31 +81,23 @@ export function createHttpBoltTransport(options: HttpBoltTransportOptions): Bolt
 		command: (command, input, signal, headers) =>
 			Effect.runPromise(
 				Effect.gen(function* () {
-					const response = yield* httpRequest(
-						`${endpoint}/${encodeURIComponent(command)}`,
-						{
-							operation: `bolt.command.${command}`,
-							init: {
-								method: 'POST',
-								credentials: 'same-origin',
-								headers: {
-									'content-type': 'application/json',
-									authorization: `Bearer ${options.credential}`,
-									...(headers ?? {})
-								},
-								body: JSON.stringify(input),
-								signal: signal ?? null
-							}
+					const response = yield* httpRequest(`${endpoint}/${encodeURIComponent(command)}`, {
+						operation: `bolt.command.${command}`,
+						init: {
+							method: 'POST',
+							credentials: 'same-origin',
+							headers: {
+								'content-type': 'application/json',
+								authorization: `Bearer ${options.credential}`,
+								...(headers ?? {})
+							},
+							body: JSON.stringify(input),
+							signal: signal ?? null
 						}
-					).pipe(
+					}).pipe(
 						Effect.mapError(
 							(failure) =>
-								new BoltHttpResponseError(
-									failure.message,
-									failure.status ?? 0,
-									undefined,
-									null
-								)
+								new BoltHttpResponseError(failure.message, failure.status ?? 0, undefined, null)
 						)
 					);
 					const text = yield* Effect.tryPromise(() => response.text());

@@ -28,8 +28,9 @@ export function isConfiguredTest(path: string, owner: Readonly<{ root: string }>
 	}
 	// The manifest is a parsed boundary value: scripts is read tolerantly, and any non-object
 	// slot is "no test command", which is what an empty map is for.
-	const scripts =
-		(jsonRecord(scriptsValue)?.['scripts'] ?? jsonRecord(scriptsValue) ?? {}) as Readonly<Record<string, unknown>>;
+	const scripts = (jsonRecord(scriptsValue)?.['scripts'] ??
+		jsonRecord(scriptsValue) ??
+		{}) as Readonly<Record<string, unknown>>;
 	const commands = Object.entries(scripts)
 		.filter(([name]) => name === 'test' || name.startsWith('test:'))
 		.map(([, command]) => command)

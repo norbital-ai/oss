@@ -1,7 +1,7 @@
 id: NODE4
 summary: glob entrypoint uses substring matching instead of node:fs glob
 severity: error
-principles: [ simplicity, straightforwardness, testability ]
+principles: [simplicity, straightforwardness, testability]
 rule:
   all:
     - kind: SourceFile

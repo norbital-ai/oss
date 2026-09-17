@@ -92,7 +92,11 @@ test('the leading accent marks locked and in-approval records, and nothing else'
 		tooltip: 'Payroll consumed it.'
 	});
 
-	const inApproval = resolveCollectionRecordMetadata({ approval_id: 'approval-1' }, undefined, copy);
+	const inApproval = resolveCollectionRecordMetadata(
+		{ approval_id: 'approval-1' },
+		undefined,
+		copy
+	);
 	assert.deepEqual(collectionRecordLeadingAccent(inApproval), {
 		markerClass: 'inset-y-1 w-1 rounded-r-full bg-brand',
 		tooltip: copy.pendingApprovalReason

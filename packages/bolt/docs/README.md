@@ -27,14 +27,14 @@ packages/bolt/docs/
 └── agents/                            turns, tools, envoys
 ```
 
-| Folder                                                       | Pins                                                                |
-| ------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Folder                                                       | Pins                                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------ |
 | [pillars/04-sync-engine](./pillars/04-sync-engine/README.md) | Prefix engine, SyncHost registry, connect / extend / advance, invariants |
-| [pillars/05-client](./pillars/05-client/README.md)           | Machine reducer, project(), SSE / HTTP drivers, syncStatus          |
-| [collections](./collections/README.md)                       | Reads, graph writes, hooks, history, embeddings                     |
-| [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md)       |
-| [runtime](./runtime/README.md)                               | Dispatch admission, `invoke.*`, Data Browser 403 vs other-plugin 401 |
-| [agents](./agents/README.md)                                 | Conversations and turns, Effect AI, envoys vs automations           |
+| [pillars/05-client](./pillars/05-client/README.md)           | Machine reducer, project(), SSE / HTTP drivers, syncStatus               |
+| [collections](./collections/README.md)                       | Reads, declared writes, transforms, history, embeddings                  |
+| [access](./access/README.md)                                 | Subjects, teams, policies; [approvals](./access/approvals.md)            |
+| [runtime](./runtime/README.md)                               | Dispatch admission, `invoke.*`, Data Browser 403 vs other-plugin 401     |
+| [agents](./agents/README.md)                                 | Conversations and turns, Effect AI, envoys vs automations                |
 
 | Colony               | Owned in the Colony product repository |
 | -------------------- | -------------------------------------- |
@@ -96,7 +96,7 @@ src/
 │   ├── +relationship.ts           # optional (empty relations if absent)
 │   └── <name>/
 │       ├── +model.ts              # required (at least one collection)
-│       ├── +hooks.ts
+│       ├── +collection.ts         # the write contract; absent = read-only
 │       ├── +pipelines.ts
 │       ├── +integrations.ts
 │       └── +representation.svelte
@@ -140,12 +140,13 @@ It is the tenant id and the string typed at `/login`. It is not the directory na
 ## Guest runtime
 
 `src/runtime/app.ts` builds Effect layers from the artifact. `src/runtime/dispatch.ts` routes
-commands (`collections.mutate`, `sync.connect`, `sync.advance`, `conversations.send`, …).
+commands (`collections.write`, `sync.connect`, `sync.advance`, `conversations.send`, …).
 
 The guest has no Node builtins. Every I/O port is a facility the host binds per invocation
 (`packages/bolt-protocol/src/facilities.ts`). On Colony that binding happens inside a fresh
 isolated-vm context (Colony P3 Runtime, in the Colony product repository).
 
-Reads and writes on `api.db.<collection>` are policy-guarded. Browser writes are one verb,
-`collections.mutate` (plus `delete`, and `resume` for approval release). Vector search
-(`findNearest`) is a server verb; the browser client does not declare it.
+Reads on `api.db.<collection>` and writes on `api.collection.<collection>` are policy-guarded.
+Browser writes are one verb, `collections.write`, carrying a collection's declared inputs;
+`resume` seals and `discard` restores an approval. Vector search (`findNearest`) is a server
+verb; the browser client does not declare it.

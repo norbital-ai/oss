@@ -10,7 +10,10 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { subject } from '../src/authoring/contracts-schema.js';
+import { approveBy } from '../src/authoring/approval-flow.js';
+import { describePolicy } from '../src/authoring/policy-introspection.js';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
@@ -60,22 +63,10 @@ const command = (name: string, credential: string, input: unknown = null) =>
 	});
 
 const REVIEWERS = 'Reviewers';
-const JOB_ID = '019f6f10-0008-7000-8000-000000000001';
 const APPROVAL_EFFECT_ID = EffectId.make('approval-read-entitlement');
-const APPROVAL_ROOT = { collection: 'jobs', id: JOB_ID, action: 'create' } as const;
-const REQUEST_ID = Approvals.approvalRequestId(APPROVAL_ROOT, APPROVAL_EFFECT_ID);
-
-/** The approval the raiser's grant carries. `approvers` and `team.name` are the same string. */
-const jobApproval = {
-	id: '019f6f10-0007-7000-8000-000000000009',
-	steps: [
-		{
-			id: '019f6f10-0007-7000-8000-000000000109',
-			approvers: [REVIEWERS]
-		}
-	],
-	superceded_by: []
-};
+/** The job under review and the request holding it; both set by `raise`. */
+let JOB_ID = '';
+let REQUEST_ID = '';
 
 /** Both parties read only their own rows — the narrowing an approver's ordinary grant would have. */
 const ownRowsOnly = { owner_id: { eq: subject.id } } as const;
@@ -99,11 +90,15 @@ const reviewWorkspace = workspace({
 			capabilities: { apps: ['work'] },
 			grants: [{ collection: 'jobs', action: 'read', where: ownRowsOnly }]
 		}),
-		policy({
-			name: 'raiser',
-			effect: 'allow',
+		// The approval the raiser's grant routes to. `approvers` and `team.name` are the same string.
+		describePolicy('raiser', {
+			description: 'Raises jobs for the reviewers to decide.',
 			capabilities: { apps: ['work'] },
-			grants: [{ collection: 'jobs', action: 'create', approval: jobApproval }]
+			grants: {
+				jobs: {
+					mutate: { new: { approval: { flow: () => approveBy(REVIEWERS), superceded_by: [] } } }
+				}
+			}
 		})
 	],
 	teams: {
@@ -150,7 +145,6 @@ const approvalCapabilitiesFor = async (runtime: BoltTestRuntime, credential: str
 	return outcome.success.value;
 };
 
-/** The job under review, owned by the raiser and therefore outside every reviewer's own scope. */
 const place = async (runtime: BoltTestRuntime) => {
 	await seedTeam(runtime, 'Raisers');
 	await seedTeam(runtime, REVIEWERS);
@@ -158,40 +152,45 @@ const place = async (runtime: BoltTestRuntime) => {
 	await seedSession(runtime, { token: 'raiser-token', user: 'raiser', team: 'Raisers' });
 	await seedSession(runtime, { token: 'reviewer-token', user: 'reviewer', team: REVIEWERS });
 	await seedSession(runtime, { token: 'bystander-token', user: 'bystander', team: 'Bystanders' });
-	await runtime.database.query(
-		`insert into jobs ("id", "title", "owner_id") values ($1::uuid, $2, $3)`,
-		[JOB_ID, 'Extra scaffolding', fixtureUserId('raiser')]
-	);
 };
 
-/** Raised through the public approval gate, the only owner of the state the predicate reads. */
-const raise = (runtime: BoltTestRuntime) =>
-	runtime.runtime.runPromise(
+/**
+ * The job under review, raised through the write path — the only owner of the state the predicate
+ * reads. Owned by the raiser unless told otherwise, and therefore outside every reviewer's own scope.
+ */
+const raise = async (
+	runtime: BoltTestRuntime,
+	ownerId = fixtureUserId('raiser'),
+	title = 'Extra scaffolding'
+) => {
+	const commit = await runtime.runtime.runPromise(
 		Effect.gen(function* () {
-			return yield* (yield* Approvals.Service).gate({
-				effectId: APPROVAL_EFFECT_ID,
-				subject: raiserSubject,
-				root: APPROVAL_ROOT,
-				storedGraph: { version: 1, collection: 'jobs', id: JOB_ID, action: 'create' },
-				proposedValues: { title: 'Extra scaffolding' },
-				approval: jobApproval,
-				review: undefined
-			});
+			return yield* (yield* Collections.Service).write(APPROVAL_EFFECT_ID, raiserSubject, [
+				{ collection: 'jobs', action: 'create', inputs: [{ title, owner_id: ownerId }] }
+			]);
 		})
 	);
+	if (commit.pendingApproval === undefined) throw new Error('the job create was not held');
+	JOB_ID = String(commit.records[0]?.['id']);
+	REQUEST_ID = commit.pendingApproval.requestId;
+};
+
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: { jobs: { create: { input: { columns: { title: true, owner_id: true } } } } }
+};
 
 describe('an approver may read what they were asked to approve', () => {
-	it('publishes held creates and decisions with their actual approval routing snapshots', async () => {
-		harness = await makeBoltTestRuntime(reviewWorkspace);
+	it('publishes the held row beside its request, and its removal beside the withdrawal', async () => {
+		harness = await makeBoltTestRuntime(reviewWorkspace, { authored });
 		await place(harness);
 		const drain = () =>
 			harness!.runtime.runPromise(Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges));
-		const input = { kind: 'findMany' as const, collection: 'jobs', pendingOnly: true, limit: 100 };
+		const input = { kind: 'findMany' as const, collection: 'jobs', limit: 100 };
 		const initial = await harness.runtime.runPromise(
 			resolveInitialPrefix(APPROVAL_EFFECT_ID, raiserSubject, input)
 		);
 		expect(initial.rows).toEqual([]);
-		expect(initial.plan.effectivePlan.dependencies).toContain('approval_request');
 		const subscription = {
 			subId: 'pending-jobs',
 			input,
@@ -207,6 +206,7 @@ describe('an approver may read what they were asked to approve', () => {
 		const created = await drain();
 		expect(created).toEqual(
 			expect.arrayContaining([
+				expect.objectContaining({ collection: 'jobs', id: JOB_ID, operation: 'insert' }),
 				expect.objectContaining({
 					collection: 'approval_request',
 					id: REQUEST_ID,
@@ -238,8 +238,6 @@ describe('an approver may read what they were asked to approve', () => {
 			})
 		]);
 		if (held === undefined) throw new Error('Held approval did not update its live query');
-		await raise(harness);
-		expect(await drain()).toEqual([]);
 		await harness.runtime.runPromise(
 			Effect.flatMap(Approvals.Service, (approvals) =>
 				approvals.withdraw(EffectId.make('withdraw-live-approval'), raiserSubject, {
@@ -247,8 +245,7 @@ describe('an approver may read what they were asked to approve', () => {
 				})
 			)
 		);
-		const changes = await drain();
-		expect(changes).toEqual([
+		expect(await drain()).toEqual([
 			expect.objectContaining({
 				collection: 'approval_request',
 				id: REQUEST_ID,
@@ -256,6 +253,16 @@ describe('an approver may read what they were asked to approve', () => {
 				before: expect.objectContaining({ status: 'ONGOING', row_version: 1 }),
 				after: expect.objectContaining({ status: 'WITHDRAWN', row_version: 2 })
 			})
+		]);
+		// The restore the withdrawal queued, run as the task runner would.
+		await harness.runtime.runPromise(
+			Effect.flatMap(Collections.Service, (collections) =>
+				collections.discard(EffectId.make('discard-live-approval'), REQUEST_ID)
+			)
+		);
+		const changes = await drain();
+		expect(changes).toEqual([
+			expect.objectContaining({ collection: 'jobs', id: JOB_ID, operation: 'delete' })
 		]);
 		const removed = await harness.runtime.runPromise(
 			advanceActivePrefix(
@@ -272,59 +279,25 @@ describe('an approver may read what they were asked to approve', () => {
 		);
 		expect(removed?.deltas[0]?.delta).toEqual({ removeIds: [JOB_ID], put: [] });
 	});
-	it('exposes pending candidate data to its owner without granting approval inbox access', async () => {
-		harness = await makeBoltTestRuntime(reviewWorkspace);
+	it('exposes the held row to its owner without granting approval inbox access', async () => {
+		harness = await makeBoltTestRuntime(reviewWorkspace, { authored });
 		await place(harness);
-		await harness.database.query('delete from jobs where id = $1', [JOB_ID]);
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Approvals.Service).gate({
-					effectId: APPROVAL_EFFECT_ID,
-					subject: raiserSubject,
-					root: APPROVAL_ROOT,
-					storedGraph: { version: 1, collection: 'jobs', id: JOB_ID, action: 'create' },
-					proposedValues: {
-						title: 'Reserved on behalf of the owner',
-						owner_id: fixtureUserId('bystander')
-					},
-					approval: jobApproval,
-					review: undefined
-				});
-			})
-		);
+		await raise(harness, fixtureUserId('bystander'), 'Reserved on behalf of the owner');
 		const owner: Identity.Subject = {
 			...raiserSubject,
 			userId: fixtureUserId('bystander'),
 			teamPath: ['Bystanders']
 		};
-		const read = (who: Identity.Subject, pendingOnly: boolean, collection = 'jobs') =>
+		const read = (who: Identity.Subject, collection = 'jobs') =>
 			harness!.runtime.runPromise(
 				Effect.flatMap(Collections.Service, (collections) =>
-					collections.findMany(
-						EffectId.make(`pending:${who.userId}:${collection}:${pendingOnly}`),
-						who,
-						{
-							collection,
-							pendingOnly,
-							where:
-								collection === 'jobs'
-									? { title: { eq: 'Reserved on behalf of the owner' } }
-									: undefined
-						}
-					)
+					collections.findMany(EffectId.make(`held:${who.userId}:${collection}`), who, {
+						collection
+					})
 				)
 			);
-		expect(await read(owner, false)).toEqual([]);
-		expect(await read(owner, false, 'approval_request')).toEqual([]);
-		const live = await harness.runtime.runPromise(
-			resolveInitialPrefix(APPROVAL_EFFECT_ID, owner, {
-				kind: 'findMany',
-				collection: 'jobs',
-				pendingOnly: true
-			})
-		);
-		expect(live.rows).toEqual([expect.objectContaining({ id: JOB_ID, owner_id: owner.userId })]);
-		expect(await read(owner, true)).toEqual([
+		// The provisional row is a real row: the owner's own-rows grant reaches it, stamped.
+		expect(await read(owner)).toEqual([
 			expect.objectContaining({
 				id: JOB_ID,
 				approval_id: REQUEST_ID,
@@ -332,18 +305,11 @@ describe('an approver may read what they were asked to approve', () => {
 				title: 'Reserved on behalf of the owner'
 			})
 		]);
-		expect(await read({ ...owner, userId: fixtureUserId('unrelated') }, true)).toEqual([]);
-		await harness.database.query("update approval_request set status = 'APPROVED' where id = $1", [
-			REQUEST_ID
-		]);
-		expect(await read(owner, true)).toHaveLength(1);
-		await harness.database.query('update approval_request set applied_at = now() where id = $1', [
-			REQUEST_ID
-		]);
-		expect(await read(owner, true)).toEqual([]);
+		expect(await read(owner, 'approval_request')).toEqual([]);
+		expect(await read({ ...owner, userId: fixtureUserId('unrelated') })).toEqual([]);
 	});
 	it('projects only the actions each visible principal may actually take', async () => {
-		harness = await makeBoltTestRuntime(reviewWorkspace);
+		harness = await makeBoltTestRuntime(reviewWorkspace, { authored });
 		await place(harness);
 		await raise(harness);
 
@@ -370,7 +336,7 @@ describe('an approver may read what they were asked to approve', () => {
 	});
 
 	it('reaches a record its own grant excludes, while the approval is open', async () => {
-		harness = await makeBoltTestRuntime(reviewWorkspace);
+		harness = await makeBoltTestRuntime(reviewWorkspace, { authored });
 		await place(harness);
 
 		// Before anything is raised, the narrowing is the whole answer: nobody sees the raiser's job.
@@ -386,7 +352,7 @@ describe('an approver may read what they were asked to approve', () => {
 	});
 
 	it('stops reaching it once the approval closes', async () => {
-		harness = await makeBoltTestRuntime(reviewWorkspace);
+		harness = await makeBoltTestRuntime(reviewWorkspace, { authored });
 		await place(harness);
 		await raise(harness);
 		expect(await titlesVisibleTo(harness, 'reviewer-token')).toEqual(['Extra scaffolding']);

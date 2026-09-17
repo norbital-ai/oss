@@ -27,8 +27,8 @@ const fingerprintOf = (value: Record<string, unknown>, fallback: string): string
 	return isNonEmptyString(fingerprint) ? fingerprint : fallback;
 };
 
-/** Projects the `collections.mutate` command body onto the stream outcome the Machine already speaks. */
-export const syncOutcomeFromMutateCommand = (
+/** Projects the `collections.write` command body onto the stream outcome the Machine already speaks. */
+export const syncOutcomeFromWriteCommand = (
 	id: CollectionMutationIdempotencyKey,
 	value: unknown,
 	fallbackFingerprint: string

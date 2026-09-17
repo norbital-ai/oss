@@ -3,9 +3,8 @@ import { Effect } from 'effect';
 import { EffectId, InvocationId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { automation } from '../src/authoring/automations-schema.js';
-import { authoredHooks } from '../src/authoring/contracts-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -13,18 +12,10 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-import { unwrapMutationPhase } from './support/mutation-phase.js';
 
-/** The fixture as a schema, so the hooks are typed the way a compiled workspace's are. */
-interface SettleSnapshotSchema {
-	readonly tables: {
-		readonly notes: {
-			readonly $inferSelect: { readonly id: string; readonly body: string };
-			readonly $inferInsert: { readonly id?: string; readonly body: string };
-		};
-	};
-	readonly relations: Record<string, never>;
-}
+const notesModule: AuthoredRuntime['collections'] = {
+	notes: { update: { input: { columns: { body: true } } } }
+};
 
 const definition = workspace({
 	name: 'declarative-settle-snapshot',
@@ -100,91 +91,15 @@ describe('the test database transaction result', () => {
 });
 
 describe('declarative settlement under a later writer', () => {
-	it('reports an authored defect after commit as a non-retryable settle failure', async () => {
-		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					notes: authoredHooks<SettleSnapshotSchema, 'notes'>({
-						mutate: {
-							perRecord: {
-								after: {
-									description: 'fails after the transaction is already committed',
-									handler: ({ previous }) => {
-										if (previous !== undefined) return;
-										throw new Error('settlement exploded');
-									}
-								}
-							}
-						}
-					})
-				}
-			}
-		});
-
-		const outcome = await harness.runtime.runPromise(
-			Effect.result(
-				Effect.gen(function* () {
-					return yield* (yield* Collections.Service).mutate(
-						EffectId.make('defective-declarative-settle'),
-						adminSubject,
-						'notes',
-						[{ body: 'already committed' }],
-						0,
-						{}
-					);
-				})
-			)
-		);
-
-		expect(outcome._tag).toBe('Failure');
-		if (outcome._tag !== 'Failure') return;
-		expect(outcome.failure).toBeInstanceOf(Collections.MutationPhaseFailure);
-		expect(outcome.failure).toMatchObject({
-			phase: 'settle',
-			step: 'after-hook',
-			collection: 'notes',
-			retryable: false
-		});
-		expect((outcome.failure as Collections.MutationPhaseFailure).committed).toHaveLength(1);
-		expect(unwrapMutationPhase(outcome.failure)).toMatchObject({
-			message: 'settlement exploded'
-		});
-		expect(await harness.database.query('select body from notes')).toEqual([
-			{ body: 'already committed' }
-		]);
-	}, 60_000);
-
-	it('hands hooks and change events the row captured by writer A before writer B wins', async () => {
+	it('hands the caller and the change events the row captured by writer A before writer B wins', async () => {
 		const id = recordId('settle-race-note');
-		const afterBodies: Array<string> = [];
-		const afterTransitions: Array<Readonly<Record<string, unknown>>> = [];
 		const changeBodies: Array<string> = [];
 		let armInterleave = false;
 		let interleaved = false;
 		let database: BoltTestRuntime['database'] | undefined;
-		const authored = {
+		const authored: AuthoredRuntime = {
 			...emptyAuthoredRuntime,
-			hooks: {
-				notes: authoredHooks<SettleSnapshotSchema, 'notes'>({
-					mutate: {
-						perRecord: {
-							after: {
-								description: 'records the exact row committed by this mutation',
-								handler: ({ previous, changes, record }) => {
-									if (previous === undefined) return;
-									afterBodies.push(String(record.body));
-									afterTransitions.push({
-										previous: previous.body,
-										changes: changes.body,
-										record: record.body
-									});
-								}
-							}
-						}
-					}
-				})
-			},
+			collections: notesModule,
 			automations: {
 				on_note_updated: {
 					name: 'on_note_updated',
@@ -220,24 +135,15 @@ describe('declarative settlement under a later writer', () => {
 		const answer = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				return yield* collections.mutate(
-					EffectId.make('writer-a'),
-					adminSubject,
-					'notes',
-					[{ id, body: 'writer A' }],
-					0,
-					{}
-				);
+				return yield* collections.write(EffectId.make('writer-a'), adminSubject, [
+					{ collection: 'notes', action: 'update', inputs: [{ id, body: 'writer A' }] }
+				]);
 			})
 		);
 
 		expect(interleaved).toBe(true);
 		expect(await database.query('select body from notes where id = $1', [id])).toEqual([
 			{ body: 'writer B' }
-		]);
-		expect(afterBodies).toEqual(['writer A']);
-		expect(afterTransitions).toEqual([
-			{ previous: 'original', changes: 'writer A', record: 'writer A' }
 		]);
 		expect(answer.records.map((row) => row['body'])).toEqual(['writer A']);
 		// The change automation runs in the settle phase with the same committed capture — the

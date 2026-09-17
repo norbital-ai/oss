@@ -304,7 +304,7 @@ const bearerCredential = (headers: Record<string, Array<string>>): string => {
 /**
  * The writer-owned ledger ids one committed invocation settles.
  *
- * The change list carries its mutation ids; `collections.mutate` also names its idempotency key on
+ * The change list carries its mutation ids; `collections.write` also names its idempotency key on
  * the request and echoes it in the response, and terminal outcomes that committed no collection
  * change ride that pair.
  */
@@ -317,7 +317,7 @@ const mutationIdsFrom = (
 	for (const change of response.changes ?? []) {
 		if (change.mutationId !== undefined) pending.add(change.mutationId);
 	}
-	if (command !== 'collections.mutate') return [...pending];
+	if (command !== 'collections.write') return [...pending];
 	const inputId = isRecord(input) ? Reflect.get(input, 'idempotencyKey') : undefined;
 	const responseId = isRecord(response.value)
 		? Reflect.get(response.value, 'mutationId')

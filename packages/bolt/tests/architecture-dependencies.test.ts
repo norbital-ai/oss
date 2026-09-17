@@ -160,7 +160,13 @@ describe('Bolt architecture boundaries', () => {
 		// append itself — drizzle-kit exposes no builder for `DEFERRABLE INITIALLY DEFERRED`.
 		// 9,126 -> 9,152: the conversation read policy is built per workspace (own, participant,
 		// public-envoy) and the administrator read bypass covers the chat collections.
-		expect(total).toBeLessThanOrEqual(9_152);
+		// 9,152 -> 9,415 (2026-09-17): the collection RFC's `+collection.ts` compiled write contract —
+		// discovery and conflict refusals, content-hash collection import, the serializable write
+		// projection on compiled collections, generated collection types/inputs, and the artifact
+		// carrier that ships the live transform. See RFC/collection.md §4.2–4.6.
+		// 2026-09-17: `+hooks.ts` discovery, the hook input-column scraper and the generated
+		// `inputs.d.ts` are deleted; `+collection.ts` is imported live instead. Measured 9,285.
+		expect(total).toBeLessThanOrEqual(9_415);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 
@@ -231,7 +237,33 @@ describe('Bolt architecture boundaries', () => {
 		// 18,240 -> 18,391 (2026-09-16): deletes of one table are one statement with one row lock,
 		// update and delete history rows are one insert per batch, the read-consistency prologue is
 		// one lock and one assertion, and every committed write logs its statement count.
-		expect(amendedAggregate).toBeLessThanOrEqual(18_391);
+		// 18,391 -> 19,312 (2026-09-17): the collection RFC's declared write path — declared input
+		// admission with per-level excess refusal, the reads-only two-wave transform surface, the
+		// explicit relation-action lowering (`write/declared.ts`) and `Collections.writeDeclared`,
+		// which commits through the existing statement planner and one transaction. This basket is
+		// expected to shrink once the hook path it replaces is deleted with the template migration
+		// (RFC/collection.md §9 step 3); the raise is recorded here until then.
+		// 19,312 -> 19,465 (2026-09-17): the seeding RFC's runtime core — one declared `createMany`
+		// batch per collection, model-graph ordering, fixture ids at seed origin, and existing-id
+		// skipping so a second seed is a no-op (RFC seeding.md §4).
+		// 19,465 -> 19,490 (2026-09-17): collection history reads take an anchor — a revision ordinal
+		// or an instant — reconstructed from the same log and masked by the same current-row grant
+		// (RFC §4.7); `{ before: approvalId }` lands with the approval restore point.
+		// 19,490 -> 19,521 (2026-09-17): the `upsert` relation action lowers by id — insert when the
+		// read wave found nothing, patch when it did (RFC §4.3). 19,521 -> 19,535: an upsert's
+		// `onConflictDoUpdate` patch is admitted against the update selection too.
+		// 19,535 -> 19,599 (2026-09-17): a declared write carries the caller's observed row versions
+		// beside its input and asserts them as a typed version conflict before authored code runs
+		// (RFC §4.2), and a transform's read after its second wave fails as a typed
+		// `ReadBudgetExceeded` rather than an authored refusal (RFC §5.3).
+		// 19,599 -> 19,623 (2026-09-17): a transform's create payload is checked against the full
+		// model for required fields before it is lowered, so a returned row that omits one refuses
+		// where the mistake is instead of surfacing as a database not-null fault (RFC §4.6).
+		// 2026-09-17: the hook path is deleted — `hooks/`, `declarative-prepare.ts`, the graph
+		// reconciler, `mutate`/`delete`/`findPending` — and the basket measured 15,803 with the
+		// runtime port still landing in `collections.ts`. Lower this ceiling to the measured value
+		// once that port is committed; the 18,391 -> 19,312 note promised the shrink.
+		expect(amendedAggregate).toBeLessThanOrEqual(19_623);
 		// 4700 -> 4770 (2026-09-04): `mutate([...])` is always a batch. The browser push carries a
 		// `mutate` graph of N create/update rows, so admission, the committed action, the quarantine
 		// check and the write call each read the graph's rows; and hooks gained a `delete`
@@ -262,7 +294,20 @@ describe('Bolt architecture boundaries', () => {
 		// assertion is skipped per row, as the after-insert one already was.
 		// 5,115 -> 5,249: grouped deletes and delete locks, history as planned inserts, the
 		// per-write statement log.
-		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(5_249);
+		// 5,249 -> 5,717 (2026-09-17): the collection RFC's declared write path lives here because
+		// this file owns the policy, approval and commit seams the new path must share (declared
+		// input admission, the two-wave transform read handle, `writeDeclared` and the committed
+		// notification enqueue). It moves back under its old ceiling when the hook path it replaces
+		// is deleted; see the aggregate note above.
+		// 5,717 -> 5,844 (2026-09-17): batch declared creates (`writeDeclaredMany`) and `seedApply`.
+		// 5,844 -> 5,861: history anchors on the same log. 5,861 -> 5,863: upsert selection walk.
+		// 5,863 -> 5,877: the upsert patch half is admitted as a patch.
+		// 5,877 -> 5,909 (2026-09-17): a declared write asserts the caller's observed row versions
+		// before the transform runs (RFC §4.2), and the transform's third read wave fails as the
+		// typed `ReadBudgetExceeded` (RFC §5.3).
+		// 2026-09-17: the hook path this file carried beside the declared one is deleted; `write` is
+		// the only write. Measured 5,063 mid-port; lower the ceiling with the aggregate above.
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(5_909);
 		// 816 -> 820: server-only unstored nested ids are creates (agent admission), while the
 		// browser undeclared-create branch stays the payroll persist path. See docs/collections/README.md (collection lifecycle).
 		// 820 -> 844 (2026-09-06): rows a `before` hook nests are authorized as authored work
@@ -274,31 +319,17 @@ describe('Bolt architecture boundaries', () => {
 		// 795 -> 835: the graph owner supplies unforgeable parent values and desired-set sizes to
 		// mutation hooks, and distinguishes replacement omissions from parent deletion. Nested-write
 		// integration tests exercise each path; no second graph reader or ownership model is added.
-		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(835);
-		// 837 -> 873 (2026-09-04): the root delete-prepare wave landed in oss 5210f8d9 (+51) over the
-		// ceiling; the duplicated owner/await Deferred pattern of both waves moved to `root-wave.ts`
-		// (-15) and the cascade descendant loop left `engine.ts` for `cascade-delete.ts` (engine
-		// 844 -> 814, under its unchanged 820). The remaining +36 is the delete wave itself, which
-		// belongs here. The collection lifecycle budget; the reason for every move is recorded in this comment.
-		// 873 -> 910 (2026-09-04): hooks stage deletes as well as mutates (`api.db.X.delete`), so the
-		// staged wave drains a delete queue through `prepareDelete` before its writes, and staged
-		// mutate takes a batch. See the collection lifecycle budgets in docs/collections/README.md.
-		// 910 -> 923: before hooks receive relationship snapshots and approval reservations retain
-		// normalized values. 923 -> 940: each root primes and decodes its own input; only the batch
-		// preparation owner decodes the full batch, avoiding quadratic memory at 10,000 rows.
-		// 940 -> 946: the runaway guard counts staged-write waves instead of staged records, so a
-		// hook releasing a whole run's settled rows stages one write rather than one per row.
-		// The aggregate ceiling still includes this complete preparation path.
-		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
-			946
-		);
+		// 835 -> 29 (2026-09-17): the graph reconciler left with the hook path; what remains is the
+		// statement-plan seam `write/declared.ts` commits through.
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(29);
+		// The hook path is gone (2026-09-17, RFC/collection.md §9): `write/declarative-prepare.ts`
+		// (946) and `hooks/boundary.ts` (275) are deleted, not moved. Their ledgers ended with them.
 		// 300 -> 322 (amended 2026-09-03 06:13, learning 100; re-applied 2026-09-04 after the test
 		// flattening dropped it): wanted-list CTE + `::text` join so PGlite's unnamed prepare survives
 		// 10k ids. The collection lifecycle budget.
 		// 322 -> 324: the numeric wire guard is now a hoisted Schema predicate (GUARD2).
 		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(324);
 		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);
-		expect(await lines('runtime/collections/hooks/boundary.ts')).toBeLessThanOrEqual(275);
 		expect(accessLines).toBeLessThanOrEqual(1_705);
 
 		// Policy introspection is deliberately outside the historical aggregate basket. Give the

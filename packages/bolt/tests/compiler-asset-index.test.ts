@@ -79,10 +79,7 @@ describe('artifact asset index', () => {
 
 		// Asset indexing emits only content-addressed objects. The complete release document written by
 		// `syncWorkspace` is the sole on-disk authority for these two arrays.
-		expect(await readdir(artifactDirectory)).toEqual([
-			ARTIFACT_ASSET_DIRECTORY,
-			'capabilities'
-		]);
+		expect(await readdir(artifactDirectory)).toEqual([ARTIFACT_ASSET_DIRECTORY, 'capabilities']);
 	});
 
 	/**
@@ -111,11 +108,11 @@ describe('artifact asset index', () => {
 			['capabilities/index.json', target].toSorted()
 		);
 		expect(index.server.find(({ path }) => path === target)).toEqual({
-				path: target,
-				contentType: 'application/wasm',
-				sha256: digest('wasm-bytes'),
-				byteLength: 10
-			});
+			path: target,
+			contentType: 'application/wasm',
+			sha256: digest('wasm-bytes'),
+			byteLength: 10
+		});
 	});
 
 	it('refuses a declaration the build did not honour', async () => {
@@ -169,17 +166,21 @@ describe('artifact asset index', () => {
 			},
 			undefined,
 			{
-				skills: [{
-					name: 'triage',
-					description: 'Resolve tickets',
-					digest: 'package-digest',
-					body: skillBody,
-					files: [{
-						path: 'SKILL.md',
-						sha256: digest(skillBody),
-						byteLength: Buffer.byteLength(skillBody)
-					}]
-				}],
+				skills: [
+					{
+						name: 'triage',
+						description: 'Resolve tickets',
+						digest: 'package-digest',
+						body: skillBody,
+						files: [
+							{
+								path: 'SKILL.md',
+								sha256: digest(skillBody),
+								byteLength: Buffer.byteLength(skillBody)
+							}
+						]
+					}
+				],
 				mcp: []
 			}
 		);

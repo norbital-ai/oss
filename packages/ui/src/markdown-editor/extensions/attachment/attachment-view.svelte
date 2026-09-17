@@ -206,13 +206,14 @@
 	}
 
 	// `Error` is real: every loader fetches, and `togglePreview` already has an `onFailure` branch.
-	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent, Error>> = {
-		image: () => Effect.succeed({ type: 'image' }),
-		pdf: loadPdfPreview,
-		csv: loadCsvPreview,
-		markdown: loadMarkdownPreview,
-		text: loadTextPreview
-	};
+	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent, Error>> =
+		{
+			image: () => Effect.succeed({ type: 'image' }),
+			pdf: loadPdfPreview,
+			csv: loadCsvPreview,
+			markdown: loadMarkdownPreview,
+			text: loadTextPreview
+		};
 
 	function togglePreview() {
 		if (preview.open) {

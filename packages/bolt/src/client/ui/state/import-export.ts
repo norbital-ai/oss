@@ -91,8 +91,10 @@ export function collectionExportCommandInput(input: CollectionExportInput): {
 
 const CollectionTransfer = {
 	download: (input: CollectionExportInput, options: CollectionExportOptions = {}) =>
-		Effect.runPromise( // repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections export method (note inside try).
-			Effect.tryPromise({ // repository-health:allow UI18 -- outer wrapper of the same call; the gap is a missing generated `collections` API, not a refactor (note inside try).
+		Effect.runPromise(
+			// repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections export method (note inside try).
+			Effect.tryPromise({
+				// repository-health:allow UI18 -- outer wrapper of the same call; the gap is a missing generated `collections` API, not a refactor (note inside try).
 				try: () =>
 					// repository-health:allow UI18 -- `collections.export` has no generated method, and a
 					// WorkspaceSession carries a BoltTransport rather than a client. Routing it needs a
@@ -110,8 +112,10 @@ const CollectionTransfer = {
 			)
 		),
 	importRecords: (input: CollectionImportInput) =>
-		Effect.runPromise( // repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections import method.
-			Effect.tryPromise({ // repository-health:allow UI18 -- outer wrapper of the same call; see the note inside try.
+		Effect.runPromise(
+			// repository-health:allow UI18 -- outer wrapper of the raw transport.command below; the generated API has no collections import method.
+			Effect.tryPromise({
+				// repository-health:allow UI18 -- outer wrapper of the same call; see the note inside try.
 				try: () =>
 					// repository-health:allow UI18 -- the import half of the same gap; see the note above.
 					workspaceSession().transport.command('collections.import', input),
@@ -125,8 +129,8 @@ const CollectionTransfer = {
 export const downloadCollectionExport = CollectionTransfer.download;
 
 /**
- * One record as `collections.import` declares it — close to the shape `collections.mutate`
- * posts: where it goes, what identifies it, and what it carries.
+ * One record as `collections.import` declares it: where it goes, what identifies it, and what it
+ * carries.
  *
  * `values` is where an import differs from a create. On a collection with an import pipeline these
  * are not the record's columns; they are the document the pipeline declares as its `input`, and the
@@ -138,10 +142,10 @@ export const downloadCollectionExport = CollectionTransfer.download;
  * what actually gets written come back off the rows the pipeline returns. Mint it with
  * `crypto.randomUUID()`.
  *
- * `collections.mutate` keeps identity inside an existing row and assigns it for a new one, while
- * this is the last browser surface with a separate top-level id. The difference is what the id is
- * *for*: a mutation is one root record, while an import posts a document whose id is a handle on
- * the posted file rather than on any row, and the pipeline decides what rows the file becomes.
+ * A `collections.write` input never carries an id for a create, while this is the last browser
+ * surface with a separate top-level id. The difference is what the id is *for*: a write is one
+ * root record, while an import posts a document whose id is a handle on the posted file rather
+ * than on any row, and the pipeline decides what rows the file becomes.
  */
 const CollectionImportRecordSchema = Schema.Struct({
 	collection: Schema.String,

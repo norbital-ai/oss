@@ -267,12 +267,12 @@ const CASES: ReadonlyArray<Case> = [
 	{
 		rule: 'GUARD2',
 		bad: "export const pick = (style) => typeof style === 'string' ? style : style.context;",
-		good: "export const pick = (style) => (Schema.is(Schema.String)(style) ? style : style.context);"
+		good: 'export const pick = (style) => (Schema.is(Schema.String)(style) ? style : style.context);'
 	},
 	{
 		rule: 'REFLECT1',
 		bad: "export const name = Reflect.get(Object(manifest), 'name');",
-		good: "export const name = decoded.name;"
+		good: 'export const name = decoded.name;'
 	},
 	{
 		rule: 'STATE2',
@@ -621,7 +621,10 @@ test('simplification rules keep their declared service and bootstrap boundaries'
 		),
 		false
 	);
-	assert.equal(reports('Q5', 'export const f = (owner: string | undefined) => owner;', 'src/reset.ts'), false);
+	assert.equal(
+		reports('Q5', 'export const f = (owner: string | undefined) => owner;', 'src/reset.ts'),
+		false
+	);
 	assert.equal(reports('Q5', 'export const f = (owner: void) => owner;', 'src/reset.ts'), true);
 	assert.equal(
 		reports('Q5', 'export interface Handler { click(this: void): void }', 'src/view.ts'),
@@ -644,7 +647,7 @@ test('simplification rules keep their declared service and bootstrap boundaries'
 		false
 	);
 	assert.equal(
-		reports('GUARD1', "export const ok = Schema.is(JsonObject)(value);", 'src/guard.ts'),
+		reports('GUARD1', 'export const ok = Schema.is(JsonObject)(value);', 'src/guard.ts'),
 		false
 	);
 	assert.equal(

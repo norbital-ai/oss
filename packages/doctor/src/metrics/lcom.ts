@@ -29,9 +29,8 @@ import ts from 'typescript';
 function hasStaticModifier(member: ts.ClassElement): boolean {
 	if (!ts.canHaveModifiers(member)) return false;
 	return (
-		ts.getModifiers(member)?.some(
-			(modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword
-		) ?? false
+		ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ??
+		false
 	);
 }
 
@@ -40,7 +39,9 @@ function isInstanceField(member: ts.ClassElement): member is ts.PropertyDeclarat
 }
 
 /** A callable instance member: a method, or a property whose initializer is a function. */
-function isInstanceMethod(member: ts.ClassElement): member is ts.MethodDeclaration | ts.PropertyDeclaration {
+function isInstanceMethod(
+	member: ts.ClassElement
+): member is ts.MethodDeclaration | ts.PropertyDeclaration {
 	if (hasStaticModifier(member)) return false;
 	if (ts.isMethodDeclaration(member)) return true;
 	return (
@@ -51,10 +52,7 @@ function isInstanceMethod(member: ts.ClassElement): member is ts.MethodDeclarati
 }
 
 /** Whether the body references at least one of `fields` through an explicit `this.` access. */
-function touchesInstanceFields(
-	body: ts.Node,
-	fields: ReadonlySet<string>
-): boolean {
+function touchesInstanceFields(body: ts.Node, fields: ReadonlySet<string>): boolean {
 	let touched = false;
 	const walk = (node: ts.Node): void => {
 		if (touched) return;
@@ -82,15 +80,12 @@ export function lcomHendersonSellers(classDecl: ts.ClassDeclaration): number | n
 	const fieldCount = fields.length;
 	if (methodCount <= 1 || fieldCount === 0) return null;
 	const fieldNames = new Set(
-		fields.map((field) =>
-			ts.isIdentifier(field.name) ? field.name.text : field.name.getText()
-		)
+		fields.map((field) => (ts.isIdentifier(field.name) ? field.name.text : field.name.getText()))
 	);
 	const connected = methods.filter((method) => {
 		const body = ts.isMethodDeclaration(method) ? method.body : method.initializer;
 		return body !== undefined && touchesInstanceFields(body, fieldNames);
 	}).length;
-	const raw =
-		Math.abs(methodCount - connected) / ((methodCount - 1) * fieldCount);
+	const raw = Math.abs(methodCount - connected) / ((methodCount - 1) * fieldCount);
 	return Math.min(1, Math.max(0, raw));
 }

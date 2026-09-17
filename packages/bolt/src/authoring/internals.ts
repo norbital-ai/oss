@@ -3,7 +3,7 @@ import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
 import type { RemoteQuery as ClientRemoteQuery } from '@norbital-ai/std/collection';
 import type { TableName, TablesForModels } from './contracts-schema.js';
 export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
-export { describeHooks, compileModel } from './model-introspection.js';
+export { compileModel } from './model-introspection.js';
 export { describeEnvoy, describePolicy } from './policy-introspection.js';
 export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
 export { agentTools } from './workspace-schema.js';
@@ -88,18 +88,15 @@ export type PublicPlatformSchema = {
 /**
  * The browser client's view of a workspace's collections.
  *
- * `Inputs` is the generated map the compiler emits, and it types `client.db.<collection>.mutate`
- * from the same `input` the server's `api.db.<collection>.mutate` reads. One declaration, both
- * callers. Unset, every collection is wholly writable — which is what unsynced workspaces and
- * Bolt's own sources see.
+ * `create` and `update` are the declared inputs of the collection's `+collection.ts`, read off
+ * the same augmentation the server's `api.collection` types from. One declaration, both callers.
+ * A collection with no declaration has `never` inputs: no write surface exists for it.
  */
-export type CollectionRegistryFor<
-	S extends import('./contracts-schema.js').AnySchema,
-	Inputs = import('./contracts-schema.js').WorkspaceInputsOf<S>
-> = {
+export type CollectionRegistryFor<S extends import('./contracts-schema.js').AnySchema> = {
 	readonly [N in TableName<S>]: {
 		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;
-		readonly mutation: import('./contracts-schema.js').MutationValuesFor<S, N, Inputs>;
+		readonly create: import('./contracts-schema.js').CollectionClientInput<N, 'create'>;
+		readonly update: import('./contracts-schema.js').CollectionClientInput<N, 'update'>;
 		/** Type-only: what a live `orderBy` may name (RFC/bolt.md B9b). */
 		readonly scalarColumns: import('./contracts-schema.js').SchemaScalarColumns<S, N>;
 	};

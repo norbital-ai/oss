@@ -128,9 +128,8 @@ const workspaceRead = (resource: string): AuthorizedRead => ({
 });
 
 /** Builds a fresh invocation memo around one service-owned policy evaluator. */
-export const createInvocationFactory = (
-	prepare: (subject: Identity.Subject) => InvocationSubjectEvaluator
-): (() => Invocation) =>
+export const createInvocationFactory =
+	(prepare: (subject: Identity.Subject) => InvocationSubjectEvaluator): (() => Invocation) =>
 	() => {
 		const keysByObject = new WeakMap<object, string>();
 		const subjects = new Map<string, InvocationSubjectState>();

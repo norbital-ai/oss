@@ -7,7 +7,10 @@ const formSource = readFileSync(
 	new URL('../src/collection-form/collection-form.svelte', import.meta.url),
 	'utf8'
 );
-const formState = readFileSync(new URL('../src/form/form_state.svelte.ts', import.meta.url), 'utf8');
+const formState = readFileSync(
+	new URL('../src/form/form_state.svelte.ts', import.meta.url),
+	'utf8'
+);
 
 test('semantic validation issues prevent CollectionForm from calling the mutation', () => {
 	assert.match(formSource, /applySemanticValidation/);

@@ -87,25 +87,25 @@
 	<PopoverContent {align} class="w-auto p-3">
 		<Stack gap="sm">
 			<div class="flex items-center justify-between">
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label={t('monthPicker.previousYear')}
-				onclick={() => (viewYear -= 1)}
-			>
-				<Icon icon="lucide:chevron-left" class="size-4" />
-			</Button>
-			<span class="text-sm font-medium tabular-nums" data-month-picker-year={viewYear}>
-				{viewYear}
-			</span>
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label={t('monthPicker.nextYear')}
-				onclick={() => (viewYear += 1)}
-			>
-				<Icon icon="lucide:chevron-right" class="size-4" />
-			</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label={t('monthPicker.previousYear')}
+					onclick={() => (viewYear -= 1)}
+				>
+					<Icon icon="lucide:chevron-left" class="size-4" />
+				</Button>
+				<span class="text-sm font-medium tabular-nums" data-month-picker-year={viewYear}>
+					{viewYear}
+				</span>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label={t('monthPicker.nextYear')}
+					onclick={() => (viewYear += 1)}
+				>
+					<Icon icon="lucide:chevron-right" class="size-4" />
+				</Button>
 			</div>
 			<MonthGrid
 				year={viewYear}

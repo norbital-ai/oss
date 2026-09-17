@@ -25,10 +25,7 @@ import {
 	compileWorkspaceAuthoring
 } from '../src/authoring/model-introspection.js';
 
-const compile = (
-	models: Readonly<Record<string, ModelDeclaration>>,
-	relationships?: unknown
-) =>
+const compile = (models: Readonly<Record<string, ModelDeclaration>>, relationships?: unknown) =>
 	compileWorkspaceAuthoring({
 		models,
 		sourcePaths: Object.fromEntries(
@@ -101,14 +98,9 @@ describe('CompiledAuthoring model truth', () => {
 			'open',
 			'closed'
 		]);
-		expect(catalog.fields.find(({ name }) => name === 'pay')?.currencies).toEqual([
-			'SGD',
-			'USD'
-		]);
+		expect(catalog.fields.find(({ name }) => name === 'pay')?.currencies).toEqual(['SGD', 'USD']);
 		expect(catalog.fields.find(({ name }) => name === 'period')?.precision).toBe('minute');
-		expect(catalog.fields.find(({ name }) => name === 'photo')?.mimeTypes).toEqual([
-			'image/png'
-		]);
+		expect(catalog.fields.find(({ name }) => name === 'photo')?.mimeTypes).toEqual(['image/png']);
 		expect(catalog.fields.find(({ name }) => name === 'attachments')?.array).toBe(true);
 		expect(sample.fields.tags).toMatchObject({ array: true, sqlType: 'text[]' });
 		expect(catalog.fields.find(({ name }) => name === 'tags')?.array).toBe(true);
@@ -124,7 +116,9 @@ describe('CompiledAuthoring model truth', () => {
 		const compiled = compile({
 			pay_components: defineModel({
 				name: text({ search: true }).notNull(),
-				nature: text().generatedAlwaysAs(sql`upper("name")`).notNull(),
+				nature: text()
+					.generatedAlwaysAs(sql`upper("name")`)
+					.notNull(),
 				sequence: integer().notNull()
 			})
 		});
@@ -153,9 +147,7 @@ describe('CompiledAuthoring relationship truth', () => {
 	const relationships = ((r) => ({
 		employees: { employments: r.many.employments() },
 		employments: {
-			employee: cascade(
-				r.one.employees({ from: r.employments.employee_id, to: r.employees.id })
-			)
+			employee: cascade(r.one.employees({ from: r.employments.employee_id, to: r.employees.id }))
 		}
 	})) satisfies PlatformRelationshipsFor<typeof models>;
 
@@ -183,9 +175,11 @@ describe('CompiledAuthoring relationship truth', () => {
 		]);
 		const employment = compiled.collections.find(({ name }) => name === 'employments');
 		if (employment === undefined) throw new Error('employments did not compile');
-		expect(
-			collectionCatalogEntry(employment, compiled.relationships).fields[0]?.relation
-		).toEqual({ name: 'employee', target: 'employees', cardinality: 'one' });
+		expect(collectionCatalogEntry(employment, compiled.relationships).fields[0]?.relation).toEqual({
+			name: 'employee',
+			target: 'employees',
+			cardinality: 'one'
+		});
 	});
 
 	it('refuses ambiguous inverse endpoints instead of guessing', () => {

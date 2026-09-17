@@ -34,7 +34,7 @@ rule:
         has:
           any:
             - '$CLIENT.db.$COLLECTION.$METHOD($...ARGS)'
-            - '$MUTATION.mutate($...ARGS)'
+            - '$CLIENT.collection.$COLLECTION.$METHOD($...ARGS)'
         stopBy: end
 examples:
   bad:

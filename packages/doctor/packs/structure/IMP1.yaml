@@ -1,7 +1,7 @@
 id: IMP1
 summary: deep relative import bypasses a declared alias for the same target
 severity: error
-principles: [ simplicity, straightforwardness, colocation ]
+principles: [simplicity, straightforwardness, colocation]
 rule:
   all:
     - kind: ImportDeclaration
@@ -12,7 +12,7 @@ examples:
   fixture:
     tsconfig.json: |-
       { "compilerOptions": { "baseUrl": ".", "paths": { "#lib/*": ["src/lib/*"] } } }
-    src/lib/value.ts: "export const v = 1;"
+    src/lib/value.ts: 'export const v = 1;'
   bad:
     - "import { v } from '../../lib/value.js';\nexport const x = v;"
   good:

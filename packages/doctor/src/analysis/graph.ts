@@ -138,13 +138,13 @@ export function exportedStems(owner: PackageOwner, subpath: string): Array<strin
 	const declared = jsonRecord(parsed)?.['exports'] ?? undefined;
 	const request = subpath === '' ? '.' : `./${subpath}`;
 	const noDotKeys =
-		jsonRecord(declared) !== undefined && !Object.keys(jsonRecord(declared) ?? {}).some((key) => key.startsWith('.'));
-	const entries: Array<[string, unknown]> =
-		isStringOrUnknownArray(declared)
+		jsonRecord(declared) !== undefined &&
+		!Object.keys(jsonRecord(declared) ?? {}).some((key) => key.startsWith('.'));
+	const entries: Array<[string, unknown]> = isStringOrUnknownArray(declared)
+		? [['.', declared]]
+		: noDotKeys
 			? [['.', declared]]
-			: noDotKeys
-				? [['.', declared]]
-				: Object.entries(jsonRecord(declared) ?? {});
+			: Object.entries(jsonRecord(declared) ?? {});
 	for (const [pattern, value] of entries) {
 		const star = pattern.indexOf('*');
 		let captured = '';
@@ -190,7 +190,8 @@ export function packageFor(
 			try {
 				const parsed: unknown = JSON.parse(readFileSync(manifest, 'utf8'));
 				const declaredName = jsonRecord(parsed)?.['name'] ?? undefined;
-				if (declaredName != null) name = isString(declaredName) ? declaredName : String(declaredName);
+				if (declaredName != null)
+					name = isString(declaredName) ? declaredName : String(declaredName);
 			} catch {
 				/* ownership survives invalid metadata */
 			}

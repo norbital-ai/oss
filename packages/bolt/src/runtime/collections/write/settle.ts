@@ -1,6 +1,5 @@
 import { Cause, Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { AuthoredRefusal, RefusalSite } from '#lib/authoring/refusal.js';
 import {
 	mutationPhaseFailure,
 	type MutationPhaseFailure
@@ -8,13 +7,6 @@ import {
 import type { AppliedDeclarativeGraph } from './engine.js';
 
 type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
-	/** The hook api, bound to the workspace: an after hook's write lands and opens no request. */
-	readonly buildApi: (effectId: EffectId, depth: number) => unknown;
-	readonly runHook: (
-		hook: { readonly handler: (context: unknown) => unknown } | undefined,
-		context: unknown,
-		site: RefusalSite
-	) => Effect.Effect<unknown, AuthoredRefusal>;
 	readonly emitChangeEventsMany: (
 		effectId: EffectId,
 		collection: string,
@@ -31,15 +23,14 @@ type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
 	) => Effect.Effect<unknown, EmbedE, never>;
 }>;
 
-/** After-hook, change-event, and embedding settle for one committed graph. */
+/** Change-event and embedding settle for one committed graph. */
 export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGraph')(function* <
 	EmitE,
 	EmbedE
 >(
 	ports: SettleDeclarativeGraphPorts<EmitE, EmbedE>,
 	effectId: EffectId,
-	applied: AppliedDeclarativeGraph,
-	hookDepth: number
+	applied: AppliedDeclarativeGraph
 ) {
 	const { operations, records } = applied;
 	const committed = operations.map((operation) => operation.id);
@@ -55,59 +46,9 @@ export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGr
 				)
 			)
 		);
-	const runAfterHook = (
-		operation: (typeof operations)[number],
-		hook: { readonly handler: (context: unknown) => unknown },
-		context: (api: unknown) => unknown,
-		action: RefusalSite['action']
-	) =>
-		settleStep(
-			'after-hook',
-			operation.collection,
-			ports.runHook(
-				hook,
-				context(ports.buildApi(operation.taskScope, hookDepth + operation.depth + 1)),
-				{
-					collection: operation.collection,
-					...(action === undefined ? {} : { action })
-				}
-			)
-		);
-	for (const operation of operations) {
-		if (operation.action === 'delete') {
-			const removed = operation.module?.delete?.perRecord?.after;
-			if (removed === undefined) continue;
-			yield* runAfterHook(
-				operation,
-				removed,
-				(api) => ({ record: operation.previous, api }),
-				'delete.after'
-			);
-			continue;
-		}
-		if (
-			operation.action === 'update' &&
-			Object.keys(operation.values).length === 0 &&
-			operation.clearLock !== true
-		)
-			continue;
-		const hook = operation.module?.mutate?.perRecord?.after;
-		if (hook === undefined) continue;
-		const record = records.get(`${operation.collection}\u0000${operation.id}`);
-		if (record === undefined) continue;
-		yield* runAfterHook(
-			operation,
-			hook,
-			(api) => ({ previous: operation.previous, changes: operation.values, record, api }),
-			'mutate.after'
-		);
-	}
 	for (const [key, grouped] of Map.groupBy(
 		operations.filter(
-			(operation) =>
-				operation.action !== 'update' ||
-				Object.keys(operation.values).length > 0 ||
-				operation.clearLock === true
+			(operation) => operation.action !== 'update' || Object.keys(operation.values).length > 0
 		),
 		(operation) => `${operation.collection}\u0000${operation.action}`
 	)) {

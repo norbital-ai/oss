@@ -5,7 +5,6 @@ import type { TurntimeConfig } from '../src/client/ui/agent/client.svelte.js';
 import type { AutomationRunsClient } from '../src/client/ui/studio/workspace-client.js';
 import {
 	ManifestSchema,
-	hookSummaryKey,
 	integrationBindingSummary,
 	manifestInspectionState,
 	manifestSections,
@@ -13,6 +12,7 @@ import {
 	reviewNextOwner,
 	reviewRelativeTime,
 	workspaceEnvoys,
+	writeSummaryKey,
 	boundTriple,
 	canWorkOnMergeRequest,
 	CHANGES_DIFF_BASELINE_KEY,
@@ -135,11 +135,11 @@ describe('Workspace Studio manifest handoff', () => {
 					history: true,
 					sourcePath: 'src/collections/jobs/+model.ts',
 					destination: { kind: 'system', surface: 'data', selection: 'jobs' },
-					hookDeclarations: [
+					writes: [
 						{
-							name: 'mutate.before',
-							description: 'Validates a job',
-							sourcePath: 'src/collections/jobs/+hooks.ts',
+							name: 'create',
+							description: 'Creates a job',
+							sourcePath: 'src/collections/jobs/+collection.ts',
 							origin: 'authored'
 						}
 					],
@@ -241,7 +241,7 @@ describe('Workspace Studio manifest handoff', () => {
 		expect(manifest.compiledManifestVersion).toBe(COMPILED_MANIFEST_VERSION);
 		expect([
 			manifest.collections[0]?.sourcePath,
-			manifest.collections[0]?.hookDeclarations?.[0]?.sourcePath,
+			manifest.collections[0]?.writes?.[0]?.sourcePath,
 			manifest.collections[0]?.pipelines?.[0]?.sourcePath,
 			manifest.apps[0]?.sourcePath,
 			manifest.appGroups?.[0]?.sourcePath,
@@ -259,8 +259,8 @@ describe('Workspace Studio manifest handoff', () => {
 			surface: 'envoys',
 			selection: 'support'
 		});
-		expect(hookSummaryKey('mutate.prepare')).toBe('bolt.studio.hook.mutatePrepare');
-		expect(hookSummaryKey('delete.prepare')).toBe('bolt.studio.hook.deletePrepare');
+		expect(writeSummaryKey('create')).toBe('bolt.studio.write.create');
+		expect(writeSummaryKey('transform')).toBe('bolt.studio.write.transform');
 		expect(integrationBindingSummary(manifest.integrations[0]!.bindings![0]!)).toBe(
 			'GET /jobs · 0 * * * *'
 		);

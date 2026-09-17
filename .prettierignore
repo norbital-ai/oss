@@ -35,3 +35,8 @@ pnpm-workspace.yaml
 Thumbs.db
 
 vite.config.js*
+
+# Reviewed Phase 0 sync-engine probes: `sync-sync-engine-receipt.test.ts` pins their sha256, so a
+# reformat reads as a tampered receipt.
+packages/bolt/tests/sync-sync-engine-pglite-probes.test.mjs
+packages/bolt/tests/sync-sync-engine-prefix-model.test.mjs

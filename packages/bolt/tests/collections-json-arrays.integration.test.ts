@@ -9,10 +9,18 @@ import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
-	emptyAuthoredRuntime
+	emptyAuthoredRuntime,
+	type AuthoredRuntime
 } from '../src/runtime/collections/authored.js';
 import * as Database from '../src/runtime/facilities/database.js';
-import { AI, Connector, Files, HostTools, SyncCommit, Tasks } from '../src/runtime/facilities/services.js';
+import {
+	AI,
+	Connector,
+	Files,
+	HostTools,
+	SyncCommit,
+	Tasks
+} from '../src/runtime/facilities/services.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
 import * as Workspace from '../src/runtime/workspace.js';
 import * as TaskQueue from '../src/runtime/tasks/tasks.js';
@@ -82,6 +90,16 @@ const subject: Identity.Subject = {
 };
 
 const RECORD_ID = '11111111-2222-4333-8444-555555555555';
+
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		shifts: {
+			create: { input: { columns: { name: true, intervals: true, metadata: true, labels: true } } },
+			update: { input: { columns: { name: true, intervals: true, metadata: true, labels: true } } }
+		}
+	}
+};
 
 /**
  * Records every statement so the test can assert how a value was bound, not only that it was.
@@ -179,69 +197,71 @@ const testLayer = (
 				taskQueue,
 				automations,
 				syncCommit,
-				Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime)
+				Layer.succeed(AuthoredRuntimeService, authored)
 			)
 		)
 	);
 };
 
-/** The statement that writes the collection's own row, not the history or outbox rows beside it. */
-const rowStatement = (seen: ReadonlyArray<DatabaseRequest>, fragment: string) =>
-	seen
+/**
+ * The rows the piece writing the collection's own table carries, out of the one folded write: a
+ * recordset piece binds its rows as one JSON parameter, so a JSON column arrives as the value itself.
+ */
+const writtenRows = (
+	seen: ReadonlyArray<DatabaseRequest>,
+	piece: RegExp
+): ReadonlyArray<Record<string, unknown>> => {
+	const statement = seen
 		.flatMap((request) => (request._tag === 'Transaction' ? request.statements : []))
-		.find((statement) => statement.sql.includes(fragment));
+		.find((candidate) => candidate.sql.includes('anchor as materialized'));
+	const match = statement === undefined ? null : piece.exec(statement.sql);
+	if (statement === undefined || match === null) return [];
+	return JSON.parse(String(statement.parameters[Number(match[1]) - 1])) as Array<
+		Record<string, unknown>
+	>;
+};
 
 describe('JSON columns holding a list', () => {
 	const intervals = [{ start_at: '2026-05-31T01:00:00.000Z', end_at: '2026-05-31T09:00:00.000Z' }];
 
-	it.effect('binds a list as JSON text under a cast on create', () => {
+	it.effect('carries a list as JSON in the recordset on create', () => {
 		const seen: Array<DatabaseRequest> = [];
 		return Effect.gen(function* () {
-			yield* (yield* Collections.Service).mutate(
-				EffectId.make('create-shift'),
-				subject,
-				'shifts',
-				[
-					{
-						id: RECORD_ID,
-						name: 'Night',
-						intervals,
-						metadata: { source: 'roster' },
-						labels: ['night', 'weekend']
-					}
-				],
-				0,
-				{ roots: [{ id: RECORD_ID, action: 'create' }] }
-			);
-			const statement = rowStatement(seen, 'insert into "shifts"');
-			expect(statement).toBeDefined();
-			// The cast is what makes the difference: without it the driver sends array-literal syntax.
-			expect(statement?.sql).toContain('::jsonb');
-			expect(statement?.parameters).toContain(JSON.stringify(intervals));
-			// Both JSON columns bind JSON text; the native Postgres array remains an array.
-			expect(statement?.parameters).toContain(JSON.stringify({ source: 'roster' }));
-			expect(statement?.parameters).toContainEqual(['night', 'weekend']);
-			expect(statement?.sql.match(/::jsonb/g)).toHaveLength(2);
+			yield* (yield* Collections.Service).write(EffectId.make('create-shift'), subject, [
+				{
+					collection: 'shifts',
+					action: 'create',
+					inputs: [
+						{
+							name: 'Night',
+							intervals,
+							metadata: { source: 'roster' },
+							labels: ['night', 'weekend']
+						}
+					]
+				}
+			]);
+			const rows = writtenRows(seen, /insert into "shifts" \([^)]*\) select [^$]*\$(\d+)::jsonb/);
+			expect(rows).toHaveLength(1);
+			// The recordset is typed by the table, so a list-valued JSON column, an object-valued one
+			// and a native Postgres array all arrive as the value itself — no per-column cast to forget.
+			expect(rows[0]?.['intervals']).toEqual(intervals);
+			expect(rows[0]?.['metadata']).toEqual({ source: 'roster' });
+			expect(rows[0]?.['labels']).toEqual(['night', 'weekend']);
 		}).pipe(Effect.provide(testLayer(seen)));
 	});
 
-	it.effect('binds a list as JSON text under a cast on update', () => {
+	it.effect('carries a list as JSON in the recordset on update', () => {
 		const seen: Array<DatabaseRequest> = [];
 		return Effect.gen(function* () {
 			// The authoritative row the update lands on: the write engine's wave read answers it, and
 			// an update the wave read cannot pre-image is refused before any statement is planned.
-			yield* (yield* Collections.Service).mutate(
-				EffectId.make('update-shift'),
-				subject,
-				'shifts',
-				[{ id: RECORD_ID, intervals }],
-				0,
-				{ roots: [{ id: RECORD_ID, action: 'update' }] }
-			);
-			const statement = rowStatement(seen, 'update "shifts"');
-			expect(statement).toBeDefined();
-			expect(statement?.sql).toContain('"intervals" = $1::jsonb');
-			expect(statement?.parameters?.[0]).toBe(JSON.stringify(intervals));
+			yield* (yield* Collections.Service).write(EffectId.make('update-shift'), subject, [
+				{ collection: 'shifts', action: 'update', inputs: [{ id: RECORD_ID, intervals }] }
+			]);
+			const rows = writtenRows(seen, /update "shifts" as t set [^$]*\$(\d+)::jsonb/);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.['intervals']).toEqual(intervals);
 		}).pipe(
 			Effect.provide(
 				testLayer(seen, {

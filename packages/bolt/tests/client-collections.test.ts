@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import {
 	EnvironmentName,
 	ReleaseId,
 	syncRetainedPrefixBytes,
 	TenantId,
-	type CollectionMutateRequest,
+	type CollectionMutationPush,
 	type StoredRecord,
 	type SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
@@ -40,7 +40,7 @@ const fakeSyncClient = () => {
 	let state = initialClientState();
 	const listeners = new Set<(state: ClientState) => void>();
 	const mounted: Array<{ readonly key: string; readonly input: unknown }> = [];
-	const enqueued: Array<CollectionMutateRequest> = [];
+	const enqueued: Array<CollectionMutationPush> = [];
 	const client = {
 		start: () => undefined,
 		attach: () => () => undefined,
@@ -56,7 +56,8 @@ const fakeSyncClient = () => {
 			mounted.push({ key, input });
 			return { key, extend: () => undefined, detach: () => undefined };
 		},
-		enqueue: (request: CollectionMutateRequest) => enqueued.push(request),
+		enqueue: (request: CollectionMutationPush) => enqueued.push(request),
+		answer: () => undefined,
 		publish: (
 			key: string,
 			rows: ReadonlyArray<StoredRecord>,
@@ -97,7 +98,8 @@ const inertSync: SyncClient = {
 		extend: () => undefined,
 		detach: () => undefined
 	}),
-	enqueue: () => undefined
+	enqueue: () => undefined,
+	answer: () => undefined
 };
 
 const inertSettlements: MutationSettlements = {
@@ -110,6 +112,22 @@ const inertSettlements: MutationSettlements = {
 	accept: () => undefined
 };
 
+type WriteSurface = {
+	create(input: Schema.Json): Promise<{ readonly row: unknown }>;
+	createMany(inputs: ReadonlyArray<Schema.Json>): Promise<{ readonly row: unknown }>;
+	update(id: string, input: Schema.Json): Promise<{ readonly row: unknown }>;
+	updateMany(inputs: ReadonlyArray<Schema.Json>): Promise<{ readonly row: unknown }>;
+	delete(id: string): Promise<{ readonly row: unknown }>;
+	deleteMany(ids: readonly string[]): Promise<{ readonly row: unknown }>;
+	readonly pending: number;
+};
+const writesOf = (proxy: { readonly collection: object }, collection: string): WriteSurface => {
+	const surface = Reflect.get(proxy.collection, collection) as WriteSurface | undefined;
+	if (surface === undefined) throw new Error(`${collection} declares no write`);
+	return surface;
+};
+const writable = { create: { columns: {} }, update: { columns: {} }, delete: true } as const;
+
 const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceClientRuntime => ({
 	bolt,
 	db: {},
@@ -120,42 +138,65 @@ const runtimeOf = (bolt: BoltClient, sync: SyncClient = inertSync): WorkspaceCli
 });
 
 describe('typed browser client', () => {
-	it('keeps pending candidate reads live and separate from committed records', async () => {
+	it('writes through the declared collection surface as one graph per call', async () => {
 		const sync = fakeSyncClient();
-		const commands: string[] = [];
-		const bolt = createBoltClient(scope, {
-			command: async (name) => {
-				commands.push(name);
-				return [];
-			}
-		});
+		const bolt = createBoltClient(scope, { command: async () => null });
 		const proxy = createWorkspaceApiProxy(
 			runtimeOf(bolt, sync.client),
-			{},
-			{ allowedCollections: ['leave_requests'] }
+			{
+				notes: { name: 'notes', fields: [], write: writable },
+				drafts: { name: 'drafts', fields: [] }
+			},
+			{ allowedCollections: ['notes', 'drafts'] }
 		);
-		const query = proxy.pending.findMany('leave_requests', {
-			where: { employment_id: { eq: 'employee' } },
-			limit: 2000
+		const notes = writesOf(proxy, 'notes');
+		await notes.create({ body: 'hello' });
+		await notes.createMany([{ body: 'a' }, { body: 'b' }]);
+		await notes.update('n1', { body: 'edited' });
+		await notes.updateMany([
+			{ id: 'n1', body: 'x' },
+			{ id: 'n2', body: 'y' }
+		]);
+		await notes.delete('n1');
+		await notes.deleteMany(['n1', 'n2']);
+		expect(sync.enqueued.map((request) => request.graph)).toEqual([
+			{ collection: 'notes', action: 'create', inputs: [{ body: 'hello' }] },
+			{ collection: 'notes', action: 'create', inputs: [{ body: 'a' }, { body: 'b' }] },
+			{ collection: 'notes', action: 'update', inputs: [{ body: 'edited', id: 'n1' }] },
+			{
+				collection: 'notes',
+				action: 'update',
+				inputs: [
+					{ id: 'n1', body: 'x' },
+					{ id: 'n2', body: 'y' }
+				]
+			},
+			{ collection: 'notes', action: 'delete', inputs: [{ id: 'n1' }] },
+			{ collection: 'notes', action: 'delete', inputs: [{ id: 'n1' }, { id: 'n2' }] }
+		]);
+		expect(new Set(sync.enqueued.map((request) => request.idempotencyKey)).size).toBe(6);
+		// A collection with no declared write, or one the shell never published, has no surface.
+		expect(Reflect.get(proxy.collection, 'drafts')).toBeUndefined();
+		expect(Reflect.get(proxy.collection, 'bolt_approvals')).toBeUndefined();
+		await expect(notes.updateMany([{ body: 'no id' }])).rejects.toThrow(/names no record id/);
+		await expect(notes.deleteMany(['n1', 'n1'])).rejects.toThrow(/more than once/);
+		await expect(notes.createMany([])).rejects.toThrow(/at least one input/);
+	});
+	it('attaches the observed row version of every row the declared input names', async () => {
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const sync = fakeSyncClient();
+		const mounted = sync.client.mount({ kind: 'findMany', collection: 'notes' });
+		sync.client.publish(mounted.key, [{ id: 'n1', row_version: 3, body: 'hello' }]);
+		const proxy = createWorkspaceApiProxy(
+			runtimeOf(bolt, sync.client),
+			{ notes: { name: 'notes', fields: [], write: writable } },
+			{ allowedCollections: ['notes'] }
+		);
+		await writesOf(proxy, 'notes').update('n1', { body: 'edited' });
+		expect(sync.enqueued[0]).toMatchObject({
+			graph: { collection: 'notes', action: 'update', inputs: [{ body: 'edited', id: 'n1' }] },
+			baseVersions: [{ row: { collection: 'notes', recordId: 'n1' }, rowVersion: 3 }]
 		});
-		const mounted = sync.mounted[0];
-		if (mounted === undefined) throw new Error('Pending query was not mounted');
-		expect(mounted.input).toEqual({
-			kind: 'findMany',
-			collection: 'leave_requests',
-			pendingOnly: true,
-			where: { employment_id: { eq: 'employee' } },
-			limit: 2000
-		});
-		sync.client.publish(mounted.key, []);
-		expect(await query).toEqual([]);
-		const proposed = { id: 'leave', employment_id: 'employee', approval_id: 'approval' };
-		sync.client.publish(mounted.key, [proposed]);
-		expect(query.current).toEqual([proposed]);
-		sync.client.publish(mounted.key, []);
-		expect(query.current).toEqual([]);
-		expect(commands).toEqual([]);
-		expect(() => proxy.pending.findMany('bolt_approvals')).toThrow('private to the Bolt runtime');
 	});
 	it('sends compact approval decisions without echoing the review snapshot', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
@@ -218,14 +259,14 @@ describe('typed browser client', () => {
 			orders: {
 				name: 'orders',
 				fields: [],
-				relationships: [{ name: 'lines', target: 'order_lines', cardinality: 'many' }]
+				relationships: [{ name: 'lines', target: 'order_lines', cardinality: 'many' }],
+				write: writable
 			},
 			order_lines: { name: 'order_lines', fields: [], relationships: [] }
 		});
 		const orders = Reflect.get(proxy.db, 'orders') as {
 			findMany: (input: Schema.Json) => unknown;
 			findFirst: (input: Schema.Json) => unknown;
-			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<unknown>;
 		};
 		orders.findMany({ columns: { reference: true }, with: { lines: { columns: { sku: true } } } });
 		expect(sync.mounted[0]?.input).toMatchObject({
@@ -240,7 +281,10 @@ describe('typed browser client', () => {
 				lines: [{ id: 'line-1', sku: 'OLD', row_version: 9 }]
 			}
 		]);
-		await orders.mutate([{ id: 'order-1', lines: [{ id: 'line-1', sku: 'NEW' }] }]);
+		await writesOf(proxy, 'orders').update('order-1', { lines: [{ id: 'line-1', sku: 'NEW' }] });
+		expect(sync.enqueued[0]?.graph.inputs).toEqual([
+			{ id: 'order-1', lines: { update: [{ id: 'line-1', set: { sku: 'NEW' } }] } }
+		]);
 		expect(sync.enqueued[0]?.baseVersions).toEqual([
 			{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 3 },
 			{ row: { collection: 'order_lines', recordId: 'line-1' }, rowVersion: 9 }
@@ -253,7 +297,7 @@ describe('typed browser client', () => {
 		const failure = new Error('invalid_input: employees.created_at is managed by Bolt');
 		const bolt = createBoltClient(scope, { command: () => Promise.reject(failure) });
 
-		await expect(bolt.command('collections.mutate', {}, Schema.Json)).rejects.toBe(failure);
+		await expect(bolt.command('collections.write', {}, Schema.Json)).rejects.toBe(failure);
 	});
 
 	it('makes reactive remote invocations awaitable while preserving the live handle', async () => {
@@ -310,19 +354,21 @@ describe('typed browser client', () => {
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const runtime = runtimeOf(bolt, sync.client);
 		const proxy = createWorkspaceApiProxy(runtime, {
-			employees: { name: 'employees', fields: [], relationships: [] }
+			employees: { name: 'employees', fields: [], relationships: [], write: writable }
 		});
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: () => { readonly current: unknown };
-			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<{ readonly row: unknown }>;
 		};
 		employees.findMany();
 		sync.client.publish(sync.mounted[0]?.key ?? '', [
 			{ id: 'employee-1', name: 'Ada', row_version: 7 }
 		]);
 
-		await employees.mutate([{ id: 'employee-1', name: 'Grace' }]);
-		await employees.mutate([{ name: 'Lin' }]);
+		const writes = writesOf(proxy, 'employees');
+		expect(await writes.update('employee-1', { name: 'Grace' })).toMatchObject({
+			row: { id: 'employee-1', name: 'Grace' }
+		});
+		await writes.create({ name: 'Lin' });
 
 		expect(sync.enqueued).toHaveLength(2);
 		expect(sync.enqueued[0]).toMatchObject({
@@ -330,9 +376,9 @@ describe('typed browser client', () => {
 			partitionKey: 'test-partition',
 			schemaFingerprint: 'sha256:test',
 			graph: {
-				action: 'mutate',
+				action: 'update',
 				collection: 'employees',
-				rows: [{ action: 'update', values: { id: 'employee-1', name: 'Grace' } }]
+				inputs: [{ id: 'employee-1', name: 'Grace' }]
 			},
 			baseVersions: [
 				{
@@ -345,11 +391,7 @@ describe('typed browser client', () => {
 		expect(sync.enqueued[0]?.idempotencyKey).toBeTypeOf('string');
 		expect(sync.enqueued[1]).toMatchObject({
 			protocolVersion: 2,
-			graph: {
-				action: 'mutate',
-				collection: 'employees',
-				rows: [{ action: 'create', values: { name: 'Lin' } }]
-			},
+			graph: { action: 'create', collection: 'employees', inputs: [{ name: 'Lin' }] },
 			baseVersions: []
 		});
 	});
@@ -359,11 +401,10 @@ describe('typed browser client', () => {
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const runtime = runtimeOf(bolt, sync.client);
 		const proxy = createWorkspaceApiProxy(runtime, {
-			employees: { name: 'employees', fields: [], relationships: [] }
+			employees: { name: 'employees', fields: [], relationships: [], write: writable }
 		});
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: () => { readonly current: unknown };
-			delete: (ids: readonly string[]) => Promise<{ readonly row: unknown }>;
 		};
 		employees.findMany();
 		sync.client.publish(sync.mounted[0]?.key ?? '', [
@@ -371,7 +412,9 @@ describe('typed browser client', () => {
 			{ id: 'employee-2', name: 'Lin', row_version: 3 }
 		]);
 
-		await employees.delete(['employee-1', 'employee-2']);
+		expect(
+			await writesOf(proxy, 'employees').deleteMany(['employee-1', 'employee-2'])
+		).toMatchObject({ row: null });
 
 		expect(sync.enqueued).toHaveLength(1);
 		expect(sync.enqueued[0]).toMatchObject({
@@ -381,7 +424,7 @@ describe('typed browser client', () => {
 			graph: {
 				action: 'delete',
 				collection: 'employees',
-				ids: ['employee-1', 'employee-2']
+				inputs: [{ id: 'employee-1' }, { id: 'employee-2' }]
 			},
 			baseVersions: [
 				{ row: { collection: 'employees', recordId: 'employee-1' }, rowVersion: 7 },
@@ -391,45 +434,99 @@ describe('typed browser client', () => {
 		expect(sync.enqueued[0]?.graph).not.toHaveProperty('id');
 	});
 
-	it('includes known nested relationship rows in the whole-row base vector', async () => {
+	it('diffs a relation matrix against the loaded children into explicit actions', async () => {
 		const sync = fakeSyncClient();
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client), {
 			orders: {
 				name: 'orders',
 				fields: [],
-				relationships: [{ name: 'lines', target: 'order_lines', cardinality: 'many' }]
+				relationships: [
+					{ name: 'lines', target: 'order_lines', cardinality: 'many' },
+					{ name: 'notes', target: 'order_notes', cardinality: 'many' }
+				],
+				write: writable
 			},
 			order_lines: { name: 'order_lines', fields: [], relationships: [] }
 		});
-		const orders = Reflect.get(proxy.db, 'orders') as {
-			findMany: () => unknown;
-			mutate: (values: ReadonlyArray<Schema.Json>) => Promise<unknown>;
-		};
-		const lines = Reflect.get(proxy.db, 'order_lines') as { findMany: () => unknown };
+		const orders = Reflect.get(proxy.db, 'orders') as { findMany: () => unknown };
 		orders.findMany();
-		lines.findMany();
 		sync.client.publish(sync.mounted[0]?.key ?? '', [
-			{ id: 'order-1', reference: 'A', row_version: 3 }
-		]);
-		sync.client.publish(sync.mounted[1]?.key ?? '', [
-			{ id: 'line-1', sku: 'OLD', row_version: '9' }
-		]);
-
-		await orders.mutate([
 			{
 				id: 'order-1',
-				reference: 'B',
+				reference: 'A',
+				row_version: 3,
 				lines: [
-					{ id: 'line-1', sku: 'NEW' },
-					{ id: 'line-new', sku: 'NEW-ROW' }
+					{ id: 'line-1', sku: 'OLD', row_version: '9' },
+					{ id: 'line-2', sku: 'GONE', row_version: 4 }
 				]
 			}
 		]);
 
+		const writes = writesOf(proxy, 'orders');
+		await writes.update('order-1', {
+			reference: 'B',
+			lines: [{ id: 'line-1', sku: 'NEW' }, { sku: 'NEW-ROW' }]
+		});
+		expect(sync.enqueued[0]?.graph.inputs).toEqual([
+			{
+				id: 'order-1',
+				reference: 'B',
+				lines: {
+					create: [{ sku: 'NEW-ROW' }],
+					update: [{ id: 'line-1', set: { sku: 'NEW' } }],
+					delete: [{ id: 'line-2' }]
+				}
+			}
+		]);
 		expect(sync.enqueued[0]?.baseVersions).toEqual([
 			{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 3 },
-			{ row: { collection: 'order_lines', recordId: 'line-1' }, rowVersion: 9 }
+			{ row: { collection: 'order_lines', recordId: 'line-1' }, rowVersion: 9 },
+			{ row: { collection: 'order_lines', recordId: 'line-2' }, rowVersion: 4 }
+		]);
+
+		// Children this tab never loaded cannot be deleted by their absence; an actions object and
+		// a non-relation key pass through untouched.
+		await writes.update('order-2', {
+			lines: [{ id: 'line-9', sku: 'X' }],
+			tags: ['a'],
+			notes: { create: [{ body: 'n' }] }
+		});
+		expect(sync.enqueued[1]?.graph.inputs).toEqual([
+			{
+				id: 'order-2',
+				lines: { update: [{ id: 'line-9', set: { sku: 'X' } }] },
+				tags: ['a'],
+				notes: { create: [{ body: 'n' }] }
+			}
+		]);
+		await writes.create({ reference: 'C', lines: [{ sku: 'FIRST' }] });
+		expect(sync.enqueued[2]?.graph.inputs).toEqual([
+			{ reference: 'C', lines: { create: [{ sku: 'FIRST' }] } }
+		]);
+	});
+
+	it('passes a history anchor through the record history command', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve([]);
+			}
+		});
+		const proxy = createWorkspaceApiProxy(runtimeOf(bolt));
+		const history = Reflect.get(proxy.collection_history, 'notes') as {
+			revisions: (id: string) => PromiseLike<unknown>;
+			at: (id: string, anchor: object) => PromiseLike<unknown>;
+		};
+		await expect(history.at('n1', { revision: 2 })).resolves.toBeUndefined();
+		await expect(history.revisions('n1')).resolves.toEqual([]);
+		expect(commands).toEqual([
+			{
+				command: 'collections.history',
+				input: { collection: 'notes', id: 'n1', at: { revision: 2 } }
+			},
+			{ command: 'collections.history', input: { collection: 'notes', id: 'n1' } }
 		]);
 	});
 
@@ -438,9 +535,14 @@ describe('typed browser client', () => {
 		const proxy = createWorkspaceApiProxy(
 			runtimeOf(bolt),
 			{
-				employees: { name: 'employees', fields: [], relationships: [] },
-				approval_request: { name: 'approval_request', fields: [], relationships: [] },
-				user: { name: 'user', fields: [], relationships: [] }
+				employees: { name: 'employees', fields: [], relationships: [], write: writable },
+				approval_request: {
+					name: 'approval_request',
+					fields: [],
+					relationships: [],
+					write: writable
+				},
+				user: { name: 'user', fields: [], relationships: [], write: writable }
 			},
 			{
 				allowedCollections: ['employees', 'approval_request'],
@@ -453,17 +555,16 @@ describe('typed browser client', () => {
 		expect(Reflect.get(proxy.db, 'user')).toBeUndefined();
 		expect(proxy.collections['user']).toBeUndefined();
 		expect(() => proxy.records.findMany('user')).toThrow(/private to the Bolt runtime/);
-		expect(() => proxy.history.findMany('conversation', 'task-1')).toThrow(
-			/private to the Bolt runtime/
-		);
+		expect(Reflect.get(proxy.collection_history, 'conversation')).toBeUndefined();
 		expect(Reflect.get(proxy.db, 'employees')).toBeDefined();
+		expect(Reflect.get(proxy.collection, 'employees')).toBeDefined();
 		const approval = Reflect.get(proxy.db, 'approval_request');
 		expect(approval).toBeDefined();
 		if (approval === null || typeof approval !== 'object')
 			throw new Error('approval_request did not resolve to a collection surface');
 		expect(Reflect.get(approval, 'findMany')).toBeTypeOf('function');
-		expect(Reflect.get(approval, 'mutate')).toBeUndefined();
-		expect(Reflect.get(approval, 'pending')).toBeUndefined();
+		// Published read-only: the catalog's write contract does not reach the browser surface.
+		expect(Reflect.get(proxy.collection, 'approval_request')).toBeUndefined();
 	});
 
 	it('answers a grouped aggregate as a one-shot command without mounting a live prefix', async () => {

@@ -29,7 +29,10 @@ function repository(name: string, files: Readonly<Record<string, string>>): stri
 	return root;
 }
 
-function parsed(root: string, file: string): {
+function parsed(
+	root: string,
+	file: string
+): {
 	file: string;
 	source: string;
 	sourceFile: ts.SourceFile;

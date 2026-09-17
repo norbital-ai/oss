@@ -20,10 +20,7 @@ import {
 } from '../src/authoring/index.js';
 import type { TablesForModels } from '../src/authoring/contracts-schema.js';
 import { describeModelColumns } from '../src/authoring/model-introspection.js';
-import {
-	registerWorkspaceShape,
-	type WorkspaceShape
-} from '../src/authoring/schema-registry.js';
+import { registerWorkspaceShape, type WorkspaceShape } from '../src/authoring/schema-registry.js';
 import type { RelationDefinition } from '../src/authoring/workspace-schema.js';
 import { selectedColumnNames } from '../src/runtime/access/effective-plan.js';
 
@@ -185,8 +182,8 @@ describe('schema() as a type', () => {
 
 describe('schema() as a schema', () => {
 	it('resolves lazily, so a module-init declaration does not depend on import order', () => {
-		// Declared while the registry holds no collection at all — which is the state a `+hooks.ts`
-		// evaluating `export const input = schema(…)` before the workspace module may be in.
+		// Declared while the registry holds no collection at all — which is the state a module
+		// evaluating `schema(…)` at import time, before the workspace module, may be in.
 		registerWorkspaceShape({ collections: [], relations: [] });
 		const declared = schema('employments', { columns: { code: true } });
 		register();

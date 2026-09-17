@@ -38,7 +38,10 @@
 				<button
 					type="button"
 					data-testid="studio-live-release-option"
-					class="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70 {release.releaseId === selected?.releaseId ? 'bg-primary/5' : ''}"
+					class="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/70 {release.releaseId ===
+					selected?.releaseId
+						? 'bg-primary/5'
+						: ''}"
 					onclick={() => onselect?.(release.releaseId)}
 				>
 					<span class="block truncate font-mono text-xs font-medium text-foreground">

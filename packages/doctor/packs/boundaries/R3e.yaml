@@ -11,7 +11,7 @@ rule:
         stopBy:
           kind: AsExpression
 examples:
-  bad: ["const opaque = value as unknown;"]
+  bad: ['const opaque = value as unknown;']
   good:
-    - "const opaque: unknown = value;"
-    - "const n = text as unknown as number;"
+    - 'const opaque: unknown = value;'
+    - 'const n = text as unknown as number;'

@@ -78,7 +78,8 @@ const fakeMachine = () => {
 			extend: () => undefined,
 			detach: () => undefined
 		}),
-		enqueue: () => undefined
+		enqueue: () => undefined,
+		answer: () => undefined
 	};
 	return {
 		client,

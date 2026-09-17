@@ -50,8 +50,8 @@ export const authoredSeedStages = (
 		JSON.parse(readFileSync(manifestPath, 'utf8')) // repository-health:allow IO1 -- same sync probe contract.
 	);
 	// repository-health:allow IO1 -- same sync probe contract.
-	return flattenSeedStages(manifest.seed?.stages).filter((stage) =>
-		existsSync(join(seedDirectory, `${stage}.json`)) // repository-health:allow IO1 -- same sync probe contract.
+	return flattenSeedStages(manifest.seed?.stages).filter(
+		(stage) => existsSync(join(seedDirectory, `${stage}.json`)) // repository-health:allow IO1 -- same sync probe contract.
 	);
 };
 
@@ -74,7 +74,9 @@ export const requireReleaseBundle = (
 		throw new Error(`compiled artifact is missing ${path}`);
 	}
 	// repository-health:allow IO1 -- same sync probe contract.
-	const release = Schema.decodeUnknownSync(RELEASE_MANIFEST)(JSON.parse(readFileSync(path, 'utf8')));
+	const release = Schema.decodeUnknownSync(RELEASE_MANIFEST)(
+		JSON.parse(readFileSync(path, 'utf8'))
+	);
 	const entrypoint = release.code?.entrypoint;
 	if (entrypoint === undefined || entrypoint.length === 0) {
 		throw new Error('release.json code.entrypoint must name the bundle');

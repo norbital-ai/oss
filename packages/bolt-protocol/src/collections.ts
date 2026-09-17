@@ -29,60 +29,46 @@ export const CollectionMutationBaseVersion = Schema.Struct({
 }).annotate({ identifier: 'BoltCollectionMutationBaseVersion' });
 export type CollectionMutationBaseVersion = typeof CollectionMutationBaseVersion.Type;
 
+/**
+ * Where a history read stands (RFC §4.7): a record's revision ordinal, 1-based oldest first, an
+ * instant, or an approval's restore point. Without one the read answers every revision.
+ */
+export const CollectionHistoryAnchor = Schema.Union([
+	Schema.Struct({
+		revision: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
+	}),
+	Schema.Struct({ instant: Schema.NonEmptyString }),
+	/** The restore point of an approval request: the record as it stood before the hold (§4.8). */
+	Schema.Struct({ before: Schema.NonEmptyString })
+]).annotate({ identifier: 'BoltCollectionHistoryAnchor' });
+export type CollectionHistoryAnchor = typeof CollectionHistoryAnchor.Type;
+
 const CollectionMutationRetryIdentity = {
 	idempotencyKey: CollectionMutationIdempotencyKey,
 	issuedAtEpochMs: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isFinite())
 };
 
-const CollectionMutationDeleteIds = Schema.NonEmptyArray(Schema.NonEmptyString).check(
-	Schema.makeFilter(
-		(ids: readonly string[]) => new Set(ids).size === ids.length || 'delete ids must be unique'
-	)
-);
-
-export const CollectionMutationWriteRow = Schema.Struct({
-	action: Schema.Literals(['create', 'update']),
-	values: CollectionWriteValues
-});
-export type CollectionMutationWriteRow = typeof CollectionMutationWriteRow.Type;
-
 /**
- * The one write graph a browser pushes: a batch of create/update rows on one collection, or a
- * batch of deletes. A single record is a batch of one; there is no single-row shape.
+ * One write as the browser pushes it (RFC §4.2): one collection, one root action, and the
+ * declared inputs — a batch of one for a single record. An update or delete input carries the
+ * record's `id`; a create input never does. Relation actions ride inside the inputs.
  */
-export const CollectionMutationGraph = Schema.Union([
-	Schema.Struct({
-		action: Schema.Literal('mutate'),
-		collection: Schema.NonEmptyString,
-		rows: Schema.NonEmptyArray(CollectionMutationWriteRow)
-	}),
-	Schema.Struct({
-		action: Schema.Literal('delete'),
-		collection: Schema.NonEmptyString,
-		ids: CollectionMutationDeleteIds
-	})
-]).annotate({ identifier: 'BoltCollectionMutationGraph' });
-export type CollectionMutationGraph = typeof CollectionMutationGraph.Type;
-
-/** The record ids a delete graph names. Delete is a batch, like mutate's payload array. */
-export const mutationGraphDeleteIds = (
-	graph: Extract<CollectionMutationGraph, { readonly action: 'delete' }>
-): readonly string[] => graph.ids;
+export const CollectionWriteGraph = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	action: Schema.Literals(['create', 'update', 'delete']),
+	inputs: Schema.NonEmptyArray(Schema.JsonObject)
+}).annotate({ identifier: 'BoltCollectionWriteGraph' });
+export type CollectionWriteGraph = typeof CollectionWriteGraph.Type;
 
 export const CollectionMutationPush = Schema.Struct({
 	protocolVersion: Schema.Literal(2),
 	...CollectionMutationRetryIdentity,
 	partitionKey: Schema.NonEmptyString,
 	schemaFingerprint: Schema.NonEmptyString,
-	graph: CollectionMutationGraph,
+	graph: CollectionWriteGraph,
 	baseVersions: Schema.Array(CollectionMutationBaseVersion)
 }).annotate({ identifier: 'BoltCollectionMutationPush' });
 export type CollectionMutationPush = typeof CollectionMutationPush.Type;
-
-export const CollectionMutateRequest = CollectionMutationPush.annotate({
-	identifier: 'BoltCollectionMutateRequest'
-});
-export type CollectionMutateRequest = typeof CollectionMutateRequest.Type;
 
 export const StoredRecord = Schema.Record(Schema.String, Schema.Json).annotate({
 	identifier: 'BoltStoredRecord'

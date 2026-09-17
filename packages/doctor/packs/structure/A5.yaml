@@ -1,7 +1,7 @@
 id: A5
 summary: catch only rethrows
 severity: hint
-principles: [ simplicity, no-bloat ]
+principles: [simplicity, no-bloat]
 rule: 'try { $B } catch ($ERR) { throw $ERR; }'
 examples:
   bad:

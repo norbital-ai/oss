@@ -4,6 +4,7 @@ import { defineModel, text } from '../src/authoring/models-schema.js';
 import { compileModel } from '../src/authoring/model-introspection.js';
 import { collection, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -66,26 +67,27 @@ const searchable = workspace({
 	requiredFacilities: []
 });
 
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		people: { create: { input: { columns: { name: true, team: true, secret_note: true } } } }
+	}
+};
+
 const seed = (harness: BoltTestRuntime) =>
 	harness.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			yield* collections.mutate(
-				harness.effectId('a'),
-				adminSubject,
-				'people',
-				[{ id: rid('a'), name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' }],
-				0,
-				{ roots: [{ id: rid('a'), action: 'create' }] }
-			);
-			yield* collections.mutate(
-				harness.effectId('b'),
-				adminSubject,
-				'people',
-				[{ id: rid('b'), name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }],
-				0,
-				{ roots: [{ id: rid('b'), action: 'create' }] }
-			);
+			yield* collections.write(harness.effectId('seed'), adminSubject, [
+				{
+					collection: 'people',
+					action: 'create',
+					inputs: [
+						{ id: rid('a'), name: 'Ada Lovelace', team: 'Engineering', secret_note: 'zebra' },
+						{ id: rid('b'), name: 'Grace Hopper', team: 'Research', secret_note: 'quartz' }
+					]
+				}
+			]);
 		})
 	);
 
@@ -110,25 +112,25 @@ const search = (harness: BoltTestRuntime, term?: string) =>
 
 describe('collection search', () => {
 	it('matches a declared searchable column', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		expect(await search(harness, 'Ada')).toEqual(['Ada Lovelace']);
 	});
 
 	it('matches case-insensitively and on a fragment', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		expect(await search(harness, 'hopp')).toEqual(['Grace Hopper']);
 	});
 
 	it('spans every searchable column, not just the first', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		expect(await search(harness, 'Research')).toEqual(['Grace Hopper']);
 	});
 
 	it('never reaches a column that did not opt in', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		// `zebra` exists, in a column nobody declared searchable. Matching it would make search a way
 		// to read fields a collection deliberately kept out of it.
@@ -136,23 +138,22 @@ describe('collection search', () => {
 	});
 
 	it('returns everything when no term is given', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		expect((await search(harness)).sort()).toEqual(['Ada Lovelace', 'Grace Hopper']);
 	});
 
 	it('matches nothing on a collection that declares no searchable column', async () => {
-		harness = await makeBoltTestRuntime();
+		harness = await makeBoltTestRuntime(undefined, { authored });
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					harness!.effectId('x'),
-					adminSubject,
-					'people',
-					[{ id: rid('x'), name: 'Ada Lovelace' }],
-					0,
-					{ roots: [{ id: rid('x'), action: 'create' }] }
-				);
+				yield* (yield* Collections.Service).write(harness!.effectId('x'), adminSubject, [
+					{
+						collection: 'people',
+						action: 'create',
+						inputs: [{ id: rid('x'), name: 'Ada Lovelace' }]
+					}
+				]);
 			})
 		);
 		// The default fixture opts no column in, so a term that reached here must not widen to a scan.
@@ -160,7 +161,7 @@ describe('collection search', () => {
 	});
 
 	it('counts the same rows it returns', async () => {
-		harness = await makeBoltTestRuntime(searchable);
+		harness = await makeBoltTestRuntime(searchable, { authored });
 		await seed(harness);
 		const total = await harness.runtime.runPromise(
 			Effect.gen(function* () {

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import {
-	AUTH_MODELS,
-	SYSTEM_MODELS,
-	SYSTEM_MODEL_TABLES
-} from '../src/authoring/system-models.js';
+import { AUTH_MODELS, SYSTEM_MODELS, SYSTEM_MODEL_TABLES } from '../src/authoring/system-models.js';
 import { collection } from '../src/authoring/workspace-schema.js';
 import {
 	IDENTITY_COLLECTIONS,

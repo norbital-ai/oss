@@ -22,10 +22,14 @@
 	let { link, transcript }: { link: SubagentLink; transcript: SubagentTranscript } = $props();
 
 	const task = $derived(
-		link.conversationId === null ? undefined : transcript.tasks.find((task) => task.id === link.conversationId)
+		link.conversationId === null
+			? undefined
+			: transcript.tasks.find((task) => task.id === link.conversationId)
 	);
 	const messages = $derived(
-		task === undefined ? [] : transcript.messages.filter((message) => message.conversationId === task.id)
+		task === undefined
+			? []
+			: transcript.messages.filter((message) => message.conversationId === task.id)
 	);
 	const runs = $derived(
 		task === undefined ? [] : transcript.runs.filter((run) => run.conversation_id === task.id)

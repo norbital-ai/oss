@@ -1,12 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cassetteAi, readCassetteFile } from '@norbital-ai/test-utilities';
-import type {
-	AIRequest,
-	AIResponse,
-	FacilityBinding
+import type { AIRequest, AIResponse, FacilityBinding } from '@norbital-ai/bolt-protocol';
+import {
+	AgentId,
+	DirectiveMode,
+	DirectivePriority,
+	ConversationId
 } from '@norbital-ai/bolt-protocol';
-import { AgentId, DirectiveMode, DirectivePriority, ConversationId } from '@norbital-ai/bolt-protocol';
 import { tool } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import {
@@ -176,7 +177,11 @@ describe('cassette agent turn (offline replay of the live probe)', () => {
 				})
 			);
 			await runtime.runtime.runPromise(
-				agents.answerQueued(runtime.effectId(`answer:latency:${turn}`), adminSubject, conversationId)
+				agents.answerQueued(
+					runtime.effectId(`answer:latency:${turn}`),
+					adminSubject,
+					conversationId
+				)
 			);
 		}
 		expect(latencies).toHaveLength(LATENCY_TURNS);

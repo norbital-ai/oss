@@ -38,4 +38,4 @@ examples:
     - 'export function labeled(name: string): string; export function labeled(name: string) { return name.trim(); }'
     - 'export interface Reader { read(name: string): string; }'
     - 'export declare function labeled(name: string): string;'
-    - "export const labeled: (name: string) => string = (name) => name.trim();"
+    - 'export const labeled: (name: string) => string = (name) => name.trim();'

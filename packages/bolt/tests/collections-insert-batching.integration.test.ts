@@ -3,27 +3,23 @@ import { Effect } from 'effect';
 import { EffectId, type SyncChange } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import {
-	groupedInsertStatements,
-	insertionLayers,
-	type PlannedInsert
-} from '../src/runtime/collections/collections.js';
+import { groupedInserts, type PlannedInsert } from '../src/runtime/collections/collections.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
+import { foldedWrites, writesTo } from './support/folded-write.js';
 
 /**
  * How many statements a batch of creates is — not how long one takes.
  *
- * A tenant database is a Neon instance a region away, and the host runs a transaction's statements
- * serially on one connection because that is the only correct way to run a transaction. So every
- * statement in the transaction is a round trip, and 89 payslips at three statements each was 267 of
- * them at ~84ms: 22.4 seconds against a 30s deadline, none of it parse cost. The only lever is the
- * number of statements, so the number of statements is what this counts. A duration would be a
- * machine's opinion; a count is the claim.
+ * A tenant database is a Neon instance a region away and charges per statement, so a write is one
+ * statement: every row it creates, its history and its deliveries are pieces of one `WITH`. Rows of
+ * one shape are one piece; this counts pieces and statements. A duration would be a machine's
+ * opinion; a count is the claim.
  *
  * `notes` carries a required column and an optional one, because the shape of the claim is that
  * rows sharing a column set merge and rows that do not, do not — a fixture where every row has
@@ -36,7 +32,22 @@ const definition = workspace({
 		collection({
 			name: 'notes',
 			fields: { body: field.string({ required: true }), title: field.string({}) }
+		}),
+		collection({
+			name: 'note_lines',
+			fields: { note_id: field.uuid({}), label: field.string({ required: true }) }
 		})
+	],
+	relations: [
+		{
+			name: 'note_lines',
+			source: 'notes',
+			target: 'note_lines',
+			cardinality: 'many',
+			from: { collection: 'notes', column: 'id' },
+			to: { collection: 'note_lines', column: 'note_id' },
+			cascade: true
+		}
 	],
 	apps: [app({ name: 'batching', label: 'Batching' })],
 	teams: { admin: ['admin-data'] },
@@ -53,11 +64,29 @@ const definition = workspace({
 			effect: 'allow',
 			grants: [
 				{ collection: 'notes', action: 'create' },
-				{ collection: 'notes', action: 'read' }
+				{ collection: 'notes', action: 'read' },
+				{ collection: 'note_lines', action: 'create' },
+				{ collection: 'note_lines', action: 'read' }
 			]
 		})
 	]
 });
+
+/** The declared write contract (RFC §4.2): a note, optionally with its lines created inline. */
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		notes: {
+			create: {
+				input: {
+					columns: { body: true, title: true },
+					with: { note_lines: { create: { columns: { label: true } } } }
+				}
+			}
+		},
+		note_lines: { create: { input: { columns: { note_id: true, label: true } } } }
+	}
+};
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -70,54 +99,67 @@ const batchFor = async (
 	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
 ): Promise<{
 	readonly statements: ReadonlyArray<string>;
+	readonly bound: ReadonlyArray<
+		Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }>
+	>;
 	readonly changes: ReadonlyArray<SyncChange>;
 }> => {
-	harness = await makeBoltTestRuntime(definition);
+	harness = await makeBoltTestRuntime(definition, { authored });
 	harness.database.forget();
 	const changes = await harness.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			yield* collections.mutate(EffectId.make('batching'), adminSubject, 'notes', rows);
+			yield* collections.write(EffectId.make('batching'), adminSubject, [
+				{ collection: 'notes', action: 'create', inputs: rows }
+			]);
 			return yield* (yield* SyncCommit.Service).drainChanges;
 		})
 	);
 	const statements = [...harness.database.statements];
+	const bound = [...harness.database.bound];
 	await harness.dispose();
 	harness = undefined;
-	return { statements, changes };
+	return { statements, bound, changes };
 };
 
-const statementsFor = async (
-	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-): Promise<ReadonlyArray<string>> => (await batchFor(rows)).statements;
-
-const insertsInto = (statements: ReadonlyArray<string>, table: string): ReadonlyArray<string> =>
-	statements.filter((statement) => statement.startsWith(`insert into "${table}" `));
-
-/** How many rows one multi-row `values` list carries. */
-const tuples = (sql: string): number => (sql.match(/\), \(/g)?.length ?? 0) + 1;
-
-/** The highest `$n` a statement binds, which is how many parameters it carries. */
-const parameterCount = (sql: string): number =>
-	(sql.match(/\$(\d+)/g) ?? []).reduce(
-		(highest, token) => Math.max(highest, Number(token.slice(1))),
-		0
-	);
+/** The insert pieces into `table` of the one folded write, each with the rows its recordset carries. */
+const insertsInto = (
+	bound: ReadonlyArray<
+		Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }>
+	>,
+	table: string
+): ReadonlyArray<{ readonly columns: string; readonly rows: number }> => {
+	const write = bound.find(({ sql }) => sql.includes('anchor as materialized'));
+	if (write === undefined) return [];
+	return [
+		...write.sql.matchAll(
+			new RegExp(
+				`w_[a-z0-9_]+ as \\(insert into "${table}" \\(([^)]*)\\) select [^$]*\\$(\\d+)::jsonb`,
+				'g'
+			)
+		)
+	].map((match) => {
+		const rows: unknown = JSON.parse(String(write.parameters[Number(match[2]) - 1]));
+		return { columns: match[1]!, rows: Array.isArray(rows) ? rows.length : 0 };
+	});
+};
 
 describe('the statements a batch of creates is', () => {
 	it('writes rows of one shape as one insert, not one each', async () => {
-		const { statements, changes } = await batchFor(
+		const { statements, bound, changes } = await batchFor(
 			Array.from({ length: 40 }, (_, index) => ({ body: `note ${index}` }))
 		);
 
-		const rows = insertsInto(statements, 'notes');
-		// One, not forty. This is the whole claim: 40 rows of one shape are one round trip.
+		// One statement — a write that read nothing takes no lock — with one piece for the forty rows.
+		expect(foldedWrites(statements)).toHaveLength(1);
+		expect(statements).toHaveLength(1);
+		const rows = insertsInto(bound, 'notes');
 		expect(rows).toHaveLength(1);
-		expect(tuples(rows[0] ?? '')).toBe(40);
-		// History remains one explicit batch statement. Sync is a ChangeBatch in-process after
-		// the write, not a second bookkeeping table.
-		expect(insertsInto(statements, 'bolt_collection_history')).toHaveLength(1);
-		expect(insertsInto(statements, 'bolt_sync_outbox')).toHaveLength(0);
+		expect(rows[0]?.rows).toBe(40);
+		// History is one piece of the same statement. Sync is a ChangeBatch in-process after the
+		// write, not a second bookkeeping table.
+		expect(insertsInto(bound, 'bolt_collection_history')).toHaveLength(1);
+		expect(writesTo(statements, 'bolt_sync_outbox')).toHaveLength(0);
 		expect(changes).toHaveLength(40);
 		expect(
 			changes.every((change) => change.collection === 'notes' && change.operation === 'insert')
@@ -125,65 +167,73 @@ describe('the statements a batch of creates is', () => {
 	}, 60_000);
 
 	/**
+	 * A root and its nested children are one graph (RFC §5.2): the forty lines are one insert of
+	 * their own shape, and the forty-one history rows the graph touched are still one insert.
+	 */
+	it('writes a create with forty nested create children as one insert per shape and one history insert', async () => {
+		const { bound, changes } = await batchFor([
+			{
+				body: 'parent',
+				note_lines: {
+					create: Array.from({ length: 40 }, (_, index) => ({ label: `line ${index}` }))
+				}
+			}
+		]);
+
+		expect(insertsInto(bound, 'notes')).toHaveLength(1);
+		const lines = insertsInto(bound, 'note_lines');
+		expect(lines).toHaveLength(1);
+		expect(lines[0]?.rows).toBe(40);
+		const history = insertsInto(bound, 'bolt_collection_history');
+		expect(history).toHaveLength(1);
+		expect(history[0]?.rows).toBe(41);
+		expect(changes).toHaveLength(41);
+	}, 60_000);
+
+	/**
 	 * The objection this design has to answer. A batch's rows do not have to name the same columns —
-	 * `create.perRecord.before` may return different keys per row — and merging them under one column
+	 * a transform may return different keys per row — and merging them under one column
 	 * list would mean writing an explicit NULL where a row omitted a column, which is not the same as
 	 * letting the column's default apply. So rows are grouped by the columns they actually carry, and
 	 * a heterogeneous batch is one statement per shape rather than one statement with holes in it.
 	 */
 	it('writes one insert per distinct shape, and no more', async () => {
-		const statements = await statementsFor([
+		const { bound } = await batchFor([
 			{ body: 'first' },
 			{ body: 'second', title: 'titled' },
 			{ body: 'third' },
 			{ body: 'fourth', title: 'also titled' }
 		]);
 
-		const rows = insertsInto(statements, 'notes');
+		const rows = insertsInto(bound, 'notes');
 		expect(rows).toHaveLength(2);
-		expect(rows.map(tuples).toSorted()).toEqual([2, 2]);
+		expect(rows.map((piece) => piece.rows).toSorted()).toEqual([2, 2]);
 		// The shape that omitted `title` never names it, so the column takes its default rather than a
 		// NULL this layer invented.
-		const untitled = rows.find((statement) => !statement.includes('"title"'));
+		const untitled = rows.find((piece) => !piece.columns.includes('"title"'));
 		expect(untitled).toBeDefined();
-		expect(untitled).toContain('"body"');
+		expect(untitled?.columns).toContain('"body"');
 	}, 60_000);
 });
 
 /**
- * The two bounds the grouping is built against, checked on the grouping itself.
- *
- * Against the pure function rather than through a workspace, because both of them are about sizes a
- * database test cannot reach: wide rows can exceed the driver parameter bound before reaching the changed-row limit.
- * The mutation-phases integration suite separately proves the complete 10,000-row transaction.
+ * A group is one `jsonb` parameter however many rows it carries, so there is no parameter ceiling
+ * to split on; what is checked on the grouping itself is the one row that must stay alone.
  */
-describe('the bounds a grouped insert is built against', () => {
-	const wideRows = (count: number): ReadonlyArray<PlannedInsert> =>
-		Array.from({ length: count }, (_, row) => ({
-			table: 'wide',
-			layer: 0,
-			columns: Array.from({ length: 10 }, (_, column) => `c${column}`),
-			parameters: Array.from({ length: 10 }, (_, column) => `${row}-${column}`)
-		}));
-
-	it('splits on the parameter ceiling rather than on a row count', () => {
-		// 10,000 rows of ten columns is 100,000 parameters. Postgres binds a statement's parameters
-		// under a 16-bit count and refuses more than 65,535 of them, so this has to arrive as more
-		// than one statement or as none at all.
-		const statements = groupedInsertStatements(wideRows(10_000));
-
-		expect(statements.length).toBeGreaterThan(1);
-		for (const statement of statements) {
-			expect(parameterCount(statement.sql)).toBeLessThanOrEqual(30_000);
-			expect(statement.parameters.length).toBeLessThanOrEqual(30_000);
-			// Each statement binds its own parameters from $1, rather than continuing the last one's
-			// numbering.
-			expect(statement.sql).toContain('values ($1, $2,');
-		}
-		// Split, not dropped: every row is still written, and every parameter still bound.
-		expect(statements.reduce((total, statement) => total + tuples(statement.sql), 0)).toBe(10_000);
-		expect(statements.reduce((total, statement) => total + statement.parameters.length, 0)).toBe(
-			100_000
+describe('the shape a grouped insert takes', () => {
+	it('carries a group as one recordset parameter', () => {
+		const groups = groupedInserts(
+			Array.from({ length: 10_000 }, (_, row) => ({
+				table: 'wide',
+				columns: Array.from({ length: 10 }, (_, column) => `c${column}`),
+				values: Array.from({ length: 10 }, (_, column) => `${row}-${column}`)
+			}))
+		);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.fragment.parameters).toHaveLength(1);
+		expect(JSON.parse(String(groups[0]?.fragment.parameters[0]))).toHaveLength(10_000);
+		expect(groups[0]?.fragment.sql).toBe(
+			'insert into "wide" ("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9") select v."c0", v."c1", v."c2", v."c3", v."c4", v."c5", v."c6", v."c7", v."c8", v."c9" from jsonb_populate_recordset(null::"wide", $1::jsonb) as v returning *'
 		);
 	});
 
@@ -195,112 +245,39 @@ describe('the bounds a grouped insert is built against', () => {
 	 * quietly start resolving against the row being written instead.
 	 */
 	it('leaves a row carrying a visibility predicate on the statement it has today', () => {
-		const predicated: ReadonlyArray<PlannedInsert> = [
-			{
-				table: 'notes',
-				layer: 0,
-				columns: ['id', 'body'],
-				parameters: ['id-1', 'first'],
-				// A predicate is appended after the row's own column parameters and shares one bound
-				// list with them, so its placeholders are numbered from where those end. The runtime
-				// numbers them through `predicateStatement`'s `parameterOffset`; the fixture says the
-				// same thing by hand.
-				where: { sql: '"owner" = $3', parameters: ['ada'] }
-			},
-			{
-				table: 'notes',
-				layer: 0,
-				columns: ['id', 'body'],
-				parameters: ['id-2', 'second'],
-				where: { sql: '"owner" = $3', parameters: ['ada'] }
+		const predicated: ReadonlyArray<PlannedInsert> = [1, 2].map((index) => ({
+			table: 'notes',
+			key: `rec${index}`,
+			columns: ['id', 'body'],
+			values: [`id-${index}`, 'text'],
+			// A predicate is appended after the row's own column parameters and shares one bound
+			// list with them, so its placeholders are numbered from where those end. The runtime
+			// numbers them through `predicateStatement`'s `parameterOffset`; the fixture says the
+			// same thing by hand.
+			where: {
+				sql: '"owner" = $3',
+				parameters: ['ada'],
+				casts: ['', ''],
+				parameterValues: [`id-${index}`, 'text']
 			}
-		];
+		}));
 
-		const statements = groupedInsertStatements(predicated);
+		const groups = groupedInserts(predicated);
 
-		expect(statements).toHaveLength(2);
-		for (const statement of statements) {
-			expect(statement.sql).toBe(
-				'insert into "notes" ("id", "body") select $1, $2 where "owner" = $3'
+		expect(groups.map((group) => group.key)).toEqual(['rec1', 'rec2']);
+		for (const group of groups) {
+			expect(group.fragment.sql).toBe(
+				'insert into "notes" ("id", "body") select $1, $2 where "owner" = $3 returning *'
 			);
-			expect(statement.parameters).toHaveLength(3);
+			expect(group.fragment.parameters).toHaveLength(3);
 		}
 	});
 
-	/** A parent is still written before the child that names it, whatever else merges. */
-	it('emits a lower layer before a higher one', () => {
-		const statements = groupedInsertStatements([
-			{ table: 'lines', layer: 1, columns: ['id'], parameters: ['line-1'] },
-			{ table: 'payslips', layer: 0, columns: ['id'], parameters: ['slip-1'] },
-			{ table: 'lines', layer: 1, columns: ['id'], parameters: ['line-2'] },
-			{ table: 'payslips', layer: 0, columns: ['id'], parameters: ['slip-2'] }
+	/** Bookkeeping written after a predicated record is gated on that record's piece having written. */
+	it('gates a row written after another piece on that piece', () => {
+		const groups = groupedInserts([
+			{ table: 'bolt_collection_history', columns: ['record_id'], values: ['id-1'], after: 'rec1' }
 		]);
-
-		expect(statements.map((statement) => statement.sql.split(' (')[0])).toEqual([
-			'insert into "payslips"',
-			'insert into "lines"'
-		]);
-		expect(statements.map((statement) => tuples(statement.sql))).toEqual([2, 2]);
-	});
-});
-
-describe('graph insertion dependency identity', () => {
-	it('uses reference kind and target collection, not a UUID alone', () => {
-		const sharedId = '018f9f89-6cb2-7b3c-8fc8-832ea10c46d1';
-		const graphDefinition = workspace({
-			name: 'reference-batching',
-			version: '1.0.0',
-			collections: [
-				collection({ name: 'time_entries', fields: {} }),
-				collection({ name: 'leave_requests', fields: {} }),
-				collection({
-					name: 'claims',
-					fields: {
-						source: {
-							type: 'reference',
-							required: true,
-							indexed: true,
-							reference: {
-								onDelete: 'restrict',
-								targets: [
-									{
-										tag: 'TIME_ENTRY',
-										collection: 'time_entries',
-										storageColumn: 'source__time_entry_id'
-									},
-									{
-										tag: 'LEAVE_REQUEST',
-										collection: 'leave_requests',
-										storageColumn: 'source__leave_request_id'
-									}
-								]
-							}
-						}
-					}
-				})
-			],
-			apps: [],
-			policies: [],
-			automations: [],
-			integrations: [],
-			prompt: '',
-			tools: [],
-			skills: [],
-			envoys: [],
-			requiredFacilities: []
-		});
-		const operations = [
-			{ collection: 'time_entries', id: sharedId, values: {} },
-			{
-				collection: 'claims',
-				id: '018f9f89-6cb2-7b3c-8fc8-832ea10c46d2',
-				values: { source: { kind: 'LEAVE_REQUEST', id: sharedId } }
-			},
-			{ collection: 'leave_requests', id: sharedId, values: {} }
-		];
-		// The claim depends on the matching leave row, even when it appears later in the batch.
-		expect(insertionLayers(operations, graphDefinition)).toEqual([0, 1, 0]);
-		// A time entry with the same UUID is not the claim's target.
-		expect(insertionLayers(operations.slice(0, 2), graphDefinition)).toEqual([0, 0]);
+		expect(groups[0]?.fragment.sql).toContain('where exists (select 1 from w_rec1)');
 	});
 });

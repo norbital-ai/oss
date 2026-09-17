@@ -41,21 +41,21 @@ its `not: [c]` is `rule: { all: [<shape>, { not: c }] }`, both of which say what
 
 ## Constructs
 
-| Construct                                        | Meaning                                                         |
-| ------------------------------------------------ | --------------------------------------------------------------- |
-| `'$A + $B'` or `{ pattern }`                     | a shape; `$NAME` binds one node, `$...NAME` a run               |
-| `{ pattern: { context, selector, strictness } }` | parse `context`, match the `selector` node inside it            |
-| `{ kind }`                                       | a bare syntax kind                                              |
-| `{ regex, on? }`                                 | over the node's text, or over a binding's                       |
-| `{ nthChild }`                                   | position among siblings; number, `odd`/`even`/`An+B`, or object |
-| `{ range: { start, end } }`                      | the node occupies exactly this span                             |
-| `{ inside, stopBy?, field? }`                    | an ancestor matches                                             |
-| `{ has, stopBy?, field? }`                       | a descendant matches                                            |
-| `{ follows, stopBy? }` / `{ precedes }`          | an earlier / later sibling statement matches                    |
-| `{ all }` / `{ any }` / `{ not }`                | composition                                                     |
-| `{ matches: 'name' }`                            | a rule named in `utils`                                         |
-| `{ atLeast, of }`                                | **extension** — N _distinct_ members match in the subtree       |
-| `{ count: { min, of } }`                         | **extension** — `of` matches at least `min` unwrapped times      |
+| Construct                                        | Meaning                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------- |
+| `'$A + $B'` or `{ pattern }`                     | a shape; `$NAME` binds one node, `$...NAME` a run                       |
+| `{ pattern: { context, selector, strictness } }` | parse `context`, match the `selector` node inside it                    |
+| `{ kind }`                                       | a bare syntax kind                                                      |
+| `{ regex, on? }`                                 | over the node's text, or over a binding's                               |
+| `{ nthChild }`                                   | position among siblings; number, `odd`/`even`/`An+B`, or object         |
+| `{ range: { start, end } }`                      | the node occupies exactly this span                                     |
+| `{ inside, stopBy?, field? }`                    | an ancestor matches                                                     |
+| `{ has, stopBy?, field? }`                       | a descendant matches                                                    |
+| `{ follows, stopBy? }` / `{ precedes }`          | an earlier / later sibling statement matches                            |
+| `{ all }` / `{ any }` / `{ not }`                | composition                                                             |
+| `{ matches: 'name' }`                            | a rule named in `utils`                                                 |
+| `{ atLeast, of }`                                | **extension** — N _distinct_ members match in the subtree               |
+| `{ count: { min, of } }`                         | **extension** — `of` matches at least `min` unwrapped times             |
 | `{ fact: { name, …params } }`                    | **extension** — a registered analysis answers for this node (see Facts) |
 
 Alongside the matcher, `defineRule` accepts `utils` (named rules `matches` resolves) and

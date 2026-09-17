@@ -1,10 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from '@effect/vitest';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import {
-	callMcpTool,
-	MCP_PROTOCOL_VERSION
-} from '../src/runtime/agents/capability-catalog.js';
+import { callMcpTool, MCP_PROTOCOL_VERSION } from '../src/runtime/agents/capability-catalog.js';
 import { FacilityError } from '../src/runtime/facilities/database.js';
 
 const JsonRpcRequest = Schema.Struct({
@@ -62,10 +59,10 @@ describe('official MCP 2026 tool adapter', () => {
 									headers: { 'content-type': 'application/json' },
 									body: {
 										jsonrpc: '2.0',
-									id: input.body.id ?? null,
-									result: {
-										resultType: 'complete',
-										content: [{ type: 'text', text: 'Two hits' }],
+										id: input.body.id ?? null,
+										result: {
+											resultType: 'complete',
+											content: [{ type: 'text', text: 'Two hits' }],
 											structuredContent: { hits: 2 }
 										}
 									}

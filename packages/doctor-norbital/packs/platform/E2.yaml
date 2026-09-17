@@ -1,7 +1,7 @@
 id: E2
 summary: feature flag declared in source
 severity: hint
-principles: [ straightforwardness, no-bloat ]
+principles: [straightforwardness, no-bloat]
 rule:
   any:
     - all:

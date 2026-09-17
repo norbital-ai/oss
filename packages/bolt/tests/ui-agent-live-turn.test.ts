@@ -27,9 +27,7 @@ describe('Task client commands', () => {
 		const command = vi.fn((command: string, input: Schema.Json) => {
 			calls.push({ command, input });
 			return Promise.resolve(
-				command === 'conversations.send'
-					? { messageId }
-					: { conversationId, status: 'stopped' }
+				command === 'conversations.send' ? { messageId } : { conversationId, status: 'stopped' }
 			);
 		});
 		const agent = createAgentClient({

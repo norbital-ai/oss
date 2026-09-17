@@ -13,10 +13,6 @@
 
 <ol>
 	{#each messages as message (message.key)}
-		<AgentTranscriptItem
-			{message}
-			{tools}
-			subagent={transcript}
-		/>
+		<AgentTranscriptItem {message} {tools} subagent={transcript} />
 	{/each}
 </ol>

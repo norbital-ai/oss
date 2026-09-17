@@ -106,7 +106,10 @@ test('unreferencedModule / unreferencedExport / duplicateBody are repository fac
 	const root = mkdtempSync(join(tmpdir(), 'doctor-facts-graph-'));
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 	mkdirSync(join(root, 'src'), { recursive: true });
-	writeFileSync(join(root, 'package.json'), '{"name":"facts","type":"module","exports":"./src/index.ts"}');
+	writeFileSync(
+		join(root, 'package.json'),
+		'{"name":"facts","type":"module","exports":"./src/index.ts"}'
+	);
 	const shared = `export function summarise(rows: ReadonlyArray<{ amount: number; kind: string }>): string {
 	let total = 0;
 	const kinds = new Set<string>();
@@ -134,16 +137,22 @@ export const orphan = (): number => 3;
 	);
 	const other = parsed(root, 'src/other.ts', shared);
 	const orphan = parsed(root, 'src/orphan.ts', 'export const leftover = (): number => 0;\n');
-	bindCrossFileIndex(
-		root,
-		analyseCrossFile({ root, files: [index, helper, other, orphan] })
-	);
+	bindCrossFileIndex(root, analyseCrossFile({ root, files: [index, helper, other, orphan] }));
 
 	const ctx = (file: string, sourceFile: ts.SourceFile, node: ts.Node = sourceFile) =>
 		factContext(root, file, node, sourceFile);
-	assert.equal(evaluateFact('unreferencedModule', {}, ctx('src/orphan.ts', orphan.sourceFile)), true);
-	assert.equal(evaluateFact('unreferencedModule', {}, ctx('src/index.ts', index.sourceFile)), false);
-	assert.equal(evaluateFact('unreferencedModule', {}, ctx('src/orphan.ts', orphan.sourceFile)), true);
+	assert.equal(
+		evaluateFact('unreferencedModule', {}, ctx('src/orphan.ts', orphan.sourceFile)),
+		true
+	);
+	assert.equal(
+		evaluateFact('unreferencedModule', {}, ctx('src/index.ts', index.sourceFile)),
+		false
+	);
+	assert.equal(
+		evaluateFact('unreferencedModule', {}, ctx('src/orphan.ts', orphan.sourceFile)),
+		true
+	);
 
 	let orphanExport: ts.Node | undefined;
 	const visitHelper = (node: ts.Node): void => {
@@ -153,7 +162,10 @@ export const orphan = (): number => 3;
 	};
 	visitHelper(helper.sourceFile);
 	assert.ok(orphanExport);
-	assert.equal(evaluateFact('unreferencedExport', {}, ctx('src/helper.ts', helper.sourceFile, orphanExport)), true);
+	assert.equal(
+		evaluateFact('unreferencedExport', {}, ctx('src/helper.ts', helper.sourceFile, orphanExport)),
+		true
+	);
 
 	let usedExport: ts.Node | undefined;
 	const visitUsed = (node: ts.Node): void => {
@@ -163,7 +175,10 @@ export const orphan = (): number => 3;
 	};
 	visitUsed(helper.sourceFile);
 	assert.ok(usedExport);
-	assert.equal(evaluateFact('unreferencedExport', {}, ctx('src/helper.ts', helper.sourceFile, usedExport)), false);
+	assert.equal(
+		evaluateFact('unreferencedExport', {}, ctx('src/helper.ts', helper.sourceFile, usedExport)),
+		false
+	);
 
 	let otherFn: ts.Node | undefined;
 	const visitOther = (node: ts.Node): void => {
@@ -172,7 +187,10 @@ export const orphan = (): number => 3;
 	};
 	visitOther(other.sourceFile);
 	assert.ok(otherFn);
-	assert.equal(evaluateFact('duplicateBody', {}, ctx('src/other.ts', other.sourceFile, otherFn)), true);
+	assert.equal(
+		evaluateFact('duplicateBody', {}, ctx('src/other.ts', other.sourceFile, otherFn)),
+		true
+	);
 	let indexFn: ts.Node | undefined;
 	const visitIndex = (node: ts.Node): void => {
 		if (ts.isFunctionDeclaration(node) && indexFn === undefined) indexFn = node;
@@ -180,7 +198,10 @@ export const orphan = (): number => 3;
 	};
 	visitIndex(index.sourceFile);
 	assert.ok(indexFn);
-	assert.equal(evaluateFact('duplicateBody', {}, ctx('src/index.ts', index.sourceFile, indexFn)), false);
+	assert.equal(
+		evaluateFact('duplicateBody', {}, ctx('src/index.ts', index.sourceFile, indexFn)),
+		false
+	);
 });
 
 test('memoised computes once per host and key', () => {

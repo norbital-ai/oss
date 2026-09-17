@@ -7,6 +7,7 @@ import {
 	guardAuthoringOps,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
+	type AuthoredRuntime,
 	type AuthoringOps
 } from '../src/runtime/collections/authored.js';
 import * as Automations from '../src/runtime/automations/automations.js';
@@ -18,6 +19,11 @@ import {
 	recordId,
 	testWorkspace
 } from './support/bolt-test-layer.js';
+
+const peopleAuthored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: { people: { create: { input: { columns: { name: true, team: true } } } } }
+};
 
 // The guard fails with `AutomationStopped`, so `guardAuthoringOps` widens the error channel; the
 // declared type has to say so or the helper claims operations that can never stop.
@@ -36,8 +42,8 @@ const guardedOperations = (
 		findFirst: () => record('findFirst', undefined),
 		count: () => record('count', 0),
 		findNearest: () => Effect.succeed([]),
-		mutate: () => record('mutate', undefined),
-		delete: () => record('delete', undefined),
+		write: () => record('write', { records: [], batch: { changes: [] } }),
+		history: () => record('history', []),
 		runAutomation: () => record('runAutomation', { taskId: 'child' }),
 		infer: () => record('infer', {}),
 		readFileAsset: () =>
@@ -57,24 +63,22 @@ const guardedOperations = (
 
 describe('automation stoppage facility guard', () => {
 	it('gives sequential direct authored creates distinct replay-stable identities', async () => {
-		const harness = await makeBoltTestRuntime();
+		const harness = await makeBoltTestRuntime(undefined, { authored: peopleAuthored });
 		try {
 			await harness.runtime.runPromise(
 				Effect.gen(function* () {
 					const collections = yield* Collections.Service;
 					const ai = yield* AI.Service;
 					const files = yield* Files.Service;
-					const automations = yield* Automations.Service;
 					const ops = makeBoundAuthoringOps(
 						EffectId.make('direct-authored-writes'),
 						adminSubject,
 						collections,
 						ai,
-						files,
-						automations
+						files
 					);
-					yield* ops.mutate('people', [{ name: 'First' }]);
-					yield* ops.mutate('people', [{ name: 'Second' }]);
+					yield* ops.write('people', 'create', [{ name: 'First' }]);
+					yield* ops.write('people', 'create', [{ name: 'Second' }]);
 				})
 			);
 			expect(await harness.database.query('select name from people order by name')).toEqual([
@@ -83,13 +87,11 @@ describe('automation stoppage facility guard', () => {
 			]);
 			const writes = harness.database.calls
 				.map(({ effectId }) => String(effectId))
-				.filter((effectId) =>
-					/^direct-authored-writes:hook:mutate:people:root:\d+$/u.test(effectId)
-				);
+				.filter((effectId) => /^direct-authored-writes:write:create:people:\d+$/u.test(effectId));
 			expect(new Set(writes)).toEqual(
 				new Set([
-					'direct-authored-writes:hook:mutate:people:root:1',
-					'direct-authored-writes:hook:mutate:people:root:2'
+					'direct-authored-writes:write:create:people:1',
+					'direct-authored-writes:write:create:people:2'
 				])
 			);
 		} finally {
@@ -102,7 +104,7 @@ describe('automation stoppage facility guard', () => {
 		const guards: Array<string> = [];
 		const ops = guardedOperations(calls, guards);
 		const attempts = [
-			ops.mutate('people', [{ id: recordId('mutate'), name: 'mutate' }]),
+			ops.write('people', 'create', [{ name: 'create' }]),
 			ops.infer({ schema: Schema.Struct({}), prompt: 'infer', model: 'test/language' }),
 			ops.readFileAsset({
 				storage_key: 'file',
@@ -122,15 +124,20 @@ describe('automation stoppage facility guard', () => {
 		}
 
 		expect(calls).toEqual([]);
-		expect(guards).toEqual(['db.people.mutate', 'ai.infer', 'files.read', 'automations.child.run']);
+		expect(guards).toEqual([
+			'collection.people.create',
+			'ai.infer',
+			'files.read',
+			'automations.child.run'
+		]);
 	});
 
 	it('observes a stop between progress and the next authored write', async () => {
 		const personId = recordId('stopped-write');
 		type TestAuthoringApi = Readonly<{
-			db: Readonly<{
+			collection: Readonly<{
 				people: Readonly<{
-					mutate: (values: ReadonlyArray<Readonly<Record<string, unknown>>>) => Effect.Effect<void>;
+					create: (input: Readonly<Record<string, unknown>>) => Effect.Effect<unknown>;
 				}>;
 			}>;
 		}>;
@@ -141,7 +148,7 @@ describe('automation stoppage facility guard', () => {
 			policies: ['admin']
 		});
 		const definition = testWorkspace({ automations: [declaration] });
-		const harness = await makeBoltTestRuntime(definition, { authored: emptyAuthoredRuntime });
+		const harness = await makeBoltTestRuntime(definition, { authored: peopleAuthored });
 		try {
 			const taskId = 'stopped-rebuild';
 			await harness.database.query(
@@ -189,14 +196,13 @@ describe('automation stoppage facility guard', () => {
 							},
 							collections,
 							ai,
-							files,
-							automations
+							files
 						),
 						guard
 					);
 					const api = makeAuthoringApi(ops) as TestAuthoringApi;
 					return yield* Effect.result(
-						api.db.people.mutate([{ id: personId, name: 'must not exist' }])
+						api.collection.people.create({ id: personId, name: 'must not exist' })
 					);
 				})
 			);

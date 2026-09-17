@@ -24,7 +24,10 @@ describe('package isolation (T11)', () => {
 		for (const leaf of ['src', 'tests'] as const) {
 			const root = path.join(packageRoot, leaf);
 			if (!existsSync(root)) continue;
-			for (const hit of importsMatching(walkImportSpecifiers(root), FORBIDDEN_ISOLATION_FRAGMENTS)) {
+			for (const hit of importsMatching(
+				walkImportSpecifiers(root),
+				FORBIDDEN_ISOLATION_FRAGMENTS
+			)) {
 				offenders.push(`${path.relative(packageRoot, hit.file)} -> ${hit.specifier}`);
 			}
 		}

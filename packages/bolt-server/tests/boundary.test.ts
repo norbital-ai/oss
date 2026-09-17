@@ -29,7 +29,7 @@ describe('facility boundary', () => {
 		process.off('unhandledRejection', record);
 	});
 
-	it('answers a binding that throws synchronously as that call\'s failure', async () => {
+	it("answers a binding that throws synchronously as that call's failure", async () => {
 		const binding = guardBinding('database', {
 			call: () => {
 				throw new Error('threw before returning a promise');
@@ -44,7 +44,7 @@ describe('facility boundary', () => {
 		expect(processEvents).toEqual([]);
 	});
 
-	it('answers a binding that rejects as that call\'s failure', async () => {
+	it("answers a binding that rejects as that call's failure", async () => {
 		const binding = guardBinding('files', { call: () => Promise.reject(new Error('rejected')) });
 		expect(await call(binding)).toMatchObject({
 			_tag: 'Failure',

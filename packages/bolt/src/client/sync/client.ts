@@ -1,6 +1,6 @@
 import type {
 	CollectionMutationIdempotencyKey,
-	CollectionMutateRequest,
+	CollectionMutationPush,
 	SyncApplyFrame,
 	SyncConnectRequest,
 	SyncConnectResponse,
@@ -56,7 +56,7 @@ export type SyncWorkspaceAttachment = Readonly<{
 		request: SyncExtendPrefixRequest,
 		signal?: AbortSignal
 	) => Promise<SyncExtendPrefixResponse>;
-	readonly push: (request: CollectionMutateRequest, signal?: AbortSignal) => Promise<void>;
+	readonly push: (request: CollectionMutationPush, signal?: AbortSignal) => Promise<void>;
 	readonly subscribe: (listener: SyncWorkspaceAttachmentListener) => () => void;
 }>;
 
@@ -67,7 +67,9 @@ export type SyncClient = Readonly<{
 	readonly current: () => ClientState;
 	readonly subscribe: (listener: (state: ClientState) => void) => () => void;
 	readonly mount: (input: SyncQueryInput) => MountedLiveQuery;
-	readonly enqueue: (request: CollectionMutateRequest) => void;
+	readonly enqueue: (request: CollectionMutationPush) => void;
+	/** The push's own reply, which settles the write without waiting for the stream to restate it. */
+	readonly answer: (outcome: SyncOutcome) => void;
 }>;
 
 export type SyncClientOptions = Readonly<{
@@ -398,6 +400,8 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 			options.onOutcomes?.(event.payload.outcomes, state);
 		} else if (event.kind === 'registered' && state.link === 'live') {
 			options.onOutcomes?.(event.response.outcomes, state);
+		} else if (event.kind === 'writeAnswered') {
+			options.onOutcomes?.([event.outcome], state);
 		}
 		publish();
 		for (const effect of effects) runEffect(effect);
@@ -518,6 +522,10 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 				throw new Error('Cannot enqueue a mutation on a closed Sync client');
 			}
 			dispatch({ kind: 'writeEnqueued', request, at: Date.now() });
+		},
+		answer: (outcome) => {
+			if (shutDown) return;
+			dispatch({ kind: 'writeAnswered', outcome });
 		}
 	};
 };

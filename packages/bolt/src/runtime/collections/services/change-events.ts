@@ -52,8 +52,10 @@ export const emitChangeEventsMany = Effect.fn('Collections.emitChangeEventsMany'
 	const runs = triggers.flatMap((automation) =>
 		records.map((record) => {
 			const taskId = `${record.taskScope}:event:${automation.name}`;
-			const scope: Readonly<Record<string, Schema.Json>> =
-				event === 'deleted' ? {} : { incoming_record: record.row as Schema.Json };
+			// A delete's `incoming_record` is the row as it stood; settle hands the pre-image in `row`.
+			const scope: Readonly<Record<string, Schema.Json>> = {
+				incoming_record: record.row as Schema.Json
+			};
 			return { automation, taskId, scope };
 		})
 	);

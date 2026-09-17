@@ -38,7 +38,12 @@ describe('reasoning is an ordinary assistant part', () => {
 	it('survives the round trip a stored row makes', () => {
 		const message = assistant([
 			Prompt.reasoningPart({ text: 'Working it out.' }),
-			Prompt.toolCallPart({ id: 'call-1', name: 'read_collection', params: {}, providerExecuted: false }),
+			Prompt.toolCallPart({
+				id: 'call-1',
+				name: 'read_collection',
+				params: {},
+				providerExecuted: false
+			}),
 			Prompt.textPart({ text: 'Done.' })
 		]);
 		// What the row holds is the encoded form; what reads it back decodes that form.

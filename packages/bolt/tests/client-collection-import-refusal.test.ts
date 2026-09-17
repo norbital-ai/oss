@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	setWorkspaceSession,
-	type WorkspaceSession
-} from '../src/client/session.js';
+import { setWorkspaceSession, type WorkspaceSession } from '../src/client/session.js';
 import { importCollectionRecords } from '../src/client/ui/state/import-export.js';
 
 const PH_REFUSAL =

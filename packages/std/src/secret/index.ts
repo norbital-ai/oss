@@ -254,7 +254,10 @@ const utf8 = (text: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode
 const sourced = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from(bytes);
 
 /** The AES-GCM key handle. WebCrypto, never `node:crypto`, for the reason `toBase64Url` gives. */
-const importKey = (key: Uint8Array, usage: 'encrypt' | 'decrypt'): Effect.Effect<CryptoKey, Error> =>
+const importKey = (
+	key: Uint8Array,
+	usage: 'encrypt' | 'decrypt'
+): Effect.Effect<CryptoKey, Error> =>
 	Effect.tryPromise({
 		try: () => crypto.subtle.importKey('raw', sourced(key), { name: 'AES-GCM' }, false, [usage]),
 		catch: toError

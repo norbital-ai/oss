@@ -53,8 +53,7 @@ const sha256 = (value: string): string => createHash('sha256').update(value).dig
 const scopeKey = (scope: SyncScope): string =>
 	`${scope.tenantId}\u0000${scope.environment}\u0000${scope.releaseId}`;
 
-const makeSyncRegistry = (): SyncRegistry<SyncConnection> =>
-	new SyncRegistry({ hash: sha256 });
+const makeSyncRegistry = (): SyncRegistry<SyncConnection> => new SyncRegistry({ hash: sha256 });
 
 export class SyncConnectionUnavailable extends Error {
 	readonly name = 'SyncConnectionUnavailable';
@@ -77,20 +76,26 @@ export class SyncGuestRejected extends Error {
 }
 
 export type SyncGuestBridge = Readonly<{
-	readonly connect: (input: Readonly<{
-		scope: SyncScope;
-		credential: string;
-		request: SyncConnectRequest;
-	}>) => Promise<SyncConnectEvaluation>;
-	readonly extendPrefix: (input: Readonly<{
-		scope: SyncScope;
-		request: SyncExtendPrefixRequest;
-		state: SyncAdvanceRequest['subscriptions'][number];
-	}>) => Promise<SyncExtendPrefixEvaluation>;
-	readonly advance: (input: Readonly<{
-		scope: SyncScope;
-		request: SyncAdvanceRequest;
-	}>) => Promise<SyncAdvanceResponse>;
+	readonly connect: (
+		input: Readonly<{
+			scope: SyncScope;
+			credential: string;
+			request: SyncConnectRequest;
+		}>
+	) => Promise<SyncConnectEvaluation>;
+	readonly extendPrefix: (
+		input: Readonly<{
+			scope: SyncScope;
+			request: SyncExtendPrefixRequest;
+			state: SyncAdvanceRequest['subscriptions'][number];
+		}>
+	) => Promise<SyncExtendPrefixEvaluation>;
+	readonly advance: (
+		input: Readonly<{
+			scope: SyncScope;
+			request: SyncAdvanceRequest;
+		}>
+	) => Promise<SyncAdvanceResponse>;
 }>;
 
 type SyncCommit = Readonly<{
@@ -109,11 +114,13 @@ type ScopedInput = Readonly<{
 }>;
 
 export type SyncInterface = Readonly<{
-	readonly open: (input: Readonly<{
-		connectionId: string;
-		principal: string;
-		sink: SyncSink;
-	}>) => void;
+	readonly open: (
+		input: Readonly<{
+			connectionId: string;
+			principal: string;
+			sink: SyncSink;
+		}>
+	) => void;
 	readonly connect: (
 		input: ScopedInput & { readonly request: SyncConnectRequest }
 	) => Promise<SyncConnectResponse>;
@@ -165,7 +172,9 @@ export const makeSyncHost = (bridge: SyncGuestBridge): SyncInterface => {
 					state: {
 						...sharedState,
 						credential: connection.credential,
-						...(attachment.authority === undefined ? {} : { impersonatedTeam: attachment.authority })
+						...(attachment.authority === undefined
+							? {}
+							: { impersonatedTeam: attachment.authority })
 					}
 				});
 			},

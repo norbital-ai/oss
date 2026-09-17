@@ -1,7 +1,7 @@
 id: P9
 summary: export-star barrel
 severity: hint
-principles: [ simplicity, colocation, no-bloat ]
+principles: [simplicity, colocation, no-bloat]
 rule:
   all:
     - kind: ExportDeclaration

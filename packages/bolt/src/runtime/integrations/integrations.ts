@@ -361,9 +361,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		 */
 		const dependencies = (integrationName: string, subject: Identity.Subject): PullDependencies => {
 			const integrationAuthoringApi = (effectId: EffectId) =>
-				makeAuthoringApi(
-					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
-				);
+				makeAuthoringApi(makeBoundAuthoringOps(effectId, subject, collections, ai, files));
 			return {
 				request: (effectId, connectorName, descriptor) =>
 					connector
@@ -434,15 +432,17 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				remove: (effectId, collection, ids) =>
 					ids.length === 0
 						? Effect.void
-						: collections.delete(effectId, subject, collection, ids).pipe(
-								Effect.asVoid,
-								Effect.mapError((error) => ({ message: describeCause(error) }))
-							),
+						: collections
+								.write(effectId, subject, [
+									{ collection, action: 'delete', inputs: ids.map((id) => ({ id })) }
+								])
+								.pipe(
+									Effect.asVoid,
+									Effect.mapError((error) => ({ message: describeCause(error) }))
+								),
 				write: (effectId, collection, id, values, mode) =>
 					collections
-						.mutate(effectId, subject, collection, [{ ...values, id }], 0, {
-							roots: [{ id, action: mode }]
-						})
+						.write(effectId, subject, [{ collection, action: mode, inputs: [{ ...values, id }] }])
 						.pipe(
 							Effect.asVoid,
 							Effect.mapError((error) => ({ message: describeCause(error) }))

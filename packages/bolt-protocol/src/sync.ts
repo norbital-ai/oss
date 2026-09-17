@@ -51,8 +51,7 @@ const { after: _after, ...LiveCollectionQueryRequestFields } = CollectionQueryRe
 export const SyncQueryInput = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('findMany'),
-		...LiveCollectionQueryRequestFields,
-		pendingOnly: Schema.optionalKey(Schema.Boolean)
+		...LiveCollectionQueryRequestFields
 	}),
 	Schema.Struct({ kind: Schema.Literal('findFirst'), ...LiveCollectionQueryRequestFields })
 ]).annotate({ identifier: 'BoltSyncQueryInput' });

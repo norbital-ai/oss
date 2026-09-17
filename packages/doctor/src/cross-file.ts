@@ -222,7 +222,11 @@ function declaredEntries(
 		if (fromSource !== undefined) roots.add(fromSource);
 		return;
 	}
-	const nested = Array.isArray(value) ? value : jsonRecord(value) ? Object.values(jsonRecord(value) ?? {}) : [];
+	const nested = Array.isArray(value)
+		? value
+		: jsonRecord(value)
+			? Object.values(jsonRecord(value) ?? {})
+			: [];
 	for (const entry of nested) declaredEntries(manifest, entry, files, roots);
 }
 
@@ -380,7 +384,9 @@ export function analyseCrossFile(options: CrossFileOptions): CrossFileIndex {
 				packageRootOf(options.root, original.parsed.file)
 			)
 				continue;
-			duplicateBodies.add(siteKey(duplicate.parsed.file, duplicate.node, duplicate.parsed.sourceFile));
+			duplicateBodies.add(
+				siteKey(duplicate.parsed.file, duplicate.node, duplicate.parsed.sourceFile)
+			);
 		}
 	}
 
@@ -396,7 +402,9 @@ export function bindCrossFileIndex(root: string, index: CrossFileIndex): void {
 function indexFor(context: FactContext): CrossFileIndex {
 	const index = boundIndexes.get(context.root);
 	if (index === undefined)
-		throw new Error(`norbital-doctor: repository fact "${context.file}" has no bound cross-file index`);
+		throw new Error(
+			`norbital-doctor: repository fact "${context.file}" has no bound cross-file index`
+		);
 	return index;
 }
 

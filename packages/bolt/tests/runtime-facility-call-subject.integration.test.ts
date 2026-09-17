@@ -17,8 +17,7 @@ import {
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { PendingApproval } from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { ADMIN_STATUS } from '../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import {
@@ -151,10 +150,11 @@ const gatedWorkspace = workspace({
 });
 
 const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
-const gatedAuthored = {
+const gatedAuthored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
 	policyAuthorizations: gatedFunctions.authorizations,
-	approvalFlows: gatedFunctions.approvalFlows
+	approvalFlows: gatedFunctions.approvalFlows,
+	collections: { people: { create: { input: { columns: { name: true } } } } }
 };
 
 describe('the subject a facility call carries', () => {
@@ -240,24 +240,15 @@ describe('the subject a facility call carries', () => {
 	it('provides no subject at all for an enqueued task', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-		const id = recordId('person-1');
-
 		const held = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id, name: 'Ada' }],
-						0,
-						{ roots: [{ id, action: 'create' }] }
-					);
-				})
-			)
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).write(effectId('create-held'), policySubject, [
+					{ collection: 'people', action: 'create', inputs: [{ name: 'Ada' }] }
+				]);
+			})
 		);
-		expect(held).toBeInstanceOf(PendingApproval);
-		const requestId = held instanceof PendingApproval ? held.requestId : '';
+		const requestId = held.pendingApproval?.requestId ?? '';
+		expect(requestId).not.toBe('');
 		const pending = await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Approvals.Service).status(effectId('status'), requestId);
@@ -266,8 +257,8 @@ describe('the subject a facility call carries', () => {
 		if (pending?._tag !== 'Pending')
 			throw new Error(`expected a pending approval, got ${String(pending?._tag)}`);
 		// Only the discriminant and the decider move. `status` answers the *public* projection, which
-		// deliberately drops `storedGraph`, `subject` and `reviewDigest` — the three things a resume
-		// replays from — so writing that projection back would approve a request nothing could resume.
+		// deliberately drops `subject` and the lock set — what the seal reads — so writing that
+		// projection back would approve a request nothing could resume.
 		await harness.database.query(
 			`update bolt_approvals
 			 set state = jsonb_set(jsonb_set(state, '{_tag}', '"Approved"'::jsonb), '{decidedBy}', to_jsonb($2::text))

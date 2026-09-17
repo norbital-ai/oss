@@ -4,8 +4,15 @@ import { startSessionGateway, workspaceDocumentHtml } from '../src/session-gatew
 import { waitUntilReady } from '../src/ready.js';
 
 const listenUpstream = async (
-	handler: (request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse) => void
-): Promise<{ readonly host: string; readonly port: number; readonly stop: () => Promise<void> }> => {
+	handler: (
+		request: import('node:http').IncomingMessage,
+		response: import('node:http').ServerResponse
+	) => void
+): Promise<{
+	readonly host: string;
+	readonly port: number;
+	readonly stop: () => Promise<void>;
+}> => {
 	const server = createServer(handler);
 	const address = await new Promise<{ host: string; port: number }>((resolve, reject) => {
 		server.once('error', reject);
@@ -52,12 +59,15 @@ describe('session gateway', () => {
 			cookieName: 'norbital_session',
 			isDocument: (pathname) => pathname === '/app' || pathname === '/app/',
 			rewritePath: (pathname) =>
-				pathname.startsWith('/app/sync/') ? `/sync/${pathname.slice('/app/sync/'.length)}` : pathname,
+				pathname.startsWith('/app/sync/')
+					? `/sync/${pathname.slice('/app/sync/'.length)}`
+					: pathname,
 			document: workspaceDocumentHtml({
 				tenantId: 'acme',
 				environment: 'test',
 				releaseId: 'r1',
 				principal: 'founder',
+				email: 'founder@example.test',
 				title: 'Acme',
 				commandPrefix: '/_bolt/command/',
 				syncStreamUrl: '/sync/stream',
@@ -113,76 +123,82 @@ describe('session gateway', () => {
 		}
 	});
 
-	it('opens SSE before its first heartbeat so a connect can join', { timeout: 15_000 }, async () => {
-		const openIds = new Set<string>();
-		const upstream = await listenUpstream((request, response) => {
-			const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-			if (url.pathname === '/sync/stream') {
-				const id = url.searchParams.get('connectionId') ?? '';
-				openIds.add(id);
-				response.writeHead(200, {
-					'content-type': 'text/event-stream; charset=utf-8',
-					'cache-control': 'no-store'
-				});
-				response.flushHeaders();
-				response.once('close', () => {
-					openIds.delete(id);
-				});
-				return;
-			}
-			if (url.pathname === '/sync/connect') {
-				const id = request.headers['x-bolt-sync-connection'];
-				const key = typeof id === 'string' ? id : '';
-				response.writeHead(openIds.has(key) ? 200 : 410, {
-					'content-type': 'application/json'
-				});
-				response.end(JSON.stringify({ open: openIds.has(key) }));
-				return;
-			}
-			response.writeHead(404);
-			response.end();
-		});
-		const gateway = await startSessionGateway({
-			upstream,
-			credential: 'founder-token',
-			cookieName: 'norbital_session',
-			isDocument: (pathname) => pathname === '/app',
-			rewritePath: (pathname) =>
-				pathname.startsWith('/app/sync/') ? `/sync/${pathname.slice('/app/sync/'.length)}` : pathname,
-			document: '<html></html>'
-		});
-		let stream: import('node:http').IncomingMessage | undefined;
-		try {
-			const page = await fetch(`${gateway.baseUrl}/app`);
-			const cookie = page.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
-			stream = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error('sse headers not received')), 3_000);
-				const req = requestGet(
-					`${gateway.baseUrl}/app/sync/stream?connectionId=sse-1`,
-					{ headers: { cookie } },
-					(response) => {
+	it(
+		'opens SSE before its first heartbeat so a connect can join',
+		{ timeout: 15_000 },
+		async () => {
+			const openIds = new Set<string>();
+			const upstream = await listenUpstream((request, response) => {
+				const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+				if (url.pathname === '/sync/stream') {
+					const id = url.searchParams.get('connectionId') ?? '';
+					openIds.add(id);
+					response.writeHead(200, {
+						'content-type': 'text/event-stream; charset=utf-8',
+						'cache-control': 'no-store'
+					});
+					response.flushHeaders();
+					response.once('close', () => {
+						openIds.delete(id);
+					});
+					return;
+				}
+				if (url.pathname === '/sync/connect') {
+					const id = request.headers['x-bolt-sync-connection'];
+					const key = typeof id === 'string' ? id : '';
+					response.writeHead(openIds.has(key) ? 200 : 410, {
+						'content-type': 'application/json'
+					});
+					response.end(JSON.stringify({ open: openIds.has(key) }));
+					return;
+				}
+				response.writeHead(404);
+				response.end();
+			});
+			const gateway = await startSessionGateway({
+				upstream,
+				credential: 'founder-token',
+				cookieName: 'norbital_session',
+				isDocument: (pathname) => pathname === '/app',
+				rewritePath: (pathname) =>
+					pathname.startsWith('/app/sync/')
+						? `/sync/${pathname.slice('/app/sync/'.length)}`
+						: pathname,
+				document: '<html></html>'
+			});
+			let stream: import('node:http').IncomingMessage | undefined;
+			try {
+				const page = await fetch(`${gateway.baseUrl}/app`);
+				const cookie = page.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
+				stream = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+					const timer = setTimeout(() => reject(new Error('sse headers not received')), 3_000);
+					const req = requestGet(
+						`${gateway.baseUrl}/app/sync/stream?connectionId=sse-1`,
+						{ headers: { cookie } },
+						(response) => {
+							clearTimeout(timer);
+							resolve(response);
+						}
+					);
+					req.once('error', (cause) => {
 						clearTimeout(timer);
-						resolve(response);
-					}
-				);
-				req.once('error', (cause) => {
-					clearTimeout(timer);
-					reject(cause);
+						reject(cause);
+					});
 				});
-			});
-			expect(stream.statusCode).toBe(200);
-			const joined = await fetch(`${gateway.baseUrl}/app/sync/connect`, {
-				method: 'POST',
-				headers: { cookie, 'x-bolt-sync-connection': 'sse-1' }
-			});
-			expect(joined.status).toBe(200);
-			expect(await joined.json()).toEqual({ open: true });
-		} finally {
-			stream?.destroy();
-			await gateway.stop();
-			await upstream.stop();
+				expect(stream.statusCode).toBe(200);
+				const joined = await fetch(`${gateway.baseUrl}/app/sync/connect`, {
+					method: 'POST',
+					headers: { cookie, 'x-bolt-sync-connection': 'sse-1' }
+				});
+				expect(joined.status).toBe(200);
+				expect(await joined.json()).toEqual({ open: true });
+			} finally {
+				stream?.destroy();
+				await gateway.stop();
+				await upstream.stop();
+			}
 		}
-	});
+	);
 
 	it('inbox long-polls Node SSE frames as finite JSON', { timeout: 15_000 }, async () => {
 		const sinks = new Set<import('node:http').ServerResponse>();

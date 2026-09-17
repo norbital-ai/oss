@@ -72,12 +72,29 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 	it('refuses fabricated child delegation and plan calls even when the child declaration enables delegation', async () => {
 		const parentId = ConversationId.make('00000000-0000-4000-8000-000000000911');
 		const { ai } = scriptedTranscript([
-			assistantToolCall('subagent', { action: 'spawn', agentId: 'worker', instruction: 'Inspect only.' }, 'spawn-boundary'),
+			assistantToolCall(
+				'subagent',
+				{ action: 'spawn', agentId: 'worker', instruction: 'Inspect only.' },
+				'spawn-boundary'
+			),
 			assistantText('Child dispatched.'),
-			assistantToolCall('subagent', { action: 'spawn', agentId: 'web', instruction: 'Must not run.' }, 'fabricated-spawn'),
-			assistantToolCall('update_plan', { operation: 'replace', expectedRevision: 0, body: 'Must not create a child plan.' }, 'fabricated-plan'),
+			assistantToolCall(
+				'subagent',
+				{ action: 'spawn', agentId: 'web', instruction: 'Must not run.' },
+				'fabricated-spawn'
+			),
+			assistantToolCall(
+				'update_plan',
+				{ operation: 'replace', expectedRevision: 0, body: 'Must not create a child plan.' },
+				'fabricated-plan'
+			),
 			assistantText('Boundary checked.'),
-			async () => assistantToolCall('subagent', { action: 'await', conversationId: String((await childTaskRow(parentId))?.id) }, 'consume-boundary'),
+			async () =>
+				assistantToolCall(
+					'subagent',
+					{ action: 'await', conversationId: String((await childTaskRow(parentId))?.id) },
+					'consume-boundary'
+				),
 			assistantText('Finished.')
 		]);
 		harness = await makeBoltTestRuntime(definition, { ai });
@@ -85,9 +102,16 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		await submitParent(agents, '911', parentId);
 		await execute(agents, '911', parentId);
 		const child = await childTaskRow(parentId);
-		expect(await harness.database.query('select id from conversation where parent_id = $1', [child?.id])).toEqual([]);
-		expect(await harness.database.query('select id from plan where conversation_id = $1', [child?.id])).toEqual([]);
-		const rows = await harness.database.query('select message from conversation_message where conversation_id = $1 and author->>\'kind\' = \'tool\'', [child?.id]);
+		expect(
+			await harness.database.query('select id from conversation where parent_id = $1', [child?.id])
+		).toEqual([]);
+		expect(
+			await harness.database.query('select id from plan where conversation_id = $1', [child?.id])
+		).toEqual([]);
+		const rows = await harness.database.query(
+			"select message from conversation_message where conversation_id = $1 and author->>'kind' = 'tool'",
+			[child?.id]
+		);
 		expect(JSON.stringify(rows).match(/"isFailure":true/g)).toHaveLength(2);
 	});
 	/**

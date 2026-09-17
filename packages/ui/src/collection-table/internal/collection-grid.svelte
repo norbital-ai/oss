@@ -289,7 +289,9 @@
 		}
 
 		void Effect.runPromise(
-			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(Effect.map(() => syncScrollState()))
+			Effect.tryPromise({ try: () => tick(), catch: toError }).pipe(
+				Effect.map(() => syncScrollState())
+			)
 		);
 
 		const resizeObserver =

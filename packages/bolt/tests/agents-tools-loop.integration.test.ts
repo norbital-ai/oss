@@ -159,7 +159,9 @@ describe('canonical Effect Prompt tool loop', () => {
 		const { ai } = cassetteTranscript(cassette('agents-tools-host'));
 		const { result, conversationId } = await executeTask(ai, 'host-tool', { hostTools });
 		expect(result.status).toBe('done');
-		expect(calls).toEqual([{ tool: 'sandbox_files', input: { path: 'src' }, sessionId: conversationId }]);
+		expect(calls).toEqual([
+			{ tool: 'sandbox_files', input: { path: 'src' }, sessionId: conversationId }
+		]);
 	});
 
 	it('returns an Effect tool failure for a provider-requested undeclared tool', async () => {

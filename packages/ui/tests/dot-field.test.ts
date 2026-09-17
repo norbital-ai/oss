@@ -1,8 +1,20 @@
 // @ts-nocheck -- executed directly by Node with --experimental-strip-types.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { RIBBON_BELOW, dotFar, dotNear, measureFit, pitchAcross, pitchAlong } from '../src/dot-field/index.ts';
-import { NORBIUS_STRIP_STATES, bandFaces, bandLayout, norbiusStripGeometry } from '../src/norbius-strip/geometry.ts';
+import {
+	RIBBON_BELOW,
+	dotFar,
+	dotNear,
+	measureFit,
+	pitchAcross,
+	pitchAlong
+} from '../src/dot-field/index.ts';
+import {
+	NORBIUS_STRIP_STATES,
+	bandFaces,
+	bandLayout,
+	norbiusStripGeometry
+} from '../src/norbius-strip/geometry.ts';
 import { accretionDiscGeometry, discLayout, discPoint } from '../src/accretion-disc/geometry.ts';
 
 test('a bigger box gets more dots, never bigger ones', () => {
@@ -10,8 +22,14 @@ test('a bigger box gets more dots, never bigger ones', () => {
 	const bandCounts = sizes.map((size) => bandLayout(size).length);
 	const discCounts = sizes.map((size) => discLayout(size).length);
 	for (let i = 1; i < sizes.length; i += 1) {
-		assert.ok(bandCounts[i] > bandCounts[i - 1], `band ${sizes[i]}px has more dots than ${sizes[i - 1]}px`);
-		assert.ok(discCounts[i] > discCounts[i - 1], `disc ${sizes[i]}px has more dots than ${sizes[i - 1]}px`);
+		assert.ok(
+			bandCounts[i] > bandCounts[i - 1],
+			`band ${sizes[i]}px has more dots than ${sizes[i - 1]}px`
+		);
+		assert.ok(
+			discCounts[i] > discCounts[i - 1],
+			`disc ${sizes[i]}px has more dots than ${sizes[i - 1]}px`
+		);
 	}
 	for (const size of sizes) {
 		assert.ok(dotNear(size) <= 1.2, `near dot capped at ${size}px`);

@@ -224,6 +224,19 @@ const answering = (body: Schema.Json): FacilityBinding<ConnectorRequest, Connect
 	call: async () => ({ _tag: 'Success', value: { output: { status: 200, headers: {}, body } } })
 });
 
+/** The write contract an importable collection declares: the columns a pull may land. */
+const jobsWrite = {
+	create: { input: { columns: { external_ref: true, site_id: true, title: true } } },
+	update: { input: { columns: { external_ref: true, site_id: true, title: true } } },
+	delete: {}
+} as const;
+const codedWrite = (code: string) =>
+	({
+		create: { input: { columns: { [code]: true, name: true } } },
+		update: { input: { columns: { [code]: true, name: true } } },
+		delete: {}
+	}) as const;
+
 let harness: BoltTestRuntime | undefined;
 
 afterEach(async () => {
@@ -234,7 +247,15 @@ afterEach(async () => {
 const build = async (body: Schema.Json): Promise<BoltTestRuntime> => {
 	const built = await makeBoltTestRuntime(definition, {
 		connector: answering(body),
-		authored: { ...emptyAuthoredRuntime, integrations: described.authored }
+		authored: {
+			...emptyAuthoredRuntime,
+			integrations: described.authored,
+			collections: {
+				jobs: jobsWrite,
+				sites: codedWrite('site_code'),
+				regions: codedWrite('region_code')
+			}
+		}
 	});
 	harness = built;
 	return built;

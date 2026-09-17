@@ -191,8 +191,7 @@ const layer = Layer.effect(
 				if (!isObject(row)) continue;
 				const name = Reflect.get(row, 'name');
 				const updatedAt = Reflect.get(row, 'updated_at');
-				if (isString(name))
-					stored.set(name, isString(updatedAt) ? updatedAt : undefined);
+				if (isString(name)) stored.set(name, isString(updatedAt) ? updatedAt : undefined);
 			}
 			return declared().map((variable) => {
 				const updatedAt = stored.get(variable.name);

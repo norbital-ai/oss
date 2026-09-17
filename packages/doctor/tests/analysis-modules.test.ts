@@ -137,7 +137,10 @@ test('inventory: scanner digest tracks input bytes, not walk order', () => {
 		const first = scannerInputInventory(root);
 		const second = scannerInputInventory(root);
 		assert.deepEqual(first.sources, ['a.ts', 'sub/b.mjs']);
-		assert.deepEqual(first.inputs, ['.doctorignore', 'a.ts', 'sub/b.mjs'].filter((name) => name !== '.doctorignore'));
+		assert.deepEqual(
+			first.inputs,
+			['.doctorignore', 'a.ts', 'sub/b.mjs'].filter((name) => name !== '.doctorignore')
+		);
 		assert.equal(first.digest, second.digest);
 		assert.match(first.digest, /^sha256:[0-9a-f]{64}$/);
 		writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
@@ -190,10 +193,7 @@ test('graph: exports flatten conditionals and project build output back to sourc
 		const owner = { ...OWNER, root };
 		// Both conditional branches survive as separate stems, stripped of build output and
 		// extensions; dedup happens later, at resolved-target level.
-		assert.deepEqual(exportedStems(owner, ''), [
-			join(root, 'src/index'),
-			join(root, 'src/index')
-		]);
+		assert.deepEqual(exportedStems(owner, ''), [join(root, 'src/index'), join(root, 'src/index')]);
 		assert.deepEqual(exportedStems(owner, 'util'), [join(root, 'src/util')]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -267,8 +267,13 @@ test('graph: resolution classifies internal, external, aliased, and workspace sp
 			scanRoot: root,
 			id: 'rid/@ws/lib@packages/lib'
 		};
-		const fileSet = new Set([join(root, 'packages/app/src/main.ts'), join(root, 'packages/lib/src/util.ts')]);
-		const aliasesByRoot = new Map([[app.root, [{ pattern: '@app/*', targets: [join(app.root, 'src', '*')], order: 0 }]]]);
+		const fileSet = new Set([
+			join(root, 'packages/app/src/main.ts'),
+			join(root, 'packages/lib/src/util.ts')
+		]);
+		const aliasesByRoot = new Map([
+			[app.root, [{ pattern: '@app/*', targets: [join(app.root, 'src', '*')], order: 0 }]]
+		]);
 		const packageByName = new Map([['@ws/lib', [libOwner]]]);
 		const resolved = resolveImport(
 			join(app.root, 'src/main.ts'),
@@ -355,7 +360,10 @@ test('graph: reach follows value edges from configured tests only', () => {
 		['/prod.ts', new Set(['/leaf.ts'])]
 	]);
 	const productionSet = new Set(['/prod.ts', '/leaf.ts']);
-	assert.deepEqual([...testReach(new Set(['/t.test.ts']), adjacency, productionSet)].sort(), ['/leaf.ts', '/prod.ts']);
+	assert.deepEqual([...testReach(new Set(['/t.test.ts']), adjacency, productionSet)].sort(), [
+		'/leaf.ts',
+		'/prod.ts'
+	]);
 });
 
 // --- structure ------------------------------------------------------------------------------
@@ -395,10 +403,28 @@ test('structure: locality classes span same-directory through cross-root', () =>
 		'sameConcept'
 	);
 	assert.equal(
-		importLocality(LOCAL_FROM, localTarget('/r/pkg/other/x.ts', { owner: { id: 'r/other@other' }, pillar: 'p9', concept: 'c9' })),
+		importLocality(
+			LOCAL_FROM,
+			localTarget('/r/pkg/other/x.ts', {
+				owner: { id: 'r/other@other' },
+				pillar: 'p9',
+				concept: 'c9'
+			})
+		),
 		'crossPackage'
 	);
-	assert.equal(importLocality(LOCAL_FROM, localTarget('/s/x.ts', { root: { id: 's' }, owner: { id: 's/o@o' }, pillar: 'p8', concept: 'c8' })), 'crossRoot');
+	assert.equal(
+		importLocality(
+			LOCAL_FROM,
+			localTarget('/s/x.ts', {
+				root: { id: 's' },
+				owner: { id: 's/o@o' },
+				pillar: 'p8',
+				concept: 'c8'
+			})
+		),
+		'crossRoot'
+	);
 });
 
 test('structure: colocation score weights classes and defaults to perfect when empty', () => {
@@ -406,7 +432,10 @@ test('structure: colocation score weights classes and defaults to perfect when e
 	const counts = emptyLocality();
 	counts.sameDirectory = 1;
 	counts.crossPackage = 1;
-	assert.equal(localityScore(counts), Math.round(((1 * 1 + 0.1 * 1) / 2) * 100 * 1_000_000) / 1_000_000);
+	assert.equal(
+		localityScore(counts),
+		Math.round(((1 * 1 + 0.1 * 1) / 2) * 100 * 1_000_000) / 1_000_000
+	);
 });
 
 // --- authenticate ---------------------------------------------------------------------------
@@ -419,10 +448,17 @@ test('authenticate: catalogue rows attach to records and unmapped locations stay
 		catalogueDigest: 'sha256:' + 'cc'.repeat(32)
 	};
 	const quality = staticFindings(
-		[{ receiptPath: '/r/.norbital/diagnosis/receipt.json', receipt, catalogue: '/r/.norbital/diagnosis/findings.tsv', rows: [
-			`error\thigh\tA6\tawait in loop\tsrc/one/mod.ts:12: await x(); [position=loop-body]\tstraightforwardness`,
-			`hint\treview\tQ4\tnaming\toutside/nobody.ts:3: y(); [name=y]\tcolocation,no-bloat`
-		] }],
+		[
+			{
+				receiptPath: '/r/.norbital/diagnosis/receipt.json',
+				receipt,
+				catalogue: '/r/.norbital/diagnosis/findings.tsv',
+				rows: [
+					`error\thigh\tA6\tawait in loop\tsrc/one/mod.ts:12: await x(); [position=loop-body]\tstraightforwardness`,
+					`hint\treview\tQ4\tnaming\toutside/nobody.ts:3: y(); [name=y]\tcolocation,no-bloat`
+				]
+			}
+		],
 		new Map([['/r/src/one/mod.ts', { displayPath: 'r/src/one/mod.ts', concept: 'r/pkg@pkg:one' }]]),
 		new Map([['/r', { path: '/r', id: 'r' }]])
 	);
@@ -438,7 +474,16 @@ test('authenticate: catalogue rows attach to records and unmapped locations stay
 	assert.equal(unmapped?.evidence, 'name=y');
 	assert.deepEqual(
 		quality.byPrinciple.map(({ name, count }) => [name, count]),
-		[['simplicity', 0], ['straightforwardness', 1], ['modularity', 0], ['testability', 0], ['efficiency', 0], ['type-safety', 0], ['colocation', 1], ['no-bloat', 1]]
+		[
+			['simplicity', 0],
+			['straightforwardness', 1],
+			['modularity', 0],
+			['testability', 0],
+			['efficiency', 0],
+			['type-safety', 0],
+			['colocation', 1],
+			['no-bloat', 1]
+		]
 	);
 	assert.equal(SCANNER_VERSION, 34);
 });
@@ -591,7 +636,9 @@ test('entities: pathways require forty structural tokens and preserve literal te
 		`const big = first(a, ${seed}); const more = second(big, '${seed}'); const extra = blend(more, ${seed}, 'z'); const last = third(extra, [1, 2, 3]);`;
 	const left = pathwayHash(template(1));
 	const right = pathwayHash(template(2));
-	const other = pathwayHash(`const big = fourth(a, 1); const more = fifth(big, 'x', extraBit); const extra = merge(more, 1, 'z'); const last = sixth(extra, [1, 2, 3], { deep: true });`);
+	const other = pathwayHash(
+		`const big = fourth(a, 1); const more = fifth(big, 'x', extraBit); const extra = merge(more, 1, 'z'); const last = sixth(extra, [1, 2, 3], { deep: true });`
+	);
 	assert.ok(left && right && other);
 	assert.notEqual(left.hash, right.hash);
 	assert.equal(left.tokens, right.tokens);
@@ -626,8 +673,26 @@ function occurrenceOf(overrides: Record<string, unknown>): Record<string, unknow
 
 test('entities: exact groups need cross-file agreement and classes suppress their members', () => {
 	const entities = [
-		occurrenceOf({ id: 'a', rootId: 'r', file: 'r/left.ts', name: 'dupe', kind: 'function', hash: 'h1', shingles: [], cyclomatic: 2 }),
-		occurrenceOf({ id: 'b', rootId: 'r', file: 'r/right.ts', name: 'dupe', kind: 'function', hash: 'h1', shingles: [], cyclomatic: 2 })
+		occurrenceOf({
+			id: 'a',
+			rootId: 'r',
+			file: 'r/left.ts',
+			name: 'dupe',
+			kind: 'function',
+			hash: 'h1',
+			shingles: [],
+			cyclomatic: 2
+		}),
+		occurrenceOf({
+			id: 'b',
+			rootId: 'r',
+			file: 'r/right.ts',
+			name: 'dupe',
+			kind: 'function',
+			hash: 'h1',
+			shingles: [],
+			cyclomatic: 2
+		})
 	] as never;
 	const evidence = pathwayEvidence(entities);
 	assert.equal(evidence.exact.length, 1);
@@ -637,13 +702,17 @@ test('entities: exact groups need cross-file agreement and classes suppress thei
 
 test('entities: labels prefer call evidence and fall back to entity words', () => {
 	assert.equal(
-		clusterLabel([
-			occurrenceOf({ operationSignature: 'serialize:2|if:1' }) as never
-		]),
+		clusterLabel([occurrenceOf({ operationSignature: 'serialize:2|if:1' }) as never]),
 		'calls: serialize'
 	);
-	assert.equal(clusterLabel([occurrenceOf({ entity: 'invoiceBuilder', operationSignature: null }) as never]), 'functions: builder + invoice');
-	assert.equal(clusterLabel([occurrenceOf({ entity: 'run', operationSignature: null }) as never]), 'structurally duplicated pathway');
+	assert.equal(
+		clusterLabel([occurrenceOf({ entity: 'invoiceBuilder', operationSignature: null }) as never]),
+		'functions: builder + invoice'
+	);
+	assert.equal(
+		clusterLabel([occurrenceOf({ entity: 'run', operationSignature: null }) as never]),
+		'structurally duplicated pathway'
+	);
 });
 
 // --- tests-config ---------------------------------------------------------------------------
@@ -677,7 +746,17 @@ test('tests-config: commands must be able to select the candidate', () => {
 // --- composite ------------------------------------------------------------------------------
 
 test('composite: distributions report rounded summaries over sorted copies', () => {
-	assert.deepEqual(distribution([]), { count: 0, mean: 0, stdev: 0, cv: 0, gini: 0, median: 0, p90: 0, p95: 0, max: 0 });
+	assert.deepEqual(distribution([]), {
+		count: 0,
+		mean: 0,
+		stdev: 0,
+		cv: 0,
+		gini: 0,
+		median: 0,
+		p90: 0,
+		p95: 0,
+		max: 0
+	});
 	const stats = distribution([4, 1, 3, 2]);
 	assert.equal(stats.count, 4);
 	assert.equal(stats.mean, 2.5);
@@ -707,8 +786,16 @@ test('composite: comparisons gate on versions and roots, then compute signed del
 	const outcome = compare(report, baseline);
 	assert.equal(outcome.deltas['coupling'], 1);
 	assert.equal(outcome.deltas['cyclicModules'], 2);
-	assert.deepEqual(outcome.regressions, ['coupling +1', 'modularity -1', 'cyclicModules +2', 'staticErrors +1']);
-	assert.throws(() => compare(report, { ...baseline, schemaVersion: 7 }), /baseline analyzer\/schema does not match/);
+	assert.deepEqual(outcome.regressions, [
+		'coupling +1',
+		'modularity -1',
+		'cyclicModules +2',
+		'staticErrors +1'
+	]);
+	assert.throws(
+		() => compare(report, { ...baseline, schemaVersion: 7 }),
+		/baseline analyzer\/schema does not match/
+	);
 	assert.throws(() => compare(report, { ...baseline, roots: [] }), /baseline roots do not match/);
 });
 
@@ -745,8 +832,24 @@ function minimalReport(): Parameters<typeof markdown>[0] {
 					property === 'productionCodeLoc' || property === 'testCodeLoc' ? 0 : 0
 			}
 		) as never,
-		scores: { coupling: 1, modularity: 2, colocation: 3, testability: 4, simplicity: 5, staticQuality: null, health: null },
-		scorePrecision: { coupling: 1, modularity: 2, colocation: 3, testability: 4, simplicity: 5, staticQuality: null, health: null },
+		scores: {
+			coupling: 1,
+			modularity: 2,
+			colocation: 3,
+			testability: 4,
+			simplicity: 5,
+			staticQuality: null,
+			health: null
+		},
+		scorePrecision: {
+			coupling: 1,
+			modularity: 2,
+			colocation: 3,
+			testability: 4,
+			simplicity: 5,
+			staticQuality: null,
+			health: null
+		},
 		quality: null,
 		distributions: {
 			productionFileCodeLoc: distribution([]),
@@ -780,7 +883,8 @@ test('snapshot: assembleReport publishes pairs and reports what it wrote', async
 	writeTree(root, {
 		'package.json': `${JSON.stringify({ name: 'tiny', scripts: { test: 'node --test' } })}\n`,
 		'src/only.ts': 'export const only = 1;\n',
-		'test/only.test.ts': "import { strict } from 'node:assert';\nimport { only } from '../src/only.js';\nstrict.ok(only);\n"
+		'test/only.test.ts':
+			"import { strict } from 'node:assert';\nimport { only } from '../src/only.js';\nstrict.ok(only);\n"
 	});
 	try {
 		const out = join(scratch('doctor-snap-out'), 'report');

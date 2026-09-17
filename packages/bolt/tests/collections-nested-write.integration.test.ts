@@ -2,14 +2,8 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
-import {
-	authoredHooks,
-	type CollectionHooks,
-	type MutateGraph
-} from '../src/authoring/contracts-schema.js';
-import { AuthoredRefusal } from '../src/authoring/refusal.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
 import {
 	adminSubject,
@@ -19,7 +13,8 @@ import {
 } from './support/bolt-test-layer.js';
 
 /**
- * That a record and the records that belong to it are written together, or not at all.
+ * The nested-write grammar (RFC §4.3): a record and the records that belong to it are written
+ * together, or not at all, through explicit relation actions.
  *
  * The shape this replaces: a payroll run was committed, and *then* its payslips were written in a
  * second transaction, their lines in a third, their source claims in a fourth. A build that died
@@ -36,8 +31,23 @@ const definition = workspace({
 		collection({
 			name: 'order_lines',
 			fields: {
-				order_id: field.string({ required: false }),
+				order_id: field.uuid({ required: false }),
 				sku: field.string({ required: true })
+			}
+		}),
+		collection({
+			name: 'line_notes',
+			fields: {
+				line_id: field.uuid({ required: true }),
+				body: field.string({ required: true })
+			}
+		}),
+		// A row an order pins rather than owns: deleting the order releases it, never takes it.
+		collection({
+			name: 'shipments',
+			fields: {
+				order_id: field.uuid({ required: false }),
+				carrier: field.string({ required: true })
 			}
 		})
 	],
@@ -50,6 +60,24 @@ const definition = workspace({
 			from: { collection: 'orders', column: 'id' },
 			to: { collection: 'order_lines', column: 'order_id' },
 			cascade: true
+		},
+		{
+			name: 'line_note_line',
+			source: 'order_lines',
+			target: 'line_notes',
+			cardinality: 'many',
+			from: { collection: 'order_lines', column: 'id' },
+			to: { collection: 'line_notes', column: 'line_id' },
+			cascade: true
+		},
+		{
+			name: 'shipment_order',
+			source: 'orders',
+			target: 'shipments',
+			cardinality: 'many',
+			from: { collection: 'orders', column: 'id' },
+			to: { collection: 'shipments', column: 'order_id' },
+			setNull: true
 		}
 	],
 	apps: [app({ name: 'nested', label: 'Nested' })],
@@ -66,108 +94,66 @@ const definition = workspace({
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
-			grants: [
-				{ collection: 'orders', action: 'create' },
-				{ collection: 'orders', action: 'update' },
-				{ collection: 'orders', action: 'delete' },
-				{ collection: 'orders', action: 'read' },
-				{ collection: 'order_lines', action: 'create' },
-				{ collection: 'order_lines', action: 'update' },
-				{ collection: 'order_lines', action: 'delete' },
-				{ collection: 'order_lines', action: 'read' }
-			]
+			grants: (['orders', 'order_lines', 'line_notes', 'shipments'] as const).flatMap((name) =>
+				(['create', 'read', 'update', 'delete'] as const).map((action) => ({
+					collection: name,
+					action
+				}))
+			)
 		})
 	]
 });
 
-/**
- * The two fixtures as a schema, so the hooks are typed the way a compiled workspace's are: the
- * many edge is declared with the endpoint the mutations own, which lets a `before` return a child
- * graph without naming the foreign key.
- */
-interface NestedWriteSchema {
-	readonly tables: {
-		readonly orders: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly reference: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly reference: string;
-			};
-		};
-		readonly order_lines: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly order_id: string | null;
-				readonly sku: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly order_id?: string | null;
-				readonly sku: string;
-			};
-		};
-	};
-	readonly relations: {
-		readonly orders: {
-			readonly order_line_order: {
-				readonly cardinality: 'many';
-				readonly target: 'order_lines';
-				readonly column: 'order_id';
-				readonly parentColumn: 'id';
-			};
-		};
-	};
-}
+const lineSelection = {
+	create: {
+		columns: { sku: true },
+		with: { line_note_line: { create: { columns: { body: true } } } }
+	},
+	update: { columns: { sku: true } },
+	link: { columns: {} },
+	unlink: { columns: {} },
+	delete: {}
+} as const;
 
-interface NestedDeleteSchema extends NestedWriteSchema {
-	readonly tables: NestedWriteSchema['tables'] & {
-		readonly line_notes: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly line_id: string;
-				readonly body: string;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly line_id: string;
-				readonly body: string;
-			};
-		};
-	};
-	readonly relations: NestedWriteSchema['relations'] & {
-		readonly order_lines: {
-			readonly line_note_line: {
-				readonly cardinality: 'many';
-				readonly target: 'line_notes';
-				readonly column: 'line_id';
-				readonly parentColumn: 'id';
-			};
-		};
-	};
-}
-
-/** The hook returns a graph, which is the case the whole design exists for. */
-const orderHooks: CollectionHooks<NestedWriteSchema, 'orders'> = {
-	mutate: {
-		perRecord: {
-			before: {
-				description: 'Expands an order into its lines.',
-				handler: ({ input }) => ({
-					...(input.reference === undefined ? {} : { reference: input.reference }),
-					order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
-				})
-			}
-		}
+/** The declared contract: an order with its lines, and a line with its notes, written inline. */
+const declared: AuthoredRuntime['collections'] = {
+	orders: {
+		create: { input: { columns: { reference: true }, with: { order_line_order: lineSelection } } },
+		update: { input: { columns: { reference: true }, with: { order_line_order: lineSelection } } },
+		delete: {}
+	},
+	order_lines: {
+		create: { input: { columns: { order_id: true, sku: true } } },
+		update: { input: { columns: { order_id: true, sku: true } } },
+		delete: {}
+	},
+	shipments: {
+		create: { input: { columns: { order_id: true, carrier: true } } },
+		update: { input: { columns: { order_id: true, carrier: true } } },
+		delete: {}
 	}
 };
 
-const authored = {
+type Payload = Readonly<Record<string, unknown>>;
+
+/** A transform returning a graph, which is the case the whole design exists for. */
+const expandingTransform = (inputs: ReadonlyArray<Payload>) =>
+	Effect.succeed(
+		inputs.map((input) => ({
+			...input,
+			order_line_order: { create: [{ sku: 'a-1' }, { sku: 'a-2' }] }
+		}))
+	);
+
+const authoredWith = (
+	transform?: (inputs: ReadonlyArray<Payload>) => unknown
+): AuthoredRuntime => ({
 	...emptyAuthoredRuntime,
-	hooks: { orders: authoredHooks(orderHooks) }
-};
+	collections: {
+		...declared,
+		orders: { ...declared.orders, ...(transform === undefined ? {} : { transform }) }
+	}
+});
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -175,404 +161,93 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const write = (values: Record<string, unknown>) =>
-	Effect.gen(function* () {
-		const collections = yield* Collections.Service;
-		return yield* collections.mutate(EffectId.make('nested-1'), adminSubject, 'orders', [values]);
-	});
-
-const createLine = (runtime: BoltTestRuntime, effectId: string, values: Record<string, unknown>) =>
+const write = (
+	runtime: BoltTestRuntime,
+	effectId: string,
+	collection: string,
+	action: 'create' | 'update' | 'delete',
+	input: Payload
+) =>
 	runtime.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			const result = yield* collections.mutate(
-				EffectId.make(effectId),
-				adminSubject,
-				'order_lines',
-				[values]
-			);
-			const id = result.records[0]?.['id'];
-			if (typeof id !== 'string') throw new Error('created line has no id');
-			return id;
-		})
-	);
-
-const createOrder = (runtime: BoltTestRuntime, effectId: string, reference: string) =>
-	runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			const collections = yield* Collections.Service;
-			const result = yield* collections.mutate(EffectId.make(effectId), adminSubject, 'orders', [
-				{ reference }
+			return yield* collections.write(EffectId.make(effectId), adminSubject, [
+				{ collection, action, inputs: [input] }
 			]);
-			const id = result.records[0]?.['id'];
-			if (typeof id !== 'string') throw new Error('created order has no id');
-			return id;
 		})
 	);
 
-const claimLinesAuthored = (lineIds: ReadonlyArray<string>, refuseSku?: string) => ({
-	...emptyAuthoredRuntime,
-	hooks: {
-		orders: authoredHooks<NestedWriteSchema, 'orders'>({
-			mutate: {
-				perRecord: {
-					before: {
-						description: 'Attaches explicitly selected existing lines to the new order.',
-						handler: ({ input }) =>
-							({
-								...input,
-								order_line_order: lineIds.map((id) => ({ id }))
-							}) as MutateGraph<NestedWriteSchema, 'orders'>
-					}
-				}
-			}
-		}),
-		...(refuseSku === undefined
-			? {}
-			: {
-					order_lines: authoredHooks<NestedWriteSchema, 'order_lines'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Refuses the selected stored line to prove graph rollback.',
-									handler: ({ input, existing }) =>
-										existing?.sku === refuseSku
-											? Effect.fail(new AuthoredRefusal({ message: 'claimed line refused' }))
-											: Effect.succeed(input)
-								}
-							}
-						}
-					})
-				})
-	}
-});
+const createLine = async (runtime: BoltTestRuntime, effectId: string, values: Payload) => {
+	const result = await write(runtime, effectId, 'order_lines', 'create', values);
+	const id = result.records[0]?.['id'];
+	if (typeof id !== 'string') throw new Error('created line has no id');
+	return id;
+};
+
+const createOrder = async (runtime: BoltTestRuntime, effectId: string, input: Payload) => {
+	const result = await write(runtime, effectId, 'orders', 'create', input);
+	const id = result.records[0]?.['id'];
+	if (typeof id !== 'string') throw new Error('created order has no id');
+	return id;
+};
 
 describe('a nested write', () => {
-	it('gives deletion hooks their immediate prepared or deleted parent, and no parent for direct deletion', async () => {
-		const observed: Array<
-			Readonly<{ collection: string; parent?: Readonly<Record<string, unknown>> }>
-		> = [];
-		const deepDefinition = workspace({
-			...definition,
-			collections: [
-				...definition.collections,
-				collection({
-					name: 'line_notes',
-					fields: {
-						line_id: field.string({ required: true }),
-						body: field.string({ required: true })
-					}
-				})
-			],
-			relations: [
-				...definition.relations,
-				{
-					name: 'line_note_line',
-					source: 'order_lines',
-					target: 'line_notes',
-					cardinality: 'many',
-					from: { collection: 'order_lines', column: 'id' },
-					to: { collection: 'line_notes', column: 'line_id' },
-					cascade: true
-				}
-			],
-			policies: [
-				...definition.policies,
-				policy({
-					name: 'notes-data',
-					effect: 'allow',
-					grants: [
-						{ collection: 'line_notes', action: 'read' },
-						{ collection: 'line_notes', action: 'create' },
-						{ collection: 'line_notes', action: 'update' },
-						{ collection: 'line_notes', action: 'delete' }
-					]
-				})
-			],
-			teams: { admin: ['admin-data', 'notes-data'] }
-		});
-		harness = await makeBoltTestRuntime(deepDefinition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					order_lines: authoredHooks<NestedDeleteSchema, 'order_lines'>({
-						delete: {
-							perRecord: {
-								before: {
-									description: 'Record the enclosing order for each removed line.',
-									handler: ({ parent }) => {
-										observed.push({
-											collection: 'order_lines',
-											...(parent === undefined ? {} : { parent })
-										});
-									}
-								}
-							}
-						}
-					}),
-					line_notes: authoredHooks<NestedDeleteSchema, 'line_notes'>({
-						delete: {
-							perRecord: {
-								before: {
-									description: 'Record the immediate line owner when its note cascades.',
-									handler: ({ parent }) => {
-										observed.push({
-											collection: 'line_notes',
-											...(parent === undefined ? {} : { parent })
-										});
-									}
-								}
-							}
-						}
-					})
-				}
-			}
-		});
-		const orderId = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				const created = yield* collections.mutate(
-					EffectId.make('delete-parent-create'),
-					adminSubject,
-					'orders',
-					[
-						{
-							reference: 'INITIAL',
-							order_line_order: [
-								{ sku: 'keep', line_note_line: [{ body: 'retained' }] },
-								{ sku: 'drop', line_note_line: [{ body: 'removed' }] }
-							]
-						}
-					]
-				);
-				return String(created.records[0]?.['id']);
-			})
-		);
-		const lines = await harness.database.query('select id, sku from order_lines');
-		const keepId = String(lines.find((row) => row['sku'] === 'keep')!['id']);
-		const dropId = String(lines.find((row) => row['sku'] === 'drop')!['id']);
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					EffectId.make('delete-parent-reconcile'),
-					adminSubject,
-					'orders',
-					[
-						{
-							id: orderId,
-							reference: 'AMENDED',
-							order_line_order: [{ id: keepId }]
-						}
-					]
-				);
-			})
-		);
-		expect(observed[0]).toMatchObject({
-			collection: 'order_lines',
-			parent: {
-				collection: 'orders',
-				id: orderId,
-				column: 'order_id',
-				action: 'update',
-				values: { reference: 'AMENDED' }
-			}
-		});
-		expect(observed[1]).toMatchObject({
-			collection: 'line_notes',
-			parent: {
-				collection: 'order_lines',
-				id: dropId,
-				column: 'line_id',
-				action: 'delete',
-				values: { sku: 'drop' }
-			}
-		});
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.delete(EffectId.make('delete-parent-cascade'), adminSubject, 'orders', [
-					orderId
-				]);
-			})
-		);
-		expect(observed[2]).toMatchObject({
-			collection: 'order_lines',
-			parent: {
-				collection: 'orders',
-				id: orderId,
-				action: 'delete',
-				values: { reference: 'AMENDED' }
-			}
-		});
-		expect(observed[3]).toMatchObject({
-			collection: 'line_notes',
-			parent: { collection: 'order_lines', id: keepId, action: 'delete' }
-		});
-		const directId = await createLine(harness, 'delete-direct-create', { sku: 'standalone' });
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).delete(
-					EffectId.make('delete-direct-line'),
-					adminSubject,
-					'order_lines',
-					[directId]
-				);
-			})
-		);
-		expect(observed.at(-1)).toEqual({ collection: 'order_lines' });
-	}, 60_000);
-
-	it('gives child hooks the prepared parent own fields on create and update, and no parent on direct writes', async () => {
-		const observed: Array<Readonly<Record<string, unknown>> | undefined> = [];
-		const sizes: Array<Readonly<Partial<Record<string, number>>>> = [];
-		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					orders: authoredHooks<NestedWriteSchema, 'orders'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Canonicalize the parent reference before preparing children.',
-									handler: ({ input, relationshipSizes }) => {
-										sizes.push(relationshipSizes);
-										return {
-											...input,
-											...(input.reference === undefined
-												? {}
-												: { reference: input.reference.toUpperCase() })
-										};
-									}
-								}
-							}
-						}
-					}),
-					order_lines: authoredHooks<NestedWriteSchema, 'order_lines'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Resolve the enclosing order before it has been stored.',
-									handler: ({ input, parent }) => {
-										observed.push(parent);
-										if (parent?.collection !== 'orders') return input;
-										return { ...input, sku: `${parent.values.reference}:${input.sku}` };
-									}
-								}
-							}
-						}
-					})
-				}
-			}
-		});
-		const orderId = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				const created = yield* collections.mutate(
-					EffectId.make('parent-create'),
-					adminSubject,
-					'orders',
-					[{ reference: 'new', order_line_order: [{ sku: 'first' }] }]
-				);
-				return String(created.records[0]?.['id']);
-			})
-		);
-		const [line] = await harness.database.query('select id, order_id, sku from order_lines');
-		expect(line?.['sku']).toBe('NEW:first');
-		expect(observed[0]).toEqual({
-			collection: 'orders',
-			id: orderId,
-			column: 'order_id',
-			values: { id: orderId, reference: 'NEW' }
-		});
-		expect(sizes[0]).toEqual({ order_line_order: 1 });
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.mutate(EffectId.make('parent-update'), adminSubject, 'orders', [
-					{
-						id: orderId,
-						reference: 'amended',
-						order_line_order: [{ id: line!['id'], sku: 'second' }]
-					}
-				]);
-				yield* collections.mutate(EffectId.make('parent-preserved'), adminSubject, 'orders', [
-					{ id: orderId, order_line_order: [{ id: line!['id'], sku: 'third' }] }
-				]);
-			})
-		);
-		expect(observed[1]?.['values']).toMatchObject({ id: orderId, reference: 'AMENDED' });
-		expect(observed[2]?.['values']).toMatchObject({ id: orderId, reference: 'AMENDED' });
-		expect(observed[1]?.['values']).not.toHaveProperty('order_line_order');
-		await createLine(harness, 'direct-child', { order_id: orderId, sku: 'direct' });
-		expect(observed.at(-1)).toBeUndefined();
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.mutate(EffectId.make('parent-no-relationship'), adminSubject, 'orders', [
-					{ id: orderId, reference: 'kept' }
-				]);
-				yield* collections.mutate(
-					EffectId.make('parent-empty-relationship'),
-					adminSubject,
-					'orders',
-					[{ id: orderId, order_line_order: [] }]
-				);
-				const forged = yield* Effect.result(
-					collections.mutate(EffectId.make('parent-forged-count'), adminSubject, 'orders', [
-						{ id: orderId, relationshipSizes: { order_line_order: 1 }, order_line_order: [] }
-					])
-				);
-				expect(forged._tag).toBe('Failure');
-			})
-		);
-		expect(sizes.slice(-2)).toEqual([{}, { order_line_order: 0 }]);
-	}, 60_000);
-
-	it('commits the parent and its children in one transaction', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored });
+	it('commits the parent and its transform-added children in one transaction', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith(expandingTransform) });
 		harness.database.forget();
 
-		await harness.runtime.runPromise(write({ reference: 'ORD-1' }));
+		await write(harness, 'nested-1', 'orders', 'create', { reference: 'ORD-1' });
 
-		// One transaction, not three: the call count is the shape under test, the same way
-		// `mutation-facility-budget.test.ts` measures the batch.
-		const writes = harness.database.calls.length;
+		// One transaction, not three: a declared create with no reads is one facility call.
+		expect(harness.database.calls).toHaveLength(1);
 		const orders = await harness.database.query('select id, reference from orders');
 		const lines = await harness.database.query(
 			'select order_id, sku from order_lines order by sku'
 		);
-
 		expect(orders).toHaveLength(1);
 		expect(lines).toHaveLength(2);
 		// The link the author never wrote: filled from the parent's assigned id.
 		expect(lines.map((row) => row['order_id'])).toEqual([orders[0]!['id'], orders[0]!['id']]);
-		expect(writes).toBeLessThan(5);
 	}, 60_000);
 
-	it('captures every nested create and cascade delete from the committed graph', async () => {
-		harness = await makeBoltTestRuntime(definition, { authored });
+	it('captures every nested create and the whole cascade closure of a delete', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
 		const result = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
 				const syncCommit = yield* SyncCommit.Service;
-				const created = yield* collections.mutate(
+				const created = yield* collections.write(
 					EffectId.make('nested-capture-create'),
 					adminSubject,
-					'orders',
-					[{ reference: 'ORD-CAPTURE' }]
+					[
+						{
+							collection: 'orders',
+							action: 'create',
+							inputs: [
+								{
+									reference: 'ORD-CAPTURE',
+									order_line_order: {
+										create: [
+											{ sku: 'keep', line_note_line: { create: [{ body: 'retained' }] } },
+											{ sku: 'drop' }
+										]
+									}
+								}
+							]
+						}
+					]
 				);
 				const createBatch = yield* syncCommit.drainChanges;
 				const orderId = String(created.records[0]?.['id']);
-				yield* collections.delete(EffectId.make('nested-capture-delete'), adminSubject, 'orders', [
-					orderId
+				yield* collections.write(EffectId.make('nested-capture-delete'), adminSubject, [
+					{ collection: 'orders', action: 'delete', inputs: [{ id: orderId }] }
 				]);
 				const deleteBatch = yield* syncCommit.drainChanges;
 				return { orderId, createBatch, deleteBatch };
 			})
 		);
 
-		expect(result.createBatch).toHaveLength(3);
+		expect(result.createBatch).toHaveLength(4);
 		expect(result.createBatch).toContainEqual({
 			collection: 'orders',
 			id: result.orderId,
@@ -586,60 +261,87 @@ describe('a nested write', () => {
 				(change) => change.operation === 'insert' && change.after?.['order_id'] === result.orderId
 			)
 		).toBe(true);
+		// The grandchild names the line's guest-allocated id.
+		const note = result.createBatch.find((change) => change.collection === 'line_notes');
+		expect(note?.operation).toBe('insert');
+		expect(createdLines.map((change) => change.id)).toContain(
+			note?.operation === 'insert' ? note.after['line_id'] : undefined
+		);
 
-		expect(result.deleteBatch).toHaveLength(3);
+		// The engine read the cascade closure before the transaction (RFC §4.3): the order, both
+		// lines and the note are one delete batch, and every row is gone.
+		expect(result.deleteBatch).toHaveLength(4);
+		expect(result.deleteBatch.map((change) => change.operation)).toEqual([
+			'delete',
+			'delete',
+			'delete',
+			'delete'
+		]);
+		expect(result.deleteBatch.map((change) => change.collection).toSorted()).toEqual([
+			'line_notes',
+			'order_lines',
+			'order_lines',
+			'orders'
+		]);
+		expect(await harness.database.query('select id from line_notes')).toEqual([]);
+		expect(await harness.database.query('select id from order_lines')).toEqual([]);
+	}, 60_000);
+
+	it('releases the rows a deleted parent pinned as explicit updates, so the capture sees them', async () => {
+		// A `setNull` edge used to be the database's alone: the key was cleared by `ON DELETE SET
+		// NULL`, and nothing the transaction named said so — history, sync capture and change events
+		// all missed it, so a browser replica kept the released row pinned until it was reset.
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				const syncCommit = yield* SyncCommit.Service;
+				const created = yield* collections.write(
+					EffectId.make('release-create-order'),
+					adminSubject,
+					[{ collection: 'orders', action: 'create', inputs: [{ reference: 'ORD-PIN' }] }]
+				);
+				const orderId = String(created.records[0]?.['id']);
+				const pinned = yield* collections.write(EffectId.make('release-create-pin'), adminSubject, [
+					{
+						collection: 'shipments',
+						action: 'create',
+						inputs: [{ order_id: orderId, carrier: 'DHL' }]
+					}
+				]);
+				yield* syncCommit.drainChanges;
+				yield* collections.write(EffectId.make('release-delete'), adminSubject, [
+					{ collection: 'orders', action: 'delete', inputs: [{ id: orderId }] }
+				]);
+				const deleteBatch = yield* syncCommit.drainChanges;
+				return { orderId, shipmentId: String(pinned.records[0]?.['id']), deleteBatch };
+			})
+		);
 		expect(result.deleteBatch).toContainEqual({
 			collection: 'orders',
 			id: result.orderId,
 			operation: 'delete',
 			before: {}
 		});
-		const deletedLines = result.deleteBatch.filter((change) => change.collection === 'order_lines');
-		expect(deletedLines).toHaveLength(2);
-		expect(
-			deletedLines.every(
-				(change) => change.operation === 'delete' && change.before?.['order_id'] === result.orderId
-			)
-		).toBe(true);
+		const released = result.deleteBatch.find((change) => change.collection === 'shipments');
+		expect(released?.operation).toBe('update');
+		expect(released?.operation === 'update' ? released.after['order_id'] : 'kept').toBeNull();
+		expect(await harness.database.query('select id, order_id, carrier from shipments')).toEqual([
+			{ id: result.shipmentId, order_id: null, carrier: 'DHL' }
+		]);
 	}, 60_000);
 
 	it('does not put cascade-child row bodies on the delete history snapshot', async () => {
 		const fat = 'payload-body-'.repeat(200);
 		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					orders: authoredHooks<NestedWriteSchema, 'orders'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Expands an order into one fat line.',
-									handler: ({ input }) => ({
-										...(input.reference === undefined ? {} : { reference: input.reference }),
-										order_line_order: [{ sku: fat }]
-									})
-								}
-							}
-						}
-					})
-				}
-			}
+			authored: authoredWith((inputs) =>
+				Effect.succeed(
+					inputs.map((input) => ({ ...input, order_line_order: { create: [{ sku: fat }] } }))
+				)
+			)
 		});
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				const created = yield* collections.mutate(
-					EffectId.make('fat-cascade-create'),
-					adminSubject,
-					'orders',
-					[{ reference: 'ORD-FAT' }]
-				);
-				const orderId = String(created.records[0]?.['id']);
-				yield* collections.delete(EffectId.make('fat-cascade-delete'), adminSubject, 'orders', [
-					orderId
-				]);
-			})
-		);
+		const orderId = await createOrder(harness, 'fat-cascade-create', { reference: 'ORD-FAT' });
+		await write(harness, 'fat-cascade-delete', 'orders', 'delete', { id: orderId });
 		const history = await harness.database.query(
 			`select collection_name, record_id, snapshot::text as snapshot from bolt_collection_history where operation = 'delete' order by collection_name, record_id`
 		);
@@ -654,277 +356,170 @@ describe('a nested write', () => {
 		}
 	}, 60_000);
 
-	it('refuses a key that is neither a column nor a declared relation, rather than dropping it', async () => {
+	it('refuses a transform payload naming a key that is neither a column nor a relation, before the transaction', async () => {
 		harness = await makeBoltTestRuntime(definition, {
-			authored: {
-				...authored,
-				hooks: {
-					orders: authoredHooks<NestedWriteSchema, 'orders'>({
-						mutate: {
-							perRecord: {
-								before: {
-									description: 'Returns a misspelled relation name.',
-									handler: ({ input }) => {
-										// The misspelled key is the point of the test: it is a type error on a returned
-										// literal, so the handler builds the graph in a variable — which is exactly the
-										// shape the runtime's FLATTEN refuses before the transaction.
-										const misspelled = {
-											reference: input.reference,
-											order_line_orders: [{ sku: 'a-1' }]
-										};
-										return misspelled as MutateGraph<NestedWriteSchema, 'orders'>;
-									}
-								}
-							}
-						}
-					})
-				}
-			}
-		});
-
-		// `Effect.result`, not `Effect.either` — v4 renamed it, and the old name is not a compile error.
-		const outcome = await harness.runtime.runPromise(Effect.result(write({ reference: 'ORD-2' })));
-		expect(outcome._tag).toBe('Failure');
-		expect(JSON.stringify(outcome)).toContain('order_line_orders');
-
-		// And nothing was written, because the refusal happened before the transaction.
-		const orders = await harness.database.query('select id from orders');
-		expect(orders).toHaveLength(0);
-	}, 60_000);
-
-	it('lets a trusted authored graph claim a null-owned child without overwriting omitted fields', async () => {
-		const claimedIds: Array<string> = [];
-		harness = await makeBoltTestRuntime(definition, {
-			authored: claimLinesAuthored(claimedIds)
-		});
-		const lineId = await createLine(harness, 'claim-null-owned-seed', {
-			sku: 'attendance-only-facts'
-		});
-		const before = await harness.database.query(
-			'select id, order_id, sku from order_lines where id = $1',
-			[lineId]
-		);
-		expect(before).toEqual([{ id: lineId, order_id: null, sku: 'attendance-only-facts' }]);
-		claimedIds.push(lineId);
-
-		const orderId = await createOrder(harness, 'claim-null-owned', 'ROSTER-2026-01');
-		expect(
-			await harness.database.query('select id, order_id, sku from order_lines where id = $1', [
-				lineId
-			])
-		).toEqual([{ id: lineId, order_id: orderId, sku: 'attendance-only-facts' }]);
-	}, 60_000);
-
-	it('lets a server-only payload claim a stored null-owned child', async () => {
-		harness = await makeBoltTestRuntime(definition);
-		const lineId = await createLine(harness, 'server-claim-seed', { sku: 'claim-from-payload' });
-		const orderId = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const result = yield* (yield* Collections.Service).mutate(
-					EffectId.make('server-only-payload-claim'),
-					adminSubject,
-					'orders',
-					[{ reference: 'SERVER-CLAIM', order_line_order: [{ id: lineId }] }]
-				);
-				const id = result.records[0]?.['id'];
-				if (typeof id !== 'string') throw new Error('created order has no id');
-				return id;
-			})
-		);
-
-		expect(
-			await harness.database.query('select id, order_id, sku from order_lines where id = $1', [
-				lineId
-			])
-		).toEqual([{ id: lineId, order_id: orderId, sku: 'claim-from-payload' }]);
-	}, 60_000);
-
-	it('refuses a trusted authored graph that names a child owned by another parent', async () => {
-		const claimedIds: Array<string> = [];
-		harness = await makeBoltTestRuntime(definition, {
-			authored: claimLinesAuthored(claimedIds)
-		});
-		const existingOwnerId = await createOrder(harness, 'owned-elsewhere-parent', 'OWNER');
-		const lineId = await createLine(harness, 'owned-elsewhere-line', {
-			order_id: existingOwnerId,
-			sku: 'owned-elsewhere'
-		});
-		claimedIds.push(lineId);
-
-		const outcome = await harness.runtime.runPromise(
-			Effect.result(
-				Effect.gen(function* () {
-					return yield* (yield* Collections.Service).mutate(
-						EffectId.make('owned-elsewhere-claim'),
-						adminSubject,
-						'orders',
-						[{ reference: 'ATTEMPTED-NEW-OWNER' }]
-					);
-				})
+			authored: authoredWith((inputs) =>
+				Effect.succeed(
+					inputs.map((input) => ({ ...input, order_line_orders: { create: [{ sku: 'a-1' }] } }))
+				)
 			)
-		);
-
-		expect(outcome._tag).toBe('Failure');
-		expect(await harness.database.query('select id, reference from orders')).toEqual([
-			{ id: existingOwnerId, reference: 'OWNER' }
-		]);
-		expect(
-			await harness.database.query('select order_id from order_lines where id = $1', [lineId])
-		).toEqual([{ order_id: existingOwnerId }]);
+		});
+		await expect(
+			write(harness, 'nested-2', 'orders', 'create', { reference: 'ORD-2' })
+		).rejects.toThrow(/order_line_orders/);
+		// And nothing was written, because the refusal happened before the transaction.
+		expect(await harness.database.query('select id from orders')).toEqual([]);
 	}, 60_000);
 
-	it('persists nested children with explicit ids on a server-only create', async () => {
-		harness = await makeBoltTestRuntime(definition);
+	it('links a stored null-owned child from the transform or the input without touching its other fields', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
+		const first = await createLine(harness, 'link-seed-1', { sku: 'attendance-only-facts' });
+		const second = await createLine(harness, 'link-seed-2', { sku: 'claim-from-payload' });
+		expect(await harness.database.query('select order_id from order_lines')).toEqual([
+			{ order_id: null },
+			{ order_id: null }
+		]);
+
+		// The caller names the link in its declared input.
+		const orderId = await createOrder(harness, 'link-from-input', {
+			reference: 'ROSTER-2026-01',
+			order_line_order: { link: [{ id: second }] }
+		});
+		// The transform names it: the workspace's own work, judged against nobody.
+		await harness.dispose();
+		harness = await makeBoltTestRuntime(definition, {
+			authored: authoredWith((inputs) =>
+				Effect.succeed(
+					inputs.map((input) => ({ ...input, order_line_order: { link: [{ id: first }] } }))
+				)
+			)
+		});
+		await harness.database.query('insert into order_lines (id, sku) values ($1, $2), ($3, $4)', [
+			first,
+			'attendance-only-facts',
+			second,
+			'claim-from-payload'
+		]);
+		const linkedByTransform = await createOrder(harness, 'link-from-transform', {
+			reference: 'ROSTER-2026-02'
+		});
+		expect(
+			await harness.database.query('select id, order_id, sku from order_lines order by sku')
+		).toEqual([
+			{ id: first, order_id: linkedByTransform, sku: 'attendance-only-facts' },
+			{ id: second, order_id: null, sku: 'claim-from-payload' }
+		]);
+		expect(orderId).not.toBe(linkedByTransform);
+	}, 60_000);
+
+	it('keeps the ids an administrator names for nested children on create and on update', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
 		const orderId = recordId('server-only-nested-order');
 		const lineId = recordId('server-only-nested-line');
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).mutate(
-					EffectId.make('server-only-nested-create'),
-					adminSubject,
-					'orders',
-					[
-						{
-							id: orderId,
-							reference: 'ORD-NESTED',
-							order_line_order: [{ id: lineId, sku: 'nested-1' }]
-						}
-					],
-					0,
-					{ roots: [{ id: orderId, action: 'create' }] }
-				);
-			})
-		);
-
+		await write(harness, 'server-only-nested-create', 'orders', 'create', {
+			id: orderId,
+			reference: 'ORD-NESTED',
+			order_line_order: { create: [{ id: lineId, sku: 'nested-1' }] }
+		});
 		expect(await harness.database.query('select id, reference from orders')).toEqual([
 			{ id: orderId, reference: 'ORD-NESTED' }
 		]);
 		expect(await harness.database.query('select id, order_id, sku from order_lines')).toEqual([
 			{ id: lineId, order_id: orderId, sku: 'nested-1' }
 		]);
-	}, 60_000);
 
-	it('persists a new nested child id on a server-only update', async () => {
-		harness = await makeBoltTestRuntime(definition);
-		const orderId = await createOrder(harness, 'server-only-update-parent', 'ORD-EXISTING');
-		const lineId = recordId('server-only-update-line');
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).mutate(
-					EffectId.make('server-only-nested-update'),
-					adminSubject,
-					'orders',
-					[
-						{
-							id: orderId,
-							order_line_order: [{ id: lineId, sku: 'added-1' }]
-						}
-					],
-					0,
-					{ roots: [{ id: orderId, action: 'update' }] }
-				);
-			})
-		);
-
-		expect(await harness.database.query('select id, order_id, sku from order_lines')).toEqual([
-			{ id: lineId, order_id: orderId, sku: 'added-1' }
+		const added = recordId('server-only-update-line');
+		await write(harness, 'server-only-nested-update', 'orders', 'update', {
+			id: orderId,
+			order_line_order: { create: [{ id: added, sku: 'added-1' }] }
+		});
+		expect(
+			await harness.database.query('select id, order_id, sku from order_lines order by sku')
+		).toEqual([
+			{ id: added, order_id: orderId, sku: 'added-1' },
+			{ id: lineId, order_id: orderId, sku: 'nested-1' }
 		]);
 	}, 60_000);
 
-	it('rolls back every claim and the parent when any claimed child hook refuses', async () => {
-		const lineIds: Array<string> = [];
-		harness = await makeBoltTestRuntime(definition, {
-			authored: claimLinesAuthored(lineIds, 'refuse-this-line')
+	it('rolls back the whole graph when a nested create omits a required field', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored: authoredWith() });
+		const orderId = await createOrder(harness, 'rollback-seed', {
+			reference: 'Before',
+			order_line_order: { create: [{ sku: 'existing' }] }
 		});
-		lineIds.push(
-			await createLine(harness, 'claim-rollback-first', { sku: 'would-have-been-claimed' }),
-			await createLine(harness, 'claim-rollback-second', { sku: 'refuse-this-line' })
-		);
-
+		const [line] = await harness.database.query('select id from order_lines');
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
 				Effect.gen(function* () {
-					return yield* (yield* Collections.Service).mutate(
-						EffectId.make('claim-rollback-parent'),
+					return yield* (yield* Collections.Service).write(
+						EffectId.make('rollback-invalid'),
 						adminSubject,
-						'orders',
-						[{ reference: 'MUST-ROLL-BACK' }]
+						[
+							{
+								collection: 'orders',
+								action: 'update',
+								inputs: [
+									{
+										id: orderId,
+										reference: 'Must roll back',
+										order_line_order: {
+											update: [{ id: String(line?.['id']), set: { sku: 'also rolled back' } }],
+											create: [{}]
+										}
+									}
+								]
+							}
+						]
 					);
 				})
 			)
 		);
-
 		expect(outcome._tag).toBe('Failure');
-		expect(JSON.stringify(outcome)).toContain('claimed line refused');
-		expect(await harness.database.query('select id from orders')).toEqual([]);
-		expect(
-			await harness.database.query('select order_id, sku from order_lines order by sku')
-		).toEqual([
-			{ order_id: null, sku: 'refuse-this-line' },
-			{ order_id: null, sku: 'would-have-been-claimed' }
+		expect(await harness.database.query('select reference from orders')).toEqual([
+			{ reference: 'Before' }
+		]);
+		expect(await harness.database.query('select sku from order_lines')).toEqual([
+			{ sku: 'existing' }
 		]);
 	}, 60_000);
 });
 
-/**
- * That a batch's reads can be hoisted without the rule being written twice.
- *
- * A hook is authored for one record, and one that reads is an N+1 by construction: the attendance
- * rules ask two questions per row, so a four-thousand-row import asks eight thousand times. `load`
- * is where the query a person would actually write goes — one read over the window the batch spans.
- *
- * What is counted here is how many times `load` ran against how many records it served, because
- * that ratio *is* the feature. The rule stays in `handler`, once, while preparation only loads the
- * shared data it needs.
- */
-describe('a batch prepare', () => {
-	const prepareCalls: Array<number> = [];
-	const withPrepare = {
-		...emptyAuthoredRuntime,
-		hooks: {
-			orders: authoredHooks<NestedWriteSchema, 'orders', { readonly seen: Set<string> }>({
-				mutate: {
-					// Once for the batch. Returns data; decides nothing.
-					prepare: ({ inputs }) => {
-						prepareCalls.push(inputs.length);
-						return { seen: new Set(inputs.map((input) => String(input.reference))) };
-					},
-					perRecord: {
-						before: {
-							description: 'Rejects a reference the batch has already claimed.',
-							handler: ({ input, prepared }) => ({
-								reference: prepared.seen.has(String(input.reference))
-									? String(input.reference)
-									: 'unclaimed'
-							})
-						}
-					}
+describe('the writable many relation a nested action resolves through', () => {
+	it('resolves direct many endpoints while inheriting cascade from the inverse one edge', () => {
+		// The many edge is declared from the child's side, and only its inverse `one` edge cascades:
+		// the resolver still finds the child column the parent fills and carries the cascade over.
+		const childOriented = workspace({
+			...definition,
+			relations: [
+				{
+					name: 'order_line_order',
+					source: 'orders',
+					target: 'order_lines',
+					cardinality: 'many',
+					from: { collection: 'order_lines', column: 'order_id' },
+					to: { collection: 'orders', column: 'id' }
+				},
+				{
+					name: 'line_order',
+					source: 'order_lines',
+					target: 'orders',
+					cardinality: 'one',
+					from: { collection: 'order_lines', column: 'order_id' },
+					to: { collection: 'orders', column: 'id' },
+					cascade: true
 				}
-			})
-		}
-	};
-
-	it('runs once for the batch and feeds every record in it', async () => {
-		prepareCalls.length = 0;
-		harness = await makeBoltTestRuntime(definition, { authored: withPrepare });
-
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				return yield* collections.mutate(
-					EffectId.make('load-1'),
-					adminSubject,
-					'orders',
-					Array.from({ length: 6 }, (_, index) => ({ reference: `ORD-${index}` }))
-				);
-			})
-		);
-
-		// One call, six records — not six calls.
-		expect(prepareCalls).toEqual([6]);
-		const rows = await harness.database.query('select reference from orders');
-		expect(rows).toHaveLength(6);
-		// And every handler saw what `load` returned, rather than `undefined`.
-		expect(rows.every((row) => row['reference'] !== 'unclaimed')).toBe(true);
-	}, 60_000);
+			]
+		});
+		expect(
+			Collections.resolveWritableManyRelation(childOriented, 'orders', 'order_line_order')
+		).toEqual({
+			name: 'order_line_order',
+			parentCollection: 'orders',
+			parentColumn: 'id',
+			childCollection: 'order_lines',
+			childColumn: 'order_id',
+			cascade: true,
+			setNull: false
+		});
+	});
 });

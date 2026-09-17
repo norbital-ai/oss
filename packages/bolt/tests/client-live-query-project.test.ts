@@ -1,8 +1,8 @@
-import type { CollectionMutationGraph, StoredRecord } from '@norbital-ai/bolt-protocol';
+import type { CollectionWriteGraph, StoredRecord } from '@norbital-ai/bolt-protocol';
 import { describe, expect, it } from 'vitest';
 import { project } from '../src/client/live-query/project.js';
 
-const write = (graph: CollectionMutationGraph) => ({ graph });
+const write = (graph: CollectionWriteGraph) => ({ graph });
 
 describe('project', () => {
 	it('patches an existing id, appends a pending create, and skips other collections and unknown deletes', () => {
@@ -11,34 +11,34 @@ describe('project', () => {
 			[held],
 			[
 				write({
-					action: 'mutate',
+					action: 'update',
 					collection: 'payroll_runs',
-					rows: [{ action: 'update', values: { id: 'run-1', status: 'posted' } }]
+					inputs: [{ id: 'run-1', status: 'posted' }]
 				}),
 				write({
-					action: 'mutate',
+					action: 'create',
 					collection: 'payroll_runs',
-					rows: [{ action: 'create', values: { id: 'run-2', status: 'draft' } }]
+					inputs: [{ id: 'run-2', status: 'draft' }]
 				}),
 				write({
-					action: 'mutate',
+					action: 'update',
 					collection: 'payroll_runs',
-					rows: [{ action: 'update', values: { id: 'run-3', status: 'draft' } }]
+					inputs: [{ id: 'run-3', status: 'draft' }]
 				}),
 				write({
-					action: 'mutate',
+					action: 'create',
 					collection: 'payslips',
-					rows: [{ action: 'create', values: { id: 'slip-1', status: 'draft' } }]
+					inputs: [{ id: 'slip-1', status: 'draft' }]
 				}),
 				write({
 					action: 'delete',
 					collection: 'payroll_runs',
-					ids: ['never-held']
+					inputs: [{ id: 'never-held' }]
 				}),
 				write({
-					action: 'mutate',
+					action: 'create',
 					collection: 'payroll_runs',
-					rows: [{ action: 'create', values: { status: 'no-id' } }]
+					inputs: [{ status: 'no-id' }]
 				})
 			],
 			'payroll_runs'
@@ -63,7 +63,7 @@ describe('project', () => {
 				write({
 					action: 'delete',
 					collection: 'payroll_runs',
-					ids: ['run-1', 'run-2']
+					inputs: [{ id: 'run-1' }, { id: 'run-2' }]
 				})
 			],
 			'payroll_runs'

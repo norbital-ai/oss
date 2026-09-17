@@ -2,6 +2,7 @@ import type {
 	CollectionOperations,
 	CollectionPageQuery,
 	CollectionRecord,
+	CollectionRecordHistoryEntry,
 	CollectionType,
 	RemoteQuery
 } from '@norbital-ai/std/collection';
@@ -20,6 +21,27 @@ import type { SyncClient } from '../src/client/sync/client.js';
 import { initialClientState } from '../src/client/sync/machine.js';
 import { stableKey } from '../src/client/live-query/stable-key.js';
 import { createWorkspaceApiProxy, type SystemClientApi } from '../src/client/workspace-api.js';
+
+const AGENT_COLLECTION_NAMES = [
+	'approval_request',
+	'requestor',
+	'session',
+	'account',
+	'verification',
+	'auth_config',
+	'team',
+	'conversation',
+	'plan',
+	'conversation_message',
+	'turn',
+	'turn_usage',
+	'automation_run',
+	'user',
+	'bolt_notifications'
+] as const;
+const refuseWrite = async (): Promise<never> => {
+	throw new Error('The empty agent client does not execute writes');
+};
 
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,
@@ -58,14 +80,7 @@ const emptyOperations = <T extends CollectionType<object, object>>() =>
 		findMany: () => page<T['row']>([]),
 		findFirst: () => settledQuery<T['row'] | undefined>(undefined),
 		findGrouped: () => settledQuery<Readonly<Record<string, T['row'][]>>>({}),
-		count: () => settledQuery(0),
-		mutate: async () => {
-			throw new Error('The empty agent client does not execute mutations');
-		},
-		delete: async () => {
-			throw new Error('The empty agent client does not execute deletions');
-		},
-		pending: 0
+		count: () => settledQuery(0)
 	}) satisfies CollectionOperations<T>;
 
 /**
@@ -83,7 +98,8 @@ const emptySync: SyncClient = {
 		extend: () => undefined,
 		detach: () => undefined
 	}),
-	enqueue: () => undefined
+	enqueue: () => undefined,
+	answer: () => undefined
 };
 
 const emptySettlements: MutationSettlements = {
@@ -116,6 +132,12 @@ export const emptyAgentClient = (transport: BoltTransport): TurntimeConfig['clie
 	const api = createWorkspaceApiProxy(runtime, {}, { system: true });
 	if (!('system' in api)) throw new Error('The agent fixture requires the projected system client');
 	const system: SystemClientApi = api.system;
+	/** One entry per platform collection, so the fixture satisfies every keyed client surface. */
+	const perCollection = <V>(make: () => V) =>
+		Object.fromEntries(AGENT_COLLECTION_NAMES.map((name) => [name, make()])) as Record<
+			(typeof AGENT_COLLECTION_NAMES)[number],
+			V
+		>;
 	return {
 		automations: {},
 		db: {
@@ -135,6 +157,19 @@ export const emptyAgentClient = (transport: BoltTransport): TurntimeConfig['clie
 			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
 		},
+		collection: perCollection(() => ({
+			create: refuseWrite,
+			createMany: refuseWrite,
+			update: refuseWrite,
+			updateMany: refuseWrite,
+			delete: refuseWrite,
+			deleteMany: refuseWrite,
+			pending: 0
+		})),
+		collection_history: perCollection(() => ({
+			revisions: () => page<CollectionRecordHistoryEntry>([]),
+			at: () => settledQuery<undefined>(undefined)
+		})),
 		collections: {},
 		records: {
 			findMany: () => page<CollectionRecord>([])

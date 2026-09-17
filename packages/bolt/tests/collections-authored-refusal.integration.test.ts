@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Effect, Exit, Option, Result } from 'effect';
 import { refuse, AuthoredRefusal } from '../src/authoring/refusal.js';
-import { authoredHooks, type CollectionHooks } from '../src/authoring/contracts-schema.js';
-import { runAuthoredHandler } from '../src/runtime/collections/authored.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import {
+	emptyAuthoredRuntime,
+	runAuthoredHandler,
+	type AuthoredRuntime
+} from '../src/runtime/collections/authored.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import {
 	adminSubject,
@@ -13,47 +15,16 @@ import {
 } from './support/bolt-test-layer.js';
 import { unwrapMutationPhase } from './support/mutation-phase.js';
 
-/**
- * The fixture collection as a schema, so the hook below is typed the way a compiled workspace's
- * is: `CollectionHooks` reads the handler context off `tables`, making `existing` and `input`
- * inferred rather than reflected.
- */
-interface PeopleSchema {
-	readonly tables: {
-		readonly people: {
-			readonly $inferSelect: {
-				readonly id: string;
-				readonly name: string;
-				readonly team: string | null;
-			};
-			readonly $inferInsert: {
-				readonly id?: string;
-				readonly name: string;
-				readonly team?: string | null;
-			};
-		};
-	};
-	readonly relations: Record<string, never>;
-}
-
-const peopleHooks: CollectionHooks<PeopleSchema, 'people'> = {
-	mutate: {
-		perRecord: {
-			before: {
-				description: 'Refuses a person with no team.',
-				/**
-				 * Typed from the collection's own hooks type rather than as the runtime carrier declares
-				 * it. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) => unknown`, which
-				 * is what this suite hand-builds an `AuthoredRuntime` against — the runtime side of the
-				 * boundary. The authored side is `MutateBefore` in `authoring/contracts-schema.ts`, which
-				 * types the context from the workspace schema; `authoredHooks` is the one place the
-				 * handoff is said, so a hook written typed here is *carried* typed.
-				 */
-				handler: (context) => {
-					if (context.existing !== undefined) return context.input;
-					if (context.input['team'] == null) refuse('A person must belong to a team.');
-					return context.input;
-				}
+/** The `people` write contract, with the one transform a rule can come from (RFC §4.4). */
+const authored: AuthoredRuntime = {
+	...emptyAuthoredRuntime,
+	collections: {
+		people: {
+			create: { input: { columns: { name: true, team: true } } },
+			transform: (inputs: ReadonlyArray<Readonly<Record<string, unknown>>>) => {
+				for (const input of inputs)
+					if (input['team'] == null) refuse('A person must belong to a team.');
+				return inputs;
 			}
 		}
 	}
@@ -159,55 +130,39 @@ describe('refuse, as a typed refusal rather than a defect', () => {
 	});
 });
 
-describe('a refusal raised from a real hook', () => {
+describe('a refusal raised from a real transform', () => {
 	let harness: BoltTestRuntime;
 
 	beforeAll(async () => {
-		harness = await makeBoltTestRuntime(undefined, {
-			authored: {
-				...emptyAuthoredRuntime,
-				hooks: {
-					// Nested under `perRecord` because that is where a rule authored for one record now
-					// lives: `prepare` runs once for the batch and decides nothing, and `before` runs once
-					// per record, which is the only place a refusal can come from.
-					people: authoredHooks(peopleHooks)
-				}
-			}
-		});
+		harness = await makeBoltTestRuntime(undefined, { authored });
 	}, 30_000);
 
 	afterAll(async () => {
 		await harness.dispose();
 	});
 
-	it('refuses the write, writes no row, and names the collection and the phase', async () => {
+	it('refuses the write, writes no row, and names the collection and the site', async () => {
 		const id = recordId('refused-person');
 		const exit = await harness.runtime.runPromiseExit(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					harness.effectId('refusal-1'),
-					adminSubject,
-					'people',
-					[{ id, name: 'Ada' }],
-					0,
-					{ roots: [{ id, action: 'create' }] }
-				);
+				yield* collections.write(harness.effectId('refusal-1'), adminSubject, [
+					{ collection: 'people', action: 'create', inputs: [{ id, name: 'Ada' }] }
+				]);
 			})
 		);
-		// The batched engine reports the phase it died in around the refusal — `prepare`, because a
-		// `before` hook refuses ahead of the transaction. Unwrapping restores the typed refusal,
-		// which is what a business rule is; the phase wrapper is additive and never replaces it.
+		// The refusal is stamped with the site it came from — the transform, which runs ahead of the
+		// transaction. Unwrapping restores the typed refusal, which is what a business rule is.
 		const failure = Option.getOrUndefined(Exit.findErrorOption(exit));
 		const refusal = unwrapMutationPhase(failure);
 		expect(refusal).toBeInstanceOf(AuthoredRefusal);
 		expect(refusal).toMatchObject({
 			message: 'A person must belong to a team.',
 			collection: 'people',
-			action: 'mutate.before'
+			action: 'transform'
 		});
 		expect(defectFrom(exit)).toBeUndefined();
-		// The load-bearing half. A `before` hook refuses *ahead of* the write, so there is nothing to
+		// The load-bearing half. The transform refuses *ahead of* the write, so there is nothing to
 		// undo — and if the refusal had arrived after the insert, this row would exist and the
 		// semantic in item 2 would be untrue.
 		const rows = await harness.runtime.runPromise(
@@ -226,14 +181,13 @@ describe('a refusal raised from a real hook', () => {
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.mutate(
-					harness.effectId('admit-1'),
-					adminSubject,
-					'people',
-					[{ id, name: 'Grace', team: 'payroll' }],
-					0,
-					{ roots: [{ id, action: 'create' }] }
-				);
+				yield* collections.write(harness.effectId('admit-1'), adminSubject, [
+					{
+						collection: 'people',
+						action: 'create',
+						inputs: [{ id, name: 'Grace', team: 'payroll' }]
+					}
+				]);
 			})
 		);
 		const rows = await harness.runtime.runPromise(

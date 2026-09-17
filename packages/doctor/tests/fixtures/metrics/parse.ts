@@ -32,10 +32,7 @@ const classByName = (source: ts.SourceFile, name: string): ts.ClassDeclaration |
 			ts.isClassDeclaration(statement) && statement.name?.text === name
 	);
 
-const variableInitializer = (
-	source: ts.SourceFile,
-	name: string
-): ts.Expression | undefined => {
+const variableInitializer = (source: ts.SourceFile, name: string): ts.Expression | undefined => {
 	for (const statement of source.statements) {
 		if (!ts.isVariableStatement(statement)) continue;
 		for (const declaration of statement.declarationList.declarations)

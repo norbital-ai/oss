@@ -15,7 +15,15 @@
  * an empty file — passing for the wrong reason, which is worse than failing.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+	existsSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -26,8 +34,6 @@ import { analyseCrossFile, bindCrossFileIndex } from '../build/cross-file.js';
 import { loadPackDirectory, runRules, type Rule } from '../build/index.js';
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), '../..');
-
-
 
 type Documented = Readonly<{
 	rule: Rule;
@@ -96,7 +102,9 @@ function reports(
 	const componentScoped = (rule.files ?? []).some((glob) => glob.includes('.svelte'));
 	const file = at ?? (componentScoped ? 'src/Probe.svelte' : 'src/probe.ts');
 	const body =
-		componentScoped && !/<\w/.test(example) ? `<script lang="ts">\n${example}\n</script>\n` : example;
+		componentScoped && !/<\w/.test(example)
+			? `<script lang="ts">\n${example}\n</script>\n`
+			: example;
 	const root = mkdtempSync(join(tmpdir(), 'doctor-examples-'));
 	try {
 		const files: Record<string, string> = { ...fixture, [file]: body };

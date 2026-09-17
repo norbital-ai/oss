@@ -28,11 +28,9 @@ describe('rollback plan', () => {
 	});
 
 	it('orders every deletion before every restoration', () => {
-		const kinds = rollbackPlan([
-			entry('b1', 21, 7),
-			entry('a1', 20, null),
-			entry('b2', 22, 9)
-		]).map(({ kind }) => kind);
+		const kinds = rollbackPlan([entry('b1', 21, 7), entry('a1', 20, null), entry('b2', 22, 9)]).map(
+			({ kind }) => kind
+		);
 		expect(kinds.lastIndexOf('delete')).toBeLessThan(kinds.indexOf('restore'));
 	});
 

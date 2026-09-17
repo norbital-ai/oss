@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	assertCollectionFormFieldRegistration,
-	collectionFormMutationFieldNames,
+	collectionFormWriteColumns,
+	collectionFormWriteSelection,
 	pickCollectionFormValues,
 	pickWritableFormValues
 } from '../src/collection-form/collection-form-values.ts';
@@ -31,10 +32,12 @@ test('an edited hydrated row submits only declared writable fields', () => {
 test('a declared input narrows the write mask past the catalog', () => {
 	const writableColumns = ['company_id', 'period'];
 	assert.deepEqual(
-		pickWritableFormValues(
-			writableColumns,
-			{ company_id: 'c1', period: '2026-01', lifecycle: 'PAID', pay_date: '2026-02-01' }
-		),
+		pickWritableFormValues(writableColumns, {
+			company_id: 'c1',
+			period: '2026-01',
+			lifecycle: 'PAID',
+			pay_date: '2026-02-01'
+		}),
 		{ company_id: 'c1', period: '2026-01' }
 	);
 });
@@ -58,17 +61,32 @@ test('day-precision instants survive an unrelated edit without losing their stor
 	);
 });
 
-test('form composition requires every mutable field exactly once and keeps identity internal', () => {
-	const fields = [
-		{ name: 'id', kind: 'uuid', nullable: false },
-		{ name: 'created_at', kind: 'instant', nullable: false },
-		{ name: 'name', kind: 'text', nullable: false },
-		{ name: 'search_name', kind: 'text', nullable: false, readOnly: true },
-		{ name: 'email', kind: 'text', nullable: true }
-	];
+test('a matrix relation rides along only when the selection declares it', () => {
+	const values = { principal: 1200, repayment_loan: [{ amount_due: 600 }], notes: [] };
+	assert.deepEqual(pickWritableFormValues(['principal'], values, ['repayment_loan']), {
+		principal: 1200,
+		repayment_loan: [{ amount_due: 600 }]
+	});
+});
 
-	assert.deepEqual(collectionFormMutationFieldNames(fields), ['name', 'email']);
-	const expectedKeys = collectionFormMutationFieldNames(fields);
+test('the form writes through the operation the record decides', () => {
+	const write = {
+		create: { columns: { name: true, email: true } },
+		update: { columns: { email: true }, with: { addresses: { create: {} } } }
+	};
+	assert.deepEqual(collectionFormWriteColumns(collectionFormWriteSelection(write, false)), [
+		'name',
+		'email'
+	]);
+	assert.deepEqual(collectionFormWriteColumns(collectionFormWriteSelection(write, true)), [
+		'email'
+	]);
+	assert.equal(collectionFormWriteSelection({ create: write.create }, true), undefined);
+	assert.equal(collectionFormWriteSelection(undefined, false), undefined);
+});
+
+test('form composition requires every declared column exactly once and keeps identity internal', () => {
+	const expectedKeys = collectionFormWriteColumns({ columns: { name: true, email: true } });
 	assert.doesNotThrow(() =>
 		assertCollectionFormFieldRegistration(
 			'employees',

@@ -92,7 +92,9 @@ describe('direct sign-in code delivery', () => {
 		const communication = recordingCommunication();
 		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
 		communication.failOnce();
-		await expect(sendCode(harness, 'challenge-rejected', 'retry@example.test')).rejects.toBeDefined();
+		await expect(
+			sendCode(harness, 'challenge-rejected', 'retry@example.test')
+		).rejects.toBeDefined();
 		await sendCode(harness, 'challenge-retry', 'retry@example.test');
 		expect(communication.calls.map(({ metadata }) => String(metadata.idempotencyKey))).toEqual([
 			'challenge-rejected:code-delivery',
@@ -115,7 +117,9 @@ describe('direct sign-in code delivery', () => {
 		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
 		await harness.database.query('drop table "verification"', []);
 
-		await expect(sendCode(harness, 'challenge-unpersisted', 'lost@example.test')).rejects.toBeDefined();
+		await expect(
+			sendCode(harness, 'challenge-unpersisted', 'lost@example.test')
+		).rejects.toBeDefined();
 		expect(communication.calls).toEqual([]);
 	});
 });

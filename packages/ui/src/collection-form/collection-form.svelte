@@ -23,7 +23,8 @@
 	import { collectionFormSubmissionPending } from './collection-form-pending';
 	import {
 		assertCollectionFormFieldRegistration,
-		collectionFormMutationFieldNames,
+		collectionFormWriteColumns,
+		collectionFormWriteSelection,
 		pickCollectionFormValues,
 		pickWritableFormValues
 	} from './collection-form-values';
@@ -215,24 +216,31 @@
 	const fieldByName = $derived(
 		new Map(definition.fields.map((field) => [field.name, field] as const))
 	);
-	const operations = $derived(client.db[collection]);
+	const operations = $derived(client.collection[collection]);
 	const registeredFields = new Map<string, number>();
 	const hiddenFields = new Set<string>();
 	const pendingFields = new SvelteSet<string>();
 	/**
-	 * The collection's writable columns: the declared `input`'s set when the workspace declares
-	 * one, the catalog's mutable fields otherwise. Registration, the mutation mask and unknown-key
-	 * rejection all narrow to this one set, so a form cannot write a column the collection's
-	 * write contract does not accept — the same contract the server's decode enforces.
+	 * The selection this form writes through: the collection's declared `update` input when it
+	 * edits a record, its `create` input for a draft. Registration, the write mask and unknown-key
+	 * rejection all narrow to that selection's columns, so a form cannot write a column the
+	 * collection does not accept — the same contract the server's decode enforces. A collection
+	 * that declares no such operation renders read-only.
 	 */
-	const mutationFieldNames = $derived(
-		definition.inputColumns ?? collectionFormMutationFieldNames(definition.fields)
+	const writeSelection = $derived(
+		collectionFormWriteSelection(definition.write, recordId !== undefined)
 	);
+	const writable = $derived(writeSelection !== undefined && operations !== undefined);
+	const mutationFieldNames = $derived(
+		writeSelection === undefined ? [] : collectionFormWriteColumns(writeSelection)
+	);
+	const writeRelationNames = $derived(Object.keys(writeSelection?.with ?? {}));
+	const history = $derived(workspaceClient.collection_history[String(collection)]);
 	let historyRequested = $state(false);
 	const historyQuery = $derived.by(() => {
 		const currentRecordId = optionalCollectionRecordId(defaultValues);
-		if (!historyRequested || !currentRecordId || !workspaceClient.history) return undefined;
-		return workspaceClient.history.findMany(String(collection), currentRecordId);
+		if (!historyRequested || !currentRecordId || !history) return undefined;
+		return history.revisions(currentRecordId);
 	});
 	let deleting = $state(false);
 
@@ -266,7 +274,7 @@
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
-		disabled: () => loading || disabled || readonly || updateRestriction != null,
+		disabled: () => loading || disabled || readonly || !writable || updateRestriction != null,
 		submitSuccessBehavior: () => (lastSubmissionKind === 'pendingApproval' ? 'none' : 'commit'),
 		successMessage: null,
 		translate: t,
@@ -277,11 +285,16 @@
 				const writableValues = pickWritableFormValues(
 					mutationFieldNames,
 					values,
-					definition.relationships ?? []
+					writeRelationNames
 				);
-				return submitCollectionMutation(() =>
-					operations.mutate([recordId ? { id: recordId, ...writableValues } : writableValues])
-				).pipe(
+				return submitCollectionMutation(() => {
+					// `writable` gates the submit control; a form with no write surface never reaches here.
+					if (operations === undefined)
+						return Promise.reject(new Error(`${collection} declares no write contract.`));
+					return recordId
+						? operations.update(recordId, writableValues)
+						: operations.create(writableValues);
+				}).pipe(
 					Effect.tap((submission) =>
 						Effect.sync(() => {
 							lastSubmissionKind =
@@ -302,7 +315,7 @@
 	const submissionPending = $derived(
 		collectionFormSubmissionPending({
 			isSubmitting: form.isSubmitting,
-			operationsPending: operations.pending
+			operationsPending: operations?.pending ?? 0
 		})
 	);
 	const dirtyFieldCount = $derived(
@@ -310,7 +323,7 @@
 	);
 
 	function loadHistory(): void {
-		if (!recordId || !workspaceClient.history) return;
+		if (!recordId || !history) return;
 		historyRequested = true;
 	}
 
@@ -339,8 +352,8 @@
 		dirty: (name) => form.hasChangesForPath(name),
 		errors: (name) => form.getFieldErrors(name),
 		disabled: () => form.disabled || submissionPending,
-		readonly: () => readonly,
-		historyAvailable: () => Boolean(recordId && workspaceClient.history),
+		readonly: () => readonly || !writable,
+		historyAvailable: () => Boolean(recordId && history),
 		loadHistory,
 		history: () => historyQuery?.current ?? [],
 		historyLoading: () => historyQuery?.loading ?? false,
@@ -416,8 +429,9 @@
 		);
 	}
 
+	// A read-only form declares no write, so there is no selection for its fields to satisfy.
 	$effect(() => {
-		if (loading) return;
+		if (loading || !writable) return;
 		assertCollectionFormFieldRegistration(String(collection), mutationFieldNames, registeredFields);
 	});
 	onDestroy(() => {
@@ -506,7 +520,7 @@
 	class={className}
 	aria-busy={loading || submissionPending}
 	onsubmit={submit}
-	bottom={sendMode === 'manual' && !readonly ? formFooter : undefined}
+	bottom={sendMode === 'manual' && !readonly && writable ? formFooter : undefined}
 >
 	{#if !noticeInHeader}
 		<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />

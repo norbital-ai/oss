@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
-import { projectConversationMessages, projectTurns, turnWaitingSeconds } from '../src/client/ui/agent/transcript.js';
+import {
+	projectConversationMessages,
+	projectTurns,
+	turnWaitingSeconds
+} from '../src/client/ui/agent/transcript.js';
 import { canonicalAgentRows } from './ui-canonical-agent-fixture.js';
 
 const conversationId = '00000000-0000-4000-8000-000000000101';

@@ -64,13 +64,19 @@ const toolCall = (id: string, name: string, params: unknown) =>
 const toolResult = (id: string, name: string, result: unknown, isFailure = false) =>
 	({ type: 'tool-result', id, name, isFailure, result }) as const;
 
-function mountList(messages: readonly PanelMessage[], runs: readonly TurnRow[], tasks: unknown[] = []) {
+function mountList(
+	messages: readonly PanelMessage[],
+	runs: readonly TurnRow[],
+	tasks: unknown[] = []
+) {
 	const target = document.createElement('div');
 	document.body.append(target);
 	const component = mount(AgentTranscriptList, {
 		target,
 		props: {
-			messages: messages.filter((message) => message.conversationId === (messages[0]?.conversationId ?? '')),
+			messages: messages.filter(
+				(message) => message.conversationId === (messages[0]?.conversationId ?? '')
+			),
 			transcript: { tasks: projectConversations(tasks), messages, runs, plans: [] }
 		}
 	});
@@ -94,10 +100,7 @@ describe('AGENT-UI1 one row per tool call', () => {
 					runId: parentRun,
 					message: {
 						role: 'assistant',
-						content: [
-							{ type: 'text', text: 'Let me look.' },
-							toolCall('call-1', 'list_skills', {})
-						]
+						content: [{ type: 'text', text: 'Let me look.' }, toolCall('call-1', 'list_skills', {})]
 					}
 				},
 				{
@@ -125,7 +128,11 @@ describe('AGENT-UI1 one row per tool call', () => {
 			expect(view.target.querySelectorAll('li[data-role="tool"]')).toHaveLength(0);
 			expect(view.target.querySelectorAll('li')).toHaveLength(3);
 			expect(view.target.textContent).not.toContain('Tool');
-			expect([...view.target.querySelectorAll('[aria-label]')].map((element) => element.getAttribute('aria-label'))).not.toContain('Tool');
+			expect(
+				[...view.target.querySelectorAll('[aria-label]')].map((element) =>
+					element.getAttribute('aria-label')
+				)
+			).not.toContain('Tool');
 			// Both payloads live inside the one row (the editor double prints the value as text).
 			expect(row.textContent).toContain('payroll');
 			expect(row.querySelectorAll('p')).toHaveLength(2);
@@ -149,7 +156,10 @@ describe('AGENT-UI1 one row per tool call', () => {
 					runId: parentRun,
 					message: {
 						role: 'assistant',
-						content: [toolCall('call-1', 'read_skill', { name: 'payroll' }), toolCall('call-2', 'todo', {})]
+						content: [
+							toolCall('call-1', 'read_skill', { name: 'payroll' }),
+							toolCall('call-2', 'todo', {})
+						]
 					}
 				},
 				{
@@ -277,7 +287,10 @@ describe('AGENT-SUB2 nested child conversation', () => {
 					runId: childRun,
 					message: {
 						role: 'tool',
-						content: [toolResult('call-2', 'list_skills', ['statute']), spawned('call-3', grandchildTask)]
+						content: [
+							toolResult('call-2', 'list_skills', ['statute']),
+							spawned('call-3', grandchildTask)
+						]
 					}
 				},
 				{
@@ -323,7 +336,13 @@ describe('AGENT-SUB2 nested child conversation', () => {
 		expect(call?.type).toBe('tool-call');
 		const link =
 			call?.type === 'tool-call' ? subagentLink(call, tools.resultsByCallId.get(call.id)) : null;
-		expect(link).toMatchObject({ toolCallId: 'call-1', agentId: 'researcher', conversationId: childTask, failure: null, pending: false });
+		expect(link).toMatchObject({
+			toolCallId: 'call-1',
+			agentId: 'researcher',
+			conversationId: childTask,
+			failure: null,
+			pending: false
+		});
 		expect(subagentLink(toolCall('x', 'list_skills', {}), undefined)).toBeNull();
 	});
 
@@ -331,7 +350,10 @@ describe('AGENT-SUB2 nested child conversation', () => {
 		const view = mountList(fixture(), fixtureRuns(), fixtureTasks());
 		try {
 			const blocks = [...view.target.querySelectorAll('[data-subagent-conversation]')];
-			expect(blocks.map((block) => block.getAttribute('data-subagent-conversation'))).toEqual(['researcher', 'clerk']);
+			expect(blocks.map((block) => block.getAttribute('data-subagent-conversation'))).toEqual([
+				'researcher',
+				'clerk'
+			]);
 			const [child, grandchild] = blocks as [HTMLElement, HTMLElement];
 			// The grandchild block sits inside the child block, which sits inside the parent's list.
 			expect(child.contains(grandchild)).toBe(true);
@@ -340,9 +362,15 @@ describe('AGENT-SUB2 nested child conversation', () => {
 			expect(view.target.textContent).toContain('Delegating.');
 			expect(child.textContent).toContain('Child reply in **markdown**.');
 			expect(grandchild.textContent).toContain('Grandchild reply.');
-			const childRows = [...child.querySelectorAll('[data-tool-row]')].map((row) => row.getAttribute('data-tool-row'));
+			const childRows = [...child.querySelectorAll('[data-tool-row]')].map((row) =>
+				row.getAttribute('data-tool-row')
+			);
 			expect(childRows).toEqual(['list_skills', 'read_skill']);
-			expect([...grandchild.querySelectorAll('[data-tool-row]')].map((row) => row.getAttribute('data-tool-row'))).toEqual(['read_skill']);
+			expect(
+				[...grandchild.querySelectorAll('[data-tool-row]')].map((row) =>
+					row.getAttribute('data-tool-row')
+				)
+			).toEqual(['read_skill']);
 			// The spawn call itself never renders as a plain tool row: the block is its face.
 			expect(view.target.querySelectorAll('[data-tool-row="subagent"]')).toHaveLength(0);
 			// Done children are collapsed; the raw payload stays behind a closed toggle.
@@ -358,7 +386,8 @@ describe('AGENT-SUB2 nested child conversation', () => {
 	});
 
 	it('renders a failed spawn as a nested block whose only line is the error', async () => {
-		const error = 'Bolt.AccessControl.AccessDenied: unknown agent (agent on sg-statutory-law-query)';
+		const error =
+			'Bolt.AccessControl.AccessDenied: unknown agent (agent on sg-statutory-law-query)';
 		const messages = projectConversationMessages(
 			canonicalAgentRows([
 				{
@@ -398,7 +427,10 @@ describe('AGENT-SUB2 nested child conversation', () => {
 				}
 			])
 		);
-		const view = mountList(messages, projectTurns([runRow(parentRun, parentTask, { status: 'running' })]));
+		const view = mountList(
+			messages,
+			projectTurns([runRow(parentRun, parentTask, { status: 'running' })])
+		);
 		try {
 			const block = view.target.querySelector('[data-subagent-conversation]') as HTMLDetailsElement;
 			expect(block.getAttribute('data-subagent-state')).toBe('starting');

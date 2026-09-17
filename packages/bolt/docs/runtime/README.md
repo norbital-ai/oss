@@ -45,10 +45,10 @@ every collection, file, and approval check inside the function is the caller's p
 
 `authenticatePlugin` treats a missing credential differently for the one shipped plugin:
 
-| Plugin          | No credential                                         | Status |
-| --------------- | ----------------------------------------------------- | -----: |
-| `data-browser`  | `AccessDenied` — `trustedContext` is not a credential |    403 |
-| any other plugin | `DispatchError { code: 'unauthorized' }`             |    401 |
+| Plugin           | No credential                                         | Status |
+| ---------------- | ----------------------------------------------------- | -----: |
+| `data-browser`   | `AccessDenied` — `trustedContext` is not a credential |    403 |
+| any other plugin | `DispatchError { code: 'unauthorized' }`              |    401 |
 
 A Data Browser call with a session may then impersonate inside the same tenant. System HMAC is also
 accepted.

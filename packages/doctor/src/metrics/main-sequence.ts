@@ -17,22 +17,28 @@
 import ts from 'typescript';
 
 /** A / (A + C); null when the package declares nothing measurable. */
-export function abstractness(input: Readonly<{ abstractCount: number; concreteCount: number }>): number | null {
+export function abstractness(
+	input: Readonly<{ abstractCount: number; concreteCount: number }>
+): number | null {
 	const total = input.abstractCount + input.concreteCount;
 	return total === 0 ? null : input.abstractCount / total;
 }
 
 /** Ce / (Ca + Ce); null when the package neither imports nor is imported. */
-export function instability(input: Readonly<{ efferent: number; afferent: number }>): number | null {
+export function instability(
+	input: Readonly<{ efferent: number; afferent: number }>
+): number | null {
 	const total = input.efferent + input.afferent;
 	return total === 0 ? null : input.efferent / total;
 }
 
 /** |A + I − 1|: perpendicular distance from the main-sequence diagonal (√2-scaled). */
-export function distanceFromMainSequence(point: Readonly<{
-	abstractness: number;
-	instability: number;
-}>): number {
+export function distanceFromMainSequence(
+	point: Readonly<{
+		abstractness: number;
+		instability: number;
+	}>
+): number {
 	return Math.abs(point.abstractness + point.instability - 1);
 }
 

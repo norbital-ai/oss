@@ -163,4 +163,3 @@ contract, LIVE1 detects named/timer/loop polling, and LIVE2 reserves SSE for the
 Transaction SQL is accepted only when the AST places it under a Transaction request/return or passes
 it directly to the branded `transactionSql` imported from Bolt's persistence owner; local lookalikes
 are positive fixtures.
-

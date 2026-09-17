@@ -134,9 +134,7 @@ export type StaticQualityBase = Readonly<{
 /** A file record as finding attachment sees it. */
 export type FindingTarget = Readonly<{ displayPath: string; concept: string }>;
 
-const isSha256 = Schema.is(
-	Schema.String.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/u))
-);
+const isSha256 = Schema.is(Schema.String.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/u)));
 
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
@@ -251,8 +249,7 @@ export function scannerCatalogues(
 			const columns = line.split('\t');
 			if (columns.length !== 6) throw new Error(`invalid scanner catalogue row: ${catalogue}`);
 			const [severity, , , , , encodedPrinciples] = columns;
-			if (!isSeverity(severity))
-				throw new Error(`invalid scanner severity in ${catalogue}`);
+			if (!isSeverity(severity)) throw new Error(`invalid scanner severity in ${catalogue}`);
 			counts[severity] += 1;
 			const principles = (encodedPrinciples ?? '').split(',').filter(Boolean);
 			const canonical = PRINCIPLES.filter((principle) => principles.includes(principle));
@@ -280,9 +277,7 @@ export function scannerCatalogues(
 			Object.entries(counts)
 				.filter(([name]) => name !== 'principles')
 				.some(([name, value]) => countsRecord[name] !== value) ||
-			Object.entries(counts.principles).some(
-				([name, value]) => principlesRecord[name] !== value
-			)
+			Object.entries(counts.principles).some(([name, value]) => principlesRecord[name] !== value)
 		)
 			throw new Error(`scanner finding counts mismatch: ${catalogue}`);
 		byRoot.set(root, {
@@ -318,7 +313,8 @@ export function scannerCatalogues(
 }
 
 /** Import verified scanner catalogues and attach each static violation to its owning concept. */
-export function staticFindings(	catalogues: ReadonlyArray<ScannerCatalogue>,
+export function staticFindings(
+	catalogues: ReadonlyArray<ScannerCatalogue>,
 	byPath: ReadonlyMap<string, FindingTarget>,
 	rootByPath: ReadonlyMap<string, RootDescription>
 ): StaticQualityBase {

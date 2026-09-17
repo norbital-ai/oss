@@ -2,7 +2,8 @@ import {
 	createServer,
 	request as requestUpstream,
 	type IncomingMessage,
-	type Server
+	type Server,
+	type ServerResponse
 } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Predicate } from 'effect';
@@ -49,7 +50,9 @@ const parseSseBlock = (raw: string): SseInboxEvent | undefined => {
 	return data.length === 0 ? undefined : { type, data: data.join('\n') };
 };
 
-const consumeSse = (buffer: string): { readonly rest: string; readonly events: SseInboxEvent[] } => {
+const consumeSse = (
+	buffer: string
+): { readonly rest: string; readonly events: SseInboxEvent[] } => {
 	const events: SseInboxEvent[] = [];
 	let rest = buffer;
 	for (;;) {
@@ -68,8 +71,7 @@ export type SessionGatewayAddress = {
 };
 
 export type SessionGatewayDocument =
-	| string
-	| ((session: { readonly browserSession: string }) => string);
+	string | ((session: { readonly browserSession: string }) => string);
 
 export type SessionGatewayInput = {
 	readonly upstream: SessionGatewayAddress;
@@ -79,6 +81,18 @@ export type SessionGatewayInput = {
 	readonly rewritePath?: (pathname: string) => string;
 	readonly document: SessionGatewayDocument;
 	readonly listen?: { readonly host?: string; readonly port?: number };
+	/**
+	 * The object store behind the browser's `files.store` / `remove` / `urlFor`. Without one the
+	 * document's file operations are unavailable: a record file field and a chat attachment then
+	 * refuse rather than silently drop the bytes. Keys are served at `/files/<key>`.
+	 */
+	readonly files?: SessionGatewayFiles;
+};
+
+export type SessionGatewayFiles = {
+	readonly write: (key: string, bytes: Uint8Array) => Promise<void>;
+	readonly read: (key: string) => Promise<Uint8Array | undefined>;
+	readonly remove: (key: string) => Promise<void>;
 };
 
 export type SessionGateway = {
@@ -93,6 +107,8 @@ export type WorkspaceDocumentInput = {
 	readonly environment: string;
 	readonly releaseId: string;
 	readonly principal: string;
+	/** The principal's sign-in address, as the runtime's subject carries it; own-record policies match on it. */
+	readonly email: string;
 	readonly workspaceId?: string;
 	readonly syncPrincipal?: string;
 	readonly organizationName?: string;
@@ -106,6 +122,8 @@ export type WorkspaceDocumentInput = {
 	readonly credential?: string;
 	/** Host `user.admin`. Runtime `access.impersonation` is the picker authority. */
 	readonly admin?: boolean;
+	/** The gateway serves `/files/<key>`, so the document's file operations reach an object store. */
+	readonly files?: boolean;
 };
 
 const loopbackHost = (host: string): string =>
@@ -187,7 +205,11 @@ export const workspaceDocumentHtml = (input: WorkspaceDocumentInput): string => 
 				transport: { command },
 				syncStreamUrl: ${json(syncStreamUrl)},
 				authoringStreamUrl: '/authoring/stream',
-				files: { store: unavailable, remove: unavailable, urlFor: (key) => '/files/' + key },
+				files: {
+					store: ${input.files === true ? "async (key, file) => { const response = await fetch('/files/' + key, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file }); if (!response.ok) throw new Error('storing ' + key + ' failed: ' + response.status); return '/files/' + key; }" : 'unavailable'},
+					remove: ${input.files === true ? "async (key) => { const response = await fetch('/files/' + key, { method: 'DELETE', credentials: 'same-origin' }); if (!response.ok) throw new Error('removing ' + key + ' failed: ' + response.status); }" : 'unavailable'},
+					urlFor: (key) => '/files/' + key
+				},
 				operations: { read: async () => ({}), run: unavailable }
 			});
 			const currentView = () => ({
@@ -195,7 +217,7 @@ export const workspaceDocumentHtml = (input: WorkspaceDocumentInput): string => 
 				organizations: [{ organizationId: ${json(input.tenantId)}, organizationName: ${json(organizationName)}, logoUrl: null }],
 				user: {
 					id: ${json(input.principal)},
-					email: ${json(`${input.principal}@example.test`)},
+					email: ${json(input.email)},
 					teamPath: previewTeam === null ? [] : [previewTeam],
 					admin: previewTeam === null && ${admin}
 				},
@@ -238,6 +260,87 @@ export const workspaceDocumentHtml = (input: WorkspaceDocumentInput): string => 
  * EventSource cannot set Authorization; bolt-server `/sync/stream` is Authorization-only.
  * Cookie or the same session value as a query parameter — Obscura's EventSource may omit cookies.
  */
+const FILES_PREFIX = '/files/';
+const serveFile = (
+	files: SessionGatewayFiles,
+	url: URL,
+	request: IncomingMessage,
+	response: ServerResponse
+): void => {
+	const key = decodeURIComponent(url.pathname.slice(FILES_PREFIX.length));
+	const fail = (status: number, message: string): void => {
+		response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+		response.end(JSON.stringify({ ok: false, error: message }));
+	};
+	if (key.length === 0 || key.includes('..')) {
+		fail(400, 'key');
+		return;
+	}
+	const settle = (work: Promise<void>): void => {
+		work.catch((cause: unknown) =>
+			fail(500, cause instanceof Error ? cause.message : String(cause))
+		);
+	};
+	if (request.method === 'GET' || request.method === 'HEAD') {
+		settle(
+			files.read(key).then((bytes) => {
+				if (bytes === undefined) {
+					fail(404, 'not found');
+					return;
+				}
+				response.writeHead(200, {
+					'content-type': contentTypeOf(key),
+					'content-length': String(bytes.byteLength),
+					'cache-control': 'no-store'
+				});
+				response.end(request.method === 'HEAD' ? undefined : Buffer.from(bytes));
+			})
+		);
+		return;
+	}
+	if (request.method === 'PUT') {
+		const chunks: Buffer[] = [];
+		request.on('data', (chunk: Buffer) => chunks.push(chunk));
+		request.on('end', () => {
+			settle(
+				files.write(key, new Uint8Array(Buffer.concat(chunks))).then(() => {
+					response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+					response.end(JSON.stringify({ ok: true, key }));
+				})
+			);
+		});
+		return;
+	}
+	if (request.method === 'DELETE') {
+		settle(
+			files.remove(key).then(() => {
+				response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+				response.end(JSON.stringify({ ok: true, key }));
+			})
+		);
+		return;
+	}
+	fail(405, 'method');
+};
+
+/** The media type a stored key is served with: its extension, the only thing the store keeps. */
+const contentTypeOf = (key: string): string => {
+	const extension = key.slice(key.lastIndexOf('.') + 1).toLowerCase();
+	const known: Record<string, string> = {
+		pdf: 'application/pdf',
+		png: 'image/png',
+		jpg: 'image/jpeg',
+		jpeg: 'image/jpeg',
+		gif: 'image/gif',
+		webp: 'image/webp',
+		svg: 'image/svg+xml',
+		txt: 'text/plain; charset=utf-8',
+		csv: 'text/csv; charset=utf-8',
+		json: 'application/json'
+	};
+	return known[extension] ?? 'application/octet-stream';
+};
+
 export const startSessionGateway = async (input: SessionGatewayInput): Promise<SessionGateway> => {
 	const browserSession = randomUUID();
 	const document = Predicate.isFunction(input.document)
@@ -257,7 +360,11 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 		);
 	};
 
-	const openInbox = (connectionId: string, streamPath: string, streamSearch: string): SseInboxLane => {
+	const openInbox = (
+		connectionId: string,
+		streamPath: string,
+		streamSearch: string
+	): SseInboxLane => {
 		const existing = inboxes.get(connectionId);
 		if (existing !== undefined) return existing;
 		const abort = new AbortController();
@@ -357,7 +464,9 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 			const finish = (events: readonly SseInboxEvent[]): void => {
 				if (response.writableEnded) return;
 				response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-				response.end(JSON.stringify({ ok: true, opened: lane.opened, closed: lane.closed, events }));
+				response.end(
+					JSON.stringify({ ok: true, opened: lane.opened, closed: lane.closed, events })
+				);
 			};
 			if (lane.events.length > 0 || lane.closed) {
 				finish(takeInboxEvents(lane));
@@ -374,6 +483,10 @@ export const startSessionGateway = async (input: SessionGatewayInput): Promise<S
 			}, waitMs);
 			timer.unref();
 			lane.waiters.push(waiter);
+			return;
+		}
+		if (input.files !== undefined && url.pathname.startsWith(FILES_PREFIX)) {
+			serveFile(input.files, url, request, response);
 			return;
 		}
 		if (input.isDocument(url.pathname) && request.method === 'GET') {

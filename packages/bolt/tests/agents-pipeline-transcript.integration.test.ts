@@ -163,7 +163,7 @@ describe('scripted agent pipeline transcript', () => {
 		expect(
 			output.tools?.find(({ name }) => name === 'write_collection')?.inputSchema
 		).toMatchObject({
-			required: ['collection', 'operation', 'id'],
+			required: ['collection', 'operation'],
 			properties: { values: { type: 'object' } }
 		});
 		const persisted = await harness!.database.query(

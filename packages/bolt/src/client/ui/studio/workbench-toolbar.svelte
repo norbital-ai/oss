@@ -100,10 +100,7 @@
 
 <Inline shrink={false} class="h-10 border-b border-border/60 sm:h-9">
 	<Scroll name={t('bolt.studio.workbench')} axis="x" layout="inline" gap="xs" grow class="min-w-0">
-		<div
-			data-testid="studio-mr-switcher"
-			class="w-64 max-w-[min(16rem,80vw)] shrink-0"
-		>
+		<div data-testid="studio-mr-switcher" class="w-64 max-w-[min(16rem,80vw)] shrink-0">
 			<Combobox
 				options={switcherOptions}
 				value={tracking}
@@ -146,7 +143,7 @@
 			>
 				<Icon
 					icon={toolbarStatus.icon}
-					class="{toolbarStatus.loading ? 'size-3 shrink-0 animate-spin' : 'size-3 shrink-0'}"
+					class={toolbarStatus.loading ? 'size-3 shrink-0 animate-spin' : 'size-3 shrink-0'}
 					aria-hidden="true"
 				/>
 				<span class="truncate">{t(toolbarStatus.labelKey)}</span>

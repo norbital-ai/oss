@@ -8,7 +8,8 @@
 import { Context, Effect, Schema } from 'effect';
 import { getErrorMessage } from '@norbital-ai/std';
 import type {
-	CollectionMutateRequest,
+	CollectionHistoryAnchor,
+	CollectionMutationPush,
 	CollectionMutationBaseVersion,
 	CollectionMutationIdempotencyKey,
 	CollectionMutationSettlement,
@@ -39,7 +40,6 @@ export type CollectionAction = typeof CollectionAction.Type;
 export type QueryInput = Readonly<{
 	readonly collection: string;
 	/** Server authoring only: candidates held for approval, filtered by their collection's read policy. */
-	readonly pendingOnly?: boolean;
 	// `where` and `orderBy` stay `unknown`: authored handlers bind `Date` operands the wire form
 	// never carries, and the where compiler is the one place that decides what is bindable.
 	readonly where?: unknown | undefined;
@@ -231,6 +231,44 @@ export class MutationVersionConflict extends Schema.TaggedError<MutationVersionC
 }
 
 /**
+ * A transform issued a read after its second wave (RFC §5.3).
+ *
+ * Two waves are the budget: the first is keyed by the inputs alone, the second by the first wave's
+ * results. Nothing is read after that, so a transform that keeps querying fails here — before the
+ * facility, not after a third call — instead of stretching one operation's round trips without bound.
+ */
+export class ReadBudgetExceeded extends Schema.TaggedError<ReadBudgetExceeded>()(
+	'Bolt.Collections.ReadBudgetExceeded',
+	{
+		collection: Schema.NonEmptyString,
+		limit: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+	}
+) {
+	readonly retryable = false;
+	readonly message = `The ${this.collection} transform exceeded its ${this.limit}-wave read budget.`;
+}
+
+/**
+ * A write reached a row held under another subject's approval request (RFC §4.8).
+ *
+ * The hold covers every row the proposal named or created. Only the request's participants — the
+ * requestor, the approvers of its current step, a superseding team, an administrator — may write
+ * under it, and their revisions are what a restore unwinds. Everyone else fails here, before
+ * anything is written.
+ */
+export class ApprovalHeld extends Schema.TaggedError<ApprovalHeld>()(
+	'Bolt.Collections.ApprovalHeld',
+	{
+		collection: Schema.NonEmptyString,
+		id: Schema.NonEmptyString,
+		requestId: Schema.NonEmptyString
+	}
+) {
+	readonly retryable = false;
+	readonly message = `${this.collection} ${this.id} is held by approval request ${this.requestId}.`;
+}
+
+/**
  * The mutation remains durable client-side because this release cannot safely interpret it.
  *
  * This is not a rejection: removing the overlay would lose user work. A client keeps the journal
@@ -250,11 +288,10 @@ export class MutationQuarantined extends Schema.TaggedError<MutationQuarantined>
 }
 
 /**
- * `AuthoredRefusal` is a member of all three channels because authored code runs on all three
- * paths: hooks on every mutation, the import pipeline under `import`, the export pipeline under
- * `export`, and `mutate.after` again when an approval resumes. It is stated rather than left to
- * inference so that a caller which handles these unions exhaustively has to decide what a business
- * rule refusing means for it — which is the distinction the whole change exists to make available.
+ * `AuthoredRefusal` is a member of every channel because authored code runs on every path: the
+ * transform on a write, the import pipeline under `import`, the export pipeline under `export`.
+ * It is stated rather than left to inference so that a caller which handles these unions
+ * exhaustively has to decide what a business rule refusing means for it.
  */
 export type CollectionHistorySnapshot = Readonly<{
 	readonly values: Readonly<Record<string, Schema.Json>>;
@@ -283,6 +320,8 @@ export type MutationError =
 	| MutationInProgress
 	| MutationVersionConflict
 	| MutationQuarantined
+	| ReadBudgetExceeded
+	| ApprovalHeld
 	| AuthoredRefusal
 	| NestingLimitExceeded;
 /**
@@ -410,34 +449,36 @@ export const mutationPhaseFailure = (
 			});
 
 /**
- * One root of a mutation graph.
+ * Request metadata a browser attaches beside a declared input (RFC §4.2).
  *
- * `collection` is optional and defaults to the call's own — a batch is usually one collection. When
- * roots name different collections the write is still *one* mutate: the engine groups them, reads
- * and prepares each group, then compiles every group's operations into a single statement plan,
- * applies it in one transaction and publishes one commit. That is what lets a turn write its `turn`
- * row, its input message and the conversation together, instead of paying three commits — and a
- * commit crosses to the host, so three of them is three host round trips.
- *
- * The field was read by the engine and absent from this type, so the capability existed and no
- * caller could reach it. It is stated here because a write that fans across collections is exactly
- * the write that must not be split.
+ * The observed version of every row the graph names, keyed by row. The engine asserts them and
+ * fails the whole operation as a version conflict if one moved. Authored code never reads, writes
+ * or reasons about a version; a system-origin caller may omit them entirely.
  */
-type MutationRoot = Readonly<{
-	readonly collection?: string;
-	readonly id: string;
-	readonly action: 'create' | 'update';
-	readonly expectedVersion?: number;
+export type WriteOptions = Readonly<{
+	readonly baseVersions?: ReadonlyArray<CollectionMutationBaseVersion> | undefined;
+	/** Browser-only exactly-once fence; authored callers never construct or receive this. */
+	readonly browserMutation?: BrowserMutationFence | undefined;
+	/**
+	 * The ids the browser ledger allocated for the first group's creates, in input order, so the
+	 * durable outcome can name the row before the transaction runs. Engine-internal.
+	 */
+	readonly createIds?: ReadonlyArray<string> | undefined;
 }>;
 
-type MutateOptions = {
-	/** Explicit only for an invocation-bound create/update whose chosen id must not imply action. */
-	readonly root?: MutationRoot;
-	/** Exact root identities/actions for a multi-root atomic invocation such as an import chunk. */
-	readonly roots?: ReadonlyArray<MutationRoot>;
-	/** Browser-only exactly-once fence; authored callers never construct or receive this. */
-	readonly browserMutation?: BrowserMutationFence;
-};
+/** One declared write: one collection, one root action, its declared inputs. */
+export type WriteGroup = Readonly<{
+	readonly collection: string;
+	readonly action: 'create' | 'update' | 'delete';
+	readonly inputs: ReadonlyArray<Readonly<Record<string, unknown>>>;
+}>;
+
+/** What one write committed: the root rows, in input order, and the change batch. */
+export type WriteCommit = CollectionMutationCommit &
+	Readonly<{
+		/** The open request when policy routed the write to approval; the rows are held under it. */
+		readonly pendingApproval?: Readonly<{ readonly requestId: string }>;
+	}>;
 
 export type Interface = Readonly<{
 	/** Exact tenant-authored collection names plus the one generic system exception. */
@@ -506,30 +547,33 @@ export type Interface = Readonly<{
 		input: GroupedQueryInput
 	) => Effect.Effect<GroupedQueryRows, QueryError>;
 	/**
-	 * The batched write, and the one every batch goes through.
+	 * The write path (RFC §4.2–4.8): the caller submits a collection's declared inputs, the
+	 * transform turns them into payload graphs, and the engine commits the whole batch in one
+	 * transaction — or holds it under an approval request when policy routes it there.
 	 *
-	 * On the interface rather than only behind the authoring api because it is not an authoring
-	 * convenience: it is the write path, and a command surface that wants a batch should reach the
-	 * same one a hook does rather than loop a single create.
+	 * A batch of several groups is the runtime's own multi-collection commit (a conversation, its
+	 * turn and its message land together); a command surface always submits exactly one group.
 	 */
-	readonly mutate: (
+	readonly write: (
 		effectId: EffectId,
 		subject: Subject,
-		collection: string,
-		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-		depth?: number,
-		options?: MutateOptions
-	) => Effect.Effect<CollectionMutationCommit, BatchMutationError>;
-	readonly delete: (
+		groups: ReadonlyArray<WriteGroup>,
+		options?: WriteOptions
+	) => Effect.Effect<WriteCommit, BatchMutationError | QueryError>;
+	/**
+	 * Applies one seed plan as the administering subject (RFC seeding.md §4): collections ordered by
+	 * the relation graph, each one declared `createMany` batch, existing ids skipped.
+	 */
+	readonly seedApply: (
 		effectId: EffectId,
 		subject: Subject,
-		collection: string,
-		ids: ReadonlyArray<string>,
-		options?: Readonly<{
-			readonly baseVersion?: number;
-			readonly browserMutation?: BrowserMutationFence;
-		}>
-	) => Effect.Effect<CollectionMutationCommit, MutationError>;
+		fixtures: ReadonlyArray<
+			Readonly<{
+				readonly collection: string;
+				readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+			}>
+		>
+	) => Effect.Effect<Readonly<Record<string, number>>, BatchMutationError | QueryError>;
 	/** Commits made anywhere in this invocation, drained once by the bundle boundary. */
 	readonly drainChanges: Effect.Effect<ReadonlyArray<SyncChange>>;
 	readonly mutateBrowser: (
@@ -537,7 +581,7 @@ export type Interface = Readonly<{
 		actor: Subject,
 		subject: Subject,
 		impersonatedTeam: string | null,
-		input: CollectionMutateRequest
+		input: CollectionMutationPush
 	) => Effect.Effect<CollectionMutationSettlement, BatchMutationError | Error>;
 	readonly lookupBrowserMutations: (
 		effectId: EffectId,
@@ -554,11 +598,12 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		requestId: string
 	) => Effect.Effect<void, BatchMutationError>;
+	/** An import: the document through the collection's pipeline, its rows through `write`. */
 	readonly import: (
 		effectId: EffectId,
 		subject: Subject,
 		inputs: ReadonlyArray<MutationInput>
-	) => Effect.Effect<number, MutationError>;
+	) => Effect.Effect<number, BatchMutationError | QueryError>;
 	readonly export: (
 		effectId: EffectId,
 		subject: Subject,
@@ -568,7 +613,13 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Subject,
 		collection: string,
-		id: string
+		id: string,
+		/**
+		 * RFC §4.7 anchor: without one the latest revision is read (the live row). `revision` is the
+		 * 1-based ordinal of the record's own revision sequence; `instant` reads the state at or
+		 * before that time. `{ before: approvalId }` arrives with the approval restore point (§4.8).
+		 */
+		at?: CollectionHistoryAnchor
 	) => Effect.Effect<ReadonlyArray<CollectionHistorySnapshot>, QueryError>;
 	readonly audit: (
 		effectId: EffectId,

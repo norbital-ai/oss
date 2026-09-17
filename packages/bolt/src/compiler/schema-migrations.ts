@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { getErrorMessage, toError } from '@norbital-ai/std';
 import { Effect, Result, Schema } from 'effect';
 import { getColumns, sql } from 'drizzle-orm';
@@ -31,6 +33,7 @@ import {
 	searchDocumentExpression,
 	searchTextExpression
 } from '../authoring/model-introspection.js';
+import type { AuthoredCollectionModule } from '../authoring/collection-schema.js';
 import {
 	referenceDatabaseIdentifier,
 	type ModelDeclaration,
@@ -52,7 +55,7 @@ import {
 } from '../runtime/schema/schema-plan.js';
 import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './workspace-build.js';
 import { workspaceSchemaFingerprint } from './schema-fingerprint.js';
-import { isString } from '../schema-decode.js';
+import { isRecord, isString } from '../schema-decode.js';
 
 /** Deterministic in-process Drizzle snapshot diffing; this boundary emits DDL but never executes it. */
 
@@ -746,6 +749,81 @@ export const importWorkspaceModels = (modelFiles: ReadonlyArray<string>) =>
 	Effect.forEach(modelFiles, (modelFile) =>
 		importModel(modelFile).pipe(
 			Effect.map((model) => [basename(dirname(modelFile)), model] as const)
+		)
+	).pipe(Effect.map((entries) => Object.fromEntries(entries)));
+
+/**
+ * Imports the collection declarations named by filesystem-first discovery, keyed by collection
+ * name.
+ *
+ * The declaration is the authority for its selection exactly as a model is for its columns, so the
+ * module is imported rather than scraped — and by content revision, for the reason `importModel`
+ * documents: `sync --watch` must not read a cached module after its file changed. The module
+ * imports its own `./+model.js`; the resolution hook above maps that name onto the source file.
+ */
+/**
+ * Authored modules import each other by their emitted names (`./+model.js`), which is what the
+ * bundle and the type checker see; sync imports the source directly, so the `.js` specifier of a
+ * sibling that only exists as `.ts` is resolved to that source. Registered once per process, and
+ * only for relative specifiers whose `.js` target is absent and whose `.ts` twin is present.
+ */
+let authoredResolutionRegistered = false;
+const registerAuthoredResolution = (): void => {
+	if (authoredResolutionRegistered) return;
+	authoredResolutionRegistered = true;
+	registerHooks({
+		resolve: (specifier, context, next) => {
+			if (
+				context.parentURL !== undefined &&
+				specifier.startsWith('.') &&
+				specifier.endsWith('.js') &&
+				context.parentURL.startsWith('file:')
+			) {
+				const target = join(dirname(fileURLToPath(context.parentURL)), specifier);
+				if (!existsSync(target) && existsSync(target.replace(/\.js$/, '.ts')))
+					return next(specifier.replace(/\.js$/, '.ts'), context);
+			}
+			return next(specifier, context);
+		}
+	});
+};
+
+const importCollection = (collectionFile: string) =>
+	Effect.tryPromise({
+		try: async () => {
+			registerAuthoredResolution();
+			const source = await readFile(collectionFile, 'utf8');
+			const revision = createHash('sha256').update(source).digest('hex');
+			return import(`${pathToFileURL(collectionFile).href}?bolt-collection=${revision}`);
+		},
+		catch: (caught) =>
+			new Error(
+				`Could not import ${collectionFile} to read its declaration.\n\nNode said:\n${getErrorMessage(caught)}`,
+				{ cause: caught }
+			)
+	}).pipe(
+		Effect.flatMap((module) => {
+			const imported = Schema.decodeUnknownSync(Schema.Struct({ default: Schema.Unknown }))(module);
+			const declaration = imported.default;
+			const model = isRecord(declaration) ? Reflect.get(declaration, 'model') : undefined;
+			if (isRecord(model) && model['__kind'] === 'model' && isRecord(model['columns'])) {
+				// The envelope is schema-checked above; the declaration's own selections are plain
+				// JSON the runtime carriers consume, and `defineCollection` validated them at load.
+				return Effect.succeed(declaration as AuthoredCollectionModule);
+			}
+			return Effect.fail(
+				new Error(
+					`${collectionFile} does not default-export a defineCollection() declaration whose model has columns`
+				)
+			);
+		})
+	);
+
+/** Imports `+collection.ts` declarations by filesystem-first discovery, keyed by collection name. */
+export const importWorkspaceCollections = (collectionFiles: ReadonlyArray<string>) =>
+	Effect.forEach(collectionFiles, (collectionFile) =>
+		importCollection(collectionFile).pipe(
+			Effect.map((declaration) => [basename(dirname(collectionFile)), declaration] as const)
 		)
 	).pipe(Effect.map((entries) => Object.fromEntries(entries)));
 

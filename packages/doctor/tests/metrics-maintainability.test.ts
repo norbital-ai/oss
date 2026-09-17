@@ -8,9 +8,7 @@ import { maintainabilityIndex } from '../build/metrics/index.js';
 test('the SEI constants reproduce the textbook value', () => {
 	// 171 − 5.2·ln100 − 0.23·1 − 16.2·ln10 = 109.5212… → ·100/171 = 64.0475…
 	assert.ok(
-		Math.abs(
-			maintainabilityIndex({ volume: 100, cyclomatic: 1, loc: 10 }) - 64.0475067
-		) < 0.0001
+		Math.abs(maintainabilityIndex({ volume: 100, cyclomatic: 1, loc: 10 }) - 64.0475067) < 0.0001
 	);
 });
 

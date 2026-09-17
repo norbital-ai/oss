@@ -1,8 +1,8 @@
 # Approvals and locking
 
-Access and approvals are one system. An approval flow is attached to a **write grant**. The
-runtime prepares the mutation before it asks for approval; it does not publish proposed values
-while review is open. There is no separate "submit for approval" action.
+Access and approvals are one system. An approval flow is attached to a **write grant**. When
+policy routes a write to approval the engine commits the write **provisionally** under a hold and
+opens the request in the same transaction. There is no separate "submit for approval" action.
 
 Subjects and teams: [access](./README.md).
 
@@ -40,82 +40,82 @@ Teams listed in one stage are alternatives; stages are sequential (`thenBy`).
 `superceded_by` names teams that may finish every remaining step. The chosen
 `ApprovalConfiguration` is **snapshotted** into the request so a later release cannot restate it.
 
-`authorize` on the same grant runs first; only explicit `true` passes.
+`authorize` on the same grant runs first; only explicit `true` passes. The whole batch of one
+write shares one route; rows that route differently are refused and submitted separately.
 
 There is no UI for editing a flow. Changing who approves is a source edit and a deploy.
 
 ---
 
-## Prepare, gate, commit, settle
+## The machine
 
-Every `mutate` / `delete` path, including an agent's `write_collection` and a browser's
-`collections.mutate` graph, uses the same lifecycle. `mutate.new` governs new rows and
-`mutate.existing` governs existing rows:
+```text
+                start: provisional commit + hold + restore point
+                                   │
+                                   ▼
+   ┌────────────────────── ONGOING (step i) ──────────────────────┐
+   │ step approved → i+1        participants may write, stamped  │
+   │                                                              │
+last step approved       request-changes / withdraw / reject   restore fails
+   │                                    │                          │
+   ▼                                    ▼                          ▼
+APPROVED                 CHANGES_REQUESTED · WITHDRAWN · REJECTED   CONFLICTED
+seal: clear stamps,        restore: every row back to its hold    held for an admin;
+`committed` fires          snapshot, stamps cleared, `restore`    the restore is retried
+                           revision appended                       or superseded
+```
 
-1. **PREPARE** runs the applicable hooks and reconciles the proposed mutation graph without
-   publishing its domain values.
-2. The approval **gate** chooses `noApproval` or a concrete review flow.
-3. `noApproval` proceeds to **COMMIT**. A gated mutation is put on **hold** instead.
-4. **SETTLE** runs after commit. Approving a held request calls `collections.resume`, which commits
-   the prepared mutation and settles it; rejecting or withdrawing discards it.
+- **Start** is one transaction: the graph, the stamps, the restore point, the `bolt_approvals`
+  row, the `approval_request` projection, its `requestor` link, and the `approvalStarted` /
+  `approvalStepRequested` notification rows. The caller gets `pendingApproval: { requestId }`
+  (a browser write settles as **202** `PendingApproval` — success, not a refusal).
+- **The hold.** Every row the graph creates or updates carries `approval_id = requestId`; a row
+  the graph deletes is gone, its snapshot kept. Each row gets one `hold` revision in
+  `bolt_collection_history` carrying its full pre-image, or a null snapshot for a row the request
+  created. Provisional values are real rows: sync pushes them, reports and automations see them,
+  and `approval_id` (`where: { approval_id: { isNull: false } }`) is how a consumer tells them apart.
+- **Writing under the hold.** A write that names a held row fails `ApprovalHeld { requestId }`
+  before anything is written, unless the subject is a participant: the requestor, an approver of
+  the current step, a team named in `superceded_by`, or an administrator. A participant's write
+  goes through the same path as any other; its rows are stamped and hold-revisioned so a restore
+  covers them, and one that would itself route to review rides the open request — nobody opens
+  a second approval on a held row.
+- **Step approved** advances the step. `SUPERSEDED` is an approval by a `superceded_by` team or an
+  administrator that finishes every remaining step at once.
+- **Seal** (`collections.resume`, dispatched as a task when the last step approves) clears the
+  stamps on every locked collection in one statement, stamps `approval_request.applied_at`,
+  publishes the change, and writes the `committed` and `approvalCompleted` notification rows. The
+  values on the records are whatever the requestor and participants left there; nothing is
+  re-applied.
+- **Restore** (`collections.discard`, dispatched on request-changes, withdraw or reject) is
+  record-level point-in-time recovery: the earliest `hold` snapshot of every row whose history
+  carries the request's `approval_id` is loaded, then one transaction deletes rows born under the
+  hold, rewrites every other row to its snapshot, re-inserts rows deleted in flight, clears the
+  stamps and appends one `restore` revision per row. Every change made while the request was in
+  flight, by anyone, is undone; the history keeps all of them.
+- **Conflicted** is a restore that cannot apply (a foreign key from an unheld row now pointing at a
+  row the restore must delete). The hold stays and the request is marked `CONFLICTED` for an
+  administrator; `approvalConflicted` notification rules fire.
 
-A held new-row mutation has **no domain row**. A held existing-row mutation or delete may stamp the
-existing row with `approval_id` to prevent conflicting edits, but the proposed values or deletion
-have not been applied.
-
-On hold:
-
-1. `bolt_approvals` row: `_tag: Pending`, embedded operation + configuration.
-2. `approval_request` projection (`status: ONGOING`) and a `requestor` link.
-3. For an existing-row mutation or delete target, `approval_id = requestId` may hold the committed
-   row. A new-row mutation has no target row to stamp.
-4. Caller gets **202** `{ pending: true, requestId, collection, id, action }` — success, not a
-   refusal.
-
-Further writes to that row are refused as an approval conflict until the request closes. There are
-no database triggers; the runtime checks the stamp before it writes.
-
-Convention: `approval_id IS NULL` means an existing row is not held; a non-null value identifies
-the open request holding its committed state.
-
-Server hooks and remotes can read held candidates with
-`api.db.<collection>.findPending({ where, limit })`. These are partial candidate rows under the
-target collection's read predicate and field mask, with `id` and `approval_id`; they do not expose
-approval inbox metadata. Use this for reservations that must include requests submitted by another
-person. Ordinary `findMany` still returns committed rows. The candidate read includes approved
-requests until the mutation transaction stamps `approval_request.applied_at`, and excludes rejected,
-withdrawn and applied requests. Merge candidates by record ID and exclude the hook's `recordId`
-when validating that same request again during approval replay.
-
-Browser views use `client.pending.findMany(collectionName, { where, limit })` for the same
-policy-scoped candidates as a live query. It accepts a fixed scope of at most 2,000 proposals,
-ordered by target record ID; narrow the scope instead of paging a reservation total. Generated
-domain fields may be absent until approval applies the mutation. Approval transitions publish
-their committed projection changes, and this read observes those changes without granting inbox
-access. Ordinary command invocations remain one-shot; a derived calculation can depend on the
-live candidate rows and committed row versions before invoking its read handler again.
-
-Decision and withdrawal commands send only `{ state: { requestId }, ... }`. The server loads the
-durable state and checks authority; the client never needs to upload the review snapshot again.
+`api.collection_history.<name>.at(id, { before: requestId })` reads a record's restore point.
 
 ---
 
 ## Statuses
 
-| Internal           | `approval_request.status` | Outcome                                                                          |
-| ------------------ | ------------------------- | -------------------------------------------------------------------------------- |
-| `Pending`          | `ONGOING`                 | Prepared values are held; existing targets are locked against conflicting writes |
-| `Approved`         | `APPROVED`                | `collections.resume` commits the prepared mutation/delete and settles it         |
-| `Rejected`         | `REJECTED`                | The prepared mutation is discarded; any existing-row lock is released            |
-| `ChangesRequested` | `CHANGES_REQUESTED`       | Same as reject; requestor may resubmit                                           |
-| `Conflicted`       | `CONFLICTED`              | Reviewed graph could not apply                                                   |
-| `Withdrawn`        | `WITHDRAWN`               | Requestor closed it while pending                                                |
+| Internal           | `approval_request.status` | Outcome                                                       |
+| ------------------ | ------------------------- | ------------------------------------------------------------- |
+| `Pending`          | `ONGOING`                 | The graph is committed provisionally; its rows are held       |
+| `Approved`         | `APPROVED`                | `collections.resume` seals: stamps cleared, `committed` fires |
+| `Rejected`         | `REJECTED`                | `collections.discard` restores every held row                 |
+| `ChangesRequested` | `CHANGES_REQUESTED`       | Same restore; the requestor may resubmit                      |
+| `Withdrawn`        | `WITHDRAWN`               | Requestor closed it while pending; same restore               |
+| `Conflicted`       | `CONFLICTED`              | The restore could not apply; the hold stays                   |
 
 Client `approvals.process` accepts `APPROVED` | `REJECTED` | `REQUEST_FOR_CHANGE` | `SUPERSEDED`.
 `approvals.withdraw` is the requestor's own action.
 
-Transitions are optimistic: `transitionQuery` updates state only if it is still `Pending`. Lock
-release sets `approval_id = null` where `approval_id = requestId`.
+Transitions are optimistic: `transitionQuery` updates state only if it is still `Pending`.
 
 ---
 
@@ -135,13 +135,14 @@ approve**.
 
 ## Where the state lives
 
-| Artifact                            | Role                                                             |
-| ----------------------------------- | ---------------------------------------------------------------- |
-| `approval_id` on an existing row    | The open request holding its current committed state             |
-| `bolt_approvals`                    | Durable FSM + full operation (`sync: false`)                     |
-| `approval_request`                  | Synced inbox: status, steps cursor, proposed values, locked refs |
-| `requestor`                         | Who raised it                                                    |
-| `bolt_notifications` / `bolt_audit` | Decision notices and timeline                                    |
+| Artifact                            | Role                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| `approval_id` on a row              | The open request holding it                                            |
+| `bolt_collection_history` `hold`    | The row's restore point, tagged with the request                       |
+| `bolt_approvals`                    | Durable FSM + the operation (root, requestor, resolved flow, lock set) |
+| `approval_request`                  | Synced inbox: status, steps cursor, `applied_at`, who closed it        |
+| `requestor`                         | Who raised it                                                          |
+| `bolt_notifications` / `bolt_audit` | The collection's declared notices and the timeline                     |
 
 `reconcileApproverTeams` inserts an empty `team` row for every `superceded_by` name that has none.
 It does **not** auto-create flow-stage approver teams — those must exist via operator or
@@ -152,9 +153,7 @@ names**.
 
 ## Reads that validate a write
 
-Database reads made during hook preparation are fingerprinted with their result. Before committing
-or reserving an approval, Bolt rechecks those queries inside the write transaction under ordered
-table locks. A changed result, including a new matching row or pending proposal, refuses the stale
-write and asks the caller to refresh and retry. Queries for unrelated records can still pass.
-External calls are not repeated inside a database transaction. This protects concurrent mutations;
-a hook that accepts a batch must also validate the combined effect of its inputs.
+Reads a transform makes are fingerprinted with their result. Before committing, Bolt rechecks
+those queries inside the write transaction under ordered table locks. A changed result refuses the
+stale write and asks the caller to refresh and retry. Queries for unrelated records can still pass.
+External calls are not repeated inside a database transaction.

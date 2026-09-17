@@ -69,7 +69,11 @@ const named = (set: ReadonlyMap<string, string>, pattern: RegExp): ReadonlyArray
 		.toSorted();
 
 const occurrences = (source: string, pattern: RegExp): number =>
-	(source.match(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)) ?? []).length;
+	(
+		source.match(
+			new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)
+		) ?? []
+	).length;
 
 /**
  * The statement shapes that write a `bolt_task` row.
@@ -78,18 +82,18 @@ const occurrences = (source: string, pattern: RegExp): number =>
  * reaches its own insert through the `enqueueTaskRow` builder, so all three spellings are the write.
  */
 const TASK_ROW_WRITE =
-	/insert\(\s*(?:boltTask\w*|taskTable)\)|insert\s+into\s+bolt_task|enqueueTaskRow\(/u;
+	/insert\(\s*(?:boltTask\w*|taskTable)\)|insert\s+into\s+bolt_task|table: 'bolt_task'|enqueueTaskRow\(/u;
 
 describe('instance 2 — every write path that queues a delivery also queues its drain', () => {
 	const source = readFileSync(join(RUNTIME, 'collections/collections.ts'), 'utf8');
 	const blocks = blocksOf(source);
 
 	it('has the two sets, and they are the same set', () => {
-		// A write path is one that puts outbound delivery rows in its transaction. The delivery rows
-		// and their drain task enter through the `createStatements`/`deleteStatements` builders, so a
-		// call site — a spread into a transaction's statement list, never the `const` definition — is
-		// a path that can emit a delivery, and every one of them must announce the flush.
-		const emits = named(blocks, /\.\.\.createStatements\(|\.\.\.deleteStatements\(/u);
+		// A write path is one that puts outbound delivery rows in its statement. The delivery rows
+		// and their drain task enter through `drainRows`, so a call site — a spread into the write's
+		// insert rows, never the `const` definition — is a path that can emit a delivery, and every
+		// one of them must announce the flush.
+		const emits = named(blocks, /\.\.\.drainRows\(/u);
 		const announces = named(blocks, /announceFlush\(/u);
 		// Printed on failure rather than only compared, so a diff says *which* path lost its drain.
 		expect({ emits, announces }).toEqual({ emits, announces: emits });
@@ -102,8 +106,7 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		const body = blocks.get('Collections.applyDeclarativeGraph');
 		expect(body).toBeDefined();
 		const flushAt = body?.search(/announceFlush\(/u) ?? -1;
-		const statementsAt =
-			body?.search(/\.\.\.createStatements\(|\.\.\.deleteStatements\(/u) ?? -1;
+		const statementsAt = body?.search(/\.\.\.drainRows\(/u) ?? -1;
 		expect(flushAt).toBeGreaterThan(-1);
 		expect(statementsAt).toBeGreaterThan(-1);
 		expect(flushAt).toBeLessThan(statementsAt);
@@ -112,11 +115,11 @@ describe('instance 2 — every write path that queues a delivery also queues its
 	it('is not vacuous — there are write paths to check', () => {
 		// A parity assertion over two empty sets passes and proves nothing. This is the guard against
 		// the check silently becoming decorative after a refactor renames the builders.
-		// The declarative engine consolidated the per-record create/delete builders into one apply
-		// pass; the outbox builder keeps at least its definition plus its commit-path call sites.
-		expect(occurrences(source, /outboxStatements\(/u)).toBeGreaterThanOrEqual(2);
+		// The declarative engine consolidated the per-record builders into one apply pass; the
+		// delivery builder keeps at least its definition plus its commit-path call sites.
+		expect(occurrences(source, /outboxDeliveries\(/u)).toBeGreaterThanOrEqual(2);
 		expect(
-			occurrences(source, /\.\.\.createStatements\(|\.\.\.deleteStatements\(|applyDeclarativeGraph\(/u)
+			occurrences(source, /\.\.\.drainRows\(|applyDeclarativeGraph\(/u)
 		).toBeGreaterThanOrEqual(1);
 	});
 });
@@ -153,18 +156,20 @@ describe('instance 3 — every task row written is announced to the host', () =>
 	it('every block that commits a task row in its own transaction arms the host timer first', () => {
 		const offenders = files.flatMap((file) => {
 			const blocks = blocksOf(readFileSync(file, 'utf8'));
-			return [...blocks]
-				// A block that only *builds* the statement — the collections drain rows, the approvals
-				// follow-up CTE — commits nothing itself; its caller's announcement is the contract, and
-				// the callers are pinned by the other tests in this file.
-				.filter(([, body]) => /executeBuilt\(/u.test(body))
-				.filter(([, body]) => TASK_ROW_WRITE.test(body))
-				.filter(([, body]) => {
-					const wakeAt = body.search(/\.wake\(/u);
-					const writeAt = body.search(TASK_ROW_WRITE);
-					return wakeAt === -1 || wakeAt > writeAt;
-				})
-				.map(([name]) => `${file.slice(RUNTIME.length + 1)}:${name}`);
+			return (
+				[...blocks]
+					// A block that only *builds* the statement — the collections drain rows, the approvals
+					// follow-up CTE — commits nothing itself; its caller's announcement is the contract, and
+					// the callers are pinned by the other tests in this file.
+					.filter(([, body]) => /executeBuilt\(/u.test(body))
+					.filter(([, body]) => TASK_ROW_WRITE.test(body))
+					.filter(([, body]) => {
+						const wakeAt = body.search(/\.wake\(/u);
+						const writeAt = body.search(TASK_ROW_WRITE);
+						return wakeAt === -1 || wakeAt > writeAt;
+					})
+					.map(([name]) => `${file.slice(RUNTIME.length + 1)}:${name}`)
+			);
 		});
 		expect(offenders).toEqual([]);
 	});

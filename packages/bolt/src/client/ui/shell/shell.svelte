@@ -473,7 +473,7 @@
 	);
 
 	const markNotificationRead = (id: string): void => {
-		void runtime.client.db.bolt_notifications.mutate([{ id, read: true }]);
+		void runtime.client.collection.bolt_notifications.update(id, { read: true });
 	};
 
 	onMount(() => {
@@ -801,7 +801,6 @@
 											<Column name="action" label={t('bolt.shell.action')} card="badge" />
 											<Column name="record_id" label={t('bolt.shell.record')} card="subtitle" />
 											<Column name="status" label={t('bolt.shell.status')} />
-											<Column name="proposed_values" label={t('bolt.shell.proposedChange')} />
 										{/snippet}
 									</CollectionTable>
 								</Bound>

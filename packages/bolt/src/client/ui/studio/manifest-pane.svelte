@@ -95,7 +95,7 @@
 		t(MANIFEST_SECTION_MESSAGES[id][2]);
 	const countLabel = (
 		count: number,
-		kind: 'fields' | 'relations' | 'hooks' | 'grants' | 'policies'
+		kind: 'fields' | 'relations' | 'writes' | 'grants' | 'policies'
 	): string => t(`bolt.studio.count.${kind}`, { count });
 	const automationTrigger = (automation: WorkspaceManifest['automations'][number]): string => {
 		if (automation.trigger._tag === 'Schedule')
@@ -278,7 +278,7 @@
 
 {#snippet collectionBehaviors(entry: ManifestCollection, workspace: WorkspaceManifest)}
 	<Stack gap="md" class="pl-7">
-		{#each [{ title: t('bolt.studio.hooks'), empty: t('bolt.studio.noHooks'), entries: entry.hookDeclarations ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.collection === entry.name) }] as group (group.title)}
+		{#each [{ title: t('bolt.studio.writes'), empty: t('bolt.studio.noWrites'), entries: entry.writes ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.collection === entry.name) }] as group (group.title)}
 			<Stack as="section" gap="xs">
 				<h4 class="text-xs font-medium text-foreground">{group.title}</h4>
 				{#if group.entries.length === 0}

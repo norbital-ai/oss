@@ -68,20 +68,14 @@ describe('Bolt authoring contracts', () => {
 		);
 		expect(declaration.metadata?.embedding?.fields).toEqual(['title', 'photo']);
 		expect(() =>
-			defineModel(
-				{ title: text() },
-				{ embedding: { fields: ['missing'] } } as never
-			)
+			defineModel({ title: text() }, { embedding: { fields: ['missing'] } } as never)
 		).toThrow(/undeclared field missing/u);
-		expect(() =>
-			defineModel(
-				{ amount: numeric() },
-				{ embedding: { fields: ['amount'] } }
-			)
-		).toThrow(/must be text or file data/u);
-		expect(() =>
-			defineModel({ title: text() }, { embedding: { fields: [] } })
-		).toThrow(/at least one source field/u);
+		expect(() => defineModel({ amount: numeric() }, { embedding: { fields: ['amount'] } })).toThrow(
+			/must be text or file data/u
+		);
+		expect(() => defineModel({ title: text() }, { embedding: { fields: [] } })).toThrow(
+			/at least one source field/u
+		);
 	});
 
 	it('preserves command and connection declaration inference', () => {

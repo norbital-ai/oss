@@ -2,23 +2,23 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { auditAuthoredClientWrappers, auditHooklessMutations } from '../src/quality/audit.js';
+import { auditAuthoredClientWrappers, auditUndeclaredWrites } from '../src/quality/audit.js';
 
 /**
  * Proves the onsite-write rule can tell a helper from a handler.
  *
- * Writes (`client.db.*.mutate|delete`, `client.invoke.*`) belong in markup event-handler
+ * Writes (`client.collection.*.create|update|delete…`, `client.invoke.*`) belong in markup event-handler
  * arrows and `$derived` — positions with no named holder. A named function holding one is
  * the violation. Reads (`findMany`, `pending`) belong in helpers, so both halves are
  * asserted here: the wrappers must fire, and the legitimate shapes must stay silent.
  */
 describe('authored client-wrapper audit', () => {
-	it('reports a named function wrapping a mutate', () => {
+	it('reports a named function wrapping an update', () => {
 		const source = [
 			'<script>',
 			"  import { client } from './workspace-client.js';",
 			'  function saveLoan() {',
-			'    return client.db.loans.mutate([{ id: "1" }]);',
+			'    return client.collection.loans.update("1", { amount: 1 });',
 			'  }',
 			'</script>',
 			'<button>save</button>'
@@ -28,7 +28,7 @@ describe('authored client-wrapper audit', () => {
 				file: 'a.svelte',
 				line: 4,
 				functionName: 'saveLoan',
-				call: 'client.db.loans.mutate'
+				call: 'client.collection.loans.update'
 			}
 		]);
 	});
@@ -57,12 +57,17 @@ describe('authored client-wrapper audit', () => {
 			'<script context="module">',
 			'  import { client } from "./workspace-client.js";',
 			'  export function seed() {',
-			'    return client.db.loans.mutate([]);',
+			'    return client.collection.loans.createMany([]);',
 			'  }',
 			'</script>'
 		].join('\n');
 		expect(auditAuthoredClientWrappers({ 'a.svelte': source })).toEqual([
-			{ file: 'a.svelte', line: 4, functionName: 'seed', call: 'client.db.loans.mutate' }
+			{
+				file: 'a.svelte',
+				line: 4,
+				functionName: 'seed',
+				call: 'client.collection.loans.createMany'
+			}
 		]);
 	});
 
@@ -70,7 +75,7 @@ describe('authored client-wrapper audit', () => {
 		const source = [
 			"import { client } from './workspace-client.js';",
 			'export function saveLoan(input: unknown) {',
-			'  return client.db.loans.mutate([input]);',
+			'  return client.collection.loans.create(input);',
 			'}'
 		].join('\n');
 		expect(auditAuthoredClientWrappers({ 'lib/loans.ts': source })).toEqual([
@@ -78,7 +83,7 @@ describe('authored client-wrapper audit', () => {
 				file: 'lib/loans.ts',
 				line: 3,
 				functionName: 'saveLoan',
-				call: 'client.db.loans.mutate'
+				call: 'client.collection.loans.create'
 			}
 		]);
 	});
@@ -88,7 +93,7 @@ describe('authored client-wrapper audit', () => {
 			"import { client } from './workspace-client.js';",
 			'export class LoanService {',
 			'  async save(input: unknown) {',
-			'    return client.db.loans.delete(["1"]);',
+			'    return client.collection.loans.delete("1");',
 			'  }',
 			'}'
 		].join('\n');
@@ -97,7 +102,7 @@ describe('authored client-wrapper audit', () => {
 				file: 'lib/service.ts',
 				line: 4,
 				functionName: 'save',
-				call: 'client.db.loans.delete'
+				call: 'client.collection.loans.delete'
 			}
 		]);
 	});
@@ -107,7 +112,7 @@ describe('authored client-wrapper audit', () => {
 			"import { client } from './workspace-client.js';",
 			'export const handlers = {',
 			'  async save(input: unknown) {',
-			'    return client.db.loans.mutate([input]);',
+			'    return client.collection.loans.create(input);',
 			'  }',
 			'};'
 		].join('\n');
@@ -116,7 +121,7 @@ describe('authored client-wrapper audit', () => {
 				file: 'lib/handlers.ts',
 				line: 4,
 				functionName: 'save',
-				call: 'client.db.loans.mutate'
+				call: 'client.collection.loans.create'
 			}
 		]);
 	});
@@ -126,12 +131,12 @@ describe('authored client-wrapper audit', () => {
 			'<script>',
 			"  import { client } from './workspace-client.js';",
 			'  function save() {',
-			'    return submit(() => client.db.loans.mutate([{ id: "1" }]));',
+			'    return submit(() => client.collection.loans.update("1", { amount: 1 }));',
 			'  }',
 			'</script>'
 		].join('\n');
 		expect(auditAuthoredClientWrappers({ 'a.svelte': source })).toEqual([
-			{ file: 'a.svelte', line: 4, functionName: 'save', call: 'client.db.loans.mutate' }
+			{ file: 'a.svelte', line: 4, functionName: 'save', call: 'client.collection.loans.update' }
 		]);
 	});
 
@@ -161,7 +166,8 @@ describe('authored client-wrapper audit', () => {
 	it('does not report an inline markup arrow, which is the onsite position', () => {
 		expect(
 			auditAuthoredClientWrappers({
-				'a.svelte': '<button onclick={() => client.db.loans.mutate([{ id: "1" }])}>save</button>'
+				'a.svelte':
+					'<button onclick={() => client.collection.loans.update("1", { amount: 1 })}>save</button>'
 			})
 		).toEqual([]);
 	});
@@ -193,19 +199,19 @@ describe('authored client-wrapper audit', () => {
 			'<script>',
 			'  import { client } from "./w.js";',
 			'  function isSaving() {',
-			'    return client.db.loans.pending;',
+			'    return client.collection.loans.pending;',
 			'  }',
 			'</script>'
 		].join('\n');
 		expect(auditAuthoredClientWrappers({ 'a.svelte': source })).toEqual([]);
 	});
 
-	it('does not report a mutate on another client, such as a prop', () => {
+	it('does not report a write on another client, such as a prop', () => {
 		const source = [
 			'<script>',
 			'  let { operations } = $props();',
 			'  function save() {',
-			'    return operations.mutate([]);',
+			'    return operations.create({});',
 			'  }',
 			'</script>'
 		].join('\n');
@@ -213,7 +219,7 @@ describe('authored client-wrapper audit', () => {
 	});
 
 	it('skips files outside authored source, like the build guard', () => {
-		const source = '<script>function s() { return client.db.a.mutate([]); }</script>';
+		const source = '<script>function s() { return client.collection.a.create({}); }</script>';
 		expect(auditAuthoredClientWrappers({ 'w/node_modules/x.svelte': source })).toEqual([]);
 		expect(
 			auditAuthoredClientWrappers({ 'w/.norbital/x.ts': 'export function s() { return 1; }' })
@@ -222,31 +228,31 @@ describe('authored client-wrapper audit', () => {
 });
 
 /**
- * Proves the hookless-mutation audit lists exactly the mutate grants without hooks.
+ * Proves the undeclared-write audit lists exactly the mutate grants without a `+collection.ts`.
  *
- * A collection granted `mutate.*` is expected to carry its write effects in
- * `src/collections/<collection>/+hooks.ts`. Read-only grants need no hooks, and a grant
- * with its hooks file present is complete — both stay silent. Fixtures are real workspace
- * trees under a temporary root, because the audit reads the workspace rather than a record
- * of sources.
+ * A collection granted `mutate.*` is expected to declare its write contract in
+ * `src/collections/<collection>/+collection.ts`. Read-only grants need no declaration, and a
+ * grant with its declaration present is complete — both stay silent. Fixtures are real
+ * workspace trees under a temporary root, because the audit reads the workspace rather than
+ * a record of sources.
  */
-describe('hookless mutation audit', () => {
+describe('undeclared write audit', () => {
 	const writeWorkspace = (
 		policies: Readonly<Record<string, string>>,
-		hooks: ReadonlyArray<string>
+		declared: ReadonlyArray<string>
 	): string => {
-		const root = mkdtempSync(join(tmpdir(), 'bolt-hookless-'));
+		const root = mkdtempSync(join(tmpdir(), 'bolt-undeclared-'));
 		mkdirSync(join(root, 'src', 'access', 'policies'), { recursive: true });
 		for (const [name, content] of Object.entries(policies))
 			writeFileSync(join(root, 'src', 'access', 'policies', name), content);
-		for (const collection of hooks) {
+		for (const collection of declared) {
 			mkdirSync(join(root, 'src', 'collections', collection), { recursive: true });
-			writeFileSync(join(root, 'src', 'collections', collection, '+hooks.ts'), 'export {};\n');
+			writeFileSync(join(root, 'src', 'collections', collection, '+collection.ts'), 'export {};\n');
 		}
 		return root;
 	};
 
-	it('flags a mutate grant with no hooks file', () => {
+	it('flags a mutate grant with no +collection.ts', () => {
 		const root = writeWorkspace(
 			{
 				'+manager.ts': [
@@ -259,12 +265,12 @@ describe('hookless mutation audit', () => {
 			[]
 		);
 		try {
-			expect(auditHooklessMutations(root)).toEqual([
+			expect(auditUndeclaredWrites(root)).toEqual([
 				{
 					collection: 'loans',
 					file: 'src/access/policies/+manager.ts',
 					line: 3,
-					expectedHooks: 'src/collections/loans/+hooks.ts'
+					expectedDeclaration: 'src/collections/loans/+collection.ts'
 				}
 			]);
 		} finally {
@@ -285,12 +291,12 @@ grants: {
 			['invoices']
 		);
 		try {
-			expect(auditHooklessMutations(root)).toEqual([
+			expect(auditUndeclaredWrites(root)).toEqual([
 				{
 					collection: 'orders',
 					file: 'src/access/policies/+manager.ts',
 					line: 3,
-					expectedHooks: 'src/collections/orders/+hooks.ts'
+					expectedDeclaration: 'src/collections/orders/+collection.ts'
 				}
 			]);
 		} finally {
@@ -298,7 +304,7 @@ grants: {
 		}
 	});
 
-	it('flags a grantOn mutate and stays silent when the hooks file exists', () => {
+	it('flags a grantOn mutate and stays silent when the declaration exists', () => {
 		const without = writeWorkspace(
 			{
 				'+hr.ts': [
@@ -310,7 +316,7 @@ grants: {
 			},
 			[]
 		);
-		const withHooks = writeWorkspace(
+		const withDeclaration = writeWorkspace(
 			{
 				'+hr.ts': [
 					"import { grantOn } from '../../lib/policy_grants.js';",
@@ -322,22 +328,22 @@ grants: {
 			['payslips']
 		);
 		try {
-			expect(auditHooklessMutations(without)).toEqual([
+			expect(auditUndeclaredWrites(without)).toEqual([
 				{
 					collection: 'payslips',
 					file: 'src/access/policies/+hr.ts',
 					line: 3,
-					expectedHooks: 'src/collections/payslips/+hooks.ts'
+					expectedDeclaration: 'src/collections/payslips/+collection.ts'
 				}
 			]);
-			expect(auditHooklessMutations(withHooks)).toEqual([]);
+			expect(auditUndeclaredWrites(withDeclaration)).toEqual([]);
 		} finally {
 			rmSync(without, { recursive: true, force: true });
-			rmSync(withHooks, { recursive: true, force: true });
+			rmSync(withDeclaration, { recursive: true, force: true });
 		}
 	});
 
-	it('stays silent for read-only and delete-only grants without hooks', () => {
+	it('stays silent for read-only and delete-only grants without a declaration', () => {
 		const root = writeWorkspace(
 			{
 				'+a.ts': [
@@ -356,16 +362,16 @@ grants: {
 			[]
 		);
 		try {
-			expect(auditHooklessMutations(root)).toEqual([]);
+			expect(auditUndeclaredWrites(root)).toEqual([]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
 	it('returns nothing when there are no policies', () => {
-		const root = mkdtempSync(join(tmpdir(), 'bolt-hookless-'));
+		const root = mkdtempSync(join(tmpdir(), 'bolt-undeclared-'));
 		try {
-			expect(auditHooklessMutations(root)).toEqual([]);
+			expect(auditUndeclaredWrites(root)).toEqual([]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

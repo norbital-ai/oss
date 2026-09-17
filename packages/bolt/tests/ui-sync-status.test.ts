@@ -32,7 +32,8 @@ describe('live sync presentation', () => {
 			mount: () => {
 				throw new Error('not used');
 			},
-			enqueue: () => undefined
+			enqueue: () => undefined,
+			answer: () => undefined
 		} satisfies SyncClient;
 		const view = createSyncStatusView(sync);
 		expect(view.link).toBe('reconnecting');
@@ -66,7 +67,7 @@ describe('live sync presentation', () => {
 						issuedAtEpochMs: 1,
 						partitionKey: 'partition',
 						schemaFingerprint: 'schema',
-						graph: { action: 'delete', collection: 'tasks', ids: ['a'] },
+						graph: { action: 'delete', collection: 'tasks', inputs: [{ id: 'a' }] },
 						baseVersions: []
 					},
 					phase: 'sent',

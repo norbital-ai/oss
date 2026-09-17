@@ -4,7 +4,8 @@ import { WorkspaceAuthoringManifest } from './bundle.js';
 import {
 	CollectionAnchoredPage,
 	CollectionGroupedQueryRequest,
-	CollectionMutateRequest,
+	CollectionHistoryAnchor,
+	CollectionMutationPush,
 	CollectionQueryRequest
 } from './collections.js';
 import { CommandHeaders, commandContract } from './host.js';
@@ -242,7 +243,9 @@ const ApprovalCapabilityRows = Schema.Array(
 const RequestIdInput = Schema.Struct({ requestId: Schema.NonEmptyString });
 const CollectionRecordInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
-	id: Schema.NonEmptyString
+	id: Schema.NonEmptyString,
+	/** RFC §4.7: a revision ordinal or an instant; absent reads the latest revision. */
+	at: Schema.optionalKey(CollectionHistoryAnchor)
 });
 const CollectionMutation = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -502,6 +505,22 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.NullOr(ApprovalState))]
 	}),
 	commandContract({ name: 'collections.embed', input: EmptyInput, responses: [ok(Schema.Json)] }),
+	/**
+	 * One seed plan (RFC seeding.md §4): fixtures ordered by the runtime's model graph, each
+	 * collection one declared `createMany` as the administering subject. Host-origin only.
+	 */
+	commandContract({
+		name: 'seed.apply',
+		input: Schema.Struct({
+			fixtures: Schema.Array(
+				Schema.Struct({
+					collection: Schema.NonEmptyString,
+					rows: Schema.Array(Schema.JsonObject)
+				})
+			)
+		}),
+		responses: [ok(Schema.Json)]
+	}),
 	commandContract({
 		name: 'conversations.models',
 		input: Schema.Struct({ agentId: AgentId }),
@@ -565,9 +584,13 @@ export const SystemCommandContracts = [
 		input: CollectionRecordInput,
 		responses: [ok(Schema.Json)]
 	}),
+	/**
+	 * One browser write (RFC §4.2): the declared inputs under the idempotent push envelope. 200 is
+	 * the committed settlement; 202 is a write committed provisionally under an approval hold.
+	 */
 	commandContract({
-		name: 'collections.mutate',
-		input: CollectionMutateRequest,
+		name: 'collections.write',
+		input: CollectionMutationPush,
 		responses: [ok(Schema.Json), response(202, Schema.Json)]
 	}),
 	commandContract({

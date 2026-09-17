@@ -55,9 +55,7 @@ const migrate = async (
 	previous: WorkspaceSnapshot,
 	models: Readonly<Record<string, ModelDeclaration>>
 ): Promise<ReadonlyArray<string>> => {
-	const migration = await Effect.runPromise(
-		planWorkspaceMigration({ models, previous })
-	);
+	const migration = await Effect.runPromise(planWorkspaceMigration({ models, previous }));
 	if (migration === undefined) throw new Error('a restructure must produce a migration');
 	return migration.statements;
 };

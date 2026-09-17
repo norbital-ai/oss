@@ -1,7 +1,7 @@
 id: QRY3
 summary: query parameters froze reactive input outside $derived
 severity: error
-principles: [ simplicity, straightforwardness, testability, type-safety, no-bloat ]
+principles: [simplicity, straightforwardness, testability, type-safety, no-bloat]
 ignore:
   - '**/scripts/**'
 rule:

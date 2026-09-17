@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { approveBy } from '../src/authoring/approval-flow.js';
@@ -9,26 +8,15 @@ import {
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
 import * as Approvals from '../src/runtime/approvals/approvals.js';
 import * as Collections from '../src/runtime/collections/collections.js';
-import { PendingApproval } from '../src/runtime/collections/collections.js';
-import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
+import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
+import type { AuthoredCollectionModule } from '../src/authoring/collection-schema.js';
+import type * as Identity from '../src/runtime/identity/identity.js';
 import { SyncCommit } from '../src/runtime/facilities/services.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from './support/bolt-test-layer.js';
-
-/**
- * A valid record id for a readable fixture name.
- *
- * Records are keyed by `id uuid`. Names like `'person-1'` were only ever accepted by the
- * `id text` primary key Bolt used to invent, so these fixtures built rows a real database would have
- * rejected — and passed anyway.
- */
-const rid = (name: string): string => {
-	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
-	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
-};
 
 /**
  * The approval gate over real SQL.
@@ -85,10 +73,12 @@ const gatedWorkspace = workspace({
 });
 
 const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
-const gatedAuthored = {
+const peopleModule: AuthoredCollectionModule = { create: { input: { columns: { name: true } } } };
+const gatedAuthored: AuthoredRuntime = {
 	...emptyAuthoredRuntime,
 	policyAuthorizations: gatedFunctions.authorizations,
-	approvalFlows: gatedFunctions.approvalFlows
+	approvalFlows: gatedFunctions.approvalFlows,
+	collections: { people: peopleModule }
 };
 
 const rowCount = async (runtime: BoltTestRuntime, name: string): Promise<number> => {
@@ -97,52 +87,37 @@ const rowCount = async (runtime: BoltTestRuntime, name: string): Promise<number>
 	return typeof row?.['total'] === 'number' ? row['total'] : -1;
 };
 
+const createPerson = (
+	runtime: BoltTestRuntime,
+	effectId: string,
+	name: string,
+	subject: Identity.Subject = policySubject
+) =>
+	runtime.runtime.runPromise(
+		Effect.gen(function* () {
+			return yield* (yield* Collections.Service).write(runtime.effectId(effectId), subject, [
+				{ collection: 'people', action: 'create', inputs: [{ name }] }
+			]);
+		})
+	);
+
 describe('approval gate over SQL', () => {
 	it('writes the row a gated create requested, and holds it under the approval', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
-		const { runtime, effectId } = harness;
-
-		const failure = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					const collections = yield* Collections.Service;
-					yield* collections.mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id: rid('person-1'), name: 'Ada' }],
-						0,
-						{ roots: [{ id: rid('person-1'), action: 'create' }] }
-					);
-				})
-			)
-		);
-
-		expect(failure).toBeInstanceOf(PendingApproval);
-		expect(failure).toMatchObject({ collection: 'people', id: rid('person-1'), action: 'create' });
-		// The canonical gate stores the engine graph and review, but no provisional domain row.
-		expect(await rowCount(harness, 'people')).toBe(0);
+		const commit = await createPerson(harness, 'create-held', 'Ada');
+		const requestId = commit.pendingApproval?.requestId;
+		expect(requestId).toBeTypeOf('string');
+		// The graph is committed provisionally under the request (RFC §4.8).
+		expect(await harness.database.query('select name, approval_id from people')).toEqual([
+			{ name: 'Ada', approval_id: requestId }
+		]);
 	});
 
 	it('records the held request so a reviewer can find and read it', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-
-		const failure = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id: rid('person-2'), name: 'Grace' }],
-						0,
-						{ roots: [{ id: rid('person-2'), action: 'create' }] }
-					);
-				})
-			)
-		);
-		const requestId = failure instanceof PendingApproval ? failure.requestId : '';
+		const commit = await createPerson(harness, 'create-held', 'Grace');
+		const requestId = commit.pendingApproval?.requestId ?? '';
 		expect(requestId).not.toBe('');
 
 		const state = await runtime.runPromise(
@@ -160,36 +135,20 @@ describe('approval gate over SQL', () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatchObject({
 			collection_name: 'people',
-			record_id: rid('person-2'),
-			action: 'create'
+			record_id: commit.records[0]?.['id'],
+			action: 'create',
+			status: 'ONGOING'
 		});
 	});
 
-	it('commits a decision, its projections, audit, notification, and follow-up atomically', async () => {
+	it('commits a decision, its projections, audit and follow-up atomically', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-		const failure = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-decided'),
-						policySubject,
-						'people',
-						[{ id: rid('person-decided'), name: 'Margaret' }],
-						0,
-						{ roots: [{ id: rid('person-decided'), action: 'create' }] }
-					);
-				})
-			)
-		);
-		expect(failure).toBeInstanceOf(PendingApproval);
-		if (!(failure instanceof PendingApproval)) return;
+		const commit = await createPerson(harness, 'create-decided', 'Margaret');
+		const requestId = commit.pendingApproval?.requestId ?? '';
 		const pending = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).status(
-					effectId('status-decided'),
-					failure.requestId
-				);
+				return yield* (yield* Approvals.Service).status(effectId('status-decided'), requestId);
 			})
 		);
 		expect(pending?._tag).toBe('Pending');
@@ -211,62 +170,29 @@ describe('approval gate over SQL', () => {
 			})
 		);
 		expect(decided._tag).toBe('Approved');
-		expect(
-			await harness.database.query('select status, steps, proposed_values from approval_request')
-		).toEqual([
-			expect.objectContaining({
-				status: 'APPROVED',
-				steps: [],
-				proposed_values: { name: 'Margaret' }
-			})
+		expect(await harness.database.query('select status, steps from approval_request')).toEqual([
+			expect.objectContaining({ status: 'APPROVED', steps: [] })
 		]);
 		expect(
 			await harness.database.query(
 				"select kind, subject_id from bolt_audit where kind = 'approval_decided'"
 			)
 		).toEqual([{ kind: 'approval_decided', subject_id: 'reviewer-1' }]);
-		expect(
-			await harness.database.query('select recipient, payload from bolt_notifications')
-		).toEqual([
-			expect.objectContaining({
-				recipient: policySubject.userId,
-				payload: expect.objectContaining({
-					approvalRequestId: failure.requestId,
-					status: 'APPROVED'
-				})
-			})
-		]);
 		expect(await harness.database.query('select command, input from bolt_task')).toEqual([
-			{ command: 'collections.resume', input: { requestId: failure.requestId } }
+			{ command: 'collections.resume', input: { requestId } }
 		]);
 	});
 
 	it('lets every workspace administrator supersede without an authored superseding team', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
-		const failure = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-admin-superseded'),
-						policySubject,
-						'people',
-						[{ id: rid('person-admin-superseded'), name: 'Katherine' }],
-						0,
-						{
-							roots: [{ id: rid('person-admin-superseded'), action: 'create' }]
-						}
-					);
-				})
-			)
-		);
-		expect(failure).toBeInstanceOf(PendingApproval);
-		if (!(failure instanceof PendingApproval)) return;
+		const commit = await createPerson(harness, 'create-admin-superseded', 'Katherine');
+		const requestId = commit.pendingApproval?.requestId ?? '';
 		const pending = await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Approvals.Service).status(
 					effectId('status-admin-superseded'),
-					failure.requestId
+					requestId
 				);
 			})
 		);
@@ -279,7 +205,7 @@ describe('approval gate over SQL', () => {
 				const capabilities = yield* service.capabilities(
 					effectId('capabilities-admin-superseded'),
 					adminSubject,
-					failure.requestId
+					requestId
 				);
 				const decided = yield* service.decide(
 					effectId('decide-admin-superseded'),
@@ -300,81 +226,45 @@ describe('approval gate over SQL', () => {
 	});
 
 	it('leaves an ungated collection alone', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId } = harness;
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).mutate(
-					effectId('create-direct'),
-					adminSubject,
-					'people',
-					[{ id: rid('person-3'), name: 'Ada' }],
-					0,
-					{ roots: [{ id: rid('person-3'), action: 'create' }] }
-				);
-			})
-		);
-
+		harness = await makeBoltTestRuntime(undefined, {
+			authored: { ...emptyAuthoredRuntime, collections: { people: peopleModule } }
+		});
+		const commit = await createPerson(harness, 'create-direct', 'Ada', adminSubject);
+		expect(commit.pendingApproval).toBeUndefined();
 		expect(await rowCount(harness, 'people')).toBe(1);
 		expect(await harness.database.query('select 1 from approval_request')).toHaveLength(0);
 	});
 
-	it('holds each write independently rather than letting one decision cover a batch', async () => {
+	it('holds each write under its own request rather than letting one decision cover both', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
-		const { runtime, effectId } = harness;
-
-		const failure = await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					for (const [index, person] of [
-						{ id: rid('person-4'), name: 'Ada' },
-						{ id: rid('person-5'), name: 'Grace' }
-					].entries())
-						yield* (yield* Collections.Service).mutate(
-							effectId(`create-many:${index}`),
-							policySubject,
-							'people',
-							[person],
-							0,
-							{ roots: [{ id: person.id, action: 'create' }] }
-						);
-				})
-			)
-		);
-
-		expect(failure).toBeInstanceOf(PendingApproval);
-		// The first request aborts preparation before any domain row is committed.
-		expect(await rowCount(harness, 'people')).toBe(0);
+		const first = await createPerson(harness, 'create-many:0', 'Ada');
+		const second = await createPerson(harness, 'create-many:1', 'Grace');
+		expect(first.pendingApproval?.requestId).not.toBe(second.pendingApproval?.requestId);
+		expect(
+			await harness.database.query('select name, approval_id from people order by name')
+		).toEqual([
+			{ name: 'Ada', approval_id: first.pendingApproval?.requestId },
+			{ name: 'Grace', approval_id: second.pendingApproval?.requestId }
+		]);
+		expect(await rowCount(harness, 'approval_request')).toBe(2);
 	});
 
-	it('does not replicate a provisional domain row while approval is pending', async () => {
+	it('replicates the provisional row with its stamp beside the request projection', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
-		const { runtime, effectId } = harness;
-
-		await runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					yield* (yield* Collections.Service).mutate(
-						effectId('create-held'),
-						policySubject,
-						'people',
-						[{ id: rid('person-6'), name: 'Ada' }],
-						0,
-						{ roots: [{ id: rid('person-6'), action: 'create' }] }
-					);
-				})
-			)
-		);
-
-		// The committed approval metadata is live; the proposed domain row remains absent.
+		const { runtime } = harness;
+		const commit = await createPerson(harness, 'create-held', 'Ada');
 		const changes = await runtime.runPromise(
 			Effect.flatMap(SyncCommit.Service, (sync) => sync.drainChanges)
 		);
-		expect(await rowCount(harness, 'people')).toBe(0);
 		expect(changes.map((change) => change.collection).toSorted()).toEqual([
 			'approval_request',
+			'people',
 			'requestor'
 		]);
+		// The change carries routing values only; the stamp is read from the row itself.
+		expect(changes.find((change) => change.collection === 'people')).toMatchObject({
+			operation: 'insert',
+			id: commit.records[0]?.['id']
+		});
 	});
 });

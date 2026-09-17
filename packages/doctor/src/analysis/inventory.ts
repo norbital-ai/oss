@@ -229,11 +229,7 @@ function scriptLineCounts(source: string): LineCounts {
 		for (let line = first; line <= last && line < lines.length; line += 1) set.add(line);
 	};
 	const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.JSX, source);
-	for (
-		let token = scanner.scan();
-		token !== ts.SyntaxKind.EndOfFileToken;
-		token = scanner.scan()
-	) {
+	for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
 		const start = scanner.getTokenPos();
 		const end = scanner.getTextPos();
 		if (

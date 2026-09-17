@@ -191,7 +191,9 @@ test('every ported rule reports its positive example', () => {
 		const rule = ALL.find((candidate) => candidate.id === testCase.rule);
 		assert.ok(rule !== undefined, `${testCase.rule} is not in a Norbital pack`);
 		if (!scan(testCase.bad, file, [rule], testCase.fixture).includes(testCase.rule))
-			missing.push(`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`);
+			missing.push(
+				`${testCase.rule}: no finding for ${testCase.bad.replace(/\n/g, ' ').slice(0, 60)}`
+			);
 	}
 	assert.deepEqual(missing, [], missing.join('\n'));
 });

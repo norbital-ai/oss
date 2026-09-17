@@ -21,6 +21,7 @@ const recordMessage = Schema.Struct({ message: Schema.Unknown });
 export function getErrorMessage(value: unknown): string {
 	if (value instanceof Error) return value.message;
 	if (Schema.is(stringMessage)(value)) return value;
-	if (Schema.is(recordMessage)(value)) return Schema.is(stringMessage)(value.message) ? value.message : String(value.message);
+	if (Schema.is(recordMessage)(value))
+		return Schema.is(stringMessage)(value.message) ? value.message : String(value.message);
 	return String(value);
 }

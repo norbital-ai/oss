@@ -224,6 +224,7 @@ import {
 	type AuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
 import * as Database from '../../src/runtime/facilities/database.js';
+import { SYSTEM_COLLECTION_NAMES } from '../../src/runtime/schema/system-collections.js';
 import type { CallContext } from '../../src/runtime/facilities/database.js';
 import {
 	AI,
@@ -337,6 +338,10 @@ export const makeTestDatabase = async (
 	 * in the statement — so a test that wants to know what the host is told has to read the envelope.
 	 */
 	readonly calls: ReadonlyArray<FacilityCall>;
+	/** Every statement with the parameters it was bound with, in the order `statements` lists them. */
+	readonly bound: ReadonlyArray<
+		Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }>
+	>;
 	/** Drops what has been recorded so far, so a test asserts on its own statements and not on setup. */
 	readonly forget: () => void;
 	readonly query: (
@@ -353,9 +358,11 @@ export const makeTestDatabase = async (
 		extensions: { pg_trgm, btree_gist, vector }
 	});
 	const statements: Array<string> = [];
+	const bound: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> = [];
 	const calls: Array<FacilityCall> = [];
 	const run = async (sql: string, parameters: ReadonlyArray<unknown>) => {
 		statements.push(sql);
+		bound.push({ sql, parameters });
 		return database.query<Record<string, unknown>>(sql, [...parameters]);
 	};
 	return {
@@ -375,6 +382,7 @@ export const makeTestDatabase = async (
 					await database.transaction(async (transaction) => {
 						for (const statement of input.statements) {
 							statements.push(statement.sql);
+							bound.push({ sql: statement.sql, parameters: statement.parameters });
 							const result = await transaction.query<Record<string, unknown>>(statement.sql, [
 								...statement.parameters
 							]);
@@ -405,9 +413,11 @@ export const makeTestDatabase = async (
 			}
 		},
 		statements,
+		bound,
 		calls,
 		forget: () => {
 			statements.length = 0;
+			bound.length = 0;
 			calls.length = 0;
 		},
 		query: async (sql, parameters = []) =>
@@ -597,7 +607,28 @@ export const makeBoltTestRuntime = async (
 	// are described. Mirror that boundary here so a test cannot accidentally serialize the marker
 	// half of a policy and omit the implementation half.
 	const declaredPolicyFunctions = policyRuntimeFunctionsFor(definition.policies);
-	const suppliedAuthored = bindings.authored ?? emptyAuthoredRuntime;
+	/**
+	 * A test that binds no authored runtime gets every tenant collection declared writable over all
+	 * of its columns — what a `+collection.ts` with no transform says — so tests about reads, sync,
+	 * agents and approvals do not restate the write contract. A test that binds `authored` states
+	 * its declarations itself, and an absent one is refused as it would be in a workspace.
+	 */
+	const suppliedAuthored: AuthoredRuntime = bindings.authored ?? {
+		...emptyAuthoredRuntime,
+		collections: Object.fromEntries(
+			definition.collections
+				.filter((entry) => !SYSTEM_COLLECTION_NAMES.has(entry.name))
+				.map((entry) => {
+					const columns = Object.fromEntries(
+						Object.keys(entry.fields).map((field) => [field, true as const])
+					);
+					return [
+						entry.name,
+						{ create: { input: { columns } }, update: { input: { columns } }, delete: {} }
+					];
+				})
+		)
+	};
 	const authoredLayer = Layer.succeed(AuthoredRuntimeService, {
 		...suppliedAuthored,
 		policyAuthorizations: {

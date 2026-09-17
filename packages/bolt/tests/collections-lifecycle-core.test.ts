@@ -1,10 +1,8 @@
 import { Result } from 'effect';
 import { describe, expect, it } from 'vitest';
 import type { SQL } from 'drizzle-orm';
-import { EffectId } from '@norbital-ai/bolt-protocol';
 import { text } from '../src/authoring/index.js';
 import { describeModelColumns } from '../src/authoring/model-introspection.js';
-import { HookEffectIds } from '../src/runtime/collections/hooks/boundary.js';
 import {
 	compileLexicalSearch,
 	compileSemanticSearch,
@@ -13,10 +11,7 @@ import {
 	SEARCH_DOCUMENT_COLUMN
 } from '../src/runtime/collections/read/search.js';
 import { statementPlanFor } from '../src/runtime/collections/write/statements.js';
-import {
-	projectHistory,
-	type HistoryPatch
-} from '../src/runtime/collections/services/history.js';
+import { projectHistory, type HistoryPatch } from '../src/runtime/collections/services/history.js';
 
 const render = (expression: SQL) =>
 	expression.getSQL().toQuery({
@@ -121,23 +116,28 @@ describe('collection lifecycle core', () => {
 		expect(plan.operations.map((operation) => operation.id)).toEqual(['c2', 'p1', 'p2', 'c1']);
 	});
 
-	it('issues fresh child effect ids and masks bounded history', () => {
-		const effects = new HookEffectIds(EffectId.make('root'));
-		const first = effects.next({ phase: 'after', collection: 'orders', recordId: 'o1' });
-		const second = effects.next({ phase: 'after', collection: 'orders', recordId: 'o1' });
-		expect(first).not.toBe(second);
+	it('masks bounded history and skips the hold revisions in it', () => {
 		const patches: ReadonlyArray<HistoryPatch> = [
 			{
 				sequence: 1,
-			operation: 'create',
-			snapshot: { id: 'o1', public: 'a', secret: 'x' },
-			createdAt: '2026-01-01'
+				operation: 'create',
+				snapshot: { id: 'o1', public: 'a', secret: 'x' },
+				createdAt: '2026-01-01',
+				approvalId: null
 			},
 			{
 				sequence: 2,
-			operation: 'update',
-			snapshot: { public: 'b' },
-			createdAt: '2026-01-02'
+				operation: 'hold',
+				snapshot: { id: 'o1', public: 'a', secret: 'x' },
+				createdAt: '2026-01-02',
+				approvalId: 'req-1'
+			},
+			{
+				sequence: 3,
+				operation: 'update',
+				snapshot: { public: 'b' },
+				createdAt: '2026-01-02',
+				approvalId: 'req-1'
 			}
 		];
 		const projected = projectHistory({
