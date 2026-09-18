@@ -257,13 +257,12 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'list_skills',
 		description:
-			"List the skills authorized for this run (list_personal_skills, when present, lists the user's own). Read a body only when relevant.",
+			'List the skills available to this run — the workspace’s, the platform’s and your own. Read a body only when relevant.',
 		command: 'platform:list_skills'
 	},
 	{
 		name: 'read_skill',
-		description:
-			'Read one skill from list_skills by exact name (personal skills: read_personal_skill).',
+		description: 'Read one skill from list_skills by exact name.',
 		command: 'platform:read_skill',
 		inputSchema: objectInput({ name: { type: 'string', minLength: 1 } }, ['name'])
 	},
@@ -396,6 +395,21 @@ const decode = <S extends Schema.ConstraintDecoder<unknown>>(
 	Schema.decodeUnknownEffect(schema)(input).pipe(
 		Effect.mapError((error) => invalidToolInput(tool, error))
 	);
+
+/** The host's private-skill tools, reached through the one skill list and reader above. */
+export const PERSONAL_LIST_TOOL = 'list_personal_skills';
+export const PERSONAL_READ_TOOL = 'read_personal_skill';
+type PersonalSkillEntry = Readonly<{ readonly name: string; readonly description?: string }>;
+const PersonalList = Schema.Struct({
+	skills: Schema.Array(
+		Schema.Struct({ name: Schema.String, description: Schema.optionalKey(Schema.String) })
+	)
+});
+const decodePersonalList = (output: unknown): ReadonlyArray<PersonalSkillEntry> =>
+	Option.getOrElse(Schema.decodeUnknownOption(PersonalList)(output), () => ({ skills: [] })).skills;
+const PersonalBody = Schema.Struct({ body: Schema.String });
+const decodePersonalBody = (output: unknown): string =>
+	Option.getOrElse(Schema.decodeUnknownOption(PersonalBody)(output), () => ({ body: '' })).body;
 
 export const READ_COLLECTION_RESULT_BYTE_LIMIT = 16 * 1024;
 
@@ -703,16 +717,35 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		}
 		case 'describe_workspace':
 			return describeWorkspace(context);
-		case 'list_skills':
+		/**
+		 * One list, one reader. A person's private skills live in the host, so they are folded in
+		 * here when the host advertises them — the model never learns there are two stores.
+		 */
+		case 'list_skills': {
+			const personal = context.toolNames.includes(PERSONAL_LIST_TOOL)
+				? yield* executeHostTool(PERSONAL_LIST_TOOL, {}, context).pipe(
+						Effect.map((output) => decodePersonalList(output)),
+						Effect.catch(() => Effect.succeed([] as ReadonlyArray<PersonalSkillEntry>))
+					)
+				: [];
 			return {
 				readTool: 'read_skill',
-				skills: context.skills.map(({ name, description }) => ({
-					name,
-					...(description === undefined ? {} : { description })
-				}))
+				skills: [
+					...context.skills.map(({ name: skill, description }) => ({
+						name: skill,
+						...(description === undefined ? {} : { description })
+					})),
+					...personal.map((skill) => ({ ...skill, scope: 'personal' as const }))
+				]
 			};
+		}
 		case 'read_skill': {
 			const parsed = yield* decode(name, SkillNameInput, input);
+			const own = context.skills.some((skill) => skill.name === parsed.name);
+			if (!own && context.toolNames.includes(PERSONAL_READ_TOOL)) {
+				const output = yield* executeHostTool(PERSONAL_READ_TOOL, { name: parsed.name }, context);
+				return { name: parsed.name, body: decodePersonalBody(output), scope: 'personal' };
+			}
 			const body = yield* readSkillBody(context.skills, parsed.name);
 			return { name: parsed.name, body };
 		}

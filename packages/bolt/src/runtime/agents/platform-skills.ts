@@ -22,10 +22,10 @@ database. Check its exit code. Install the pinned dependencies with the document
 before running project tests. Guest file changes are discarded; save source through
 \`workspace_edit\` / \`workspace_apply\`. Never attempt Git operations. Planning cannot execute code.
 
-Discover tenant/platform workflows with \`list_skills\`. When available, also use
-\`list_personal_skills\` for the authenticated user's private workflows. Use each list's returned
-\`readTool\` with an exact listed name; a platform skill is not a personal skill. Read only relevant bodies;
-skills do not grant extra permissions. Personal skills are stored privately by Colony, not in source.
+Discover workflows with \`list_skills\` — the workspace's, the platform's and the person's own
+(\`scope: personal\`) in one list — and read a body with \`read_skill\` by its exact name, only when
+relevant; skills do not grant extra permissions. Personal skills are stored privately by Colony,
+not in source.
 
 Validation does not execute the test suite or browser acceptance. Use only tools actually listed in
 this session. If a required test or browser tool is unavailable, report that check as unrun; label
@@ -76,8 +76,8 @@ Read the current requirement, inspect the relevant source, and record checks and
 Use a lowercase kebab-case name matching its directory. No separate manifest is required. Format and
 validate the draft. Discovery through \`list_skills\` reads the current runtime artifact; a new skill
 in the private draft becomes discoverable after that draft is built into a Preview or published
-release. \`describe_workspace\` describes the current runtime; \`workspace_files\` and
-\`workspace_read\` inspect the private source draft. Confirm the environment, release and commit
+release. \`describe_workspace\` describes the current runtime; \`workspace_read\` (a directory or a file)
+inspects the private source draft. Confirm the environment, release and commit
 before comparing their contents. A running app can be either Preview or Live.
 
 ## Collections
@@ -253,8 +253,8 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
 
 ## Method
 
-1. Read the existing source (\`workspace_files\`, \`workspace_read\`) before writing. Use its
-   character \`offset\` and \`limit\` to read the relevant excerpt; do not reread unchanged whole files.
+1. Read the existing source (\`workspace_read\` on \`src\`, then on the files that matter) before
+   writing. Use its line \`offset\` and \`limit\` for a relevant window; do not reread unchanged whole files.
    Child agents have the same source access; delegating a dependency-signature lookup does not
    expose node_modules. Use this contract and compiler diagnostics instead of recursive lookups.
 2. State the collections and app surfaces you will add; then author a small batch. Use

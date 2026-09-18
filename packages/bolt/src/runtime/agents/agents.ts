@@ -89,6 +89,8 @@ import {
 	SkillError,
 	ToolNotAllowed,
 	SUBAGENT_TOOL_NAME,
+	PERSONAL_LIST_TOOL,
+	PERSONAL_READ_TOOL,
 	callMcpTool,
 	executeHostTool,
 	executeSystemTool,
@@ -1273,7 +1275,10 @@ export const layer = Layer.effect(
 						({ name }) =>
 							!authoredNames.has(name) &&
 							!systemToolSpecs.some((tool) => tool.name === name) &&
-							name !== SUBAGENT_TOOL_NAME
+							name !== SUBAGENT_TOOL_NAME &&
+							// Folded into list_skills / read_skill; never a second pair on the list.
+							name !== PERSONAL_LIST_TOOL &&
+							name !== PERSONAL_READ_TOOL
 					)
 					.map(({ readOnly, ...tool }) => ({
 						...tool,
@@ -3406,7 +3411,7 @@ export const layer = Layer.effect(
 				)
 			);
 			if (authored.found) return authored.value;
-			if (name.startsWith('sandbox_') || declaration.command.startsWith('host:')) {
+			if (declaration.command.startsWith('host:')) {
 				return yield* executeHostTool(name, input, context);
 			}
 			return yield* new ToolNotAllowed({ agent: agent.id, tool: name });
@@ -3882,14 +3887,7 @@ export const layer = Layer.effect(
 										(['describe_workspace', 'list_skills', 'read_skill'].includes(tool.name) &&
 											tool.command === `platform:${tool.name}`) ||
 										(tool.hostReadOnly === true &&
-											[
-												'workspace_files',
-												'workspace_read',
-												'workspace_search',
-												'agent_output_read',
-												'list_personal_skills',
-												'read_personal_skill'
-											].includes(tool.name))
+											['workspace_read', 'agent_output_read'].includes(tool.name))
 								)
 							]
 						: allTools;
