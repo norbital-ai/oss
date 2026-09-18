@@ -91,7 +91,9 @@ describe('Task collection discovery', () => {
 		expect(executed.status).toBe('done');
 		expect(generated).toHaveLength(2);
 		const result = lastToolResult(generated[1]!);
-		expect(result).toMatchObject({ collections: expect.arrayContaining(['job_assignments']) });
+		expect(result).toMatchObject({
+			collections: expect.arrayContaining([expect.objectContaining({ name: 'job_assignments' })])
+		});
 		expect(JSON.stringify(result)).not.toContain(hiddenCollection);
 	});
 });

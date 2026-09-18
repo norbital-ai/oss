@@ -22,10 +22,10 @@ database. Check its exit code. Install the pinned dependencies with the document
 before running project tests. Guest file changes are discarded; save source through
 \`workspace_edit\` / \`workspace_apply\`. Never attempt Git operations. Planning cannot execute code.
 
-Discover workflows with \`list_skills\` — the workspace's, the platform's and the person's own
-(\`scope: personal\`) in one list — and read a body with \`read_skill\` by its exact name, only when
-relevant; skills do not grant extra permissions. Personal skills are stored privately by Colony,
-not in source.
+The Skills list in your system prompt is the index — the workspace's, the platform's and the
+person's own in one list; read a body with \`read_skill\` by its exact name, only when relevant;
+skills do not grant extra permissions. Personal skills are stored privately by Colony, not in
+source.
 
 Validation does not execute the test suite or browser acceptance. Use only tools actually listed in
 this session. If a required test or browser tool is unavailable, report that check as unrun; label
@@ -74,7 +74,7 @@ Read the current requirement, inspect the relevant source, and record checks and
 \`\`\`
 
 Use a lowercase kebab-case name matching its directory. No separate manifest is required. Format and
-validate the draft. Discovery through \`list_skills\` reads the current runtime artifact; a new skill
+validate the draft. The Skills list reads the current runtime artifact; a new skill
 in the private draft becomes discoverable after that draft is built into a Preview or published
 release. \`describe_workspace\` describes the current runtime; \`workspace_read\` (a directory or a file)
 inspects the private source draft. Confirm the environment, release and commit

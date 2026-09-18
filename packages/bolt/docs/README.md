@@ -119,11 +119,11 @@ known optional file, not a stray.
 
 Tenant Skills live at `src/capabilities/skills/<name>/SKILL.md` (same package shape as Agent
 Skills: optional `references/`, `scripts/`, `assets/`). They compile into the release and are
-offered through `list_skills` / `read_skill`.
+listed by name and description in the system prompt and read through `read_skill`.
 
-Colony stores personal skills privately per tenant and authenticated user. Discover with
-`list_personal_skills`, load one with `read_personal_skill`, and manage with
-`save_personal_skill` / `delete_personal_skill`. Discovery excludes bodies. These skills
+Colony stores personal skills privately per tenant and authenticated user. The runtime lists
+them in the same Skills index and `read_skill` reads them; the agent manages them with
+`save_personal_skill` / `delete_personal_skill`. The index excludes bodies. These skills
 are not source or release input and do not grant permissions. `.norbital/personal/**`
 remains ignored; it is not scanned for personal skills, MCP registrations or scripts.
 

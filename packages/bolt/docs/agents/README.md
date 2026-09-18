@@ -448,7 +448,7 @@ nothing has to be threaded through the call. Messages entering a child from its 
 ## Capabilities and tools
 
 Platform tools, in the order the catalogue offers them: `todo`, `compact`, `describe_workspace`,
-`list_skills`, `read_skill`, `search_task_history`, `read_messages`, `use_image`, `read_collection`,
+`read_skill`, `search_task_history`, `read_messages`, `use_image`, `read_collection`,
 `write_collection`, and `subagent`. `read_messages` is declared only for an envoy agent, where a
 chat replica exists to read; every other agent gets it off its list. All but `compact` answer from
 within the tool call; `compact` records the intent and the turn's own loop writes the checkpoint at

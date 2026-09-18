@@ -15,7 +15,8 @@ import * as Agents from '../src/runtime/agents/agents.js';
 import {
 	scriptedTranscript,
 	assistantText,
-	assistantToolCall
+	assistantToolCall,
+	systemPrompt
 } from './agents-canonical-ai-fixture.js';
 import {
 	adminSubject,
@@ -94,7 +95,9 @@ describe('host capability discovery and execution', () => {
 											}
 										]
 									}
-								: { contents: 'evidence'.repeat(50_000) }
+								: request.tool === 'list_personal_skills'
+									? { skills: [{ name: 'my-way', description: 'How I like it done.' }] }
+									: { contents: 'evidence'.repeat(50_000) }
 					}
 				})
 			}
@@ -133,7 +136,9 @@ describe('host capability discovery and execution', () => {
 							output:
 								request.tool === 'capability_catalog'
 									? catalog
-									: { contents: 'source evidence', commit: 'current' }
+									: request.tool === 'list_personal_skills'
+										? { skills: [{ name: 'my-way', description: 'How I like it done.' }] }
+										: { contents: 'source evidence', commit: 'current' }
 						}
 					};
 				}
@@ -161,7 +166,12 @@ describe('host capability discovery and execution', () => {
 				calls
 					.filter(({ request }) => request.tool !== 'capability_catalog')
 					.map(({ request }) => request.tool)
-			).toEqual(mode === 'agent' ? ['workspace_read', 'workspace_apply'] : ['workspace_read']);
+			).toEqual(
+				// The turn reads the personal skill index for its system prompt before the model runs.
+				mode === 'agent'
+					? ['list_personal_skills', 'workspace_read', 'workspace_apply']
+					: ['list_personal_skills', 'workspace_read']
+			);
 			expect(calls.every(({ metadata }) => metadata.subject?.userId === adminSubject.userId)).toBe(
 				true
 			);
@@ -170,8 +180,10 @@ describe('host capability discovery and execution', () => {
 			expect(first?.output._tag).toBe('Message');
 			if (first?.output._tag !== 'Message') throw new Error('Expected tool-capable generation');
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_read')).toBe(true);
+			expect(systemPrompt(first)).toContain('- my-way — How I like it done.');
+			// Folded into the Skills index and read_skill; never offered as a second pair.
 			for (const tool of ['list_personal_skills', 'read_personal_skill'])
-				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(true);
+				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(false);
 			for (const tool of ['sandbox_bash', 'save_personal_skill'])
 				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(mode === 'agent');
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_validate')).toBe(

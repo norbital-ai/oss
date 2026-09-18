@@ -26,14 +26,6 @@
 						{
 							"options": {},
 							"type": "tool-call",
-							"id": "list_skills-2",
-							"name": "list_skills",
-							"params": {},
-							"providerExecuted": false
-						},
-						{
-							"options": {},
-							"type": "tool-call",
 							"id": "read_skill-3",
 							"name": "read_skill",
 							"params": {

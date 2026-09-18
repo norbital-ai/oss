@@ -71,32 +71,38 @@ const childTaskRow = async (parentId: ConversationId) => {
 describe('sub-agent orchestration over a scripted transcript', () => {
 	it('refuses fabricated child delegation and plan calls even when the child declaration enables delegation', async () => {
 		const parentId = ConversationId.make('00000000-0000-4000-8000-000000000911');
-		const { ai } = scriptedTranscript([
-			assistantToolCall(
-				'subagent',
-				{ action: 'spawn', agentId: 'worker', instruction: 'Inspect only.' },
-				'spawn-boundary'
-			),
-			assistantText('Child dispatched.'),
-			assistantToolCall(
-				'subagent',
-				{ action: 'spawn', agentId: 'web', instruction: 'Must not run.' },
-				'fabricated-spawn'
-			),
-			assistantToolCall(
-				'update_plan',
-				{ operation: 'replace', expectedRevision: 0, body: 'Must not create a child plan.' },
-				'fabricated-plan'
-			),
-			assistantText('Boundary checked.'),
-			async () =>
+		const { ai } = scriptedTranscript(
+			[
 				assistantToolCall(
 					'subagent',
-					{ action: 'await', conversationId: String((await childTaskRow(parentId))?.id) },
-					'consume-boundary'
+					{ action: 'spawn', agentId: 'worker', instruction: 'Inspect only.' },
+					'spawn-boundary'
 				),
-			assistantText('Finished.')
-		]);
+				assistantText('Child dispatched.'),
+				async () =>
+					assistantToolCall(
+						'subagent',
+						{ action: 'await', conversationId: String((await childTaskRow(parentId))?.id) },
+						'consume-boundary'
+					),
+				assistantText('Finished.')
+			],
+			{
+				children: [
+					assistantToolCall(
+						'subagent',
+						{ action: 'spawn', agentId: 'web', instruction: 'Must not run.' },
+						'fabricated-spawn'
+					),
+					assistantToolCall(
+						'update_plan',
+						{ operation: 'replace', expectedRevision: 0, body: 'Must not create a child plan.' },
+						'fabricated-plan'
+					),
+					assistantText('Boundary checked.')
+				]
+			}
+		);
 		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '911', parentId);
@@ -115,47 +121,53 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		expect(JSON.stringify(rows).match(/"isFailure":true/g)).toHaveLength(2);
 	});
 	/**
-	 * A parent runs its own children, in its own turn, and does not stop for them.
+	 * A parent runs its own children, inside its own turn, and does not stop for them.
 	 *
 	 * There used to be a park here: the parent set itself `waiting`, returned, and something else
 	 * had to run the child and wake it. That something was a durable work occurrence, and when the
 	 * occurrence went, nothing replaced it — a spawned child sat with a queued message no caller
-	 * would ever answer, and the parent sat `waiting` forever. The child is a frame on the parent's
-	 * own stack now: one `execute`, and the whole tree runs inside it.
+	 * would ever answer, and the parent sat `waiting` forever. The child is a fiber of the parent's
+	 * turn now: one `execute`, and the whole tree runs inside it, the child beside the parent.
 	 */
-	it('runs its child inline and demands consumption before finishing', async () => {
+	it('runs its child beside itself and demands consumption before finishing', async () => {
 		let childConversationId: string | undefined;
 		const parentConversationId = ConversationId.make('00000000-0000-4000-8000-000000000901');
-		const { ai, requests } = scriptedTranscript([
-			assistantToolCall(
-				'subagent',
-				{ action: 'spawn', agentId: 'worker', instruction: 'Report the field status.' },
-				'spawn-1'
-			),
-			async () => {
-				const child = await childTaskRow(parentConversationId);
-				childConversationId = String(child?.id);
-				return assistantText('Child dispatched; standing by.');
-			},
-			// The child's own turn, run by the parent at the barrier rather than by a separate caller.
-			(request) => {
-				const tools = request.output._tag === 'Message' ? request.output.tools : [];
-				expect(tools?.map(({ name }) => name)).not.toContain('subagent');
-				expect(tools?.map(({ name }) => name)).not.toContain('update_plan');
-				return assistantText('Field status: all sites nominal.');
-			},
-			(request) => {
-				expect(JSON.stringify(request.messages)).toContain(
-					'Consume required child Tasks with subagent await before finishing'
-				);
-				return assistantToolCall(
+		const { ai, requests } = scriptedTranscript(
+			[
+				assistantToolCall(
 					'subagent',
-					{ action: 'await', conversationId: childConversationId },
-					'await-1'
-				);
-			},
-			assistantText('Child result consumed; the field report is nominal.')
-		]);
+					{ action: 'spawn', agentId: 'worker', instruction: 'Report the field status.' },
+					'spawn-1'
+				),
+				async () => {
+					const child = await childTaskRow(parentConversationId);
+					childConversationId = String(child?.id);
+					return assistantText('Child dispatched; standing by.');
+				},
+				(request) => {
+					expect(JSON.stringify(request.messages)).toContain(
+						'Consume required child Tasks with subagent await before finishing'
+					);
+					return assistantToolCall(
+						'subagent',
+						{ action: 'await', conversationId: childConversationId },
+						'await-1'
+					);
+				},
+				assistantText('Child result consumed; the field report is nominal.')
+			],
+			{
+				// The child's own turn, forked by the spawn rather than run by a separate caller.
+				children: [
+					(request) => {
+						const tools = request.output._tag === 'Message' ? request.output.tools : [];
+						expect(tools?.map(({ name }) => name)).not.toContain('subagent');
+						expect(tools?.map(({ name }) => name)).not.toContain('update_plan');
+						return assistantText('Field status: all sites nominal.');
+					}
+				]
+			}
+		);
 		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '901', parentConversationId);
@@ -191,7 +203,10 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			[parentConversationId]
 		);
 		expect(JSON.stringify(parentMessages)).toContain('Consume required child Tasks');
-		const consumed = toolResultFor(requests.at(-1)!, 'subagent');
+		const consumed = toolResultFor(
+			requests.findLast(({ sessionId }) => sessionId === parentConversationId)!,
+			'subagent'
+		);
 		expect(consumed).toMatchObject({ state: 'done', conversationId: childConversationId });
 		expect(JSON.stringify(consumed)).toContain('Field status: all sites nominal.');
 
@@ -224,69 +239,85 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 	it('delivers both parent messages to the child as steering, ahead of its own instruction', async () => {
 		let childConversationId: string | undefined;
 		const parentConversationId = ConversationId.make('00000000-0000-4000-8000-000000000902');
-		const { ai, feed, requests } = scriptedTranscript([
-			assistantToolCall(
-				'subagent',
-				{ action: 'spawn', agentId: 'worker', instruction: 'Record the field update.' },
-				'spawn-1'
-			),
-			async (request) => {
-				const child = await childTaskRow(parentConversationId);
-				childConversationId = String(child?.id);
-				// The spawn tool result carries the child's directive id.
-				const spawned = toolResultFor(request, 'subagent');
-				expect(spawned).toMatchObject({ conversationId: childConversationId, state: 'running' });
-				return assistantToolCall(
-					'subagent',
-					{
-						action: 'message',
-						conversationId: childConversationId,
-						message: 'Capture the invoice count.'
-					},
-					'message-1'
-				);
-			},
-			() =>
+		const delivered = Promise.withResolvers<void>();
+		const { ai, feed, requests } = scriptedTranscript(
+			[
 				assistantToolCall(
 					'subagent',
-					{
-						action: 'message',
-						conversationId: childConversationId,
-						message: 'Prioritize the payroll export.'
-					},
-					'steer-1'
+					{ action: 'spawn', agentId: 'worker', instruction: 'Record the field update.' },
+					'spawn-1'
 				),
-			assistantText('Directives delivered; standing by.'),
-			/**
-			 * The child's one turn, run by the parent's barrier, holding all three messages.
-			 *
-			 * One, not three, and that is the property. Steering is taken at a *step* boundary of the
-			 * turn already running, so the two messages the parent sent after the spawn are folded
-			 * into the turn answering the spawn rather than queued behind it. A child that had to
-			 * finish before hearing them would answer the first instruction having been told twice
-			 * that it was the wrong one.
-			 */
-			(request) => {
-				const transcript = JSON.stringify(request.messages);
-				expect(transcript).toContain('[Parent agent');
-				expect(transcript).toContain('Record the field update.');
-				expect(transcript).toContain('Capture the invoice count.');
-				expect(transcript).toContain('Prioritize the payroll export.');
-				return assistantText('Payroll export prioritized.');
-			},
-			// Back in the parent, which is told to consume before it may finish.
-			(request) => {
-				expect(JSON.stringify(request.messages)).toContain(
-					'Consume required child Tasks with subagent await before finishing'
-				);
-				return assistantToolCall(
-					'subagent',
-					{ action: 'await', conversationId: childConversationId },
-					'await-1'
-				);
-			},
-			assistantText('Child directives acknowledged.')
-		]);
+				async (request) => {
+					const child = await childTaskRow(parentConversationId);
+					childConversationId = String(child?.id);
+					// The spawn tool result carries the child's directive id.
+					const spawned = toolResultFor(request, 'subagent');
+					expect(spawned).toMatchObject({ conversationId: childConversationId, state: 'running' });
+					return assistantToolCall(
+						'subagent',
+						{
+							action: 'message',
+							conversationId: childConversationId,
+							message: 'Capture the invoice count.'
+						},
+						'message-1'
+					);
+				},
+				() =>
+					assistantToolCall(
+						'subagent',
+						{
+							action: 'message',
+							conversationId: childConversationId,
+							message: 'Prioritize the payroll export.'
+						},
+						'steer-1'
+					),
+				(request) => {
+					expect(toolResultFor(request, 'subagent')).toMatchObject({ state: 'queued' });
+					delivered.resolve();
+					return assistantText('Directives delivered; standing by.');
+				},
+				// Back in the parent, which is told to consume before it may finish.
+				(request) => {
+					expect(JSON.stringify(request.messages)).toContain(
+						'Consume required child Tasks with subagent await before finishing'
+					);
+					return assistantToolCall(
+						'subagent',
+						{ action: 'await', conversationId: childConversationId },
+						'await-1'
+					);
+				},
+				assistantText('Child directives acknowledged.')
+			],
+			{
+				children: [
+					/**
+					 * The child's one turn, running beside the parent, holding all three messages.
+					 *
+					 * One, not three, and that is the property. Steering is taken at a *step* boundary
+					 * of the turn already running, so the two messages the parent sent after the spawn
+					 * are folded into the turn answering the spawn rather than queued behind it. A child
+					 * that had to finish before hearing them would answer the first instruction having
+					 * been told twice that it was the wrong one. The first step is held until both are
+					 * sent, so the second step is the one that hears them.
+					 */
+					async () => {
+						await delivered.promise;
+						return assistantToolCall('todo', { operation: 'read' }, 'look-1');
+					},
+					(request) => {
+						const transcript = JSON.stringify(request.messages);
+						expect(transcript).toContain('[Parent agent');
+						expect(transcript).toContain('Record the field update.');
+						expect(transcript).toContain('Capture the invoice count.');
+						expect(transcript).toContain('Prioritize the payroll export.');
+						return assistantText('Payroll export prioritized.');
+					}
+				]
+			}
+		);
 		harness = await makeBoltTestRuntime(definition, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '902', parentConversationId);
@@ -334,10 +365,11 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			)
 		).toEqual([{ id: childRuns[0]?.input_message_id }]);
 
-		// Six parent Generates plus the child's one.
-		expect(feed).toHaveLength(6 + 1);
+		// Six parent Generates plus the child's two.
+		expect(feed).toHaveLength(6 + 2);
 		// The message tool result acknowledged as queued, never silently consumed.
-		expect(toolResultFor(requests[2]!, 'subagent')).toMatchObject({
+		const parentRequests = requests.filter(({ sessionId }) => sessionId === parentConversationId);
+		expect(toolResultFor(parentRequests[2]!, 'subagent')).toMatchObject({
 			conversationId: childConversationId,
 			state: 'queued'
 		});

@@ -222,10 +222,14 @@ export type TranscriptReply =
  * Automatic Compact is an extra Generate the runtime inserts before the scripted turn when the
  * projected prompt exceeds 64 KiB in agent mode. That call is answered here and does not consume
  * a scripted reply, so the feed still records what the model was given.
+ *
+ * A child Task runs beside its parent, so its calls interleave with the parent's in no fixed
+ * order; `children` is the script every conversation other than the first-seen one reads from,
+ * in its own order.
  */
 export const scriptedTranscript = (
 	script: ReadonlyArray<TranscriptReply>,
-	options: SuccessfulAIOptions = {}
+	options: SuccessfulAIOptions & { readonly children?: ReadonlyArray<TranscriptReply> } = {}
 ): {
 	readonly ai: FacilityBinding<AIRequest, AIResponse>;
 	readonly feed: GenerateInspection[];
@@ -236,7 +240,9 @@ export const scriptedTranscript = (
 	const feed: GenerateInspection[] = [];
 	const requests: GenerateRequest[] = [];
 	const verdictRequests: GenerateRequest[] = [];
-	let scriptIndex = 0;
+	const { children, ...aiOptions } = options;
+	const cursors = { parent: 0, children: 0 };
+	let parentSession: string | undefined;
 	return {
 		feed,
 		requests,
@@ -251,15 +257,19 @@ export const scriptedTranscript = (
 						"| Section | Summary |\n| --- | --- |\n| Goal | Retained: the current user instruction, open decisions, and unresolved work. |\n| Progress | No completed work in this fixture. |\n| What we learned | Original context is preserved in Transcript. |\n| What's left | Continue the requested work. |"
 					);
 				}
-				const reply = script[scriptIndex];
-				scriptIndex += 1;
+				parentSession ??= request.sessionId;
+				const lane =
+					children === undefined || request.sessionId === parentSession ? 'parent' : 'children';
+				const source = lane === 'parent' ? script : children!;
+				const reply = source[cursors[lane]];
+				cursors[lane] += 1;
 				if (reply === undefined) {
-					throw new Error(`scripted transcript exhausted after ${script.length} replies`);
+					throw new Error(`scripted ${lane} transcript exhausted after ${source.length} replies`);
 				}
 				return typeof reply === 'function' ? reply(request, inspection) : reply;
 			},
 			{
-				...options,
+				...aiOptions,
 				onVerdict: (request) => verdictRequests.push(request)
 			}
 		)
@@ -280,6 +290,12 @@ export const lastToolResult = (
 		}
 	}
 	return undefined;
+};
+
+/** The system prompt a request opened with: the first system message's text. */
+export const systemPrompt = (request: GenerateRequest): string => {
+	const first = request.messages[0];
+	return first?.role === 'system' ? encodedText(first) : '';
 };
 
 /** The first tool result recorded for one tool name, searched newest-first. */

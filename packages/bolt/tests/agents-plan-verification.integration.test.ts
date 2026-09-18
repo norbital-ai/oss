@@ -415,7 +415,7 @@ describe('root Plan lifecycle', () => {
 		const first = requests[0]!;
 		if (first.output._tag !== 'Message') throw Error('Expected tools');
 		expect(first.output.tools?.map((t) => t.name).sort()).toEqual(
-			['describe_workspace', 'list_skills', 'read_skill', 'update_plan'].sort()
+			['describe_workspace', 'read_skill', 'update_plan'].sort()
 		);
 		const failures = await harness!.database.query(
 			"select message from conversation_message where conversation_id=$1 and author->>'kind'='tool'",

@@ -191,36 +191,36 @@ it.each(['agent', 'plan', 'child'] as const)(
 		const entered = Promise.withResolvers<void>();
 		let mutations = 0;
 		const tool = scope === 'plan' ? 'workspace_read' : 'workspace_apply';
-		const { ai, requests } = scriptedTranscript([
-			...(scope === 'child'
-				? [
-						assistantToolCall(
-							'subagent',
-							{ action: 'spawn', agentId: 'web', instruction: 'Inspect the workspace.' },
-							'spawn-recovery'
-						),
-						assistantText('Wait for the child.')
-					]
-				: []),
-			assistantToolCall(tool, {}, 'uncertain-write'),
-			...(scope === 'child'
-				? [
-						async () => {
-							const [child] = await harness!.database.query(
-								'select id,status from conversation where parent_id=$1',
-								[conversationId]
-							);
-							expect(child?.status).toBe('failed');
-							return assistantToolCall(
+		const uncertain = assistantToolCall(tool, {}, 'uncertain-write');
+		const { ai, requests } = scriptedTranscript(
+			[
+				...(scope === 'child'
+					? [
+							assistantToolCall(
 								'subagent',
-								{ action: 'await', conversationId: String(child?.id) },
-								'read-recovered-child'
-							);
-						}
-					]
-				: []),
-			assistantText('Inspected the recovered state; finished.')
-		]);
+								{ action: 'spawn', agentId: 'web', instruction: 'Inspect the workspace.' },
+								'spawn-recovery'
+							),
+							assistantText('Wait for the child.'),
+							// The child ran beside the parent's turn and fell with it.
+							async () => {
+								const [child] = await harness!.database.query(
+									'select id,status from conversation where parent_id=$1',
+									[conversationId]
+								);
+								expect(child?.status).toBe('failed');
+								return assistantToolCall(
+									'subagent',
+									{ action: 'await', conversationId: String(child?.id) },
+									'read-recovered-child'
+								);
+							}
+						]
+					: [uncertain]),
+				assistantText('Inspected the recovered state; finished.')
+			],
+			scope === 'child' ? { children: [uncertain] } : {}
+		);
 		const hostTools: FacilityBinding<HostToolRequest, HostToolResponse> = {
 			call: async (_metadata, request, signal) => {
 				if (request.tool === 'capability_catalog')
