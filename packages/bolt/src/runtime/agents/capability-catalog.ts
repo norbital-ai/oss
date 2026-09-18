@@ -211,7 +211,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'todo',
 		description:
-			"Read or replace this conversation's ordered Todo checklist. `read` takes no items. `set` replaces the whole list; at most one item may be doing, stable IDs reconcile progress, and a done item cannot be reopened or reworded. Todo is evidence, not completion authority.",
+			"Read or replace this conversation's ordered checklist. `set` replaces the whole list: stable ids, at most one item doing, a done item stays done and unchanged.",
 		command: 'platform:todo',
 		inputSchema: objectInput(
 			{
@@ -235,7 +235,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'compact',
 		description:
-			'Checkpoint this conversation: summarize the durable context you still need and continue from it. Use it when the transcript has grown long enough that older detail is getting in the way, or after finishing a phase of work whose intermediate steps no longer matter. The checkpoint is written at your next step, not inside this call, and the current instruction is retained while completed tool exchanges are summarized. The runtime also does this at its bounded working-context limit; calling it yourself is for reorganizing, not for staying under a limit.',
+			'Checkpoint this conversation: completed tool exchanges are summarized at your next step, the current instruction kept. Use it when older detail is in the way or a phase is finished; the runtime does it anyway at its context limit.',
 		command: 'platform:compact',
 		inputSchema: objectInput(
 			{
@@ -251,26 +251,25 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'describe_workspace',
 		description:
-			'Describe this workspace: every collection you may reach with its fields, values, relations and write contract; the apps, automations, envoys and integrations; and where the source of each lives. Call it once before reading or writing data.',
+			'This workspace in one answer: each reachable collection with its fields, values, relations and write contract; apps, automations, envoys, integrations; where the source lives. Call once, first.',
 		command: 'platform:describe_workspace'
 	},
 	{
 		name: 'list_skills',
 		description:
-			"List tenant-wide and platform skills authorized for this run. If list_personal_skills is available, use it to discover this user's private skills too. Read only relevant skill bodies on demand.",
+			"List the skills authorized for this run (list_personal_skills, when present, lists the user's own). Read a body only when relevant.",
 		command: 'platform:list_skills'
 	},
 	{
 		name: 'read_skill',
 		description:
-			'Read one tenant or platform skill returned by list_skills, using its exact name. Personal skills use read_personal_skill instead.',
+			'Read one skill from list_skills by exact name (personal skills: read_personal_skill).',
 		command: 'platform:read_skill',
 		inputSchema: objectInput({ name: { type: 'string', minLength: 1 } }, ['name'])
 	},
 	{
 		name: 'search_task_history',
-		description:
-			'Search complete durable Effect messages in this Task or its workbench. Task IDs define the boundary.',
+		description: 'Search earlier messages of this Task or its workbench.',
 		command: 'platform:search_task_history',
 		inputSchema: objectInput({
 			scope: { type: 'string', enum: ['this_task', 'workbench'] },
@@ -281,7 +280,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_messages',
 		description:
-			'Read unread messages in this chat that did not address you — group messages nobody mentioned you in — oldest first, and mark them read. Content is what the channel last reported: a sender may have edited or deleted a message since, and this chat is only visible from the point the channel began recording. Messages before that point cannot be retrieved. Attachments are descriptors; images can be admitted with use_image.',
+			'Read unread group messages in this chat that did not address you, oldest first, and mark them read; as the channel last reported them, from when recording began. Attachments are descriptors; admit an image with use_image.',
 		command: 'platform:read_messages',
 		inputSchema: objectInput({
 			limit: { type: 'integer', minimum: 1, maximum: 50 }
@@ -289,8 +288,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'use_image',
-		description:
-			'Admit one descriptor-sized image source for the next provider call. The trusted host resolves and verifies bytes.',
+		description: 'Admit one image descriptor for your next step; the host resolves the bytes.',
 		command: 'platform:use_image',
 		inputSchema: objectInput(
 			{
@@ -305,7 +303,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'read_collection',
-		description: 'Read a bounded page from an authorized collection.',
+		description: 'Read one page of a collection (default 50 rows); continue with cursor.',
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
@@ -319,7 +317,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'write_collection',
 		description:
-			'Create, update, or delete an authorized collection record through its declared input. A create names no id; an update or delete names the record. The answer carries the stored row, so read it back from here rather than with another read.',
+			'Create, update or delete one record through its declared contract; update and delete name the id. The answer is the stored row — no read-back needed.',
 		command: 'platform:write_collection',
 		inputSchema: objectInput(
 			{
@@ -490,7 +488,7 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
  * `note` says where the source lives for anyone with a file-reading tool.
  */
 const WORKSPACE_NOTE =
-	"Collections are the public API. Each is declared in src/collections/<name>/+model.ts (columns) and +collection.ts (the write contract: input columns, transform, notifications); relations in src/collections/+relationship.ts; who may read or write what in src/access/policies/+<name>.ts and src/access/+teams.ts; apps in src/apps/+<name>.svelte; automations in src/automations/+<name>.ts. Read those files with a file-reading tool when this summary is not enough. read_collection accepts a page; write_collection takes the create/update columns listed here and answers with the stored row. A refusal names the transform rule that stopped the write. The system columns id, created_at, updated_at and row_version are the platform's.";
+	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. id, created_at, updated_at, row_version are the platform's.";
 
 const SYSTEM_FIELD_NAMES: ReadonlyArray<string> = [
 	...SYSTEM_COLUMN_NAMES,
@@ -498,25 +496,29 @@ const SYSTEM_FIELD_NAMES: ReadonlyArray<string> = [
 	'embedded_at'
 ];
 
+/** One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`. */
 const describeField = (
 	name: string,
 	field: WorkspaceDefinition['collections'][number]['fields'][string],
 	relations: ReadonlyArray<RelationDefinition>
-): Schema.JsonObject => {
+): string => {
 	const edge = relations.find((relation) => relation.from?.column === name);
-	return {
-		name,
-		type: `${field.type}${(field as { readonly array?: true }).array === true ? '[]' : ''}`,
-		...(field.required ? { required: true } : {}),
-		...(field.values === undefined ? {} : { values: [...field.values] }),
-		...(edge === undefined ? {} : { references: edge.target }),
-		...(field.reference === undefined
-			? {}
-			: { references: field.reference.targets.map((target) => target.collection) }),
-		...(field.file === true ? { file: field.fileMultiple === true ? 'many' : 'one' } : {}),
-		...(field.generated === undefined && field.primaryKey !== true ? {} : { generated: true }),
-		...(field.search === true ? { searchable: true } : {})
-	};
+	const targets =
+		field.reference === undefined
+			? edge === undefined
+				? []
+				: [edge.target]
+			: field.reference.targets.map((target) => target.collection);
+	return [
+		`${name}:${field.type}`,
+		field.required ? '!' : '',
+		(field as { readonly array?: true }).array === true ? '[]' : '',
+		field.values === undefined ? '' : `=${field.values.join('|')}`,
+		targets.length === 0 ? '' : `->${targets.join('|')}`,
+		field.file === true ? (field.fileMultiple === true ? '(files)' : '(file)') : '',
+		field.generated === undefined && field.primaryKey !== true ? '' : '(generated)',
+		field.search === true ? '(search)' : ''
+	].join('');
 };
 
 const describeCollection = (
@@ -527,13 +529,13 @@ const describeCollection = (
 ): Schema.JsonObject => {
 	const relations = definition.relations.filter((relation) => relation.source === collection.name);
 	const write = collection.write;
-	const columnsOf = (selection: CollectionInputSelection | undefined): Schema.JsonObject | null =>
+	const columnsOf = (selection: CollectionInputSelection | undefined): string | null =>
 		selection === undefined
 			? null
-			: {
-					columns: Object.keys(selection.columns ?? {}),
-					...(selection.with === undefined ? {} : { relations: Object.keys(selection.with) })
-				};
+			: [
+					...Object.keys(selection.columns ?? {}),
+					...Object.keys(selection.with ?? {}).map((relation) => `${relation}{…}`)
+				].join(', ');
 	const contract = (): Schema.JsonObject | null => {
 		if (write === undefined) return null;
 		const create = columnsOf(write.create);
@@ -542,30 +544,27 @@ const describeCollection = (
 			...(create === null ? {} : { create }),
 			...(update === null ? {} : { update }),
 			...(write.delete === true ? { delete: true } : {}),
-			...(write.hasTransform ? { transform: true } : {}),
-			...(write.similarity === undefined || write.similarity.length === 0
-				? {}
-				: { search: write.similarity.map((index) => `/${index.name}`) })
+			...(write.hasTransform ? { transform: true } : {})
 		};
 	};
+	const search = [
+		...(collection.embedding === undefined ? [] : ['/semantic']),
+		...(write?.similarity ?? []).map((index) => `/${index.name}`)
+	];
+	const integrations = definition.integrations
+		.filter((integration) => integration.collection === collection.name)
+		.map((integration) => integration.name);
 	return {
 		name: collection.name,
 		...(collection.description === undefined ? {} : { description: collection.description }),
-		...(collection.recordLabel === undefined ? {} : { recordLabel: collection.recordLabel }),
-		...(collection.sourcePath === undefined ? {} : { source: collection.sourcePath }),
-		access: { read: readable, write: writable },
+		...(collection.recordLabel === undefined ? {} : { label: collection.recordLabel }),
+		access: `${readable ? 'r' : '-'}${writable ? 'w' : '-'}`,
 		fields: Object.entries(collection.fields)
 			.filter(([name]) => !SYSTEM_FIELD_NAMES.includes(name))
 			.map(([name, field]) => describeField(name, field, relations)),
 		write: contract(),
-		...(collection.embedding === undefined ? {} : { search: ['/semantic'] }),
-		...(definition.integrations.some((integration) => integration.collection === collection.name)
-			? {
-					integrations: definition.integrations
-						.filter((integration) => integration.collection === collection.name)
-						.map((integration) => integration.name)
-				}
-			: {})
+		...(search.length === 0 ? {} : { search }),
+		...(integrations.length === 0 ? {} : { integrations })
 	};
 };
 
@@ -595,30 +594,31 @@ export const describeWorkspace = (
 					context.writableCollectionNames.includes(collection.name)
 				)
 			),
-		apps: definition.apps.map((app) => ({
-			name: app.name,
-			label: app.label,
-			...(app.description === undefined ? {} : { description: app.description }),
-			...(app.kiosk === true ? { kiosk: true } : {})
-		})),
-		automations: definition.automations.map((automation) => ({
-			name: automation.name,
-			...(automation.description === undefined ? {} : { description: automation.description }),
-			trigger:
-				automation.trigger._tag === 'Schedule'
-					? `schedule ${automation.trigger.cron}`
-					: automation.trigger._tag === 'Change'
-						? `${automation.trigger.collection} ${automation.trigger.event}`
-						: 'manual'
-		})),
+		apps: definition.apps.map(
+			(app) =>
+				`${app.name}: ${app.label}${app.kiosk === true ? ' (kiosk)' : ''}${app.description === undefined ? '' : ` — ${app.description}`}`
+		),
+		automations: definition.automations.map(
+			(automation) =>
+				`${automation.name} [${
+					automation.trigger._tag === 'Schedule'
+						? `schedule ${automation.trigger.cron}`
+						: automation.trigger._tag === 'Change'
+							? `${automation.trigger.collection} ${automation.trigger.event}`
+							: 'manual'
+				}]${automation.description === undefined ? '' : ` — ${automation.description}`}`
+		),
 		envoys: definition.envoys.map((envoy) => envoy.name),
-		integrations: definition.integrations.map((integration) => ({
-			name: integration.name,
-			collection: integration.collection,
-			...(integration.receive.length > 0 ? { receives: integration.receive.length } : {}),
-			...(integration.webhooks.length > 0 ? { webhooks: integration.webhooks.length } : {}),
-			...(integration.send.length > 0 ? { sends: integration.send.length } : {})
-		})),
+		integrations: definition.integrations.map(
+			(integration) =>
+				`${integration.name} on ${integration.collection} (${[
+					integration.receive.length > 0 ? `${integration.receive.length} pull` : '',
+					integration.webhooks.length > 0 ? `${integration.webhooks.length} webhook` : '',
+					integration.send.length > 0 ? `${integration.send.length} send` : ''
+				]
+					.filter((part) => part !== '')
+					.join(', ')})`
+		),
 		tools: context.toolNames,
 		skills: context.skills.map(({ name: skill }) => skill)
 	};
@@ -884,7 +884,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		'Coordinate bounded child Tasks in this workbench through spawn, read, message, await, stop, and resume. This tool is available only to the root Task; child Tasks cannot delegate or control other Tasks. A message reaches a running child at its next step, not after its current one.',
+		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await to collect its answer when you need it, stop and resume to control it. Only the root Task may do this; children cannot delegate.",
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{

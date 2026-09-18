@@ -83,60 +83,36 @@ describe('describe_workspace', () => {
 		});
 		expect(described.note).toMatch(/src\/collections\/<name>\/\+model\.ts/);
 		const [projects, customers] = described.collections as ReadonlyArray<Record<string, unknown>>;
-		expect(projects).toMatchObject({
+		expect(projects).toEqual({
 			name: 'projects',
 			description: 'One customer enquiry.',
-			recordLabel: 'project_no',
-			source: 'src/collections/projects',
-			access: { read: true, write: true },
-			write: {
-				create: { columns: ['customer_id', 'status'] },
-				update: { columns: ['status'], relations: ['trials'] },
-				transform: true,
-				search: ['/colour']
-			}
+			label: 'project_no',
+			access: 'rw',
+			// System columns and the generated search document stay out; a field is one token.
+			fields: [
+				'project_no:string!(search)',
+				'customer_id:uuid!->customers',
+				'status:string=pending|done',
+				'light_sources:string[]=D65|CWF',
+				'plaque:json(file)',
+				'documents:json(files)'
+			],
+			write: { create: 'customer_id, status', update: 'status, trials{…}', transform: true },
+			search: ['/colour']
 		});
-		const fields = projects!.fields as ReadonlyArray<Record<string, unknown>>;
-		// System columns stay out; the generated search document too.
-		expect(fields.map((f) => f.name)).toEqual([
-			'project_no',
-			'customer_id',
-			'status',
-			'light_sources',
-			'plaque',
-			'documents'
-		]);
-		expect(fields.find((f) => f.name === 'customer_id')).toEqual({
-			name: 'customer_id',
-			type: 'uuid',
-			required: true,
-			references: 'customers'
-		});
-		expect(fields.find((f) => f.name === 'light_sources')).toEqual({
-			name: 'light_sources',
-			type: 'string[]',
-			values: ['D65', 'CWF']
-		});
-		expect(fields.find((f) => f.name === 'documents')).toEqual({
-			name: 'documents',
-			type: 'json',
-			file: 'many'
-		});
-		expect(customers).toMatchObject({
+		expect(customers).toEqual({
 			name: 'customers',
-			access: { read: true, write: false },
+			access: 'r-',
+			fields: ['name:string'],
 			write: null,
 			integrations: ['erp']
 		});
-		expect(described.apps).toEqual([
-			{ name: 'board', label: 'Board', description: 'The kanban.' },
-			{ name: 'kiosk', label: 'Kiosk', kiosk: true }
-		]);
+		expect(described.apps).toEqual(['board: Board — The kanban.', 'kiosk: Kiosk (kiosk)']);
 		expect(described.automations).toEqual([
-			{ name: 'post_stock', trigger: 'stock created' },
-			{ name: 'nightly', trigger: 'schedule 0 2 * * *' }
+			'post_stock [stock created]',
+			'nightly [schedule 0 2 * * *]'
 		]);
-		expect(described.integrations).toEqual([{ name: 'erp', collection: 'customers', receives: 1 }]);
+		expect(described.integrations).toEqual(['erp on customers (1 pull)']);
 		expect(described.tools).toEqual(['read_collection', 'write_collection']);
 		expect(described.skills).toEqual(['intake']);
 	});
