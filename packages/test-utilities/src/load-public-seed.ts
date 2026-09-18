@@ -124,9 +124,11 @@ const insertRow = async (
 	if (entries.length === 0) {
 		throw new Error(`loadPublicSeed requires columns on each ${stage} row`);
 	}
-	// Read once per stage, after the first row passed — a refused row never reaches the database.
-	const vectorNames = await (vectors.get(stage) ??
-		vectors.set(stage, vectorColumns(stage, query)).get(stage)!);
+	// Read once per stage and only when a row carries an array, after that row passed — a refused
+	// row never reaches the database, and a stage without arrays asks nothing extra.
+	const vectorNames = entries.some(([, value]) => Array.isArray(value))
+		? await (vectors.get(stage) ?? vectors.set(stage, vectorColumns(stage, query)).get(stage)!)
+		: new Set<string>();
 	const columns = entries.map(([name]) => quoteIdent(name)).join(', ');
 	const placeholders = entries.map((_, index) => `$${index + 1}`).join(', ');
 	// repository-health:allow SQL1 -- fixture seeder runs through the host query facility it is handed; pre-bootstrap seed rows have no collection client to route through, and every value stays a bound parameter.
