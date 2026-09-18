@@ -806,6 +806,10 @@ export const collectionCatalogEntry = (
 	name: collection.name,
 	...(collection.recordLabel === undefined ? {} : { recordLabel: collection.recordLabel }),
 	...(collection.write === undefined ? {} : { write: catalogWriteContract(collection.write) }),
+	...(collection.embedding === undefined ? {} : { semantic: true }),
+	...(collection.write?.similarity === undefined
+		? {}
+		: { similarity: collection.write.similarity }),
 	fields: Object.entries(collection.fields).map(([name, field]) => {
 		const relation = relationships.find(
 			(candidate) =>
@@ -1049,12 +1053,45 @@ export const compileCollectionWrite = (declaration: unknown): CompiledCollection
 	const updateInput: CompiledCollectionWrite['update'] | undefined = isRecord(update)
 		? (update.input as CompiledCollectionWrite['update'])
 		: undefined;
+	const similarity = isRecord(declaration.similarity)
+		? Object.entries(declaration.similarity).flatMap(([name, index]) =>
+				isRecord(index) && isString(index.column) && isRecord(index.input)
+					? [
+							{
+								name,
+								...(isString(index.label) ? { label: index.label } : {}),
+								column: index.column,
+								metric: (isString(index.metric) ? index.metric : 'l2') as 'l2' | 'cosine' | 'ip',
+								input: Object.entries(index.input).flatMap(([field, control]) =>
+									isRecord(control)
+										? [
+												{
+													name: field,
+													...(isString(control.label) ? { label: control.label } : {}),
+													kind: String(control.kind) as 'number' | 'text' | 'enum',
+													...(Array.isArray(control.values)
+														? { values: control.values.map(String) }
+														: {}),
+													...(typeof control.min === 'number' ? { min: control.min } : {}),
+													...(typeof control.max === 'number' ? { max: control.max } : {}),
+													...(typeof control.step === 'number' ? { step: control.step } : {}),
+													...(control.optional === true ? { optional: true } : {})
+												}
+											]
+										: []
+								)
+							}
+						]
+					: []
+			)
+		: [];
 	return {
 		...(createInput === undefined ? {} : { create: createInput }),
 		...(updateInput === undefined ? {} : { update: updateInput }),
 		...(isRecord(declaration.delete) ? { delete: true as const } : {}),
 		...(Object.keys(notifications).length === 0 ? {} : { notifications }),
-		hasTransform: Predicate.isFunction(declaration.transform)
+		hasTransform: Predicate.isFunction(declaration.transform),
+		...(similarity.length === 0 ? {} : { similarity })
 	};
 };
 

@@ -122,8 +122,10 @@ export const COLLECTION_SEARCH_MAX_LENGTH = 200;
 /**
  * One collection search command.
  *
- * Both branches are explicit so callers cannot accidentally route ordinary type-ahead through the
- * embedding path.
+ * Every branch is explicit so callers cannot accidentally route ordinary type-ahead through the
+ * embedding path. `nearest` names one of the collection's declared similarity indexes and hands
+ * it the target as the index's own capture form states it; the workspace's embedder turns that
+ * into the probe, never the browser.
  */
 export type CollectionSearch =
 	| Readonly<{
@@ -133,7 +135,44 @@ export type CollectionSearch =
 	| Readonly<{
 			readonly mode: 'semantic';
 			readonly term: string;
+	  }>
+	| Readonly<{
+			readonly mode: 'nearest';
+			readonly index: string;
+			readonly target: Readonly<Record<string, unknown>>;
 	  }>;
+
+/**
+ * The column a nearest search attaches beside each row: the distance the row was ranked by. Named
+ * so that no authored column can collide with it, and read by the table's distance column.
+ */
+export const SEARCH_DISTANCE_COLUMN = 'search_distance';
+
+/** One control of a similarity index's capture form, as the browser renders it. */
+export interface CollectionSimilarityInputField {
+	readonly name: string;
+	readonly label?: string;
+	readonly kind: 'number' | 'text' | 'enum';
+	readonly values?: readonly string[];
+	readonly min?: number;
+	readonly max?: number;
+	readonly step?: number;
+	/** A control that may be left empty; absent means the search needs it. */
+	readonly optional?: boolean;
+}
+
+/**
+ * A declared similarity index, as the catalog carries it: what the search command is called, which
+ * vector column it ranks by, and the form that captures a target. The embedder stays in the
+ * workspace; the browser only knows how to ask.
+ */
+export interface CollectionSimilarityIndex {
+	readonly name: string;
+	readonly label?: string;
+	readonly column: string;
+	readonly metric: 'l2' | 'cosine' | 'ip';
+	readonly input: readonly CollectionSimilarityInputField[];
+}
 
 /**
  * Whether a field is searchable — the predicate every search path and lexical document generation
@@ -169,6 +208,10 @@ export interface CollectionDefinition<
 	 * read-only and no write surface exists for it.
 	 */
 	readonly write?: CollectionWriteContract;
+	/** The collection declares a platform embedding, so `/semantic` search is offered. */
+	readonly semantic?: boolean;
+	/** The similarity indexes `+collection.ts` declared, each a `/<name>` search command. */
+	readonly similarity?: readonly CollectionSimilarityIndex[];
 }
 
 /** One selection: `columns` names fields, `with` names relation actions. */

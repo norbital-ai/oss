@@ -102,9 +102,11 @@ import {
 import {
 	SEARCH_DOCUMENT_COLUMN,
 	prepareSearchPlan,
+	type NearestProbe,
 	type SearchContext,
 	type SearchInput
 } from '#lib/runtime/collections/read/search.js';
+import { SEARCH_DISTANCE_COLUMN } from '@norbital-ai/std/collection';
 import {
 	readRelational as readRelationalService,
 	ROOT_ALIAS,
@@ -1891,8 +1893,57 @@ export const layerWith = (
 							return vector;
 						})
 					);
+				/**
+				 * A declared similarity index: the descriptor lives in the definition (column, metric),
+				 * the embedder in the live module. The probe is the module's own `target`, so the browser
+				 * never states a vector — only the index's capture form.
+				 */
+				const nearest = (
+					index: string,
+					target: Readonly<Record<string, unknown>>
+				): Promise<NearestProbe> =>
+					Effect.runPromise(
+						Effect.gen(function* () {
+							const declared = definition.write?.similarity?.find(
+								(candidate) => candidate.name === index
+							);
+							const live = declaredModuleOf(definition.name)?.similarity?.[index];
+							if (declared === undefined || live === undefined) {
+								return yield* Effect.fail(
+									refusal({
+										field: 'search.index',
+										message: `Collection '${definition.name}' declares no similarity index '${index}'.`
+									})
+								);
+							}
+							const answer = yield* Effect.try({
+								try: () => live.target(target),
+								catch: (cause) =>
+									refusal({
+										field: 'search.target',
+										message: cause instanceof Error ? cause.message : String(cause)
+									})
+							});
+							const aimed = Array.isArray(answer)
+								? { column: declared.column, probe: answer as ReadonlyArray<number> }
+								: (answer as { readonly column: string; readonly probe: ReadonlyArray<number> });
+							const column = aimed.column;
+							if (!Object.hasOwn(definition.fields, column))
+								return yield* Effect.fail(
+									refusal({
+										field: 'search.target',
+										message: `Index '${index}' measures against '${column}', which is not a column of ${definition.name}.`
+									})
+								);
+							return {
+								column,
+								operator: NEAREST_OPERATORS[declared.metric],
+								probe: aimed.probe
+							};
+						})
+					);
 				const planned = yield* Effect.tryPromise({
-					try: () => prepareSearchPlan(input, context, embed),
+					try: () => prepareSearchPlan(input, context, embed, nearest),
 					catch: toError
 				}).pipe(
 					Effect.mapError((cause) =>
@@ -2009,15 +2060,70 @@ export const layerWith = (
 					searchOrdering:
 						searched.mode === 'lexical'
 							? desc(searched.rank)
-							: searched.mode === 'semantic'
+							: searched.mode === 'semantic' || searched.mode === 'nearest'
 								? asc(searched.distance)
 								: undefined,
 					limit: Math.max(1, input.limit ?? 100),
 					with: input.with,
-					columns: input.columns
+					// The ranked column must come back with the row: the distance beside it is measured from it.
+					columns:
+						searched.mode === 'nearest' && input.columns !== undefined
+							? { ...input.columns, [searched.column]: true }
+							: input.columns
 				});
-				return read.rows;
+				if (searched.mode !== 'nearest') return read.rows;
+				return withSearchDistance(definition.name, searched, read.rows) as typeof read.rows;
 			});
+			/**
+			 * The distance a nearest search ranked each row by, attached beside the row.
+			 *
+			 * The index answered the order; the number is measured here from the row's own vector, or
+			 * by the index's `rerank` when it declares one — the exact measure over the page the index
+			 * returned as candidates, which then re-sorts the page. Either way the row reports one
+			 * number under `search_distance`, and the browser shows that.
+			 */
+			const withSearchDistance = (
+				collection: string,
+				searched: Readonly<{
+					readonly index: string;
+					readonly column: string;
+					readonly probe: ReadonlyArray<number>;
+					readonly target: Readonly<Record<string, unknown>>;
+				}>,
+				rows: ReadonlyArray<Readonly<Record<string, unknown>>>
+			): ReadonlyArray<Readonly<Record<string, unknown>>> => {
+				const live = declaredModuleOf(collection)?.similarity?.[searched.index];
+				const declared = workspace.definition.collections
+					.find((candidate) => candidate.name === collection)
+					?.write?.similarity?.find((candidate) => candidate.name === searched.index);
+				const metric = declared?.metric ?? 'l2';
+				const measure = (row: Readonly<Record<string, unknown>>): number => {
+					if (live?.rerank !== undefined) return live.rerank(searched.target, row as never);
+					const vector = row[searched.column];
+					if (!Array.isArray(vector) || vector.length !== searched.probe.length) return Number.NaN;
+					const stored = vector.map(Number);
+					if (metric === 'l2')
+						return Math.sqrt(
+							stored.reduce((sum, value, i) => sum + (value - searched.probe[i]!) ** 2, 0)
+						);
+					const dot = stored.reduce((sum, value, i) => sum + value * searched.probe[i]!, 0);
+					if (metric === 'ip') return -dot;
+					const norm = (values: ReadonlyArray<number>) =>
+						Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+					const denominator = norm(stored) * norm(searched.probe);
+					return denominator === 0 ? Number.NaN : 1 - dot / denominator;
+				};
+				const measured: ReadonlyArray<Readonly<Record<string, unknown>>> = rows.map((row) => ({
+					...row,
+					[SEARCH_DISTANCE_COLUMN]: measure(row)
+				}));
+				return live?.rerank === undefined
+					? measured
+					: measured.toSorted(
+							(left, right) =>
+								Number(left[SEARCH_DISTANCE_COLUMN]) - Number(right[SEARCH_DISTANCE_COLUMN])
+						);
+			};
 			/**
 			 * The rows nearest a probe vector, closest first.
 			 *
@@ -3521,9 +3627,62 @@ export const layerWith = (
 				}
 				// The transform, once per admitted group, reading as the workspace and recording every read.
 				const payloadsOf: Array<ReadonlyArray<Readonly<Record<string, unknown>>>> = [];
+				/**
+				 * The declared similarity indexes' vectors, embedded from the row the payload will make.
+				 * Runs after the transform so the vector is the workspace's own work: a caller's input
+				 * never names the column, and a row that changes gets re-embedded in the same statement.
+				 * An embedder that throws is that collection's refusal, not a runtime fault.
+				 */
+				const embedSimilarity = (
+					collection: string,
+					module: AuthoredCollectionModule,
+					inputs: ReadonlyArray<Readonly<Record<string, unknown>>>,
+					payloads: ReadonlyArray<Readonly<Record<string, unknown>>>
+				): Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, AuthoredRefusal> =>
+					Effect.gen(function* () {
+						const indexes = Object.entries(module.similarity ?? {});
+						if (indexes.length === 0) return payloads;
+						const embedded: Array<Readonly<Record<string, unknown>>> = [];
+						for (const [position, payload] of payloads.entries()) {
+							const stored = previousOf(collection, String(inputs[position]?.['id'] ?? ''));
+							const row = { ...stored, ...payload };
+							let next: Record<string, unknown> = { ...payload };
+							for (const [name, index] of indexes) {
+								const answer = yield* Effect.try({
+									try: () => index.embed(row as never),
+									catch: (cause) =>
+										declaredRefusal(collection, `similarity.${name}`, describeCause(cause))
+								});
+								// One vector for the index's column, or one per column when the index spans several.
+								const vectors: ReadonlyArray<readonly [string, ReadonlyArray<number> | null]> =
+									answer === null || Array.isArray(answer)
+										? [[index.column, answer as ReadonlyArray<number> | null]]
+										: Object.entries(answer as Record<string, ReadonlyArray<number> | null>);
+								for (const [column, vector] of vectors) {
+									if (vector !== null && !vector.every((value) => Number.isFinite(value)))
+										return yield* Effect.fail(
+											declaredRefusal(
+												collection,
+												`similarity.${name}`,
+												`The ${name} embedder returned a vector with a non-finite value for ${column}.`
+											)
+										);
+									next = { ...next, [column]: vector === null ? null : [...vector] };
+								}
+							}
+							embedded.push(next);
+						}
+						return embedded;
+					});
 				for (const { group, module } of prepared) {
-					if (group.action === 'delete' || module.transform === undefined) {
+					if (group.action === 'delete') {
 						payloadsOf.push(group.inputs);
+						continue;
+					}
+					if (module.transform === undefined) {
+						payloadsOf.push(
+							yield* embedSimilarity(group.collection, module, group.inputs, group.inputs)
+						);
 						continue;
 					}
 					const existing = group.inputs.map((input) =>
@@ -3576,7 +3735,14 @@ export const layerWith = (
 									`The ${group.collection} transform returned a payload that is not a record.`
 								)
 							);
-					payloadsOf.push(transformed as ReadonlyArray<Readonly<Record<string, unknown>>>);
+					payloadsOf.push(
+						yield* embedSimilarity(
+							group.collection,
+							module,
+							group.inputs,
+							transformed as ReadonlyArray<Readonly<Record<string, unknown>>>
+						)
+					);
 				}
 				// A transform may name rows the submission did not (a link target, a child to update):
 				// one more wave reads the ones the first did not cover, so lowering sees every pre-image.
@@ -4114,7 +4280,7 @@ export const layerWith = (
 						searchOrdering:
 							searched.mode === 'lexical'
 								? desc(searched.rank)
-								: searched.mode === 'semantic'
+								: searched.mode === 'semantic' || searched.mode === 'nearest'
 									? asc(searched.distance)
 									: undefined,
 						limit: GROUPED_RESULT_LIMIT + 1,

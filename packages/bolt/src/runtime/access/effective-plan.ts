@@ -1689,7 +1689,8 @@ export const compileEffectiveQueryPlan = (
 		input.kind === 'count' ||
 		input.kind === 'findGrouped' ||
 		input.after !== undefined ||
-		input.search?.mode === 'semantic'
+		input.search?.mode === 'semantic' ||
+		input.search?.mode === 'nearest'
 			? 'one-shot'
 			: 'live-prefix';
 	const requestedLimit = input.kind === 'findFirst' ? 1 : (input.limit ?? DEFAULT_LIVE_PREFIX);
@@ -1725,7 +1726,7 @@ export const compileEffectiveQueryPlan = (
 			? `${input.kind} is an aggregate one-shot read`
 			: input.after !== undefined
 				? 'an anchored cursor page is one-shot'
-				: input.search?.mode === 'semantic'
+				: input.search?.mode === 'semantic' || input.search?.mode === 'nearest'
 					? 'vector-nearest ordering is one-shot'
 					: undefined;
 	const semantics = mergePredicateSemantics([

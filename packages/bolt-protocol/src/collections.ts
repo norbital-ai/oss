@@ -91,9 +91,20 @@ export interface CollectionSemanticSearch extends Schema.Schema.Type<
 	typeof CollectionSemanticSearch
 > {}
 
+/** A declared similarity index and a target in its capture form's shape; the workspace embeds it. */
+export const CollectionNearestSearch = Schema.Struct({
+	mode: Schema.Literal('nearest'),
+	index: Schema.NonEmptyString,
+	target: Schema.Record(Schema.String, Schema.Json)
+}).annotate({ identifier: 'BoltCollectionNearestSearch' });
+export interface CollectionNearestSearch extends Schema.Schema.Type<
+	typeof CollectionNearestSearch
+> {}
+
 export const CollectionSearch = Schema.Union([
 	CollectionLexicalSearch,
-	CollectionSemanticSearch
+	CollectionSemanticSearch,
+	CollectionNearestSearch
 ]).annotate({
 	identifier: 'BoltCollectionSearch'
 });

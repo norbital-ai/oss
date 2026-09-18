@@ -15,7 +15,10 @@ import type {
 } from './contracts-schema.js';
 import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
 import type { CollectionInputSelection } from './collection-schema.js';
-import type { CollectionWriteContract } from '@norbital-ai/std/collection';
+import type {
+	CollectionSimilarityIndex,
+	CollectionWriteContract
+} from '@norbital-ai/std/collection';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
@@ -334,6 +337,8 @@ export interface CompiledCollectionWrite {
 	/** Rule channel names per lifecycle event, in declaration order. */
 	readonly notifications?: Readonly<Partial<Record<string, ReadonlyArray<string>>>>;
 	readonly hasTransform: boolean;
+	/** The declared similarity indexes, functions dropped: what the catalog and the planner need. */
+	readonly similarity?: ReadonlyArray<CollectionSimilarityIndex>;
 }
 
 export interface CompiledCollection extends CollectionDefinition<
@@ -437,6 +442,10 @@ export interface CollectionCatalogEntry {
 	readonly recordLabel?: string;
 	/** The declared write contract, absent for a read-only collection. */
 	readonly write?: CollectionWriteContract;
+	/** The collection declares a platform embedding: `/semantic` is a real command here. */
+	readonly semantic?: true;
+	/** The declared similarity indexes: one `/<name>` command each. */
+	readonly similarity?: ReadonlyArray<CollectionSimilarityIndex>;
 	readonly fields: ReadonlyArray<CollectionCatalogField>;
 	readonly relationships: ReadonlyArray<
 		CollectionCatalogRelation & {

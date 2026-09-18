@@ -126,10 +126,15 @@
 				{disabled}
 				{searchEnabled}
 				{filterEnabled}
-				initialSearch={query.search}
+				initialSearch={query.searchCommand ?? null}
 				{initialFilters}
 				{filterPersistenceKey}
-				onSearchChange={(search) => query.setSearch(search)}
+				onSearchChange={(search) =>
+					search === null
+						? query.setSearch('')
+						: search.mode === 'lexical'
+							? query.setSearch(search.term)
+							: query.setSearchCommand(search)}
 				onFilterChange={applyFilters}
 			/>
 			{#if operations && operationsVisible}

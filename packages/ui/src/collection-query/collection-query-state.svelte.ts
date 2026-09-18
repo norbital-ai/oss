@@ -1,7 +1,8 @@
 import type {
 	CollectionFilter,
 	CollectionFilterOptions,
-	CollectionRecord
+	CollectionRecord,
+	CollectionSearch
 } from '@norbital-ai/std/collection';
 import { PersistedState } from 'runed';
 import { Number as Number_ } from 'effect';
@@ -56,6 +57,12 @@ const MAX_COLLECTION_PAGE_SIZE = 500;
  */
 export class CollectionQueryState<TRow extends object = CollectionRecord> {
 	#search = $state('');
+	/**
+	 * The search as a command, when the box captured one that is not plain text: `/semantic` with
+	 * a term, or `/<index>` with a target from the index's own form. Plain text is `#search` and
+	 * reaches the query as the lexical command; this wins over it whenever set.
+	 */
+	#searchCommand = $state<CollectionSearch | null>(null);
 	#filters = $state<readonly CollectionFilter[]>([]);
 	#pageIndex = $state(0);
 	#pageSize = $state(DEFAULT_COLLECTION_PAGE_SIZE);
@@ -80,6 +87,12 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 		return this.#search;
 	}
 
+	/** The search command the query sends: the captured command, else the lexical text, else none. */
+	get searchCommand(): CollectionSearch | undefined {
+		if (this.#searchCommand !== null) return this.#searchCommand;
+		return this.#search === '' ? undefined : { mode: 'lexical', term: this.#search };
+	}
+
 	get filters(): readonly CollectionFilter[] {
 		return this.#filters;
 	}
@@ -94,13 +107,23 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 
 	/** True while the result set is narrowed, so a surface can offer "clear" without recomputing. */
 	get narrowed(): boolean {
-		return this.#search.trim().length > 0 || this.#filters.length > 0;
+		return (
+			this.#search.trim().length > 0 || this.#searchCommand !== null || this.#filters.length > 0
+		);
 	}
 
 	setSearch(search: string): void {
 		const next = search.trim().normalize('NFC');
-		if (next === this.#search) return;
+		if (next === this.#search && this.#searchCommand === null) return;
 		this.#search = next;
+		this.#searchCommand = null;
+		this.#pageIndex = 0;
+	}
+
+	/** A captured command replaces the text; `null` returns the box to plain text. */
+	setSearchCommand(command: CollectionSearch | null): void {
+		this.#searchCommand = command;
+		if (command !== null) this.#search = '';
 		this.#pageIndex = 0;
 	}
 
@@ -124,6 +147,7 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 
 	clear(): void {
 		this.#search = '';
+		this.#searchCommand = null;
 		this.#filters = [];
 		this.#pageIndex = 0;
 	}

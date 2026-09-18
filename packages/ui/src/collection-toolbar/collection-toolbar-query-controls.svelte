@@ -1,19 +1,16 @@
 <script lang="ts">
 	import {
-		COLLECTION_SEARCH_MAX_LENGTH,
 		isSearchableCollectionField,
-		type CollectionFilter
+		type CollectionFilter,
+		type CollectionSearch
 	} from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
-	import { debounce } from 'es-toolkit/function';
-	import { onDestroy } from 'svelte';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
-	import { Input } from '#lib/input';
-	import { Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
+	import CollectionSearchCommand from './collection-search-command.svelte';
 	import {
 		CollectionFilter as CollectionFilterBuilder,
 		type FilterCollectionDefinition
@@ -28,7 +25,7 @@
 		disabled = false,
 		searchEnabled = true,
 		filterEnabled = true,
-		initialSearch = '',
+		initialSearch = null,
 		initialFilters = [],
 		filterPersistenceKey,
 		onSearchChange,
@@ -41,12 +38,13 @@
 		searchEnabled?: boolean;
 		/** Caller opt-out for the schema-derived filter builder. */
 		filterEnabled?: boolean;
-		initialSearch?: string;
+		initialSearch?: CollectionSearch | null;
 		/** Conditions the view opens with, seeded as removable rows in the filter builder. */
 		initialFilters?: readonly CollectionInitialFilter[];
 		/** View key a cleared seed is remembered against. */
 		filterPersistenceKey?: string;
-		onSearchChange: (search: string) => void;
+		/** The command the box captured; `null` when it holds nothing worth sending. */
+		onSearchChange: (search: CollectionSearch | null) => void;
 		onFilterChange: (filters: readonly CollectionFilter[]) => void;
 	} = $props();
 
@@ -56,7 +54,12 @@
 	 * that returns nothing however it is typed into, so the affordance is not rendered at all.
 	 */
 	const searchableFields = $derived(definition.fields.filter(isSearchableCollectionField));
-	const searchVisible = $derived(searchEnabled && searchableFields.length > 0);
+	const similarity = $derived(definition.similarity ?? []);
+	const semantic = $derived(definition.semantic === true);
+	/** A collection with a similarity index is searchable through it even with no text field. */
+	const searchVisible = $derived(
+		searchEnabled && (searchableFields.length > 0 || semantic || similarity.length > 0)
+	);
 
 	/** Beyond this the names stop being a hint and become a wall of text in a 16rem input. */
 	const SEARCH_FIELDS_SHOWN = 3;
@@ -79,29 +82,15 @@
 		});
 	});
 
-	// svelte-ignore state_referenced_locally -- the input owns its draft independently of query refreshes.
-	let searchInput = $state(initialSearch);
-	let searchInputElement: HTMLInputElement | null = $state(null);
-	const commitSearch = debounce((value: string) => {
-		onSearchChange(value.trim().normalize('NFC'));
-	}, 180);
-
-	// A collapsed popover hides the term, so the trigger has to carry it: without this an active
-	// search reads as an unfiltered collection whose row count is inexplicably short.
-	const searchActive = $derived(searchInput.trim().length > 0);
-
-	onDestroy(() => commitSearch.cancel());
-
-	function updateSearch(event: Event & { currentTarget: HTMLInputElement }): void {
-		searchInput = event.currentTarget.value;
-		commitSearch(searchInput);
-	}
-
-	function clearSearch(): void {
-		searchInput = '';
-		commitSearch('');
-		searchInputElement?.focus();
-	}
+	// svelte-ignore state_referenced_locally -- the seed only opens the box; the box owns the draft.
+	let searchActive = $state(initialSearch !== null);
+	let modeLabel = $state<string | null>(null);
+	let box: { active: () => boolean; modeLabel: () => string | null } | undefined = $state();
+	const changed = (command: CollectionSearch | null): void => {
+		searchActive = command !== null;
+		modeLabel = box?.modeLabel() ?? null;
+		onSearchChange(command);
+	};
 </script>
 
 {#if searchVisible}
@@ -115,7 +104,9 @@
 						variant="ghost"
 						size="icon"
 						class="size-8"
-						aria-label={searchActive ? t('table.searchActive') : t('table.searchRecords')}
+						aria-label={searchActive
+							? `${t('table.searchActive')}${modeLabel === null ? '' : ` ${modeLabel}`}`
+							: t('table.searchRecords')}
 						aria-pressed={searchActive}
 						{disabled}
 					>
@@ -124,25 +115,16 @@
 				</Indicator>
 			{/snippet}
 		</Popover.Trigger>
-		<Popover.Content align="start" class="w-[min(calc(100vw-1rem),20rem)] p-2">
-			<Inline gap="sm">
-				<Input
-					bind:ref={searchInputElement}
-					type="search"
-					class="h-9 min-w-0 flex-1 text-base md:text-sm"
-					value={searchInput}
-					maxlength={COLLECTION_SEARCH_MAX_LENGTH}
-					{placeholder}
-					aria-label={t('table.searchRecords')}
-					oninput={updateSearch}
-					{disabled}
-				/>
-				{#if searchInput}
-					<Button type="button" variant="ghost" size="sm" class="h-9 shrink-0" onclick={clearSearch}
-						>{t('common.clear')}</Button
-					>
-				{/if}
-			</Inline>
+		<Popover.Content align="start" class="w-[min(calc(100vw-1rem),24rem)] p-2">
+			<CollectionSearchCommand
+				bind:this={box}
+				{placeholder}
+				{semantic}
+				{similarity}
+				initial={initialSearch}
+				{disabled}
+				onChange={changed}
+			/>
 		</Popover.Content>
 	</Popover.Root>
 {/if}

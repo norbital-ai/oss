@@ -12,7 +12,11 @@
 		CollectionScalarFieldName,
 		CollectionType
 	} from '@norbital-ai/std/collection';
-	import { isSystemCollectionField, labelTermText } from '@norbital-ai/std/collection';
+	import {
+		SEARCH_DISTANCE_COLUMN,
+		isSystemCollectionField,
+		labelTermText
+	} from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { Effect, Number as Number_, Schema } from 'effect';
@@ -151,7 +155,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionTable');
 	setCollectionClientContext(() => workspaceClient);
-	const { t } = useI18n();
+	const { t, intlLocale } = useI18n();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, String(collection))
@@ -296,27 +300,60 @@
 		return renderSnippet(defaultCell, { column, row, value });
 	}
 
+	/**
+	 * The distance a nearest search ranked each row by, as the leading column while one is active.
+	 * It is the search's own number, not a field of the collection, so it is neither registered nor
+	 * sortable — the order it reports is the order the rows already come in.
+	 */
+	const distanceColumn = $derived.by((): TCreateColumnProps<GridRow, unknown>[] =>
+		queryState.searchCommand?.mode === 'nearest'
+			? [
+					{
+						id: SEARCH_DISTANCE_COLUMN,
+						header: () => t('table.searchDistance'),
+						accessor: (row: RowAPI<GridRow, unknown>) =>
+							Reflect.get(row.raw.record, SEARCH_DISTANCE_COLUMN),
+						cell: ({ row }: { row: RowAPI<GridRow, unknown> }) => {
+							const value = Reflect.get(row.raw.record, SEARCH_DISTANCE_COLUMN);
+							return typeof value === 'number' && Number.isFinite(value)
+								? new Intl.NumberFormat(intlLocale, { maximumFractionDigits: 2 }).format(value)
+								: '—';
+						},
+						width: 96,
+						enableSorting: false,
+						enableResizing: true,
+						enableHiding: false,
+						enablePinning: false,
+						enableSelection: effectiveSelectable
+					}
+				]
+			: []
+	);
 	const gridColumns = $derived.by((): TCreateColumnProps<GridRow, unknown>[] =>
 		withSelectionColumn(
-			registeredColumns.map((column) => {
-				const field = metadataFor(column);
-				return {
-					id: column.key,
-					header: () => column.label ?? field.label ?? humanize(column.key),
-					accessor: (row: RowAPI<GridRow, unknown>) => Reflect.get(row.raw.record, column.key),
-					cell: ({ row }: { row: RowAPI<GridRow, unknown> }) => renderCell(column, row.raw.record),
-					width: column.width,
-					minWidth: column.minWidth,
-					maxWidth: column.maxWidth,
-					enableSorting: collectionTableColumnCanSort(field, {
-						sortable: column.sortable
-					}),
-					enableResizing: column.resizable ?? true,
-					enableHiding: column.hideable ?? true,
-					enablePinning: column.pinnable ?? true,
-					enableSelection: effectiveSelectable
-				};
-			}),
+			[
+				...distanceColumn,
+				...registeredColumns.map((column) => {
+					const field = metadataFor(column);
+					return {
+						id: column.key,
+						header: () => column.label ?? field.label ?? humanize(column.key),
+						accessor: (row: RowAPI<GridRow, unknown>) => Reflect.get(row.raw.record, column.key),
+						cell: ({ row }: { row: RowAPI<GridRow, unknown> }) =>
+							renderCell(column, row.raw.record),
+						width: column.width,
+						minWidth: column.minWidth,
+						maxWidth: column.maxWidth,
+						enableSorting: collectionTableColumnCanSort(field, {
+							sortable: column.sortable
+						}),
+						enableResizing: column.resizable ?? true,
+						enableHiding: column.hideable ?? true,
+						enablePinning: column.pinnable ?? true,
+						enableSelection: effectiveSelectable
+					};
+				})
+			],
 			effectiveSelectable,
 			t
 		)
@@ -413,11 +450,10 @@
 			query: {
 				...query,
 				with: { ...automaticRelationshipWith, ...(query?.with ?? {}) },
-				search:
-					queryState.search === ''
-						? undefined
-						: { mode: 'lexical' as const, term: queryState.search },
-				orderBy: orderBy ?? defaultOrderBy,
+				search: queryState.searchCommand,
+				// A ranked search owns the order; the table's own sort would undo it.
+				orderBy:
+					queryState.searchCommand?.mode === 'nearest' ? undefined : (orderBy ?? defaultOrderBy),
 				// The first live answer intentionally has no cursor (§2.3). Ask for a growing live
 				// window and slice the visible page rather than labelling page one as a cursor page it
 				// is not; later pages stay live and no sequential cursor walk is hidden behind a click.
@@ -440,10 +476,7 @@
 			operations,
 			query: {
 				where: query?.where,
-				search:
-					queryState.search === ''
-						? undefined
-						: { mode: 'lexical' as const, term: queryState.search },
+				search: queryState.searchCommand,
 				columns: query?.columns,
 				bypass_secret: query?.bypass_secret
 			},

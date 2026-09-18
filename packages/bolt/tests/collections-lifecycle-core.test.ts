@@ -156,3 +156,56 @@ describe('collection lifecycle core', () => {
 		}
 	});
 });
+
+describe('declared similarity search', () => {
+	it('reaches the declared index only for the nearest command and ranks by its own column', async () => {
+		const context = {
+			collection: 'formulations',
+			fields: searchedFields,
+			searchDocumentColumn: SEARCH_DOCUMENT_COLUMN
+		} as const;
+		let embedded = 0;
+		let targets = 0;
+		const embed = async () => {
+			embedded += 1;
+			return [0.1];
+		};
+		const nearest = async (index: string, target: Readonly<Record<string, unknown>>) => {
+			targets += 1;
+			expect(index).toBe('colour');
+			return { column: 'lab_vector', operator: '<->' as const, probe: [Number(target['l']), 0, 0] };
+		};
+		const plan = await prepareSearchPlan(
+			{ mode: 'nearest', index: 'colour', target: { l: 62.4 } },
+			context,
+			embed,
+			nearest
+		);
+		expect(Result.isSuccess(plan) && plan.success.mode).toBe('nearest');
+		expect(targets).toBe(1);
+		expect(embedded).toBe(0);
+		if (Result.isSuccess(plan) && plan.success.mode === 'nearest') {
+			const query = render(plan.success.distance);
+			expect(query.sql).toContain('"lab_vector" <-> ');
+			expect(query.params).toContain('[62.4,0,0]');
+			expect(plan.success.live).toBe(false);
+		}
+		const absent = await prepareSearchPlan(
+			{ mode: 'nearest', index: 'colour', target: {} },
+			context,
+			embed
+		);
+		expect(Result.isFailure(absent)).toBe(true);
+		const rejected = await prepareSearchPlan(
+			{ mode: 'nearest', index: 'colour', target: {} },
+			context,
+			embed,
+			async () => {
+				throw new Error('L* is a lightness from 0 to 100.');
+			}
+		);
+		expect(Result.isFailure(rejected) && rejected.failure.message).toBe(
+			'L* is a lightness from 0 to 100.'
+		);
+	});
+});

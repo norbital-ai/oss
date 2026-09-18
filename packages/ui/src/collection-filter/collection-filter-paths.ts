@@ -1,10 +1,18 @@
-import type { CollectionField, CollectionRelationship } from '@norbital-ai/std/collection';
+import type {
+	CollectionField,
+	CollectionRelationship,
+	CollectionSimilarityIndex
+} from '@norbital-ai/std/collection';
 
 export interface FilterCollectionDefinition {
 	readonly name: string;
 	readonly fields: readonly CollectionField[];
 	readonly recordLabel?: string | null;
 	readonly relationships?: readonly CollectionRelationship[];
+	/** The collection declares a platform embedding, so the box offers `/semantic`. */
+	readonly semantic?: boolean;
+	/** The declared similarity indexes, each a `/<name>` command with its own capture form. */
+	readonly similarity?: readonly CollectionSimilarityIndex[];
 }
 
 /** One schema-derived filter leaf, including every relationship edge needed to reach it. */

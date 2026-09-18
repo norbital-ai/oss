@@ -20,7 +20,22 @@ type SemanticSearchCommand = Readonly<{
 	readonly term: string;
 }>;
 
-export type SearchInput = LexicalSearchCommand | SemanticSearchCommand | null | undefined;
+/** A declared similarity index and a target in its capture form's shape. */
+type NearestSearchCommand = Readonly<{
+	readonly mode: 'nearest';
+	readonly index: string;
+	readonly target: Readonly<Record<string, unknown>>;
+}>;
+
+export type SearchInput =
+	LexicalSearchCommand | SemanticSearchCommand | NearestSearchCommand | null | undefined;
+
+/** What the planner needs of a declared similarity index: the column, the operator, the probe. */
+export type NearestProbe = Readonly<{
+	readonly column: string;
+	readonly operator: '<->' | '<=>' | '<#>';
+	readonly probe: ReadonlyArray<number>;
+}>;
 
 export type SearchContext = Readonly<{
 	readonly collection: string;
@@ -75,12 +90,32 @@ type SemanticSearchPlan = Readonly<{
 	readonly live: false;
 }>;
 
-type SearchPlan = EmptySearchPlan | LexicalSearchPlan | SemanticSearchPlan;
+type NearestSearchPlan = Readonly<{
+	readonly mode: 'nearest';
+	readonly index: string;
+	readonly target: Readonly<Record<string, unknown>>;
+	readonly column: string;
+	readonly probe: ReadonlyArray<number>;
+	readonly predicate: SQL;
+	readonly distance: SQL<number>;
+	readonly orderBy: ReadonlyArray<
+		Readonly<{ readonly expression: SQL; readonly direction: 'asc' }>
+	>;
+	readonly corpusRelative: true;
+	readonly live: false;
+}>;
+
+type SearchPlan = EmptySearchPlan | LexicalSearchPlan | SemanticSearchPlan | NearestSearchPlan;
 
 type NormalizedSearch =
 	| Readonly<{ readonly mode: 'none' }>
 	| Readonly<{ readonly mode: 'lexical'; readonly term: string }>
-	| Readonly<{ readonly mode: 'semantic'; readonly term: string }>;
+	| Readonly<{ readonly mode: 'semantic'; readonly term: string }>
+	| Readonly<{
+			readonly mode: 'nearest';
+			readonly index: string;
+			readonly target: Readonly<Record<string, unknown>>;
+	  }>;
 
 const failure = (
 	context: SearchContext,
@@ -102,14 +137,29 @@ const conjunction = (clauses: ReadonlyArray<SQL | undefined>): SQL => {
 };
 
 const isString = Schema.is(Schema.String);
+const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 const normalizeSearch = (
 	input: SearchInput,
 	context: SearchContext
 ): Result.Result<NormalizedSearch, SearchCompileError> => {
 	if (input === undefined || input === null) return Result.succeed({ mode: 'none' });
+	if (input.mode === 'nearest') {
+		if (!isString(input.index) || input.index === '' || !isRecord(input.target)) {
+			return failure(
+				context,
+				'search',
+				"A nearest search requires { mode: 'nearest', index, target }."
+			);
+		}
+		return Result.succeed({ mode: 'nearest', index: input.index, target: input.target });
+	}
 	if ((input.mode !== 'lexical' && input.mode !== 'semantic') || !isString(input.term)) {
-		return failure(context, 'search', "Search requires { mode: 'lexical' | 'semantic', term }.");
+		return failure(
+			context,
+			'search',
+			"Search requires { mode: 'lexical' | 'semantic', term } or { mode: 'nearest', index, target }."
+		);
 	}
 	const term = input.term.trim();
 	if (term === '') return failure(context, 'search.term', 'Search requires a non-empty term.');
@@ -216,15 +266,44 @@ export const compileSemanticSearch = (
 	});
 };
 
+/** Compiles the probe of a declared similarity index: the index's own column and operator. */
+export const compileNearestSearch = (
+	index: string,
+	target: Readonly<Record<string, unknown>>,
+	nearest: NearestProbe,
+	context: SearchContext
+): Result.Result<NearestSearchPlan, SearchCompileError> => {
+	if (nearest.probe.length === 0 || !nearest.probe.every((value) => Number.isFinite(value))) {
+		return failure(context, 'search.target', `Index '${index}' produced no finite probe.`);
+	}
+	const column = qualifiedColumn(context, nearest.column);
+	const probeSql = sql`${vectorLiteral(nearest.probe)}::vector`;
+	const distance = sql<number>`${column} ${sql.raw(nearest.operator)} ${probeSql}`;
+	return Result.succeed({
+		mode: 'nearest',
+		index,
+		target,
+		column: nearest.column,
+		probe: nearest.probe,
+		predicate: conjunction([context.basePredicate, sql`${column} is not null`]),
+		distance,
+		orderBy: [{ expression: distance, direction: 'asc' }],
+		corpusRelative: true,
+		live: false
+	});
+};
+
 /**
  * Runtime branch point for search.
  *
- * The embedder callback is reached only by the structurally distinct semantic command.
+ * The embedder callback is reached only by the structurally distinct semantic command; the
+ * declared-index callback only by a nearest command, which names the index it wants.
  */
 export const prepareSearchPlan = async (
 	input: SearchInput,
 	context: SearchContext,
-	embed: (term: string) => Promise<ReadonlyArray<number>>
+	embed: (term: string) => Promise<ReadonlyArray<number>>,
+	nearest?: (index: string, target: Readonly<Record<string, unknown>>) => Promise<NearestProbe>
 ): Promise<Result.Result<SearchPlan, SearchCompileError>> => {
 	const normalized = normalizeSearch(input, context);
 	if (Result.isFailure(normalized)) return Result.fail(normalized.failure);
@@ -238,6 +317,25 @@ export const prepareSearchPlan = async (
 	}
 	if (normalized.success.mode === 'lexical') {
 		return compileLexicalSearch(normalized.success.term, context);
+	}
+	if (normalized.success.mode === 'nearest') {
+		if (nearest === undefined)
+			return failure(context, 'search', 'This read surface offers no similarity indexes.');
+		try {
+			const probe = await nearest(normalized.success.index, normalized.success.target);
+			return compileNearestSearch(
+				normalized.success.index,
+				normalized.success.target,
+				probe,
+				context
+			);
+		} catch (cause) {
+			return failure(
+				context,
+				'search',
+				cause instanceof Error ? cause.message : 'The target could not be embedded.'
+			);
+		}
 	}
 	try {
 		// Exactly one model call per explicit semantic request.

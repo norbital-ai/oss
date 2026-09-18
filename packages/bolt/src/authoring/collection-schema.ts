@@ -293,6 +293,56 @@ export type CollectionTransform<M extends ModelDeclaration, Input> = (
 	AuthoredRefusal
 >;
 
+/** One control of a similarity index's capture form: what the browser shows to state a target. */
+export type SimilarityInputField = Readonly<{
+	readonly label?: string;
+	readonly kind: 'number' | 'text' | 'enum';
+	readonly values?: ReadonlyArray<string>;
+	readonly min?: number;
+	readonly max?: number;
+	readonly step?: number;
+	readonly optional?: boolean;
+}>;
+
+export const SIMILARITY_METRICS = ['l2', 'cosine', 'ip'] as const;
+export type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
+
+/**
+ * One similarity index: a domain's own notion of "nearest", declared beside the write contract.
+ *
+ * The index ranks by a `vector({ dimensions })` column the model declares (index it with HNSW and
+ * the opclass matching `metric`). `embed` fills that column from the row on every write — the
+ * runtime calls it after the transform, so the vector is the workspace's own work and never a
+ * caller's input. `target` turns a capture-form value into the probe a search ranks by. `rerank`
+ * is the exact measure when the index metric is only a candidate stage: it is run over the page the
+ * index returned, and its value is what the row reports as its distance.
+ *
+ * A domain whose "nearest" depends on a condition the form states — a colour under one light, a
+ * position in one frame — keeps one vector column per condition: `embed` then returns every
+ * column's vector at once, and `target` names the column the probe is measured against.
+ */
+export type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclaration> = Readonly<{
+	readonly label?: string;
+	/** The `vector()` column the index ranks by unless `target` names another. */
+	readonly column: string;
+	/** Defaults to `l2`. */
+	readonly metric?: SimilarityMetric;
+	/** The capture form: one control per key, rendered in this order. */
+	readonly input: Readonly<Record<string, SimilarityInputField>>;
+	readonly embed: (
+		row: RowFor<M>
+	) =>
+		| ReadonlyArray<number>
+		| null
+		| Readonly<Record<string, ReadonlyArray<number> | null>>;
+	readonly target: (
+		input: Readonly<Record<string, unknown>>
+	) =>
+		| ReadonlyArray<number>
+		| Readonly<{ readonly column: string; readonly probe: ReadonlyArray<number> }>;
+	readonly rerank?: (input: Readonly<Record<string, unknown>>, row: RowFor<M>) => number;
+}>;
+
 /** The events every collection may notify on, one for each approval-machine transition. */
 export type CollectionNotificationEvent =
 	| 'committed'
@@ -363,6 +413,8 @@ export interface CollectionDeclaration<
 		>
 	>;
 	readonly notifications?: CollectionNotifications;
+	/** Similarity indexes, each a `/<name>` search command on this collection. */
+	readonly similarity?: Readonly<Record<string, SimilarityIndexDeclaration<M>>>;
 }
 
 export type AnyCollectionDeclaration = CollectionDeclaration<
@@ -446,6 +498,40 @@ export const defineCollection = <
 			}
 		}
 	}
+	if (declaration.similarity !== undefined) {
+		if (!isRecord(declaration.similarity))
+			throw new TypeError('similarity must map index names to declarations.');
+		for (const [name, index] of Object.entries(declaration.similarity)) {
+			if (!/^[a-z][a-z0-9_]*$/.test(name))
+				throw new TypeError(
+					`similarity.${name}: an index name is lower-case letters, digits and underscores; it becomes the /${name} search command.`
+				);
+			if (!isRecord(index)) throw new TypeError(`similarity.${name} must be an object.`);
+			if (typeof index['column'] !== 'string' || index['column'] === '')
+				throw new TypeError(`similarity.${name} must name the vector column it ranks by.`);
+			if (
+				index['metric'] !== undefined &&
+				!(SIMILARITY_METRICS as ReadonlyArray<unknown>).includes(index['metric'])
+			)
+				throw new TypeError(
+					`similarity.${name}.metric must be one of ${SIMILARITY_METRICS.join(', ')}.`
+				);
+			if (!isRecord(index['input']) || Object.keys(index['input']).length === 0)
+				throw new TypeError(`similarity.${name}.input must declare at least one control.`);
+			for (const [field, control] of Object.entries(index['input'])) {
+				if (!isRecord(control) || !['number', 'text', 'enum'].includes(String(control['kind'])))
+					throw new TypeError(
+						`similarity.${name}.input.${field}.kind must be number, text or enum.`
+					);
+				if (control['kind'] === 'enum' && !Array.isArray(control['values']))
+					throw new TypeError(`similarity.${name}.input.${field} is an enum with no values.`);
+			}
+			if (typeof index['embed'] !== 'function' || typeof index['target'] !== 'function')
+				throw new TypeError(`similarity.${name} needs embed(row) and target(input) functions.`);
+			if (index['rerank'] !== undefined && typeof index['rerank'] !== 'function')
+				throw new TypeError(`similarity.${name}.rerank must be a function when present.`);
+		}
+	}
 	return Object.freeze({ ...declaration });
 };
 
@@ -461,4 +547,5 @@ export type AuthoredCollectionModule = Readonly<{
 	readonly delete?: Readonly<Record<never, never>>;
 	readonly transform?: unknown;
 	readonly notifications?: CollectionNotifications;
+	readonly similarity?: Readonly<Record<string, SimilarityIndexDeclaration>>;
 }>;

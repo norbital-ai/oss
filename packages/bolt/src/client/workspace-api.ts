@@ -168,8 +168,20 @@ type ClientCommandName = FixedCommandName | `invoke.${string}`;
 /** Live contiguous prefix, or one answered-only keyset page. See docs/pillars/04-sync-engine/README.md. */
 type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
 
-const collectionReadMode = (after: Schema.Json | undefined): CollectionReadMode =>
-	after === undefined ? { kind: 'live' } : { kind: 'anchored' };
+/**
+ * A cursor page is one-shot, and so is a ranked search the replica cannot answer: a semantic or
+ * nearest command is planned against the server's index and read once, the way the engine admits
+ * it (`vector-nearest ordering is one-shot`), rather than mounted as a live prefix it would refuse.
+ */
+const collectionReadMode = (
+	after: Schema.Json | undefined,
+	search: Schema.Json | undefined
+): CollectionReadMode => {
+	const mode = isRecord(search) ? search['mode'] : undefined;
+	return after === undefined && mode !== 'semantic' && mode !== 'nearest'
+		? { kind: 'live' }
+		: { kind: 'anchored' };
+};
 
 const decodedCommandEffect = <Name extends FixedCommandName, Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,
@@ -479,7 +491,7 @@ const pageQueryOf = (
 		collection,
 		...withMutationVersions(mergeWhere(asJsonRecord(input), options))
 	};
-	const mode = collectionReadMode(requestFields['after']);
+	const mode = collectionReadMode(requestFields['after'], requestFields['search']);
 	switch (mode.kind) {
 		case 'anchored': {
 			const request = Schema.decodeUnknownSync(CollectionQueryRequest)(requestFields);
@@ -558,7 +570,7 @@ const firstQueryOf = (
 		collection,
 		...withMutationVersions(asJsonRecord(input))
 	};
-	const mode = collectionReadMode(requestFields['after']);
+	const mode = collectionReadMode(requestFields['after'], requestFields['search']);
 	switch (mode.kind) {
 		case 'anchored': {
 			const query = commandQueryFromContract(

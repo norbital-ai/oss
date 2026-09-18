@@ -32,6 +32,7 @@ export {
 	CollectionLexicalSearch,
 	CollectionSearch,
 	CollectionSemanticSearch,
+	CollectionNearestSearch,
 	CollectionWriteValues,
 	StoredRecord
 } from './collections.js';
