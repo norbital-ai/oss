@@ -24,9 +24,12 @@ import { getErrorMessage, toError } from '@norbital-ai/std';
 import {
 	SkillDeclaration,
 	type McpToolRoute,
+	type RelationDefinition,
 	type ToolDeclaration,
 	type WorkspaceDefinition
 } from '#lib/authoring/workspace-schema.js';
+import type { CollectionInputSelection } from '#lib/authoring/collection-schema.js';
+import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
 import type { ConnectorInterface, HostToolsInterface } from '#lib/runtime/facilities/services.js';
@@ -247,7 +250,8 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'describe_workspace',
-		description: 'Describe the workspace surface authorized for this run.',
+		description:
+			'Describe this workspace: every collection you may reach with its fields, values, relations and write contract; the apps, automations, envoys and integrations; and where the source of each lives. Call it once before reading or writing data.',
 		command: 'platform:describe_workspace'
 	},
 	{
@@ -315,7 +319,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'write_collection',
 		description:
-			'Create, update, or delete an authorized collection record through its declared input. A create names no id; an update or delete names the record.',
+			'Create, update, or delete an authorized collection record through its declared input. A create names no id; an update or delete names the record. The answer carries the stored row, so read it back from here rather than with another read.',
 		command: 'platform:write_collection',
 		inputSchema: objectInput(
 			{
@@ -479,29 +483,146 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
 	return skill.body;
 });
 
-const DescribeWorkspaceResult = Schema.Struct({
-	name: Schema.String,
-	version: Schema.String,
-	collections: Schema.Array(Schema.String),
-	apps: Schema.Array(Schema.String),
-	tools: Schema.Array(Schema.String),
-	skills: Schema.Array(Schema.String),
-	automations: Schema.Array(Schema.String),
-	envoys: Schema.Array(Schema.String),
-	integrations: Schema.Array(Schema.String)
-});
-type DescribeWorkspaceResult = Schema.Schema.Type<typeof DescribeWorkspaceResult>;
+/**
+ * The workspace as one concise answer: what the collections are and how they are written, the
+ * apps, the automations, the envoys and integrations — so a turn reads the shape once instead of
+ * sampling rows to guess at columns. Every collection is the public API of a `+model.ts`; the
+ * `note` says where the source lives for anyone with a file-reading tool.
+ */
+const WORKSPACE_NOTE =
+	"Collections are the public API. Each is declared in src/collections/<name>/+model.ts (columns) and +collection.ts (the write contract: input columns, transform, notifications); relations in src/collections/+relationship.ts; who may read or write what in src/access/policies/+<name>.ts and src/access/+teams.ts; apps in src/apps/+<name>.svelte; automations in src/automations/+<name>.ts. Read those files with a file-reading tool when this summary is not enough. read_collection accepts a page; write_collection takes the create/update columns listed here and answers with the stored row. A refusal names the transform rule that stopped the write. The system columns id, created_at, updated_at and row_version are the platform's.";
 
-const declaredSurface = (
-	definition: WorkspaceDefinition
-): Omit<DescribeWorkspaceResult, 'tools' | 'skills' | 'collections'> => ({
-	name: definition.name,
-	version: definition.version,
-	apps: definition.apps.map((app) => app.name),
-	automations: definition.automations.map((automation) => automation.name),
-	envoys: definition.envoys.map((envoy) => envoy.name),
-	integrations: definition.integrations.map((integration) => integration.name)
-});
+const SYSTEM_FIELD_NAMES: ReadonlyArray<string> = [
+	...SYSTEM_COLUMN_NAMES,
+	'search_document',
+	'embedded_at'
+];
+
+const describeField = (
+	name: string,
+	field: WorkspaceDefinition['collections'][number]['fields'][string],
+	relations: ReadonlyArray<RelationDefinition>
+): Schema.JsonObject => {
+	const edge = relations.find((relation) => relation.from?.column === name);
+	return {
+		name,
+		type: `${field.type}${(field as { readonly array?: true }).array === true ? '[]' : ''}`,
+		...(field.required ? { required: true } : {}),
+		...(field.values === undefined ? {} : { values: [...field.values] }),
+		...(edge === undefined ? {} : { references: edge.target }),
+		...(field.reference === undefined
+			? {}
+			: { references: field.reference.targets.map((target) => target.collection) }),
+		...(field.file === true ? { file: field.fileMultiple === true ? 'many' : 'one' } : {}),
+		...(field.generated === undefined && field.primaryKey !== true ? {} : { generated: true }),
+		...(field.search === true ? { searchable: true } : {})
+	};
+};
+
+const describeCollection = (
+	collection: WorkspaceDefinition['collections'][number],
+	definition: WorkspaceDefinition,
+	readable: boolean,
+	writable: boolean
+): Schema.JsonObject => {
+	const relations = definition.relations.filter((relation) => relation.source === collection.name);
+	const write = collection.write;
+	const columnsOf = (selection: CollectionInputSelection | undefined): Schema.JsonObject | null =>
+		selection === undefined
+			? null
+			: {
+					columns: Object.keys(selection.columns ?? {}),
+					...(selection.with === undefined ? {} : { relations: Object.keys(selection.with) })
+				};
+	const contract = (): Schema.JsonObject | null => {
+		if (write === undefined) return null;
+		const create = columnsOf(write.create);
+		const update = columnsOf(write.update);
+		return {
+			...(create === null ? {} : { create }),
+			...(update === null ? {} : { update }),
+			...(write.delete === true ? { delete: true } : {}),
+			...(write.hasTransform ? { transform: true } : {}),
+			...(write.similarity === undefined || write.similarity.length === 0
+				? {}
+				: { search: write.similarity.map((index) => `/${index.name}`) })
+		};
+	};
+	return {
+		name: collection.name,
+		...(collection.description === undefined ? {} : { description: collection.description }),
+		...(collection.recordLabel === undefined ? {} : { recordLabel: collection.recordLabel }),
+		...(collection.sourcePath === undefined ? {} : { source: collection.sourcePath }),
+		access: { read: readable, write: writable },
+		fields: Object.entries(collection.fields)
+			.filter(([name]) => !SYSTEM_FIELD_NAMES.includes(name))
+			.map(([name, field]) => describeField(name, field, relations)),
+		write: contract(),
+		...(collection.embedding === undefined ? {} : { search: ['/semantic'] }),
+		...(definition.integrations.some((integration) => integration.collection === collection.name)
+			? {
+					integrations: definition.integrations
+						.filter((integration) => integration.collection === collection.name)
+						.map((integration) => integration.name)
+				}
+			: {})
+	};
+};
+
+export const describeWorkspace = (
+	context: Pick<
+		ToolExecutionContext,
+		| 'workspace'
+		| 'collectionNames'
+		| 'readableCollectionNames'
+		| 'writableCollectionNames'
+		| 'toolNames'
+		| 'skills'
+	>
+): Schema.JsonObject => {
+	const definition = context.workspace.definition;
+	return {
+		name: definition.name,
+		version: definition.version,
+		note: WORKSPACE_NOTE,
+		collections: definition.collections
+			.filter(({ name }) => context.collectionNames.includes(name))
+			.map((collection) =>
+				describeCollection(
+					collection,
+					definition,
+					context.readableCollectionNames.includes(collection.name),
+					context.writableCollectionNames.includes(collection.name)
+				)
+			),
+		apps: definition.apps.map((app) => ({
+			name: app.name,
+			label: app.label,
+			...(app.description === undefined ? {} : { description: app.description }),
+			...(app.kiosk === true ? { kiosk: true } : {})
+		})),
+		automations: definition.automations.map((automation) => ({
+			name: automation.name,
+			...(automation.description === undefined ? {} : { description: automation.description }),
+			trigger:
+				automation.trigger._tag === 'Schedule'
+					? `schedule ${automation.trigger.cron}`
+					: automation.trigger._tag === 'Change'
+						? `${automation.trigger.collection} ${automation.trigger.event}`
+						: 'manual'
+		})),
+		envoys: definition.envoys.map((envoy) => envoy.name),
+		integrations: definition.integrations.map((integration) => ({
+			name: integration.name,
+			collection: integration.collection,
+			...(integration.receive.length > 0 ? { receives: integration.receive.length } : {}),
+			...(integration.webhooks.length > 0 ? { webhooks: integration.webhooks.length } : {}),
+			...(integration.send.length > 0 ? { sends: integration.send.length } : {})
+		})),
+		tools: context.toolNames,
+		skills: context.skills.map(({ name: skill }) => skill)
+	};
+};
 
 const TodoInput = Schema.Union([
 	Schema.Struct({ operation: Schema.Literal('read') }),
@@ -581,12 +702,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			return { checkpoint: 'scheduled', reason: parsed.reason };
 		}
 		case 'describe_workspace':
-			return {
-				...declaredSurface(context.workspace.definition),
-				collections: context.collectionNames,
-				tools: context.toolNames,
-				skills: context.skills.map(({ name: skill }) => skill)
-			} satisfies DescribeWorkspaceResult;
+			return describeWorkspace(context);
 		case 'list_skills':
 			return {
 				readTool: 'read_skill',
@@ -723,10 +839,16 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				{ collection: parsed.collection, action: parsed.operation, inputs: [submitted] }
 			]);
 			const written = commit.records[0];
+			// The stored row rides back, so a create or update is verified without a second read.
+			const record =
+				written === undefined || parsed.operation === 'delete'
+					? undefined
+					: (JSON.parse(JSON.stringify(written)) as Schema.Json);
 			return {
 				collection: parsed.collection,
 				id: parsed.id ?? (isString(written?.['id']) ? written['id'] : ''),
 				operation: parsed.operation,
+				...(record === undefined ? {} : { record }),
 				...(commit.pendingApproval === undefined ? {} : { pendingApproval: commit.pendingApproval })
 			};
 		}
