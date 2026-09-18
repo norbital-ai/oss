@@ -18,6 +18,7 @@ const definition = {
 			description: 'One customer enquiry.',
 			recordLabel: 'project_no',
 			sourcePath: 'src/collections/projects',
+			search: { documentColumn: 'search_document' },
 			fields: {
 				id: field('uuid', { required: true, primaryKey: true }),
 				created_at: field('instant', { required: true }),
@@ -87,8 +88,7 @@ describe('describe_workspace', () => {
 			name: 'projects',
 			description: 'One customer enquiry.',
 			label: 'project_no',
-			access: 'rw',
-			// System columns and the generated search document stay out; a field is one token.
+			// System columns and the search document stay out; a field is one token.
 			fields: [
 				'project_no:string!(search)',
 				'customer_id:uuid!->customers',
@@ -102,7 +102,6 @@ describe('describe_workspace', () => {
 		});
 		expect(customers).toEqual({
 			name: 'customers',
-			access: 'r-',
 			fields: ['name:string'],
 			write: null,
 			integrations: ['erp']

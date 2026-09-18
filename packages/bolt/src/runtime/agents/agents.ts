@@ -1260,7 +1260,7 @@ export const layer = Layer.effect(
 			const envoyMessaging =
 				agent.id !== WEB_AGENT_NAME &&
 				Option.isSome(yield* Effect.serviceOption(EnvoyInbox.Service));
-			const tools: ReadonlyArray<ToolDeclaration & { readonly hostReadOnly?: boolean }> = [
+			const tools: ReadonlyArray<ToolDeclaration> = [
 				...systemToolSpecs.filter(
 					(tool) =>
 						!authoredNames.has(tool.name) &&
@@ -1280,11 +1280,7 @@ export const layer = Layer.effect(
 							name !== PERSONAL_LIST_TOOL &&
 							name !== PERSONAL_READ_TOOL
 					)
-					.map(({ readOnly, ...tool }) => ({
-						...tool,
-						command: `host:${tool.name}`,
-						hostReadOnly: readOnly
-					})),
+					.map(({ readOnly: _readOnly, ...tool }) => ({ ...tool, command: `host:${tool.name}` })),
 				...authored
 			];
 			return isChild
@@ -2858,11 +2854,23 @@ export const layer = Layer.effect(
 
 		/**
 		 * Children in flight, by conversation. A spawn forks the child's run and returns at once, so
-		 * the parent keeps working — reading, messaging, spawning more — and `await` joins the fiber
-		 * when it wants the answer. The map is this process's memory of what it forked: a child
-		 * nobody holds a fiber for (a restart, a different host) is run inline by `await`, as before.
+		 * the parent keeps working — reading, messaging, spawning more — and `await` or the barrier
+		 * joins the fiber when it wants the answer. A child with no fiber here was forked by a process
+		 * that is gone; nothing drives it again, and saying so is the honest answer.
 		 */
 		const childRuns = new Map<ConversationId, Fiber.Fiber<Conversation, unknown>>();
+		const settleChild = Effect.fn('Agents.settleChild')(function* (child: Conversation) {
+			if (isSettled(child.status)) return child;
+			const running = childRuns.get(child.id);
+			if (running === undefined)
+				return yield* new TaskRuntimeError({
+					operation: 'children',
+					message: `Child conversation ${child.id} is ${child.status} but no run of it is held here; read its transcript or spawn again.`
+				});
+			return yield* Fiber.join(running).pipe(
+				Effect.ensuring(Effect.sync(() => childRuns.delete(child.id)))
+			);
+		});
 
 		const runChild = Effect.fn('Agents.runChild')(function* (
 			effectId: EffectId,
@@ -2916,17 +2924,8 @@ export const layer = Layer.effect(
 					if (result._tag === 'Some') consumed.add(result.value.conversationId);
 				}
 			}
-			/**
-			 * A child that has not run is run here, by its parent, before the barrier judges it.
-			 *
-			 * Nothing else would. A spawned child is a conversation with a queued message and no
-			 * caller sitting on it, and the runtime has exactly one driver of a turn — the request
-			 * that admitted the message. The parent is that request, one level up, so the parent is
-			 * the driver. This is what the durable occurrence used to be for, and the whole of what
-			 * it was for: `enqueueExecute` existed to give a child and a woken parent a caller.
-			 */
-			for (const child of children.filter(({ status }) => !isSettled(status)))
-				yield* runChild(EffectId.make(`${effectId}:child:${child.id}`), subject, child.id);
+			// A child still running is joined before the barrier judges it.
+			for (const child of children) yield* settleChild(child);
 			const unconsumed = children.filter(({ id }) => !consumed.has(id));
 			return unconsumed.length === 0
 				? { state: 'clear' as const }
@@ -3360,16 +3359,9 @@ export const layer = Layer.effect(
 						}),
 					awaitTarget: (actionId, childId) =>
 						Effect.gen(function* () {
-							const child = yield* requireOwnedConversation(actionId, subject, childId);
-							const running = childRuns.get(child.id);
-							// A forked child is joined; one this process never forked is run here, now.
-							const settled = isSettled(child.status)
-								? child
-								: running === undefined
-									? yield* runChild(actionId, subject, child.id)
-									: yield* Fiber.join(running).pipe(
-											Effect.ensuring(Effect.sync(() => childRuns.delete(child.id)))
-										);
+							const settled = yield* settleChild(
+								yield* requireOwnedConversation(actionId, subject, childId)
+							);
 							const childMessages = yield* messageRows(actionId, subject, settled.id);
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
 								state: settled.status,
@@ -3882,12 +3874,14 @@ export const layer = Layer.effect(
 					: run.mode === 'plan'
 						? [
 								planToolSpec,
-								...allTools.filter(
-									(tool) =>
-										(['describe_workspace', 'list_skills', 'read_skill'].includes(tool.name) &&
-											tool.command === `platform:${tool.name}`) ||
-										(tool.hostReadOnly === true &&
-											['workspace_read', 'agent_output_read'].includes(tool.name))
+								...allTools.filter((tool) =>
+									[
+										'describe_workspace',
+										'list_skills',
+										'read_skill',
+										'workspace_read',
+										'agent_output_read'
+									].includes(tool.name)
 								)
 							]
 						: allTools;

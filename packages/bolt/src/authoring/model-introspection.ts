@@ -251,9 +251,11 @@ const declaredColumnSql = (
 			isNumber(column.dimensions) ? column.dimensions : 0,
 			configOf(columns[name])?.dimensions ?? 0
 		);
-		const sqlType = declaredType.endsWith('[]')
-			? declaredType
-			: `${declaredType}${'[]'.repeat(Math.max(0, dimensions))}`;
+		// A pgvector column's `dimensions` is its width, not an array depth.
+		const sqlType =
+			declaredType.endsWith('[]') || declaredType.startsWith('vector(')
+				? declaredType
+				: `${declaredType}${'[]'.repeat(Math.max(0, dimensions))}`;
 		declared.set(name, {
 			sqlType,
 			...(sqlDefault === undefined ? {} : { sqlDefault })
@@ -301,9 +303,7 @@ export const describeModelColumns = (
 		fields[name] = {
 			type: scalarOf(config),
 			presentationKind: presentationOf(config),
-			...((isNumber(config.dimensions) && config.dimensions > 0) || sqlType?.includes('[]') === true
-				? { array: true }
-				: {}),
+			...(sqlType?.includes('[]') === true ? { array: true } : {}),
 			...(config.notNull === true ? { databaseNotNull: true } : {}),
 			// A generated column is never written, so `not null` on it is a constraint the runtime
 			// cannot satisfy and the database computes anyway.

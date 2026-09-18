@@ -1924,13 +1924,11 @@ export const layerWith = (
 										message: cause instanceof Error ? cause.message : String(cause)
 									})
 							});
-							const aimed = Array.isArray(answer)
-								? { column: declared.column, probe: answer as ReadonlyArray<number> }
-								: (answer as {
-										readonly column?: string;
-										readonly probe: ReadonlyArray<number>;
-										readonly where?: Readonly<Record<string, string | number | boolean | null>>;
-									});
+							const aimed = answer as {
+								readonly column?: string;
+								readonly probe: ReadonlyArray<number>;
+								readonly where?: Readonly<Record<string, string | number | boolean | null>>;
+							};
 							const column = aimed.column ?? declared.column;
 							if (!Object.hasOwn(definition.fields, column))
 								return yield* Effect.fail(
@@ -3666,12 +3664,8 @@ export const layerWith = (
 									catch: (cause) =>
 										declaredRefusal(collection, `similarity.${name}`, describeCause(cause))
 								});
-								// One vector for the index's column, or one per column when the index spans several.
-								const vectors: ReadonlyArray<readonly [string, ReadonlyArray<number> | null]> =
-									answer === null || Array.isArray(answer)
-										? [[index.column, answer as ReadonlyArray<number> | null]]
-										: Object.entries(answer as Record<string, ReadonlyArray<number> | null>);
-								for (const [column, vector] of vectors) {
+								// One vector per column the index spans; `null` leaves a row out of that column's ranking.
+								for (const [column, vector] of Object.entries(answer)) {
 									if (vector !== null && !vector.every((value) => Number.isFinite(value)))
 										return yield* Effect.fail(
 											declaredRefusal(

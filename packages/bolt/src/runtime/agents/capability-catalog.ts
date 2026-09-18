@@ -396,20 +396,15 @@ const decode = <S extends Schema.ConstraintDecoder<unknown>>(
 		Effect.mapError((error) => invalidToolInput(tool, error))
 	);
 
-/** The host's private-skill tools, reached through the one skill list and reader above. */
+/** The host's private-skill tools, reached through the one skill list and reader. */
 export const PERSONAL_LIST_TOOL = 'list_personal_skills';
 export const PERSONAL_READ_TOOL = 'read_personal_skill';
-type PersonalSkillEntry = Readonly<{ readonly name: string; readonly description?: string }>;
 const PersonalList = Schema.Struct({
 	skills: Schema.Array(
 		Schema.Struct({ name: Schema.String, description: Schema.optionalKey(Schema.String) })
 	)
 });
-const decodePersonalList = (output: unknown): ReadonlyArray<PersonalSkillEntry> =>
-	Option.getOrElse(Schema.decodeUnknownOption(PersonalList)(output), () => ({ skills: [] })).skills;
 const PersonalBody = Schema.Struct({ body: Schema.String });
-const decodePersonalBody = (output: unknown): string =>
-	Option.getOrElse(Schema.decodeUnknownOption(PersonalBody)(output), () => ({ body: '' })).body;
 
 export const READ_COLLECTION_RESULT_BYTE_LIMIT = 16 * 1024;
 
@@ -504,12 +499,6 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
 const WORKSPACE_NOTE =
 	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. id, created_at, updated_at, row_version are the platform's.";
 
-const SYSTEM_FIELD_NAMES: ReadonlyArray<string> = [
-	...SYSTEM_COLUMN_NAMES,
-	'search_document',
-	'embedded_at'
-];
-
 /** One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`. */
 const describeField = (
 	name: string,
@@ -530,7 +519,6 @@ const describeField = (
 		field.values === undefined ? '' : `=${field.values.join('|')}`,
 		targets.length === 0 ? '' : `->${targets.join('|')}`,
 		field.file === true ? (field.fileMultiple === true ? '(files)' : '(file)') : '',
-		field.generated === undefined && field.primaryKey !== true ? '' : '(generated)',
 		field.search === true ? '(search)' : ''
 	].join('');
 };
@@ -572,9 +560,16 @@ const describeCollection = (
 		name: collection.name,
 		...(collection.description === undefined ? {} : { description: collection.description }),
 		...(collection.recordLabel === undefined ? {} : { label: collection.recordLabel }),
-		access: `${readable ? 'r' : '-'}${writable ? 'w' : '-'}`,
 		fields: Object.entries(collection.fields)
-			.filter(([name]) => !SYSTEM_FIELD_NAMES.includes(name))
+			// The platform's own columns stay out: system, the search document, the embedding trio.
+			.filter(
+				([name]) =>
+					!SYSTEM_COLUMN_NAMES.includes(name) &&
+					name !== collection.search?.documentColumn &&
+					name !== collection.embedding?.vectorColumn &&
+					name !== collection.embedding?.embeddedAtColumn &&
+					name !== collection.embedding?.sourceFingerprintColumn
+			)
 			.map(([name, field]) => describeField(name, field, relations)),
 		write: contract(),
 		...(search.length === 0 ? {} : { search }),
@@ -723,10 +718,9 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		 */
 		case 'list_skills': {
 			const personal = context.toolNames.includes(PERSONAL_LIST_TOOL)
-				? yield* executeHostTool(PERSONAL_LIST_TOOL, {}, context).pipe(
-						Effect.map((output) => decodePersonalList(output)),
-						Effect.catch(() => Effect.succeed([] as ReadonlyArray<PersonalSkillEntry>))
-					)
+				? (yield* Schema.decodeUnknownEffect(PersonalList)(
+						yield* executeHostTool(PERSONAL_LIST_TOOL, {}, context)
+					).pipe(Effect.mapError((error) => invalidToolInput(PERSONAL_LIST_TOOL, error)))).skills
 				: [];
 			return {
 				readTool: 'read_skill',
@@ -743,8 +737,10 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			const parsed = yield* decode(name, SkillNameInput, input);
 			const own = context.skills.some((skill) => skill.name === parsed.name);
 			if (!own && context.toolNames.includes(PERSONAL_READ_TOOL)) {
-				const output = yield* executeHostTool(PERSONAL_READ_TOOL, { name: parsed.name }, context);
-				return { name: parsed.name, body: decodePersonalBody(output), scope: 'personal' };
+				const { body } = yield* Schema.decodeUnknownEffect(PersonalBody)(
+					yield* executeHostTool(PERSONAL_READ_TOOL, { name: parsed.name }, context)
+				).pipe(Effect.mapError((error) => invalidToolInput(PERSONAL_READ_TOOL, error)));
+				return { name: parsed.name, body, scope: 'personal' };
 			}
 			const body = yield* readSkillBody(context.skills, parsed.name);
 			return { name: parsed.name, body };

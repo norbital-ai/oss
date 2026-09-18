@@ -89,16 +89,18 @@ const physicalSelection = (
 	return selection;
 };
 
+/** The fields the read decodes on the way out: reference arms and vectors, which the wire carries as text. */
 const decodableReferences = (
 	fields: Readonly<Record<string, FieldDefinition>>,
 	selection: Readonly<Record<string, true>> | undefined
 ): Readonly<Record<string, FieldDefinition>> =>
 	Object.fromEntries(
-		Object.entries(fields).filter(
-			([, field]) =>
-				field.reference !== undefined &&
-				(selection === undefined ||
-					field.reference.targets.every((target) => selection[target.storageColumn] === true))
+		Object.entries(fields).filter(([name, field]) =>
+			field.sqlType?.toLowerCase().startsWith('vector(') === true
+				? selection === undefined || selection[name] === true
+				: field.reference !== undefined &&
+					(selection === undefined ||
+						field.reference.targets.every((target) => selection[target.storageColumn] === true))
 		)
 	);
 

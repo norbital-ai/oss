@@ -82,21 +82,58 @@ const insertableEntries = (
 ): ReadonlyArray<readonly [string, unknown]> =>
 	Object.entries(row).filter(([, value]) => value !== undefined && !(value instanceof Uint8Array));
 
+/**
+ * The vector columns of a table, read once per stage. A JSON array is bound as a Postgres array
+ * (`{…}`) by every driver, which a `vector` column refuses; those columns take the array as
+ * pgvector's own text (`[…]`) instead, so a seed row states a reading as numbers.
+ */
+const vectorColumns = async (
+	stage: string,
+	query: PublicSeedQuery
+): Promise<ReadonlySet<string>> => {
+	const answer = await query(
+		'SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND udt_name = $2',
+		[stage, 'vector']
+	);
+	const rows = Array.isArray(answer)
+		? answer
+		: answer !== null &&
+			  typeof answer === 'object' &&
+			  Array.isArray((answer as { rows?: unknown }).rows)
+			? (answer as { rows: unknown[] }).rows
+			: [];
+	return new Set(
+		rows.flatMap((row) =>
+			row !== null &&
+			typeof row === 'object' &&
+			typeof (row as { column_name?: unknown }).column_name === 'string'
+				? [(row as { column_name: string }).column_name]
+				: []
+		)
+	);
+};
+
 const insertRow = async (
 	stage: string,
 	row: Readonly<Record<string, unknown>>,
-	query: PublicSeedQuery
+	query: PublicSeedQuery,
+	vectors: Map<string, Promise<ReadonlySet<string>>>
 ): Promise<void> => {
 	rowId(row, stage);
 	const entries = insertableEntries(row);
 	if (entries.length === 0) {
 		throw new Error(`loadPublicSeed requires columns on each ${stage} row`);
 	}
+	// Read once per stage, after the first row passed — a refused row never reaches the database.
+	const vectorNames = await (vectors.get(stage) ??
+		vectors.set(stage, vectorColumns(stage, query)).get(stage)!);
 	const columns = entries.map(([name]) => quoteIdent(name)).join(', ');
 	const placeholders = entries.map((_, index) => `$${index + 1}`).join(', ');
 	// repository-health:allow SQL1 -- fixture seeder runs through the host query facility it is handed; pre-bootstrap seed rows have no collection client to route through, and every value stays a bound parameter.
 	await query(`INSERT INTO ${quoteIdent(stage)} (${columns}) VALUES (${placeholders})`, [
-		...entries.map(([, value]) => value)
+		...entries.map(([name, value]) =>
+			vectorNames.has(name) && Array.isArray(value) ? JSON.stringify(value) : value
+		)
 	]);
 };
 
@@ -166,10 +203,11 @@ export async function loadPublicSeed(input: LoadPublicSeedInput): Promise<void> 
 		refuseIfBank(stage);
 	}
 	const records = await resolveRecords(source, input.stages);
+	const vectors = new Map<string, Promise<ReadonlySet<string>>>();
 	for (const stage of input.stages) {
 		for (const row of records[stage] ?? []) {
 			// repository-health:allow A6 -- rows insert in stage and row order so foreign keys resolve; the order is the loader's contract.
-			await insertRow(stage, row, input.query);
+			await insertRow(stage, row, input.query, vectors);
 		}
 	}
 }

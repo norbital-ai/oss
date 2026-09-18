@@ -30,9 +30,13 @@ describe('similarity index declarations', () => {
 							lab_a?: unknown;
 							lab_b?: unknown;
 						};
-						return lab_l == null ? null : [Number(lab_l), Number(lab_a), Number(lab_b)];
+						return {
+							lab_vector: lab_l == null ? null : [Number(lab_l), Number(lab_a), Number(lab_b)]
+						};
 					},
-					target: (input) => [Number(input['l']), Number(input['a']), Number(input['b'])]
+					target: (input) => ({
+						probe: [Number(input['l']), Number(input['a']), Number(input['b'])]
+					})
 				}
 			}
 		});
@@ -61,8 +65,8 @@ describe('similarity index declarations', () => {
 					Colour: {
 						column: 'lab_vector',
 						input: { l: { kind: 'number' } },
-						embed: () => null,
-						target: () => []
+						embed: () => ({}),
+						target: () => ({ probe: [] })
 					}
 				}
 			})
@@ -71,7 +75,12 @@ describe('similarity index declarations', () => {
 			defineCollection({
 				model,
 				similarity: {
-					colour: { column: 'lab_vector', input: {}, embed: () => null, target: () => [] }
+					colour: {
+						column: 'lab_vector',
+						input: {},
+						embed: () => ({}),
+						target: () => ({ probe: [] })
+					}
 				}
 			})
 		).toThrow(/at least one control/);
@@ -82,8 +91,8 @@ describe('similarity index declarations', () => {
 					colour: {
 						column: 'lab_vector',
 						input: { base: { kind: 'reference' } },
-						embed: () => null,
-						target: () => []
+						embed: () => ({}),
+						target: () => ({ probe: [] })
 					}
 				}
 			})
@@ -95,8 +104,8 @@ describe('similarity index declarations', () => {
 					semantic: {
 						column: 'lab_vector',
 						input: { l: { kind: 'number' } },
-						embed: () => null,
-						target: () => []
+						embed: () => ({}),
+						target: () => ({ probe: [] })
 					}
 				}
 			})
@@ -109,8 +118,8 @@ describe('similarity index declarations', () => {
 						column: 'lab_vector',
 						metric: 'hamming' as never,
 						input: { l: { kind: 'number' } },
-						embed: () => null,
-						target: () => []
+						embed: () => ({}),
+						target: () => ({ probe: [] })
 					}
 				}
 			})
@@ -122,7 +131,7 @@ describe('similarity index declarations', () => {
 					colour: {
 						column: 'lab_vector',
 						input: { l: { kind: 'number' } },
-						embed: () => null
+						embed: () => ({})
 					} as never
 				}
 			})

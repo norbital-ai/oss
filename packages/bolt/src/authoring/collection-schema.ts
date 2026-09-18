@@ -309,7 +309,7 @@ export type SimilarityInputField = Readonly<{
 }>;
 
 /** The search commands every collection offers itself; no declared index may take their names. */
-export const RESERVED_SEARCH_COMMANDS: ReadonlyArray<string> = ['text', 'semantic', 'lexical'];
+export const RESERVED_SEARCH_COMMANDS: ReadonlyArray<string> = ['text', 'semantic'];
 
 export const SIMILARITY_METRICS = ['l2', 'cosine', 'ip'] as const;
 export type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
@@ -338,16 +338,14 @@ export type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclara
 	readonly metric?: SimilarityMetric;
 	/** The capture form: one control per key, rendered in this order. */
 	readonly input: Readonly<Record<string, SimilarityInputField>>;
-	readonly embed: (
-		row: RowFor<M>
-	) => ReadonlyArray<number> | null | Readonly<Record<string, ReadonlyArray<number> | null>>;
-	readonly target: (input: Readonly<Record<string, unknown>>) =>
-		| ReadonlyArray<number>
-		| Readonly<{
-				readonly column?: string;
-				readonly probe: ReadonlyArray<number>;
-				readonly where?: Readonly<Record<string, string | number | boolean | null>>;
-		  }>;
+	/** The vector for each column the index spans, keyed by column; `null` leaves the row unranked there. */
+	readonly embed: (row: RowFor<M>) => Readonly<Record<string, ReadonlyArray<number> | null>>;
+	/** The probe; the column it is measured against when not `column`; equalities that narrow. */
+	readonly target: (input: Readonly<Record<string, unknown>>) => Readonly<{
+		readonly column?: string;
+		readonly probe: ReadonlyArray<number>;
+		readonly where?: Readonly<Record<string, string | number | boolean | null>>;
+	}>;
 	readonly rerank?: (input: Readonly<Record<string, unknown>>, row: RowFor<M>) => number;
 }>;
 

@@ -25,9 +25,9 @@
 	 * A delimited-number field: a few numbers that belong together, keyed in one motion.
 	 *
 	 * The OTP pattern for decimals — one bordered group, one cell per number with its label as a
-	 * prefix, the keyboard doing the walking: `,` `;` `/` space, Tab or Enter moves to the next
-	 * cell, Backspace on an empty cell moves back, arrows cross the cell edges, and a pasted
-	 * `62.4, 18.1, 12.9` fills every cell at once. A reading, a tolerance, a coordinate — anything
+	 * prefix, the keyboard doing the walking: a typed `,` `;` `/` or space, Tab or Enter moves to
+	 * the next cell, Backspace on an empty cell moves back, arrows cross the cell edges, and a
+	 * pasted `62.4, 18.1, 12.9` fills every cell at once. A reading, a tolerance, a coordinate — anything
 	 * a person reads off an instrument as one line.
 	 */
 	import { cn } from '#lib/utils';
@@ -109,44 +109,24 @@
 	};
 	/** Puts the caret in the first cell — what a form or a search box does once the field appears. */
 	export const focusFirst = (): void => focus(0);
+	/** Enter walks on, Backspace on an empty cell walks back, arrows cross the cell edges; a typed
+	 * delimiter is handled by the input path, so a paste needs no handler of its own. */
 	const onKeydown = (index: number, event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
 		const input = event.currentTarget;
 		const last = index === segments.length - 1;
-		if ([',', ';', '/', ' ', 'Enter'].includes(event.key) && !last) {
-			event.preventDefault();
-			focus(index + 1);
-			return;
-		}
-		if (event.key === 'Backspace' && input.value === '' && index > 0) {
-			event.preventDefault();
-			focus(index - 1);
-			return;
-		}
-		if (event.key === 'ArrowRight' && !last && input.selectionStart === input.value.length) {
-			event.preventDefault();
-			focus(index + 1);
-			return;
-		}
-		if (event.key === 'ArrowLeft' && index > 0 && input.selectionStart === 0) {
-			event.preventDefault();
-			focus(index - 1);
-		}
-	};
-	const onPaste = (index: number, event: ClipboardEvent) => {
-		const pasted = splitNumbers(event.clipboardData?.getData('text') ?? '');
-		if (pasted.length < 2) return;
+		const step =
+			event.key === 'Enter' && !last
+				? 1
+				: event.key === 'Backspace' && input.value === '' && index > 0
+					? -1
+					: event.key === 'ArrowRight' && !last && input.selectionStart === input.value.length
+						? 1
+						: event.key === 'ArrowLeft' && index > 0 && input.selectionStart === 0
+							? -1
+							: 0;
+		if (step === 0) return;
 		event.preventDefault();
-		const next: Record<string, number | null> = { ...value };
-		const nextDrafts: Record<string, string> = { ...drafts };
-		for (const [offset, token] of pasted.entries()) {
-			const segment = segments[index + offset];
-			if (segment === undefined) break;
-			next[segment.name] = Number(token);
-			nextDrafts[segment.name] = token;
-		}
-		drafts = nextDrafts;
-		onchange(next);
-		focus(Math.min(segments.length - 1, index + pasted.length));
+		focus(index + step);
 	};
 	const sizes = { sm: 'h-8 text-xs', md: 'h-9 text-sm' };
 </script>
@@ -184,7 +164,6 @@
 				step={segment.step}
 				oninput={(event) => onInput(index, event.currentTarget.value)}
 				onkeydown={(event) => onKeydown(index, event)}
-				onpaste={(event) => onPaste(index, event)}
 			/>
 		</label>
 	{/each}

@@ -102,8 +102,9 @@ describe('loadPublicSeed', () => {
 				}
 			});
 		});
-		assert.equal(statements.length, 1);
-		assert.match(statements[0] ?? '', /INSERT INTO "people"/);
+		const inserts = statements.filter((statement) => statement.startsWith('INSERT'));
+		assert.equal(inserts.length, 1);
+		assert.match(inserts[0] ?? '', /INSERT INTO "people"/);
 	});
 
 	it('inserts an in-memory public tree through query in stage order', async () => {
@@ -119,20 +120,36 @@ describe('loadPublicSeed', () => {
 				calls.push({ statement, parameters: [...(parameters ?? [])] });
 			}
 		});
+		const inserts = calls.filter((call) => call.statement.startsWith('INSERT'));
 		assert.deepEqual(
-			calls.map((call) => call.statement),
+			inserts.map((call) => call.statement),
 			[
 				'INSERT INTO "authors" ("id", "name") VALUES ($1, $2)',
 				'INSERT INTO "notes" ("id", "body") VALUES ($1, $2)'
 			]
 		);
 		assert.deepEqual(
-			calls.map((call) => call.parameters),
+			inserts.map((call) => call.parameters),
 			[
 				['a-1', 'Ada'],
 				['n-1', 'hello']
 			]
 		);
+	});
+
+	it('binds a vector column as pgvector text and any other array as itself', async () => {
+		const calls: Array<{ readonly statement: string; readonly parameters: readonly unknown[] }> =
+			[];
+		await loadPublicSeed({
+			stages: ['trials'],
+			rows: { trials: [{ id: 't-1', reading: [1, 2, 3], tags: ['a', 'b'] }] },
+			query: async (statement, parameters) => {
+				calls.push({ statement, parameters: [...(parameters ?? [])] });
+				return statement.startsWith('SELECT') ? [{ column_name: 'reading' }] : [];
+			}
+		});
+		const insert = calls.find((call) => call.statement.startsWith('INSERT'));
+		assert.deepEqual(insert?.parameters, ['t-1', '[1,2,3]', ['a', 'b']]);
 	});
 
 	it('refuses a public row that has no id', async () => {

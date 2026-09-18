@@ -90,34 +90,26 @@
 	type Command = Readonly<{
 		name: string;
 		label: string;
-		kind: Mode['kind'];
-		index?: CollectionSimilarityIndex;
-		/** Listed but not choosable, with the reason. */
+		/** The mode choosing it enters; `unavailable` lists it greyed with the reason instead. */
+		mode: Mode;
 		unavailable?: string;
 	}>;
 	const commands = $derived<readonly Command[]>([
-		{ name: 'text', label: t('table.searchModeText'), kind: 'lexical' },
 		{
 			name: 'semantic',
 			label: t('table.searchModeSemantic'),
-			kind: 'semantic',
+			mode: { kind: 'semantic' },
 			...(semantic ? {} : { unavailable: t('table.searchSemanticUnavailable') })
 		},
 		...similarity.map((index) => ({
 			name: index.name,
 			label: index.label ?? humanize(index.name),
-			kind: 'nearest' as const,
-			index
+			mode: { kind: 'nearest' as const, index }
 		}))
 	]);
 	const modeOf = (name: string): Mode | undefined => {
 		const command = commands.find((candidate) => candidate.name === name);
-		if (command === undefined) return undefined;
-		return command.kind === 'nearest' && command.index !== undefined
-			? { kind: 'nearest', index: command.index }
-			: command.kind === 'nearest'
-				? undefined
-				: { kind: command.kind };
+		return command === undefined || command.unavailable !== undefined ? undefined : command.mode;
 	};
 
 	// svelte-ignore state_referenced_locally -- the box owns its draft independently of query refreshes.
@@ -142,10 +134,9 @@
 			? []
 			: commands.filter(
 					(command) =>
-						command.name !== 'text' &&
-						(commandDraft === '' ||
-							command.name.startsWith(commandDraft) ||
-							command.label.toLowerCase().includes(commandDraft))
+						commandDraft === '' ||
+						command.name.startsWith(commandDraft) ||
+						command.label.toLowerCase().includes(commandDraft)
 				)
 	);
 	/** The choice Enter takes: the first listed command that can be chosen. */
@@ -179,8 +170,7 @@
 
 	const choose = (name: string): void => {
 		const next = modeOf(name);
-		if (next === undefined || commands.find((c) => c.name === name)?.unavailable !== undefined)
-			return;
+		if (next === undefined) return;
 		mode = next;
 		term = '';
 		target = next.kind === 'nearest' ? seeded(next.index) : {};
@@ -246,9 +236,7 @@
 	export const active = (): boolean =>
 		mode.kind === 'nearest' ? Object.keys(target).length > 0 : term.trim() !== '';
 	export const modeLabel = (): string | null =>
-		mode.kind === 'lexical'
-			? null
-			: `/${commands.find((c) => c.kind === mode.kind && (mode.kind !== 'nearest' || c.name === mode.index.name))?.name ?? mode.kind}`;
+		mode.kind === 'lexical' ? null : `/${mode.kind === 'nearest' ? mode.index.name : 'semantic'}`;
 </script>
 
 <Stack gap="xs">
@@ -369,7 +357,7 @@
 							<span class="truncate text-xs text-muted-foreground">· {command.unavailable}</span>
 						{/if}
 						<Icon
-							icon={command.kind === 'semantic' ? 'lucide:sparkles' : 'lucide:scan-search'}
+							icon={command.mode.kind === 'semantic' ? 'lucide:sparkles' : 'lucide:scan-search'}
 							class="ml-auto size-3.5 shrink-0 text-muted-foreground"
 							aria-hidden="true"
 						/>
