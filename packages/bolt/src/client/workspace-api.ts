@@ -169,18 +169,17 @@ type ClientCommandName = FixedCommandName | `invoke.${string}`;
 type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
 
 /**
- * A cursor page is one-shot, and so is a ranked search the replica cannot answer: a semantic or
- * nearest command is planned against the server's index and read once, the way the engine admits
- * it (`vector-nearest ordering is one-shot`), rather than mounted as a live prefix it would refuse.
+ * A cursor page is one-shot, and so is a nearest search: it is planned against the server's index
+ * and read once, the way the engine admits it (`vector-nearest ordering is one-shot`), rather than
+ * mounted as a live prefix the sync lane would refuse. A semantic search stays live; the lane
+ * carries that arm.
  */
 const collectionReadMode = (
 	after: Schema.Json | undefined,
 	search: Schema.Json | undefined
 ): CollectionReadMode => {
 	const mode = isRecord(search) ? search['mode'] : undefined;
-	return after === undefined && mode !== 'semantic' && mode !== 'nearest'
-		? { kind: 'live' }
-		: { kind: 'anchored' };
+	return after === undefined && mode !== 'nearest' ? { kind: 'live' } : { kind: 'anchored' };
 };
 
 const decodedCommandEffect = <Name extends FixedCommandName, Output extends Schema.Top>(
