@@ -92,6 +92,19 @@ describe('similarity index declarations', () => {
 			defineCollection({
 				model,
 				similarity: {
+					semantic: {
+						column: 'lab_vector',
+						input: { l: { kind: 'number' } },
+						embed: () => null,
+						target: () => []
+					}
+				}
+			})
+		).toThrow(/platform's own search command/);
+		expect(() =>
+			defineCollection({
+				model,
+				similarity: {
 					colour: {
 						column: 'lab_vector',
 						metric: 'hamming' as never,

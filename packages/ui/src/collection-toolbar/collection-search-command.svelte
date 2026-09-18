@@ -81,11 +81,28 @@
 		return typeof value === 'string' && value !== '' ? value : String(record.id ?? '');
 	};
 
-	const commands = $derived([
-		{ name: 'text', label: t('table.searchModeText'), kind: 'lexical' as const },
-		...(semantic
-			? [{ name: 'semantic', label: t('table.searchModeSemantic'), kind: 'semantic' as const }]
-			: []),
+	/**
+	 * `/text` and `/semantic` are the platform's own, listed on every collection: the built-in
+	 * search by meaning is one command everywhere, greyed where the model declares no embedding
+	 * rather than absent, so the box reads the same on every table. Declared indexes may not take
+	 * those names (`defineCollection` refuses them).
+	 */
+	type Command = Readonly<{
+		name: string;
+		label: string;
+		kind: Mode['kind'];
+		index?: CollectionSimilarityIndex;
+		/** Listed but not choosable, with the reason. */
+		unavailable?: string;
+	}>;
+	const commands = $derived<readonly Command[]>([
+		{ name: 'text', label: t('table.searchModeText'), kind: 'lexical' },
+		{
+			name: 'semantic',
+			label: t('table.searchModeSemantic'),
+			kind: 'semantic',
+			...(semantic ? {} : { unavailable: t('table.searchSemanticUnavailable') })
+		},
 		...similarity.map((index) => ({
 			name: index.name,
 			label: index.label ?? humanize(index.name),
@@ -96,9 +113,11 @@
 	const modeOf = (name: string): Mode | undefined => {
 		const command = commands.find((candidate) => candidate.name === name);
 		if (command === undefined) return undefined;
-		return command.kind === 'nearest'
+		return command.kind === 'nearest' && command.index !== undefined
 			? { kind: 'nearest', index: command.index }
-			: { kind: command.kind };
+			: command.kind === 'nearest'
+				? undefined
+				: { kind: command.kind };
 	};
 
 	// svelte-ignore state_referenced_locally -- the box owns its draft independently of query refreshes.
@@ -129,6 +148,8 @@
 							command.label.toLowerCase().includes(commandDraft))
 				)
 	);
+	/** The choice Enter takes: the first listed command that can be chosen. */
+	const firstChoice = $derived(commandChoices.find((command) => command.unavailable === undefined));
 
 	const commit = debounce((command: CollectionSearch | null) => onChange(command), 180);
 	onDestroy(() => commit.cancel());
@@ -158,7 +179,8 @@
 
 	const choose = (name: string): void => {
 		const next = modeOf(name);
-		if (next === undefined) return;
+		if (next === undefined || commands.find((c) => c.name === name)?.unavailable !== undefined)
+			return;
 		mode = next;
 		term = '';
 		target = next.kind === 'nearest' ? seeded(next.index) : {};
@@ -176,9 +198,9 @@
 	};
 
 	const onKeydown = (event: KeyboardEvent): void => {
-		if (commandDraft !== null && event.key === 'Enter' && commandChoices[0] !== undefined) {
+		if (commandDraft !== null && event.key === 'Enter') {
 			event.preventDefault();
-			choose(commandChoices[0].name);
+			if (firstChoice !== undefined) choose(firstChoice.name);
 			return;
 		}
 		if (event.key === 'Backspace' && term === '' && mode.kind !== 'lexical') {
@@ -332,15 +354,20 @@
 					<button
 						type="button"
 						role="option"
-						aria-selected={command === commandChoices[0]}
+						aria-selected={command === firstChoice}
+						aria-disabled={command.unavailable !== undefined}
 						class={cn(
 							'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent',
-							command === commandChoices[0] && 'bg-accent'
+							command === firstChoice && 'bg-accent',
+							command.unavailable !== undefined && 'cursor-default opacity-50 hover:bg-transparent'
 						)}
 						onclick={() => choose(command.name)}
 					>
 						<span class="font-mono text-xs text-muted-foreground">/{command.name}</span>
 						<span class="truncate">{command.label}</span>
+						{#if command.unavailable !== undefined}
+							<span class="truncate text-xs text-muted-foreground">· {command.unavailable}</span>
+						{/if}
 						<Icon
 							icon={command.kind === 'semantic' ? 'lucide:sparkles' : 'lucide:scan-search'}
 							class="ml-auto size-3.5 shrink-0 text-muted-foreground"
@@ -352,7 +379,7 @@
 				<li class="px-2 py-1.5 text-muted-foreground">{t('table.searchNoCommand')}</li>
 			{/each}
 		</ul>
-	{:else if mode.kind === 'lexical' && (semantic || similarity.length > 0) && term === ''}
+	{:else if mode.kind === 'lexical' && term === ''}
 		<p class="text-meta">{t('table.searchModeHint')}</p>
 	{/if}
 </Stack>
