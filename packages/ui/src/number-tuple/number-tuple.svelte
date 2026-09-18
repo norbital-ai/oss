@@ -63,11 +63,42 @@
 		return current == null ? '' : String(current);
 	};
 
-	const commit = (name: string, raw: string): void => {
-		drafts = { ...drafts, [name]: raw };
+	const parse = (raw: string): number | null => {
 		const trimmed = raw.trim();
 		const number = trimmed === '' ? null : Number(trimmed);
-		onchange({ ...value, [name]: number !== null && Number.isFinite(number) ? number : null });
+		return number !== null && Number.isFinite(number) ? number : null;
+	};
+	const commit = (name: string, raw: string): void => {
+		drafts = { ...drafts, [name]: raw };
+		onchange({ ...value, [name]: parse(raw) });
+	};
+	/**
+	 * Typed input, delimiter included: a keyboard that inserts text rather than sending a keydown
+	 * (a phone, an IME, a tool) still walks the cells — `62.4 ` moves on, `62.4 18.1` fills two.
+	 */
+	const onInput = (index: number, raw: string): void => {
+		const name = segments[index]?.name;
+		if (name === undefined) return;
+		if (!/[;,·|/\s]/u.test(raw)) {
+			commit(name, raw);
+			return;
+		}
+		const tokens = splitNumbers(raw);
+		const next: Record<string, number | null> = { ...value };
+		const nextDrafts: Record<string, string> = { ...drafts };
+		for (const [offset, token] of tokens.entries()) {
+			const segment = segments[index + offset];
+			if (segment === undefined) break;
+			next[segment.name] = Number(token);
+			nextDrafts[segment.name] = token;
+		}
+		if (tokens.length === 0) nextDrafts[name] = '';
+		drafts = nextDrafts;
+		// The draft may not have changed (`62.4` then `62.4 `), so the cell is written directly.
+		const cell = cells[index];
+		if (cell) cell.value = nextDrafts[name] ?? '';
+		onchange(next);
+		focus(Math.min(segments.length - 1, index + Math.max(1, tokens.length)));
 	};
 	const focus = (index: number): void => {
 		const cell = cells[index];
@@ -76,6 +107,8 @@
 			cell.select();
 		}
 	};
+	/** Puts the caret in the first cell — what a form or a search box does once the field appears. */
+	export const focusFirst = (): void => focus(0);
 	const onKeydown = (index: number, event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
 		const input = event.currentTarget;
 		const last = index === segments.length - 1;
@@ -129,7 +162,9 @@
 	role="group"
 >
 	{#each segments as segment, index (segment.name)}
-		<label class="flex min-w-0 flex-1 items-center gap-1 px-2">
+		<!-- `size=1` keeps a cell's demand at its digits, not a text input's 20-character default,
+		     so three cells never squeeze each other's input to nothing; the floor keeps room for one. -->
+		<label class="flex min-w-[4.5rem] flex-1 items-center gap-1 px-2">
 			<span class="shrink-0 text-muted-foreground select-none">{segment.label}</span>
 			<input
 				bind:this={cells[index]}
@@ -138,7 +173,8 @@
 				inputmode="decimal"
 				autocomplete="off"
 				spellcheck="false"
-				class="min-w-0 flex-1 bg-transparent text-right tabular-nums outline-none placeholder:text-muted-foreground/60"
+				size={1}
+				class="w-full min-w-0 flex-1 bg-transparent text-right tabular-nums outline-none placeholder:text-muted-foreground/60"
 				value={text(segment.name)}
 				placeholder={segment.placeholder ?? ''}
 				aria-label={segment.label}
@@ -146,7 +182,7 @@
 				min={segment.min}
 				max={segment.max}
 				step={segment.step}
-				oninput={(event) => commit(segment.name, event.currentTarget.value)}
+				oninput={(event) => onInput(index, event.currentTarget.value)}
 				onkeydown={(event) => onKeydown(index, event)}
 				onpaste={(event) => onPaste(index, event)}
 			/>

@@ -115,12 +115,14 @@
 				</Indicator>
 			{/snippet}
 		</Popover.Trigger>
-		<Popover.Content align="start" class="w-[min(calc(100vw-1rem),24rem)] p-2">
+		<!-- Wide enough for a capture form on one line: a chip, two selectors, three numbers, Clear. -->
+		<Popover.Content align="start" class="w-[min(calc(100vw-1rem),46rem)] p-2">
 			<CollectionSearchCommand
 				bind:this={box}
 				{placeholder}
 				{semantic}
 				{similarity}
+				{collections}
 				initial={initialSearch}
 				{disabled}
 				onChange={changed}

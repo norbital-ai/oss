@@ -35,6 +35,8 @@ export type NearestProbe = Readonly<{
 	readonly column: string;
 	readonly operator: '<->' | '<=>' | '<#>';
 	readonly probe: ReadonlyArray<number>;
+	/** Equalities on the collection's own columns the target narrows by, beside the ranking. */
+	readonly where?: Readonly<Record<string, string | number | boolean | null>>;
 }>;
 
 export type SearchContext = Readonly<{
@@ -279,13 +281,18 @@ export const compileNearestSearch = (
 	const column = qualifiedColumn(context, nearest.column);
 	const probeSql = sql`${vectorLiteral(nearest.probe)}::vector`;
 	const distance = sql<number>`${column} ${sql.raw(nearest.operator)} ${probeSql}`;
+	const narrowed = Object.entries(nearest.where ?? {}).map(([name, value]) =>
+		value === null
+			? sql`${qualifiedColumn(context, name)} is null`
+			: sql`${qualifiedColumn(context, name)} = ${value}`
+	);
 	return Result.succeed({
 		mode: 'nearest',
 		index,
 		target,
 		column: nearest.column,
 		probe: nearest.probe,
-		predicate: conjunction([context.basePredicate, sql`${column} is not null`]),
+		predicate: conjunction([context.basePredicate, sql`${column} is not null`, ...narrowed]),
 		distance,
 		orderBy: [{ expression: distance, direction: 'asc' }],
 		corpusRelative: true,

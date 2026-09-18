@@ -81,6 +81,19 @@ describe('similarity index declarations', () => {
 				similarity: {
 					colour: {
 						column: 'lab_vector',
+						input: { base: { kind: 'reference' } },
+						embed: () => null,
+						target: () => []
+					}
+				}
+			})
+		).toThrow(/reference with no collection/);
+		expect(() =>
+			defineCollection({
+				model,
+				similarity: {
+					colour: {
+						column: 'lab_vector',
 						metric: 'hamming' as never,
 						input: { l: { kind: 'number' } },
 						embed: () => null,

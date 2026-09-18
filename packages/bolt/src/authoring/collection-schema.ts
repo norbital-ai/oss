@@ -296,8 +296,12 @@ export type CollectionTransform<M extends ModelDeclaration, Input> = (
 /** One control of a similarity index's capture form: what the browser shows to state a target. */
 export type SimilarityInputField = Readonly<{
 	readonly label?: string;
-	readonly kind: 'number' | 'text' | 'enum';
+	/** `reference` picks one record of `collection` — a condition the search narrows by. */
+	readonly kind: 'number' | 'text' | 'enum' | 'reference';
 	readonly values?: ReadonlyArray<string>;
+	readonly collection?: string;
+	/** Equalities that narrow which records a `reference` control offers. */
+	readonly where?: Readonly<Record<string, string | number | boolean>>;
 	readonly min?: number;
 	readonly max?: number;
 	readonly step?: number;
@@ -319,7 +323,9 @@ export type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
  *
  * A domain whose "nearest" depends on a condition the form states — a colour under one light, a
  * position in one frame — keeps one vector column per condition: `embed` then returns every
- * column's vector at once, and `target` names the column the probe is measured against.
+ * column's vector at once, and `target` names the column the probe is measured against. A
+ * condition that narrows rather than re-measures — the base a colour is moulded in — is a `where`
+ * on the target: equalities on the collection's own columns, applied beside the ranking.
  */
 export type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclaration> = Readonly<{
 	readonly label?: string;
@@ -331,15 +337,14 @@ export type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclara
 	readonly input: Readonly<Record<string, SimilarityInputField>>;
 	readonly embed: (
 		row: RowFor<M>
-	) =>
+	) => ReadonlyArray<number> | null | Readonly<Record<string, ReadonlyArray<number> | null>>;
+	readonly target: (input: Readonly<Record<string, unknown>>) =>
 		| ReadonlyArray<number>
-		| null
-		| Readonly<Record<string, ReadonlyArray<number> | null>>;
-	readonly target: (
-		input: Readonly<Record<string, unknown>>
-	) =>
-		| ReadonlyArray<number>
-		| Readonly<{ readonly column: string; readonly probe: ReadonlyArray<number> }>;
+		| Readonly<{
+				readonly column?: string;
+				readonly probe: ReadonlyArray<number>;
+				readonly where?: Readonly<Record<string, string | number | boolean | null>>;
+		  }>;
 	readonly rerank?: (input: Readonly<Record<string, unknown>>, row: RowFor<M>) => number;
 }>;
 
@@ -519,12 +524,19 @@ export const defineCollection = <
 			if (!isRecord(index['input']) || Object.keys(index['input']).length === 0)
 				throw new TypeError(`similarity.${name}.input must declare at least one control.`);
 			for (const [field, control] of Object.entries(index['input'])) {
-				if (!isRecord(control) || !['number', 'text', 'enum'].includes(String(control['kind'])))
+				if (
+					!isRecord(control) ||
+					!['number', 'text', 'enum', 'reference'].includes(String(control['kind']))
+				)
 					throw new TypeError(
-						`similarity.${name}.input.${field}.kind must be number, text or enum.`
+						`similarity.${name}.input.${field}.kind must be number, text, enum or reference.`
 					);
 				if (control['kind'] === 'enum' && !Array.isArray(control['values']))
 					throw new TypeError(`similarity.${name}.input.${field} is an enum with no values.`);
+				if (control['kind'] === 'reference' && typeof control['collection'] !== 'string')
+					throw new TypeError(
+						`similarity.${name}.input.${field} is a reference with no collection.`
+					);
 			}
 			if (typeof index['embed'] !== 'function' || typeof index['target'] !== 'function')
 				throw new TypeError(`similarity.${name} needs embed(row) and target(input) functions.`);

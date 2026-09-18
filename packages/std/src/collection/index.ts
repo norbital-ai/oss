@@ -152,8 +152,12 @@ export const SEARCH_DISTANCE_COLUMN = 'search_distance';
 export interface CollectionSimilarityInputField {
 	readonly name: string;
 	readonly label?: string;
-	readonly kind: 'number' | 'text' | 'enum';
+	/** `reference` picks one record of `collection`; the target may then narrow by it. */
+	readonly kind: 'number' | 'text' | 'enum' | 'reference';
 	readonly values?: readonly string[];
+	readonly collection?: string;
+	/** Equalities that narrow which records a `reference` control offers. */
+	readonly where?: Readonly<Record<string, string | number | boolean>>;
 	readonly min?: number;
 	readonly max?: number;
 	readonly step?: number;

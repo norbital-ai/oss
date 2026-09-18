@@ -1068,9 +1068,24 @@ export const compileCollectionWrite = (declaration: unknown): CompiledCollection
 												{
 													name: field,
 													...(isString(control.label) ? { label: control.label } : {}),
-													kind: String(control.kind) as 'number' | 'text' | 'enum',
+													kind: String(control.kind) as 'number' | 'text' | 'enum' | 'reference',
 													...(Array.isArray(control.values)
 														? { values: control.values.map(String) }
+														: {}),
+													...(isString(control.collection)
+														? { collection: control.collection }
+														: {}),
+													...(isRecord(control.where)
+														? {
+																where: Object.fromEntries(
+																	Object.entries(control.where).filter(
+																		([, value]) =>
+																			typeof value === 'string' ||
+																			typeof value === 'number' ||
+																			typeof value === 'boolean'
+																	)
+																) as Record<string, string | number | boolean>
+															}
 														: {}),
 													...(typeof control.min === 'number' ? { min: control.min } : {}),
 													...(typeof control.max === 'number' ? { max: control.max } : {}),

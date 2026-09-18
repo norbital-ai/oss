@@ -1926,8 +1926,12 @@ export const layerWith = (
 							});
 							const aimed = Array.isArray(answer)
 								? { column: declared.column, probe: answer as ReadonlyArray<number> }
-								: (answer as { readonly column: string; readonly probe: ReadonlyArray<number> });
-							const column = aimed.column;
+								: (answer as {
+										readonly column?: string;
+										readonly probe: ReadonlyArray<number>;
+										readonly where?: Readonly<Record<string, string | number | boolean | null>>;
+									});
+							const column = aimed.column ?? declared.column;
 							if (!Object.hasOwn(definition.fields, column))
 								return yield* Effect.fail(
 									refusal({
@@ -1935,10 +1939,19 @@ export const layerWith = (
 										message: `Index '${index}' measures against '${column}', which is not a column of ${definition.name}.`
 									})
 								);
+							for (const name of Object.keys(aimed.where ?? {}))
+								if (!Object.hasOwn(definition.fields, name))
+									return yield* Effect.fail(
+										refusal({
+											field: 'search.target',
+											message: `Index '${index}' narrows by '${name}', which is not a column of ${definition.name}.`
+										})
+									);
 							return {
 								column,
 								operator: NEAREST_OPERATORS[declared.metric],
-								probe: aimed.probe
+								probe: aimed.probe,
+								...(aimed.where === undefined ? {} : { where: aimed.where })
 							};
 						})
 					);

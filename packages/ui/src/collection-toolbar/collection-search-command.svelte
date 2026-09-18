@@ -8,17 +8,23 @@
 	 * not a phrase. The box captures the intent and shows the right control for it; what it commits
 	 * is one `CollectionSearch` command the query sends as it is.
 	 */
-	import type { CollectionSearch, CollectionSimilarityIndex } from '@norbital-ai/std/collection';
+	import type {
+		CollectionRecord,
+		CollectionSearch,
+		CollectionSimilarityIndex
+	} from '@norbital-ai/std/collection';
 	import { COLLECTION_SEARCH_MAX_LENGTH } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { debounce } from 'es-toolkit/function';
 	import { onDestroy } from 'svelte';
 	import { Button } from '#lib/button';
+	import type { FilterCollectionDefinition } from '#lib/collection-filter';
+	import { getOptionalCollectionClientContext } from '#lib/collection-runtime';
 	import { Combobox } from '#lib/combobox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
-	import { Inline, Stack } from '#lib/layout';
+	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { NumberTuple, type NumberTupleValue } from '#lib/number-tuple';
 	import { cn } from '#lib/utils';
 
@@ -33,6 +39,7 @@
 		placeholder,
 		semantic = false,
 		similarity = [],
+		collections = {},
 		initial = null,
 		disabled = false,
 		onChange,
@@ -42,12 +49,37 @@
 		placeholder: string;
 		semantic?: boolean;
 		similarity?: readonly CollectionSimilarityIndex[];
+		/** Every collection the surface knows, so a `reference` control can name and label its records. */
+		collections?: Readonly<Record<string, FilterCollectionDefinition>>;
 		initial?: CollectionSearch | null;
 		disabled?: boolean;
 		/** `null` clears; a lexical command with an empty term never arrives. */
 		onChange: (command: CollectionSearch | null) => void;
 		inputRef?: HTMLInputElement | null;
 	} = $props();
+
+	let tupleRef = $state<NumberTuple | null>(null);
+
+	/**
+	 * The records a `reference` control offers: the target collection's rows, labelled by its
+	 * record label. One query per control, live from the client the surface already holds.
+	 */
+	const records = getOptionalCollectionClientContext()?.records;
+	const referenceQuery = (
+		collection: string,
+		where: Readonly<Record<string, string | number | boolean>> | undefined
+	) =>
+		records?.findMany(collection, {
+			...(where === undefined
+				? {}
+				: { where: Object.fromEntries(Object.entries(where).map(([k, v]) => [k, { eq: v }])) }),
+			limit: 200
+		}) ?? null;
+	const referenceLabel = (collection: string, record: CollectionRecord): string => {
+		const key = collections[collection]?.recordLabel;
+		const value = key == null ? undefined : record[key];
+		return typeof value === 'string' && value !== '' ? value : String(record.id ?? '');
+	};
 
 	const commands = $derived([
 		{ name: 'text', label: t('table.searchModeText'), kind: 'lexical' as const },
@@ -131,7 +163,8 @@
 		term = '';
 		target = next.kind === 'nearest' ? seeded(next.index) : {};
 		commit(null);
-		queueMicrotask(() => inputRef?.focus());
+		// The numbers are what a person came to type: the caret lands in the first cell.
+		queueMicrotask(() => (next.kind === 'nearest' ? tupleRef?.focusFirst() : inputRef?.focus()));
 	};
 
 	const clear = (): void => {
@@ -209,7 +242,8 @@
 		{#if mode.kind === 'nearest'}
 			{@const index = mode.index}
 			{@const segments = tupleSegments(index)}
-			<Inline gap="xs" align="center" class="min-w-0 flex-1">
+			<!-- Wraps: the tuple takes its own line when a selector leaves it too little room. -->
+			<Cluster gap="xs" align="center" class="min-w-0 flex-1">
 				{#each selectors(index) as field (field.name)}
 					{#if field.kind === 'enum'}
 						<div class="w-32 shrink-0">
@@ -221,6 +255,23 @@
 								value={typeof target[field.name] === 'string' ? String(target[field.name]) : null}
 								allowClear={field.optional === true}
 								searchable={false}
+								emptyPlaceholder={field.label ?? humanize(field.name)}
+								{disabled}
+								onValueChange={(value) =>
+									commitTarget(index, { ...target, [field.name]: value ?? null })}
+							/>
+						</div>
+					{:else if field.kind === 'reference' && field.collection !== undefined}
+						{@const collection = field.collection}
+						{@const query = referenceQuery(collection, field.where)}
+						<div class="w-44 shrink-0">
+							<Combobox
+								options={(query?.current ?? []).map((record) => ({
+									value: String(record.id),
+									label: referenceLabel(collection, record)
+								}))}
+								value={typeof target[field.name] === 'string' ? String(target[field.name]) : null}
+								allowClear={field.optional === true}
 								emptyPlaceholder={field.label ?? humanize(field.name)}
 								{disabled}
 								onValueChange={(value) =>
@@ -242,14 +293,15 @@
 				{/each}
 				{#if segments.length > 0}
 					<NumberTuple
+						bind:this={tupleRef}
 						{segments}
 						value={tupleValue(index)}
 						onchange={(next) => commitTarget(index, { ...target, ...next })}
 						{disabled}
-						class="min-w-0 flex-1"
+						class="min-w-56 flex-1"
 					/>
 				{/if}
-			</Inline>
+			</Cluster>
 		{:else}
 			<Input
 				bind:ref={inputRef}

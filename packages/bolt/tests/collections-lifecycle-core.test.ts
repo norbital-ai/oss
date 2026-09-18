@@ -208,4 +208,30 @@ describe('declared similarity search', () => {
 			'L* is a lightness from 0 to 100.'
 		);
 	});
+
+	it('narrows by the equalities the target states, beside the ranking', async () => {
+		const context = {
+			collection: 'formulations',
+			fields: searchedFields,
+			searchDocumentColumn: SEARCH_DOCUMENT_COLUMN
+		} as const;
+		const plan = await prepareSearchPlan(
+			{ mode: 'nearest', index: 'colour', target: { l: 1, base: 'abs' } },
+			context,
+			async () => [0.1],
+			async () => ({
+				column: 'lab_vector',
+				operator: '<->' as const,
+				probe: [1, 0, 0],
+				where: { base_material_id: 'abs', retired_at: null }
+			})
+		);
+		expect(Result.isSuccess(plan) && plan.success.mode).toBe('nearest');
+		if (Result.isSuccess(plan) && plan.success.mode === 'nearest') {
+			const predicate = render(plan.success.predicate);
+			expect(predicate.sql).toContain('"base_material_id" = ');
+			expect(predicate.params).toContain('abs');
+			expect(predicate.sql).toContain('"retired_at" is null');
+		}
+	});
 });
