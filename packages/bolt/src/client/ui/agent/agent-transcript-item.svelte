@@ -117,6 +117,57 @@
 					partVisible(part, index) ? [{ part, index }] : []
 				)
 	);
+	/**
+	 * Consecutive tool calls fold into one row, the way a coding agent's transcript does: a step
+	 * that read three collections is one line, "3 tool calls · read_collection ×3", opened on
+	 * demand. A lone call keeps its own row; a child-task spawn is never folded, its block is the
+	 * conversation it started.
+	 */
+	type Visible = { readonly part: Part; readonly index: number };
+	type Segment =
+		| { readonly kind: 'one'; readonly item: Visible }
+		| { readonly kind: 'tools'; readonly items: ReadonlyArray<Visible> };
+	const isFoldable = ({ part }: Visible): boolean =>
+		(part.type === 'tool-call' &&
+			(subagent === undefined ||
+				subagentLink(part, tools?.resultsByCallId.get(part.id)) === null)) ||
+		part.type === 'tool-result';
+	const segments = $derived.by((): ReadonlyArray<Segment> => {
+		const out: Segment[] = [];
+		let run: Visible[] = [];
+		const flush = () => {
+			if (run.length >= 2) out.push({ kind: 'tools', items: run });
+			else for (const item of run) out.push({ kind: 'one', item });
+			run = [];
+		};
+		for (const item of visibleParts) {
+			if (isFoldable(item)) run.push(item);
+			else {
+				flush();
+				out.push({ kind: 'one', item });
+			}
+		}
+		flush();
+		return out;
+	});
+	const foldSummary = (items: ReadonlyArray<Visible>): string => {
+		const counts = new Map<string, number>();
+		for (const { part } of items)
+			if (part.type === 'tool-call' || part.type === 'tool-result')
+				counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
+		return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(', ');
+	};
+	const foldState = (items: ReadonlyArray<Visible>): 'pending' | 'failed' | 'done' => {
+		let pending = false;
+		for (const { part } of items) {
+			if (part.type !== 'tool-call') continue;
+			const result = tools?.resultsByCallId.get(part.id);
+			if (result === undefined) pending = true;
+			else if (result.isFailure) return 'failed';
+		}
+		return pending ? 'pending' : 'done';
+	};
+
 	const renders = $derived(
 		failureText !== null ||
 			(message.message.role !== 'system' &&
@@ -303,91 +354,127 @@
 					{/if}
 				</div>
 			{:else}
-				{#each visibleParts as { part, index } (index)}
-					{@const pendingPart = isActivePart(index)}
-					{#if part.type === 'text'}
-						<div
-							class={humanBubble
-								? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
-								: 'w-full text-sm leading-6 text-foreground'}
-							data-text-part
-						>
-							{#if message.message.role === 'assistant'}
-								{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
-										>{generating ? 'Writing…' : 'Response interrupted'}</span
-									>{/if}
-								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
-							{:else}
-								{#if parentAttribution}
-									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
-								{:else}
-									<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
-								{/if}
-							{/if}
-						</div>
-					{:else if part.type === 'reasoning'}
-						<details class="group/reasoning w-full rounded-lg py-1.5 text-xs" data-reasoning-part>
-							<summary class="cursor-pointer list-none text-muted-foreground">
+				{#each segments as segment (segment.kind === 'one' ? segment.item.index : `tools:${segment.items[0]?.index}`)}
+					{#if segment.kind === 'tools'}
+						{@const state = foldState(segment.items)}
+						<details class="group/fold w-full rounded-lg py-1.5 text-xs" data-tool-fold={state}>
+							<summary class="cursor-pointer list-none">
 								<Inline as="span" gap="sm">
-									<Icon icon="lucide:brain" class="size-3.5" />
-									<span
-										>{pendingPart
-											? generating
-												? 'Reasoning…'
-												: 'Reasoning interrupted'
-											: 'Reasoning'}</span
-									>
+									<Icon
+										icon={state === 'pending'
+											? 'lucide:wrench'
+											: state === 'failed'
+												? 'lucide:circle-alert'
+												: 'lucide:circle-check'}
+										class={state === 'failed'
+											? 'size-3.5 text-destructive'
+											: 'size-3.5 text-muted-foreground'}
+									/>
+									<span class="font-medium">{segment.items.length} tool calls</span>
+									<span class="truncate text-muted-foreground">· {foldSummary(segment.items)}</span>
 								</Inline>
 							</summary>
-							<div class="mt-1 border-l border-border pl-3 text-foreground/85">
-								<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+							<div class="mt-1 border-l border-border pl-3">
+								{#each segment.items as { part, index } (index)}
+									{#if part.type === 'tool-call'}
+										{@render toolRow(
+											part,
+											tools?.resultsByCallId.get(part.id) ?? null,
+											isActivePart(index)
+										)}
+									{:else if part.type === 'tool-result'}
+										{@render toolRow(null, part, false)}
+									{/if}
+								{/each}
 							</div>
 						</details>
-					{:else if part.type === 'file'}
-						{@const href = fileHref(part)}
-						{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
-							<img
-								src={href}
-								alt={part.fileName ?? 'Agent image'}
-								class="max-h-96 max-w-full rounded-lg object-contain"
-							/>
-						{/if}
-						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-							<Inline gap="sm">
-								<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
-								{#if href === null}
-									<span>{part.fileName ?? part.mediaType}</span>
+					{:else}
+						{@const { part, index } = segment.item}
+						{@const pendingPart = isActivePart(index)}
+						{#if part.type === 'text'}
+							<div
+								class={humanBubble
+									? 'max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground'
+									: 'w-full text-sm leading-6 text-foreground'}
+								data-text-part
+							>
+								{#if message.message.role === 'assistant'}
+									{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
+											>{generating ? 'Writing…' : 'Response interrupted'}</span
+										>{/if}
+									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
 								{:else}
-									<a {href} target="_blank" rel="noreferrer" class="underline">
-										{part.fileName ?? part.mediaType}
-									</a>
+									{#if parentAttribution}
+										<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+									{:else}
+										<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
+									{/if}
 								{/if}
-							</Inline>
-						</div>
-					{:else if part.type === 'tool-call'}
-						{@const result = tools?.resultsByCallId.get(part.id)}
-						{@const link = subagent === undefined ? null : subagentLink(part, result)}
-						{#if link !== null && subagent !== undefined}
-							<AgentChildConversation {link} transcript={subagent} />
-						{:else}
-							{@render toolRow(part, result ?? null, pendingPart)}
+							</div>
+						{:else if part.type === 'reasoning'}
+							<details class="group/reasoning w-full rounded-lg py-1.5 text-xs" data-reasoning-part>
+								<summary class="cursor-pointer list-none text-muted-foreground">
+									<Inline as="span" gap="sm">
+										<Icon icon="lucide:brain" class="size-3.5" />
+										<span
+											>{pendingPart
+												? generating
+													? 'Reasoning…'
+													: 'Reasoning interrupted'
+												: 'Reasoning'}</span
+										>
+									</Inline>
+								</summary>
+								<div class="mt-1 border-l border-border pl-3 text-foreground/85">
+									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+								</div>
+							</details>
+						{:else if part.type === 'file'}
+							{@const href = fileHref(part)}
+							{#if href !== null && /^image\/(png|jpeg|gif|webp|avif)$/.test(part.mediaType)}
+								<img
+									src={href}
+									alt={part.fileName ?? 'Agent image'}
+									class="max-h-96 max-w-full rounded-lg object-contain"
+								/>
+							{/if}
+							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+								<Inline gap="sm">
+									<Icon icon="lucide:file" class="size-3.5 text-muted-foreground" />
+									{#if href === null}
+										<span>{part.fileName ?? part.mediaType}</span>
+									{:else}
+										<a {href} target="_blank" rel="noreferrer" class="underline">
+											{part.fileName ?? part.mediaType}
+										</a>
+									{/if}
+								</Inline>
+							</div>
+						{:else if part.type === 'tool-call'}
+							{@const result = tools?.resultsByCallId.get(part.id)}
+							{@const link = subagent === undefined ? null : subagentLink(part, result)}
+							{#if link !== null && subagent !== undefined}
+								<AgentChildConversation {link} transcript={subagent} />
+							{:else}
+								{@render toolRow(part, result ?? null, pendingPart)}
+							{/if}
+						{:else if part.type === 'tool-result'}
+							{@render toolRow(null, part, false)}
+						{:else if part.type === 'tool-approval-request'}
+							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+								<Inline gap="sm">
+									<Icon icon="lucide:shield-question" class="size-3.5" />
+									<span>Approval requested for tool call {part.toolCallId}</span>
+								</Inline>
+							</div>
+						{:else if part.type === 'tool-approval-response'}
+							<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+								<Inline gap="sm">
+									<Icon icon="lucide:shield-check" class="size-3.5" />
+									<span>Approval response recorded</span>
+								</Inline>
+							</div>
 						{/if}
-					{:else if part.type === 'tool-result'}
-						{@render toolRow(null, part, false)}
-					{:else if part.type === 'tool-approval-request'}
-						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-							<Inline gap="sm">
-								<Icon icon="lucide:shield-question" class="size-3.5" />
-								<span>Approval requested for tool call {part.toolCallId}</span>
-							</Inline>
-						</div>
-					{:else if part.type === 'tool-approval-response'}
-						<div class="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs">
-							<Inline gap="sm">
-								<Icon icon="lucide:shield-check" class="size-3.5" />
-								<span>Approval response recorded</span>
-							</Inline>
-						</div>
 					{/if}
 				{/each}
 			{/if}

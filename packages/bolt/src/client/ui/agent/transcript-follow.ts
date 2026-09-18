@@ -37,18 +37,27 @@ export type TailFollower = Readonly<{
 	follow: () => void;
 }>;
 
-export function createTailFollower(port: () => Scrollport | null): TailFollower {
+export function createTailFollower(
+	port: () => Scrollport | null,
+	/** Told whenever the follower's mind changes, so a surface can offer a way back to the end. */
+	onPinned: (pinned: boolean) => void = () => undefined
+): TailFollower {
 	let pinned = true;
+	const set = (next: boolean) => {
+		if (next === pinned) return;
+		pinned = next;
+		onPinned(next);
+	};
 	return {
 		get pinned() {
 			return pinned;
 		},
 		observe: () => {
 			const current = port();
-			if (current !== null) pinned = atTail(current);
+			if (current !== null) set(atTail(current));
 		},
 		pin: () => {
-			pinned = true;
+			set(true);
 		},
 		follow: () => {
 			const current = port();

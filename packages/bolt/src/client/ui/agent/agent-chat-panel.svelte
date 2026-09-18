@@ -104,7 +104,16 @@
 	let revisedMessage = $state<{ readonly id: string; readonly sequence: number } | null>(null);
 	/** The transcript scrollport and the B11 follower that keeps a reader at its tail. */
 	let transcriptPort = $state<HTMLElement | null>(null);
-	const tail = createTailFollower(() => transcriptPort);
+	/** Mirrors the follower for the template: false while the reader has scrolled up. */
+	let followingTail = $state(true);
+	const tail = createTailFollower(
+		() => transcriptPort,
+		(pinned) => (followingTail = pinned)
+	);
+	const jumpToLatest = () => {
+		tail.pin();
+		tail.follow();
+	};
 	let pendingAttachments = $state<
 		Array<{ id: string; file: File; mimeType: string; previewUrl: string | null }>
 	>([]);
@@ -969,181 +978,196 @@
 		</Inline>
 	</div>
 
-	<Scroll
-		class="min-h-0 flex-1"
-		name="Conversation transcript"
-		bind:ref={transcriptPort}
-		onscroll={tail.observe}
-	>
-		<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
-			{#if activeTask === undefined && visibleAdmission === null}
-				<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
-					<p class="max-w-sm">
-						Start a conversation. Ask for help or switch to Plan to work through an approach.
-					</p>
-				</div>
-			{:else if activeTask === undefined && visibleAdmission !== null}
-				<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
-					<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
-						<Stack gap="xs" align="end">
-							<span class="text-tiny font-medium text-muted-foreground">You</span>
-							<div
-								class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
-							>
-								<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
-							</div>
-						</Stack>
-					</li>
-				</ol>
-			{:else}
-				<Stack gap="md">
-					{#if contextProjectionIncomplete}
-						<div
-							class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs"
-							role="status"
-						>
-							The loaded query reached its safety limit. Older durable rows may not be visible; the
-							active model-view boundary cannot be certified until older rows are paged.
-						</div>
-					{/if}
-
-					<AgentContextSegment
-						plan={draftingPlan ? undefined : activePlan}
-						runs={rootRuns}
-						messages={deliveredMessages}
-						status={planState()}
-						onrevise={() => Effect.runFork(submit('steer', 'revise'))}
-						ondelete={deletePlan}
-						deleteDisabled={composerLocked}
-						transitionDisabled={composerLocked ||
-							draft.trim().length > 0 ||
-							pendingAttachments.length > 0 ||
-							!modelAvailable}
-						{tools}
-						subagent={subagentTranscript}
-					/>
-
-					{#if todo !== null && todo.items.length > 0}
-						{@const completed = todo.items.filter((item) => item.status === 'done').length}
-						<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
-							<summary
-								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							>
-								<Stack gap="sm">
-									<Inline justify="between" gap="md" class="text-xs">
-										<span class="font-medium"
-											>{completed === todo.items.length ? 'Goal complete' : 'Goal progress'}</span
-										>
-										<span class="shrink-0 text-muted-foreground"
-											>{completed} / {todo.items.length} complete</span
-										>
-									</Inline>
-									<progress
-										class="h-1 w-full accent-primary"
-										max={todo.items.length}
-										value={completed}
-										aria-label="Goal progress"
-									></progress>
-									<p class="m-0 text-sm">
-										{todo.items.find((item) => item.status === 'doing')?.text ??
-											todo.items.find((item) => item.status === 'pending')?.text ??
-											'All steps completed'}
-									</p>
-								</Stack>
-							</summary>
-							<Scroll name="Goal steps" class="max-h-64">
-								<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
-									{#each todo.items as item (item.id)}
-										<li class="min-w-0 text-xs">
-											<Inline align="start" gap="sm">
-												{#if item.status === 'done'}
-													<Icon
-														icon="lucide:circle-check"
-														class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-													/>
-												{:else if item.status === 'doing'}
-													<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
-												{:else}
-													<Icon
-														icon="lucide:circle"
-														class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-													/>
-												{/if}
-												<span
-													class="min-w-0 {item.status === 'done'
-														? 'text-muted-foreground line-through'
-														: ''}">{item.text}</span
-												>
-											</Inline>
-										</li>
-									{/each}
-								</Stack>
-							</Scroll>
-						</details>
-					{/if}
-
-					<ol class="m-0 list-none p-0" aria-label="Conversation transcript">
-						{#each contextView.focusMessages as message (message.key)}
-							{@const changedModel = modelDividers.get(message.id)}
-							{#if changedModel !== undefined}
-								<li
-									class="my-3 min-w-0"
-									role="separator"
-									data-divider="model"
-									aria-label={t('bolt.agent.modelChanged', { model: changedModel })}
+	<div class="relative flex min-h-0 flex-1 flex-col">
+		{#if !followingTail}
+			<!-- The reader scrolled up; new rows land below the fold. One press returns them to the end. -->
+			<Button
+				variant="secondary"
+				size="sm"
+				class="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-md"
+				aria-label="Jump to latest"
+				onclick={jumpToLatest}
+			>
+				<Icon icon="lucide:arrow-down" class="size-4" />
+				Latest
+			</Button>
+		{/if}
+		<Scroll
+			class="min-h-0 flex-1"
+			name="Conversation transcript"
+			bind:ref={transcriptPort}
+			onscroll={tail.observe}
+		>
+			<Stack gap="md" class="mx-auto w-full max-w-3xl px-4 py-4">
+				{#if activeTask === undefined && visibleAdmission === null}
+					<div class="grid min-h-56 place-items-center text-center text-sm text-muted-foreground">
+						<p class="max-w-sm">
+							Start a conversation. Ask for help or switch to Plan to work through an approach.
+						</p>
+					</div>
+				{:else if activeTask === undefined && visibleAdmission !== null}
+					<ol class="m-0 list-none p-0" aria-label="Messages in the agent model view">
+						<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
+							<Stack gap="xs" align="end">
+								<span class="text-tiny font-medium text-muted-foreground">You</span>
+								<div
+									class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
 								>
-									<Inline align="center" gap="sm" class="text-micro text-muted-foreground">
-										<span class="h-px flex-1 bg-border"></span>
-										<Icon icon="lucide:cpu" class="size-3 shrink-0" />
-										<span class="shrink-0"
-											>{t('bolt.agent.modelChanged', { model: changedModel })}</span
-										>
-										<span class="h-px flex-1 bg-border"></span>
-									</Inline>
+									<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
+								</div>
+							</Stack>
+						</li>
+					</ol>
+				{:else}
+					<Stack gap="md">
+						{#if contextProjectionIncomplete}
+							<div
+								class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs"
+								role="status"
+							>
+								The loaded query reached its safety limit. Older durable rows may not be visible;
+								the active model-view boundary cannot be certified until older rows are paged.
+							</div>
+						{/if}
+
+						<AgentContextSegment
+							plan={draftingPlan ? undefined : activePlan}
+							runs={rootRuns}
+							messages={deliveredMessages}
+							status={planState()}
+							onrevise={() => Effect.runFork(submit('steer', 'revise'))}
+							ondelete={deletePlan}
+							deleteDisabled={composerLocked}
+							transitionDisabled={composerLocked ||
+								draft.trim().length > 0 ||
+								pendingAttachments.length > 0 ||
+								!modelAvailable}
+							{tools}
+							subagent={subagentTranscript}
+						/>
+
+						{#if todo !== null && todo.items.length > 0}
+							{@const completed = todo.items.filter((item) => item.status === 'done').length}
+							<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
+								<summary
+									class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									<Stack gap="sm">
+										<Inline justify="between" gap="md" class="text-xs">
+											<span class="font-medium"
+												>{completed === todo.items.length ? 'Goal complete' : 'Goal progress'}</span
+											>
+											<span class="shrink-0 text-muted-foreground"
+												>{completed} / {todo.items.length} complete</span
+											>
+										</Inline>
+										<progress
+											class="h-1 w-full accent-primary"
+											max={todo.items.length}
+											value={completed}
+											aria-label="Goal progress"
+										></progress>
+										<p class="m-0 text-sm">
+											{todo.items.find((item) => item.status === 'doing')?.text ??
+												todo.items.find((item) => item.status === 'pending')?.text ??
+												'All steps completed'}
+										</p>
+									</Stack>
+								</summary>
+								<Scroll name="Goal steps" class="max-h-64">
+									<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
+										{#each todo.items as item (item.id)}
+											<li class="min-w-0 text-xs">
+												<Inline align="start" gap="sm">
+													{#if item.status === 'done'}
+														<Icon
+															icon="lucide:circle-check"
+															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+														/>
+													{:else if item.status === 'doing'}
+														<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
+													{:else}
+														<Icon
+															icon="lucide:circle"
+															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+														/>
+													{/if}
+													<span
+														class="min-w-0 {item.status === 'done'
+															? 'text-muted-foreground line-through'
+															: ''}">{item.text}</span
+													>
+												</Inline>
+											</li>
+										{/each}
+									</Stack>
+								</Scroll>
+							</details>
+						{/if}
+
+						<ol class="m-0 list-none p-0" aria-label="Conversation transcript">
+							{#each contextView.focusMessages as message (message.key)}
+								{@const changedModel = modelDividers.get(message.id)}
+								{#if changedModel !== undefined}
+									<li
+										class="my-3 min-w-0"
+										role="separator"
+										data-divider="model"
+										aria-label={t('bolt.agent.modelChanged', { model: changedModel })}
+									>
+										<Inline align="center" gap="sm" class="text-micro text-muted-foreground">
+											<span class="h-px flex-1 bg-border"></span>
+											<Icon icon="lucide:cpu" class="size-3 shrink-0" />
+											<span class="shrink-0"
+												>{t('bolt.agent.modelChanged', { model: changedModel })}</span
+											>
+											<span class="h-px flex-1 bg-border"></span>
+										</Inline>
+									</li>
+								{/if}
+								<AgentTranscriptItem
+									hideTodo
+									{message}
+									{tools}
+									subagent={subagentTranscript}
+									generating={runs.some(
+										(run) => run.id === message.runId && run.status === 'running'
+									)}
+									mode={message.runId === null ? null : (modeByTurnId.get(message.runId) ?? null)}
+									outsideModelView={contextView.outsideMessageIds.has(message.id)}
+									checkpointOrigin={message.annotation?.tag === 'compact'
+										? compactOrigin(message)
+										: null}
+									onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
+										? undefined
+										: reviseMessage}
+								/>
+							{/each}
+							{#if waitingSeconds !== null}
+								<li class="my-1.5 min-w-0" role="status" data-turn-waiting>
+									<span class="text-xs text-muted-foreground"
+										>{t('bolt.agent.thinkingFor', { seconds: waitingSeconds })}</span
+									>
 								</li>
 							{/if}
-							<AgentTranscriptItem
-								hideTodo
-								{message}
-								{tools}
-								subagent={subagentTranscript}
-								generating={runs.some(
-									(run) => run.id === message.runId && run.status === 'running'
-								)}
-								mode={message.runId === null ? null : (modeByTurnId.get(message.runId) ?? null)}
-								outsideModelView={contextView.outsideMessageIds.has(message.id)}
-								checkpointOrigin={message.annotation?.tag === 'compact'
-									? compactOrigin(message)
-									: null}
-								onedit={!taskAcceptsSubmission || editableUserMessageText(message) === null
-									? undefined
-									: reviseMessage}
-							/>
-						{/each}
-						{#if waitingSeconds !== null}
-							<li class="my-1.5 min-w-0" role="status" data-turn-waiting>
-								<span class="text-xs text-muted-foreground"
-									>{t('bolt.agent.thinkingFor', { seconds: waitingSeconds })}</span
-								>
-							</li>
-						{/if}
-						{#if visibleAdmission !== null && activeTask?.status !== 'running'}
-							<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
-								<Stack gap="xs" align="end">
-									<span class="text-tiny font-medium text-muted-foreground">You</span>
-									<div
-										class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
-									>
-										<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
-									</div>
-								</Stack>
-							</li>
-						{/if}
-					</ol>
-				</Stack>
-			{/if}
-		</Stack>
-	</Scroll>
+							{#if visibleAdmission !== null && activeTask?.status !== 'running'}
+								<li class="my-1.5 min-w-0" data-role="user" data-admission="pending">
+									<Stack gap="xs" align="end">
+										<span class="text-tiny font-medium text-muted-foreground">You</span>
+										<div
+											class="max-w-[88%] rounded-[1.15rem] bg-muted px-3.5 py-2.5 text-sm leading-6 text-foreground"
+										>
+											<p class="m-0 break-words whitespace-pre-wrap">{visibleAdmission.message}</p>
+										</div>
+									</Stack>
+								</li>
+							{/if}
+						</ol>
+					</Stack>
+				{/if}
+			</Stack>
+		</Scroll>
+	</div>
 
 	{#if draftingPlan}
 		<div class="mx-auto w-full max-w-3xl min-w-0 shrink-0 px-4 pb-3" data-draft-plan>
