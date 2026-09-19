@@ -20,6 +20,7 @@ const intentSource = readFileSync(
 	new URL('../src/client/ui/agent/intent.ts', import.meta.url),
 	'utf8'
 );
+const i18nSource = readFileSync(new URL('../src/client/ui/agent/i18n.ts', import.meta.url), 'utf8');
 
 describe('G1 immediate user text', () => {
 	it('keeps the operator text visible until a durable human message is a live fact', () => {
@@ -53,7 +54,9 @@ describe('G3 Plan Compact and edit', () => {
 	it('parses only plan and compact, and revises through tasks.editMessage', () => {
 		expect(intentSource).toMatch(/\/\(plan\|compact\)/);
 		expect(panelSource).toContain('editMessage');
-		expect(panelSource).toContain('/compact');
+		// The composer names its commands through the catalog, not a literal in the markup.
+		expect(panelSource).toContain("t('bolt.agent.composerPlaceholder')");
+		expect(i18nSource).toContain('/plan, /compact or /export');
 	});
 });
 
