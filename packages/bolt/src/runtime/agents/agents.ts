@@ -1592,6 +1592,12 @@ export const layer = Layer.effect(
 			parent?: Conversation;
 			resume?: boolean;
 			modelId?: ModelId;
+			/**
+			 * The turn this admission starts belongs to the task named after the message, not to
+			 * whatever turn is admitting it: an agent messaging a sibling conversation of the same
+			 * person, whose driver claim must not become the sibling's owner.
+			 */
+			ownTask?: boolean;
 		}>;
 
 		/**
@@ -1870,7 +1876,8 @@ export const layer = Layer.effect(
 						{ id: input.conversationId, agent_id: input.agentId, parent_id: null },
 						{ id: messageId, mode: input.mode, model_id: input.modelId ?? null },
 						[...messages, yield* Schema.decodeUnknownEffect(ConversationMessageRow)(message)],
-						plan
+						plan,
+						input.ownTask === true
 					)
 				: undefined;
 			const admitted =
@@ -2194,7 +2201,8 @@ export const layer = Layer.effect(
 			}>,
 			directive: Readonly<{ id: MessageId; mode: DirectiveMode; model_id?: ModelId | null }>,
 			messages: ReadonlyArray<ConversationMessage>,
-			plan: Plan | undefined
+			plan: Plan | undefined,
+			ownTask = false
 		) {
 			const agent = yield* resolveAgent(conversation.agent_id);
 			yield* access.authorize(subject, 'agent', agent.id);
@@ -2211,12 +2219,17 @@ export const layer = Layer.effect(
 			const runId = runIdFor(`${conversation.id}:${directive.id}`);
 			/**
 			 * The durable task whose lease fences this turn. Inside a driver that is the claim being
-			 * run; outside one — admission from a send — it is the task that send enqueues next, whose
-			 * id is a function of the message, so the occurrence that arrives finds a turn it owns.
+			 * run — a recovery's resume included, which runs under the original claim; outside one,
+			 * admission from a send, it is the task that send enqueues next, whose id is a function
+			 * of the message. `ownTask` is the one admission made *inside* a driver on behalf of a
+			 * different conversation: the claim admitting it is the sender's, and the turn must be
+			 * owned by the task that will arrive to answer it.
 			 */
-			const executionOwner = Option.getOrElse(yield* Effect.serviceOption(ExecutionOwner), () =>
-				executionTaskId(directive.id)
-			);
+			const executionOwner = ownTask
+				? executionTaskId(directive.id)
+				: Option.getOrElse(yield* Effect.serviceOption(ExecutionOwner), () =>
+						executionTaskId(directive.id)
+					);
 			const run = {
 				id: runId,
 				conversation_id: conversation.id,
@@ -3378,7 +3391,8 @@ export const layer = Layer.effect(
 								message: parentAgentInput(task.id, message),
 								author: { kind: 'parent-agent', id: task.id },
 								mode: DirectiveMode.make('agent'),
-								modelId: run.model_id
+								modelId: run.model_id,
+								ownTask: target.parent_id == null
 							});
 							// A child hears this at its next step on the fiber its parent holds. A root
 							// conversation has no such fiber: its answer is a durable task, as a person's

@@ -361,3 +361,73 @@ it('defers a queued message behind a live driver without losing it or spending f
 	for (const occurrence of later.occurrences) await deliver(occurrence);
 	expect(twin.requests).toHaveLength(2);
 });
+
+/**
+ * An agent's message to a sibling conversation of the same person is that conversation's next
+ * turn, run by its own durable task. Probed live on 0.0.66, the message landed and the sibling
+ * sat `running` forever: the admitting turn was the sender's driver claim, so the sibling's turn
+ * was stamped with the *sender's* task and the task enqueued to answer it found a turn it did not
+ * own. A root turn is owned by the task named after its own directive, whoever admitted it.
+ */
+it('answers an agent’s message to a sibling conversation under the sibling’s own task', async () => {
+	const siblingId = '00000000-0000-4000-8000-000000000741';
+	const senderId = '00000000-0000-4000-8000-000000000742';
+	const { ai } = scriptedTranscript([
+		assistantText('Ledger desk ready.'),
+		assistantToolCall('search_task_history', { scope: 'mine', query: 'Ledger desk' }, 'find'),
+		assistantToolCall(
+			'subagent',
+			{ action: 'message', conversationId: siblingId, message: 'Confirm the ledger has 3 rows.' },
+			'message'
+		),
+		assistantText('Sent.'),
+		assistantText('Three rows, confirmed.')
+	]);
+	harness = await makeBoltTestRuntime(undefined, { ai });
+	await seedSession(harness, {
+		token: 'continuation-token',
+		user: 'continuation-user',
+		team: 'admin',
+		status: 'admin'
+	});
+	const send = (conversation: string, submissionId: string, text: string) =>
+		command(
+			'conversations.send',
+			Schema.decodeUnknownSync(Schema.Json)({
+				conversationId: conversation,
+				submissionId,
+				agentId: 'web',
+				message: userAgentInput(text),
+				mode: 'agent',
+				priority: 'normal'
+			})
+		);
+	await send(siblingId, '00000000-0000-4000-8000-000000000743', 'You are the ledger desk.');
+	await deliver(latestOccurrence());
+	await send(senderId, '00000000-0000-4000-8000-000000000744', 'Message the ledger desk.');
+	await deliver(latestOccurrence());
+
+	const [queued] = await harness.database.query(
+		`select id, annotation->>'executionAuthority' as authority from conversation_message
+		 where conversation_id = $1 and author->>'kind' = 'parent-agent'`,
+		[siblingId]
+	);
+	expect(queued?.authority).toBeTruthy();
+	const [turn] = await harness.database.query(
+		`select capability_snapshot->>'executionOwner' as owner, status from turn
+		 where conversation_id = $1 order by created_at desc limit 1`,
+		[siblingId]
+	);
+	expect(turn).toEqual({ owner: `agent:${queued?.id}`, status: 'running' });
+	const answer = latestOccurrence();
+	expect(answer.taskId).toBe(`agent:${queued?.id}`);
+	await deliver(answer);
+	const rows = await harness.database.query(
+		`select message from conversation_message where conversation_id = $1 order by sequence`,
+		[siblingId]
+	);
+	expect(JSON.stringify(rows)).toContain('Three rows, confirmed.');
+	expect(
+		await harness.database.query('select status from conversation where id = $1', [siblingId])
+	).toEqual([{ status: 'done' }]);
+});
