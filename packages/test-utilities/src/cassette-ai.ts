@@ -29,7 +29,7 @@ const CassetteFile = Schema.Struct({
 
 export type AgentCassette = typeof CassetteFile.Type;
 export type CassetteTurn = Extract<AgentCassette['turns'][number], { readonly _tag: 'Generated' }>;
-export type CassetteVerdictTurn = Extract<
+type CassetteVerdictTurn = Extract<
 	NonNullable<AgentCassette['verdicts']>[number],
 	{ readonly _tag: 'Generated' }
 >;
@@ -67,21 +67,7 @@ export const readCassetteFile = (path: string): AgentCassette => {
 	return file;
 };
 
-/**
- * File-backed twin of `recordedAi`: Catalog matches `catalogAi`, Generate plays the next
- * cassette turn with the live request's `callId` stamped on the observation. Exhaustion is an
- * error, not a silent repeat — a pipeline that calls more turns than recorded changed shape.
- *
- * With `tokensPerSecond` set, text turns stream: progressive part snapshots go out over
- * `onProgress` paced at that rate (tokens ≈ chars/4) before the complete message returns —
- * the offline stand-in for a provider delivering at N tok/s. Default 0 streams nothing and
- * returns instantly, which is how the sub-second first-part budget is measured: any delay is
- * host overhead by construction. Assumed flash-class rate is 60 tok/s (conservative;
- * GPT-4.1-mini and GLM flash typically answer faster) — a test parameter, not a provider claim.
- */
-export const DEFAULT_CASSETTE_TOKENS_PER_SECOND = 60;
-
-export type CassetteStreamOptions = Readonly<{ readonly tokensPerSecond?: number }>;
+type CassetteStreamOptions = Readonly<{ readonly tokensPerSecond?: number }>;
 
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 

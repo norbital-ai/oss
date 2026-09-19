@@ -355,7 +355,6 @@ const isFiniteNumber = (value: unknown): boolean => isNumber(value) && Number.is
  * this boundary as JSON text. PostgreSQL then parses the bound text using the target JSONB column's
  * type. SQL null stays null; a JSON null is not used by these bookkeeping rows.
  */
-const encodedJsonb = (value: Exclude<Schema.Json, null>): string => JSON.stringify(value);
 
 /** Maximum exact grouped membership; the SQL query fails closed instead of truncating past it. */
 const GROUPED_RESULT_LIMIT = 5000;
@@ -439,7 +438,7 @@ const statementShapes = (statements: ReadonlyArray<{ readonly sql: string }>): s
 };
 
 /** One insert group: the rows it writes and the piece that writes them. */
-export type InsertGroup = Readonly<{
+type InsertGroup = Readonly<{
 	readonly key: string;
 	readonly table: string;
 	readonly rows: ReadonlyArray<PlannedInsert>;
@@ -506,7 +505,7 @@ export const groupedInserts = (rows: ReadonlyArray<PlannedInsert>): ReadonlyArra
 	});
 };
 
-export type PlannedUpdate = Readonly<{
+type PlannedUpdate = Readonly<{
 	readonly table: string;
 	readonly id: string;
 	/** The version the row was prepared at; the update applies only while the row is still there. */
@@ -517,7 +516,7 @@ export type PlannedUpdate = Readonly<{
 }>;
 
 /** One update group: its rows and the piece that applies them; the caller asserts the count. */
-export type UpdateGroup = Readonly<{
+type UpdateGroup = Readonly<{
 	readonly key: string;
 	readonly table: string;
 	readonly rows: ReadonlyArray<PlannedUpdate>;
@@ -570,13 +569,13 @@ export const groupedUpdates = (rows: ReadonlyArray<PlannedUpdate>): ReadonlyArra
 };
 
 /** One row a grouped delete is built from. */
-export type PlannedDelete = Readonly<{
+type PlannedDelete = Readonly<{
 	readonly table: string;
 	readonly id: string;
 	readonly rowVersion: number | undefined;
 }>;
 
-export type DeleteGroup = Readonly<{
+type DeleteGroup = Readonly<{
 	readonly key: string;
 	readonly table: string;
 	readonly rows: ReadonlyArray<PlannedDelete>;
@@ -584,7 +583,7 @@ export type DeleteGroup = Readonly<{
 }>;
 
 /** Deletes of one table as one statement, version-guarded the way a grouped update is. */
-export const groupedDeletes = (rows: ReadonlyArray<PlannedDelete>): ReadonlyArray<DeleteGroup> => {
+const groupedDeletes = (rows: ReadonlyArray<PlannedDelete>): ReadonlyArray<DeleteGroup> => {
 	const byTable = Map.groupBy(rows, (row) => row.table);
 	return [...byTable.entries()].map(([name, group], index) => {
 		const table = quoteIdentifier(name);
@@ -1569,7 +1568,7 @@ export const layerWith = (
 						record_id: entry.recordId,
 						operation: entry.operation,
 						path: entry.path,
-						payload: entry.payload === null ? null : encodedJsonb(entry.payload),
+						payload: entry.payload === null ? null : JSON.stringify(entry.payload),
 						status: entry.refusal === null ? 'pending' : 'failed',
 						last_error: entry.refusal
 					}

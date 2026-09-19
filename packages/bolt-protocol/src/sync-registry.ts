@@ -698,15 +698,10 @@ export class SyncConnectionLane<
 			const connection = options.resolve();
 			if (connection === undefined) throw options.unavailable();
 			this.registry.release(connection, options.request.detached);
-			let evaluation: SyncConnectEvaluation;
-			try {
-				evaluation = await this.#connect(connection, options.request);
-			} catch (cause) {
-				// A refused or exploded registration is that request's failure. Detaching here closed
-				// the physical stream for every other live query — month-board hops and calendar
-				// expansions then 410'd on a connection the EventSource still believed it owned.
-				throw cause;
-			}
+			// A refused or exploded registration is that request's failure and nothing more: detaching
+			// here once closed the physical stream for every other live query — month-board hops and
+			// calendar expansions then 410'd on a connection the EventSource still believed it owned.
+			const evaluation = await this.#connect(connection, options.request);
 			if (connection.closed || this.#closed) throw options.unavailable();
 			const requestedKeys = options.request.queries.map(({ queryKey }) => queryKey).sort();
 			const resultKeys = evaluation.results.map(({ key }) => key).sort();
@@ -727,12 +722,8 @@ export class SyncConnectionLane<
 				// this EventSource.
 				throw new Error('sync initial answer does not match its prefix');
 			}
-			try {
-				this.registry.attach(connection, evaluation.results);
-			} catch (cause) {
-				// Same as a guest throw: the registration fails; already-attached queries stay.
-				throw cause;
-			}
+			// As with a guest throw: the registration fails; already-attached queries stay.
+			this.registry.attach(connection, evaluation.results);
 			// Built after attachment, because the version a query is registered at is the registry's
 			// answer and not the evaluation's.
 			const response = syncClientResponse(
@@ -751,13 +742,8 @@ export class SyncConnectionLane<
 		return this.enqueue(async () => {
 			const connection = options.resolve();
 			if (connection === undefined) throw options.unavailable();
-			let evaluation: SyncExtendPrefixEvaluation;
-			try {
-				evaluation = await this.#extendPrefix(connection, options.request);
-			} catch (cause) {
-				// Same as connect: the prefix request fails; already-attached queries stay on the stream.
-				throw cause;
-			}
+			// As with connect: the prefix request fails; already-attached queries stay on the stream.
+			const evaluation = await this.#extendPrefix(connection, options.request);
 			if (connection.closed || this.#closed) throw options.unavailable();
 			if (
 				evaluation.queryKey !== options.request.queryKey ||

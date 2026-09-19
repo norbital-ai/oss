@@ -74,7 +74,7 @@ const closingParen = (sql: string, open: number): number => {
 };
 
 /** Splits a top-level `with [recursive] a as (…), b as (…) <body>` into its parts; a bare body has none. */
-export const splitWith = (sql: string): Split => {
+const splitWith = (sql: string): Split => {
 	const trimmed = sql.trim();
 	const head = /^with\s+(recursive\s+)?/i.exec(trimmed);
 	if (head === null) return { recursive: false, ctes: [], body: trimmed };
@@ -103,8 +103,6 @@ export const splitWith = (sql: string): Split => {
 		cursor = close + separator[0].length;
 	}
 };
-
-const isSelect = (body: string): boolean => /^\s*select\b/i.test(body);
 
 /**
  * Folds the pieces of one write into one statement.
@@ -141,7 +139,7 @@ export const oneStatement = (pieces: ReadonlyArray<Piece>, final: Fragment): Fra
 		const name = cteName(piece.key);
 		const split = fold(piece.fragment);
 		claim(name);
-		if (isSelect(split.body)) {
+		if (/^\s*select\b/i.test(split.body)) {
 			hoisted.push(`${name} as materialized (${split.body})`);
 			guards.push(name);
 		} else hoisted.push(`${name} as (${split.body})`);

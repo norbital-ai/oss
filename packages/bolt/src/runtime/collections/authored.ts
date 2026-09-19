@@ -184,7 +184,7 @@ export const runAuthoredHandler = <A>(
 	});
 
 /** Read operations shared by authored handlers and policy decisions. */
-export type AuthoringReadOps<E = never> = Readonly<{
+type AuthoringReadOps<E = never> = Readonly<{
 	/** Exact generic database members structurally visible to authored code. */
 	readonly allowedCollections: ReadonlySet<string>;
 	readonly findMany: (
@@ -482,30 +482,6 @@ export const makeAutomationApi = <E, P, W, C>(
 	}
 ): RuntimeAutomationApi<E | P | W | C> => ({ ...api, progress, readUrl, runId, connection });
 
-/**
- * How deep authored writes may nest before the chain is refused.
- *
- * An automation started from a transform's commit may write, which may start another; the shape
- * has no natural floor. Checked on the way in, so the refusal names the collection whose chain went
- * too deep, far above the real depths so it catches a loop, never a design.
- */
-const WRITE_NESTING_LIMIT = 16;
-
-export const refuseRunawayWrites = (
-	action: string,
-	collection: string,
-	depth: number
-): Effect.Effect<void, InvocationBudget.NestingLimitExceeded> =>
-	depth > WRITE_NESTING_LIMIT
-		? Effect.fail(
-				InvocationBudget.NestingLimitExceeded.at(
-					`${action} on ${collection}, from authored code`,
-					depth,
-					WRITE_NESTING_LIMIT
-				)
-			)
-		: Effect.void;
-
 const effectLabel = (value: string): string => encodeURIComponent(value).replaceAll('%', '_');
 
 /**
@@ -515,7 +491,7 @@ const effectLabel = (value: string): string => encodeURIComponent(value).replace
  * silently collapse into one. The ordinal is state owned by the boundary, not by an author who
  * could accidentally reuse it, and the coordinate keeps the id readable in a ledger.
  */
-export class WriteEffectIds {
+class WriteEffectIds {
 	#issued = 0;
 	readonly parent: EffectIdType;
 

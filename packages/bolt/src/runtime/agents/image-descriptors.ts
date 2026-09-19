@@ -119,7 +119,7 @@ export function stripImageFileParts(message: Prompt.MessageEncoded): Prompt.Mess
  * `encodeSync` refuses (`Expected array at ["content"]`) — a sync throw, not a
  * typed Effect failure.
  */
-export function userMessageWithAttachments(
+function userMessageWithAttachments(
 	text: string,
 	assets: readonly ImageAsset[]
 ): Prompt.UserMessageEncoded {

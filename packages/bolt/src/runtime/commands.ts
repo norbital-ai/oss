@@ -1247,8 +1247,6 @@ for (const contract of FixedCommandCatalogue) {
 
 export const FixedCommandBindings: ReadonlyMap<string, (typeof allBindings)[number]> = fixedByName;
 
-const resolveFixedCommand = (name: string) => fixedByName.get(name);
-
 /** Boot invariant shared by exact automation membership and fixed-name collision checks. */
 export const assertCommandNamespace = Effect.fn('Bolt.assertCommandNamespace')(function* () {
 	const declared = new Set(
@@ -1362,7 +1360,7 @@ export const resolveCommand = Effect.fn('Bolt.resolveCommand')(function* (
 		if (plugin === undefined) return undefined;
 		return resolveCompositeCommand(plugin, name) as CommandBinding<unknown> | undefined;
 	}
-	const fixed = resolveFixedCommand(name);
+	const fixed = fixedByName.get(name);
 	if (fixed !== undefined) return fixed as CommandBinding<unknown>;
 	return (yield* resolveWorkspaceCommand(name, origin)) as CommandBinding<unknown> | undefined;
 });

@@ -21,7 +21,7 @@ export class SyncHttpError extends Error {
 	}
 }
 
-export type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutationPush>;
+type SyncPushRequest = Readonly<{ readonly connectionId: string } & CollectionMutationPush>;
 
 export type SyncHttpDriver = Readonly<{
 	readonly register: (
@@ -37,7 +37,7 @@ export type SyncHttpDriver = Readonly<{
 	readonly push: (request: SyncPushRequest, signal?: AbortSignal) => Promise<void>;
 }>;
 
-export type SyncHttpDriverOptions = Readonly<{
+type SyncHttpDriverOptions = Readonly<{
 	readonly registrationUrl: string;
 	readonly extensionUrl: string;
 	readonly fetch?: typeof fetch;

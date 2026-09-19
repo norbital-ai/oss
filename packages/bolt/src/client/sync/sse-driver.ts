@@ -15,7 +15,7 @@ import type { SyncHttpDriver } from './http-driver.js';
 
 export type { SyncApplyFrame as SyncClientApplyFrame };
 export type BrowserSyncScope = Readonly<SyncScope & Pick<WorkspaceSession, 'workspaceId'>>;
-export type BrowserSyncProfileElection = Readonly<Pick<WorkspaceSession, 'syncPrincipal'>>;
+type BrowserSyncProfileElection = Readonly<Pick<WorkspaceSession, 'syncPrincipal'>>;
 export type EventSourceLike = {
 	readonly addEventListener: (
 		type: string,
@@ -25,15 +25,15 @@ export type EventSourceLike = {
 	onerror: ((event: unknown) => void) | null;
 };
 export type { SyncHttpDriver as BrowserSyncWorkspaceControls };
-export type BrowserSyncWorkspaceBindingOptions = Readonly<{
+type BrowserSyncWorkspaceBindingOptions = Readonly<{
 	readonly scope: BrowserSyncScope;
 	readonly controls: SyncHttpDriver;
 }>;
-export type BrowserSyncWorkspaceBinding = Readonly<{
+type BrowserSyncWorkspaceBinding = Readonly<{
 	readonly attachment: SyncWorkspaceAttachment;
 	readonly close: () => void;
 }>;
-export type BrowserSyncBrokerOptions = Readonly<{
+type BrowserSyncBrokerOptions = Readonly<{
 	readonly election: BrowserSyncProfileElection;
 	readonly streamUrl: string;
 	readonly source?: (url: string) => EventSourceLike;

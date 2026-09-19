@@ -21,7 +21,6 @@ const ExportAttachmentSchema = Schema.Struct({
 	contentType: Schema.String,
 	content: Schema.Unknown
 });
-export type ExportAttachment = typeof ExportAttachmentSchema.Type;
 
 const ExportActionSchema = Schema.Struct({
 	label: Schema.String,
@@ -31,7 +30,6 @@ const ExportActionSchema = Schema.Struct({
 export type ExportAction = typeof ExportActionSchema.Type;
 
 const ExportManifestSchema = Schema.Array(ExportActionSchema);
-export type ExportManifest = typeof ExportManifestSchema.Type;
 export type CollectionExportOptions = Readonly<{
 	readonly includeAction?: (action: ExportAction) => boolean;
 }>;
@@ -152,7 +150,6 @@ const CollectionImportRecordSchema = Schema.Struct({
 	id: Schema.String,
 	values: Schema.Record(Schema.String, Schema.Json)
 });
-export type CollectionImportRecord = typeof CollectionImportRecordSchema.Type;
 /**
  * The command's declared body, and nothing besides.
  *

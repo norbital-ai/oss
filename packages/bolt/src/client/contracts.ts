@@ -74,7 +74,7 @@ export type MutationSettlement = Readonly<
 /** The std settlement vocabulary is the authority; this adds only the Machine's queue phases. */
 export type MutationSettlementStatus = CollectionMutationSettlementStatus | 'queued' | 'sent';
 
-export type MutationSettlementHandle = Readonly<{
+type MutationSettlementHandle = Readonly<{
 	readonly idempotencyKey: string;
 	readonly settled: Promise<MutationSettlement>;
 	readonly status: () => Promise<MutationSettlementStatus>;

@@ -269,7 +269,7 @@ export const compileSemanticSearch = (
 };
 
 /** Compiles the probe of a declared similarity index: the index's own column and operator. */
-export const compileNearestSearch = (
+const compileNearestSearch = (
 	index: string,
 	target: Readonly<Record<string, unknown>>,
 	nearest: NearestProbe,

@@ -91,7 +91,7 @@ const ResolvedApprovalConfiguration = Schema.Struct({
 const isResolvedApprovalConfiguration = Schema.is(ResolvedApprovalConfiguration);
 
 /** Stable structural identity for approval configurations authored with different key order. */
-export const approvalFingerprint = (value: Schema.Json | undefined): string =>
+const approvalFingerprint = (value: Schema.Json | undefined): string =>
 	value === undefined ? 'default' : canonicalJson(value);
 
 /**
@@ -230,7 +230,7 @@ type ApprovalRoot = Readonly<{
 }>;
 
 /** One row the hold covers: stamped `approval_id`, restored on refusal. */
-export type ApprovalLockedRow = Readonly<{ readonly collection: string; readonly id: string }>;
+type ApprovalLockedRow = Readonly<{ readonly collection: string; readonly id: string }>;
 
 /**
  * What the engine hands over when policy routes a write to approval (RFC §4.8).

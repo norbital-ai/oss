@@ -24,7 +24,7 @@ export const ReplicaAttachment = Schema.Struct({
 });
 export interface ReplicaAttachment extends Schema.Schema.Type<typeof ReplicaAttachment> {}
 
-export const ReplicaMessage = Schema.Struct({
+const ReplicaMessage = Schema.Struct({
 	sent_at: Schema.NonEmptyString,
 	sender_external_id: Schema.NullOr(Schema.String),
 	sender_display_name: Schema.NullOr(Schema.String),
@@ -32,16 +32,16 @@ export const ReplicaMessage = Schema.Struct({
 	text: Schema.String,
 	attachments: Schema.Array(ReplicaAttachment)
 });
-export interface ReplicaMessage extends Schema.Schema.Type<typeof ReplicaMessage> {}
+interface ReplicaMessage extends Schema.Schema.Type<typeof ReplicaMessage> {}
 
 /** Where this conversation's replica begins, so a reader never claims knowledge before it. */
-export type ReplicaHorizon = Readonly<{
+type ReplicaHorizon = Readonly<{
 	floorAt: string | null;
 	/** Synced rows older than the first live arrival: content from before this tenant paired. */
 	prePairing: number;
 }>;
 
-export type ReadResult = Readonly<{
+type ReadResult = Readonly<{
 	messages: ReadonlyArray<ReplicaMessage>;
 	/** Unread rows still waiting after this read. */
 	unreadAfter: number;

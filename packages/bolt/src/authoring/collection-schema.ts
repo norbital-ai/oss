@@ -294,7 +294,7 @@ export type CollectionTransform<M extends ModelDeclaration, Input> = (
 >;
 
 /** One control of a similarity index's capture form: what the browser shows to state a target. */
-export type SimilarityInputField = Readonly<{
+type SimilarityInputField = Readonly<{
 	readonly label?: string;
 	/** `reference` picks one record of `collection` — a condition the search narrows by. */
 	readonly kind: 'number' | 'text' | 'enum' | 'reference';
@@ -309,10 +309,10 @@ export type SimilarityInputField = Readonly<{
 }>;
 
 /** The search commands every collection offers itself; no declared index may take their names. */
-export const RESERVED_SEARCH_COMMANDS: ReadonlyArray<string> = ['text', 'semantic'];
+const RESERVED_SEARCH_COMMANDS: ReadonlyArray<string> = ['text', 'semantic'];
 
-export const SIMILARITY_METRICS = ['l2', 'cosine', 'ip'] as const;
-export type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
+const SIMILARITY_METRICS = ['l2', 'cosine', 'ip'] as const;
+type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
 
 /**
  * One similarity index: a domain's own notion of "nearest", declared beside the write contract.
@@ -330,7 +330,7 @@ export type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
  * condition that narrows rather than re-measures — the base a colour is moulded in — is a `where`
  * on the target: equalities on the collection's own columns, applied beside the ranking.
  */
-export type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclaration> = Readonly<{
+type SimilarityIndexDeclaration<M extends ModelDeclaration = ModelDeclaration> = Readonly<{
 	readonly label?: string;
 	/** The `vector()` column the index ranks by unless `target` names another. */
 	readonly column: string;

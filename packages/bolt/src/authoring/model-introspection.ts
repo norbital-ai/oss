@@ -957,7 +957,7 @@ const recordEmbeddingColumns = (
 	};
 };
 
-export const compileModelTable = <
+const compileModelTable = <
 	const TName extends string,
 	const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>
 >(

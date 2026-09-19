@@ -1,7 +1,7 @@
 import { TAU, clamp, pitchAcross, smooth, type DotGeometry, type DotPoint } from '#lib/dot-field';
 
 /** A dot on the disc or on the photon ring. */
-export type DiscSeed = {
+type DiscSeed = {
 	readonly kind: 'disc' | 'ring';
 	/** Orbit radius in shadow radii. */
 	readonly r: number;
@@ -11,7 +11,7 @@ export type DiscSeed = {
 };
 
 /** The disc's outer edge, in shadow radii; the mark's horizontal reach. */
-export const DISC_REACH = 2.6;
+const DISC_REACH = 2.6;
 const DISC_INNER = 1.15;
 const RING_RADIUS = 0.9;
 /** Sine of the disc's inclination: nearly edge-on. */

@@ -81,14 +81,14 @@ export type WorkspaceHostActions = {
 	readonly stopImpersonating: () => void;
 };
 
-export type AppGroup = Readonly<{
+type AppGroup = Readonly<{
 	readonly defaultChild?: string;
 	readonly label?: string;
 	readonly description?: string;
 	readonly icon?: string;
 }>;
 
-export type AppMeta = Readonly<{
+type AppMeta = Readonly<{
 	readonly label?: string;
 	readonly icon?: string;
 	readonly description?: string;
@@ -148,7 +148,7 @@ export type CompiledWorkspace = Readonly<{
  * where they are, what it will do when asked, and which host capabilities exist. What the workspace
  * *is* comes from the workspace, and a host has no way to assert it.
  */
-export type HostMountOptions = Readonly<{
+type HostMountOptions = Readonly<{
 	readonly session: WorkspaceSession;
 	readonly view: WorkspaceView;
 	readonly actions: WorkspaceHostActions;

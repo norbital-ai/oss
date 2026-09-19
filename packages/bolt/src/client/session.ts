@@ -15,7 +15,7 @@ import { Effect, MutableRef } from 'effect';
  * So the host states all of it once, by name, when it mounts the workspace. A surface that needs a
  * capability is given it; a surface that is given nothing can do nothing, which is the point.
  */
-export type WorkspaceFilesHost = Readonly<{
+type WorkspaceFilesHost = Readonly<{
 	/**
 	 * Stores one file under a key the caller names, and answers with the URL it reads back from.
 	 *
@@ -44,7 +44,7 @@ export type WorkspaceFilesHost = Readonly<{
  * *host*, because only the host holds the release table. The Studio needs both and they are two
  * different authorities, so they are two different members here rather than one `fetch`.
  */
-export type WorkspaceOperationsHost = Readonly<{
+type WorkspaceOperationsHost = Readonly<{
 	/**
 	 * The host snapshot. `billing` costs two Stripe round trips, so it is asked for rather than
 	 * assumed — a surface that does not show money should not wait on a payments API to render.

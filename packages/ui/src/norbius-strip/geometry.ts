@@ -31,7 +31,7 @@ export const NORBIUS_STRIP_STATES = [
 export type NorbiusStripState = (typeof NORBIUS_STRIP_STATES)[number];
 
 /** A place on the band: `u` along it, `v` across it in [-1, 1]. */
-export type BandSeed = {
+type BandSeed = {
 	readonly u: number;
 	readonly v: number;
 	readonly edge: boolean;
@@ -73,7 +73,7 @@ const CENTRE_RADIUS = 0.78;
 const REACH = 1.15;
 
 /** The seed grid, ring-major: index = ring · across + column. `faces` needs the shape back. */
-export type BandLayout = BandSeed[] & { readonly around: number; readonly across: number };
+type BandLayout = BandSeed[] & { readonly around: number; readonly across: number };
 
 /**
  * Rows of dots along the band, as many as the pixel pitch allows.
@@ -159,7 +159,7 @@ function surface(
 }
 
 /** Places one band particle: shaded by its surface normal, then accented per state. */
-export function bandPoint(
+function bandPoint(
 	state: NorbiusStripState,
 	seed: BandSeed,
 	index: number,

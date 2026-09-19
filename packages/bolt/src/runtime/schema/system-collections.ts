@@ -46,8 +46,7 @@ const conversationFence = (
 		const claimed = input['active_turn_id'];
 		if (stored === undefined || claimed === null || claimed === undefined) return input;
 		const held = stored['active_turn_id'];
-		if (held !== null && held !== undefined && held !== claimed)
-			refuse('This turn no longer holds the conversation.');
+		if (held != null && held !== claimed) refuse('This turn no longer holds the conversation.');
 		const status = input['status'] ?? stored['status'];
 		if (held === claimed && status !== 'running' && status !== 'ready')
 			refuse('This turn no longer holds the conversation.');
@@ -359,7 +358,7 @@ export const SYSTEM_RELATIONSHIPS: ReadonlyArray<RelationDefinition> = Object.fr
  * owning service is the only writer. An authored `deny` policy still wins — this is an ordinary
  * declaration evaluated with the rest, not a bypass.
  */
-export const systemReadPolicy = (envoys: ReadonlyArray<EnvoyReach>): PolicyDeclaration =>
+const systemReadPolicy = (envoys: ReadonlyArray<EnvoyReach>): PolicyDeclaration =>
 	Object.freeze<PolicyDeclaration>({
 		name: 'bolt.system-collections',
 		description:

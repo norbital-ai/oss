@@ -29,7 +29,7 @@ export type MountedLiveQuery = Readonly<{
 	readonly detach: () => void;
 }>;
 
-export type SyncAttachmentFailureKind = 'transport' | 'terminal' | 'prefix-reset';
+type SyncAttachmentFailureKind = 'transport' | 'terminal' | 'prefix-reset';
 
 export class SyncAttachmentError extends Error {
 	readonly kind: SyncAttachmentFailureKind;
@@ -72,7 +72,7 @@ export type SyncClient = Readonly<{
 	readonly answer: (outcome: SyncOutcome) => void;
 }>;
 
-export type SyncClientOptions = Readonly<{
+type SyncClientOptions = Readonly<{
 	readonly scope: BrowserSyncScope;
 	readonly onOutcomes?: (outcomes: ReadonlyArray<SyncOutcome>, state: ClientState) => void;
 	readonly onError?: (cause: unknown) => void;

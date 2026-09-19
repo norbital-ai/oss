@@ -770,7 +770,7 @@ type AuthoredReadDatabase<S extends AnySchema> = {
  * `+collection.ts`; unsynced workspaces and Bolt's own sources have no augmentation and see every
  * collection as read-only.
  */
-export type WorkspaceCollectionsOf = WorkspaceAuthoringTypes extends {
+type WorkspaceCollectionsOf = WorkspaceAuthoringTypes extends {
 	readonly collections: infer Collections;
 }
 	? Collections

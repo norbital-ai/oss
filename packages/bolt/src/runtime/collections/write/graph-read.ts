@@ -5,12 +5,12 @@ import type { WritableManyRelation } from './plan.js';
 
 const isNumber = Schema.is(Schema.Number);
 
-export type RelatedRowsRequest = Readonly<{
+type RelatedRowsRequest = Readonly<{
 	readonly edge: WritableManyRelation;
 	readonly parentId: string;
 }>;
 
-export type RelatedRowsResult = Readonly<{
+type RelatedRowsResult = Readonly<{
 	readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
 	readonly raw: ReadonlyArray<Readonly<Record<string, unknown>>>;
 	readonly json: string;
@@ -21,7 +21,7 @@ type StoredGraphRow = Readonly<{
 	readonly snapshot: string;
 }>;
 
-export type GraphWaveReadResult = Readonly<{
+type GraphWaveReadResult = Readonly<{
 	readonly stored: Map<string, StoredGraphRow | undefined>;
 	readonly related: Map<string, RelatedRowsResult>;
 }>;
@@ -34,7 +34,7 @@ type PendingGraphWaveRead<Error> = Readonly<{
 	readonly result: Deferred.Deferred<GraphWaveReadResult, Error>;
 }>;
 
-export type GraphReadSession<Error> = Readonly<{
+type GraphReadSession<Error> = Readonly<{
 	readonly relatedRows: Map<string, RelatedRowsResult>;
 	readonly storedRows: Map<string, StoredGraphRow | undefined>;
 	readonly batch: {

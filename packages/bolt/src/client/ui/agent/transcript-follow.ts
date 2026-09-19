@@ -12,7 +12,7 @@ import { Schema } from 'effect';
 import type { PanelMessage } from './transcript.js';
 
 /** What the follower reads of a scrollport, and the one thing it writes. */
-export type Scrollport = Readonly<{
+type Scrollport = Readonly<{
 	scrollHeight: number;
 	clientHeight: number;
 }> & { scrollTop: number };
@@ -26,7 +26,7 @@ export const TAIL_SLACK_PX = 32;
 export const atTail = (port: Scrollport): boolean =>
 	port.scrollHeight - port.clientHeight - port.scrollTop <= TAIL_SLACK_PX;
 
-export type TailFollower = Readonly<{
+type TailFollower = Readonly<{
 	/** Whether the next growth will be followed; read for tests and affordances. */
 	readonly pinned: boolean;
 	/** Records where the reader is. Wire it to the scrollport's scroll event. */

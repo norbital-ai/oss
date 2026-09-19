@@ -27,7 +27,7 @@ import * as Identity from '#lib/runtime/identity/identity.js';
  * schema-constrained turn over everything it gathered.
  */
 /** One image an authored `api.infer` attached to its turn, taken straight from a `file()` column. */
-export type AuthoredInferenceImage = Readonly<{
+type AuthoredInferenceImage = Readonly<{
 	readonly file: FileRef;
 	readonly detail?: 'auto' | 'low' | 'high';
 }>;
@@ -60,7 +60,7 @@ export type InferenceRequest = Readonly<{
 }>;
 
 /** What an invocation must carry for an authored inference to call host tools. */
-export type InferenceHostToolContext = Readonly<{
+type InferenceHostToolContext = Readonly<{
 	readonly effectId: EffectIdType;
 	readonly subject: Identity.Subject;
 	/** The conversation the call belongs to, when there is one; the host scopes sessions by it. */
@@ -76,7 +76,7 @@ export type InferenceHostToolContext = Readonly<{
  * read through `api.readUrl`, a lookup through `api.db`) and its result is what the model sees
  * next. A failure becomes a failed tool result the model can react to, never a dropped turn.
  */
-export type AuthoredInferenceTool = Readonly<{
+type AuthoredInferenceTool = Readonly<{
 	readonly name: string;
 	readonly description: string;
 	readonly input: Schema.Codec<unknown, unknown>;

@@ -20,7 +20,7 @@ import { Option, Schema } from 'effect';
 import type { SyncClientApplyFrame } from './sse-driver.js';
 import { applyPrefixDelta } from '../live-query/project.js';
 
-export type DisconnectCause = Readonly<{
+type DisconnectCause = Readonly<{
 	readonly kind: 'transport' | 'terminal';
 	readonly message: string;
 	readonly at: number;
@@ -37,7 +37,7 @@ const RETRY_MAX_MS = 30_000;
  */
 const TRANSPORT_ESCALATION_ATTEMPTS = 6;
 
-export type QueryPhase = 'pending' | 'fresh' | 'failed';
+type QueryPhase = 'pending' | 'fresh' | 'failed';
 
 export type VersionedPrefixState = Readonly<{
 	readonly version: number;
@@ -57,7 +57,7 @@ export type QueryState = Readonly<{
 	readonly error?: string;
 }>;
 
-export type WriteState = Readonly<
+type WriteState = Readonly<
 	{ readonly request: CollectionMutationPush } & (
 		{ readonly phase: 'queued' } | { readonly phase: 'sent'; readonly sentAt: number }
 	)

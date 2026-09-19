@@ -15,7 +15,7 @@ import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import type { GraphPreparedOperation } from './engine.js';
 import { WRITE_DEPTH_LIMIT, type WritableManyRelation } from './plan.js';
 
-export type DeclaredAction = 'create' | 'update' | 'delete';
+type DeclaredAction = 'create' | 'update' | 'delete';
 
 /** The runtime shape of one collection, as the workspace definition carries it. */
 export type DeclaredCollection = WorkspaceDefinition['collections'][number];

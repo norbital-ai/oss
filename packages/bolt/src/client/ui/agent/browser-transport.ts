@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect';
 import { httpRequest } from '@norbital-ai/std/http';
 import type { BoltTransport } from '#lib/client/contracts.js';
 
-export type HttpBoltTransportOptions = Readonly<{
+type HttpBoltTransportOptions = Readonly<{
 	/**
 	 * Where a command is posted, as a prefix the command name is appended to.
 	 *
