@@ -119,7 +119,11 @@ known optional file, not a stray.
 
 Tenant Skills live at `src/capabilities/skills/<name>/SKILL.md` (same package shape as Agent
 Skills: optional `references/`, `scripts/`, `assets/`). They compile into the release and are
-offered through `list_skills` / `read_skill`.
+offered through `list_skills` / `read_skill`; a skill's `## ` headings are listed as its sections
+and `read_skill { name, section }` answers one of them. The platform's `authoring-tenant-workspace`
+skill ends in reference sections that are the built authoring declarations verbatim —
+`packages/bolt/scripts/authoring-reference.mjs` writes them after `pnpm build`, and
+`tests/authoring-reference.test.ts` fails when the committed module no longer matches the types.
 
 Colony stores personal skills privately per tenant and authenticated user. Discover with
 `list_personal_skills`, load one with `read_personal_skill`, and manage with

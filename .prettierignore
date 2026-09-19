@@ -40,3 +40,6 @@ vite.config.js*
 # reformat reads as a tampered receipt.
 packages/bolt/tests/sync-sync-engine-pglite-probes.test.mjs
 packages/bolt/tests/sync-sync-engine-prefix-model.test.mjs
+
+# The authoring reference is the built declarations verbatim; scripts/authoring-reference.mjs writes it.
+**/*.generated.ts

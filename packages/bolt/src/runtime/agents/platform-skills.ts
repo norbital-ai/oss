@@ -1,4 +1,5 @@
 import type { SkillDeclaration } from '../../authoring/workspace-schema.js';
+import { AUTHORING_REFERENCE } from './authoring-reference.generated.js';
 
 /**
  * Skills the host supplies to every workspace agent, beside the ones the workspace authors.
@@ -161,15 +162,12 @@ to show meaningful record names. CollectionForm supplies validation and save con
 
 ## Server code: automations, functions, transforms
 
-Server handlers are Effect-native and receive one \`api\`. This is the whole of it. What this
-skill does not state does not exist: never read the installed \`@norbital-ai\` packages to look for
-more — a missing capability is an answer to give, not a thing to find.
-
-- \`api.db.<collection>.findMany / findFirst / count\` — reads, policy-filtered.
-- \`api.collection.<collection>.create / update / delete\` — writes through the declared contract.
-- \`api.automations.run(name, input?, { after? })\` — start a declared automation, durably.
-- \`api.infer(...)\`, \`api.readFileAsset(file)\`; an automation also has \`api.runId\`,
-  \`api.progress({ progress, text })\`, \`api.readUrl(url)\` and \`api.connection.get(...)\`.
+Server handlers are Effect-native and receive one \`api\`. Its exact shape, and every other
+authoring type, is in the reference sections at the end of this skill — the built declarations
+themselves, doc comments included. Read one with \`read_skill\` and its \`section\` (the section
+titles are listed with the skill) instead of the whole skill. What the reference does not declare
+does not exist: never read the installed \`@norbital-ai\` packages to look for more — a missing
+capability is an answer to give, not a thing to find.
 
 Notifications are declared, never sent from code. A \`+collection.ts\` carries
 \`notifications: { committed: [{ channel: 'inbox', recipients: ({ action }) => [{ team: 'R&D' }],
@@ -318,6 +316,12 @@ export const PLATFORM_SKILLS: ReadonlyArray<SkillDeclaration> = [
 		name: 'authoring-tenant-workspace',
 		description:
 			'Author tenant source, collections, apps, skills and tests using the published workspace contract.',
-		body: AUTHORING_CONTRACT
+		body: [
+			AUTHORING_CONTRACT,
+			...AUTHORING_REFERENCE.map(
+				({ title, body }) =>
+					`## ${title}\n\nFrom the built declarations.\n\n\`\`\`ts\n${body}\n\`\`\``
+			)
+		].join('\n\n')
 	}
 ];

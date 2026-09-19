@@ -262,9 +262,13 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'read_skill',
-		description: 'Read one skill from list_skills by exact name.',
+		description:
+			'Read one skill from list_skills by exact name — whole, or one `## section` by its title (list_skills names them).',
 		command: 'platform:read_skill',
-		inputSchema: objectInput({ name: { type: 'string', minLength: 1 } }, ['name'])
+		inputSchema: objectInput(
+			{ name: { type: 'string', minLength: 1 }, section: { type: 'string', minLength: 1 } },
+			['name']
+		)
 	},
 	{
 		name: 'search_task_history',
@@ -339,7 +343,29 @@ export interface TodoItem extends Schema.Schema.Type<typeof TodoItem> {}
 export const TodoList = Schema.Struct({ items: Schema.Array(TodoItem) });
 export interface TodoList extends Schema.Schema.Type<typeof TodoList> {}
 
-const SkillNameInput = Schema.Struct({ name: Schema.NonEmptyString });
+const SkillNameInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	section: Schema.optionalKey(Schema.NonEmptyString)
+});
+
+/** A skill's `## ` headings, in order: the index a reader asks by. */
+export const skillSections = (body: string): ReadonlyArray<string> =>
+	[...body.matchAll(/^## (.+)$/gm)].map((match) => match[1]!.trim());
+
+/** One `## section` of a skill body by title (case-insensitive), or nothing. */
+const skillSection = (body: string, title: string): string | undefined => {
+	const wanted = title.trim().toLowerCase();
+	const parts = body.split(/^(?=## )/m);
+	return parts
+		.find(
+			(part) =>
+				part
+					.match(/^## (.+)$/m)?.[1]
+					?.trim()
+					.toLowerCase() === wanted
+		)
+		?.trimEnd();
+};
 const CompactInput = Schema.Struct({ reason: Schema.NonEmptyString });
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -736,10 +762,14 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			return {
 				readTool: 'read_skill',
 				skills: [
-					...context.skills.map(({ name: skill, description }) => ({
-						name: skill,
-						...(description === undefined ? {} : { description })
-					})),
+					...context.skills.map(({ name: skill, description, body }) => {
+						const sections = skillSections(body);
+						return {
+							name: skill,
+							...(description === undefined ? {} : { description }),
+							...(sections.length === 0 ? {} : { sections })
+						};
+					}),
 					...personal.map((skill) => ({ ...skill, scope: 'personal' as const }))
 				]
 			};
@@ -751,10 +781,23 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				const { body } = yield* Schema.decodeUnknownEffect(PersonalBody)(
 					yield* executeHostTool(PERSONAL_READ_TOOL, { name: parsed.name }, context)
 				).pipe(Effect.mapError((error) => invalidToolInput(PERSONAL_READ_TOOL, error)));
-				return { name: parsed.name, body, scope: 'personal' };
+				const section = parsed.section === undefined ? body : skillSection(body, parsed.section);
+				if (section === undefined)
+					return yield* new SkillError({
+						name: `${parsed.name} § ${parsed.section}`,
+						reason: 'missing'
+					});
+				return { name: parsed.name, body: section, scope: 'personal' };
 			}
 			const body = yield* readSkillBody(context.skills, parsed.name);
-			return { name: parsed.name, body };
+			if (parsed.section === undefined) return { name: parsed.name, body };
+			const section = skillSection(body, parsed.section);
+			if (section === undefined)
+				return yield* new SkillError({
+					name: `${parsed.name} § ${parsed.section}`,
+					reason: 'missing'
+				});
+			return { name: parsed.name, section: parsed.section, body: section };
 		}
 		case 'search_task_history': {
 			const parsed = yield* decode(name, TaskHistoryInput, input);

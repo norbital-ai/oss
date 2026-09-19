@@ -148,7 +148,8 @@ describe('distributed skills and the Todo surface in the loop', () => {
 				{ name: 'payroll', description: 'Approved payroll workflow.' },
 				expect.objectContaining({
 					name: 'authoring-tenant-workspace',
-					description: expect.any(String)
+					description: expect.any(String),
+					sections: expect.arrayContaining(['Method', 'Automations'])
 				})
 			]
 		});
