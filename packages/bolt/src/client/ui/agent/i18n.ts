@@ -32,10 +32,12 @@ const boltConversationMessages = defineMessages({
 		'bolt.agent.compactContextHint':
 			'This turn saves a focused context checkpoint. Durable history remains available in this conversation.',
 		'bolt.agent.compactedContextAria': 'Compacted context',
-		'bolt.agent.composerPlaceholder': 'Ask anything, or type /plan or /compact',
+		'bolt.agent.composerPlaceholder': 'Ask anything, or type /plan, /compact or /export',
 		'bolt.agent.commandPlanDescription': 'Research and save a plan without making changes',
 		'bolt.agent.commandCompactDescription':
 			'Summarize this conversation and keep its transcript available',
+		'bolt.agent.commandExportDescription':
+			'Download this conversation as Markdown: every message, tool call and model call',
 		'bolt.agent.modelChanged': 'Model changed · {model}',
 		'bolt.agent.contextCompacted': 'Context compacted',
 		'bolt.agent.contextWindowUsed': 'Context window used',
@@ -601,9 +603,10 @@ const boltConversationMessages = defineMessages({
 		'bolt.agent.collection': '集合',
 		'bolt.agent.compactContextHint': '本轮会保存聚焦的上下文检查点；完整历史仍保留在此对话中。',
 		'bolt.agent.compactedContextAria': '压缩后的上下文',
-		'bolt.agent.composerPlaceholder': '可直接提问，或输入 /plan、/compact',
+		'bolt.agent.composerPlaceholder': '可直接提问，或输入 /plan、/compact、/export',
 		'bolt.agent.commandPlanDescription': '仅调研并保存计划，不做任何更改',
 		'bolt.agent.commandCompactDescription': '总结此对话并保留其完整记录',
+		'bolt.agent.commandExportDescription': '将此对话导出为 Markdown：每条消息、工具调用和模型调用',
 		'bolt.agent.modelChanged': '模型已切换 · {model}',
 		'bolt.agent.contextCompacted': '上下文已压缩',
 		'bolt.agent.contextWindowUsed': '已用上下文窗口',

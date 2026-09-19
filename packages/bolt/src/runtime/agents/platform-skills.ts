@@ -159,6 +159,44 @@ Declare every mutable field exactly once, including relationship and file fields
 can use \`relationOptions={{ label: (row) => String(row.name ?? ''), orderBy: { name: 'asc' } }}\`
 to show meaningful record names. CollectionForm supplies validation and save controls.
 
+## Server code: automations, functions, transforms
+
+Server handlers are Effect-native and receive one \`api\`. This is the whole of it — there is no
+other server surface, so do not search the installed package for one:
+
+- \`api.db.<collection>.findMany / findFirst / count\` — reads, policy-filtered.
+- \`api.collection.<collection>.create / update / delete\` — writes through the declared contract.
+- \`api.automations.run(name, input?, { after? })\` — start a declared automation, durably.
+- \`api.infer(...)\`, \`api.readFileAsset(file)\`; an automation also has \`api.runId\`,
+  \`api.progress({ progress, text })\`, \`api.readUrl(url)\` and \`api.connection.get(...)\`.
+
+Notifications are declared, never sent from code. A \`+collection.ts\` carries
+\`notifications: { committed: [{ channel: 'inbox', recipients: ({ action }) => [{ team: 'R&D' }],
+message: ({ ids }) => ({ title, body }) }] }\` (events: \`committed\`, and the approval events);
+recipients are user ids or \`{ team }\`; \`inbox\` is the only channel. Work that must notify on a
+schedule writes or updates a row of a collection whose rule fans out.
+
+\`\`\`ts
+import { defineAutomation } from '@norbital-ai/bolt/authoring';
+import { Effect } from 'effect';
+
+export default defineAutomation(
+  { schedule: '0 0 * * 1-5' },   // five-field cron, always UTC; or { trigger: { collection, event: 'created' | 'updated' | 'deleted' } }, or {}
+  {
+    description: 'What this run is for — mandatory; the studio shows it.',
+    policies: ['operations'],
+    handler: (api, { args, scope }) =>   // scope.incoming_record on a change trigger
+      Effect.gen(function* () {
+        const rows = yield* api.db.projects.findMany({ where: { status: { eq: 'pending' } }, limit: 200 });
+        return { count: rows.length };
+      })
+  }
+);
+\`\`\`
+
+Every automation is also runnable by hand. It never repeats its filename as an id and never
+declares \`bolt_task_id\`.
+
 ## Apps
 
 An app is \`src/apps/+<app>.svelte\`. The workspace shell renders its translated page heading.

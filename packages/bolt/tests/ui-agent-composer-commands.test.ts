@@ -8,11 +8,12 @@ import {
 import { parseTaskSlashCommand } from '../src/client/ui/agent/intent.js';
 
 describe('AGENT-UI4 the / command menu', () => {
-	it('opens for a / at the start of the draft with plan and compact', () => {
+	it('opens for a / at the start of the draft with plan, compact and export', () => {
 		expect(findCommandTrigger('/', 1)).toEqual({ query: '' });
 		expect(commandMenuItems('')).toEqual([
 			{ kind: 'composer-command', command: 'plan' },
-			{ kind: 'composer-command', command: 'compact' }
+			{ kind: 'composer-command', command: 'compact' },
+			{ kind: 'composer-command', command: 'export' }
 		]);
 		expect(findCommandTrigger('/pl', 3)).toEqual({ query: 'pl' });
 		expect(commandMenuItems('pl')).toEqual([{ kind: 'composer-command', command: 'plan' }]);
@@ -55,12 +56,11 @@ describe('AGENT-UI4 the / command menu', () => {
 		});
 	});
 
-	it('offers exactly the commands the send path parses', () => {
+	it('offers the commands the send path parses, plus /export which sends nothing', () => {
 		for (const command of COMPOSER_COMMANDS) {
-			expect(parseTaskSlashCommand(`/${command} x`)).toMatchObject({
-				kind: 'submission',
-				mode: command
-			});
+			expect(parseTaskSlashCommand(`/${command} x`)).toMatchObject(
+				command === 'export' ? { kind: 'message' } : { kind: 'submission', mode: command }
+			);
 		}
 	});
 });

@@ -113,6 +113,30 @@ export function plainMessageText(message: PanelMessage): string {
 		.join('\n');
 }
 
+/**
+ * A checkpoint is asked for as a two-column table (Section | Summary), which reads well to the
+ * model and badly to a person: a narrow first column wraps "Section" letter by letter. Shown as
+ * headed sections instead; text that is not that table is shown as it came.
+ */
+export function checkpointSections(text: string): string {
+	const rows = text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith('|'))
+		.map((line) =>
+			line
+				.slice(1, line.endsWith('|') ? -1 : undefined)
+				.split(/(?<!\\)\|/)
+				.map((cell) => cell.trim().replace(/\\\|/g, '|'))
+		)
+		.filter((cells) => cells.length === 2 && !/^-+$/.test(cells[0]!));
+	if (rows.length < 2 || rows[0]![0]!.toLowerCase() !== 'section') return text;
+	return rows
+		.slice(1)
+		.map(([section, body]) => `#### ${section}\n\n${body}`)
+		.join('\n\n');
+}
+
 /** Returns editable plain user text without dropping files or other canonical message parts. */
 export function editableUserMessageText(message: PanelMessage): string | null {
 	if (message.author.kind !== 'human' || message.message.role !== 'user') return null;

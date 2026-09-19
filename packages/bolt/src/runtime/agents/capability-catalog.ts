@@ -497,7 +497,7 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
  * `note` says where the source lives for anyone with a file-reading tool.
  */
 const WORKSPACE_NOTE =
-	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. id, created_at, updated_at, row_version are the platform's.";
+	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's.";
 
 /** One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`. */
 const describeField = (
@@ -586,6 +586,7 @@ export const describeWorkspace = (
 		| 'writableCollectionNames'
 		| 'toolNames'
 		| 'skills'
+		| 'subject'
 	>
 ): Schema.JsonObject => {
 	const definition = context.workspace.definition;
@@ -617,6 +618,16 @@ export const describeWorkspace = (
 							: 'manual'
 				}]${automation.description === undefined ? '' : ` — ${automation.description}`}`
 		),
+		// Who does what: the declared teams and the policies each holds, then the asker's own place.
+		teams: Object.entries(definition.teams ?? {}).map(
+			([team, policies]) => `${team}: ${policies.join(', ')}`
+		),
+		you:
+			context.subject.system === true
+				? 'system'
+				: context.subject.policies.length === 0
+					? 'admin (every collection, no policy scope)'
+					: `teams ${context.subject.teamPath.join(' > ')}; policies ${context.subject.policies.join(', ')}`,
 		envoys: definition.envoys.map((envoy) => envoy.name),
 		integrations: definition.integrations.map(
 			(integration) =>

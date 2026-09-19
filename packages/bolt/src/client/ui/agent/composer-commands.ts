@@ -5,12 +5,15 @@
  * A command is only ever the first thing in a draft: `/plan` and `/compact` are parsed off the
  * start by `parseTaskSlashCommand`, so a `/` anywhere else is prose and opens nothing. The menu is
  * a static list with one row per command; selecting one lifts the command out of the draft into a
- * mode the composer shows as a badge, leaving only the message text behind.
+ * mode the composer shows as a badge, leaving only the message text behind. `/export` is the
+ * exception: it acts at once — the transcript downloads — and sends nothing.
  */
 import type { MentionMenuItem } from './mention-sources.js';
 
-export const COMPOSER_COMMANDS = ['plan', 'compact'] as const;
+export const COMPOSER_COMMANDS = ['plan', 'compact', 'export'] as const;
 export type ComposerCommand = (typeof COMPOSER_COMMANDS)[number];
+/** The commands a send carries as its mode; `/export` never reaches a send. */
+export type SubmissionCommand = Exclude<ComposerCommand, 'export'>;
 
 const WHITESPACE = /\s/;
 
@@ -50,8 +53,8 @@ export function commandMenuItems(query: string): readonly MentionMenuItem[] {
 export function selectComposerCommand(
 	draft: string,
 	trigger: { readonly query: string },
-	command: ComposerCommand
-): { readonly mode: ComposerCommand; readonly message: string; readonly caret: number } {
+	command: SubmissionCommand
+): { readonly mode: SubmissionCommand; readonly message: string; readonly caret: number } {
 	const after = draft.slice(1 + trigger.query.length);
 	const message = after.startsWith(' ') ? after.slice(1) : after;
 	return { mode: command, message, caret: 0 };

@@ -110,9 +110,16 @@
 					description: t(
 						item.command === 'plan'
 							? 'bolt.agent.commandPlanDescription'
-							: 'bolt.agent.commandCompactDescription'
+							: item.command === 'compact'
+								? 'bolt.agent.commandCompactDescription'
+								: 'bolt.agent.commandExportDescription'
 					),
-					icon: item.command === 'plan' ? 'lucide:list-todo' : 'lucide:scan-text',
+					icon:
+						item.command === 'plan'
+							? 'lucide:list-todo'
+							: item.command === 'compact'
+								? 'lucide:scan-text'
+								: 'lucide:download',
 					entity: { kind: 'composer-command', command: item.command }
 				};
 			default: {

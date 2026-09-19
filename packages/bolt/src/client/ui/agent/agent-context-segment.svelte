@@ -5,7 +5,12 @@
 	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Tabs } from '@norbital-ai/ui/tabs';
 	import { Bound, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { compactOrigin, plainMessageText, projectAgentContextView } from './context-view.js';
+	import {
+		checkpointSections,
+		compactOrigin,
+		plainMessageText,
+		projectAgentContextView
+	} from './context-view.js';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import type { SubagentTranscript, ToolPairing } from './tool-rows.js';
 	import { type PlanRow, type TurnRow, type PanelMessage } from './transcript.js';
@@ -70,7 +75,7 @@
 					<ReadonlyMarkdown
 						scale="compact"
 						allowHtml={false}
-						content={plainMessageText(checkpoint)}
+						content={checkpointSections(plainMessageText(checkpoint))}
 					/>
 				{/if}
 				{#if plan !== undefined}

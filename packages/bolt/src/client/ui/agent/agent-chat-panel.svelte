@@ -36,8 +36,9 @@
 		commandMenuItems,
 		findCommandTrigger,
 		selectComposerCommand,
-		type ComposerCommand
+		type SubmissionCommand
 	} from './composer-commands.js';
+	import { downloadMarkdown, exportTranscript } from './export-transcript.js';
 	import { pairToolCalls, type SubagentTranscript } from './tool-rows.js';
 	import {
 		compactOrigin,
@@ -724,8 +725,22 @@
 		);
 	}
 
+	/** `/export` is local: the transcript downloads and nothing is sent. */
+	function exportConversation(): void {
+		if (activeConversationId === undefined) return;
+		downloadMarkdown(
+			`conversation-${activeConversationId}.md`,
+			exportTranscript(activeConversationId, panelMessages, usageRows)
+		);
+		draft = '';
+	}
+
 	function attemptSend(priority: 'normal' | 'steer' = 'normal'): void {
 		if (composer !== null && composer.value !== draft) draft = composer.value;
+		if (/^\s*\/export\s*$/i.test(draft)) {
+			exportConversation();
+			return;
+		}
 		const parsed = parseTaskSlashCommand(draft);
 		if (composerLocked || !modelAvailable || !draftSendable(parsed)) return;
 		if (revisedMessage !== null) {
@@ -742,7 +757,7 @@
 	let caret = $state(0);
 	let commandHighlight = $state(0);
 	let commandMenuDismissed = $state(false);
-	let commandMode = $state<ComposerCommand | null>(null);
+	let commandMode = $state<SubmissionCommand | null>(null);
 	/** The command a send would carry: the selected badge, or one typed into the draft. */
 	const activeCommand = $derived(
 		commandMode ?? (parsedDraft.kind === 'submission' ? parsedDraft.mode : null)
@@ -768,6 +783,11 @@
 		const item = commandItems[index];
 		const trigger = commandTrigger;
 		if (item === undefined || item.kind !== 'composer-command' || trigger === null) return;
+		if (item.command === 'export') {
+			commandMenuDismissed = true;
+			exportConversation();
+			return;
+		}
 		const next = selectComposerCommand(draft, trigger, item.command);
 		commandMode = next.mode;
 		draft = next.message;

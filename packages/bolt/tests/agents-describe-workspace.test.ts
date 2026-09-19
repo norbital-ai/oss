@@ -69,7 +69,8 @@ const definition = {
 	envoys: [{ name: 'whatsapp' }],
 	integrations: [
 		{ name: 'erp', collection: 'customers', policies: [], receive: [{}], webhooks: [], send: [] }
-	]
+	],
+	teams: { 'R&D': ['color_matcher'], Reviewers: ['submission_reviewer'] }
 } as unknown as WorkspaceDefinition;
 
 describe('describe_workspace', () => {
@@ -80,7 +81,8 @@ describe('describe_workspace', () => {
 			readableCollectionNames: ['projects', 'customers'],
 			writableCollectionNames: ['projects'],
 			toolNames: ['read_collection', 'write_collection'],
-			skills: [{ name: 'intake' } as never]
+			skills: [{ name: 'intake' } as never],
+			subject: { userId: 'u1', teamPath: ['R&D'], policies: ['color_matcher'] } as never
 		});
 		expect(described.note).toMatch(/src\/collections\/<name>\/\+model\.ts/);
 		const [projects, customers] = described.collections as ReadonlyArray<Record<string, unknown>>;
@@ -112,6 +114,8 @@ describe('describe_workspace', () => {
 			'nightly [schedule 0 2 * * *]'
 		]);
 		expect(described.integrations).toEqual(['erp on customers (1 pull)']);
+		expect(described.teams).toEqual(['R&D: color_matcher', 'Reviewers: submission_reviewer']);
+		expect(described.you).toBe('teams R&D; policies color_matcher');
 		expect(described.tools).toEqual(['read_collection', 'write_collection']);
 		expect(described.skills).toEqual(['intake']);
 	});
