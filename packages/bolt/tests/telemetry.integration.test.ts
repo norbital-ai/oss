@@ -86,7 +86,7 @@ describe('the runtime keeps its own records', () => {
 		});
 	});
 
-	it('surfaces a failed task as one error record and prunes the aged window with it', async () => {
+	it('surfaces a refused task as one warning record and prunes the aged window with it', async () => {
 		harness = await makeBoltTestRuntime();
 		await seedAged(harness);
 		const invocation = task('collections.findMany', { collection: 'people' });
@@ -95,8 +95,8 @@ describe('the runtime keeps its own records', () => {
 		expect(kept.map((row) => row.event)).not.toContain('aged');
 		expect(kept).toHaveLength(1);
 		expect(kept[0]).toMatchObject({
-			severity: 'ERROR',
-			event: 'dispatch.failed',
+			severity: 'WARN',
+			event: 'dispatch.refused',
 			invocation: invocation.id
 		});
 		expect(String(kept[0]!.attributes['error'])).toContain('AccessDenied');

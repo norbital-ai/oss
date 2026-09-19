@@ -92,8 +92,9 @@ export const record = (
 ): Effect.Effect<void> => Effect.logInfo(event).pipe(Effect.annotateLogs(fields));
 
 /**
- * How the invocation ended: one record, at info with its time when it settled, at error with the
- * cause when it failed — the failure surfaced as a record rather than lost in a stack.
+ * How the invocation ended: one record, at info with its time when it settled, at warning with the
+ * reason when it refused, at error with the cause when it failed — surfaced as a record rather
+ * than lost in a stack.
  */
 export const recordSettled = (
 	invocation: Invocation,
@@ -111,9 +112,15 @@ export const recordSettled = (
 					ms,
 					outcome: Exit.isSuccess(exit) ? 'success' : 'interrupted'
 				});
-	return Effect.logError('dispatch.failed').pipe(
-		Effect.annotateLogs({ ms, error: Cause.pretty(exit.cause).slice(0, LINE_LIMIT) })
-	);
+	// A typed failure is a refusal the runtime meant — a missing credential, a policy, a rule — and
+	// its message is the whole story; a defect is the runtime's own fault and carries its stack.
+	return Cause.hasDies(exit.cause)
+		? Effect.logError('dispatch.failed').pipe(
+				Effect.annotateLogs({ ms, error: Cause.pretty(exit.cause).slice(0, LINE_LIMIT) })
+			)
+		: Effect.logWarning('dispatch.refused').pipe(
+				Effect.annotateLogs({ ms, error: String(Cause.squash(exit.cause)).slice(0, LINE_LIMIT) })
+			);
 };
 
 const decodeHours = Schema.decodeUnknownOption(
