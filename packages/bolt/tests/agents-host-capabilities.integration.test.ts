@@ -75,6 +75,7 @@ describe('host capability discovery and execution', () => {
 		const { ai, feed, requests } = scriptedTranscript([
 			assistantToolCall('workspace_read', {}, 'bounded-read'),
 			assistantToolCall('list_skills', {}, 'skills'),
+			assistantToolCall('describe_workspace', {}, 'describe'),
 			assistantText('Read the bounded receipt.')
 		]);
 		harness = await makeBoltTestRuntime(undefined, {
@@ -120,12 +121,21 @@ describe('host capability discovery and execution', () => {
 				)
 			).status
 		).toBe('done');
-		expect(feed.map(({ automaticCompact }) => automaticCompact)).toEqual([false, false, false]);
-		// The host's private store is folded into the one list, marked as the person's own.
+		expect(feed.map(({ automaticCompact }) => automaticCompact)).toEqual([
+			false,
+			false,
+			false,
+			false
+		]);
+		// The host's private store is folded into the one list, marked as the person's own, and
+		// rides on the workspace answer so a taught shorthand is found without a listing call.
 		expect(toolResultFor(requests[2]!, 'list_skills')).toMatchObject({
 			skills: expect.arrayContaining([
 				{ name: 'my-way', description: 'How I like it done.', scope: 'personal' }
 			])
+		});
+		expect(toolResultFor(requests[3]!, 'describe_workspace')).toMatchObject({
+			personalSkills: ['my-way — How I like it done.']
 		});
 	});
 

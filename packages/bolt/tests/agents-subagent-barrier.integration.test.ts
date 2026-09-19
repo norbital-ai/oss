@@ -132,6 +132,11 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		const strangerId = ConversationId.make('00000000-0000-4000-8000-000000000905');
 		const { ai, requests } = scriptedTranscript([
 			assistantText('Sibling settled.'),
+			assistantToolCall(
+				'search_task_history',
+				{ scope: 'mine', query: 'Sibling settled' },
+				'find-1'
+			),
 			assistantToolCall('subagent', { action: 'read', conversationId: siblingId }, 'read-1'),
 			assistantToolCall(
 				'subagent',
@@ -153,15 +158,19 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		await submitParent(agents, '904', parentId);
 		await execute(agents, '904', parentId);
 		const parentRequests = requests.filter(({ sessionId }) => sessionId === parentId);
-		expect(toolResultFor(parentRequests[1]!, 'subagent')).toMatchObject({
+		// The sibling is found by searching every conversation of the person, id and all.
+		expect(JSON.stringify(toolResultFor(parentRequests[1]!, 'search_task_history'))).toContain(
+			siblingId
+		);
+		expect(toolResultFor(parentRequests[2]!, 'subagent')).toMatchObject({
 			conversationId: siblingId,
 			status: 'done'
 		});
-		expect(toolResultFor(parentRequests[2]!, 'subagent')).toMatchObject({
+		expect(toolResultFor(parentRequests[3]!, 'subagent')).toMatchObject({
 			conversationId: siblingId,
 			state: 'queued'
 		});
-		const refused = toolResultFor(parentRequests[3]!, 'subagent');
+		const refused = toolResultFor(parentRequests[4]!, 'subagent');
 		expect(JSON.stringify(refused)).toContain('ToolNotAllowed');
 		// The message is the sibling's next input, named by the conversation it came from.
 		await execute(agents, '903:b', siblingId);

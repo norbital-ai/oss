@@ -273,10 +273,11 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'search_task_history',
-		description: 'Search earlier messages of this Task or its workbench.',
+		description:
+			'Search earlier messages: this Task, its workbench, or every conversation of this person (mine) — each hit names its conversationId.',
 		command: 'platform:search_task_history',
 		inputSchema: objectInput({
-			scope: { type: 'string', enum: ['this_task', 'workbench'] },
+			scope: { type: 'string', enum: ['this_task', 'workbench', 'mine'] },
 			query: { type: 'string' },
 			limit: { type: 'integer', minimum: 1, maximum: 50 }
 		})
@@ -349,6 +350,16 @@ const SkillNameInput = Schema.Struct({
 	section: Schema.optionalKey(Schema.NonEmptyString)
 });
 
+/** The person's own skills, where the host keeps a private store; none anywhere else. */
+const personalSkills = Effect.fn('CapabilityCatalog.personalSkills')(function* (
+	context: ToolExecutionContext
+) {
+	if (!context.toolNames.includes(PERSONAL_LIST_TOOL)) return [];
+	return (yield* Schema.decodeUnknownEffect(PersonalList)(
+		yield* executeHostTool(PERSONAL_LIST_TOOL, {}, context)
+	).pipe(Effect.mapError((error) => invalidToolInput(PERSONAL_LIST_TOOL, error)))).skills;
+});
+
 /** A skill's `## ` headings, in order: the index a reader asks by. */
 export const skillSections = (body: string): ReadonlyArray<string> =>
 	[...body.matchAll(/^## (.+)$/gm)].map((match) => match[1]!.trim());
@@ -386,7 +397,7 @@ const CollectionWriteInput = Schema.Struct({
 	values: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
 });
 const TaskHistoryInput = Schema.Struct({
-	scope: Schema.optionalKey(Schema.Literals(['this_task', 'workbench'])),
+	scope: Schema.optionalKey(Schema.Literals(['this_task', 'workbench', 'mine'])),
 	query: Schema.optionalKey(Schema.String),
 	limit: Schema.optionalKey(
 		Schema.Number.check(
@@ -524,7 +535,7 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
  * `note` says where the source lives for anyone with a file-reading tool.
  */
 const WORKSPACE_NOTE =
-	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's.";
+	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when this is not enough. write_collection takes the listed create/update columns and answers with the stored row; a refusal names the rule. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's. personalSkills are what this person taught you earlier — read one with read_skill when a request uses its words.";
 
 /** One field as a token: `customer_id:uuid!->customers`, `status:string=pending|done`. */
 const describeField = (
@@ -712,12 +723,18 @@ const validatedTodo = Effect.fn('CapabilityCatalog.validatedTodo')(function* (
 	return next;
 });
 
-const taskIdsInWorkbench = Effect.fn('CapabilityCatalog.taskIdsInWorkbench')(function* (
-	context: ToolExecutionContext
+/** The conversations a search may reach: this tree, or every one the person owns. */
+const taskIdsIn = Effect.fn('CapabilityCatalog.taskIdsIn')(function* (
+	context: ToolExecutionContext,
+	scope: 'workbench' | 'mine'
 ) {
 	const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 		collection: 'conversation',
-		where: { workbench_id: { eq: context.workbenchId } },
+		where:
+			scope === 'workbench'
+				? { workbench_id: { eq: context.workbenchId } }
+				: { subject_id: { eq: context.subject.userId } },
+		orderBy: { created_at: 'desc' },
 		limit: 50
 	});
 	return (yield* decodeRows(TaskProjection, rows)).map(({ id }) => id);
@@ -748,18 +765,25 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			const parsed = yield* decode(name, CompactInput, input);
 			return { checkpoint: 'scheduled', reason: parsed.reason };
 		}
-		case 'describe_workspace':
-			return describeWorkspace(context);
+		case 'describe_workspace': {
+			// The person's own skills ride on the answer every turn opens with, so a shorthand the
+			// person taught is found without a listing call — and without touching the cached prompt.
+			const personal = yield* personalSkills(context);
+			return personal.length === 0
+				? describeWorkspace(context)
+				: {
+						...describeWorkspace(context),
+						personalSkills: personal.map(({ name: skill, description }) =>
+							description === undefined ? skill : `${skill} — ${description}`
+						)
+					};
+		}
 		/**
 		 * One list, one reader. A person's private skills live in the host, so they are folded in
 		 * here when the host advertises them — the model never learns there are two stores.
 		 */
 		case 'list_skills': {
-			const personal = context.toolNames.includes(PERSONAL_LIST_TOOL)
-				? (yield* Schema.decodeUnknownEffect(PersonalList)(
-						yield* executeHostTool(PERSONAL_LIST_TOOL, {}, context)
-					).pipe(Effect.mapError((error) => invalidToolInput(PERSONAL_LIST_TOOL, error)))).skills
-				: [];
+			const personal = yield* personalSkills(context);
 			return {
 				readTool: 'read_skill',
 				skills: [
@@ -803,8 +827,8 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		case 'search_task_history': {
 			const parsed = yield* decode(name, TaskHistoryInput, input);
 			const scope = parsed.scope ?? 'this_task';
-			let taskIds: ReadonlyArray<ConversationId> = [context.conversationId];
-			if (scope === 'workbench') taskIds = yield* taskIdsInWorkbench(context);
+			const taskIds: ReadonlyArray<ConversationId> =
+				scope === 'this_task' ? [context.conversationId] : yield* taskIdsIn(context, scope);
 			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: 'conversation_message',
 				where: { conversation_id: { in: taskIds } },
