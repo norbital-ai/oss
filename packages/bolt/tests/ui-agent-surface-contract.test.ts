@@ -60,7 +60,7 @@ describe('G3 Plan Compact and edit', () => {
 describe('G4 skills MCP secrets and models', () => {
 	it('exposes inbuilt system tools, MCP 2026 pin, and host-only secret reads', () => {
 		expect(systemToolSpecs.map(({ name }) => name)).toEqual(
-			expect.arrayContaining(['read_skill', 'use_image', 'todo'])
+			expect.arrayContaining(['list_skills', 'read_skill', 'use_image', 'todo'])
 		);
 		expect(MCP_PROTOCOL_VERSION).toBe('2026-07-28');
 		const secrets = SystemCommandContracts.map(({ name }) => name).filter((name) =>

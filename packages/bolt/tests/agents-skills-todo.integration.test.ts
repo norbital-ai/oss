@@ -17,12 +17,7 @@ import {
 	assistantText,
 	assistantToolCall
 } from './agents-canonical-ai-fixture.js';
-import {
-	lastToolFailure,
-	systemPrompt,
-	toolResultFor,
-	toolResultsFor
-} from './agents-canonical-ai-fixture.js';
+import { lastToolFailure, toolResultFor, toolResultsFor } from './agents-canonical-ai-fixture.js';
 
 const cassette = (name: string) =>
 	readCassetteFile(fileURLToPath(new URL(`./assets/${name}.cassette.json`, import.meta.url)));
@@ -98,8 +93,10 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		for (const tenant of ['alpha', 'beta']) {
 			const body = `# Payroll\nFollow only ${tenant}'s approved payroll workflow.`;
 			const { ai, requests } = scriptedTranscript([
+				assistantToolCall('list_skills', {}, 'list-first'),
 				assistantToolCall('read_skill', { name: 'payroll' }, 'read-first'),
 				assistantText('Read.'),
+				assistantToolCall('list_skills', {}, 'list-second'),
 				assistantToolCall('read_skill', { name: 'payroll' }, 'read-second'),
 				assistantText('Read.')
 			]);
@@ -123,9 +120,11 @@ describe('distributed skills and the Todo surface in the loop', () => {
 				await harness.runtime.runPromise(
 					agents.execute(harness.effectId(`execute-${index}`), actor, id)
 				);
-				// The index is in the system prompt; only the body costs a call.
-				expect(systemPrompt(requests[index * 2]!)).toContain('- payroll');
-				expect(toolResultFor(requests[index * 2 + 1]!, 'read_skill')).toEqual({
+				expect(toolResultFor(requests[index * 3 + 1]!, 'list_skills')).toMatchObject({
+					readTool: 'read_skill',
+					skills: expect.arrayContaining([expect.objectContaining({ name: 'payroll' })])
+				});
+				expect(toolResultFor(requests[index * 3 + 2]!, 'read_skill')).toEqual({
 					name: 'payroll',
 					body
 				});
@@ -143,8 +142,16 @@ describe('distributed skills and the Todo surface in the loop', () => {
 		expect(result.status).toBe('done');
 
 		const second = requests[1]!;
-		expect(systemPrompt(second)).toContain('- payroll — Approved payroll workflow.');
-		expect(systemPrompt(second)).toContain('- authoring-tenant-workspace — ');
+		expect(toolResultFor(second, 'list_skills')).toEqual({
+			readTool: 'read_skill',
+			skills: [
+				{ name: 'payroll', description: 'Approved payroll workflow.' },
+				expect.objectContaining({
+					name: 'authoring-tenant-workspace',
+					description: expect.any(String)
+				})
+			]
+		});
 		expect(toolResultsFor(second, 'read_skill')[0]).toEqual({
 			name: 'payroll',
 			body: '# Payroll\n\nUse the approved workflow.'

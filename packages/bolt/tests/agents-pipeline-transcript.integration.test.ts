@@ -109,6 +109,7 @@ describe('scripted agent pipeline transcript', () => {
 			'todo',
 			'compact',
 			'describe_workspace',
+			'list_skills',
 			'read_skill',
 			'search_task_history',
 			'read_messages',
@@ -172,7 +173,7 @@ describe('scripted agent pipeline transcript', () => {
 		);
 		expect(persisted[0]).toEqual({ author_kind: 'human', role: 'user' });
 		expect(persisted[1]).toEqual({ author_kind: 'agent', role: 'assistant' });
-		expect(persisted.slice(2, 9).every((row) => row['author_kind'] === 'tool')).toBe(true);
+		expect(persisted.slice(2, 10).every((row) => row['author_kind'] === 'tool')).toBe(true);
 		expect(persisted.at(-1)).toEqual({ author_kind: 'agent', role: 'assistant' });
 		const people = await harness!.database.query(`select name from people where id = $1`, [
 			PERSON_ID

@@ -16,7 +16,7 @@ import {
 	scriptedTranscript,
 	assistantText,
 	assistantToolCall,
-	systemPrompt
+	toolResultFor
 } from './agents-canonical-ai-fixture.js';
 import {
 	adminSubject,
@@ -72,8 +72,9 @@ afterEach(async () => {
 describe('host capability discovery and execution', () => {
 	it('estimates bounded host receipts without compacting their full temporary-file contents', async () => {
 		const conversationId = ConversationId.make(recordId('bounded-tool-output'));
-		const { ai, feed } = scriptedTranscript([
+		const { ai, feed, requests } = scriptedTranscript([
 			assistantToolCall('workspace_read', {}, 'bounded-read'),
+			assistantToolCall('list_skills', {}, 'skills'),
 			assistantText('Read the bounded receipt.')
 		]);
 		harness = await makeBoltTestRuntime(undefined, {
@@ -119,7 +120,13 @@ describe('host capability discovery and execution', () => {
 				)
 			).status
 		).toBe('done');
-		expect(feed.map(({ automaticCompact }) => automaticCompact)).toEqual([false, false]);
+		expect(feed.map(({ automaticCompact }) => automaticCompact)).toEqual([false, false, false]);
+		// The host's private store is folded into the one list, marked as the person's own.
+		expect(toolResultFor(requests[2]!, 'list_skills')).toMatchObject({
+			skills: expect.arrayContaining([
+				{ name: 'my-way', description: 'How I like it done.', scope: 'personal' }
+			])
+		});
 	});
 
 	it.each(['agent', 'plan'] as const)(
@@ -166,12 +173,7 @@ describe('host capability discovery and execution', () => {
 				calls
 					.filter(({ request }) => request.tool !== 'capability_catalog')
 					.map(({ request }) => request.tool)
-			).toEqual(
-				// The turn reads the personal skill index for its system prompt before the model runs.
-				mode === 'agent'
-					? ['list_personal_skills', 'workspace_read', 'workspace_apply']
-					: ['list_personal_skills', 'workspace_read']
-			);
+			).toEqual(mode === 'agent' ? ['workspace_read', 'workspace_apply'] : ['workspace_read']);
 			expect(calls.every(({ metadata }) => metadata.subject?.userId === adminSubject.userId)).toBe(
 				true
 			);
@@ -180,8 +182,7 @@ describe('host capability discovery and execution', () => {
 			expect(first?.output._tag).toBe('Message');
 			if (first?.output._tag !== 'Message') throw new Error('Expected tool-capable generation');
 			expect(first.output.tools?.some(({ name }) => name === 'workspace_read')).toBe(true);
-			expect(systemPrompt(first)).toContain('- my-way — How I like it done.');
-			// Folded into the Skills index and read_skill; never offered as a second pair.
+			// Folded into list_skills / read_skill; never offered as a second pair.
 			for (const tool of ['list_personal_skills', 'read_personal_skill'])
 				expect(first.output.tools?.some(({ name }) => name === tool)).toBe(false);
 			for (const tool of ['sandbox_bash', 'save_personal_skill'])

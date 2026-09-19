@@ -18,6 +18,14 @@
 						{
 							"options": {},
 							"type": "tool-call",
+							"id": "chatcmpl-tool-9cfb820a1799542c",
+							"name": "list_skills",
+							"params": {},
+							"providerExecuted": false
+						},
+						{
+							"options": {},
+							"type": "tool-call",
 							"id": "chatcmpl-tool-8febaa278fb48b92",
 							"name": "read_skill",
 							"params": {
