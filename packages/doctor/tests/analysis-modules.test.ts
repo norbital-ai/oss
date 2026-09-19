@@ -38,12 +38,7 @@ import {
 	emptyLocality
 } from '../build/analysis/structure.js';
 import { SCANNER_VERSION, staticFindings } from '../build/analysis/authenticate.js';
-import {
-	analyzeAst,
-	complexityOf,
-	indirectionFindings,
-	isPassThrough
-} from '../build/analysis/complexity.js';
+import { analyzeAst, complexityOf, isPassThrough } from '../build/analysis/complexity.js';
 import { LANGUAGE_HEALTH_PROFILE, mergeHealthProfile } from '../build/health-profile.js';
 import {
 	pathwayHash,
@@ -595,9 +590,11 @@ export * from './reexports.js';
 	const proxy = summary.inlineCandidates.find((candidate) => candidate.kind === 'callback-proxy');
 	assert.equal(proxy?.name, 'onReady');
 	assert.equal(proxy?.forwardsTo, 'notify');
-	const rows = indirectionFindings('probe.ts', source);
-	assert.ok(rows.some((row) => row.rule === 'Q1' && row.location.includes('name=onReady')));
-	assert.ok(rows.some((row) => row.rule === 'Q3' && row.location.includes('name=internalShim')));
+	assert.ok(
+		summary.inlineCandidates.some(
+			(candidate) => candidate.kind === 'transparent-forwarder' && candidate.name === 'internalShim'
+		)
+	);
 });
 
 test('complexity: Q3 skips type predicates and constructed callees; Q4 skips earned names', () => {
@@ -611,20 +608,11 @@ export const like = (value: string) => escapeLikePattern(value);
 const label = (name: string) => name.trim();
 export const show = (name: string) => label(name);
 `;
-	const rows = indirectionFindings('probe.ts', source);
-	assert.equal(
-		rows.some((row) => row.location.includes('name=isRuleList')),
-		false
-	);
-	assert.equal(
-		rows.some((row) => row.location.includes('name=decodeRow')),
-		false
-	);
-	assert.equal(
-		rows.some((row) => row.location.includes('name=escapeLikePattern')),
-		false
-	);
-	assert.ok(rows.some((row) => row.rule === 'Q4' && row.location.includes('name=label')));
+	const names = analyzeAst('probe.ts', source).inlineCandidates.map((candidate) => candidate.name);
+	assert.equal(names.includes('isRuleList'), false);
+	assert.equal(names.includes('decodeRow'), false);
+	assert.equal(names.includes('escapeLikePattern'), false);
+	assert.ok(names.includes('label'));
 });
 
 // --- entities -------------------------------------------------------------------------------

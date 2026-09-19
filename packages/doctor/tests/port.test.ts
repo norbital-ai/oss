@@ -256,8 +256,8 @@ const CASES: ReadonlyArray<Case> = [
 	},
 	{
 		rule: 'RET1',
-		bad: 'export function labeled(name: string): string { return name.trim(); }',
-		good: 'export function labeled(name: string) { return name.trim(); }'
+		bad: 'function labeled(name: string): string { return name.trim(); }',
+		good: 'export function labeled(name: string): string { return name.trim(); }'
 	},
 	{
 		rule: 'GUARD1',

@@ -1,5 +1,9 @@
 id: RET1
 summary: implementation return type is written instead of inferred
+# Scoped to what nothing outside the module reads: an exported function's written return type is
+# the declaration a consumer and the emitted `.d.ts` hold still, and inference there can leak a
+# wider or internal type. The boundary walked to is the nearest declaration or enclosing
+# function, so a helper nested in an exported function is still its own, unexported, function.
 severity: hint
 principles: [simplicity, no-bloat]
 rule:
@@ -20,22 +24,48 @@ rule:
         has:
           kind: TypePredicate
         field: type
+    - not:
+        has:
+          kind: ExportKeyword
+        field: modifiers
+    - not:
+        inside:
+          has:
+            kind: ExportKeyword
+          field: modifiers
+        stopBy:
+          any:
+            - kind: VariableStatement
+            - kind: FunctionDeclaration
+            - kind: ClassDeclaration
+            - kind: ClassExpression
+            - kind: ArrowFunction
+            - kind: FunctionExpression
+            - kind: MethodDeclaration
 examples:
   bad:
+    - 'function labeled(name: string): string { return name.trim(); }'
+    - 'const labeled = (name: string): string => name.trim();'
+    - 'const labeled = async (name: string): Promise<string> => name.trim();'
+    - 'const boxed = function named(name: string): string { return name.trim(); };'
+    - 'class Box { read(name: string): string { return name; } }'
+    - 'class Box { get title(): string { return this.name; } }'
+    - 'function ignore(): void {}'
+    - 'export const outer = () => { const inner = (name: string): string => name.trim(); return inner; };'
+  good:
+    - 'function labeled(name: string) { return name.trim(); }'
+    - 'const labeled = (name: string) => name.trim();'
+    - 'const labeled = async (name: string) => name.trim();'
+    - 'function isTrimmed(name: string): name is string { return name.trim() === name; }'
+    - 'function assertTrimmed(name: string): asserts name is string { if (name.trim() !== name) throw new Error(name); }'
+    - 'function labeled(name: string): string; function labeled(name: string) { return name.trim(); }'
+    - 'interface Reader { read(name: string): string; }'
+    - 'declare function labeled(name: string): string;'
+    - 'const labeled: (name: string) => string = (name) => name.trim();'
     - 'export function labeled(name: string): string { return name.trim(); }'
     - 'export const labeled = (name: string): string => name.trim();'
-    - 'export const labeled = async (name: string): Promise<string> => name.trim();'
     - 'export const boxed = function named(name: string): string { return name.trim(); };'
     - 'export class Box { read(name: string): string { return name; } }'
     - 'export class Box { get title(): string { return this.name; } }'
-    - 'export function ignore(): void {}'
-  good:
-    - 'export function labeled(name: string) { return name.trim(); }'
-    - 'export const labeled = (name: string) => name.trim();'
-    - 'export const labeled = async (name: string) => name.trim();'
-    - 'export function isTrimmed(name: string): name is string { return name.trim() === name; }'
-    - 'export function assertTrimmed(name: string): asserts name is string { if (name.trim() !== name) throw new Error(name); }'
-    - 'export function labeled(name: string): string; export function labeled(name: string) { return name.trim(); }'
-    - 'export interface Reader { read(name: string): string; }'
-    - 'export declare function labeled(name: string): string;'
-    - 'export const labeled: (name: string) => string = (name) => name.trim();'
+    - 'export const api = { read(name: string): string { return name; } };'
+    - 'export default function labeled(name: string): string { return name.trim(); }'
