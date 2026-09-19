@@ -166,7 +166,9 @@ describe('Bolt architecture boundaries', () => {
 		// carrier that ships the live transform. See RFC/collection.md §4.2–4.6.
 		// 2026-09-17: `+hooks.ts` discovery, the hook input-column scraper and the generated
 		// `inputs.d.ts` are deleted; `+collection.ts` is imported live instead. Measured 9,285.
-		expect(total).toBeLessThanOrEqual(9_415);
+		// 9,415 -> 9,430 (2026-09-20): the `telemetry` system model and the administrator-only
+		// policy that reads it — the runtime keeps its own records in every tenant. Measured 9,426.
+		expect(total).toBeLessThanOrEqual(9_430);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

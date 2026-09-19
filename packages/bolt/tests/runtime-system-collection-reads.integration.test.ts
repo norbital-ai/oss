@@ -338,6 +338,21 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 		}
 	});
 
+	/**
+	 * `telemetry` is the exception among the runtime's collections: what the runtime did — model
+	 * charges, tool timings, failure causes — is granted by the administration policy alone.
+	 */
+	it('serves telemetry to an administrator and refuses it to a member', async () => {
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });
+		await seedAdministrator(harness);
+		await seedController(harness);
+		expect((await readAs(harness, 'admin-token', 'telemetry'))._tag).toBe('Success');
+		const refused = await readAs(harness, 'controller-token', 'telemetry');
+		expect(refused._tag).toBe('Failure');
+		if (refused._tag === 'Failure')
+			expect(refused.failure).toBeInstanceOf(AccessControl.AccessDenied);
+	});
+
 	/** The authored half, unchanged: what the member's own policy grants still reaches them. */
 	it('still serves the collection the member is authored a grant on', async () => {
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace, { authored });

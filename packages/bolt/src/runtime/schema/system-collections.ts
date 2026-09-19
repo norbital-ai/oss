@@ -454,8 +454,6 @@ export const systemReadPolicy = (envoys: ReadonlyArray<EnvoyReach>): PolicyDecla
 				collection: collections.automation_run.name,
 				action: 'read' as const
 			},
-			// `telemetry` has no grant here on purpose: model charges and failure causes are an
-			// administrator's to read, which the administrator short-circuit already answers.
 			{
 				collection: collections.bolt_notifications.name,
 				action: 'read' as const,
@@ -484,6 +482,20 @@ const WORKSPACE_ADMINISTRATION_POLICY: PolicyDeclaration = Object.freeze<PolicyD
 });
 
 /**
+ * What the runtime did — model charges, tool timings, failure causes — is an administrator's to
+ * read and nobody else's: the system read policy above deliberately leaves `telemetry` out. Its
+ * own declaration, because a policy that names grants is read by its grants alone and the
+ * administration policy above is read by its actions.
+ */
+const TELEMETRY_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclaration>({
+	name: 'bolt.telemetry',
+	description: 'Read access to the records the runtime keeps of its own work.',
+	effect: 'allow',
+	administrator: true,
+	grants: [{ collection: collections.telemetry.name, action: 'read' }]
+});
+
+/**
  * The policies the runtime owns, present in every workspace whether or not it authored any.
  *
  * They are merged here, at the same seam the runtime's own collections are merged, and for the same
@@ -498,7 +510,12 @@ const WORKSPACE_ADMINISTRATION_POLICY: PolicyDeclaration = Object.freeze<PolicyD
  * preview drops that status before it reaches the boundary.
  */
 const builtInPolicies = (envoys: ReadonlyArray<EnvoyReach>): ReadonlyArray<PolicyDeclaration> =>
-	Object.freeze([systemReadPolicy(envoys), WORKSPACE_ADMINISTRATION_POLICY, COLONY_SYSTEM_POLICY]);
+	Object.freeze([
+		systemReadPolicy(envoys),
+		WORKSPACE_ADMINISTRATION_POLICY,
+		TELEMETRY_POLICY,
+		COLONY_SYSTEM_POLICY
+	]);
 
 /** Definitions already augmented by `withSystemCollections`; re-entry returns the same reference. */
 const augmentedDefinitions = new WeakSet<object>();
