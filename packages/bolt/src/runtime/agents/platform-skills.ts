@@ -161,8 +161,9 @@ to show meaningful record names. CollectionForm supplies validation and save con
 
 ## Server code: automations, functions, transforms
 
-Server handlers are Effect-native and receive one \`api\`. This is the whole of it — there is no
-other server surface, so do not search the installed package for one:
+Server handlers are Effect-native and receive one \`api\`. This is the whole of it. What this
+skill does not state does not exist: never read the installed \`@norbital-ai\` packages to look for
+more — a missing capability is an answer to give, not a thing to find.
 
 - \`api.db.<collection>.findMany / findFirst / count\` — reads, policy-filtered.
 - \`api.collection.<collection>.create / update / delete\` — writes through the declared contract.
@@ -173,8 +174,10 @@ other server surface, so do not search the installed package for one:
 Notifications are declared, never sent from code. A \`+collection.ts\` carries
 \`notifications: { committed: [{ channel: 'inbox', recipients: ({ action }) => [{ team: 'R&D' }],
 message: ({ ids }) => ({ title, body }) }] }\` (events: \`committed\`, and the approval events);
-recipients are user ids or \`{ team }\`; \`inbox\` is the only channel. Work that must notify on a
-schedule writes or updates a row of a collection whose rule fans out.
+recipients are user ids or \`{ team }\`; \`inbox\` is the only channel. The builders receive only
+\`{ action, collection, ids, requestor, approval? }\` — never the row's values — so a message says
+what happened and where to look, and the detail lives in the row. Work that must notify on a
+schedule writes a row of a collection whose rule fans out; a listing belongs in that row.
 
 \`\`\`ts
 import { defineAutomation } from '@norbital-ai/bolt/authoring';
