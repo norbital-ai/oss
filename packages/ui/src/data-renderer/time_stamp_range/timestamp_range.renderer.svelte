@@ -5,10 +5,15 @@
 	import { toStoredInstant, toViewerInstant } from '../utc-day.js';
 	import DateView from './views/date.view.svelte';
 
-	/** The picker's own range shape; the database sends a tstzrange literal instead. */
+	/**
+	 * The picker's own range shape; the database sends a tstzrange literal instead. A bound is
+	 * `optional`, not `optionalKey`: the calendar reports a half-picked range as
+	 * `{ start, end: undefined }`, and a key that is present but undefined refused the whole value,
+	 * so the first click of every range was thrown away and no range could ever be completed.
+	 */
 	const rangeValueSchema = Schema.Struct({
-		start: Schema.optionalKey(Schema.String),
-		end: Schema.optionalKey(Schema.String)
+		start: Schema.optional(Schema.String),
+		end: Schema.optional(Schema.String)
 	});
 	const decodeCanonicalRange = Schema.decodeUnknownResult(rangeValueSchema);
 	type RangeValue = typeof rangeValueSchema.Type;

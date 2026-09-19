@@ -7,6 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Schema } from 'effect';
 import {
 	asDayInstant,
 	dayToViewerInstant,
@@ -44,4 +45,14 @@ test('the canonical day prints the same for every viewer, and unreadable input p
 	assert.equal(utcDayOf(null), null);
 	assert.equal(toStoredInstant('not a date'), null);
 	assert.equal(formatUtcDay('2026-09-01', 'en-US'), 'Sep 1, 2026');
+});
+
+test('a half-picked range keeps its start: a present-but-undefined end is not a refusal', () => {
+	// The range renderer decodes the picker's value with this shape; `optionalKey` refused
+	// `{ start, end: undefined }`, which is what the calendar reports after the first click.
+	const range = Schema.decodeUnknownResult(
+		Schema.Struct({ start: Schema.optional(Schema.String), end: Schema.optional(Schema.String) })
+	);
+	assert.equal(range({ start: '2026-09-01T00:00:00.000Z', end: undefined })._tag, 'Success');
+	assert.equal(range({ start: '2026-09-01T00:00:00.000Z' })._tag, 'Success');
 });
