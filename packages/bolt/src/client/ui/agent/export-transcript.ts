@@ -109,18 +109,14 @@ export function exportTranscript(
 	const tools = toolCounts(ordered);
 	return [
 		`# Conversation ${conversationId}`,
-		'',
 		`Exported ${new Date().toISOString()} · ${ordered.length} messages`,
-		'',
 		usageSummary(usage),
-		'',
 		tools.length === 0
 			? ''
 			: `Tool calls: ${tools.map(([name, count]) => `${name} ×${count}`).join(', ')}`,
-		'',
 		...ordered.map(renderMessage)
 	]
-		.filter((block, index, blocks) => block !== '' || blocks[index - 1] !== '')
+		.filter((block) => block !== '')
 		.join('\n\n');
 }
 

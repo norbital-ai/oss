@@ -1323,7 +1323,7 @@
 					aria-expanded={commandMenuOpen}
 					onpaste={onComposerPaste}
 					rows={2}
-					placeholder="Ask anything, or type /plan or /compact"
+					placeholder={t('bolt.agent.composerPlaceholder')}
 					class="max-h-40 min-h-14 resize-none border-0 bg-transparent py-3 text-sm leading-relaxed shadow-none outline-none focus:border-0 focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 dark:bg-transparent dark:shadow-none"
 					disabled={composerLocked}
 				/>
