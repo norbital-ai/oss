@@ -186,10 +186,15 @@ describe('instance 3 — every task row written is announced to the host', () =>
 		expect(writeAt).toBeGreaterThan(-1);
 		expect(wakeAt).toBeGreaterThan(writeAt);
 		expect(body).toMatch(/occurrence\s*\n?\s*\}\)/u);
-		// The agent turn no longer uses it: a conversation answers its own queued messages inside the
-		// invocation that admitted them, so nothing about a turn is a durable work occurrence.
+		// A conversation answers its own queued messages inside the invocation that admitted them,
+		// so a turn is never a durable work occurrence of its own. The one claimed enqueue a turn
+		// makes is on another root conversation's behalf: an agent's message to a sibling of the
+		// same person is that sibling's next turn, durable as a person's send would be.
 		const agents = readFileSync(join(RUNTIME, 'agents/agents.ts'), 'utf8');
-		expect(agents).not.toMatch(/enqueueClaimed/u);
+		expect(agents.match(/enqueueClaimed\(/gu)).toHaveLength(1);
+		expect(agents).toMatch(
+			/target\.parent_id == null\)\s*\n\s*yield\* taskQueue\.enqueueClaimed\(/u
+		);
 	});
 
 	it('statement-joining task writers are covered by an announcing flow', () => {

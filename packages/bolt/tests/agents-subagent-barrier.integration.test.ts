@@ -172,7 +172,14 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		});
 		const refused = toolResultFor(parentRequests[4]!, 'subagent');
 		expect(JSON.stringify(refused)).toContain('ToolNotAllowed');
-		// The message is the sibling's next input, named by the conversation it came from.
+		// The message is the sibling's next input, named by the conversation it came from, and a
+		// durable task answers it as a person's send would — nothing waits on the sender's turn.
+		const queued = toolResultFor(parentRequests[3]!, 'subagent') as { messageId: string };
+		expect(
+			await harness.database.query('select effect_id from bolt_task where effect_id = $1', [
+				`agent:${queued.messageId}`
+			])
+		).toHaveLength(1);
 		await execute(agents, '903:b', siblingId);
 		const rows = await harness.database.query(
 			`select message from conversation_message where conversation_id = $1 order by sequence`,

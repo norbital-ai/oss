@@ -1,5 +1,6 @@
 import {
 	Cause,
+	Clock,
 	Context,
 	Effect,
 	ExecutionPlan,
@@ -77,6 +78,7 @@ import {
 	type AIInterface
 } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -1181,6 +1183,7 @@ export const layer = Layer.effect(
 		const ai = yield* AI.Service;
 		const database = yield* Database.Service;
 		const hostTools = yield* HostTools.Service;
+		const taskQueue = yield* TaskQueue.Service;
 		const connector = yield* Connector.Service;
 		const remotes = yield* RemoteRegistry;
 
@@ -1759,7 +1762,11 @@ export const layer = Layer.effect(
 				...(input.runId === undefined ? {} : { turn_id: input.runId }),
 				annotation: input.annotation ?? {
 					tag: 'input',
-					...(input.author.kind === 'human' || input.resume
+					// A root conversation's next turn runs as the person: theirs, or their agent's message
+					// to another of their conversations. A child's runs on its parent's fiber instead.
+					...(input.author.kind === 'human' ||
+					input.resume ||
+					(input.author.kind === 'parent-agent' && input.parent === undefined)
 						? { executionAuthority: executionAuthority(subject) }
 						: {}),
 					...(input.planAction === undefined ? {} : { planAction: input.planAction })
@@ -3373,6 +3380,16 @@ export const layer = Layer.effect(
 								mode: DirectiveMode.make('agent'),
 								modelId: run.model_id
 							});
+							// A child hears this at its next step on the fiber its parent holds. A root
+							// conversation has no such fiber: its answer is a durable task, as a person's
+							// send would be, so it runs whether or not this turn is still here.
+							if (target.parent_id == null)
+								yield* taskQueue.enqueueClaimed(EffectId.make(`${actionId}:schedule`), {
+									command: 'conversations.answer',
+									input: { messageId: submitted.messageId },
+									effectId: executionTaskId(submitted.messageId),
+									nowEpochMs: yield* Clock.currentTimeMillis
+								});
 							return yield* Schema.decodeUnknownEffect(Schema.Json)({
 								conversationId: target.id,
 								messageId: submitted.messageId,
