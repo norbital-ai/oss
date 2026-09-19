@@ -79,6 +79,7 @@ import {
 } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import { record } from '#lib/runtime/telemetry.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -2724,6 +2725,22 @@ export const layer = Layer.effect(
 				[yield* usageMutation(run.id, observation)],
 				'create'
 			);
+			const tokens =
+				observation.usage !== undefined && 'inputTokens' in observation.usage
+					? observation.usage
+					: undefined;
+			yield* record('model.call', {
+				callId: observation.callId,
+				model: observation.model,
+				operation: observation.operation,
+				inputTokens: tokens?.inputTokens.total ?? null,
+				cachedTokens: tokens?.inputTokens.cacheRead ?? null,
+				outputTokens: tokens?.outputTokens.total ?? null,
+				charge:
+					observation.charge === undefined
+						? null
+						: `${observation.charge.coefficient}e-${observation.charge.scale} ${observation.charge.currency}`
+			});
 		});
 
 		const updateRun = Effect.fn('Agents.updateRun')(function* (
@@ -3658,6 +3675,11 @@ export const layer = Layer.effect(
 				remaining = remaining.slice(taken);
 			}
 			yield* fencedConversation(EffectId.make(`${effectId}:checkpoint-fence`), subject, run);
+			yield* record('context.compacted', {
+				origin,
+				projectedTokens: estimatedTokens(projected, toolOutputLimit),
+				summaryChars: JSON.stringify(checkpoint!.content).length
+			});
 			const currentInput = promptMessages(transcript.rows()).findLast(
 				(row) => row.annotation?.tag === 'input'
 			);
@@ -3937,7 +3959,6 @@ export const layer = Layer.effect(
 										PERSONAL_READ_TOOL,
 										'workspace_read',
 										'workspace_review',
-										'workspace_logs',
 										'agent_output_read'
 									].includes(tool.name)
 								)
@@ -4330,7 +4351,27 @@ export const layer = Layer.effect(
 					}
 					const handledAll = yield* Effect.forEach(
 						calls,
-						(call) => handledTool(call, subject, task, run, agent, toolsForMode, messages),
+						(call) =>
+							Effect.gen(function* () {
+								const startedAt = yield* Clock.currentTimeMillis;
+								const handled = yield* handledTool(
+									call,
+									subject,
+									task,
+									run,
+									agent,
+									toolsForMode,
+									messages
+								);
+								yield* record('tool.call', {
+									tool: call.name,
+									callId: call.id,
+									ms: (yield* Clock.currentTimeMillis) - startedAt,
+									failed: handled.isFailure,
+									bytes: JSON.stringify(handled.encodedResult)?.length ?? 0
+								});
+								return handled;
+							}),
 						{ concurrency: 'unbounded' }
 					);
 					for (const [position, call] of calls.entries()) {
@@ -4392,8 +4433,30 @@ export const layer = Layer.effect(
 			 * because a status write that fails here is exactly a panel showing work that is not happening.
 			 * A stop that already wrote `stopped` refuses both writes at the fence, which is the right answer.
 			 */
+			const turnStartedAt = yield* Clock.currentTimeMillis;
+			yield* record('turn.started', {
+				conversation: run.conversation_id,
+				turn: run.id,
+				agent: agent.id,
+				model: run.model_id,
+				mode: run.mode
+			});
 			return yield* runEffect.pipe(
 				Effect.ensuring(interruptChildren(run.id)),
+				Effect.onExit((exit) =>
+					Effect.flatMap(Clock.currentTimeMillis, (now) =>
+						record('turn.settled', {
+							ms: now - turnStartedAt,
+							outcome: Exit.isSuccess(exit)
+								? exit.value.status
+								: Cause.hasInterruptsOnly(exit.cause)
+									? 'interrupted'
+									: 'failed'
+						})
+					)
+				),
+				// Every record of this turn names its conversation and turn, whatever wrote it.
+				Effect.annotateLogs({ conversation: run.conversation_id, turn: run.id, agent: agent.id }),
 				/**
 				 * A turn that lost the fence is over, not broken. `control stop` writes `stopped` and
 				 * the turn in flight meets it at its next boundary; reporting that meeting as a failure

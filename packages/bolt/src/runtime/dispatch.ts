@@ -11,6 +11,13 @@ import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import {
+	flush,
+	invocationAnnotations,
+	loggerFor,
+	makeSink,
+	recordSettled
+} from '#lib/runtime/telemetry.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import {
 	decodeUnknownSchema,
@@ -299,7 +306,24 @@ const invoke = Effect.fn('Bolt.invokeCommandBinding')(function* <E>(
 	);
 });
 
-export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
+/**
+ * Every record an invocation writes carries its ids; each goes out as one JSON line and, when the
+ * invocation ends, they are kept together in the `telemetry` collection — see `telemetry.ts`. A
+ * failure the invocation ends with is one of those records, at error, before the result maps it;
+ * a settled one records its time.
+ */
+export const dispatchInvocation = (invocation: Invocation) => {
+	const sink = makeSink();
+	const startedAt = Date.now();
+	return dispatch(invocation).pipe(
+		Effect.onExit((exit) => recordSettled(invocation, startedAt, exit)),
+		Effect.ensuring(flush(invocation, sink)),
+		Effect.annotateLogs(invocationAnnotations(invocation)),
+		Effect.provide(loggerFor(sink))
+	);
+};
+
+const dispatch = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
 	if (invocation._tag === 'Request') {
 		if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health')
 			return json({ status: 'ok' });

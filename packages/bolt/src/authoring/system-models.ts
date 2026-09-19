@@ -528,6 +528,35 @@ const turnUsageModel = defineModel(
 	}
 );
 
+/**
+ * What the runtime told about itself: one row per telemetry record — a turn started or settled,
+ * a model call with its tokens and charge, a tool call with its time, a write with its statement
+ * count, a dispatch that failed — kept for the window the host configures and readable like any
+ * system collection. The shape follows the OpenTelemetry log record: `severity`, `event` is the
+ * body, `attributes` the fields, and the ids that join a record to its invocation, conversation
+ * and turn are columns so a query can narrow on them.
+ */
+const telemetryModel = defineModel(
+	{
+		at: instant().notNull(),
+		severity: text().notNull(),
+		event: text().notNull(),
+		invocation: text(),
+		conversation: text(),
+		turn: text(),
+		attributes: jsonb().notNull()
+	},
+	{
+		history: false,
+		indexes: [
+			systemIndex('at'),
+			systemIndex('conversation'),
+			systemIndex('turn'),
+			systemIndex('severity')
+		]
+	}
+);
+
 const approvalStateModel = defineModel(
 	{
 		request_id: text().notNull().unique(),
@@ -888,6 +917,7 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	turn: turnModel,
 	turn_usage: turnUsageModel,
 	automation_run: automationRunModel,
+	telemetry: telemetryModel,
 	bolt_notifications: notificationModel
 });
 

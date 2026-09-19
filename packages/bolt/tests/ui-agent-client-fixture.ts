@@ -36,6 +36,7 @@ const AGENT_COLLECTION_NAMES = [
 	'turn',
 	'turn_usage',
 	'automation_run',
+	'telemetry',
 	'user',
 	'bolt_notifications'
 ] as const;
@@ -58,6 +59,7 @@ type AgentCollections = Pick<
 	| 'turn'
 	| 'turn_usage'
 	| 'automation_run'
+	| 'telemetry'
 	| 'user'
 	| 'bolt_notifications'
 >;
@@ -154,6 +156,7 @@ export const emptyAgentClient = (transport: BoltTransport): TurntimeConfig['clie
 			turn: emptyOperations<AgentCollections['turn']>(),
 			turn_usage: emptyOperations<AgentCollections['turn_usage']>(),
 			automation_run: emptyOperations<AgentCollections['automation_run']>(),
+			telemetry: emptyOperations<AgentCollections['telemetry']>(),
 			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
 		},

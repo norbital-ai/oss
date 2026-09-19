@@ -179,7 +179,11 @@ describe('the subject a facility call carries', () => {
 		);
 		expect(response.value).toMatchObject([{ name: 'Ada' }]);
 
-		const calls = [...harness.database.calls];
+		// The runtime's own bookkeeping — the invocation's telemetry, written after it settled — is
+		// the runtime's write, not the command's, and carries no subject; the command's calls all do.
+		const calls = harness.database.calls.filter(
+			({ effectId }) => !String(effectId).endsWith(':telemetry')
+		);
 		expect(calls.length).toBeGreaterThan(1);
 		const firstAuthenticatedCall = calls.findIndex(({ subject }) => subject !== undefined);
 		expect(firstAuthenticatedCall).toBeGreaterThan(1);

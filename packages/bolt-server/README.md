@@ -20,3 +20,12 @@ still listening. A crashed host restarts under the container's restart policy; a
 cannot exist. `src/facilities/web.ts` is the case that taught this: a DNS answer the container
 could not route failed inside a synchronous `lookup` callback before `http` had attached its
 socket listener, and the uncaught error took the whole host down for three hours.
+
+## What the runtime tells, and where it keeps it
+
+The runtime writes one JSON line per record on this process's stdout — an event, a severity, and
+the ids that join it to its invocation, conversation and turn — which is where a log shipper
+reads it from; the server keeps no log of its own. The same records are kept in the tenant's
+`telemetry` collection for `BOLT_TELEMETRY_RETAIN_HOURS` (72 by default) and read like any
+collection, so a person, an agent or a report asks the database rather than the log: turns, model
+calls with tokens and charge, tool calls, writes, and every failed invocation with its cause.

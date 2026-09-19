@@ -64,6 +64,7 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { refusalOf } from '#lib/authoring/refusal.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { record } from '#lib/runtime/telemetry.js';
 import { AI, Connector, Files, HostTools, SyncCommit } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
@@ -2940,10 +2941,14 @@ export const layerWith = (
 				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements }).pipe(
 					Effect.tap(() =>
 						operations.length > 1
-							? Effect.log(
-									`[bolt-write] ${operations[0]?.collection ?? 'graph'} rows=${operations.length} statements=${statements.length} pieces=${pieces.length} ` +
-										`db=${Date.now() - executionStartedAt}ms ${statementShapes(statements)}`
-								)
+							? record('write', {
+									collection: operations[0]?.collection ?? 'graph',
+									rows: operations.length,
+									statements: statements.length,
+									pieces: pieces.length,
+									ms: Date.now() - executionStartedAt,
+									shapes: statementShapes(statements)
+								})
 							: Effect.void
 					),
 					Effect.catch((error): Effect.Effect<never, Database.FacilityError | AuthoredRefusal> => {

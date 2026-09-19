@@ -315,11 +315,12 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
 5. Report what validation actually proved. Compilation does not prove UI or data workflows;
    name the interactions still untested. Guard asynchronous saves against pending upload, decode,
    permission, and recording states both in the button and in its handler.
-6. Where the host offers them: \`workspace_publish\` builds the validated draft into a Preview and
-   opens (or refreshes) its merge request; \`workspace_submit\` marks it ready for review;
-   \`workspace_review\` reads the reviewer's decision and reason. Approving and merging are a
-   person's, in Studio — never claim a change is live. \`workspace_logs\` reads the host's recent
-   build, deploy and guest log lines; automation runs are the \`automation_run\` collection.`;
+6. A validated draft is where your work ends: publishing it for review, approving and merging
+   are a person's, in Studio — say the draft is ready and stop; never claim a change is live.
+   Where the host offers it, \`workspace_review\` reads the reviewer's decision and reason. What
+   the runtime did is the \`telemetry\` collection — one row per turn, model call, tool call, write
+   and failed invocation, with \`severity\`, \`event\`, \`attributes\` and the ids that join them —
+   and automation runs are the \`automation_run\` collection; read both with \`read_collection\`.`;
 
 export const PLATFORM_SKILLS: ReadonlyArray<SkillDeclaration> = [
 	{

@@ -123,6 +123,7 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.turn,
 	collections.turn_usage,
 	collections.automation_run,
+	collections.telemetry,
 	collections.bolt_notifications
 ]);
 
@@ -453,6 +454,8 @@ export const systemReadPolicy = (envoys: ReadonlyArray<EnvoyReach>): PolicyDecla
 				collection: collections.automation_run.name,
 				action: 'read' as const
 			},
+			// `telemetry` has no grant here on purpose: model charges and failure causes are an
+			// administrator's to read, which the administrator short-circuit already answers.
 			{
 				collection: collections.bolt_notifications.name,
 				action: 'read' as const,
