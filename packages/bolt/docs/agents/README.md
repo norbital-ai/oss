@@ -374,8 +374,8 @@ fragments with a rolling summary and no tools. Only a complete fold replaces the
 **Three things ask for a checkpoint.** A person sends `/compact` (`origin: "manual"`), an agent
 calls `compact` after completing a phase (`origin: "requested"`, at most three times per turn), or
 the runtime crosses its working-context bound (`origin: "automatic"`). All modes use automatic
-compaction, including planning and verification. The soft threshold is the smaller of 64,000
-estimated tokens and 75% of the model's declared window. A separate conservative UTF-8/JSON byte
+compaction, including planning and verification. The soft threshold is the smaller of 200,000
+estimated tokens and 90% of the model's declared window less the reply allowance. A separate conservative UTF-8/JSON byte
 budget accounts for tool schemas, chat overhead and the full requested reply allowance. It checks
 ordinary calls, each compaction fragment/retry and verifier calls before dispatch. The working
 projection is checked again after compaction; retained instructions or a Plan that still cannot fit

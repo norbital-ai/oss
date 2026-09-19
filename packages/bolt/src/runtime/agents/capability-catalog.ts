@@ -126,6 +126,7 @@ const TaskProjection = Schema.Struct({
 	workbench_id: WorkbenchId,
 	agent_id: AgentId,
 	parent_id: Schema.optionalKey(Schema.NullOr(ConversationId)),
+	subject_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	status: Schema.NonEmptyString
 });
 const MessageProjection = Schema.Struct({
@@ -967,7 +968,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await to collect its answer when you need it, stop and resume to control it. Only the root Task may do this; children cannot delegate.",
+		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await to collect its answer when you need it, stop and resume to control it. read and message also reach any other conversation of this person (find one with search_task_history); a message to an idle conversation starts its next turn. Only the root Task may do this; children cannot delegate.",
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{
@@ -1065,10 +1066,16 @@ export type SubagentContext<E = never> = Readonly<{
 	) => Effect.Effect<Schema.Json, E>;
 }>;
 
+/**
+ * Who a subagent action may reach. `child`: a direct child (stop, resume). `workbench`: any
+ * conversation of this tree (await, which joins a fiber only this turn holds). `own`: also any
+ * other conversation of the same person — read and message, so two of a person's conversations
+ * can talk; a message to an idle one starts its next turn, to a running one steers it.
+ */
 const workbenchTask = Effect.fn('CapabilityCatalog.workbenchTask')(function* (
 	context: SubagentContext<unknown>,
 	targetId: ConversationId,
-	requireDirectChild: boolean
+	reach: 'child' | 'workbench' | 'own'
 ) {
 	const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 		collection: 'conversation',
@@ -1078,13 +1085,15 @@ const workbenchTask = Effect.fn('CapabilityCatalog.workbenchTask')(function* (
 	const tasks = yield* decodeRows(TaskProjection, rows);
 	const current = tasks.find(({ id }) => id === context.conversationId);
 	const target = tasks.find(({ id }) => id === targetId);
-	if (
-		current === undefined ||
-		target === undefined ||
-		current.workbench_id !== context.workbenchId ||
-		target.workbench_id !== context.workbenchId ||
-		(requireDirectChild && target.parent_id !== context.conversationId)
-	) {
+	const sameWorkbench =
+		current?.workbench_id === context.workbenchId && target?.workbench_id === context.workbenchId;
+	const allowed =
+		reach === 'child'
+			? sameWorkbench && target?.parent_id === context.conversationId
+			: reach === 'workbench'
+				? sameWorkbench
+				: sameWorkbench || target?.subject_id === context.subject.userId;
+	if (current === undefined || target === undefined || !allowed) {
 		return yield* new ToolNotAllowed({ agent: context.agentId, tool: 'subagent:aperture' });
 	}
 	return target;
@@ -1118,7 +1127,7 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 			);
 		}
 		case 'read': {
-			const target = yield* workbenchTask(context, action.conversationId, false);
+			const target = yield* workbenchTask(context, action.conversationId, 'own');
 			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: 'conversation_message',
 				where: { conversation_id: { eq: target.id } },
@@ -1134,14 +1143,14 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 			};
 		}
 		case 'message':
-			yield* workbenchTask(context, action.conversationId, false);
+			yield* workbenchTask(context, action.conversationId, 'own');
 			return yield* context.admit(context.effectId, action.conversationId, action.message);
 		case 'await':
-			yield* workbenchTask(context, action.conversationId, false);
+			yield* workbenchTask(context, action.conversationId, 'workbench');
 			return yield* context.awaitTarget(context.effectId, action.conversationId);
 		case 'stop':
 		case 'resume':
-			yield* workbenchTask(context, action.conversationId, true);
+			yield* workbenchTask(context, action.conversationId, 'child');
 			return yield* context.control(context.effectId, action.conversationId, action.action);
 	}
 });

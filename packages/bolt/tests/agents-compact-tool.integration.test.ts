@@ -76,7 +76,7 @@ describe('the compact tool', () => {
 						'describe_workspace',
 						{},
 						'read-before-compact',
-						'Evidence '.repeat(35_000)
+						'Evidence '.repeat(95_000)
 					);
 				if (request.purpose !== 'compaction') return assistantText('Finished.');
 				if (attempts.length === 0 || invalid === 'always-truncated')
@@ -152,7 +152,7 @@ describe('the compact tool', () => {
 						'describe_workspace',
 						{},
 						'read-before-empty-compact',
-						'Evidence '.repeat(35_000)
+						'Evidence '.repeat(95_000)
 					)
 				: assistantText('')
 		);
@@ -308,8 +308,8 @@ describe('the compact tool', () => {
 	it('compacts a growing million-token conversation again only after new work accumulates', async () => {
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000c04');
 		const { ai, feed, requests } = scriptedTranscript([
-			assistantToolCall('describe_workspace', {}, 'large-1', 'x'.repeat(270_000)),
-			assistantToolCall('describe_workspace', {}, 'large-2', 'y'.repeat(270_000)),
+			assistantToolCall('describe_workspace', {}, 'large-1', 'x'.repeat(850_000)),
+			assistantToolCall('describe_workspace', {}, 'large-2', 'y'.repeat(850_000)),
 			assistantText('Finished both phases.')
 		]);
 		expect((await runTurn(ai, conversationId)).status).toBe('done');

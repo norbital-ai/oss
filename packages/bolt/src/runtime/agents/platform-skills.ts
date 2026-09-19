@@ -294,6 +294,11 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
 
 1. Read the existing source (\`workspace_read\` on \`src\`, then on the files that matter) before
    writing. Use its line \`offset\` and \`limit\` for a relevant window; do not reread unchanged whole files.
+   The workspace's conventions live in five files — read one of each, not the tree:
+   \`src/access/+teams.ts\`, one \`src/access/policies/+<name>.ts\` (the grant shape), one
+   \`src/collections/<name>/+collection.ts\` (transform, notifications), \`src/i18n/messages.en.json\`
+   (the key shape a collection and its fields need), and one \`+representation.svelte\`. The types
+   behind them are in the reference sections; nothing else about the platform is in the tree.
    Child agents have the same source access; delegating a dependency-signature lookup does not
    expose node_modules. Use this contract and compiler diagnostics instead of recursive lookups.
 2. State the collections and app surfaces you will add; then author a small batch. Use

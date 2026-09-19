@@ -27,8 +27,8 @@ import {
  * only place to look.
  */
 /** Small enough that one large instruction fills it; see `agents-pipeline-transcript` for why. */
-const SMALL_CONTEXT_WINDOW_TOKENS = 1_000_000;
-const AUTO_COMPACT_PROMPT_BYTES = 280 * 1_024;
+const SMALL_CONTEXT_WINDOW_TOKENS = 2_000_000;
+const AUTO_COMPACT_PROMPT_BYTES = 900 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
 
 let harness: BoltTestRuntime | undefined;

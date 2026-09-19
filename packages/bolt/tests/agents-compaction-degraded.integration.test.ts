@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { cassetteTranscript, readCassetteFile } from '@norbital-ai/test-utilities';
 
 /** Small enough that one large instruction fills it; see `agents-pipeline-transcript` for why. */
-const SMALL_CONTEXT_WINDOW_TOKENS = 1_000_000;
-const AUTO_COMPACT_PROMPT_BYTES = 280 * 1_024;
+const SMALL_CONTEXT_WINDOW_TOKENS = 2_000_000;
+const AUTO_COMPACT_PROMPT_BYTES = 900 * 1_024;
 const LARGE_INSTRUCTION = `Compaction stress ${'x'.repeat(AUTO_COMPACT_PROMPT_BYTES)}`;
 
 let harness: BoltTestRuntime | undefined;
@@ -107,7 +107,7 @@ describe('auto-compaction degraded paths', () => {
 					new TextEncoder().encode(JSON.stringify(r.messages)).byteLength * 2 +
 						(r.maxOutputTokens ?? 0) +
 						4096 <
-					1_000_000
+					2_000_000
 			)
 		).toBe(true);
 		expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain(history);

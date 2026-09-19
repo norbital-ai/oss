@@ -121,6 +121,59 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 		expect(JSON.stringify(rows).match(/"isFailure":true/g)).toHaveLength(2);
 	});
 	/**
+	 * Two of a person's conversations can talk: a root may read and message another root it owns,
+	 * not only its children. The message is that conversation's next input — it starts a turn on an
+	 * idle one — and it is labelled by the conversation it came from. A conversation of somebody
+	 * else stays out of reach.
+	 */
+	it("lets a root read and message a sibling conversation it owns, and nobody else's", async () => {
+		const siblingId = ConversationId.make('00000000-0000-4000-8000-000000000903');
+		const parentId = ConversationId.make('00000000-0000-4000-8000-000000000904');
+		const strangerId = ConversationId.make('00000000-0000-4000-8000-000000000905');
+		const { ai, requests } = scriptedTranscript([
+			assistantText('Sibling settled.'),
+			assistantToolCall('subagent', { action: 'read', conversationId: siblingId }, 'read-1'),
+			assistantToolCall(
+				'subagent',
+				{ action: 'message', conversationId: siblingId, message: 'Pick up the ledger.' },
+				'message-1'
+			),
+			assistantToolCall('subagent', { action: 'read', conversationId: strangerId }, 'read-2'),
+			assistantText('Sent.'),
+			assistantText('Ledger picked up.')
+		]);
+		harness = await makeBoltTestRuntime(definition, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		await submitParent(agents, '903', siblingId);
+		await execute(agents, '903', siblingId);
+		await harness.database.query(
+			`insert into conversation(id,workbench_id,subject_id,agent_id,audience,status) values ($1::uuid,$2::uuid,'someone-else','web','private','done')`,
+			[strangerId, strangerId]
+		);
+		await submitParent(agents, '904', parentId);
+		await execute(agents, '904', parentId);
+		const parentRequests = requests.filter(({ sessionId }) => sessionId === parentId);
+		expect(toolResultFor(parentRequests[1]!, 'subagent')).toMatchObject({
+			conversationId: siblingId,
+			status: 'done'
+		});
+		expect(toolResultFor(parentRequests[2]!, 'subagent')).toMatchObject({
+			conversationId: siblingId,
+			state: 'queued'
+		});
+		const refused = toolResultFor(parentRequests[3]!, 'subagent');
+		expect(JSON.stringify(refused)).toContain('ToolNotAllowed');
+		// The message is the sibling's next input, named by the conversation it came from.
+		await execute(agents, '903:b', siblingId);
+		const rows = await harness.database.query(
+			`select message from conversation_message where conversation_id = $1 order by sequence`,
+			[siblingId]
+		);
+		expect(JSON.stringify(rows)).toContain(`[Agent conversation ${parentId}]`);
+		expect(JSON.stringify(rows)).toContain('Ledger picked up.');
+	});
+
+	/**
 	 * A parent runs its own children, inside its own turn, and does not stop for them.
 	 *
 	 * There used to be a park here: the parent set itself `waiting`, returned, and something else
@@ -309,7 +362,7 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 					},
 					(request) => {
 						const transcript = JSON.stringify(request.messages);
-						expect(transcript).toContain('[Parent agent');
+						expect(transcript).toContain('[Agent conversation');
 						expect(transcript).toContain('Record the field update.');
 						expect(transcript).toContain('Capture the invoice count.');
 						expect(transcript).toContain('Prioritize the payroll export.');

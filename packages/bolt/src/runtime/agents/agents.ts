@@ -390,7 +390,7 @@ export const userAgentInput = (text: string): Prompt.MessageEncoded =>
 const parentAgentInput = (
 	parentConversationId: ConversationId,
 	text: string
-): Prompt.MessageEncoded => userAgentInput(`[Parent agent ${parentConversationId}]\n${text}`);
+): Prompt.MessageEncoded => userAgentInput(`[Agent conversation ${parentConversationId}]\n${text}`);
 
 export const InboundAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,
@@ -1067,9 +1067,13 @@ const isObjectLike = Schema.is(
 
 const MAX_CHILD_CONSUME_NUDGES = 2;
 const PLAN_VERIFICATION_OUTPUT_TOKENS = 4_096;
-/** Keep headroom on small models and bounded working context on million-token models. */
-const COMPACT_AT_FRACTION_OF_WINDOW = 0.75;
-const MAX_WORKING_CONTEXT_TOKENS = 64_000;
+/**
+ * Where the automatic checkpoint sits: 90% of the window less the reply the call must still fit,
+ * and never more than a working context a model reads well. A million-token model used to be
+ * checkpointed every 64K, which folded a five-minute authoring run three times.
+ */
+const COMPACT_AT_FRACTION_OF_WINDOW = 0.9;
+const MAX_WORKING_CONTEXT_TOKENS = 200_000;
 /** Bound deliberate checkpoint requests independently from context-driven compaction. */
 const MAX_REQUESTED_COMPACTIONS_PER_TURN = 3;
 const AUTO_COMPACT_OUTPUT_TOKENS = 4_096;
@@ -1632,8 +1636,11 @@ export const layer = Layer.effect(
 					resource: input.conversationId,
 					reason: 'Only a root conversation can enter planning.'
 				});
-			// A human conversation outlives its runs. Delegated tasks retain terminal result semantics.
-			const conversation = existing?.parent_id == null && input.author.kind === 'human';
+			// A root conversation outlives its runs — a person's, or another agent's message to it.
+			// Delegated tasks retain terminal result semantics.
+			const conversation =
+				existing?.parent_id == null &&
+				(input.author.kind === 'human' || input.author.kind === 'parent-agent');
 			const continueConversation =
 				conversation &&
 				existing !== undefined &&
@@ -1873,7 +1880,7 @@ export const layer = Layer.effect(
 			if (existing === undefined) {
 				const workbenchId = input.parent?.workbench_id ?? WorkbenchId.make(input.conversationId);
 				const titleText = messageText(input.message)
-					.replace(/^\[Parent agent [^\]]+\]\s*/, '')
+					.replace(/^\[Agent conversation [^\]]+\]\s*/, '')
 					.replace(/\s+/g, ' ')
 					.trim();
 				const title = (titleText.split(/[.!?。！？](?:\s|$)/, 1)[0] ?? '').slice(0, 80).trimEnd();
@@ -4000,19 +4007,19 @@ export const layer = Layer.effect(
 								output: checkpoint
 							} satisfies TurnResult;
 						}
+						const outputLimit = Math.min(
+							REPLY_OUTPUT_TOKENS,
+							Math.floor(run.context_window_tokens / 4)
+						);
 						const bound = Math.min(
 							MAX_WORKING_CONTEXT_TOKENS,
-							Math.floor(run.context_window_tokens * COMPACT_AT_FRACTION_OF_WINDOW)
+							Math.floor(run.context_window_tokens * COMPACT_AT_FRACTION_OF_WINDOW) - outputLimit
 						);
 						const tokens = Math.max(usedTokens, estimatedTokens(projected, toolOutputLimit));
 						const overBound = tokens > bound;
 						const requested = compactRequested;
 						compactRequested = false;
 						const declarations = toolsForMode;
-						const outputLimit = Math.min(
-							REPLY_OUTPUT_TOKENS,
-							Math.floor(run.context_window_tokens / 4)
-						);
 						const fits = contextFits(
 							projected,
 							run.context_window_tokens,

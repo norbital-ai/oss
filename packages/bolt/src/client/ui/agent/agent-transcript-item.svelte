@@ -71,9 +71,9 @@
 	function speaker(entry: PanelMessage): string | undefined {
 		switch (entry.author.kind) {
 			case 'human':
-				return parentAttribution ? 'Parent agent' : 'You';
+				return parentAttribution ? 'Another agent' : 'You';
 			case 'parent-agent':
-				return 'Parent agent';
+				return 'Another agent';
 			case 'agent':
 				return 'Norbius';
 			case 'tool':

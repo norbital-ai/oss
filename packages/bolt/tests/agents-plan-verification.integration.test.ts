@@ -530,7 +530,7 @@ describe('root Plan lifecycle', () => {
 					new TextEncoder().encode(JSON.stringify(r.messages)).byteLength * 2 +
 						(r.maxOutputTokens ?? 0) +
 						4096 <
-					1_000_000
+					2_000_000
 			)
 		).toBe(true);
 	});

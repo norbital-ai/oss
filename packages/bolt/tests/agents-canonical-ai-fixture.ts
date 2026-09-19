@@ -20,9 +20,9 @@ export const modelCatalogResponse = (): Promise<FacilityResult<AIResponse>> =>
 		_tag: 'Success',
 		value: {
 			_tag: 'Catalog',
-			languageModels: [{ id: TEST_MODEL, contextWindowTokens: 1_000_000 }],
+			languageModels: [{ id: TEST_MODEL, contextWindowTokens: 2_000_000 }],
 			defaultLanguageModelId: TEST_MODEL,
-			embeddingModels: [{ id: TEST_EMBEDDING_MODEL, contextWindowTokens: 1_000_000 }],
+			embeddingModels: [{ id: TEST_EMBEDDING_MODEL, contextWindowTokens: 2_000_000 }],
 			defaultEmbeddingModelId: TEST_EMBEDDING_MODEL
 		}
 	});
@@ -220,7 +220,7 @@ export type TranscriptReply =
  * Streams a scripted assistant transcript into the AI facility.
  *
  * Automatic Compact is an extra Generate the runtime inserts before the scripted turn when the
- * projected prompt exceeds 64 KiB in agent mode. That call is answered here and does not consume
+ * projected prompt exceeds the working-context bound in agent mode. That call is answered here and does not consume
  * a scripted reply, so the feed still records what the model was given.
  *
  * A child Task runs beside its parent, so its calls interleave with the parent's in no fixed

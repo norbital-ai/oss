@@ -29,8 +29,8 @@ const cassette = (name: string) =>
 
 const SYSTEM_TOOLS = systemToolSpecs.map(({ name }) => name);
 // A long completed discussion exceeds the working-context threshold; the new request stays small.
-const SMALL_CONTEXT_WINDOW_TOKENS = 1_000_000;
-const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(280 * 1_024)}`;
+const SMALL_CONTEXT_WINDOW_TOKENS = 2_000_000;
+const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(900 * 1_024)}`;
 
 const PERSON_ID = '00000000-0000-4000-8000-000000000401';
 const TOOL_TASK_ID = ConversationId.make('00000000-0000-4000-8000-000000000401');
