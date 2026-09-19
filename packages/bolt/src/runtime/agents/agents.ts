@@ -3936,6 +3936,8 @@ export const layer = Layer.effect(
 										PERSONAL_LIST_TOOL,
 										PERSONAL_READ_TOOL,
 										'workspace_read',
+										'workspace_review',
+										'workspace_logs',
 										'agent_output_read'
 									].includes(tool.name)
 								)

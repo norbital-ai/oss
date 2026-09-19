@@ -314,7 +314,12 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
    next action. Keep working from the checkpoint instead of carrying all earlier source reads.
 5. Report what validation actually proved. Compilation does not prove UI or data workflows;
    name the interactions still untested. Guard asynchronous saves against pending upload, decode,
-   permission, and recording states both in the button and in its handler.`;
+   permission, and recording states both in the button and in its handler.
+6. Where the host offers them: \`workspace_publish\` builds the validated draft into a Preview and
+   opens (or refreshes) its merge request; \`workspace_submit\` marks it ready for review;
+   \`workspace_review\` reads the reviewer's decision and reason. Approving and merging are a
+   person's, in Studio — never claim a change is live. \`workspace_logs\` reads the host's recent
+   build, deploy and guest log lines; automation runs are the \`automation_run\` collection.`;
 
 export const PLATFORM_SKILLS: ReadonlyArray<SkillDeclaration> = [
 	{
