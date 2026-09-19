@@ -13,7 +13,8 @@
 	import { Badge } from '@norbital-ai/ui/badge';
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { getErrorMessage } from '@norbital-ai/std';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { ReadonlyMarkdown } from '@norbital-ai/ui/markdown-editor';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { NorbiusStrip } from '@norbital-ai/ui/norbius-strip';
@@ -83,7 +84,8 @@
 		})
 	);
 
-	let { onclose }: { onclose?: () => void } = $props();
+	let { onclose, fullScreen = $bindable(false) }: { onclose?: () => void; fullScreen?: boolean } =
+		$props();
 
 	let draft = $state('');
 	let planMode = $state<boolean | null>(null);
@@ -191,6 +193,23 @@
 	);
 
 	const draftingPlan = $derived(activePlan?.status === 'draft');
+	/** The plan the agent is executing or has just finished — a draft is the segment's to show. */
+	const pinnedPlan = $derived(
+		activePlan !== undefined &&
+			(activePlan.status === 'active' ||
+				activePlan.status === 'stalled' ||
+				activePlan.status === 'verified')
+			? activePlan
+			: undefined
+	);
+	const overlayPane =
+		'absolute inset-x-4 top-full mt-1 rounded-xl border border-border/70 bg-background px-3 py-2 shadow-lg';
+	function planTitle(body: string): string {
+		const heading = body.split('\n').find((line) => /^#{1,3}\s+\S/.test(line.trim()));
+		return (heading ?? body.split('\n').find((line) => line.trim() !== '') ?? 'Plan')
+			.replace(/^#+\s*/, '')
+			.trim();
+	}
 
 	const runsQuery = $derived(
 		activeConversationIds.length === 0
@@ -984,6 +1003,18 @@
 			>
 				<Icon icon="lucide:plus" class="size-4" />
 			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				class="size-8"
+				aria-label={fullScreen ? t('common.exitFullScreen') : t('common.enterFullScreen')}
+				aria-pressed={fullScreen}
+				onclick={() => {
+					fullScreen = !fullScreen;
+				}}
+			>
+				<Icon icon={fullScreen ? 'lucide:minimize' : 'lucide:maximize'} class="size-4" />
+			</Button>
 			{#if onclose}
 				<Button
 					variant="ghost"
@@ -1011,6 +1042,113 @@
 				<Icon icon="lucide:arrow-down" class="size-4" />
 				Latest
 			</Button>
+		{/if}
+		{#if pinnedPlan !== undefined || (todo !== null && todo.items.length > 0)}
+			{@const completed =
+				todo === null ? 0 : todo.items.filter((item) => item.status === 'done').length}
+			<!--
+				What the agent is working from, kept in view while the transcript scrolls: the plan it
+				is executing and the checklist it keeps. Collapsed to one line each; open for the body.
+			-->
+			<div class="relative z-20 mx-auto w-full max-w-3xl px-4 pt-3" data-now-strip>
+				<Stack
+					gap="xs"
+					class="rounded-xl border border-border/70 bg-background/95 px-3 py-2 shadow-sm backdrop-blur"
+				>
+					{#if pinnedPlan !== undefined}
+						<details class="group/plan">
+							<summary
+								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<Inline justify="between" gap="md" class="text-xs">
+									<Inline gap="sm" class="min-w-0">
+										<Icon
+											icon="lucide:notebook-pen"
+											class="size-3.5 shrink-0 text-muted-foreground"
+										/>
+										<span class="truncate font-medium">{planTitle(pinnedPlan.body)}</span>
+									</Inline>
+									<span class="shrink-0 text-muted-foreground"
+										>Plan {pinnedPlan.revision} · {planState()}</span
+									>
+								</Inline>
+							</summary>
+							<!-- Opens over the transcript, not into it: a fixed pane hung below the strip. -->
+							<Bound size="compact" class={overlayPane}>
+								<Scroll name="Plan">
+									<ReadonlyMarkdown scale="compact" allowHtml={false} content={pinnedPlan.body} />
+								</Scroll>
+							</Bound>
+						</details>
+					{/if}
+					{#if todo !== null && todo.items.length > 0}
+						<details class="group/todo">
+							<summary
+								class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<Stack gap="xs">
+									<Inline justify="between" gap="md" class="text-xs">
+										<Inline gap="sm" class="min-w-0">
+											{#if completed === todo.items.length}
+												<Icon
+													icon="lucide:circle-check"
+													class="size-3.5 shrink-0 text-muted-foreground"
+												/>
+											{:else}
+												<Spinner class="size-3.5 shrink-0" label="In progress" />
+											{/if}
+											<span class="truncate"
+												>{todo.items.find((item) => item.status === 'doing')?.text ??
+													todo.items.find((item) => item.status === 'pending')?.text ??
+													'All steps completed'}</span
+											>
+										</Inline>
+										<span class="shrink-0 text-muted-foreground"
+											>{completed} / {todo.items.length}</span
+										>
+									</Inline>
+									<progress
+										class="h-1 w-full accent-primary"
+										max={todo.items.length}
+										value={completed}
+										aria-label="Goal progress"
+									></progress>
+								</Stack>
+							</summary>
+							<Bound size="compact" class={overlayPane}>
+								<Scroll name="Goal steps">
+									<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
+										{#each todo.items as item (item.id)}
+											<li class="min-w-0 text-xs">
+												<Inline align="start" gap="sm">
+													{#if item.status === 'done'}
+														<Icon
+															icon="lucide:circle-check"
+															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+														/>
+													{:else if item.status === 'doing'}
+														<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
+													{:else}
+														<Icon
+															icon="lucide:circle"
+															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+														/>
+													{/if}
+													<span
+														class="min-w-0 {item.status === 'done'
+															? 'text-muted-foreground line-through'
+															: ''}">{item.text}</span
+													>
+												</Inline>
+											</li>
+										{/each}
+									</Stack>
+								</Scroll>
+							</Bound>
+						</details>
+					{/if}
+				</Stack>
+			</div>
 		{/if}
 		<Scroll
 			class="min-h-0 flex-1"
@@ -1065,65 +1203,6 @@
 							{tools}
 							subagent={subagentTranscript}
 						/>
-
-						{#if todo !== null && todo.items.length > 0}
-							{@const completed = todo.items.filter((item) => item.status === 'done').length}
-							<details class="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
-								<summary
-									class="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								>
-									<Stack gap="sm">
-										<Inline justify="between" gap="md" class="text-xs">
-											<span class="font-medium"
-												>{completed === todo.items.length ? 'Goal complete' : 'Goal progress'}</span
-											>
-											<span class="shrink-0 text-muted-foreground"
-												>{completed} / {todo.items.length} complete</span
-											>
-										</Inline>
-										<progress
-											class="h-1 w-full accent-primary"
-											max={todo.items.length}
-											value={completed}
-											aria-label="Goal progress"
-										></progress>
-										<p class="m-0 text-sm">
-											{todo.items.find((item) => item.status === 'doing')?.text ??
-												todo.items.find((item) => item.status === 'pending')?.text ??
-												'All steps completed'}
-										</p>
-									</Stack>
-								</summary>
-								<Scroll name="Goal steps" class="max-h-64">
-									<Stack as="ol" gap="xs" class="pl-0" aria-label="Goal steps">
-										{#each todo.items as item (item.id)}
-											<li class="min-w-0 text-xs">
-												<Inline align="start" gap="sm">
-													{#if item.status === 'done'}
-														<Icon
-															icon="lucide:circle-check"
-															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-														/>
-													{:else if item.status === 'doing'}
-														<Spinner class="mt-0.5 size-3.5 shrink-0" label="In progress" />
-													{:else}
-														<Icon
-															icon="lucide:circle"
-															class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-														/>
-													{/if}
-													<span
-														class="min-w-0 {item.status === 'done'
-															? 'text-muted-foreground line-through'
-															: ''}">{item.text}</span
-													>
-												</Inline>
-											</li>
-										{/each}
-									</Stack>
-								</Scroll>
-							</details>
-						{/if}
 
 						<ol class="m-0 list-none p-0" aria-label="Conversation transcript">
 							{#each contextView.focusMessages as message (message.key)}

@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Logger, Option, Redacted, Schema } from 'effect';
+import { Cause, Context, Effect, Exit, Logger, Option, Redacted, Schema } from 'effect';
 import { lt, sql } from 'drizzle-orm';
 import { EffectId, type Invocation } from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -29,9 +29,15 @@ const LINE_LIMIT = 4_000;
 
 type Row = typeof SYSTEM_MODEL_TABLES.telemetry.$inferInsert;
 
-/** The records of one invocation, gathered as they are logged and written when it ends. */
-type Sink = { readonly rows: Array<Row> };
-export const makeSink = (): Sink => ({ rows: [] });
+/**
+ * The records of one invocation, gathered as they are logged and written in slices: every
+ * `SLICE_ROWS` while the work runs (a turn can last a quarter of an hour, and its records are
+ * worth reading while it does), and the rest when it ends.
+ */
+type Sink = { readonly invocation: Invocation; readonly rows: Array<Row>; slices: number };
+export const makeSink = (invocation: Invocation): Sink => ({ invocation, rows: [], slices: 0 });
+export const Sink = Context.Service<Sink>('@bolt/TelemetrySink');
+const SLICE_ROWS = 100;
 
 const ID_KEYS = new Set(['invocation', 'conversation', 'turn']);
 
@@ -144,31 +150,47 @@ const retainHours = Effect.gen(function* () {
 	return retainHoursMemo;
 });
 
-const effectId = (invocation: Invocation) => EffectId.make(`${invocation.id}:telemetry`);
-
 /**
- * Keep the invocation's records: one insert, and the prune of what aged out. A failure here is
- * logged to the console and otherwise dropped — telemetry must never fail the work it describes.
+ * Keep what the sink holds: one insert under its own effect id — an effect id is an idempotency
+ * key, so each slice needs its own — and, when a task ends, the prune of what aged out. Runs
+ * uninterruptibly: an interrupted invocation is the one whose records matter most. A failure here
+ * is logged to the console and otherwise dropped — telemetry must never fail the work it describes.
  */
-export const flush = (invocation: Invocation, sink: Sink) =>
+const flush = (sink: Sink, final: boolean) =>
 	Effect.gen(function* () {
 		if (sink.rows.length === 0) return;
+		const { invocation } = sink;
 		const database = yield* Database.Service;
 		const table = SYSTEM_MODEL_TABLES.telemetry;
 		const insert = composer.insert(table).values(sink.rows.splice(0));
+		const effectId = EffectId.make(`${invocation.id}:telemetry:${(sink.slices += 1)}`);
 		// A task — a turn, an automation run — carries the prune; a command stays one statement,
 		// because a statement is what a tenant's database bills.
-		if (invocation._tag !== 'Task')
-			return yield* executeBuilt(effectId(invocation), database, insert);
+		if (!final || invocation._tag !== 'Task')
+			return yield* executeBuilt(effectId, database, insert);
 		const hours = yield* retainHours;
-		yield* transactionBuilt(effectId(invocation), database, [
+		yield* transactionBuilt(effectId, database, [
 			insert,
 			composer.delete(table).where(lt(table.at, sql`now() - make_interval(hours => ${hours})`))
 		]);
 	}).pipe(
+		Effect.uninterruptible,
 		Effect.catchCause((cause) =>
 			Effect.sync(() => {
-				console.error(`telemetry: records of ${invocation.id} not kept: ${Cause.squash(cause)}`);
+				console.error(
+					`telemetry: records of ${sink.invocation.id} not kept: ${Cause.squash(cause)}`
+				);
 			})
 		)
+	);
+
+/** The invocation's remaining records, when it ends. */
+export const flushAll = (sink: Sink) => flush(sink, true);
+
+/** A slice of records, when enough have gathered — for long work to call between its steps. */
+export const keep = (database: Database.Interface): Effect.Effect<void> =>
+	Effect.flatMap(Effect.serviceOption(Sink), (sink) =>
+		Option.isSome(sink) && sink.value.rows.length >= SLICE_ROWS
+			? flush(sink.value, false).pipe(Effect.provideService(Database.Service, database))
+			: Effect.void
 	);

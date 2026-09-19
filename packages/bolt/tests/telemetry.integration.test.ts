@@ -9,6 +9,8 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
+import * as Database from '../src/runtime/facilities/database.js';
+import { keep, loggerFor, makeSink, record, Sink } from '../src/runtime/telemetry.js';
 import {
 	makeBoltTestRuntime,
 	TEST_ENVIRONMENT,
@@ -100,5 +102,21 @@ describe('the runtime keeps its own records', () => {
 			invocation: invocation.id
 		});
 		expect(String(kept[0]!.attributes['error'])).toContain('AccessDenied');
+	});
+
+	it('keeps a slice of a long invocation’s records before it ends', async () => {
+		harness = await makeBoltTestRuntime();
+		const invocation = task('collections.findMany', { collection: 'people' });
+		const sink = makeSink(invocation);
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const database = yield* Database.Service;
+				for (let index = 0; index < 100; index += 1) yield* record('tool.call', { index });
+				yield* keep(database);
+			}).pipe(Effect.provideService(Sink, sink), Effect.provide(loggerFor(sink)))
+		);
+		expect(sink.rows).toHaveLength(0);
+		expect(sink.slices).toBe(1);
+		expect(await rows(harness)).toHaveLength(100);
 	});
 });

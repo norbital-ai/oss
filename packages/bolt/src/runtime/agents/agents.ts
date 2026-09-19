@@ -79,6 +79,7 @@ import {
 } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import * as Telemetry from '#lib/runtime/telemetry.js';
 import { record } from '#lib/runtime/telemetry.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import { workspaceSubject } from '#lib/runtime/identity/static-identity.js';
@@ -548,7 +549,7 @@ const canClaimInput = (row: Pick<ConversationMessage, 'mode' | 'annotation'>, pl
  * The concepts only; the authoring contract (files, compiler roles, validation) is the
  * `authoring-tenant-workspace` skill's and is not repeated here.
  */
-const WORKSPACE_DEBRIEF = `A workspace is one compiled release of declared parts. Collection: a table with a write contract — the columns a create/update may state, nested relation actions (create/update/delete/link/unlink), one transform that numbers, stamps, derives and refuses (a refusal names the rule; a write is one statement); id/created_at/updated_at/row_version are the platform's. App: a surface people open; a record's form is its representation. Automation: durable work after a commit, on a schedule or by hand. Envoy: a persona on a channel under declared policies. Function: a request/response handler reached by invoke. Policy: what a holder may read/write/delete per collection, masked or scoped; team: a named group holding policies (membership is a row); a grant may carry an approval flow — the write is held until the named team decides, never by the requester. Search: text over searchable fields, /semantic where declared, /<index> for a similarity index. Method: describe_workspace once, read_collection for data, write_collection through the listed contract; resolve people and referenced records against existing rows, never invent them, and say what did not resolve.`;
+const WORKSPACE_DEBRIEF = `A workspace is one compiled release of declared parts. Collection: a table with a write contract — the columns a create/update may state, nested relation actions (create/update/delete/link/unlink), one transform that numbers, stamps, derives and refuses (a refusal names the rule; a write is one statement); id/created_at/updated_at/row_version are the platform's. App: a surface people open; a record's form is its representation. Automation: durable work after a commit, on a schedule or by hand. Envoy: a persona on a channel under declared policies. Function: a request/response handler reached by invoke. Policy: what a holder may read/write/delete per collection, masked or scoped; team: a named group holding policies (membership is a row); a grant may carry an approval flow — the write is held until the named team decides, never by the requester. Search: text over searchable fields, /semantic where declared, /<index> for a similarity index. Method: describe_workspace once, read_collection for data, write_collection through the listed contract; resolve people and referenced records against existing rows, never invent them, and say what did not resolve. A question beyond the workspace's own data is still yours to answer with the tools you hold — the web, the sandbox, a document the person attached; what you may write is bounded by policy, what you may look up is not.`;
 
 const COMPACTION_FORMAT = `Return only a Markdown table with two columns (Section, Summary) and exactly these four nonempty rows in this order: Goal; Progress; What we learned; What's left. Goal preserves the user's objective, constraints and decisions in one or two sentences; do not copy the original prompt or completed step list. Progress records completed work and verified checks, including exact commits and acceptance evidence. What we learned records findings, failure causes and relevant context, referencing skills/schemas instead of copying them. What's left records unfinished work, blockers, unresolved questions and the immediate next action, including any final response still owed after this checkpoint. Writing this summary does not itself complete that work. Use concise prose in each cell; escape literal pipes. Write "None yet" when a category has no evidence. Never turn completed instructions into future work. Maximum 800 words.`;
 
@@ -4370,6 +4371,7 @@ export const layer = Layer.effect(
 									failed: handled.isFailure,
 									bytes: JSON.stringify(handled.encodedResult)?.length ?? 0
 								});
+								yield* Telemetry.keep(database);
 								return handled;
 							}),
 						{ concurrency: 'unbounded' }

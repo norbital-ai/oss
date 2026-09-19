@@ -182,7 +182,7 @@ describe('the subject a facility call carries', () => {
 		// The runtime's own bookkeeping — the invocation's telemetry, written after it settled — is
 		// the runtime's write, not the command's, and carries no subject; the command's calls all do.
 		const calls = harness.database.calls.filter(
-			({ effectId }) => !String(effectId).endsWith(':telemetry')
+			({ effectId }) => !/:telemetry:\d+$/.test(String(effectId))
 		);
 		expect(calls.length).toBeGreaterThan(1);
 		const firstAuthenticatedCall = calls.findIndex(({ subject }) => subject !== undefined);

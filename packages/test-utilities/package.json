@@ -35,7 +35,8 @@
 		"test": "node --experimental-strip-types --import ./tests/resolve-source.mjs --test tests/*.test.ts"
 	},
 	"dependencies": {
-		"playwright": "1.62.1"
+		"playwright": "1.62.1",
+		"typescript": "catalog:"
 	},
 	"peerDependencies": {
 		"@norbital-ai/bolt-protocol": "0.0.73",
@@ -47,7 +48,6 @@
 		"@norbital-ai/bolt-server": "workspace:*",
 		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
-		"effect": "4.0.0-rc.112",
-		"typescript": "catalog:"
+		"effect": "4.0.0-rc.112"
 	}
 }

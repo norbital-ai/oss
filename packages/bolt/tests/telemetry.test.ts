@@ -5,7 +5,17 @@ import { invocationAnnotations, loggerFor, makeSink, record } from '../src/runti
 
 describe('the runtime tells what it did as one JSON line per record, and keeps the row', () => {
 	it('carries the event, its fields and the invocation ids', async () => {
-		const sink = makeSink();
+		const invocation = {
+			_tag: 'Task',
+			protocolVersion: 1,
+			id: 'inv-1',
+			scope: { tenantId: 't', environment: 'live', releaseId: 'r1' },
+			command: 'conversations.answer',
+			input: {},
+			taskId: 'agent:m1',
+			attempt: 2
+		} as never;
+		const sink = makeSink(invocation);
 		const lines = await Effect.runPromise(
 			Effect.gen(function* () {
 				yield* record('model.call', {
@@ -13,18 +23,7 @@ describe('the runtime tells what it did as one JSON line per record, and keeps t
 					inputTokens: 1200,
 					failed: false
 				}).pipe(
-					Effect.annotateLogs(
-						invocationAnnotations({
-							_tag: 'Task',
-							protocolVersion: 1,
-							id: 'inv-1',
-							scope: { tenantId: 't', environment: 'live', releaseId: 'r1' },
-							command: 'conversations.answer',
-							input: {},
-							taskId: 'agent:m1',
-							attempt: 2
-						} as never)
-					),
+					Effect.annotateLogs(invocationAnnotations(invocation)),
 					Effect.provide(loggerFor(sink))
 				);
 				return yield* TestConsole.logLines;

@@ -12,11 +12,12 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import {
-	flush,
+	flushAll,
 	invocationAnnotations,
 	loggerFor,
 	makeSink,
-	recordSettled
+	recordSettled,
+	Sink
 } from '#lib/runtime/telemetry.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
 import {
@@ -313,12 +314,13 @@ const invoke = Effect.fn('Bolt.invokeCommandBinding')(function* <E>(
  * a settled one records its time.
  */
 export const dispatchInvocation = (invocation: Invocation) => {
-	const sink = makeSink();
+	const sink = makeSink(invocation);
 	const startedAt = Date.now();
 	return dispatch(invocation).pipe(
 		Effect.onExit((exit) => recordSettled(invocation, startedAt, exit)),
-		Effect.ensuring(flush(invocation, sink)),
+		Effect.ensuring(flushAll(sink)),
 		Effect.annotateLogs(invocationAnnotations(invocation)),
+		Effect.provideService(Sink, sink),
 		Effect.provide(loggerFor(sink))
 	);
 };

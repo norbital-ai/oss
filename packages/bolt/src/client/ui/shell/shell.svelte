@@ -505,6 +505,7 @@
 		void tick().then(() => requestAgentComposerFocus(seed));
 	}
 
+	let agentFullScreen = $state(false);
 	function closeAgentSheet(next: boolean): void {
 		agentSheetOpen = next;
 		if (!next && onAgentPath) {
@@ -878,12 +879,16 @@
 	<BillingBanner fixed />
 
 	<Sheet.Root open={agentSheetOpen} onOpenChange={closeAgentSheet}>
+		<!-- Anchored to the workspace inset, as a record's sheet is: full screen fills the inset
+		     beside the sidebar, never over it. -->
 		<Sheet.Content
 			flush
-			portalTarget="body"
+			contained
+			portalTarget="[data-slot='sidebar-inset']"
 			side="right"
 			class="md:w-[var(--sheet-width,30rem)]"
 			showCloseButton={false}
+			fullScreen={agentFullScreen}
 			persistenceKey="bolt-workspace-agent"
 			preventBackgroundClick="narrow"
 			onOpenAutoFocus={(event) => {
@@ -891,7 +896,7 @@
 			}}
 		>
 			<Sheet.Title class="sr-only">{t('bolt.shell.workspaceAgentTitle')}</Sheet.Title>
-			<AgentChatPanel onclose={() => closeAgentSheet(false)} />
+			<AgentChatPanel onclose={() => closeAgentSheet(false)} bind:fullScreen={agentFullScreen} />
 		</Sheet.Content>
 	</Sheet.Root>
 {/if}

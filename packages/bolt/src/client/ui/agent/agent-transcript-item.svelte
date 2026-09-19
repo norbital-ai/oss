@@ -10,7 +10,7 @@
 	import { decodeAttachmentDescriptor } from '#lib/runtime/agents/image-descriptors.js';
 	import AgentChildConversation from './agent-child-conversation.svelte';
 	import type { CompactOrigin } from './context-view.js';
-	import { plainMessageText } from './context-view.js';
+	import { checkpointSections, plainMessageText } from './context-view.js';
 	import type { PanelMessage } from './transcript.js';
 	import {
 		diagnostic,
@@ -282,7 +282,7 @@
 
 {#if renders}
 	<li
-		class="group/message my-4 min-w-0"
+		class="message group/message my-4 min-w-0"
 		data-mode={mode ?? undefined}
 		aria-label={speaker(message)}
 		data-role={message.message.role}
@@ -340,7 +340,12 @@
 								>{generating ? 'Writing…' : 'Response interrupted'}</span
 							>
 						{/if}
-						<ReadonlyMarkdown scale="reading" allowHtml={false} content={message.message.content} />
+						<!-- A checkpoint answers as a section table; read it as headings here as in Summary. -->
+						<ReadonlyMarkdown
+							scale="reading"
+							allowHtml={false}
+							content={checkpointSections(message.message.content)}
+						/>
 					{:else}
 						{#if parentAttribution}
 							<ReadonlyMarkdown
@@ -402,7 +407,11 @@
 									{#if pendingPart}<span role="status" class="text-xs text-muted-foreground"
 											>{generating ? 'Writing…' : 'Response interrupted'}</span
 										>{/if}
-									<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+									<ReadonlyMarkdown
+										scale="reading"
+										allowHtml={false}
+										content={checkpointSections(part.text)}
+									/>
 								{:else}
 									{#if parentAttribution}
 										<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
@@ -516,3 +525,12 @@
 		</Stack>
 	</li>
 {/if}
+
+<style>
+	/* A long transcript lays out only what is on screen, so dragging the sheet's width
+	   reflows a viewport of messages and not hundreds of markdown blocks per frame. */
+	.message {
+		content-visibility: auto;
+		contain-intrinsic-block-size: auto 6rem;
+	}
+</style>
