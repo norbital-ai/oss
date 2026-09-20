@@ -71,6 +71,21 @@
 	--brand-muted: var(--brand-100);
 	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
 	--product-icon-accent: var(--brand);
+
+	/* Motion: one ease-out, three durations, nothing over 300ms. Finger-driven surfaces (sheets,
+	   swipes) use springs instead — a duration on something the finger moves feels wrong. */
+	--motion-fast: 120ms;
+	--motion-base: 180ms;
+	--motion-slow: 260ms;
+	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+	/* Touch density: a phone thumb needs 44px; the tokens flip under (pointer: coarse) below. */
+	--hit-target: 0;
+}
+
+@media (pointer: coarse) {
+	:root {
+		--hit-target: 2.75rem;
+	}
 }
 
 .dark {
@@ -970,10 +985,19 @@
 	--overflow-fade-inline-end: var(--overflow-fade);
 }
 
-/* Side sheets become reachable, thumb-friendly bottom sheets on narrow viewports.
-   The explicit contract wins over feature-local desktop width and height classes. */
+/* Side sheets and centred dialogs become reachable, thumb-friendly bottom sheets on narrow
+   viewports. The explicit contract wins over feature-local desktop width and height classes;
+   the tw-animate enter/exit vars turn the dialog's zoom into a slide from the bottom edge. */
 @media (max-width: 47.999rem) {
-	.sheet-content[data-mobile-bottom-sheet='true'] {
+	[data-mobile-bottom-sheet='true'] {
+		--tw-enter-translate-x: 0 !important;
+		--tw-enter-translate-y: 100% !important;
+		--tw-enter-scale: 1 !important;
+		--tw-exit-translate-x: 0 !important;
+		--tw-exit-translate-y: 100% !important;
+		--tw-exit-scale: 1 !important;
+		/* Tailwind's translate-x/y-[-50%] centring lives on `translate`; the keyframes on `transform`. */
+		translate: none !important;
 		inset: auto 0 0 !important;
 		width: 100% !important;
 		max-width: 100% !important;
@@ -1001,4 +1025,86 @@
 	-webkit-user-select: none;
 	user-select: none;
 	touch-action: none;
+}
+
+/* ================================================================ */
+/* Touch contract — behaviour branches on input, never on width      */
+/* ================================================================ */
+/* Pinch and double-tap zoom are what the OS does to *web content*; an app never zooms by
+   accident. Panning stays. Templates opt an image or map back in with `touch-action: pinch-zoom`. */
+html {
+	touch-action: pan-x pan-y;
+}
+button,
+a,
+label,
+input,
+select,
+textarea,
+[role='button'],
+[role='menuitem'],
+[role='option'],
+[role='tab'] {
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+/* Chrome (sidebar, headers, rails) is not prose: a long-press must not start a text selection. */
+[data-sidebar],
+[data-slot='sidebar'],
+[data-slot='page-header'],
+[data-slot='app-header'] {
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+/* Only an installed app owns the whole screen; a browser tab keeps its pull-to-refresh. */
+@media (display-mode: standalone) {
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+}
+/* A thumb needs 44px. Tokens, so a component that must stay dense can zero `--hit-target`.
+   Text entry under 16px makes iOS zoom the page on focus; the floor is unlayered so it wins
+   over any `text-sm` utility a primitive still carries. */
+@media (pointer: coarse) {
+	input:not([type='checkbox']):not([type='radio']):not([type='range']),
+	textarea,
+	select,
+	[contenteditable='true'] {
+		font-size: max(1rem, 1em);
+	}
+	button,
+	[role='button'],
+	[role='menuitem'],
+	[role='option'],
+	[role='tab'] {
+		min-block-size: var(--hit-target);
+		min-inline-size: var(--hit-target);
+	}
+}
+/* Tailwind gates `hover:` behind (hover: hover), so a hover-only reveal is invisible on touch.
+   Show it: the affordance exists to be found, and there is no cursor to find it with. */
+@media (hover: none) {
+	[class~='group-hover:opacity-100'],
+	[class~='hover:opacity-100'] {
+		opacity: 1;
+	}
+}
+/* A route change cross-fades on the motion scale; the shell starts the transition, this times it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: var(--motion-base);
+	animation-timing-function: var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	::before,
+	::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
 }

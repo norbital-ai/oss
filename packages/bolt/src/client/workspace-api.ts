@@ -1,3 +1,4 @@
+import { deviceClient } from './device.js';
 import { Array as Array_, Effect, Result, Schema } from 'effect';
 import {
 	CollectionGroupedQueryRequest,
@@ -1092,6 +1093,7 @@ const WorkspaceApis = {
 		const publicApi = {
 			db: ClientDatabase.database(runtime, allowedCollections, catalog),
 			automations: automationClient(runtime),
+			device: deviceClient,
 			invoke: new Proxy<Record<string, InvokeMethod>>(
 				{},
 				{

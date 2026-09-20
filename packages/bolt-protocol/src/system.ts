@@ -314,12 +314,28 @@ export const EnvoyDelivery = Schema.Struct({
 	)
 });
 export interface EnvoyDelivery extends Schema.Schema.Type<typeof EnvoyDelivery> {}
-const NotificationInput = Schema.Struct({
-	id: Schema.NonEmptyString,
-	recipient: Schema.NonEmptyString,
-	payload: Schema.Json,
-	read: Schema.Boolean
+
+/** The host config key naming the VAPID public key a browser subscribes against. */
+export const WEB_PUSH_PUBLIC_KEY_CONFIG_KEY = 'BOLT_WEB_PUSH_PUBLIC_KEY';
+export const WEB_PUSH_CHANNEL = 'webpush';
+/** The failure code a push service answering 404 or 410 becomes; the runtime drops the subscription on it. */
+export const WEB_PUSH_SUBSCRIPTION_GONE = 'communication_recipient_gone';
+export const PushConfiguration = Schema.Struct({ publicKey: Schema.NullOr(Schema.NonEmptyString) });
+export interface PushConfiguration extends Schema.Schema.Type<typeof PushConfiguration> {}
+/** What `PushSubscription.toJSON()` gives a browser: the endpoint and the two keys it minted. */
+export const PushSubscription = Schema.Struct({
+	endpoint: Schema.NonEmptyString,
+	keys: Schema.Struct({ p256dh: Schema.NonEmptyString, auth: Schema.NonEmptyString })
 });
+export interface PushSubscription extends Schema.Schema.Type<typeof PushSubscription> {}
+/** The `webpush` channel's Send payload: which subscription, and what the worker shows. */
+export const WebPushPayload = Schema.Struct({
+	subscription: PushSubscription,
+	title: Schema.NonEmptyString,
+	body: Schema.String,
+	url: Schema.optionalKey(Schema.String)
+});
+export interface WebPushPayload extends Schema.Schema.Type<typeof WebPushPayload> {}
 const AutomationTaskInput = Schema.Struct({
 	args: Schema.Json,
 	scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
@@ -715,9 +731,34 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({
-		name: 'notifications.drain',
-		input: NotificationInput,
+		name: 'notifications.deliver',
+		input: EmptyInput,
 		responses: [ok(Schema.Json)]
+	}),
+	/**
+	 * Push: the host's VAPID public key (null when the host sends no pushes, so the shell offers
+	 * nothing), then one subscription per browser, keyed by its push-service endpoint.
+	 */
+	commandContract({
+		name: 'notifications.pushConfiguration',
+		input: EmptyInput,
+		responses: [ok(PushConfiguration)],
+		clientPath: ['notifications', 'pushConfiguration'],
+		clientMode: 'query'
+	}),
+	commandContract({
+		name: 'notifications.subscribe',
+		input: PushSubscription,
+		responses: [ok(Schema.Struct({ subscribed: Schema.Literal(true) }))],
+		clientPath: ['notifications', 'subscribe'],
+		clientMode: 'operation'
+	}),
+	commandContract({
+		name: 'notifications.unsubscribe',
+		input: Schema.Struct({ endpoint: Schema.NonEmptyString }),
+		responses: [ok(Schema.Struct({ subscribed: Schema.Literal(false) }))],
+		clientPath: ['notifications', 'unsubscribe'],
+		clientMode: 'operation'
 	})
 ] as const;
 

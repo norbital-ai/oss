@@ -30,6 +30,7 @@ import { databaseOf } from './workspace-api.js';
 import { createSyncStatusView } from './sync-status.svelte.js';
 
 export type { SystemClientApi } from './workspace-api.js';
+export type { DeviceClient, DeviceLocation, DeviceRefusal, HapticKind } from './device.js';
 export type { BrowserWorkspaceRuntimeOptions } from '#lib/client/contracts.js';
 export type { RemoteQuery } from '#lib/client/contracts.js';
 export {
@@ -189,6 +190,14 @@ export const createBrowserWorkspaceRuntime = (
 		}
 	};
 	sync.start();
+	// A backgrounded phone drops the stream; the person expects the screen live the moment they
+	// return, not after whatever backoff the drop had reached.
+	if (typeof document !== 'undefined') {
+		document.addEventListener('visibilitychange', () => {
+			if (document.visibilityState === 'visible') sync.wake();
+		});
+		window.addEventListener('online', () => sync.wake());
+	}
 	const runtime: {
 		bolt: BoltClient;
 		db: Readonly<Record<string, unknown>>;

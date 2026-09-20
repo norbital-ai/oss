@@ -107,6 +107,12 @@ export type ClientEvent = Readonly<
 			readonly at: number;
 	  }
 	| { readonly kind: 'tick'; readonly now: number }
+	/**
+	 * The page came back — foregrounded, or the network returned. A reconnect that was waiting out
+	 * its backoff is due now: the backoff protects a host from a client hammering it, not from a
+	 * person who just looked at their phone.
+	 */
+	| { readonly kind: 'wake'; readonly now: number }
 >;
 
 export type ClientEffect = Readonly<
@@ -726,6 +732,11 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			);
 			return [{ ...state, writes }, [{ kind: 'push', writeId: id }]];
 		}
+		case 'wake':
+			return step(
+				state.link === 'reconnecting' ? { ...state, reconnectAt: event.now } : state,
+				{ kind: 'tick', now: event.now }
+			);
 		case 'tick': {
 			if (state.link === 'closed') return [state, []];
 			const queries = new Map(state.queries);

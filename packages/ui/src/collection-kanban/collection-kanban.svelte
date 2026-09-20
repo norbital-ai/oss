@@ -6,14 +6,11 @@
 	import type {
 		CollectionDefinition,
 		CollectionField,
-		CollectionGroupedResult,
 		CollectionRegistry,
-		CollectionRow,
-		RemoteQuery
+		CollectionRow
 	} from '@norbital-ai/std/collection';
 	import { isSystemCollectionField } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
-	import { watch } from 'runed';
 	import { Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
@@ -61,32 +58,18 @@
 		CollectionKanbanProps
 	} from '#lib/collection-kanban/collection-kanban.types';
 
-	interface OptimisticKanbanMove {
-		apply: () => void;
-		commit: () => Effect.Effect<void, Error>;
-		rollback: () => void;
-	}
-
-	/**
-	 * Keeps the visual move immediate while preserving the query as the source of truth.
-	 * A failed mutation restores the record to its server-backed lane; mutation invalidation owns
-	 * refreshing the query after a successful commit.
-	 */
-	function runOptimisticKanbanMove(move: OptimisticKanbanMove): Effect.Effect<void, Error> {
-		return Effect.sync(move.apply).pipe(
-			Effect.flatMap(() => move.commit()),
-			Effect.catch((cause) =>
-				Effect.sync(move.rollback).pipe(Effect.flatMap(() => Effect.fail(cause)))
-			)
-		);
-	}
-
 	type Row = CollectionRow<TCollections[TName]>;
 	type FieldConfig = CollectionKanbanField<Row>;
-	interface BoardResultState {
-		result: CollectionGroupedResult<Row>;
-		hasLoaded: boolean;
-	}
+	/**
+	 * The board is one live prefix, grouped here by the lane field. Live, so another person's move
+	 * arrives without a refresh; one prefix, so the optimistic overlay the sync engine already paints
+	 * on every live read moves a card the moment `update` is called and moves it back by itself if
+	 * the authority refuses — no lane override map, no reconciliation, no rollback. The old grouped
+	 * read was answered once and never registered, which is why all three existed.
+	 */
+	// ponytail: one 500-row prefix for the whole board; a board past that wants pagination per lane,
+	// which is a per-lane live query with its own limit, not a bigger prefix.
+	const BOARD_ROW_LIMIT = 500;
 
 	let {
 		client,
@@ -186,12 +169,6 @@
 			: derivedLanes.map((lane) => lane.value)
 	);
 
-	// Query inputs are pure derived data. Creating the stateful RemoteQuery belongs in the watcher
-	// callback so query resource writes never occur inside a derived computation.
-	let boardQuery = $state<BoardResultState>({
-		result: {},
-		hasLoaded: false
-	});
 	// No page size to remember: a board asks for lanes, not pages.
 	const queryState = new CollectionQueryState<Row>();
 	const automaticRelationshipWith = $derived.by(() =>
@@ -202,51 +179,30 @@
 			})
 		)
 	);
-	const queryInput = $derived.by(() => ({
-		operations: client.db[collection],
-		query: {
-			...collectionQuery,
-			with: { ...automaticRelationshipWith, ...(collectionQuery?.with ?? {}) },
-			search:
-				queryState.search === ''
-					? collectionQuery?.search
-					: { mode: 'lexical' as const, term: queryState.search },
-			orderBy: collectionQuery?.orderBy,
-			group: {
-				by: groupBy,
-				lanes: resolvedLaneValues.length > 0 ? [...resolvedLaneValues] : undefined
-			}
-		},
-		filterOptions: queryState.queryOptions
-	}));
-	let query = $state<RemoteQuery<CollectionGroupedResult<Row>>>();
-	watch(
-		() => queryInput,
-		(input) => {
-			query = input.operations.findGrouped(input.query, input.filterOptions);
-		},
-		{ lazy: false }
+	const query = $derived(
+		client.db[collection].findMany(
+			{
+				...collectionQuery,
+				with: { ...automaticRelationshipWith, ...(collectionQuery?.with ?? {}) },
+				search:
+					queryState.search === ''
+						? collectionQuery?.search
+						: { mode: 'lexical' as const, term: queryState.search },
+				orderBy: collectionQuery?.orderBy,
+				limit: BOARD_ROW_LIMIT
+			},
+			queryState.queryOptions
+		)
 	);
-	watch(
-		() => query?.current,
-		(current) => {
-			if (current == null) return;
-			boardQuery.result = current;
-			boardQuery.hasLoaded = true;
-		},
-		{ lazy: false }
-	);
-	let laneOverrides = $state(new Map<string, string>());
+	const boardRows = $derived((query.current ?? []) as readonly Row[]);
 	let moveError = $state('');
 	let activeDrag: { recordId: string; lane: string } | null = $state(null);
 	let selectedRecordIds = $state(new Set<string>());
 	const recordById = $derived.by(() => {
 		const records = new Map<string, Row>();
-		for (const group of Object.values(boardQuery.result)) {
-			for (const record of group) {
-				const id = Reflect.get(record, recordIdField);
-				if (id != null) records.set(String(id), record);
-			}
+		for (const record of boardRows) {
+			const id = Reflect.get(record, recordIdField);
+			if (id != null) records.set(String(id), record);
 		}
 		return records;
 	});
@@ -268,26 +224,25 @@
 	const updateRestrictedRecordIds = $derived(new Set(updateRestrictionReasonById.keys()));
 	const leadingAccentFor = (recordId: string) =>
 		collectionRecordLeadingAccent(metadataById.get(recordId) ?? []);
+	// Declared lanes are the columns, in model order, even when empty; a lane field with no
+	// declared values takes its columns from the rows. Authored `lanes` name a subset, so a row
+	// outside it is not on this board.
 	const groups = $derived.by((): Array<[string, Row[], string[]]> => {
-		const laneKeys =
-			resolvedLaneValues.length > 0 ? resolvedLaneValues : Object.keys(boardQuery.result);
+		const declared = resolvedLaneValues.length > 0;
 		const grouped = new Map(
-			laneKeys.map((lane) => [lane, { records: [] as Row[], recordIds: [] as string[] }])
+			resolvedLaneValues.map((lane) => [lane, { records: [] as Row[], recordIds: [] as string[] }])
 		);
-		for (const [serverLane, records] of Object.entries(boardQuery.result)) {
-			for (const record of records) {
-				const id = Reflect.get(record, recordIdField);
-				const recordId = id == null ? undefined : String(id);
-				const targetLane =
-					recordId == null ? serverLane : (laneOverrides.get(recordId) ?? serverLane);
-				let target = grouped.get(targetLane);
-				if (target === undefined) {
-					target = { records: [], recordIds: [] };
-					grouped.set(targetLane, target);
-				}
-				target.records.push(record);
-				if (recordId != null) target.recordIds.push(recordId);
+		for (const record of boardRows) {
+			const lane = String(Reflect.get(record, groupBy) ?? '');
+			let target = grouped.get(lane);
+			if (target === undefined) {
+				if (declared) continue;
+				target = { records: [], recordIds: [] };
+				grouped.set(lane, target);
 			}
+			target.records.push(record);
+			const id = Reflect.get(record, recordIdField);
+			if (id != null) target.recordIds.push(String(id));
 		}
 		return [...grouped.entries()].map(([lane, { records, recordIds }]) => [
 			lane,
@@ -295,14 +250,15 @@
 			recordIds
 		]);
 	});
+	// A selection is only ever of rows on the board: derived, so a row leaving the prefix leaves it.
+	const visibleSelection = $derived(
+		new Set([...selectedRecordIds].filter((recordId) => recordById.has(recordId)))
+	);
 	const selectedRecords = $derived(
-		[...selectedRecordIds]
-			.map((recordId) => recordById.get(recordId))
-			.filter((record): record is Row => record != null)
+		[...visibleSelection].map((recordId) => recordById.get(recordId) as Row)
 	);
 	const allVisibleSelected = $derived(
-		recordById.size > 0 &&
-			[...recordById.keys()].every((recordId) => selectedRecordIds.has(recordId))
+		recordById.size > 0 && visibleSelection.size === recordById.size
 	);
 	const selectionControls = $derived(
 		effectiveSelectable
@@ -313,7 +269,7 @@
 				}
 			: undefined
 	);
-	const actionsDisabled = $derived((query?.loading ?? false) || writePending);
+	const actionsDisabled = $derived(query.loading || writePending);
 	const laneLayoutCount = $derived(
 		Math.max(groups.length, lanes?.length ?? derivedLanes.length, 1)
 	);
@@ -355,46 +311,6 @@
 		selectedRecordIds = allVisibleSelected ? new Set() : new Set(recordById.keys());
 	}
 
-	function setRecordLane(recordId: string, lane: string | undefined): void {
-		const next = new Map(laneOverrides);
-		if (lane == null) next.delete(recordId);
-		else next.set(recordId, lane);
-		laneOverrides = next;
-	}
-
-	function serverLaneFor(recordId: string): string | undefined {
-		for (const [lane, records] of Object.entries(boardQuery.result)) {
-			if (records.some((record) => String(Reflect.get(record, recordIdField)) === recordId)) {
-				return lane;
-			}
-		}
-		return undefined;
-	}
-
-	watch(
-		() => boardQuery.result,
-		() => {
-			if (laneOverrides.size === 0) return;
-			const next = new Map(laneOverrides);
-			let changed = false;
-			for (const [recordId, optimisticLane] of laneOverrides) {
-				if (serverLaneFor(recordId) !== optimisticLane) continue;
-				next.delete(recordId);
-				changed = true;
-			}
-			if (changed) laneOverrides = next;
-		}
-	);
-
-	watch(
-		() => recordById,
-		(records) => {
-			if (selectedRecordIds.size === 0) return;
-			const next = new Set([...selectedRecordIds].filter((recordId) => records.has(recordId)));
-			if (next.size !== selectedRecordIds.size) selectedRecordIds = next;
-		}
-	);
-
 	function commitCardMove(
 		record: Row,
 		fromLane: string,
@@ -406,8 +322,8 @@
 				Effect.mapError((cause) => toError(cause))
 			);
 		}
-		// Default local-first move: the generated client durably overlays `toLane`; the temporary lane
-		// override covers only the interval before that local transaction completes.
+		// The generated client paints `toLane` on the live prefix the moment `update` is called and
+		// unpaints it if the authority refuses; the wait below is only for the message.
 		return Effect.gen(function* () {
 			const id = Reflect.get(record, recordIdField);
 			if (id == null)
@@ -450,11 +366,7 @@
 		if (!record) return;
 		moveError = '';
 		void Effect.runPromise(
-			runOptimisticKanbanMove({
-				apply: () => setRecordLane(recordId, toLane),
-				commit: () => commitCardMove(record, fromLane, toLane),
-				rollback: () => setRecordLane(recordId, undefined)
-			}).pipe(
+			commitCardMove(record, fromLane, toLane).pipe(
 				Effect.catch((cause) =>
 					Effect.sync(() => {
 						moveError = getErrorMessage(cause);
@@ -576,7 +488,7 @@
 			style={`grid-template-columns: repeat(${resolvedColumnCount}, minmax(min(18rem, 100%), 1fr)); grid-template-rows: repeat(${resolvedRowCount}, minmax(0, 1fr));`}
 		>
 			<CollectionKanbanSkeleton
-				loading={!boardQuery.hasLoaded && (query?.loading ?? true)}
+				loading={query.loading && boardRows.length === 0}
 				empty={groups.length === 0}
 				lanes={lanes?.length ?? 3}
 			/>
@@ -590,7 +502,7 @@
 					nextLane={groups[index + 1]?.[0]}
 					movable={true}
 					selectable={effectiveSelectable}
-					{selectedRecordIds}
+					selectedRecordIds={visibleSelection}
 					mutationPending={writePending}
 					{updateRestrictedRecordIds}
 					{updateRestrictionReasonById}
@@ -604,7 +516,7 @@
 					onDragEnd={() => (activeDrag = null)}
 				/>
 			{/each}
-			{#if query?.error}<p class="text-sm text-destructive">{query.error.message}</p>{/if}
+			{#if query.error}<p class="text-sm text-destructive">{query.error.message}</p>{/if}
 		</Grid>
 	</Scroll>
 </Cover>

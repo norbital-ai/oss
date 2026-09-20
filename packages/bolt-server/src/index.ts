@@ -64,6 +64,7 @@ export {
 	makeConnectorBindingFromConfig,
 	type ConnectorProvider
 } from './facilities/providers.js';
+export { sendWebPush, type WebPushKeys } from './facilities/web-push.js';
 export {
 	makeDatabaseFromConfig,
 	makeLocalDatabase,

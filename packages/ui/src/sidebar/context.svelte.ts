@@ -1,5 +1,5 @@
 import { createContext } from 'svelte';
-import { MediaQuery } from 'svelte/reactivity';
+import { narrowViewport } from '#lib/utils/viewport.svelte';
 import { SIDEBAR_KEYBOARD_SHORTCUT } from '#lib/sidebar/constants';
 
 type Getter<T> = () => T;
@@ -25,19 +25,16 @@ class SidebarState {
 	open = $derived.by(() => this.props.open());
 	openMobile = $state(false);
 	setOpen: SidebarStateProps['setOpen'];
-	#isMobile: IsMobile;
 	state = $derived.by(() => (this.open ? 'expanded' : 'collapsed'));
 
 	constructor(props: SidebarStateProps) {
 		this.setOpen = props.setOpen;
-		this.#isMobile = new IsMobile();
 		this.props = props;
 	}
 
-	// Convenience getter for checking if the sidebar is mobile
-	// without this, we would need to use `sidebar.isMobile.current` everywhere
+	/** Narrow is the one width question; `utils/viewport` owns it so every surface agrees. */
 	get isMobile() {
-		return this.#isMobile.current;
+		return narrowViewport.current;
 	}
 
 	// Event handler to apply to the `<svelte:window>`
@@ -53,7 +50,7 @@ class SidebarState {
 	};
 
 	toggleExpansion = () => {
-		if (this.#isMobile.current) {
+		if (this.isMobile) {
 			this.openMobile = false;
 			return;
 		}
@@ -61,7 +58,7 @@ class SidebarState {
 	};
 
 	toggle = () => {
-		return this.#isMobile.current ? (this.openMobile = !this.openMobile) : this.setOpen(!this.open);
+		return this.isMobile ? (this.openMobile = !this.openMobile) : this.setOpen(!this.open);
 	};
 }
 
@@ -79,10 +76,3 @@ export function setSidebar(props: SidebarStateProps): SidebarState {
 	return sidebarState;
 }
 
-const DEFAULT_MOBILE_BREAKPOINT = 768;
-
-class IsMobile extends MediaQuery {
-	constructor(breakpoint: number = DEFAULT_MOBILE_BREAKPOINT) {
-		super(`max-width: ${breakpoint - 1}px`);
-	}
-}

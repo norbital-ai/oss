@@ -51,19 +51,12 @@
 	const { t, intlLocale } = useI18n();
 	const today = currentMonthKey();
 	let open = $state(false);
-	let viewYear = $state(
-		value?.start != null ? parseMonth(value.start).year : parseMonth(today).year
-	);
+	// The year shown follows the range start and is overridden by the arrows until it moves again.
+	let viewYear = $derived(parseMonth(value?.start ?? today).year);
 	/** The first endpoint of a span being drawn; `null` between selections. */
 	let pending = $state<MonthKey | null>(null);
 	let hovered = $state<MonthKey | null>(null);
 
-	watch(
-		() => value?.start,
-		(start) => {
-			if (start != null) viewYear = parseMonth(start).year;
-		}
-	);
 	watch(
 		() => open,
 		(next) => {

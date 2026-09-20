@@ -4,6 +4,7 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
+	import type { PushSubscriptionState } from './push-subscription.svelte.js';
 
 	interface NotificationItem {
 		readonly id: string;
@@ -16,18 +17,35 @@
 		loading = false,
 		error,
 		expanded = true,
-		onread
+		onread,
+		push
 	}: {
 		items?: ReadonlyArray<NotificationItem>;
 		loading?: boolean;
 		error?: string | undefined;
 		expanded?: boolean;
 		onread?: (id: string) => void;
+		/** This browser's push subscription; absent when the host sends none. */
+		push?: PushSubscriptionState | undefined;
 	} = $props();
+	const pushOffered = $derived(
+		push !== undefined &&
+			(push.status === 'off' || push.status === 'on' || push.status === 'denied')
+	);
 
 	const unread = $derived(items.filter(({ read }) => !read));
 	const badge = $derived(unread.length > 99 ? '99+' : String(unread.length));
 	let open = $state(false);
+	/**
+	 * The installed app's icon carries the same count as the bell. An attachment on the badge
+	 * itself: it re-runs as the count changes and its cleanup — the badge leaving the tree at
+	 * zero — is what clears the icon. A browser without the API simply has no badge.
+	 */
+	const appBadge = (count: number) => () => {
+		if (!('setAppBadge' in navigator)) return;
+		void navigator.setAppBadge(count).catch(() => undefined);
+		return () => void navigator.clearAppBadge().catch(() => undefined);
+	};
 </script>
 
 <Popover.Root bind:open>
@@ -50,6 +68,7 @@
 						justify="center"
 						gap="none"
 						data-testid="notification-unread-badge"
+						{@attach appBadge(unread.length)}
 					>
 						{badge}
 					</Inline>
@@ -80,6 +99,30 @@
 			<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">
 				{error}
 			</p>
+		{/if}
+		{#if push !== undefined && pushOffered}
+			<Inline justify="between" gap="sm" class="border-b px-3 py-2">
+				<span class="text-tiny text-muted-foreground">
+					{push.status === 'denied'
+						? 'Notifications are blocked in your browser settings'
+						: push.status === 'on'
+							? 'Push notifications on'
+							: 'Get notified on this device'}
+				</span>
+				{#if push.status !== 'denied'}
+					<Button
+						type="button"
+						variant="ghost"
+						class="h-6 px-2 text-tiny"
+						onclick={() => void (push.status === 'on' ? push.disable() : push.enable())}
+					>
+						{push.status === 'on' ? 'Turn off' : 'Enable'}
+					</Button>
+				{/if}
+			</Inline>
+			{#if push.error !== undefined}
+				<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">{push.error}</p>
+			{/if}
 		{/if}
 		<Scroll name="Notifications" class="max-h-96">
 			{#if loading && items.length === 0}

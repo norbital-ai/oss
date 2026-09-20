@@ -11,6 +11,7 @@ import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import { answerAppRequest } from '#lib/runtime/pwa.js';
 import {
 	flushAll,
 	invocationAnnotations,
@@ -329,6 +330,8 @@ const dispatch = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
 	if (invocation._tag === 'Request') {
 		if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health')
 			return json({ status: 'ok' });
+		const app = yield* answerAppRequest(invocation);
+		if (app !== undefined) return app;
 		const effectId = EffectId.make(invocation.id);
 		const subject = yield* resolveSession(
 			effectId,

@@ -41,6 +41,7 @@ const fakeSyncClient = () => {
 		start: () => undefined,
 		attach: () => () => undefined,
 		shutdown: () => undefined,
+		wake: () => undefined,
 		current: () => state,
 		subscribe: (listener: (state: ClientState) => void) => {
 			listeners.add(listener);

@@ -316,7 +316,8 @@ export const buildSchemaPlan = (
 		},
 		{
 			id: 'bolt:function-automation-run-projection',
-			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, progress, progress_sequence, progress_updated_at, result, error) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error) on conflict (task_id) do update set name = excluded.name, status = excluded.status, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
+			// Queue envelopes expire; automation outcomes remain available for review and deferred work.
+			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, progress, progress_sequence, progress_updated_at, result, error) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error) on conflict (task_id) do update set name = excluded.name, status = excluded.status, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
 		}
 	];
 	const collections = [...workspace.collections, ...internalSystemTables]
@@ -364,7 +365,7 @@ export const buildSchemaPlan = (
 		},
 		{
 			id: 'projection-trigger:bolt_task-automation-run:2-create',
-			sql: 'create trigger bolt_project_automation_run after insert or update or delete on bolt_task for each row execute function bolt_project_automation_run()'
+			sql: 'create trigger bolt_project_automation_run after insert or update on bolt_task for each row execute function bolt_project_automation_run()'
 		}
 	];
 	const effectiveIndexes = effectiveIndexSteps(

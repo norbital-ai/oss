@@ -93,6 +93,7 @@ const emptySync: SyncClient = {
 	start: () => undefined,
 	attach: () => () => undefined,
 	shutdown: () => undefined,
+	wake: () => undefined,
 	current: () => initialClientState(),
 	subscribe: () => () => undefined,
 	mount: (input) => ({

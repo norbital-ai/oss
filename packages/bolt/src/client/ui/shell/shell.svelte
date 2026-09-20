@@ -41,6 +41,7 @@
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
+	import { PushSubscriptionState } from './push-subscription.svelte.js';
 	import AutomationRunsPane from '../system/automation-runs-pane.svelte';
 	import {
 		AGENT_PATH,
@@ -428,6 +429,19 @@
 			: undefined
 	);
 	const manifestQuery = $derived(runtime.client.system.workspace.manifest({}));
+	// Whether this host pushes at all is the host's VAPID key; the browser's own answer is read
+	// once that is known, through an attachment on the bell so it runs in the tree, not at import.
+	const pushConfiguration = $derived(runtime.client.system.notifications.pushConfiguration({}));
+	const push = new PushSubscriptionState(
+		{
+			subscribe: (input) => runtime.client.system.notifications.subscribe(input),
+			unsubscribe: (input) => runtime.client.system.notifications.unsubscribe(input)
+		},
+		() => pushConfiguration.current?.publicKey
+	);
+	const readPush = (publicKey: string | null | undefined) => () => {
+		if (publicKey !== undefined) void push.read();
+	};
 	const decodedManifest = $derived(manifestQuery.current);
 	const automationCatalog = $derived(
 		canAccessAutomations ? (decodedManifest?.automations ?? []) : []
@@ -650,13 +664,16 @@
 			/>
 		{/snippet}
 		{#snippet notifications({ expanded })}
-			<Notifications
-				{expanded}
-				items={notificationItems}
-				loading={notificationsQuery?.loading ?? false}
-				error={notificationsError}
-				onread={markNotificationRead}
-			/>
+			<span {@attach readPush(pushConfiguration.current?.publicKey)} style="display: contents">
+				<Notifications
+					{expanded}
+					items={notificationItems}
+					loading={notificationsQuery?.loading ?? false}
+					error={notificationsError}
+					onread={markNotificationRead}
+					{push}
+				/>
+			</span>
 		{/snippet}
 		<Stack gap="none" fill>
 			<Bound size="full" clip grow>

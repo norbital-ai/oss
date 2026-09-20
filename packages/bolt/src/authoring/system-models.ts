@@ -808,6 +808,21 @@ const notificationModel = defineModel(
 	{ history: false, indexes: [systemIndex('recipient')] }
 );
 
+/**
+ * One row per browser that asked for pushes: the push service endpoint and the keys the browser
+ * minted for it. `recipient` is the notification recipient — a user id — so a drain fans out by
+ * the same column the inbox is addressed by. The endpoint is the identity: a browser that
+ * re-subscribes replaces its row, and a push service answering 404/410 deletes it.
+ */
+const pushSubscriptionModel = defineModel(
+	{
+		recipient: text().notNull(),
+		endpoint: text().notNull().unique(),
+		keys: jsonb().notNull()
+	},
+	{ history: false, indexes: [systemIndex('recipient')] }
+);
+
 const schemaStateModel = defineModel(
 	{
 		fingerprint: text().notNull(),
@@ -940,7 +955,8 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_workspace_identity_settings: workspaceIdentitySettingsModel,
 	bolt_browser_mutation: browserMutationModel,
 	bolt_schedule: scheduleModel,
-	bolt_task: taskModel
+	bolt_task: taskModel,
+	bolt_push_subscriptions: pushSubscriptionModel
 });
 
 export const SYSTEM_MODELS = Object.freeze({

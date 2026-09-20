@@ -9,7 +9,6 @@
 	import { Stack } from '#lib/layout';
 	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
-	import { watch } from 'runed';
 	import MonthGrid from './month-grid.svelte';
 	import {
 		compareMonths,
@@ -47,14 +46,8 @@
 	const { t, intlLocale } = useI18n();
 	const today = currentMonthKey();
 	let open = $state(false);
-	let viewYear = $state(value != null ? parseMonth(value).year : parseMonth(today).year);
-
-	watch(
-		() => value,
-		(next) => {
-			if (next != null) viewYear = parseMonth(next).year;
-		}
-	);
+	// The year shown follows the value and is overridden by the arrows until the value moves again.
+	let viewYear = $derived(parseMonth(value ?? today).year);
 
 	const outOfBounds = (key: MonthKey): boolean =>
 		(min !== undefined && compareMonths(key, min) < 0) ||

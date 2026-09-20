@@ -70,6 +70,8 @@ export type SyncClient = Readonly<{
 	readonly enqueue: (request: CollectionMutationPush) => void;
 	/** The push's own reply, which settles the write without waiting for the stream to restate it. */
 	readonly answer: (outcome: SyncOutcome) => void;
+	/** The page is back in front or back online: reconnect now rather than after the backoff. */
+	readonly wake: () => void;
 }>;
 
 type SyncClientOptions = Readonly<{
@@ -526,6 +528,10 @@ export const createSyncClient = (options: SyncClientOptions): SyncClient => {
 		answer: (outcome) => {
 			if (shutDown) return;
 			dispatch({ kind: 'writeAnswered', outcome });
+		},
+		wake: () => {
+			if (shutDown || !started) return;
+			dispatch({ kind: 'wake', now: Date.now() });
 		}
 	};
 };

@@ -337,6 +337,26 @@ describe('Sync v2 prefix Machine', () => {
 		expect(effects).toEqual([]);
 	});
 
+	it('wakes a backed-off reconnect immediately, and is a plain tick otherwise', () => {
+		const input = query();
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		[state] = step(state, { kind: 'mounted', key, input });
+		[state] = step(state, { kind: 'tick', now: 0 });
+		[state] = step(state, {
+			kind: 'disconnected',
+			cause: { kind: 'transport', message: 'blip', at: 10 }
+		});
+		expect(state.link).toBe('reconnecting');
+		expect(state.reconnectAt).toBeGreaterThan(10);
+		// A tick before the backoff elapses does nothing; a wake at the same instant registers.
+		const [waiting, none] = step(state, { kind: 'tick', now: 11 });
+		expect(none).toEqual([]);
+		const [woken, effects] = step(waiting, { kind: 'wake', now: 11 });
+		expect(effects.map(({ kind }) => kind)).toEqual(['register']);
+		expect(woken.reconnectAttempt).toBe(waiting.reconnectAttempt + 1);
+	});
+
 	it('re-pushes a stale write while the connection remains live', () => {
 		const input = query();
 		const key = stableKey(input);

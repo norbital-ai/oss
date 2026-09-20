@@ -3,6 +3,7 @@
 	import { mergeProps } from 'bits-ui';
 	import type { WithElementRef } from 'bits-ui';
 	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from 'svelte/elements';
+	import type { HapticKind } from '#lib/utils/haptic';
 	import { type VariantProps, tv } from 'tailwind-variants';
 
 	export const buttonVariants = tv({
@@ -37,6 +38,8 @@
 			variant?: ButtonVariant;
 			size?: ButtonSize;
 			readonly?: boolean; // Prevents interactions but keeps normal styling
+			/** A tick on tap where the device has a motor; for decisions, not for every button. */
+			haptic?: HapticKind;
 			hint?: string; // Tooltip hint
 			disabledMessage?: string; // Tooltip message when disabled
 			readonlyMessage?: string; // Tooltip message when readonly
@@ -45,6 +48,7 @@
 
 <script lang="ts">
 	import { Tooltip } from '#lib/tooltip';
+	import { haptic as tick } from '#lib/utils/haptic';
 
 	let {
 		class: className,
@@ -59,6 +63,7 @@
 		hint,
 		disabledMessage,
 		readonlyMessage,
+		haptic,
 		onclick,
 		...restProps
 	}: ButtonProps = $props();
@@ -87,6 +92,7 @@
 			event.stopPropagation();
 			return false;
 		}
+		if (haptic !== undefined) tick(haptic);
 		return true;
 	}
 

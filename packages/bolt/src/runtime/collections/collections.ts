@@ -885,7 +885,8 @@ export const layerWith = (
 				...workspace.definition.collections
 					.map(({ name }) => name)
 					.filter((name) => !SYSTEM_COLLECTION_NAMES.has(name)),
-				'approval_request'
+				'approval_request',
+				'automation_run'
 			]);
 			const observedRead = (
 				effectId: EffectId,
@@ -1609,6 +1610,19 @@ export const layerWith = (
 					],
 					onConflict: 'on conflict (effect_id) do nothing'
 				}));
+
+			/**
+			 * One delivery task per write that lands inbox rows, in the write's own statement like the
+			 * flush rows above: the task drains every undelivered row, so a burst of writes collapses
+			 * into however many tasks got claimed, and a crash after the commit leaves the task, not a
+			 * row nobody comes back for.
+			 */
+			const deliverNotificationsRow = (effectId: EffectId): PlannedInsert => ({
+				table: 'bolt_task',
+				columns: ['command', 'input', 'effect_id', 'status'],
+				values: ['notifications.deliver', {}, `${effectId}:deliver`, 'pending'],
+				onConflict: 'on conflict (effect_id) do nothing'
+			});
 
 			/**
 			 * Tells the host to come back now, because this write is about to queue a delivery.
@@ -2855,6 +2869,13 @@ export const layerWith = (
 				const created = plannedCreates(subject, creates.map(createNodeFor), hold?.requestId);
 				inserts.push(...created.records, ...created.bookkeeping);
 				inserts.push(...drainRows(effectId, [...integrations, ...created.integrations]));
+				if (bookkeeping.length > 0) {
+					inserts.push(deliverNotificationsRow(effectId));
+					yield* queue.wake(
+						EffectId.make(`${effectId}:wake:deliver`),
+						yield* Clock.currentTimeMillis
+					);
+				}
 				const sources: Array<CaptureSource> = [
 					...[...untouched.entries()].map(([collection, ids]) => ({ collection, ids }))
 				];

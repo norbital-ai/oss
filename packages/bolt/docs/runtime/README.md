@@ -53,6 +53,13 @@ every collection, file, and approval check inside the function is the caller's p
 A Data Browser call with a session may then impersonate inside the same tenant. System HMAC is also
 accepted.
 
+## Automation history
+
+Automation outcomes are retained in the read-only `automation_run` collection for both direct
+and scheduled invocations. The task queue's cleanup removes old execution envelopes without
+deleting those outcomes. Authored handlers can read `api.db.automation_run` to resume deferred
+work and recognise completed requests. Task inputs and credentials are not exposed by this record.
+
 ## Managed automation connections
 
 An automation may declare one `connection: defineConnection({ baseUrl, authentication })` in its spec.

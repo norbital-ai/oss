@@ -762,7 +762,20 @@ interface StructuredInferenceInput<Output> {
 
 type AuthoredReadDatabase<S extends AnySchema> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N>;
-} & { readonly approval_request: ApprovalRequestQuery };
+} & {
+	readonly approval_request: ApprovalRequestQuery;
+	/** Durable outcomes let scheduled work resume an earlier automation's deferred decisions. */
+	readonly automation_run: Pick<
+		CollectionQuery<
+			{
+				tables: TablesForModels<Pick<typeof SYSTEM_COLLECTION_MODELS, 'automation_run'>>;
+				relations: Readonly<Record<never, never>>;
+			},
+			'automation_run'
+		>,
+		'findMany' | 'findFirst' | 'count'
+	>;
+};
 /**
  * The workspace's declared collections, read off the generated augmentation.
  *

@@ -1,0 +1,27 @@
+id: UI26
+summary: browser device API reached directly instead of through client.device
+severity: error
+principles: [simplicity, straightforwardness, colocation]
+# Template source only: the seam exists so authored pages run the same in a tab, an installed app
+# and a native shell. Bolt and the hosts are the seam and may reach the browser.
+files:
+  - '**/src/apps/**'
+  - '**/src/collections/**'
+  - '**/src/datatypes/**'
+  - '**/src/lib/**'
+ignore:
+  - '**/packages/**'
+  - '**/apps/colony/**'
+rule:
+  all:
+    - kind: PropertyAccessExpression
+    - regex: '^navigator\.(?:geolocation|share|clipboard|vibrate|onLine)\b'
+examples:
+  # The rule is scoped to template source, so the example lives under an authored tree.
+  file: src/lib/probe.ts
+  bad:
+    - 'navigator.geolocation.getCurrentPosition(done);'
+    - 'await navigator.clipboard.writeText(text);'
+  good:
+    - 'const fix = yield* client.device.location();'
+    - 'yield* client.device.copy(text);'

@@ -29,6 +29,15 @@ export const ENVOY_REGISTRATION_PATH = '/envoy-registration';
 /** Where a workspace invitation link lands, on every host: the shell accepts it for the signed-in person. */
 export const INVITATION_PATH = '/invitation';
 /**
+ * The two request paths that make a workspace an installable app, answered by the runtime on
+ * every host. Request-relative like the paths above: a host mounts the request namespace where it
+ * likes, and the shell asks for them beneath its own mount. The manifest names the workspace and
+ * scopes the install to the mount; the worker is what a push lands in and what answers a
+ * navigation with no network. Neither needs a session — a manifest is fetched before one exists.
+ */
+export const PWA_MANIFEST_PATH = '/manifest.webmanifest';
+export const SERVICE_WORKER_PATH = '/sw.js';
+/**
  * The host configuration key naming the public URL the workspace shell is served at — origin and
  * mount prefix, e.g. `https://core.example/__bolt`. Registration links are minted beneath it.
  */

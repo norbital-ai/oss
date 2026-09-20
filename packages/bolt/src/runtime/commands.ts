@@ -1223,12 +1223,45 @@ const BINDINGS = [
 			)
 	),
 	binding(
-		'notifications.drain',
-		{ Command: session('notification object'), Task: task('notification object') },
+		'notifications.deliver',
+		{ Command: session('undelivered notifications'), Task: task('undelivered notifications') },
+		(context) =>
+			Effect.gen(function* () {
+				const delivered = yield* (yield* Notifications.Service).deliver(context.effectId);
+				return json({ delivered });
+			})
+	),
+	binding('notifications.pushConfiguration', { Command: session('push configuration') }, () =>
+		Effect.gen(function* () {
+			const key = yield* (yield* Notifications.Service).pushPublicKey();
+			return json({ publicKey: Option.getOrNull(key) });
+		})
+	),
+	// A subscription belongs to the signed-in person: the browser that minted it is theirs.
+	binding(
+		'notifications.subscribe',
+		{ Command: session('own push subscription') },
 		(context, input) =>
 			Effect.gen(function* () {
-				yield* (yield* Notifications.Service).drain(context.effectId, input);
-				return json({ delivered: true, id: input.id });
+				yield* (yield* Notifications.Service).subscribe(
+					context.effectId,
+					principal(context).userId,
+					input
+				);
+				return json({ subscribed: true });
+			})
+	),
+	binding(
+		'notifications.unsubscribe',
+		{ Command: session('own push subscription') },
+		(context, input) =>
+			Effect.gen(function* () {
+				yield* (yield* Notifications.Service).unsubscribe(
+					context.effectId,
+					principal(context).userId,
+					input.endpoint
+				);
+				return json({ subscribed: false });
 			})
 	)
 ];
@@ -1316,12 +1349,30 @@ const resolveWorkspaceCommand = Effect.fn('Bolt.resolveWorkspaceCommand')(functi
 			});
 		if (member.length === 0 || !declared || origin !== 'Task') return undefined;
 		return {
-			contract: { ...WorkspaceAutomationContract, name },
+			contract: {
+				...WorkspaceAutomationContract,
+				name,
+				// The host supplies occurrence identity in the Task envelope, not the cron declaration.
+				input: Schema.Struct({
+					...WorkspaceAutomationContract.input.fields,
+					bolt_task_id: Schema.optionalKey(Schema.NonEmptyString)
+				})
+			},
 			origins: { Task: task(`declared automation:${member}`) },
-			handle: (context: ExecutionContext, raw: unknown) =>
+			handle: (context: ExecutionContext) =>
 				Effect.gen(function* () {
-					const input = yield* Schema.decodeUnknownEffect(WorkspaceAutomationContract.input)(raw);
-					return json(yield* executeAutomationBody(context, member, input));
+					if (context.scheduledTask === undefined)
+						return yield* new DispatchError({
+							code: 'invalid_task',
+							message: 'A scheduled automation requires its claimed occurrence.'
+						});
+					const result = yield* executeDirectAutomation(context, member, context.scheduledTask.id);
+					if (result === undefined)
+						return yield* new DispatchError({
+							code: 'invalid_task',
+							message: 'No running occurrence matches this automation.'
+						});
+					return json(result);
 				})
 		};
 	}

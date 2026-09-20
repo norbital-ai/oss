@@ -31,6 +31,7 @@ import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { adminSubject } from './support/bolt-test-layer.js';
 import { seedSession } from './support/fixture-identity.js';
+import { ActivationCommands } from '../src/runtime/app.js';
 
 const scope = {
 	tenantId: TenantId.make('test-tenant'),
@@ -71,6 +72,120 @@ const directDefinition = workspace({
 });
 
 describe('Automations owner', () => {
+	it('preserves scheduled automation outcomes when the task queue prunes old envelopes', async () => {
+		const harness = await makeBoltTestRuntime(directDefinition);
+		try {
+			await harness.database.query(
+				`insert into bolt_task (command, input, effect_id, status, attempts, result, error, updated_at)
+				 values
+				 ('automations.parent', '{}', 'old-completion', 'done', 1, '{"completed":["contract-1"]}', null, now() - interval '40 days'),
+				 ('automations.child', '{}', 'old-failure', 'failed', 1, null, 'source unavailable', now() - interval '40 days'),
+				 ('maintenance', '{}', 'old-maintenance', 'done', 1, '{}', null, now() - interval '40 days'),
+				 ('maintenance', '{}', 'current-maintenance', 'running', 1, null, null, now())`
+			);
+			await harness.runtime.runPromise(
+				Effect.gen(function* () {
+					yield* (yield* TaskQueue.Service).settle(
+						EffectId.make('retention-settlement'),
+						'current-maintenance',
+						1,
+						{ _tag: 'Done', result: {} }
+					);
+				})
+			);
+			expect(
+				await harness.database.query('select effect_id from bolt_task order by effect_id')
+			).toEqual([{ effect_id: 'current-maintenance' }]);
+			expect(
+				await harness.database.query(
+					'select task_id, status, result, error from automation_run order by task_id'
+				)
+			).toEqual([
+				{
+					task_id: 'old-completion',
+					status: 'done',
+					result: { completed: ['contract-1'] },
+					error: null
+				},
+				{ task_id: 'old-failure', status: 'failed', result: null, error: 'source unavailable' }
+			]);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
+	it('dispatches a scheduled occurrence with its envelope task id and persisted input', async () => {
+		const definition = {
+			...directDefinition,
+			automations: [
+				automation({
+					name: 'daily',
+					trigger: { _tag: 'Schedule', cron: '0 1 * * *' },
+					command: 'automations.daily',
+					policies: []
+				})
+			]
+		};
+		const taskId = 'schedule:automations.daily@2026-06-30T01:00:00.000Z';
+		const harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				automations: {
+					daily: {
+						name: 'daily',
+						trigger: { _tag: 'Schedule' as const, cron: '0 1 * * *' },
+						policies: [],
+						handler: (raw) =>
+							Effect.gen(function* () {
+								const api = raw as AutomationApi;
+								const previous = yield* api.db.automation_run.findMany({
+									where: { name: { eq: 'previous' }, status: { eq: 'done' } },
+									columns: { result: true },
+									limit: 1
+								});
+								yield* api.progress({ progress: 1, text: 'Complete' });
+								return { runId: api.runId, previous: previous[0]?.result };
+							})
+					}
+				}
+			}
+		});
+		try {
+			await harness.database.query(
+				`insert into automation_run (task_id, name, status, result)
+				 values ('previous-run', 'previous', 'done', '{"deferred":true}')`
+			);
+			const declaration = ActivationCommands.schedulesFor(definition, 'test-tenant')[0]!;
+			await harness.database.query(
+				`insert into bolt_task (command, input, status, attempts, effect_id, lease_expires_at)
+				 values ($1, $2::jsonb, 'running', 1, $3, now() + interval '1 minute')`,
+				[declaration.command, JSON.stringify(declaration.input), taskId]
+			);
+			const result = await harness.runtime.runPromise(
+				dispatchInvocation(
+					Invocation.cases.Task.make({
+						protocolVersion: PROTOCOL_VERSION,
+						id: InvocationId.make('scheduled-daily'),
+						scope,
+						command: declaration.command,
+						input: declaration.input,
+						taskId,
+						attempt: 1
+					})
+				)
+			);
+			expect(result.value).toEqual({ runId: taskId, previous: { deferred: true } });
+			const [stored] = await harness.database.query(
+				'select progress from bolt_task where effect_id = $1',
+				[taskId]
+			);
+			expect(stored?.['progress']).toEqual({ progress: 1, text: 'Complete' });
+			expect(harness.tasks.requests.map((request) => request._tag)).toContain('Active');
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
 	it('treats an omitted authored delay as immediately due', () => {
 		expect(afterMillisOf(undefined)).toBe(0);
 		expect(afterMillisOf('not a duration')).toBeUndefined();

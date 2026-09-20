@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.77",
+	"version": "0.0.78",
 	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
 	"type": "module",
 	"sideEffects": false,
@@ -30,6 +30,7 @@
 		"mammoth": "1.12.2",
 		"pdfjs-dist": "6.3.289",
 		"pg": "^8.23.0",
+		"web-push": "^3.6.7",
 		"ws": "^8.21.3"
 	},
 	"peerDependencies": {
@@ -40,6 +41,7 @@
 		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",
+		"@types/web-push": "^3.6.4",
 		"@types/ws": "^8.18.1",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"

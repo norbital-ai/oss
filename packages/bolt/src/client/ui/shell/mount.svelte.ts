@@ -1,7 +1,8 @@
-import { mount, unmount } from 'svelte';
+import { mount, tick, unmount } from 'svelte';
 import { Effect } from 'effect';
 import BoltWorkspace from './workspace.svelte';
 import { setWorkspaceSession } from '#lib/client/session.js';
+import { installWorkspaceApp } from './installed-app.js';
 import type {
 	MountWorkspaceOptions,
 	WorkspaceHandle,
@@ -27,6 +28,7 @@ export const mountWorkspace = (target: HTMLElement, options: MountWorkspaceOptio
 		Effect.gen(function* () {
 			yield* Effect.sync(() => setWorkspaceSession(options.session));
 			const workspace = yield* Effect.tryPromise(options.loadWorkspace);
+			yield* Effect.sync(() => installWorkspaceApp(options.session.syncStreamUrl, workspace.title));
 			/**
 			 * The view the mounted tree actually watches.
 			 *
@@ -39,9 +41,25 @@ export const mountWorkspace = (target: HTMLElement, options: MountWorkspaceOptio
 				target,
 				props: { view, workspace, actions: options.actions }
 			});
+			/**
+			 * A route change is one view transition: the browser snapshots the old surface, the new one
+			 * paints, and the two cross-fade over `--motion-base`. Anything else the host updates —
+			 * search, the team being previewed — is applied plainly, because a fade on a filter change
+			 * reads as lag. A browser without the API just applies the view.
+			 */
+			const apply = (next: WorkspaceView): void => {
+				Object.assign(view, next);
+			};
 			return {
 				update: (next: WorkspaceView) => {
-					Object.assign(view, next);
+					if (next.path === view.path || typeof document.startViewTransition !== 'function')
+						return apply(next);
+					const transition = document.startViewTransition(() => {
+						apply(next);
+						return tick();
+					});
+					// A superseding navigation or hidden page can skip the animation; the view still updates.
+					void transition.ready.catch(() => undefined);
 				},
 				destroy: () => {
 					void unmount(app);

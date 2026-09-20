@@ -67,6 +67,7 @@ const fakeMachine = () => {
 		start: () => undefined,
 		attach: () => () => undefined,
 		shutdown: () => undefined,
+		wake: () => undefined,
 		current: () => initialClientState(),
 		subscribe: (listener) => {
 			listeners.add(listener);

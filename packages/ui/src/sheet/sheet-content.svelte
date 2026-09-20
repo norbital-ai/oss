@@ -28,7 +28,7 @@
 	import { Dialog as BitsDialog } from 'bits-ui';
 	import { PersistedState } from 'runed';
 	import { onMount } from 'svelte';
-	import { MediaQuery } from 'svelte/reactivity';
+	import { narrowViewport } from '#lib/utils/viewport.svelte';
 	import SheetContentResize from './sheet-content-resize.svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -58,7 +58,6 @@
 		...restProps
 	}: SheetContentProps = $props();
 
-	const narrowViewport = new MediaQuery('max-width: 47.999rem');
 	const shouldPreventBackgroundClick = $derived(
 		preventBackgroundClick === 'narrow' ? narrowViewport.current : preventBackgroundClick
 	);

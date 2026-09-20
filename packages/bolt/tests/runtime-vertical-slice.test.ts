@@ -772,7 +772,7 @@ describe('runnable Bolt vertical slice', () => {
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
-				{ command: 'notifications.drain' }
+				{ command: 'notifications.deliver' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it

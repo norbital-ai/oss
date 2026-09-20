@@ -33,6 +33,8 @@ export type HeadedPage = {
 	readonly clickAt: (x: number, y: number) => Promise<void>;
 	readonly dragAndDrop: (source: string, target: string) => Promise<void>;
 	readonly setViewportSize: (size: { width: number; height: number }) => Promise<void>;
+	/** A phone's input, not just its width: `(pointer: coarse)` and `(hover: none)` become true. */
+	readonly emulateTouch: (enabled: boolean) => Promise<void>;
 	readonly screenshot: () => Promise<Uint8Array>;
 	readonly openWindow: (url: string) => Promise<HeadedPage>;
 	readonly close: () => Promise<void>;
@@ -107,6 +109,19 @@ const wrapPage = async (page: Page): Promise<HeadedPage> => {
 		click: (selector) => page.click(selector),
 		clickAt: (x, y) => page.mouse.click(x, y),
 		setViewportSize: (size) => page.setViewportSize(size),
+		emulateTouch: async (enabled) => {
+			await client.send('Emulation.setEmulatedMedia', {
+				features: enabled
+					? [
+							{ name: 'pointer', value: 'coarse' },
+							{ name: 'hover', value: 'none' },
+							{ name: 'any-pointer', value: 'coarse' },
+							{ name: 'any-hover', value: 'none' }
+						]
+					: []
+			});
+			await client.send('Emulation.setTouchEmulationEnabled', { enabled, maxTouchPoints: 5 });
+		},
 		screenshot: () => page.screenshot(),
 		dragAndDrop: async (source, target) => {
 			await page.locator(source).hover({ force: true });

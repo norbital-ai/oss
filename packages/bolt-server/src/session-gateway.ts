@@ -166,7 +166,11 @@ export const workspaceDocumentHtml = (input: WorkspaceDocumentInput): string => 
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content, maximum-scale=1, user-scalable=no" />
+		<meta name="theme-color" content="#f2f1ed" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="oklch(0.185 0.012 95)" media="(prefers-color-scheme: dark)" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<title>${title.replaceAll('<', '&lt;')}</title>
 		<style>html, body, #workspace { min-height: 100%; margin: 0; }</style>
 	</head>

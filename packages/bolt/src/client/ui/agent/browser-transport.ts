@@ -92,7 +92,11 @@ export function createHttpBoltTransport(options: HttpBoltTransportOptions): Bolt
 								...(headers ?? {})
 							},
 							body: JSON.stringify(input),
-							signal: signal ?? null
+							signal: signal ?? null,
+							// A write must outlive the tab that made it: a phone switching apps freezes the
+							// page mid-fetch, and keepalive is what lets the request finish anyway. Only
+							// writes — keepalive bodies are capped at 64KB and a refused one simply retries.
+							keepalive: command === 'collections.write'
 						}
 					}).pipe(
 						Effect.mapError(

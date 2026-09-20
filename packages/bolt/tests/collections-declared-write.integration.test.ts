@@ -625,6 +625,12 @@ describe('declared writes', () => {
 			recipient: rows[0]?.recipient ?? ''
 		});
 		expect(seen).toEqual([{ channel: 'inbox', recipient: 'ada' }]);
+		// The same statement queues the one task that pushes what it wrote; a write that lands no
+		// inbox row queues nothing.
+		const tasks = (await runtime.database.query(
+			`select command from bolt_task where command = 'notifications.deliver'`
+		)) as ReadonlyArray<{ command: string }>;
+		expect(tasks).toHaveLength(1);
 	});
 
 	it('resolves a team recipient to its members inside the write, once each', async () => {

@@ -24,6 +24,7 @@ describe('live sync presentation', () => {
 			start: () => undefined,
 			attach: () => () => undefined,
 			shutdown: () => undefined,
+			wake: () => undefined,
 			current: () => current,
 			subscribe: (listener) => {
 				listener(current);

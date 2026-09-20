@@ -8,7 +8,6 @@
 		EventRenderContext
 	} from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
-	import { watch } from 'runed';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { provideDragState } from './drag-state.svelte.js';
 
@@ -71,16 +70,10 @@
 		children?: Snippet;
 	} = $props();
 
-	let currentDate = $state<Date>(new Date());
+	// The month shown follows `initialDate` and is overridden by navigation until it changes again.
+	let currentDate = $derived<Date>(initialDate ?? new Date());
 
 	provideDragState();
-
-	watch(
-		() => initialDate,
-		(date) => {
-			if (date != null) currentDate = date;
-		}
-	);
 
 	let selectedEvent = $state<CalendarEvent | null>(null);
 

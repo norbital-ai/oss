@@ -1,7 +1,7 @@
 import type {
 	CollectionDbClient,
 	CollectionField,
-	CollectionQuery,
+	CollectionLiveQuery,
 	CollectionRelationOptions,
 	CollectionRegistry,
 	CollectionRow,
@@ -91,7 +91,8 @@ export interface CollectionKanbanProps<
 	lanes?: readonly AuthoredLaneInput[];
 	/** Number of visual lane rows. Defaults to one horizontal row. */
 	rows?: number;
-	query?: CollectionQuery<CollectionRow<TCollections[TName]>>;
+	/** The board is one live prefix, so its ordering is a scalar and it takes no `after` or `limit`. */
+	query?: Omit<CollectionLiveQuery<TCollections[TName]>, 'limit'>;
 	recordMetadata?: CollectionRecordMetadataResolver<CollectionRow<TCollections[TName]>>;
 	selectable?: boolean;
 	title?: string;

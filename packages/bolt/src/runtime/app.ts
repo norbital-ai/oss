@@ -353,7 +353,7 @@ export const ActivationCommands = {
 		[
 			'collections.resume',
 			'collections.discard',
-			'notifications.drain',
+			'notifications.deliver',
 			'integrations.pull',
 			'integrations.flush',
 			'envoys.receive',

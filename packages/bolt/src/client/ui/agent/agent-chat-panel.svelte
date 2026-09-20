@@ -712,7 +712,11 @@
 					)
 				),
 				{
-					onSuccess: () => finishAdmission(admission),
+					onSuccess: () => {
+						// A response can precede live rows; keep the submitted text until they render.
+						if (admission.planAction?.action === 'delete' || visibleAdmission === null)
+							finishAdmission(admission);
+					},
 					onFailure: reportSendFailure,
 					onSettled: () => {
 						if (unsettledAdmission?.submissionId === admission.submissionId) pending = false;

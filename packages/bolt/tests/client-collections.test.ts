@@ -45,6 +45,7 @@ const fakeSyncClient = () => {
 		start: () => undefined,
 		attach: () => () => undefined,
 		shutdown: () => undefined,
+		wake: () => undefined,
 		current: () => state,
 		subscribe: (listener: (state: ClientState) => void) => {
 			listeners.add(listener);
@@ -91,6 +92,7 @@ const inertSync: SyncClient = {
 	start: () => undefined,
 	attach: () => () => undefined,
 	shutdown: () => undefined,
+	wake: () => undefined,
 	current: () => initialClientState(),
 	subscribe: () => () => undefined,
 	mount: (input) => ({
