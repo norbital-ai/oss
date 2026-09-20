@@ -15,7 +15,12 @@
 		start: Schema.optional(Schema.String),
 		end: Schema.optional(Schema.String)
 	});
-	const decodeCanonicalRange = Schema.decodeUnknownResult(rangeValueSchema);
+	/** As stored: an open range carries `end: null`, which the picker reads as no end. */
+	const storedValueSchema = Schema.Struct({
+		start: Schema.optional(Schema.NullOr(Schema.String)),
+		end: Schema.optional(Schema.NullOr(Schema.String))
+	});
+	const decodeStoredRange = Schema.decodeUnknownResult(storedValueSchema);
 	type RangeValue = typeof rangeValueSchema.Type;
 
 	// Bare `typeof item === 'object'` acceptance: arrays included, null excluded.
@@ -39,8 +44,12 @@
 
 	function parseRange(item: unknown): RangeValue {
 		if (item != null && isObjectish(item)) {
-			const canonical = decodeCanonicalRange(item);
-			return canonical._tag === 'Success' ? canonical.success : {};
+			const stored = decodeStoredRange(item);
+			if (stored._tag !== 'Success') return {};
+			return {
+				...(stored.success.start == null ? {} : { start: stored.success.start }),
+				...(stored.success.end == null ? {} : { end: stored.success.end })
+			};
 		}
 		// PostgreSQL's own tstzrange literal grammar (a bound pair in brackets), not a data shape.
 		if (!isString(item) || item === 'empty') return {};
