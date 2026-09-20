@@ -63,13 +63,18 @@
 					end: range.end == null ? range.end : (toViewerInstant(range.end) ?? range.end)
 				};
 
-	const storedRange = (range: RangeValue): RangeValue =>
-		!dayPrecision
-			? range
-			: {
-					start: range.start == null ? range.start : (toStoredInstant(range.start) ?? range.start),
-					end: range.end == null ? range.end : (toStoredInstant(range.end) ?? range.end)
-				};
+	/**
+	 * What the column stores: an open range is `{ start, end: null }`. The picker reports a
+	 * half-picked range as `end: undefined`, and a key that is undefined does not survive JSON —
+	 * the write arrived as `{ start }` and was refused as "Expected JSON value", so no open-ended
+	 * contract, shift or entity could be created from a form. A range with no start is unset.
+	 */
+	const storedRange = (range: RangeValue): { start: string; end: string | null } | null => {
+		if (range.start == null) return null;
+		const stored = (bound: string): string =>
+			dayPrecision ? (toStoredInstant(bound) ?? bound) : bound;
+		return { start: stored(range.start), end: range.end == null ? null : stored(range.end) };
+	};
 
 	const pickerValue = $derived.by((): RangeValue | RangeValue[] =>
 		field.array && Array.isArray(value)
@@ -88,7 +93,8 @@
 			: placeholder}
 		{disabled}
 		class={className}
-		onValueChange={(next) => onValueChange?.(next.map(storedRange))}
+		onValueChange={(next) =>
+			onValueChange?.(next.map(storedRange).filter((range) => range !== null))}
 	/>
 {:else}
 	<DateView

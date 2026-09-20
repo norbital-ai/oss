@@ -428,6 +428,8 @@ export interface CollectionCatalogField {
 	readonly kind: string;
 	readonly array?: boolean;
 	readonly nullable: boolean;
+	/** A column with a DEFAULT: a create may leave it unset. */
+	readonly defaulted?: boolean;
 	readonly readOnly?: boolean;
 	readonly search?: boolean;
 	readonly values?: ReadonlyArray<string>;

@@ -825,6 +825,7 @@ export const collectionCatalogEntry = (
 			name,
 			kind: field.presentationKind,
 			nullable: !field.required,
+			...(field.sqlDefault === undefined ? {} : { defaulted: true }),
 			...(field.generated === undefined ? {} : { readOnly: true }),
 			...(field.search === true ? { search: true } : {}),
 			...(field.array === true ||

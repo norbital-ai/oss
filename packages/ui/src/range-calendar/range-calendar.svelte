@@ -7,7 +7,7 @@
 	import Header from './range-calendar-header.svelte';
 	import Months from './range-calendar-months.svelte';
 	import GridRow from './range-calendar-grid-row.svelte';
-	import Heading from './range-calendar-heading.svelte';
+	import Jump from '../calendar/calendar-jump.svelte';
 	import HeadCell from './range-calendar-head-cell.svelte';
 	import NextButton from './range-calendar-next-button.svelte';
 	import PrevButton from './range-calendar-prev-button.svelte';
@@ -33,7 +33,7 @@
 	{#snippet children({ months, weekdays })}
 		<Header>
 			<PrevButton />
-			<Heading />
+			<Jump bind:placeholder />
 			<NextButton />
 		</Header>
 		<Months>

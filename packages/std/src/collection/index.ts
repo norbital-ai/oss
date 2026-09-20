@@ -88,6 +88,11 @@ export interface CollectionField<TName extends string = string> {
 	readonly name: TName;
 	readonly kind: string;
 	readonly nullable: boolean;
+	/**
+	 * The column carries a DEFAULT: a create may leave it unset and the database fills it. A form
+	 * therefore does not demand it — a `notNull().default(false)` flag is not a required question.
+	 */
+	readonly defaulted?: boolean;
 	readonly label?: string;
 	readonly array?: boolean;
 	readonly readOnly?: boolean;

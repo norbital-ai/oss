@@ -227,6 +227,7 @@ import {
 	encodeReferenceValues,
 	referenceValueProblem
 } from '#lib/runtime/collections/references.js';
+import { describeInvalidCustomValue } from '#lib/runtime/collections/custom-values.js';
 import {
 	afterMillisOf,
 	AuthoredRuntimeService,
@@ -3783,6 +3784,8 @@ export const layerWith = (
 					encode: (definition, values) => writableValues(values, definition),
 					referenceProblem: (definition, values) =>
 						referenceValueProblem(values, definition.fields),
+					customValueProblem: (definition, values) =>
+						describeInvalidCustomValue(definition.fields, values, workspace.definition.customTypes),
 					allocateId: () => randomId(),
 					taskScope: effectId
 				};

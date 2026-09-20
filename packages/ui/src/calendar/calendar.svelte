@@ -7,7 +7,7 @@
 	import Header from './calendar-header.svelte';
 	import Months from './calendar-months.svelte';
 	import GridRow from './calendar-grid-row.svelte';
-	import Heading from './calendar-heading.svelte';
+	import Jump from './calendar-jump.svelte';
 	import GridBody from './calendar-grid-body.svelte';
 	import GridHead from './calendar-grid-head.svelte';
 	import HeadCell from './calendar-head-cell.svelte';
@@ -39,7 +39,7 @@ get along, so we shut typescript up by casting `value` to `never`.
 	{#snippet children({ months, weekdays })}
 		<Header>
 			<PrevButton />
-			<Heading />
+			<Jump bind:placeholder />
 			<NextButton />
 		</Header>
 		<Months>

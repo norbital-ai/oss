@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
+import { platformCustomTypes } from '../src/authoring/models-schema.js';
 import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import {
@@ -23,7 +24,12 @@ const baseDefinition = workspace({
 	collections: [
 		collection({
 			name: 'orders',
-			fields: { customer: field.string({ required: true }), total: field.number({}) }
+			fields: {
+				customer: field.string({ required: true }),
+				total: field.number({}),
+				// A `custom('instant_range')` column: the platform's own schema checks every write.
+				window: { ...field.json({}), customType: 'instant_range' }
+			}
 		}),
 		collection({
 			name: 'order_lines',
@@ -69,13 +75,14 @@ const baseDefinition = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: []
+	requiredFacilities: [],
+	customTypes: platformCustomTypes
 });
 
 const ordersWrite = {
 	create: {
 		input: {
-			columns: { customer: true, total: true },
+			columns: { customer: true, total: true, window: true },
 			with: {
 				order_lines: {
 					create: { columns: { sku: true, qty: true } }
@@ -192,6 +199,18 @@ describe('declared writes', () => {
 			`select record_id, operation from bolt_collection_history where collection_name in ('orders','order_lines')`
 		)) as ReadonlyArray<{ operation: string }>;
 		expect(history.filter((row) => row.operation === 'create')).toHaveLength(3);
+	});
+
+	it('refuses a custom value its declared type does not admit, and stores the open range it does', async () => {
+		const runtime = await start();
+		await expect(
+			write(runtime, 'create', { customer: 'Ada', window: { start: '2026-01-01' } })
+		).rejects.toThrow(/window is not a valid instant_range/);
+		const commit = await write(runtime, 'create', {
+			customer: 'Ada',
+			window: { start: '2026-01-01T00:00:00.000Z', end: null }
+		});
+		expect(commit.batch.changes).toHaveLength(1);
 	});
 
 	it('never deletes by omission and applies explicit update, delete and unlink actions', async () => {

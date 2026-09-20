@@ -41,6 +41,11 @@ export type DeclaredLowering = Readonly<{
 		definition: DeclaredCollection,
 		values: Readonly<Record<string, Schema.Json>>
 	) => string | undefined;
+	/** A `custom()` value its declared type's schema refuses, as the sentence the refusal carries. */
+	readonly customValueProblem: (
+		definition: DeclaredCollection,
+		values: Readonly<Record<string, Schema.Json>>
+	) => string | undefined;
 	readonly allocateId: () => string;
 	readonly taskScope: GraphPreparedOperation['taskScope'];
 }>;
@@ -203,6 +208,12 @@ export const lowerDeclaredPayload = (
 		const referenceProblem = context.referenceProblem(definition, encoded);
 		if (referenceProblem !== undefined)
 			return yield* refuse(collection, effectiveAction, referenceProblem);
+		// A `custom()` column is checked by the schema its declared type carries. The 0.0.51 rewrite
+		// of this file left the check to the shape primitive alone, so a write could store a value
+		// no arm of the type declares — a work shift with no end — and the reader died on it later.
+		const customProblem = context.customValueProblem(definition, encoded);
+		if (customProblem !== undefined)
+			return yield* refuse(collection, effectiveAction, customProblem);
 		operations.push({
 			action: effectiveAction,
 			collection,

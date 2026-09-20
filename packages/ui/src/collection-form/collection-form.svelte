@@ -67,7 +67,10 @@
 		fieldName: string,
 		value: unknown
 	): readonly CollectionFormValidationIssue[] {
-		if (!field.nullable && value == null) {
+		// A column with a DEFAULT may be left unset on a create: the database fills it, and the
+		// write boundary accepts the omission. Demanding it here made every flag, counter and list
+		// the model defaults a "required" question the person had to answer twice to clear.
+		if (!field.nullable && value == null && field.defaulted !== true) {
 			return [{ message: t('form.requiredGeneric'), path: [fieldName] }];
 		}
 		if (value == null) return [];

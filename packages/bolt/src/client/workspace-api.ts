@@ -53,6 +53,8 @@ export type CollectionCatalogField = Readonly<{
 	readonly name: string;
 	readonly kind: string;
 	readonly nullable: boolean;
+	/** A column with a DEFAULT: a create may leave it unset. */
+	readonly defaulted?: boolean;
 	/** A column the database computes; a form must not offer it as editable. */
 	readonly readOnly?: boolean;
 	readonly search?: boolean;
