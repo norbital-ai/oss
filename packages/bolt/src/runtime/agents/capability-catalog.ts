@@ -210,9 +210,20 @@ export const planToolSpec: ToolDeclaration = {
 
 export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
+		name: 'wait',
+		description:
+			"Wait for background work — jobs started with background:true on a tool call, and child conversations — for up to timeoutSeconds (at most 600; wait again when it runs out). Returns as soon as any of them settles, with its result; with reason 'message' when the person has written to you — answer them, then wait again; or with reason 'timeout' and what is still running. With nothing named it waits on everything this turn started.",
+		command: 'platform:wait',
+		inputSchema: objectInput({
+			jobs: { type: 'array', items: { type: 'string', minLength: 1 } },
+			conversations: { type: 'array', items: { type: 'string', format: 'uuid' } },
+			timeoutSeconds: { type: 'integer', minimum: 1, maximum: 600 }
+		})
+	},
+	{
 		name: 'todo',
 		description:
-			"Read or replace this conversation's ordered checklist. `set` replaces the whole list: stable ids, at most one item doing, a done item stays done and unchanged.",
+			"Read or replace this conversation's ordered checklist — the person watches it, so any work of three or more steps sets it first and keeps it current. `set` replaces the whole list: stable ids, at most one item doing, a done item stays done and unchanged.",
 		command: 'platform:todo',
 		inputSchema: objectInput(
 			{
@@ -992,7 +1003,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await to collect its answer when you need it, stop and resume to control it. read and message also reach any other conversation of this person (find one with search_task_history); a message to an idle conversation starts its next turn. Only the root Task may do this; children cannot delegate.",
+		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await (or wait) to collect its answer when you need it — bounded, so a long child is awaited again, stop and resume to control it. read and message also reach any other conversation of this person (find one with search_task_history); a message to an idle conversation starts its next turn. Only the root Task may do this; children cannot delegate.",
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{
@@ -1011,7 +1022,13 @@ export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): Tool
 				format: 'uuid',
 				description: 'Required for every action except spawn.'
 			},
-			message: { type: 'string', minLength: 1, description: 'Required for message.' }
+			message: { type: 'string', minLength: 1, description: 'Required for message.' },
+			timeoutSeconds: {
+				type: 'integer',
+				minimum: 1,
+				maximum: 600,
+				description: 'For await: how long to wait before answering with the child still running.'
+			}
 		},
 		['action']
 	)
@@ -1030,7 +1047,13 @@ const subagentAction = (spawnableAgentIds: ReadonlyArray<string>) =>
 			conversationId: ConversationId,
 			message: Schema.NonEmptyString
 		}),
-		Schema.Struct({ action: Schema.Literal('await'), conversationId: ConversationId }),
+		Schema.Struct({
+			action: Schema.Literal('await'),
+			conversationId: ConversationId,
+			timeoutSeconds: Schema.optionalKey(
+				Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600 }))
+			)
+		}),
 		Schema.Struct({ action: Schema.Literal('stop'), conversationId: ConversationId }),
 		Schema.Struct({ action: Schema.Literal('resume'), conversationId: ConversationId })
 	]);
@@ -1081,7 +1104,8 @@ export type SubagentContext<E = never> = Readonly<{
 	) => Effect.Effect<Schema.Json, E>;
 	readonly awaitTarget: (
 		effectId: EffectId,
-		conversationId: ConversationId
+		conversationId: ConversationId,
+		timeoutSeconds: number | undefined
 	) => Effect.Effect<Schema.Json, E>;
 	readonly control: (
 		effectId: EffectId,
@@ -1171,7 +1195,11 @@ export const executeSubagentTool = Effect.fn('CapabilityCatalog.executeSubagentT
 			return yield* context.admit(context.effectId, action.conversationId, action.message);
 		case 'await':
 			yield* workbenchTask(context, action.conversationId, 'workbench');
-			return yield* context.awaitTarget(context.effectId, action.conversationId);
+			return yield* context.awaitTarget(
+				context.effectId,
+				action.conversationId,
+				action.timeoutSeconds
+			);
 		case 'stop':
 		case 'resume':
 			yield* workbenchTask(context, action.conversationId, 'child');

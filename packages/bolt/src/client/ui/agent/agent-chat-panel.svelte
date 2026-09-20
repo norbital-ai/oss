@@ -869,9 +869,14 @@
 		}
 	}
 
+	/**
+	 * A message written while the agent is working reaches it at its next step — and ends a wait
+	 * it is in — rather than queueing behind the turn; the queue keeps its own controls for lining
+	 * work up after.
+	 */
 	function activatePrimaryAction(): void {
 		if (taskWorking && !draftSendable(parsedDraft)) confirmingStop = true;
-		else attemptSend('normal');
+		else attemptSend(taskWorking ? 'steer' : 'normal');
 	}
 
 	onDestroy(() => {

@@ -106,6 +106,7 @@ const toolNamesFrom = (request: {
 describe('scripted agent pipeline transcript', () => {
 	it('streams every system tool through one Generate, then a final answer', async () => {
 		expect(SYSTEM_TOOLS).toEqual([
+			'wait',
 			'todo',
 			'compact',
 			'describe_workspace',
@@ -135,9 +136,12 @@ describe('scripted agent pipeline transcript', () => {
 		 * tool result.
 		 */
 		// `read_messages` is an envoy's tool — a chat replica exists only there — so the web agent
-		// is never offered it and the recording could not have called it.
+		// is never offered it and the recording could not have called it. `wait`, like `compact`,
+		// postdates the recording and has its own suite (agents-bounded-wait).
 		expect(toolNamesFrom(requests[1]!).toSorted()).toEqual(
-			SYSTEM_TOOLS.filter((name) => name !== 'compact' && name !== 'read_messages').toSorted()
+			SYSTEM_TOOLS.filter(
+				(name) => name !== 'compact' && name !== 'read_messages' && name !== 'wait'
+			).toSorted()
 		);
 		expect(lastToolResult(requests[1]!)).toMatchObject({
 			key: IMAGE_KEY,
