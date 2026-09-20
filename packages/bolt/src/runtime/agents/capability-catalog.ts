@@ -1062,9 +1062,7 @@ const subagentAction = (spawnableAgentIds: ReadonlyArray<string>) =>
  * What this file can fail with on its own: a malformed call, a target the caller may not reach.
  *
  * It used to be a five-member union ending in `| unknown`, which is `unknown` — the members were
- * decorative and every caller of a subagent action inherited an unresolvable error channel. That
- * is not a cosmetic problem: it made `execute → childBarrier → runChild → answerQueued → execute`
- * uninferable once the parent started running its own children, because the cycle had no base case.
+ * decorative and every caller of a subagent action inherited an unresolvable error channel.
  */
 type SubagentFailure =
 	| Collections.QueryError
@@ -1116,7 +1114,7 @@ export type SubagentContext<E = never> = Readonly<{
 
 /**
  * Who a subagent action may reach. `child`: a direct child (stop, resume). `workbench`: any
- * conversation of this tree (await, which joins a fiber only this turn holds). `own`: also any
+ * conversation of this tree (await). `own`: also any
  * other conversation of the same person — read and message, so two of a person's conversations
  * can talk; a message to an idle one starts its next turn, to a running one steers it.
  */

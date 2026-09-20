@@ -223,7 +223,7 @@ export type TranscriptReply =
  * projected prompt exceeds the working-context bound in agent mode. That call is answered here and does not consume
  * a scripted reply, so the feed still records what the model was given.
  *
- * A child Task runs beside its parent, so its calls interleave with the parent's in no fixed
+ * A child is a task of its own, so its calls interleave with the parent's in no fixed
  * order; `children` is the script every conversation other than the first-seen one reads from,
  * in its own order.
  */

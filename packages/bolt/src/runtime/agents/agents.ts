@@ -822,13 +822,7 @@ export type AssistantTextPart = Readonly<{
 	readonly text: string;
 }>;
 
-/**
- * Everything running a turn can fail with.
- *
- * Named because a parent now runs its children, so the recursion `execute → childBarrier →
- * runChild → answerQueued → execute` is real and inference has no fixed point to find. One written
- * union gives it one, and the three signatures that used to spell it out share it.
- */
+/** Everything running a turn can fail with — one union the three signatures that spell it share. */
 type TurnFailure =
 	| TaskRuntimeError
 	| AccessControl.AccessDenied
@@ -1069,14 +1063,15 @@ const isObjectLike = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
 );
 
-const MAX_CHILD_CONSUME_NUDGES = 2;
+/** A turn is refused its ending this many times while a job of its is uncollected. */
+const MAX_JOB_COLLECT_NUDGES = 2;
 /**
  * Nothing waits forever. A host tool call answers inline for `toolInlineMillis`; past that it is
  * a job the model collects with `wait`, and a job that outlives `jobMaxMillis` is ended. A wait
  * is at most `WAIT_MAX_SECONDS` a call and returns the moment the person writes, so a person is
  * never behind a guest process, and the model is back in charge — to answer, or wait again.
  */
-export const WAIT_MAX_SECONDS = 600;
+const WAIT_MAX_SECONDS = 600;
 /** Mutable for a test that cannot afford the real bounds; the runtime never writes it. */
 export const AGENT_BOUNDS = {
 	toolInlineMillis: 30_000,
@@ -1192,11 +1187,6 @@ const preservePlanBoundary = (
 		retainedMessageIds: promptMessages(messages, plan).map((row) => row.id)
 	}
 });
-const ConsumedChildResult = Schema.Struct({
-	state: Schema.Literals(['done', 'failed']),
-	conversationId: ConversationId
-});
-
 export const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
@@ -2885,43 +2875,9 @@ export const layer = Layer.effect(
 		};
 
 		/**
-		 * Runs one child to a stop and returns the row it stopped at.
-		 *
-		 * `answerQueued` rather than `execute`, because a child may have more than one message
-		 * waiting — a spawn followed by a `message` — and a parent that ran only the first would
-		 * read an answer to half its instruction. Depth is not threaded: `conversationDepth` walks
-		 * `parent_id`, so the child computes its own and the nesting limit bounds the tree without
-		 * anything being carried.
-		 *
-		 * A child that will not settle is a defect, not a state: it would spin the parent's barrier,
-		 * so it is refused by name instead.
-		 */
-		/**
-		 * `answerQueued`, reachable from above it. The slot is what makes the recursion inferable.
-		 *
-		 * A parent runs its children, so `execute → childBarrier → runChild → answerQueued → execute`
-		 * is a real cycle and inference has no base case in it. One written type is the base case.
-		 *
-		 * `unknown`, because that is what `execute` infers, and stating anything narrower here would
-		 * be a claim this file cannot back. Two of the three sources are found and named — Effect's
-		 * `Toolkit` dispatch contributes `AiError`, which `TurnFailure` now carries — but a third
-		 * remains somewhere under `appendMessage`, and `Interface` has papered over it with an
-		 * `as Interface` cast since long before the cycle existed. Narrowing it is worth doing and is
-		 * not this change; a fictional union here would make the cast harder to find, not easier.
-		 *
-		 */
-		let driveConversation: (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			conversationId: ConversationId
-			// repository-health:allow EFF11 -- the inferred channel of `execute`; narrowing it is
-			// tracked in RFC/residual-gates.md, and a narrower claim here would be false today.
-		) => Effect.Effect<TurnResult, unknown>;
-
-		/**
-		 * Background work of a turn: a host tool call made with `background: true` runs on its own
-		 * fiber and answers at once with a job id; `wait` collects it. A job lives inside its turn as
-		 * a child does — the turn that ends without collecting it takes it down.
+		 * Background work of a turn: a host tool call that outlasts its inline bound goes on as a
+		 * job and the model has its id at once; `wait` collects it. A job lives inside its turn —
+		 * the turn that ends without collecting it takes it down.
 		 */
 		type Job = Readonly<{
 			turnId: TurnId;
@@ -4475,7 +4431,7 @@ export const layer = Layer.effect(
 						const openJobs = [...jobs]
 							.filter(([, held]) => held.turnId === run.id)
 							.map(([id]) => id);
-						if (openJobs.length > 0 && nudges < MAX_CHILD_CONSUME_NUDGES) {
+						if (openJobs.length > 0 && nudges < MAX_JOB_COLLECT_NUDGES) {
 							nudges += 1;
 							yield* appendMessage(
 								EffectId.make(`${effectId}:jobs-required:${iteration}`),
@@ -4740,8 +4696,6 @@ export const layer = Layer.effect(
 			}
 			return settled;
 		});
-
-		driveConversation = answerQueued;
 
 		const control = Effect.fn('Agents.control')(function* (
 			effectId: EffectId,

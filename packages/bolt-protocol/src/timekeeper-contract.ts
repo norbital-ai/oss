@@ -141,9 +141,7 @@ export const makeTimekeeperCore = <Subject>(host: TimekeeperHost): TimekeeperCor
 			if (active === undefined) throw new Error('Timekeeper callback lane is idle');
 			const { entry, retired } = active;
 			const callbackAt =
-				completion.callbackAtEpochMs !== null &&
-				completion.callbackAtEpochMs !== undefined &&
-				Number.isFinite(completion.callbackAtEpochMs)
+				completion.callbackAtEpochMs != null && Number.isFinite(completion.callbackAtEpochMs)
 					? completion.callbackAtEpochMs
 					: undefined;
 			const announced = held.get(entry.key)?.at;

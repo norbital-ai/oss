@@ -82,7 +82,7 @@ const childTaskRow = async (parentId: ConversationId) => {
 	return rows[0];
 };
 
-describe('sub-agent orchestration over a scripted transcript', () => {
+describe('sub-agents as tasks of their own', () => {
 	it('refuses fabricated child delegation and plan calls even when the child declaration enables delegation', async () => {
 		const parentId = ConversationId.make('00000000-0000-4000-8000-000000000911');
 		const { ai } = scriptedTranscript(

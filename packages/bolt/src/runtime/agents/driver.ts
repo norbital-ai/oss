@@ -1,5 +1,5 @@
 import { Clock, Effect, Schema } from 'effect';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, notExists, or, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { composer, dbNow, executeBuilt } from '#lib/runtime/persistence.js';
 import { EffectId, ConversationId, MessageId } from '@norbital-ai/bolt-protocol';
@@ -51,7 +51,6 @@ export const schedule = Effect.fn('AgentDriver.schedule')(function* (
 				and(
 					eq(messages.id, messageId),
 					or(eq(messages.state, 'queued'), ownsActiveTurn),
-					isNull(conversations.parent_id),
 					inArray(conversations.status, ['ready', 'running']),
 					isNotNull(authority)
 				)
@@ -88,7 +87,6 @@ export const recover = Effect.fn('AgentDriver.recover')(function* (
 							and(eq(messages.state, 'queued'), eq(conversations.status, 'ready')),
 							and(ownsActiveTurn, eq(conversations.status, 'running'))
 						),
-						isNull(conversations.parent_id),
 						isNotNull(authority),
 						after === '' ? undefined : gt(messages.id, after),
 						conversationId === undefined ? undefined : eq(conversations.id, conversationId),

@@ -38,7 +38,7 @@ Effect Prompt → language model → complete assistant message
 Effect Toolkit handlers run sequentially → complete tool-result messages
      │
      ├─ Plan verification phase
-     ├─ required-child barrier — runs any child that has not run, here
+     ├─ uncollected background jobs — refused an ending, once
      └─ exact provider observation per call
      ▼
 settle the turn and the conversation
@@ -411,7 +411,7 @@ collection. Todo is progress evidence, while Plan verification remains the compl
 
 ---
 
-## Child conversations and barriers
+## Child conversations
 
 The `subagent` tool supports spawn, read, message, await, stop, and resume inside one root
 workbench. Its input schema is built per workspace when the run's capability snapshot is taken:
@@ -423,31 +423,35 @@ is reserved for a tool or target the agent may not use. Child depth uses the hos
 invocation budget and is bounded by the platform limit. Cross-workbench and cross-tenant discovery
 or messaging are refused.
 
-**A parent runs its own children.** Nothing else would: the runtime has one driver of a turn — the
-request that admitted the message — and a spawned child has no such request. The parent is that
-driver, one level up, so a child that has not run is run at the barrier, and `subagent await` runs
-it too. The child is a frame on the parent's stack; there is no state in which a conversation is
-stopped and expecting something else to restart it, which is why there is no `waiting` status.
+**A child is a task of its own.** A spawn admits the child's directive and enqueues its answer as a
+durable `conversations.answer` task under the message's own claim — exactly what a person's send
+or an agent's message to a sibling does — and the task driver runs children as it runs roots. The
+parent's turn goes on, and may finish, with children still running. When a child settles, done or
+failed, it writes `[Agent conversation <id>] <status>: <answer>` into the parent conversation and
+enqueues the parent's answer: a steer the parent takes at its next step if it is mid-turn, the
+input of its next turn if it is idle. A parent that wants the answer sooner waits for it
+(`subagent await` or `wait`, both bounded); one that does not is woken by it.
 
-Every directly spawned child is a required join. Before a parent can settle, its child barrier is:
+A child recovers under its own claim at lease expiry, as any task does; a parent's interruption
+says nothing about it. Nesting is bounded by the invocation budget, read from the conversation's
+own `parent_id` chain, so nothing has to be threaded through the call. Messages entering a child
+from its caller use `parent-agent` attribution, and therefore steer.
 
-- run any child that has not settled, to a stop;
-- `consume` when settled child results have not yet been appended as canonical tool results;
-- `clear` only after every child is settled and consumed.
+## Nothing waits forever
 
-The `consume` nudge is bounded. It is the only pressure left once children run inline — a child
-always settles, so nothing else can end the loop — and a model that will not take the hint would
-otherwise spin. After two, the turn finishes; the child's answer is durable either way.
-
-Nesting is bounded by the invocation budget, read from the conversation's own `parent_id` chain, so
-nothing has to be threaded through the call. Messages entering a child from its caller use
-`parent-agent` attribution, and therefore steer.
+A host tool call answers inline while it is quick; past thirty seconds it goes on as a **job** of
+the turn — ended at ten minutes — and the model has its id at once. `wait` is the one way to wait:
+at most ten minutes a call, on named jobs and conversations or on everything the turn started,
+returning the moment one settles with its result, the moment the person writes (a steer, which the
+composer sends by default while the agent works), or at the bound with what is still running —
+and the model is back in charge, to answer or wait again. A turn is refused its ending, twice,
+while a job of its is uncollected; a job left after that is interrupted with the turn.
 
 ---
 
 ## Capabilities and tools
 
-Platform tools, in the order the catalogue offers them: `todo`, `compact`, `describe_workspace`,
+Platform tools, in the order the catalogue offers them: `wait`, `todo`, `compact`, `describe_workspace`,
 `list_skills`, `read_skill`, `search_task_history`, `read_messages`, `use_image`, `read_collection`,
 `write_collection`, and `subagent`. `read_messages` is declared only for an envoy agent, where a
 chat replica exists to read; every other agent gets it off its list. All but `compact` answer from

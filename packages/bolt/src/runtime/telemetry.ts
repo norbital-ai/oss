@@ -53,9 +53,7 @@ const rowOf = (structured: {
 		if (!ID_KEYS.has(key) && value !== undefined) attributes[key] = value;
 	if (structured.cause !== undefined) attributes['cause'] = structured.cause.slice(0, LINE_LIMIT);
 	const id = (key: string) =>
-		typeof structured.annotations[key] === 'string'
-			? (structured.annotations[key] as string)
-			: null;
+		Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(structured.annotations[key]));
 	return {
 		at: structured.timestamp,
 		severity: structured.level,
