@@ -153,8 +153,7 @@ export function run(
 						eq(sql<string>`${tasks.input}->>'messageId'`, messageId),
 						eq(tasks.status, 'running'),
 						eq(tasks.attempts, claim.attempt),
-						gt(tasks.lease_expires_at, dbNow()),
-						isNull(conversations.parent_id)
+						gt(tasks.lease_expires_at, dbNow())
 					)
 				)
 		);
@@ -192,32 +191,8 @@ export function run(
 		 * which is the recovery below, exactly as for a turn this driver claimed itself.
 		 */
 		if (owner.status === 'running' && !(owner.owned && claim.attempt === 1)) {
-			// A single driver owns the root and its synchronous children. After lease expiry, close the
-			// interrupted children before the parent decides whether to retry their uncertain work.
-			if (claim.attempt > 1) {
-				const children = yield* executeBuilt(
-					EffectId.make(`${effectId}:children`),
-					database,
-					composer
-						.select({ id: conversations.id })
-						.from(conversations)
-						.where(
-							and(
-								eq(conversations.parent_id, owner.conversation_id),
-								eq(conversations.status, 'running')
-							)
-						)
-				);
-				for (const child of yield* Schema.decodeUnknownEffect(
-					Schema.Array(Schema.Struct({ id: ConversationId }))
-				)(children.rows))
-					yield* agents.recoverExecution(
-						EffectId.make(`${effectId}:child:${child.id}`),
-						subject,
-						child.id,
-						claim.id
-					);
-			}
+			// A child is a task of its own and recovers under its own claim; a parent's lease expiry
+			// says nothing about it.
 			// Recovery resumes under this claim's lease: the turn it starts is this occurrence's to run.
 			const recovered =
 				claim.attempt > 1 &&

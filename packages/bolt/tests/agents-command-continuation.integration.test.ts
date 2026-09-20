@@ -185,42 +185,19 @@ it('recovers a lost admission wake, refuses forged claims, and checks changed me
 	).toEqual([{ status: 'attention' }]);
 });
 
-it.each(['agent', 'plan', 'child'] as const)(
+// A child is a task of its own and recovers under its own claim by this same path; it no longer
+// falls with its parent, so there is no child scope to recover through the parent here.
+it.each(['agent', 'plan'] as const)(
 	'recovers interrupted %s work without replaying its uncertain tool',
 	async (scope) => {
 		const entered = Promise.withResolvers<void>();
 		let mutations = 0;
 		const tool = scope === 'plan' ? 'workspace_read' : 'workspace_apply';
 		const uncertain = assistantToolCall(tool, {}, 'uncertain-write');
-		const { ai, requests } = scriptedTranscript(
-			[
-				...(scope === 'child'
-					? [
-							assistantToolCall(
-								'subagent',
-								{ action: 'spawn', agentId: 'web', instruction: 'Inspect the workspace.' },
-								'spawn-recovery'
-							),
-							assistantText('Wait for the child.'),
-							// The child ran beside the parent's turn and fell with it.
-							async () => {
-								const [child] = await harness!.database.query(
-									'select id,status from conversation where parent_id=$1',
-									[conversationId]
-								);
-								expect(child?.status).toBe('failed');
-								return assistantToolCall(
-									'subagent',
-									{ action: 'await', conversationId: String(child?.id) },
-									'read-recovered-child'
-								);
-							}
-						]
-					: [uncertain]),
-				assistantText('Inspected the recovered state; finished.')
-			],
-			scope === 'child' ? { children: [uncertain] } : {}
-		);
+		const { ai, requests } = scriptedTranscript([
+			uncertain,
+			assistantText('Inspected the recovered state; finished.')
+		]);
 		const hostTools: FacilityBinding<HostToolRequest, HostToolResponse> = {
 			call: async (_metadata, request, signal) => {
 				if (request.tool === 'capability_catalog')
@@ -275,11 +252,9 @@ it.each(['agent', 'plan', 'child'] as const)(
 					conversationId
 				])
 			).toEqual([{ mode: 'plan' }]);
-		expect(requests).toHaveLength(scope === 'child' ? 5 : 2);
+		expect(requests).toHaveLength(2);
 		expect(requests.at(-1)?.modelId).toBe(requests[0]?.modelId);
-		expect(JSON.stringify(requests.at(-1)?.messages)).toContain(
-			scope === 'child' ? 'failed' : 'outcome is unknown'
-		);
+		expect(JSON.stringify(requests.at(-1)?.messages)).toContain('outcome is unknown');
 		expect(JSON.stringify(requests.at(-1)?.messages)).toContain(
 			'Finish the authorized workspace change.'
 		);

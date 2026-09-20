@@ -1003,7 +1003,7 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const subagentToolSpec = (spawnableAgentIds: ReadonlyArray<string>): ToolDeclaration => ({
 	name: SUBAGENT_TOOL_NAME,
 	description:
-		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await (or wait) to collect its answer when you need it — bounded, so a long child is awaited again, stop and resume to control it. read and message also reach any other conversation of this person (find one with search_task_history); a message to an idle conversation starts its next turn. Only the root Task may do this; children cannot delegate.",
+		"Run child Tasks in this workbench. spawn starts a child at once and returns its conversationId while it runs in the background — spawn several in one step to run them side by side, keep working, read for progress, message to steer (it lands at the child's next step), await (or wait) to collect its answer when you need it — bounded, so a long child is awaited again — or simply finish: a child that settles reports into this conversation and wakes you if you are idle; stop and resume to control it. read and message also reach any other conversation of this person (find one with search_task_history); a message to an idle conversation starts its next turn. Only the root Task may do this; children cannot delegate.",
 	command: 'platform:subagent',
 	inputSchema: objectInput(
 		{

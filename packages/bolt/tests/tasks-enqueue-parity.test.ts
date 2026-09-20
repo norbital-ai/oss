@@ -187,14 +187,20 @@ describe('instance 3 — every task row written is announced to the host', () =>
 		expect(wakeAt).toBeGreaterThan(writeAt);
 		expect(body).toMatch(/occurrence\s*\n?\s*\}\)/u);
 		// A conversation answers its own queued messages inside the invocation that admitted them,
-		// so a turn is never a durable work occurrence of its own. The one claimed enqueue a turn
-		// makes is on another root conversation's behalf: an agent's message to a sibling of the
-		// same person is that sibling's next turn, durable as a person's send would be.
+		// so a turn is never a durable work occurrence of its own. Every claimed enqueue a turn makes
+		// is on another conversation's behalf — a child it spawned, a sibling it messaged, a parent
+		// it reports to — and each is that conversation's next turn under the task the message names,
+		// durable as a person's send would be.
 		const agents = readFileSync(join(RUNTIME, 'agents/agents.ts'), 'utf8');
-		expect(agents.match(/enqueueClaimed\(/gu)).toHaveLength(1);
-		expect(agents).toMatch(
-			/target\.parent_id == null\)\s*\n\s*yield\* taskQueue\.enqueueClaimed\(/u
-		);
+		const claimed = [...agents.matchAll(/enqueueClaimed\([\s\S]*?nowEpochMs/gu)].map((match) => [
+			match[0],
+			match[0]
+		]);
+		expect(claimed).toHaveLength(3);
+		for (const [, body] of claimed) {
+			expect(body).toContain("command: 'conversations.answer'");
+			expect(body).toMatch(/effectId: executionTaskId\(submitted\.messageId\)/u);
+		}
 	});
 
 	it('statement-joining task writers are covered by an announcing flow', () => {

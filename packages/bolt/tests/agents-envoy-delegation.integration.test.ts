@@ -10,6 +10,9 @@ import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { SUBAGENT_TOOL_NAME } from '../src/runtime/agents/capability-catalog.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import { fixtureUserId, seedSession } from './support/fixture-identity.js';
+import { bindTaskRunner } from './support/task-runner.js';
+import * as Identity from '../src/runtime/identity/identity.js';
 import {
 	assistantText,
 	assistantToolCall,
@@ -117,34 +120,49 @@ describe('envoy Task delegation boundary', () => {
 	 * The open half of the aperture, on an authored transcript rather than the recording.
 	 *
 	 * The recorded turns are still a truthful account of what the model said, but they are no longer
-	 * enough turns: a parent runs its child inside its own turn now, so the loop asks the provider
-	 * for the child's answer and then for the parent's consumption of it. Adding those to the
-	 * cassette would be inventing model responses. What this row asserts is ours — that `desk` may
-	 * spawn `ingress` at all, and that the child it spawns is a real conversation that runs.
+	 * enough turns: a child is a task of its own and reports back when it settles, so the loop asks
+	 * the provider for the child's answer and then for the parent's turn the report wakes. Adding
+	 * those to the cassette would be inventing model responses. What this row asserts is ours — that
+	 * `desk` may spawn `ingress` at all, and that the child it spawns is a real conversation that runs.
 	 */
-	it('lets an enabled envoy spawn a child, and runs it in the same turn', async () => {
-		const { ai } = scriptedTranscript([
-			assistantToolCall(
-				'subagent',
-				{ action: 'spawn', agentId: 'ingress', instruction: 'Record the field update.' },
-				'spawn-1'
-			),
-			assistantText('Child dispatched.'),
-			// The child's turn, run by the parent's barrier.
-			assistantText('Field update recorded.'),
-			// Twice told to consume the child, twice ignoring it. The nudge is bounded, so the turn
-			// finishes rather than spinning: the child's answer is durable either way.
-			assistantText('Child result noted.'),
-			assistantText('Still not consuming it.')
-		]);
+	it('lets an enabled envoy spawn a child, which runs as its own task and reports back', async () => {
+		const { ai } = scriptedTranscript(
+			[
+				assistantToolCall(
+					'subagent',
+					{ action: 'spawn', agentId: 'ingress', instruction: 'Record the field update.' },
+					'spawn-1'
+				),
+				assistantText('Child dispatched.'),
+				// The parent's next turn, woken by the child's report.
+				assistantText('Child result noted.')
+			],
+			{ children: [assistantText('Field update recorded.')] }
+		);
 		harness = await makeBoltTestRuntime(definition, { ai });
+		// A task resolves its person from the user row, so the operator is a seeded one here.
+		await seedSession(harness, { token: 'operator-token', user: 'operator', team: 'operator' });
+		const identity = await harness.runtime.runPromise(Identity.Service);
+		const operator = await harness.runtime.runPromise(
+			identity.resolveUser(harness.effectId('resolve-operator'), fixtureUserId('operator'))
+		);
+		const runner = bindTaskRunner(harness);
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		const enabledTask = ConversationId.make('00000000-0000-4000-8000-000000000602');
-		await submit(agents, harness, enabledTask, 'desk');
+		await harness.runtime.runPromise(
+			agents.submit(harness.effectId('desk:submit'), operator, {
+				conversationId: enabledTask,
+				agentId: AgentId.make('desk'),
+				message: Agents.userAgentInput('Handle this Task.'),
+				mode: DirectiveMode.make('agent'),
+				priority: DirectivePriority.make('normal')
+			})
+		);
 		const enabled = await harness.runtime.runPromise(
-			agents.execute(harness.effectId('desk:execute'), subject, enabledTask)
+			agents.execute(harness.effectId('desk:execute'), operator, enabledTask)
 		);
 		expect(enabled.status).toBe('done');
+		await runner.settled();
 		expect(
 			await harness.database.query(
 				`select parent_id, agent_id, status from conversation where parent_id = $1`,

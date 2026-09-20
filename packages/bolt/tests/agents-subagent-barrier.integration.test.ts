@@ -19,6 +19,9 @@ import {
 	scriptedTranscript,
 	toolResultFor
 } from './agents-canonical-ai-fixture.js';
+import { bindTaskRunner } from './support/task-runner.js';
+import { fixtureUserId, seedSession } from './support/fixture-identity.js';
+import * as Identity from '../src/runtime/identity/identity.js';
 
 const definition = testWorkspace({
 	envoys: [
@@ -39,13 +42,26 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+/**
+ * A person the host can resolve: a child, a sibling's answer and a parent's wake-up all run as
+ * durable tasks, and a task resolves its subject from the user row the message was admitted by.
+ */
+const seededSubject = async (runtime: BoltTestRuntime): Promise<Identity.Subject> => {
+	await seedSession(runtime, { token: 'coordinator-token', user: 'coordinator', team: 'admin' });
+	const identity = await runtime.runtime.runPromise(Identity.Service);
+	return runtime.runtime.runPromise(
+		identity.resolveUser(runtime.effectId('resolve-coordinator'), fixtureUserId('coordinator'))
+	);
+};
+let subject: Identity.Subject = adminSubject;
+
 const submitParent = async (
 	agents: Agents.Interface,
 	name: string,
 	conversationId: ConversationId
 ) => {
 	await harness!.runtime.runPromise(
-		agents.submit(harness!.effectId(`submit:${name}`), adminSubject, {
+		agents.submit(harness!.effectId(`submit:${name}`), subject, {
 			conversationId,
 			agentId: AgentId.make('web'),
 			message: Agents.userAgentInput('Coordinate the field work.'),
@@ -56,9 +72,7 @@ const submitParent = async (
 };
 
 const execute = (agents: Agents.Interface, name: string, conversationId: ConversationId) =>
-	harness!.runtime.runPromise(
-		agents.execute(harness!.effectId(name), adminSubject, conversationId)
-	);
+	harness!.runtime.runPromise(agents.execute(harness!.effectId(name), subject, conversationId));
 
 const childTaskRow = async (parentId: ConversationId) => {
 	const rows = await harness!.database.query(
@@ -104,9 +118,13 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			}
 		);
 		harness = await makeBoltTestRuntime(definition, { ai });
+		subject = await seededSubject(harness);
+		const runner = bindTaskRunner(harness);
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '911', parentId);
 		await execute(agents, '911', parentId);
+		// The child is a task of its own; its report wakes the parent, whose next turn awaits it.
+		await runner.settled();
 		const child = await childTaskRow(parentId);
 		expect(
 			await harness.database.query('select id from conversation where parent_id = $1', [child?.id])
@@ -190,17 +208,19 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 	});
 
 	/**
-	 * A parent runs its own children, inside its own turn, and does not stop for them.
+	 * A parent does not stop for its child, and does not hold it either.
 	 *
-	 * There used to be a park here: the parent set itself `waiting`, returned, and something else
-	 * had to run the child and wake it. That something was a durable work occurrence, and when the
-	 * occurrence went, nothing replaced it — a spawned child sat with a queued message no caller
-	 * would ever answer, and the parent sat `waiting` forever. The child is a fiber of the parent's
-	 * turn now: one `execute`, and the whole tree runs inside it, the child beside the parent.
+	 * The child is a durable task of its own, as a person's send would be — spawned, the parent's
+	 * turn goes on and may finish. When the child settles it reports into the parent conversation,
+	 * and the parent — idle by then — is woken with the result as its next turn's input. There was
+	 * a park here once, and then a fiber the parent held with a barrier at its end; both made the
+	 * parent's turn the child's lifetime. Now nothing does.
 	 */
-	it('runs its child beside itself and demands consumption before finishing', async () => {
+	it("finishes without its child and is woken by the child's report", async () => {
 		let childConversationId: string | undefined;
 		const parentConversationId = ConversationId.make('00000000-0000-4000-8000-000000000901');
+		// The child answers only once the parent's turn is over, so the report finds it idle.
+		const parentDone = Promise.withResolvers<void>();
 		const { ai, requests } = scriptedTranscript(
 			[
 				assistantToolCall(
@@ -213,22 +233,18 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 					childConversationId = String(child?.id);
 					return assistantText('Child dispatched; standing by.');
 				},
+				// The parent's next turn: woken by the child's report, which is its input.
 				(request) => {
-					expect(JSON.stringify(request.messages)).toContain(
-						'Consume required child Tasks with subagent await before finishing'
-					);
-					return assistantToolCall(
-						'subagent',
-						{ action: 'await', conversationId: childConversationId },
-						'await-1'
-					);
-				},
-				assistantText('Child result consumed; the field report is nominal.')
+					const transcript = JSON.stringify(request.messages);
+					expect(transcript).toContain(`[Agent conversation ${childConversationId}]`);
+					expect(transcript).toContain('done: Field status: all sites nominal.');
+					return assistantText('Child result received; the field report is nominal.');
+				}
 			],
 			{
-				// The child's own turn, forked by the spawn rather than run by a separate caller.
 				children: [
-					(request) => {
+					async (request) => {
+						await parentDone.promise;
 						const tools = request.output._tag === 'Message' ? request.output.tools : [];
 						expect(tools?.map(({ name }) => name)).not.toContain('subagent');
 						expect(tools?.map(({ name }) => name)).not.toContain('update_plan');
@@ -238,62 +254,49 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			}
 		);
 		harness = await makeBoltTestRuntime(definition, { ai });
+		subject = await seededSubject(harness);
+		const runner = bindTaskRunner(harness);
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '901', parentConversationId);
 
-		// One call. No park, no wake, no second execute.
+		// The parent's own turn ends with the child still its own task.
 		const settled = await execute(agents, '901:a', parentConversationId);
 		expect(settled.status).toBe('done');
+		parentDone.resolve();
+		await runner.settled();
 
 		const child = await childTaskRow(parentConversationId);
 		expect(child).toMatchObject({ agent_id: 'worker', status: 'done' });
-		expect(
-			await harness.database.query(`select status, phase from turn where conversation_id = $1`, [
-				parentConversationId
-			])
-		).toEqual([{ status: 'succeeded', phase: 'model' }]);
 		expect(
 			await harness.database.query('select status from conversation where id = $1', [
 				parentConversationId
 			])
 		).toEqual([{ status: 'done' }]);
-
-		const [snapshot] = await harness.database.query(
-			'select capability_snapshot from turn where conversation_id = $1',
-			[parentConversationId]
-		);
-		expect(snapshot?.capability_snapshot).toMatchObject({
-			capabilities: expect.any(Array),
-			authorityDigest: expect.any(String)
-		});
-
+		// Two parent turns: the one that spawned, and the one the report woke.
+		expect(
+			await harness.database.query(
+				`select status, phase from turn where conversation_id = $1 order by created_at`,
+				[parentConversationId]
+			)
+		).toEqual([
+			{ status: 'succeeded', phase: 'model' },
+			{ status: 'succeeded', phase: 'model' }
+		]);
 		const parentMessages = await harness.database.query(
-			`select message from conversation_message where conversation_id = $1 order by sequence`,
+			`select message, author from conversation_message where conversation_id = $1 order by sequence`,
 			[parentConversationId]
 		);
-		expect(JSON.stringify(parentMessages)).toContain('Consume required child Tasks');
-		const consumed = toolResultFor(
-			requests.findLast(({ sessionId }) => sessionId === parentConversationId)!,
-			'subagent'
-		);
-		expect(consumed).toMatchObject({ state: 'done', conversationId: childConversationId });
-		expect(JSON.stringify(consumed)).toContain('Field status: all sites nominal.');
-
-		/**
-		 * Every provider call the parent made is billed, and they are distinct.
-		 *
-		 * The call used to be named `${run.id}:${iteration}`, and `iteration` restarted whenever the
-		 * turn re-entered its loop — which is what the park's wake did. Two calls minted one
-		 * `call_id` and the second usage row overwrote the first, losing a billable observation with
-		 * nothing failing. The park is gone, but the naming is the guard: it is the transcript
-		 * position now, which only advances.
-		 */
+		const report = JSON.stringify(parentMessages);
+		expect(report).toContain(`[Agent conversation ${childConversationId}]`);
+		expect(report).toContain('Field status: all sites nominal.');
+		expect(requests.filter(({ sessionId }) => sessionId === parentConversationId)).toHaveLength(3);
+		// Every provider call the parent made is billed, and they are distinct.
 		const usage = await harness.database.query(
 			`select distinct usage.call_id from turn_usage usage
 			 join turn run on run.id = usage.turn_id where run.conversation_id = $1`,
 			[parentConversationId]
 		);
-		expect(usage).toHaveLength(4);
+		expect(usage).toHaveLength(3);
 	});
 
 	/**
@@ -347,18 +350,11 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 					delivered.resolve();
 					return assistantText('Directives delivered; standing by.');
 				},
-				// Back in the parent, which is told to consume before it may finish.
+				// The parent's next turn, woken by the child's report.
 				(request) => {
-					expect(JSON.stringify(request.messages)).toContain(
-						'Consume required child Tasks with subagent await before finishing'
-					);
-					return assistantToolCall(
-						'subagent',
-						{ action: 'await', conversationId: childConversationId },
-						'await-1'
-					);
-				},
-				assistantText('Child directives acknowledged.')
+					expect(JSON.stringify(request.messages)).toContain('Payroll export prioritized.');
+					return assistantText('Child directives acknowledged.');
+				}
 			],
 			{
 				children: [
@@ -388,10 +384,13 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			}
 		);
 		harness = await makeBoltTestRuntime(definition, { ai });
+		subject = await seededSubject(harness);
+		const runner = bindTaskRunner(harness);
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await submitParent(agents, '902', parentConversationId);
 		const settled = await execute(agents, '902:a', parentConversationId);
 		expect(settled.status).toBe('done');
+		await runner.settled();
 
 		const childRow = await childTaskRow(parentConversationId);
 		const childConversationId2 = ConversationId.make(String(childRow?.id));
@@ -434,8 +433,9 @@ describe('sub-agent orchestration over a scripted transcript', () => {
 			)
 		).toEqual([{ id: childRuns[0]?.input_message_id }]);
 
-		// Six parent Generates plus the child's two.
-		expect(feed).toHaveLength(6 + 2);
+		// Five parent Generates — four in the turn that spawned, one in the turn the report woke —
+		// plus the child's two.
+		expect(feed).toHaveLength(5 + 2);
 		// The message tool result acknowledged as queued, never silently consumed.
 		const parentRequests = requests.filter(({ sessionId }) => sessionId === parentConversationId);
 		expect(toolResultFor(parentRequests[2]!, 'subagent')).toMatchObject({
