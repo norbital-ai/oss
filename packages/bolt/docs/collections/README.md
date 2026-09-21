@@ -87,8 +87,9 @@ export default defineCollection({
   and delete; every guard is a `select bolt_assert(…)` piece the statement's anchor references, so a
   refusal fails the whole statement. The one thing outside it is the `lock table` a transform's
   reads need, sent first. Every sub-statement sees the snapshot the statement began with, so a piece
-  that must observe another reads its `returning` set by name, never the table. Every commit logs
-  `[bolt-write] <collection> rows=N statements=1|2 pieces=P`.
+  that must observe another reads its `returning` set by name, never the table. Every multi-operation commit records a `write`
+  telemetry slice — collection, rows, statements, pieces, ms, shapes — kept in the tenant
+  `telemetry` collection; a single-operation commit records nothing.
 - **Versions are not part of the API.** The browser attaches the observed `row_version` of every row
   its input names as request metadata; the engine asserts them and fails the whole operation as a
   version conflict if one moved.
@@ -97,11 +98,11 @@ export default defineCollection({
   `approvalSuperseded`, `approvalConflicted`, `approvalCompleted`), a channel from the deployment's
   catalogue (`inbox`), recipients — user ids, or `{ team: 'HR Manager' }` for every member of a
   team at commit time (an approval step's `approvers` are team names) — and a message; the ledger
-  rows are pieces of the write's own statement and `notifications.drain` delivers them.
+  rows are pieces of the write's own statement and `notifications.deliver` delivers them.
 
 Callers reach a collection through `api.collection.<name>.create(input)` / `.createMany(inputs)` /
 `.update(id, input)` / `.updateMany(inputs)` / `.delete(id)` / `.deleteMany(ids)` on the server,
-and `client.collection.<name>` with the same names in the browser (durable through the sync outbox,
+and `client.collection.<name>` with the same names in the browser (queued in the tab's memory,
 painted over live reads until the authority settles). Agent tools, integration pulls, imports,
 seeds and the runtime's own bookkeeping are callers like any other. A relation given to the browser
 as a plain array of rows (a form matrix) is diffed against the children the tab has loaded and sent
@@ -125,7 +126,10 @@ apply to the projected answer rather than changing predicate meaning.
   refused by the planner. A read continued with `after` is one-shot and may order by any column.
 - Lexical search is opt-in per field with `search: true`.
 - Semantic search performs one embedding request, then one policy-filtered nearest-neighbour query.
-- `findNearest` is a server operation. The browser does not accept arbitrary vectors.
+- Every collection also offers `/text` and `/semantic`; a declared `similarity` index adds
+  `/<index>`, whose target is a capture-form value the workspace embeds. Raw vectors are never
+  accepted from the browser.
+- `findNearest` is a server operation.
 - Grouped reads are exact, server-side, and bounded; they are not recomputed from a browser page.
 - History reconstruction happens before policy masking, so a field mask cannot change patch meaning.
 

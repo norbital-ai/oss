@@ -18,9 +18,9 @@
 	const layerGeometry = $derived(productLayerIconGeometry(name));
 </script>
 
-{#if name === 'agent'}
+{#if name === 'norbius' || name === 'agent'}
 	<!-- The Agent mark is the Norbius strip itself — the same animated band live surfaces render,
-	     so a listed `product:agent` means what the workspace means by an agent. -->
+	     so a listed `product:norbius` means what the workspace means by an agent. -->
 	<NorbiusStrip {size} class={className} />
 {:else}
 	<svg

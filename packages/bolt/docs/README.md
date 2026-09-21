@@ -60,6 +60,7 @@ packages/bolt/docs/
     migrations/  authored SQL lineage (committed)
     artifact/
       bundle.mjs + code/*.mjs + release.json + assets/<sha256>
+      capabilities/ index.json + skills/<name>/**
     │
     │  host loads bundle.mjs into an isolate (Colony) or Node (bolt-server)
     ▼
@@ -91,7 +92,7 @@ src/
 ├── capabilities/
 │   ├── tools/+<name>.ts
 │   ├── mcp/+<name>.ts
-│   └── skills/<name>/             # tenant Skill package (SKILL.md + optional refs/scripts/assets)
+│   └── skills/<name>/             # tenant Skill package (SKILL.md + optional references/scripts/assets)
 ├── collections/
 │   ├── +relationship.ts           # optional (empty relations if absent)
 │   └── <name>/

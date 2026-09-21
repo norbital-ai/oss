@@ -14,6 +14,8 @@ export const PRODUCT_SUBMODULE_ICON_NAMES = [
 	'automations',
 	'remotes',
 	'apps',
+	'norbius',
+	/** Legacy alias for `norbius`; persisted release metadata may still name it. */
 	'agent'
 ] as const;
 

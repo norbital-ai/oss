@@ -35,7 +35,7 @@ Effect Prompt → language model → complete assistant message
      │                              │
      │                              └─ tool calls commit before effects begin
      ▼
-Effect Toolkit handlers run sequentially → complete tool-result messages
+Effect Toolkit handlers run together → complete tool-result messages in call order
      │
      ├─ Plan verification phase
      ├─ uncollected background jobs — refused an ending, once
@@ -48,7 +48,7 @@ settle the turn and the conversation
 
 Every model iteration loads durable rows, projects an Effect `Prompt`, calls the selected Effect
 model, folds response parts into one complete assistant message, and commits that message before
-executing any tool call. Calls run sequentially through the evaluated Effect `Toolkit`; each result
+executing any tool call. A step's calls run together through the evaluated Effect `Toolkit`; each result
 is encoded as a typed tool-result part and committed before the next model iteration.
 
 Every write goes to the collection it belongs to — a message to `conversation_message`, a turn to
@@ -320,9 +320,10 @@ revision is included in the prompt and governs execution.
 Planning is root-only. Its only mutation capability is `update_plan`: create or replace the
 Markdown body, or apply an exact single-match text patch against `expectedRevision`. Each accepted
 change creates an immutable body revision and atomically supersedes its predecessor. Ordinary
-assistant replies remain discussion and do not replace the Plan. The planning capability set permits
-source/documentation reads and read-only web search/fetch when supplied by the host; validation,
-tests, data queries, delegation and implementation tools are excluded even if marked read-only.
+assistant replies remain discussion and do not replace the Plan. Plan mode permits `update_plan`,
+`describe_workspace`, `list_skills`, `read_skill`, `read_collection`, `list_personal_skills`,
+`read_personal_skill`, `workspace_read`, `workspace_review` and `agent_output_read`. Validation,
+execution, delegation, implementation and web tools are excluded even if marked read-only.
 
 During planning, discussion stays visible as a normal conversation. A collapsed draft Plan floats
 above the queue and composer and can be expanded for review. Execute plan seals that revision and
@@ -420,8 +421,9 @@ naming any other agent fails to decode before it reaches the runtime. A call tha
 for this tool or any platform tool, is answered with `InvalidToolInput { tool, path, message }`,
 rendered to the model as `Invalid input for tool "subagent" at "agentId": ...`; `ToolNotAllowed`
 is reserved for a tool or target the agent may not use. Child depth uses the host-stamped
-invocation budget and is bounded by the platform limit. Cross-workbench and cross-tenant discovery
-or messaging are refused.
+invocation budget and is bounded by the platform limit. `read` and `message` also reach any other
+conversation of the same person; `await` stays in the tree, `stop`/`resume` act on a direct child,
+and cross-tenant access is refused.
 
 **A child is a task of its own.** A spawn admits the child's directive and enqueues its answer as a
 durable `conversations.answer` task under the message's own claim — exactly what a person's send
@@ -475,10 +477,11 @@ schemas to their model API and return complete Effect tool-call messages without
 Bolt executes each call through the same authorization boundary and appends its durable result
 before the next generation. Tests must inspect the provider request as well as scripted results.
 
-Colony supplies `workspace_files`, `workspace_read`, `workspace_edit` and `workspace_apply` against the same private
+Colony supplies `workspace_read`, `workspace_edit`, `workspace_apply`, `workspace_format`,
+`workspace_validate`, `workspace_review`, `sandbox_bash` and `agent_output_read` against the same private
 source store used by Studio. The trusted tenant/environment/person selects the draft; model input
 cannot select another owner. Apply requires the commit observed while reading, accepts at most 32
-text files / 1 MiB, and atomically refuses stale commits or excluded paths. Edit accepts at most 32
+text files / 1 MiB, and atomically refuses stale commits or excluded paths. Each search must match exactly once unless `replaceAll` is set; edit accepts at most 32
 precise replacements / 1 MiB of replacement input; each search must match exactly once. It preserves
 the rest of a large file and rejects the whole batch if any edit is ambiguous or stale. Edits remain drafts for
 Studio diagnosis, preview and review. They do not publish or alter Live. Standalone hosts may supply
@@ -529,7 +532,7 @@ a divider naming the new model before that run's first message (`modelChangeDivi
 `src/client/ui/agent/transcript.ts`). It is read off the stored run rows, so it survives a reload;
 a run that persisted no message carries no divider.
 
-Typing `/` as the first character of the draft opens the command menu with `plan` and `compact`
+Typing `/` as the first character of the draft opens the command menu with `plan`, `compact` and `export`
 (`src/client/ui/agent/composer-commands.ts`); selecting an entry leaves `/plan ` in the composer
 and closes the menu. A `/` anywhere else in the draft is prose and opens nothing.
 

@@ -277,7 +277,7 @@
 					label: parsed.text
 						? t('bolt.shell.omniPlanWithQuery', { query: parsed.text })
 						: t('bolt.shell.omniPrefixPlan'),
-					icon: 'product:agent',
+					icon: 'product:norbius',
 					entity: { kind: 'plan', query: parsed.text }
 				}
 			];
@@ -307,7 +307,7 @@
 					kind: 'command',
 					label: t('bolt.shell.omniAskWithQuery', { query: parsed.text }),
 					description: t('bolt.shell.omniNewConversationHint'),
-					icon: 'product:agent',
+					icon: 'product:norbius',
 					entity: { kind: 'ask-agent', query: parsed.text }
 				});
 			} else {
@@ -316,7 +316,7 @@
 					kind: 'command',
 					label: t('bolt.shell.omniNewConversation'),
 					description: t('bolt.shell.omniNewConversationHint'),
-					icon: 'product:agent',
+					icon: 'product:norbius',
 					entity: { kind: 'ask-agent', query: '' }
 				});
 			}

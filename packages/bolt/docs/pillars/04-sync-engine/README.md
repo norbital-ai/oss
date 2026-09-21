@@ -4,12 +4,13 @@ The tenant database is authoritative. The browser holds no replica: each live qu
 **contiguous prefix** registered with the host, the host re-evaluates that prefix on every relevant
 commit, and committed state is **pushed** as a version-fenced keyed delta — or a reset that forces
 the browser to re-register. Guest commands are `sync.connect`, `sync.extendPrefix`, and
-`sync.advance`. The browser never calls `sync.advance`; the host does, after a commit.
+`sync.advance`; the browser calls only `sync.connect` and the HTTP extend request — the host
+signs and dispatches both extend and advance. The browser never calls `sync.advance`; the host does, after a commit.
 
 Source: `src/runtime/sync/` (`sync.ts`, `delta-engine.ts`), structured admission in
 `src/runtime/access/effective-plan.ts`, wire `bolt-protocol/src/sync.ts`, shared
 `SyncRegistry` / `SyncConnectionLane` in `bolt-protocol/src/sync-registry.ts`. Colony implements
-the host: `apps/colony/src/lib/hosting/sync-host.ts`, `sync-conductor.ts`, and the public URLs
+the host: `apps/colony/src/lib/hosting/sync-host.ts` and the public URLs
 `/__bolt/sync/connect`, `/__bolt/sync/extend`, `/__bolt/sync/stream`. bolt-server uses the same
 lane.
 
@@ -19,7 +20,8 @@ lane.
 
 `compileEffectiveQueryPlan` is the query and read-policy compiler. A plan is either `live-prefix`
 or `one-shot`. Live admission is `findMany` / `findFirst` with a contiguous limit (default 100,
-max 10 000). `count`, `findGrouped`, an `after` cursor, and semantic search are one-shot and are
+max 10 000). `count`, `findGrouped`, an `after` cursor, semantic search, and a declared similarity (`nearest`)
+search are one-shot and are
 never filed live. An opaque policy predicate cannot be a live plan. A live prefix is keyed by
 scalar columns only: json, custom-typed and vector columns cannot key a prefix, and the planner
 refuses such a plan (`Live ordering requires a scalar field: …`, `effective-plan.ts`). The generated
@@ -32,7 +34,7 @@ prefix continuation then needs an ordering cursor the search planner owns, or th
 | Command             | Who calls it                    | Role                                                                                         |
 | ------------------- | ------------------------------- | -------------------------------------------------------------------------------------------- |
 | `sync.connect`      | Browser (and reconnect / reset) | Resolve each requested prefix, return rows plus the plan the host will file.                 |
-| `sync.extendPrefix` | Browser, monotonic grow         | Append rows past the viewer's loaded prefix without bumping version.                         |
+| `sync.extendPrefix` | Host, on the browser's HTTP extend request | Append rows past the viewer's loaded prefix without bumping version.                         |
 | `sync.advance`      | Host, after a commit            | Re-evaluate filed prefixes against the commit's `SyncChange` list; return updates or resets. |
 
 `sync.connect` carries `queries` (`queryKey`, `input`, `requestedPrefix`), `detached` keys, and

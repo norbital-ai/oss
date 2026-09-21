@@ -56,7 +56,7 @@ client.collection_history.claims.at(id, { revision: 2 }); // or { instant } | { 
 ```
 
 Reads: `findMany` / `findFirst` with a contiguous limit are **live** — a prefix registered with
-the host and pushed thereafter. `count`, `findGrouped`, an `after` cursor, semantic search and
+the host and pushed thereafter. `count`, `findGrouped`, an `after` cursor, semantic search, a declared similarity search and
 `collection_history` are **one-shot**: answered once over the transport and never filed live.
 
 Writes: `client.collection.<name>` is the collection's declared write contract (`write` in the

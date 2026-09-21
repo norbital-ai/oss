@@ -56,7 +56,7 @@
 		compute: 'lucide:cpu',
 		database: 'lucide:database',
 		files: 'lucide:hard-drive',
-		ai: 'product:agent'
+		ai: 'product:norbius'
 	};
 
 	const dated = new Intl.DateTimeFormat(undefined, {

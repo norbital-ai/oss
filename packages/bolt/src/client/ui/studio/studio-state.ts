@@ -796,7 +796,7 @@ export const manifestSections = (
 			icon: 'policies',
 			entries: (manifest?.policies ?? []).map(({ name }) => ({ name }))
 		},
-		{ id: 'envoys', icon: 'agent', entries: envoys.map(({ name }) => ({ name })) },
+		{ id: 'envoys', icon: 'norbius', entries: envoys.map(({ name }) => ({ name })) },
 		{
 			id: 'automations',
 			icon: 'automations',

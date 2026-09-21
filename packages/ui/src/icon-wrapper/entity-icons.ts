@@ -30,7 +30,7 @@ export const ENTITY_ICONS = {
 	// ── System modules / features ───────────────────────────────────
 	module: {
 		accessControl: 'product:organization',
-		agents: 'product:agent',
+		agents: 'product:norbius',
 		applications: 'product:apps',
 		approvals: 'product:approvals',
 		automations: 'product:automations',
