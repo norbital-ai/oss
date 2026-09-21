@@ -11,6 +11,7 @@
 	import AgentChildConversation from './agent-child-conversation.svelte';
 	import type { CompactOrigin } from './context-view.js';
 	import { checkpointSections, plainMessageText } from './context-view.js';
+	import { parseInboundEnvelope, type InboundEnvelope } from './inbound-message.js';
 	import type { PanelMessage } from './transcript.js';
 	import {
 		diagnostic,
@@ -63,6 +64,28 @@
 			!cancelled
 	);
 	const humanBubble = $derived(message.author.kind === 'human' && !parentAttribution && !steering);
+	/**
+	 * An envoy message carries its sender and time inside the text the model reads. The transcript
+	 * shows them as metadata instead, and only when the envelope is exactly the runtime's own.
+	 */
+	const inboundEnvelope = $derived.by((): InboundEnvelope | null => {
+		const content = message.message.content;
+		if (isString(content)) return parseInboundEnvelope(content);
+		const text = content.find((part) => part.type === 'text');
+		return text?.type === 'text' && text.text.startsWith('INBOUND MESSAGE')
+			? parseInboundEnvelope(text.text)
+			: null;
+	});
+	const inboundSentAt = $derived.by(() => {
+		const envelope = inboundEnvelope;
+		if (envelope === null) return '';
+		const sentAt = new Date(envelope.sentAt);
+		return Number.isNaN(sentAt.getTime())
+			? envelope.sentAt
+			: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+					sentAt
+				);
+	});
 	/** Tool messages carry no speaker: their results render on the row of the call they answer. */
 	const showSpeaker = $derived(
 		parentAttribution || !['human', 'agent', 'tool'].includes(message.author.kind)
@@ -280,6 +303,21 @@
 	</details>
 {/snippet}
 
+{#snippet inboundMessage(envelope: InboundEnvelope)}
+	<Stack gap="xs">
+		<Inline align="center" gap="xs" class="text-micro text-muted-foreground" title={envelope.messageId}>
+			<Icon icon="lucide:message-circle" class="size-3 shrink-0" aria-hidden="true" />
+			<span class="font-medium text-foreground">{envelope.sender}</span>
+			<span aria-hidden="true">·</span>
+			<span>{inboundSentAt}</span>
+			<span class="rounded-full bg-background/70 px-1.5 py-0.5">{envelope.invocation}</span>
+		</Inline>
+		{#if envelope.body !== ''}
+			<p class="m-0 break-words whitespace-pre-wrap">{envelope.body}</p>
+		{/if}
+	</Stack>
+{/snippet}
+
 {#if renders}
 	<li
 		class="message group/message my-4 min-w-0"
@@ -346,6 +384,8 @@
 							allowHtml={false}
 							content={checkpointSections(message.message.content)}
 						/>
+					{:else if inboundEnvelope !== null}
+						{@render inboundMessage(inboundEnvelope)}
 					{:else}
 						{#if parentAttribution}
 							<ReadonlyMarkdown
@@ -415,6 +455,8 @@
 								{:else}
 									{#if parentAttribution}
 										<ReadonlyMarkdown scale="reading" allowHtml={false} content={part.text} />
+									{:else if inboundEnvelope !== null && part.text.startsWith('INBOUND MESSAGE')}
+										{@render inboundMessage(inboundEnvelope)}
 									{:else}
 										<p class="m-0 break-words whitespace-pre-wrap">{part.text}</p>
 									{/if}

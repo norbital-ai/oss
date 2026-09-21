@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-protocol",
-	"version": "0.0.78",
+	"version": "0.0.79",
 	"description": "Neutral Bolt artifact invocation and facility contracts.",
 	"type": "module",
 	"sideEffects": false,

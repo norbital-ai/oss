@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { Effect, Schema } from 'effect';
 	import { onMount } from 'svelte';
+	import { Button } from '@norbital-ai/ui/button';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { getErrorMessage } from '@norbital-ai/std';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	/**
 	 * The page a claim link lands on — an envoy registration or a workspace invitation — redeemed
-	 * on load for the signed-in person, then a sentence about what happened. Nothing to press: the
+	 * on load for the signed-in person, then a card about what happened. Nothing to press: the
 	 * host has already established who is signed in, and a person who was not is sent back here by
 	 * the host's own sign-in.
 	 */
@@ -84,21 +86,41 @@
 					? `This could not be completed: ${outcome.reason}`
 					: (claim.copy[outcome.state] ?? 'This link is not valid.')
 	);
+	/** The card is one of three states, and each says it with a colour and a mark, not a sentence alone. */
+	const tone = $derived(
+		done
+			? { border: 'border-success/30', icon: 'lucide:circle-check', text: 'text-success' }
+			: settled
+				? { border: 'border-destructive/30', icon: 'lucide:circle-alert', text: 'text-destructive' }
+				: { border: 'border-border', icon: 'lucide:loader-circle', text: 'text-info' }
+	);
 </script>
 
 <svelte:head><title>{done ? claim.doneTitle : claim.title}</title></svelte:head>
 
 <Scroll as="section" name={kind} inset class="bg-background">
-	<Stack gap="sm" class="max-w-xl">
-		<h1 class="text-heading">{done ? claim.doneTitle : claim.title}</h1>
-		<p
-			role={done || !settled ? 'status' : 'alert'}
-			class="text-sm leading-relaxed {done || !settled ? 'text-foreground' : 'text-destructive'}"
+	<div class="grid min-h-full place-items-center py-10">
+		<Stack
+			gap="sm"
+			align="center"
+			class="w-full max-w-md rounded-xl border bg-card p-8 text-center shadow-sm {tone.border}"
 		>
-			{copy}
-		</p>
-		{#if done && kind === 'invitation'}
-			<a href="/" class="text-sm underline underline-offset-4">Open the workspace</a>
-		{/if}
-	</Stack>
+			<IconWrapper
+				name={tone.icon}
+				class="size-9 {tone.text} {settled ? '' : 'motion-safe:animate-spin'}"
+			/>
+			<h1 class="text-heading">{done ? claim.doneTitle : claim.title}</h1>
+			<p
+				role={done || !settled ? 'status' : 'alert'}
+				class="max-w-sm text-sm leading-relaxed {done || !settled
+					? 'text-muted-foreground'
+					: 'text-destructive'}"
+			>
+				{copy}
+			</p>
+			{#if done && kind === 'invitation'}
+				<Button href="/" class="mt-1">Open the workspace</Button>
+			{/if}
+		</Stack>
+	</div>
 </Scroll>

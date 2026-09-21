@@ -87,18 +87,26 @@ describe('agent collection read result', () => {
 		expect(result.diagnostic.originalBytes).toBeGreaterThan(READ_COLLECTION_RESULT_BYTE_LIMIT);
 	});
 
-	it('does not skip a first row that cannot fit as a complete JSON value', () => {
+	it('does not skip a first row that cannot fit as a complete JSON value, and names its heaviest columns', () => {
 		const result = boundedCollectionReadResult(
-			[{ id: 'oversized', note: 'x'.repeat(READ_COLLECTION_RESULT_BYTE_LIMIT * 2) }],
+			[{ id: 'oversized', note: 'x'.repeat(READ_COLLECTION_RESULT_BYTE_LIMIT * 2), reason: 'short' }],
 			1
 		) as {
 			readonly rows: ReadonlyArray<unknown>;
 			readonly cursor: { readonly hasMore: boolean; readonly next: string | null };
-			readonly diagnostic: { readonly reason: string };
+			readonly diagnostic: {
+				readonly reason: string;
+				readonly heaviestColumns: ReadonlyArray<{ readonly column: string; readonly bytes: number }>;
+			};
 		};
 		expect(encodedBytes(result)).toBeLessThanOrEqual(READ_COLLECTION_RESULT_BYTE_LIMIT);
 		expect(result.rows).toEqual([]);
 		expect(result.cursor).toEqual({ hasMore: true, next: null });
 		expect(result.diagnostic.reason).toBe('first-row-exceeds-serialized-byte-limit');
+		expect(result.diagnostic.heaviestColumns[0]).toEqual({
+			column: 'note',
+			// The serialized string adds its two quotes to the repeated character's own bytes.
+			bytes: READ_COLLECTION_RESULT_BYTE_LIMIT * 2 + 2
+		});
 	});
 });

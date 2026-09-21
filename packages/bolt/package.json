@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.78",
+	"version": "0.0.79",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [

@@ -319,13 +319,16 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'read_collection',
-		description: 'Read one page of a collection (default 50 rows); continue with cursor.',
+		description:
+			'Read one page of a collection (default 50 rows); continue with cursor. Narrow it with `where` (exact field matches) and read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
 				collection: { type: 'string', minLength: 1 },
 				limit: { type: 'integer', minimum: 1, maximum: 50 },
-				cursor: { type: 'string', minLength: 1 }
+				cursor: { type: 'string', minLength: 1 },
+				where: { type: 'object', additionalProperties: true },
+				columns: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1 }
 			},
 			['collection']
 		)
@@ -390,6 +393,13 @@ const skillSection = (body: string, title: string): string | undefined => {
 		?.trimEnd();
 };
 const CompactInput = Schema.Struct({ reason: Schema.NonEmptyString });
+/** Exact matches only: a filter is a field and the value it must equal. */
+const CollectionFilterValue = Schema.Union([
+	Schema.String,
+	Schema.Number,
+	Schema.Boolean,
+	Schema.Null
+]);
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	limit: Schema.optionalKey(
@@ -399,7 +409,9 @@ const CollectionReadInput = Schema.Struct({
 			Schema.isLessThanOrEqualTo(50)
 		)
 	),
-	cursor: Schema.optionalKey(Schema.NonEmptyString)
+	cursor: Schema.optionalKey(Schema.NonEmptyString),
+	where: Schema.optionalKey(Schema.Record(Schema.String, CollectionFilterValue)),
+	columns: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
 const CollectionWriteInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -467,6 +479,29 @@ const serializedBytes = (value: Schema.Json): number => {
 const defaultCollectionCursor = (row: Schema.Json | undefined): string | null =>
 	row === undefined ? null : encodeCollectionCursor([{ column: 'id', direction: 'asc' }], row);
 
+/**
+ * The fields of one row, largest serialized value first.
+ *
+ * A read that returns nothing because its *first* row is oversized is otherwise a dead end: the
+ * model cannot see which column is fat, and every retry reads it again. Naming the heaviest fields
+ * is what turns the diagnostic into the next call's projection.
+ */
+const heaviestColumns = (
+	row: Schema.Json | undefined,
+	limit = 3
+): ReadonlyArray<Readonly<{ column: string; bytes: number }>> => {
+	if (row == null || typeof row !== 'object' || Array.isArray(row)) return [];
+	return Object.entries(row)
+		.flatMap(([column, value]) => {
+			const encoded = JSON.stringify(value);
+			return encoded === undefined
+				? []
+				: [{ column, bytes: new TextEncoder().encode(encoded).byteLength }];
+		})
+		.sort((left, right) => right.bytes - left.bytes)
+		.slice(0, limit);
+};
+
 export const boundedCollectionReadResult = (
 	fetchedRows: ReadonlyArray<Schema.Json>,
 	requestedRows: number
@@ -519,7 +554,10 @@ export const boundedCollectionReadResult = (
 						? 'first-row-exceeds-serialized-byte-limit'
 						: 'complete-row-prefix',
 				byteLimit: READ_COLLECTION_RESULT_BYTE_LIMIT,
-				originalBytes
+				originalBytes,
+				...(count === 0 && pageRows.length > 0
+					? { heaviestColumns: heaviestColumns(pageRows[0]) }
+					: {})
 			}
 		};
 		if (serializedBytes(result) <= READ_COLLECTION_RESULT_BYTE_LIMIT) return result;
@@ -930,10 +968,27 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				});
 			}
 			const limit = parsed.limit ?? 50;
+			/**
+			 * The model's filter and projection, in the collection contract's own shapes: `where` is a
+			 * field equalling a value, and `id` is always selected because the continuation cursor is
+			 * encoded from it. The read policy still applies, so narrowing never widens a read.
+			 */
+			const where =
+				parsed.where === undefined
+					? undefined
+					: Object.fromEntries(
+							Object.entries(parsed.where).map(([field, value]) => [field, { eq: value }])
+						);
+			const columns =
+				parsed.columns === undefined
+					? undefined
+					: { id: true, ...Object.fromEntries(parsed.columns.map((column) => [column, true])) };
 			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: parsed.collection,
 				limit: limit + 1,
-				after: parsed.cursor
+				after: parsed.cursor,
+				...(where === undefined ? {} : { where }),
+				...(columns === undefined ? {} : { columns })
 			});
 			return boundedCollectionReadResult(rows, limit);
 		}

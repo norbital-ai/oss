@@ -992,6 +992,18 @@
 				<NorbiusStrip state={orbState} size={18} label={t(agentOrbStatusKey(orbState))} />
 			</div>
 			<span class="shrink-0 text-sm font-semibold">Norbius</span>
+			{#if activeTask !== undefined && activeTask.agent_id !== runtime.agentId}
+				<!--
+					A chat with another agent — an envoy's transport conversation — is read and written
+					here, but its words are the channel's, not this person's: the badge is what says so.
+				-->
+				<span
+					class="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-micro text-muted-foreground"
+					title="Conversation with an envoy of this workspace"
+				>
+					envoy · {activeTask.agent_id}
+				</span>
+			{/if}
 			<div class="min-w-0 flex-1">
 				<TaskSelector
 					model={taskSelector}
