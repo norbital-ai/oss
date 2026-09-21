@@ -504,7 +504,7 @@ describe('bolt-server Sync v2 host', () => {
 		assert.deepStrictEqual(probe.closed, []);
 	});
 
-	it('closes a consumer before an oversized apply frame reaches its sink', async () => {
+	it('degrades an oversized delta to a reset instead of closing the consumer', async () => {
 		const baseline = makeBridge({});
 		const host = makeSyncHost({
 			...baseline,
@@ -551,8 +551,26 @@ describe('bolt-server Sync v2 host', () => {
 			changes: [updateChange('steps', 'steps-1')],
 			pending: []
 		});
-		assert.deepStrictEqual(probe.frames, []);
-		assert.deepStrictEqual(probe.closed, ['guest-failed']);
+		// The delta could not fit, so the query resets and re-registers rather than the whole
+		// connection dying: one large write used to 500 its writer and 410 every query on it.
+		assert.deepStrictEqual(probe.frames, [
+			scopedFrame({
+				updates: [],
+				resets: [{ queryKey: 'steps', reason: 'prefix-bytes' }],
+				outcomes: []
+			})
+		]);
+		assert.deepStrictEqual(probe.closed, []);
+		// Retired, so the re-registration answers from current truth.
+		await expect(
+			host.extendPrefix({
+				connectionId: 'oversized-frame',
+				principal: 'reader',
+				scope: configuration.scope,
+				credential: 'reader',
+				request: { queryKey: 'steps', version: 1, loadedPrefix: 1, requestedPrefix: 2 }
+			})
+		).rejects.toThrow(/not available|reset/u);
 	});
 
 	it('multiplexes scope-qualified workspace lanes over one physical browser connection', async () => {

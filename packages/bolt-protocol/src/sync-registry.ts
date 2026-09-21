@@ -869,6 +869,18 @@ export class SyncConnectionLane<
 
 		const failed = new Set<Connection>();
 		for (const [connection, frame] of frames) {
+			// A delta that cannot fit is degraded, not fatal: the queries it names reset and
+			// re-register from current truth. Detaching the connection — the old behaviour — turned
+			// one large write into a refused writer frame, a 500 on a committed command, and a full
+			// reconnect for every query on that connection.
+			if (!this.registry.frameFits(frame) && frame.updates.length > 0) {
+				for (const update of frame.updates) {
+					frame.resets.push({ queryKey: update.queryKey, reason: 'prefix-bytes' });
+					const subId = connection.subscriptions.get(update.queryKey);
+					if (subId !== undefined) resets.set(subId, 'prefix-bytes');
+				}
+				frame.updates = [];
+			}
 			if (!this.registry.frameFits(frame) || !connection.sink.writable()) {
 				failed.add(connection);
 				continue;

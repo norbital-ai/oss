@@ -283,6 +283,14 @@ const writeDispatchResult = (response: ServerResponse, result: BundleResult): vo
 
 /** The live-query wire carries only canonical version transitions and resets. */
 const SYNC_KEEPALIVE_MILLIS = 25_000;
+
+/**
+ * How much an SSE response may buffer before its stream is treated as abandoned.
+ *
+ * One delta frame for a large write is hundreds of kilobytes, and Node buffers it whole; the cap
+ * sits well above any single frame so backpressure never reads as a dead consumer.
+ */
+const MAX_BUFFERED_SSE_BYTES = 8 * 1024 * 1024;
 const sseEncoder = new TextEncoder();
 const sseApplyBytes = (frame: SyncScopedApplyFrame): Uint8Array =>
 	sseEncoder.encode(`event: apply\ndata: ${JSON.stringify(frame)}\n\n`);
@@ -479,11 +487,21 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		let live = true;
 		let keepalive: ReturnType<typeof setInterval> | undefined;
 		const sink: SyncSink = {
+			/**
+			 * Node accepts every write and buffers it, so `writableNeedDrain` is backpressure, not a
+			 * dead consumer — and one large delta frame (a payroll run's change set is hundreds of
+			 * kilobytes) sets it for the next frame too. Refusing that next frame used to detach the
+			 * whole stream and leave the browser reconnecting, which is why a committed write took
+			 * six seconds to be believed. Only a stream buffering past this cap is treated as dead:
+			 * the keepalive then detaches it, and memory stays bounded per abandoned tab.
+			 */
 			writable: () =>
-				live && !response.destroyed && !response.writableEnded && !response.writableNeedDrain,
+				live &&
+				!response.destroyed &&
+				!response.writableEnded &&
+				response.writableLength < MAX_BUFFERED_SSE_BYTES,
 			write: (frame) => {
 				if (!sink.writable()) return false;
-				// Node accepts the bytes even when write returns false; that signal gates the next write.
 				response.write(sseApplyBytes(frame));
 				return true;
 			},
