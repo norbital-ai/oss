@@ -357,6 +357,59 @@ describe('bolt-server Sync v2 host', () => {
 		})
 	);
 
+	it.effect('resets the writer’s prefixes when a settlement carries no changes', () =>
+		Effect.gen(function* () {
+			const host = makeSyncHost(makeBridge({}));
+			const { probe } = yield* Effect.tryPromise(() =>
+				openAndConnect(
+					host,
+					'conn-replay',
+					'steps',
+					{ kind: 'findMany', collection: 'steps' },
+					'writer'
+				)
+			);
+
+			// A replayed browser mutation answers with its durable outcome and no change set: the row
+			// it wrote is durable, but the deltas that created it are not replayable. The writer's
+			// prefix is the only state that can be stale, and nothing else would refetch it.
+			yield* Effect.tryPromise(() =>
+				host.committed({
+					scope: configuration.scope,
+					writerConnectionId: 'conn-replay',
+					writerCredential: 'writer',
+					changes: [],
+					pending: [CollectionMutationIdempotencyKey.make('write-replayed')]
+				})
+			);
+
+			assert.deepStrictEqual(probe.frames, [
+				scopedFrame({
+					updates: [],
+					resets: [{ queryKey: 'steps', reason: 'settled-without-changes' }],
+					outcomes: [
+						{
+							id: CollectionMutationIdempotencyKey.make('write-replayed'),
+							status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
+						}
+					]
+				})
+			]);
+			// Retired, so the browser's re-registration answers from current truth.
+			yield* Effect.tryPromise(() =>
+				expect(
+					host.extendPrefix({
+						connectionId: 'conn-replay',
+						principal: 'writer',
+						scope: configuration.scope,
+						credential: 'writer',
+						request: { queryKey: 'steps', version: 1, loadedPrefix: 1, requestedPrefix: 2 }
+					})
+				).rejects.toThrow(/not available|reset/u)
+			);
+		})
+	);
+
 	it.effect('emits a policy reset and retires the affected query', () =>
 		Effect.gen(function* () {
 			const host = makeSyncHost(makeBridge({}));

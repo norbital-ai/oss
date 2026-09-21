@@ -59,7 +59,10 @@ affected roots through the ordinary collection resolver, fills vacated slots fro
 boundary, and emits one keyed delta per attached viewer prefix (`removeIds` + `put` at a final
 index). A plan-key or authority mismatch, a broken prefix, or a byte/row ceiling is a
 **reset** (`stale-version`, `prefix-limit`, `prefix-bytes`, `inconsistent-prefix`, `plan-changed`,
-`policy-changed`, `release-changed`, `authority-changed`) — not a full-answer patch on the wake.
+`policy-changed`, `release-changed`, `authority-changed`, `settled-without-changes`) — not a
+full-answer patch on the wake. The last one is the host's, not the guest's: a commit that carries a
+write outcome but no changes (a replayed browser mutation) resets the writer's own prefixes, so the
+row it wrote cannot stay invisible until the next reload.
 
 ---
 

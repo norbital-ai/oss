@@ -823,6 +823,16 @@ export class SyncConnectionLane<
 				return this.#failCommit(affected, writer, 'invalid sync reset');
 			resets.set(reset.subId, reset.reason);
 		}
+		// A settlement can arrive with no change set: a browser mutation replayed from its durable
+		// ledger answers with the outcome alone, and no delta exists to publish. The writer's own
+		// prefixes are the only state that can be stale then — nothing else on the stream has a
+		// reason to refetch — so reset them to registration rather than let a written row stay
+		// invisible until the next reload.
+		if (options.changes.length === 0 && writer !== undefined && response.outcomes.length > 0) {
+			for (const subId of writer.subscriptions.values()) {
+				if (!resets.has(subId)) resets.set(subId, 'settled-without-changes');
+			}
+		}
 		const frames = new Map<Connection, MutableSyncApplyFrame>();
 		const frameFor = (connection: Connection): MutableSyncApplyFrame => {
 			let frame = frames.get(connection);

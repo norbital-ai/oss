@@ -240,7 +240,8 @@ export const SyncResetReason = Schema.Literals([
 	'plan-changed',
 	'policy-changed',
 	'release-changed',
-	'authority-changed'
+	'authority-changed',
+	'settled-without-changes'
 ]).annotate({ identifier: 'BoltSyncResetReason' });
 export type SyncResetReason = typeof SyncResetReason.Type;
 
