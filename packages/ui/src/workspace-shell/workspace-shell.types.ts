@@ -103,21 +103,6 @@ const WorkspaceImpersonationSchema = Schema.Struct({
 });
 export type WorkspaceImpersonation = typeof WorkspaceImpersonationSchema.Type;
 
-type WorkspaceNavigationBranchParams = {
-	open: boolean;
-	href: string;
-	expanded: boolean;
-	onNavigate?: (href: string) => void;
-};
-
-export function toggleWorkspaceNavigationBranch(params: WorkspaceNavigationBranchParams): boolean {
-	const { open, href, expanded, onNavigate } = params;
-	if (!open) {
-		onNavigate?.(href);
-		return expanded;
-	}
-	return !expanded;
-}
 
 const WorkspaceNavigationModelSchema = Schema.Struct({
 	activeOrganization: WorkspaceOrganizationOptionSchema,

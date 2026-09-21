@@ -9,7 +9,6 @@
 	import {
 		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
 		WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
-		toggleWorkspaceNavigationBranch,
 		type WorkspaceNavigationItem
 	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebarNavigationBranch from './workspace-sidebar-navigation-branch.svelte';
@@ -43,13 +42,10 @@
 		onNavigate(href);
 	}
 
-	function toggle(): void {
-		expanded = toggleWorkspaceNavigationBranch({
-			open,
-			href: item.href,
-			expanded,
-			onNavigate
-		});
+	/** Follows the branch's own page; its children stay open so the branch reads as one region. */
+	function openBranch(event: MouseEvent): void {
+		navigate(event, item.href);
+		expanded = true;
 	}
 
 	watch(
@@ -64,11 +60,14 @@
 	{#if hasChildren}
 		<Sidebar.MenuButton isActive={item.active} size="sm" tooltipContent={item.label}>
 			{#snippet child({ props })}
-				<button
+				<a
 					{...props}
-					type="button"
+					href={item.href}
+					onmouseenter={() => onPrefetch?.(item.href)}
+					onfocus={() => onPrefetch?.(item.href)}
+					onclick={openBranch}
 					aria-expanded={open ? expanded : undefined}
-					onclick={toggle}
+					aria-current={item.active ? 'page' : undefined}
 					class={cn(
 						typeof props.class === 'string' ? props.class : undefined,
 						'relative w-full overflow-visible',
@@ -124,7 +123,7 @@
 							/>
 						</div>
 					{/if}
-				</button>
+				</a>
 			{/snippet}
 		</Sidebar.MenuButton>
 		{#if open && expanded}
