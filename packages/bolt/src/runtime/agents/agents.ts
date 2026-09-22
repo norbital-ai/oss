@@ -380,6 +380,27 @@ const generationAssets = (assets: ReadonlyArray<ImageAsset>) => {
 	};
 };
 
+/**
+ * The attachments one generation may carry: the newest that fit the provider boundary.
+ *
+ * A Task's transcript keeps every attachment it was ever sent, so a turn that re-attaches all of
+ * them exceeds the boundary a few messages in. Dropping the oldest keeps the request bounded
+ * without failing a turn somebody is waiting on; the descriptor text for a dropped attachment
+ * stays in the transcript, so the model can still reach the stored object with its tools.
+ */
+export const boundedAttachments = (
+	assets: ReadonlyArray<ImageAsset>
+): ReadonlyArray<ImageAsset> => {
+	const kept: Array<ImageAsset> = [];
+	let bytes = 0;
+	for (const asset of assets.toReversed()) {
+		if (kept.length >= MAX_IMAGE_COUNT || bytes + asset.size > MAX_IMAGE_SOURCE_BYTES) break;
+		kept.push(asset);
+		bytes += asset.size;
+	}
+	return kept.toReversed();
+};
+
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
 export const messageText = (message: Prompt.MessageEncoded): string =>
 	isString(message.content)
@@ -2899,7 +2920,7 @@ export const layer = Layer.effect(
 					if (decoded._tag === 'Some') assets.push(decoded.value);
 				}
 			}
-			return assets;
+			return boundedAttachments(assets);
 		};
 
 		/**

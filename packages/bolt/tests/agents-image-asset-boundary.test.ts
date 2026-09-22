@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ImageAsset, ConversationId } from '@norbital-ai/bolt-protocol';
-import { conversationAssetStorageKey } from '../src/runtime/agents/agents.js';
+import { boundedAttachments, conversationAssetStorageKey } from '../src/runtime/agents/agents.js';
 import {
 	assertGuestImageDescriptorsOnly,
 	attachmentAssetsFromMessage,
@@ -70,5 +70,39 @@ describe('Task image asset boundary', () => {
 		});
 		expect(stripped.role).toBe('tool');
 		expect(Array.isArray(stripped.content)).toBe(true);
+	});
+});
+
+describe('Task attachment boundary', () => {
+	const attachment = (index: number, size = 16) =>
+		ImageAsset.make({
+			key: conversationAssetStorageKey(
+				ConversationId.make('00000000-0000-4000-8000-000000000201'),
+				`attachment-${index}`,
+				'photo.jpg'
+			),
+			name: `photo-${index}.jpg`,
+			mimeType: 'image/jpeg',
+			size
+		});
+
+	it('carries the newest attachments that fit, oldest dropped first', () => {
+		const kept = boundedAttachments(
+			Array.from({ length: 10 }, (_, index) => attachment(index))
+		);
+		expect(kept.map((entry) => entry.name)).toEqual(
+			[2, 3, 4, 5, 6, 7, 8, 9].map((index) => `photo-${index}.jpg`)
+		);
+	});
+
+	it('drops what does not fit rather than failing the turn', () => {
+		expect(boundedAttachments([attachment(0)])).toEqual([attachment(0)]);
+		// A single attachment over the byte boundary leaves the turn with none, not with an error.
+		expect(boundedAttachments([attachment(0, 21 * 1024 * 1024)])).toEqual([]);
+		const heavy = boundedAttachments([
+			attachment(0, 12 * 1024 * 1024),
+			attachment(1, 12 * 1024 * 1024)
+		]);
+		expect(heavy.map((entry) => entry.name)).toEqual(['photo-1.jpg']);
 	});
 });

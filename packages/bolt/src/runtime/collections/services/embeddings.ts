@@ -176,8 +176,7 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 					readonly id: unknown;
 					readonly updatedAt: unknown;
 					readonly fingerprint: string;
-					readonly input: Schema.Json;
-					readonly imageAssets: ReadonlyArray<ImageAsset>;
+					readonly input: EmbeddingInput;
 				}> = [];
 				const unchanged: Array<
 					Record<'id' | 'updated_at', unknown> & { readonly fingerprint: string }
@@ -213,8 +212,7 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 						id: row['id'],
 						updatedAt: row['updated_at'],
 						fingerprint,
-						input: sourceInput.input,
-						imageAssets: sourceInput.imageAssets
+						input: sourceInput.input
 					});
 				}
 				if (unchanged.length > 0) {

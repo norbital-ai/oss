@@ -291,9 +291,14 @@ that is not a transcript. Whether an empty part is _rendered_ is the panel's dec
 whitespace-only part is not shown once it settles.
 
 Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
-in the active context. Images travel in `imageAssets`; PDF and text documents travel in
-`fileAssets`. The host resolves tenant storage, verifies sizes, and passes extracted document text
-to the provider. Bytes never cross the guest invocation boundary. PDF extraction runs in a bounded
+in the active context. A transcript keeps every attachment it was ever sent, so a turn carries only
+the newest that fit: the oldest descriptors drop out of the request while their text — name, type,
+size and storage key — stays in the transcript for the model to reach with its tools. Images travel
+in `imageAssets`; PDF and text documents travel in `fileAssets`. The host resolves tenant storage,
+verifies sizes, and passes extracted document text to the provider. An attachment the host cannot
+read — an undecodable image, an unsupported document, a stored row that changed or vanished — is
+left unread, never failed: one bad attachment does not silence the conversation's later turns.
+Bytes never cross the guest invocation boundary. PDF extraction runs in a bounded
 worker, preserves page markers and the original SHA-256, and refuses unreadable pages rather than
 returning partial evidence. The standalone reader exports `extractDocumentText` for host adapters.
 The embedder supplies the workspace file store and download URLs through `WorkspaceFilesHost`.

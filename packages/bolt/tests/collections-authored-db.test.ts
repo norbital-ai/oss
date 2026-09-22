@@ -17,7 +17,8 @@ const recordingOps = (calls: Array<string>): AuthoringOps => ({
 	runAutomation: () => Effect.succeed({ taskId: 'unused' }),
 	infer: () => Effect.succeed(undefined),
 	readFileAsset: () =>
-		Effect.succeed({ id: '', name: '', mimeType: null, size: 0, bytes: new Uint8Array() })
+		Effect.succeed({ id: '', name: '', mimeType: null, size: 0, bytes: new Uint8Array() }),
+	embed: () => Effect.succeed({ collection: 'payslips', selected: 0, embedded: 0, failed: 0 })
 });
 
 type AuthoredCollections = {
