@@ -1154,7 +1154,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 	const functionEntries = functions
 		.map(
 			(path, index) =>
-				`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => fn${index}.handler(Schema.decodeUnknownSync(fn${index}.schema)(input), api)`
+				`${JSON.stringify(basename(path).slice(1, -3))}: Object.assign((input, api) => fn${index}.handler(Schema.decodeUnknownSync(fn${index}.schema)(input), api), { input: fn${index}.schema, description: fn${index}.description })`
 		)
 		.join(',\n\t');
 	const toolEntries = toolFiles

@@ -148,3 +148,33 @@ describe('absorbing a record that fans out into several rows', () => {
 		expect(harness.removed).toEqual([]);
 	});
 });
+
+describe('an existingOnly binding', () => {
+	it('updates the rows it knows and skips identities the collection does not keep', async () => {
+		const { rows, modes, dependencies } = store();
+		rows.set('known-row', { external_id: 'A', stock: 1 });
+		const enrich: AuthoredIntegrationBinding = {
+			...authored,
+			existingOnly: true,
+			map: (record) => ({ stock: Number(Reflect.get(record as object, 'stock')) })
+		};
+		const outcome = await Effect.runPromise(
+			absorbRecords(
+				dependencies,
+				EffectId.make('absorb-existing'),
+				target,
+				enrich,
+				[
+					{ id: 'A', stock: 7 },
+					{ id: 'B', stock: 9 }
+				],
+				0,
+				50
+			)
+		);
+		expect(outcome).toMatchObject({ created: 0, updated: 1, rejected: [] });
+		expect(modes).toEqual(['update']);
+		expect(rows.get('known-row')).toEqual({ external_id: 'A', stock: 7 });
+		expect(rows.size).toBe(1);
+	});
+});

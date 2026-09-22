@@ -733,10 +733,10 @@ export const step = (state: ClientState, event: ClientEvent): [ClientState, Clie
 			return [{ ...state, writes }, [{ kind: 'push', writeId: id }]];
 		}
 		case 'wake':
-			return step(
-				state.link === 'reconnecting' ? { ...state, reconnectAt: event.now } : state,
-				{ kind: 'tick', now: event.now }
-			);
+			return step(state.link === 'reconnecting' ? { ...state, reconnectAt: event.now } : state, {
+				kind: 'tick',
+				now: event.now
+			});
 		case 'tick': {
 			if (state.link === 'closed') return [state, []];
 			const queries = new Map(state.queries);

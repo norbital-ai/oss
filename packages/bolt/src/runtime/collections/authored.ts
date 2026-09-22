@@ -749,8 +749,35 @@ export const mergeRuntimeHandlers = (
 	return Object.freeze(merged);
 };
 
+/** One authored function as an outside caller sees it: its name, what it does, what it takes. */
+export type RemoteDescription = Readonly<{
+	readonly name: string;
+	readonly description: string | undefined;
+	readonly input: Schema.Json | undefined;
+}>;
+
+const describeRemote = (name: string, handler: RuntimeRemoteHandler): RemoteDescription => {
+	const input: unknown = Reflect.get(handler, 'input');
+	const description: unknown = Reflect.get(handler, 'description');
+	const document = Schema.isSchema(input) ? Schema.toJsonSchemaDocument(input) : undefined;
+	const definitions = document?.definitions ?? {};
+	return {
+		name,
+		description: typeof description === 'string' ? description : undefined,
+		input:
+			document === undefined
+				? undefined
+				: (Schema.decodeUnknownSync(Schema.Json)({
+						...document.schema,
+						...(Object.keys(definitions).length === 0 ? {} : { $defs: definitions })
+					}) as Schema.Json)
+	};
+};
+
 type RuntimeRemoteRegistry = Readonly<{
 	readonly names: ReadonlySet<string>;
+	/** Every authored function, described for an OpenAPI document; tools are not listed. */
+	readonly describe: () => ReadonlyArray<RemoteDescription>;
 	readonly invoke: (
 		name: string,
 		input: unknown,
@@ -777,6 +804,10 @@ export const remoteRegistryLayer = (handlers: Readonly<Record<string, RuntimeRem
 				return yield* Effect.fail(new Error('An authored command name may not be empty'));
 			return RemoteRegistry.of({
 				names,
+				describe: () =>
+					Object.entries(handlers)
+						.filter(([, handler]) => Reflect.get(handler, 'input') !== undefined)
+						.map(([name, handler]) => describeRemote(name, handler)),
 				invoke: Effect.fn('RemoteRegistry.invoke')(function* (name, input, subject, effectId) {
 					const handler = handlers[name];
 					if (handler === undefined)

@@ -285,7 +285,8 @@ export const ManifestIntegrationBinding = Schema.Struct({
 	/** Cron, in the host's scheduler. */
 	schedule: Schema.NonEmptyString,
 	method: Schema.Literals(['GET', 'POST']),
-	path: Schema.NonEmptyString,
+	/** Relative to the connection root; empty is the root itself. */
+	path: Schema.String,
 	cursor: Schema.optionalKey(ManifestPullCursor),
 	pages: Schema.optionalKey(ManifestPullPages),
 	/** The collection column the external key lands in — what makes a second run an update. */
@@ -388,7 +389,7 @@ const ManifestStudioIntegrationBinding = Schema.Struct({
 	name: Schema.NonEmptyString,
 	direction: Schema.Literals(['receive', 'send']),
 	method: Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-	path: Schema.NonEmptyString,
+	path: Schema.String,
 	schedule: Schema.optionalKey(Schema.NonEmptyString),
 	events: Schema.optionalKey(Schema.Array(Schema.Literals(['create', 'update', 'delete']))),
 	targetCollection: Schema.optionalKey(Schema.NonEmptyString),

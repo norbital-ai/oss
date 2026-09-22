@@ -2,10 +2,12 @@ import { IntegrationHttpRequest } from '@norbital-ai/bolt-protocol';
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';
-import type {
-	HttpConnection,
-	IntegrationDeclaration,
-	IntegrationPullDeclaration
+import {
+	checkedBaseUrl,
+	type HttpConnection,
+	type IntegrationDeclaration,
+	type IntegrationPullDeclaration,
+	type PrivateEnvReference
 } from '#lib/authoring/workspace-schema.js';
 import { absorbRecords, type AbsorbDependencies } from '#lib/runtime/integrations/absorb.js';
 import { isNumber, isObjectLike, isRecord as isObject, isString } from '#lib/schema-decode.js';
@@ -165,7 +167,7 @@ const fetchWithRetry = (
 
 /** Builds the request URL for one page: declared query, plus whatever the cursor and paging add. */
 const pageUrl = (
-	connection: HttpConnection,
+	connection: ResolvedConnection,
 	binding: IntegrationPullDeclaration,
 	cursor: string | null,
 	page: {
@@ -175,9 +177,7 @@ const pageUrl = (
 	}
 ): string => {
 	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
-	const url = new URL(
-		`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`
-	);
+	const url = connectionUrl(connection, binding.path);
 	for (const [key, value] of Object.entries(binding.query ?? {})) url.searchParams.set(key, value);
 	const cursorQuery =
 		binding.cursor === undefined ? undefined : Reflect.get(binding.cursor.send, 'query');
@@ -201,29 +201,65 @@ const pageUrl = (
 	return url.toString();
 };
 
+/** A connection with its variables read: the API root, and the credential as headers or query. */
+export type ResolvedConnection = Readonly<{
+	readonly baseUrl: string;
+	readonly headers: Readonly<Record<string, string>>;
+	readonly query: Readonly<Record<string, string>>;
+}>;
+
 /**
- * Resolves the connection's credential reference into the header it becomes.
+ * Resolves the connection's variable references into the request parts they become.
  *
  * Exported and typed on the one dependency it uses rather than on `PullDependencies`, because the
  * outbound path presents the same credential to the same connection and there must not be a second
  * function that decides what `{ type: 'bearer', token: { env } }` means. A second one is how a
  * header-authenticated connection ends up working for a pull and not for a send.
  */
-export const authenticationHeaders = (
+export const resolveConnection = (
 	secret: (effectId: EffectId, name: string) => Effect.Effect<string, { readonly message: string }>,
 	effectId: EffectId,
 	connection: HttpConnection
-): Effect.Effect<Readonly<Record<string, string>>, { readonly message: string }> =>
+): Effect.Effect<ResolvedConnection, { readonly message: string }> =>
 	Effect.gen(function* () {
+		const baseUrl =
+			typeof connection.baseUrl === 'string'
+				? connection.baseUrl
+				: yield* secret(effectId, connection.baseUrl.env).pipe(
+						Effect.flatMap((value) =>
+							Effect.try({
+								try: () => checkedBaseUrl(value),
+								catch: () => ({
+									message: `${(connection.baseUrl as PrivateEnvReference).env} is not an absolute HTTPS URL`
+								})
+							})
+						)
+					);
 		const authentication = connection.authentication;
-		if (authentication === undefined) return {};
+		if (authentication === undefined) return { baseUrl, headers: {}, query: {} };
 		if (authentication.type === 'bearer') {
 			const token = yield* secret(effectId, authentication.token.env);
-			return { authorization: `Bearer ${token}` };
+			return { baseUrl, headers: { authorization: `Bearer ${token}` }, query: {} };
 		}
 		const value = yield* secret(effectId, authentication.value.env);
-		return { [authentication.header]: value };
+		return authentication.type === 'header'
+			? { baseUrl, headers: { [authentication.header]: value }, query: {} }
+			: { baseUrl, headers: {}, query: { [authentication.name]: value } };
 	});
+
+/**
+ * `path` under the resolved root, with the credential's query parameters. An empty path is the root
+ * itself — an endpoint that is one URL, like an Apps Script web app, has no path below it.
+ */
+export const connectionUrl = (connection: ResolvedConnection, path: string): URL => {
+	const url = new URL(
+		path === ''
+			? connection.baseUrl
+			: `${connection.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`
+	);
+	for (const [key, value] of Object.entries(connection.query)) url.searchParams.set(key, value);
+	return url;
+};
 
 /** What the next page should ask for, and whether there is one. */
 const advance = (
@@ -292,16 +328,14 @@ export const runPullBinding = (
 		// send anything. A pull does, and `describeIntegrations` refuses to emit one without a
 		// connection — so this refusal is the unreachable half of a guarantee made at compile time,
 		// stated rather than asserted away.
-		const connection = integration.connection;
-		if (connection === undefined) {
+		const declared = integration.connection;
+		if (declared === undefined) {
 			return yield* Effect.fail({
 				message: `${integration.name}.${binding.name} is a pull with no connection: there is no baseUrl to request against.`
 			});
 		}
-		const headers = {
-			...(binding.headers ?? {}),
-			...(yield* authenticationHeaders(dependencies.secret, effectId, connection))
-		};
+		const connection = yield* resolveConnection(dependencies.secret, effectId, declared);
+		const headers = { ...(binding.headers ?? {}), ...connection.headers };
 		const maxPages =
 			binding.pages === undefined ? 1 : Math.max(binding.pages.max ?? MAX_PAGES_DEFAULT, 1);
 		const rejected: Array<{ readonly index: number; readonly reason: string }> = [];

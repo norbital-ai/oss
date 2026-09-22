@@ -21,6 +21,10 @@ describe('projectConversations', () => {
 			}
 		]);
 	});
+	it('keeps the checklist the todo tool wrote, which the panel renders as goal progress', () => {
+		const todos = { items: [{ id: 'review', text: 'Review all sites', status: 'doing' }] };
+		expect(projectConversations([{ ...root, todos }])[0]?.todos).toEqual(todos);
+	});
 	it('keeps the automatic title from a synced conversation', () => {
 		expect(projectConversations([{ ...root, title: 'Review the CRM records' }])[0]?.title).toBe(
 			'Review the CRM records'

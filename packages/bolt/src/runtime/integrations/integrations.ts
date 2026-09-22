@@ -65,7 +65,35 @@ const UnknownRow = Schema.Record(Schema.String, Schema.Unknown);
 const IdentifiedJsonRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
 	Schema.Record(Schema.String, Schema.Json)
 ]);
-const DueAtRow = Schema.Struct({ due_at: Schema.NullOr(Schema.String) });
+/**
+ * Whether every value a record maps to is already what the row holds.
+ *
+ * Compared as values, not spellings: the database answers `numeric` as `"0.28"` and an instant in
+ * its own zone, where a source says `0.28` and `…Z`.
+ */
+/** JSON with object keys sorted: `jsonb` hands keys back in its own order. */
+const canonical = (value: Schema.Json | undefined): string =>
+	JSON.stringify(value, (_key, inner: unknown) =>
+		inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+			? Object.fromEntries(Object.entries(inner).toSorted(([a], [b]) => a.localeCompare(b)))
+			: inner
+	);
+const unchanged = (
+	row: Readonly<Record<string, Schema.Json>> | undefined,
+	values: Readonly<Record<string, Schema.Json>>
+): boolean =>
+	row !== undefined &&
+	Object.entries(values).every(([column, value]) => {
+		const current = row[column];
+		if (canonical(current) === canonical(value)) return true;
+		if (typeof current === 'string' && typeof value === 'number') return Number(current) === value;
+		if (typeof current === 'string' && typeof value === 'string') {
+			const [a, b] = [Date.parse(current), Date.parse(value)];
+			return /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(a) && a === b;
+		}
+		return false;
+	});
+const DueAtRow = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
 
 /**
  * The two decoders this module applies per response, built once.
@@ -265,10 +293,17 @@ const outboxClaimable = (staleBefore: ReturnType<typeof dbNowPlusSeconds>) =>
  */
 const instantLabel = (epochMs: number): string => new Date(epochMs).toISOString();
 
+/**
+ * The one aggregate the due-time query answers. Read by position, not by name: the composer renders
+ * `min(...)` without its alias, so the key is `min` and a read by `due_at` found nothing — and a
+ * delivery that met a 503 was never looked at again.
+ */
 const readDueAt = (row: Schema.Json | undefined): number | undefined => {
 	const decoded = Schema.decodeUnknownResult(DueAtRow)(row);
-	if (Result.isFailure(decoded) || decoded.success.due_at === null) return undefined;
-	const parsed = Date.parse(decoded.success.due_at);
+	if (Result.isFailure(decoded)) return undefined;
+	const [value] = Object.values(decoded.success);
+	if (value === undefined || value === null) return undefined;
+	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) ? parsed : undefined;
 };
 
@@ -360,6 +395,9 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		 * every branch of it — paging, backoff, partial failure — testable without a database.
 		 */
 		const dependencies = (integrationName: string, subject: Identity.Subject): PullDependencies => {
+			// The rows the identity lookup read, so a write that would change nothing is not made: a
+			// full re-read then costs reads and no history, and never re-fires a send binding.
+			const stored = new Map<string, Readonly<Record<string, Schema.Json>>>();
 			const integrationAuthoringApi = (effectId: EffectId) =>
 				makeAuthoringApi(makeBoundAuthoringOps(effectId, subject, collections, ai, files));
 			return {
@@ -417,6 +455,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 									if (Result.isFailure(decoded)) continue;
 									const key = Schema.decodeUnknownResult(Schema.String)(decoded.success[column]);
 									if (Result.isFailure(key)) continue;
+									stored.set(decoded.success.id, decoded.success);
 									const bucket = found.get(key.success);
 									if (bucket === undefined) found.set(key.success, [decoded.success.id]);
 									else bucket.push(decoded.success.id);
@@ -441,12 +480,16 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 									Effect.mapError((error) => ({ message: describeCause(error) }))
 								),
 				write: (effectId, collection, id, values, mode) =>
-					collections
-						.write(effectId, subject, [{ collection, action: mode, inputs: [{ ...values, id }] }])
-						.pipe(
-							Effect.asVoid,
-							Effect.mapError((error) => ({ message: describeCause(error) }))
-						),
+					mode === 'update' && unchanged(stored.get(id), values)
+						? Effect.void
+						: collections
+								.write(effectId, subject, [
+									{ collection, action: mode, inputs: [{ ...values, id }] }
+								])
+								.pipe(
+									Effect.asVoid,
+									Effect.mapError((error) => ({ message: describeCause(error) }))
+								),
 				pipeline: (effectId, collection, record) => {
 					const declared = authored.pipelines[collection]?.import;
 					if (declared === undefined) return undefined;
@@ -681,6 +724,26 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							)
 						),
 						Effect.mapError((error) => ({ message: describeCause(error) }))
+					);
+				},
+				answered: (effectId, delivery, answer) => {
+					const settle = authored.integrations[integrationName]?.send[delivery.binding]?.settle;
+					if (settle === undefined) return Effect.void;
+					return Effect.try({
+						try: () => settle({ status: answer.status, body: answer.body }),
+						catch: (cause) => ({ message: describeCause(cause) })
+					}).pipe(
+						Effect.flatMap((patch) =>
+							patch === undefined || patch === null || typeof patch !== 'object'
+								? Effect.void
+								: bound.write(
+										EffectId.make(`${effectId}:answered:${delivery.sequence}`),
+										delivery.collection,
+										delivery.recordId,
+										patch as Readonly<Record<string, Schema.Json>>,
+										'update'
+									)
+						)
 					);
 				},
 				settle: (effectId, settlement) => {

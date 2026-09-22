@@ -305,7 +305,12 @@
 
 {#snippet inboundMessage(envelope: InboundEnvelope)}
 	<Stack gap="xs">
-		<Inline align="center" gap="xs" class="text-micro text-muted-foreground" title={envelope.messageId}>
+		<Inline
+			align="center"
+			gap="xs"
+			class="text-micro text-muted-foreground"
+			title={envelope.messageId}
+		>
 			<Icon icon="lucide:message-circle" class="size-3 shrink-0" aria-hidden="true" />
 			<span class="font-medium text-foreground">{envelope.sender}</span>
 			<span aria-hidden="true">·</span>

@@ -2,12 +2,15 @@ import { IntegrationHttpRequest } from '@norbital-ai/bolt-protocol';
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type {
-	HttpConnection,
 	IntegrationDeclaration,
 	IntegrationSendDeclaration
 } from '#lib/authoring/workspace-schema.js';
 import { isRetryableStatus, retryDelayMs } from '#lib/runtime/integrations/http.js';
-import { authenticationHeaders } from '#lib/runtime/integrations/pull.js';
+import {
+	connectionUrl,
+	resolveConnection,
+	type ResolvedConnection
+} from '#lib/runtime/integrations/pull.js';
 
 /**
  * The drain half of outbound delivery: queued rows out, HTTP requests away, outcomes recorded.
@@ -110,6 +113,12 @@ export type DeliverDependencies = Readonly<{
 		effectId: EffectId,
 		settlement: Settlement
 	) => Effect.Effect<void, { readonly message: string }>;
+	/** Writes what a delivered answer says back onto its record, when the binding declares how. */
+	readonly answered: (
+		effectId: EffectId,
+		delivery: ClaimedDelivery,
+		answer: Answered
+	) => Effect.Effect<void, { readonly message: string }>;
 	readonly now: Effect.Effect<number>;
 }>;
 
@@ -154,9 +163,6 @@ const REASON_LIMIT = 300;
 const shorten = (reason: string): string =>
 	reason.length <= REASON_LIMIT ? reason : `${reason.slice(0, REASON_LIMIT)}…`;
 
-const url = (connection: HttpConnection, path: string): string =>
-	`${connection.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
-
 /**
  * Runs one claimed delivery and says how it ended.
  *
@@ -167,11 +173,15 @@ const attemptDelivery = (
 	dependencies: DeliverDependencies,
 	effectId: EffectId,
 	integration: IntegrationDeclaration,
-	connection: HttpConnection,
+	connection: ResolvedConnection,
 	declaration: IntegrationSendDeclaration,
 	headers: Readonly<Record<string, string>>,
 	claimed: ClaimedDelivery
-): Effect.Effect<{ readonly settlement: Settlement; readonly outcome: DeliveryOutcome }> =>
+): Effect.Effect<{
+	readonly settlement: Settlement;
+	readonly outcome: DeliveryOutcome;
+	readonly answer?: Answered;
+}> =>
 	Effect.gen(function* () {
 		const describe = (
 			outcome: DeliveryOutcome['outcome'],
@@ -204,7 +214,7 @@ const attemptDelivery = (
 		const answer = yield* Effect.result(
 			dependencies.request(effectId, integration.name, {
 				method: declaration.method,
-				url: url(connection, claimed.path),
+				url: connectionUrl(connection, claimed.path).toString(),
 				headers,
 				// `DELETE` deliberately has no body: several APIs reject one with 400.
 				...((declaration.method === 'POST' ||
@@ -223,7 +233,8 @@ const attemptDelivery = (
 					sequence: claimed.sequence,
 					status: answer.success.status
 				},
-				outcome: describe('delivered', answer.success.status, null)
+				outcome: describe('delivered', answer.success.status, null),
+				answer: answer.success
 			};
 		}
 		const reason = shorten(
@@ -240,14 +251,17 @@ const attemptDelivery = (
 				// already rejected on its merits changes the answer, and the attempts would land on
 				// somebody else's rate limit.
 				settlement: { _tag: 'Failed', sequence: claimed.sequence, status, reason },
-				outcome: describe('failed', status, reason)
+				outcome: describe('failed', status, reason),
+				// A refusal is an answer too: `settle` can record on the row why it was refused.
+				...(Result.isSuccess(answer) ? { answer: answer.success } : {})
 			};
 		}
 		if (claimed.attempts >= attempts) {
 			const exhausted = `${reason} (gave up after ${claimed.attempts} attempts)`;
 			return {
 				settlement: { _tag: 'Failed', sequence: claimed.sequence, status, reason: exhausted },
-				outcome: describe('failed', status, exhausted)
+				outcome: describe('failed', status, exhausted),
+				...(Result.isSuccess(answer) ? { answer: answer.success } : {})
 			};
 		}
 		// `Retry-After` belongs to the answer that just arrived, so it is read here rather than
@@ -302,7 +316,7 @@ export const runOutboxDrain = (
 
 		// Resolved once for the batch rather than per delivery: it is one vault read for one connection,
 		// and doing it per row would multiply a tenant's secret reads by the size of the queue.
-		const credential = yield* authenticationHeaders(dependencies.secret, effectId, connection);
+		const resolved = yield* resolveConnection(dependencies.secret, effectId, connection);
 		const deliveries: Array<DeliveryOutcome> = [];
 		let delivered = 0;
 		let retrying = 0;
@@ -338,22 +352,35 @@ export const runOutboxDrain = (
 			}
 			const headers = {
 				...(declaration.headers ?? {}),
-				...credential,
+				...resolved.headers,
 				// Derived from the outbox row, not its payload, so retries keep one stable key while
-				// distinct events cannot collide.
+				// distinct events cannot collide. The record id makes it unique beyond this database: an
+				// outbox sequence restarts at 1 in every tenant and after every reset, and a provider that
+				// remembers keys across its whole account (Resend: 24 hours) refused the second tenant's
+				// first mail as a replay of the first tenant's.
 				[declaration.idempotencyHeader ?? 'idempotency-key']:
-					`${integration.name}:${entry.binding}:${entry.sequence}`
+					`${integration.name}:${entry.binding}:${entry.recordId}:${entry.sequence}`
 			};
 			const attempted = yield* attemptDelivery(
 				dependencies,
 				effectId,
 				integration,
-				connection,
+				resolved,
 				declaration,
 				headers,
 				entry
 			);
-			const settled = yield* Effect.result(dependencies.settle(effectId, attempted.settlement));
+			const settled = yield* Effect.result(
+				dependencies
+					.settle(effectId, attempted.settlement)
+					.pipe(
+						Effect.andThen(
+							attempted.answer === undefined
+								? Effect.void
+								: dependencies.answered(effectId, entry, attempted.answer)
+						)
+					)
+			);
 			if (attempted.outcome.outcome === 'delivered') delivered += 1;
 			else if (attempted.outcome.outcome === 'retrying') retrying += 1;
 			else failed += 1;

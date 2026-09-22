@@ -15,7 +15,7 @@ import {
 import { FacilityError } from '../src/runtime/facilities/database.js';
 
 describe('record embedding backfill', () => {
-	it('claims 512 rows and embeds one typed input per record with bounded parallelism', async () => {
+	it('claims 512 rows and embeds them as one request of one typed input per record', async () => {
 		const rows = Array.from({ length: RECORD_EMBEDDING_BACKFILL_LIMIT }, (_, index) => ({
 			id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
 			updated_at: '2026-08-30T00:00:00.000Z',
@@ -87,19 +87,19 @@ describe('record embedding backfill', () => {
 		expect(select?.request._tag).toBe('Query');
 		if (select?.request._tag !== 'Query') throw new Error('expected a database select');
 		expect(select.request.parameters[0]).toBe(512);
-		// 512 records ride 16 provider requests of 32 inputs each, not 512 calls of one input.
-		expect(aiCalls).toHaveLength(16);
+		// The pass is one request; the host facility splits it to the provider's per-request limit.
+		expect(aiCalls).toHaveLength(1);
 		expect(
 			aiCalls.map(({ request }) => (request._tag === 'Embed' ? request.inputs.length : 0))
-		).toEqual(Array.from({ length: 16 }, () => 32));
+		).toEqual([512]);
 		expect(
 			aiCalls.every(
 				({ request }) => request._tag === 'Embed' && request.modelId === 'test/embedding'
 			)
 		).toBe(true);
-		expect(peakAI).toBe(4);
-		expect(databaseCalls).toHaveLength(5);
-		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(21);
+		expect(peakAI).toBe(1);
+		expect(databaseCalls).toHaveLength(2);
+		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(3);
 	});
 
 	it('keeps the provider reason when a batch cannot be embedded', async () => {

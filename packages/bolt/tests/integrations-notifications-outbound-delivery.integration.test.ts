@@ -176,6 +176,26 @@ const ordersModule = (baseUrl: string) => ({
 	}
 });
 
+/** A binding that records the partner's reference for the order from the answer it gets back. */
+const acknowledgingModule = (baseUrl: string) => ({
+	partner: {
+		policies: ['admin'],
+		connection: defineConnection({ baseUrl }),
+		send: {
+			placed: defineSend<Order>({
+				send: { method: 'POST', path: '/orders' },
+				on: 'create',
+				settle: ({ body }) => {
+					const reference = (body as { reference?: unknown } | null)?.reference;
+					return typeof reference === 'string'
+						? { status: `acknowledged:${reference}` }
+						: undefined;
+				}
+			})
+		}
+	}
+});
+
 /** A binding whose body throws, to prove an authored mistake does not fail the tenant's write. */
 const brokenModule = (baseUrl: string) => ({
 	partner: {
@@ -411,10 +431,7 @@ describe('an outbound declaration that cannot deliver is refused at compile time
 		).toThrow(/must state POST, PUT, PATCH or DELETE/);
 	});
 
-	it('refuses a send binding with no path and one that subscribes to nothing', () => {
-		expect(() => defineSend<Order>({ send: { method: 'POST', path: '  ' }, on: 'create' })).toThrow(
-			/requires a path/
-		);
+	it('refuses a send binding that subscribes to nothing', () => {
 		expect(() => defineSend<Order>({ send: { method: 'POST', path: '/orders' }, on: {} })).toThrow(
 			/subscribes to no collection event/
 		);
@@ -531,6 +548,18 @@ describe('a queued delivery reaches a real endpoint', () => {
 		expect(rows[0]?.['last_status']).toBe(202);
 	});
 
+	it('writes what the answer says back onto the record it delivered', async () => {
+		await build(acknowledgingModule);
+		respond = () => ({ status: 201, body: '{"reference":"P-9"}' });
+		await create('order-ack', { external_id: 'A-ack', status: 'placed', amount: 1 });
+		const report = await flush('ack');
+		expect(at(report, 'delivered')).toBe(1);
+		const [row] = await current().database.query('select status from orders where id = $1', [
+			recordId('order-ack')
+		]);
+		expect(row?.['status']).toBe('acknowledged:P-9');
+	});
+
 	/**
 	 * At-least-once, with a key the receiver can collapse on.
 	 *
@@ -555,7 +584,8 @@ describe('a queued delivery reaches a real endpoint', () => {
 		expect(keys[0]).toBe(keys[1]);
 		// …and a different event does not.
 		expect(keys[2]).not.toBe(keys[0]);
-		expect(keys[0]).toMatch(/^orders\.partner:status_changed:\d+$/);
+		// …and it names the record, so a sequence that restarts in another database cannot collide.
+		expect(keys[0]).toBe(`orders.partner:status_changed:${recordId('order-4')}:1`);
 	});
 
 	/**
@@ -628,6 +658,13 @@ describe('retry is for the failures that can succeed', () => {
 		expect(afterFirst[0]?.['attempts']).toBe(1);
 		const firstWait = Number(afterFirst[0]?.['waits']);
 		expect(firstWait).toBeGreaterThan(0);
+		// Nothing else would come back for it: the drain queues its own return at the backoff.
+		const returns = await current().database.query(
+			"select effect_id, status, run_at from bolt_task where command = 'integrations.flush' and effect_id like 'flush:%'",
+			[]
+		);
+		expect(returns).toMatchObject([{ status: 'pending' }]);
+		expect(returns[0]?.['run_at']).not.toBeNull();
 
 		// The next tick of the drain, before the wait has elapsed: nothing is due, so nothing is sent.
 		const early = await flush('backoff-early');

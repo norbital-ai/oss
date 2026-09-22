@@ -6,7 +6,12 @@ const metadata = {} as FacilityCall;
 const publicAddress = async () => [{ address: '1.1.1.1', family: 4 }];
 const call = (
 	binding: ReturnType<typeof makeManagedHttpConnectorBinding>,
-	input: { url?: string; method?: 'GET' | 'POST'; headers?: Record<string, string> } = {},
+	input: {
+		url?: string;
+		method?: 'GET' | 'POST' | 'PATCH';
+		headers?: Record<string, string>;
+		body?: Record<string, number>;
+	} = {},
 	signal = new AbortController().signal
 ) =>
 	binding.call(
@@ -17,7 +22,8 @@ const call = (
 			input: {
 				method: input.method ?? 'GET',
 				url: input.url ?? 'https://api.example.test/calendar/events',
-				headers: input.headers ?? { 'X-Api-Key': 'private-key' }
+				headers: input.headers ?? { 'X-Api-Key': 'private-key' },
+				...(input.body === undefined ? {} : { body: input.body })
 			}
 		},
 		signal
@@ -46,29 +52,66 @@ it('pins DNS, passes managed credentials and preserves JSON, non-JSON and non-2x
 	}
 });
 
-it('never forwards authentication through provider redirects', async () => {
-	let requests = 0;
+it('follows redirects as GET and drops caller headers on a cross-origin hop', async () => {
+	const seen: Array<{ url: string; headers: unknown; write: unknown }> = [];
 	const binding = makeManagedHttpConnectorBinding({
 		resolve: publicAddress,
-		request: async () => {
-			requests++;
-			return {
-				status: 302,
-				location: 'https://attacker.example/collect',
-				headers: { location: 'https://attacker.example/collect' },
-				contentType: '',
-				body: ''
-			};
+		request: async (url, _addresses, _signal, headers, write) => {
+			seen.push({ url: url.toString(), headers, write });
+			return seen.length === 1
+				? {
+						status: 302,
+						location: 'https://echo.example/answer',
+						contentType: '',
+						body: ''
+					}
+				: { status: 200, contentType: 'application/json', body: '{"ok":true}' };
 		}
 	});
-	expect(await call(binding)).toMatchObject({
+	expect(await call(binding, { method: 'POST', body: { a: 1 } })).toMatchObject({
 		_tag: 'Success',
-		value: { output: { status: 302 } }
+		value: { output: { status: 200, body: { ok: true } } }
 	});
-	expect(requests).toBe(1);
+	expect(seen).toEqual([
+		{
+			url: 'https://api.example.test/calendar/events',
+			headers: {
+				accept: 'application/json',
+				'content-type': 'application/json',
+				'X-Api-Key': 'private-key'
+			},
+			write: { method: 'POST', body: '{"a":1}' }
+		},
+		{ url: 'https://echo.example/answer', headers: { accept: 'application/json' }, write: undefined }
+	]);
 });
 
-it('refuses private or mixed DNS, custom ports, credentials, header overrides and writes', async () => {
+it('reaches loopback names only when the host allows it', async () => {
+	const request = async () => ({ status: 200, contentType: '', body: '' });
+	const loopback = async () => [{ address: '127.0.0.1', family: 4 }];
+	const input = { url: 'http://sap.localhost:4182/__bolt/request/api/products' };
+	expect(
+		(await call(makeManagedHttpConnectorBinding({ resolve: loopback, request }), input))._tag
+	).toBe('Failure');
+	expect(
+		(
+			await call(
+				makeManagedHttpConnectorBinding({ resolve: loopback, request, allowLoopback: true }),
+				input
+			)
+		)._tag
+	).toBe('Success');
+	expect(
+		(
+			await call(
+				makeManagedHttpConnectorBinding({ resolve: publicAddress, request, allowLoopback: true }),
+				input
+			)
+		)._tag
+	).toBe('Failure');
+});
+
+it('refuses private or mixed DNS, custom ports, credentials and header overrides', async () => {
 	let requests = 0;
 	const request = async () => {
 		requests++;
@@ -94,8 +137,7 @@ it('refuses private or mixed DNS, custom ports, credentials, header overrides an
 		{ url: 'https://169.254.169.254/' },
 		{ url: 'https://[::ffff:127.0.0.1]/' },
 		{ headers: { Host: 'another.example' } },
-		{ headers: { 'Proxy-Authorization': 'private-key' } },
-		{ method: 'POST' as const }
+		{ headers: { 'Proxy-Authorization': 'private-key' } }
 	])
 		expect((await call(binding, input))._tag).toBe('Failure');
 	expect(requests).toBe(0);
@@ -118,7 +160,8 @@ it('bounds bytes, redacts transport failures and cancels while DNS is pending', 
 		}
 	});
 	const result = await call(broken);
-	expect(result._tag).toBe('Failure');
+	// A transport failure is worth retrying; a refused request (above) never is.
+	expect(result).toMatchObject({ _tag: 'Failure', error: { retryable: true } });
 	expect(JSON.stringify(result)).not.toContain('private-key');
 	const controller = new AbortController();
 	let started: () => void = () => {};

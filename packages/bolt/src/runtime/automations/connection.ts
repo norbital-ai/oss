@@ -8,7 +8,7 @@ import type { AutomationApi } from '#lib/authoring/automations-schema.js';
 import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
 import { FacilityError } from '#lib/runtime/facilities/database.js';
 import type { ConnectorInterface } from '#lib/runtime/facilities/services.js';
-import { authenticationHeaders } from '#lib/runtime/integrations/pull.js';
+import { resolveConnection, type ResolvedConnection } from '#lib/runtime/integrations/pull.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
 
 type GetInput = Parameters<AutomationApi['connection']['get']>[0];
@@ -22,9 +22,9 @@ const failure = (code: string, message: string) =>
 	});
 
 /** Relative paths stay within the authored API prefix; callers cannot replace its origin or credentials. */
-const targetUrl = (connection: HttpConnection, input: GetInput): string => {
+const targetUrl = (connection: ResolvedConnection, input: GetInput): string => {
 	const base = new URL(connection.baseUrl);
-	if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash)
+	if (base.username || base.password || base.search || base.hash)
 		throw new Error(
 			'Managed connections require an HTTPS base URL without credentials, query or fragment.'
 		);
@@ -41,6 +41,8 @@ const targetUrl = (connection: HttpConnection, input: GetInput): string => {
 		throw new Error('Connection GET must remain within its declared API path.');
 	for (const [name, value] of Object.entries(input.query ?? {}))
 		target.searchParams.set(name, String(value));
+	for (const [name, value] of Object.entries(connection.query))
+		target.searchParams.set(name, value);
 	return target.toString();
 };
 
@@ -60,8 +62,9 @@ export const connectionReader = (
 					'connection.not_declared',
 					'This automation declares no HTTP connection.'
 				);
-			const url = yield* Effect.try({
-				try: () => targetUrl(connection, input),
+			// The path is refused before any credential is read, whatever the root turns out to be.
+			yield* Effect.try({
+				try: () => targetUrl({ baseUrl: 'https://path.invalid', headers: {}, query: {} }, input),
 				catch: () =>
 					failure(
 						'connection.invalid_path',
@@ -70,7 +73,7 @@ export const connectionReader = (
 			});
 			const requestId = EffectId.make(`${effectId}:connection:${sequence++}`);
 			const secrets = yield* Secrets.Service;
-			const headers = yield* authenticationHeaders(
+			const resolved = yield* resolveConnection(
 				(id, name) =>
 					secrets.read(id, name).pipe(
 						Effect.mapError(() => ({
@@ -87,6 +90,15 @@ export const connectionReader = (
 				requestId,
 				connection
 			).pipe(Effect.mapError((error) => failure('connection.credential', error.message)));
+			const headers = resolved.headers;
+			const url = yield* Effect.try({
+				try: () => targetUrl(resolved, input),
+				catch: () =>
+					failure(
+						'connection.invalid_path',
+						'Connection GET requires a relative path within its declared HTTPS API.'
+					)
+			});
 			const response = yield* connector.execute(requestId, {
 				connector: 'http',
 				operation: INTEGRATION_HTTP_OPERATION,

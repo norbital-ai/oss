@@ -655,6 +655,17 @@ const BundleDispatch = {
 							_tag: 'Failure',
 							error: makeWireError('unauthorized', error.message, { httpStatus: 401 })
 						};
+					// The workspace API's own refusals: a path it does not serve, a method a path does not take.
+					if (
+						error instanceof DispatchError &&
+						(error.code === 'not_found' || error.code === 'method_not_allowed')
+					)
+						return {
+							_tag: 'Failure',
+							error: makeWireError(error.code, error.message, {
+								httpStatus: error.code === 'not_found' ? 404 : 405
+							})
+						};
 					if (error instanceof Identity.AuthenticationError)
 						return {
 							_tag: 'Failure',

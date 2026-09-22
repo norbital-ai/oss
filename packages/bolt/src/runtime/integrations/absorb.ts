@@ -263,6 +263,8 @@ export const absorbRecords = (
 				continue;
 			}
 			const before = known.get(key) ?? [];
+			// Not ours to create: the source knows this identity, the collection does not keep it.
+			if (authored.existingOnly === true && before.length === 0) continue;
 			const survivors = new Set<string>();
 			let failedRow = false;
 			for (const [offset, row] of rows.success.entries()) {

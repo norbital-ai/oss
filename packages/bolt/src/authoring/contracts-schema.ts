@@ -21,10 +21,21 @@ export interface PrivateEnvReference {
 	readonly env: string;
 }
 export interface HttpConnection {
-	readonly baseUrl: string;
+	/**
+	 * The API root, or the environment variable holding it. A variable is how one workspace source
+	 * reaches a different system per deployment — the development ERP locally, production's in
+	 * production — the way an ERP's communication arrangement names its host per system.
+	 */
+	readonly baseUrl: string | PrivateEnvReference;
 	readonly authentication?:
 		| { readonly type: 'bearer'; readonly token: PrivateEnvReference }
-		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference };
+		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference }
+		/**
+		 * The credential as a query parameter, for the APIs that read nothing else — a Google Apps
+		 * Script web app cannot see request headers at all. Prefer a header wherever one is read: a URL
+		 * is logged by more things than a header is.
+		 */
+		| { readonly type: 'query'; readonly name: string; readonly value: PrivateEnvReference };
 }
 
 /** The brand an approval flow carries; present only on flows this contract minted. */
@@ -1035,6 +1046,16 @@ type CollectionSendBinding<S extends AnySchema, N extends TableName<S>> = {
 		readonly record: SchemaRow<S, N>;
 		readonly previous?: SchemaRow<S, N>;
 	}) => unknown;
+	/**
+	 * What the receiver's answer says about the record, written back onto it: the id a provider
+	 * assigned, the reference an ERP numbered it with — or, on a final refusal (a 4xx, or a 5xx after
+	 * the last retry), why it was refused. Called once per delivery that ends with an answer; read
+	 * `status` to tell the two apart. `undefined` records nothing. Pure, like `body`.
+	 */
+	readonly settle?: (answer: {
+		readonly status: number;
+		readonly body: unknown;
+	}) => Partial<MutationInsertFor<S, N>> | undefined;
 };
 /**
  * Where the platform sends the cursor it kept, and where it reads the next one from.
@@ -1244,8 +1265,22 @@ type CollectionInboundBinding<S extends AnySchema, N extends TableName<S>> = {
 		readonly records: ReadonlyArray<never>;
 		readonly api: Api<S>;
 	}) => unknown;
-	readonly map?: (record: never, resolved: never) => MutationInsertFor<S, N>;
-};
+} & (
+	| {
+			readonly existingOnly?: false;
+			readonly map?: (record: never, resolved: never) => MutationInsertFor<S, N>;
+	  }
+	| {
+			/**
+			 * Enriches rows this collection already has and never creates one: `map` states only the
+			 * columns this source owns, and a record whose identity matches no row is skipped. For a
+			 * source that knows more things than this collection keeps — an ERP's whole material master
+			 * onto the parts one desk carries.
+			 */
+			readonly existingOnly: true;
+			readonly map: (record: never, resolved: never) => Partial<MutationInsertFor<S, N>>;
+	  }
+);
 
 /** One inbound binding driven by the platform's own scheduler. */
 type CollectionPullBinding<S extends AnySchema, N extends TableName<S>> = CollectionInboundBinding<

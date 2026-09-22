@@ -93,7 +93,46 @@ uses a distinct invocation effect identity; stoppage is checked before the crede
 The response carries `status`, lower-case `headers`, and a JSON body (or text when the provider returns
 non-JSON). The automation owns pagination and non-success status handling.
 
-The default host connector accepts HTTPS GET against public DNS addresses only, pins the checked
-address, refuses transport-header overrides, and never follows redirects. The complete request has a
-30-second deadline and a two-MiB body limit. Credentials and raw transport errors are not exposed in
-errors. Existing integration delivery providers remain independently configured.
+The default host connector performs every integration request — an automation's GET, a pull, a
+send's POST/PUT/PATCH/DELETE with a JSON body — against public HTTPS addresses only, pins the checked
+address and refuses transport-header overrides. It follows at most five redirects, re-checking each
+hop, dropping every caller header on a cross-origin hop, and continuing a `301`/`302`/`303` answer to
+a write as a bodiless GET (Google Apps Script answers that way). A host may pass `allowLoopback` to
+reach `localhost`/`*.localhost` over plain HTTP — a development host's own workspaces. The complete
+request has a 30-second deadline and a two-MiB body limit. A refused request is a known failure;
+an unreachable or slow provider is retryable. Credentials and raw transport errors are not exposed.
+
+A connection's `baseUrl` may be `{ env: NAME }`, so one source reaches a different system per
+deployment, and `authentication` may be `{ type: 'query', name, value: { env } }` for an API that
+reads nothing but the query string. An empty binding path is the root URL itself.
+
+## Integration bindings
+
+A receive binding with `existingOnly: true` enriches rows the collection already has: its `map`
+returns only the columns that source owns, and a record whose identity matches no row is skipped. A
+pull writes nothing for a record whose mapped values already equal the row, so a full re-read costs
+reads only, records no history and never re-fires a send binding — which is what makes a
+full-refresh pull the reliable way to keep a mirror in line.
+
+A send binding may declare `settle({ status, body })`: the receiver's final answer as a patch on the
+record it was about — the id a provider assigned, or on a refusal the reason. A delivery's
+idempotency key is `<integration>:<binding>:<record id>:<sequence>`: stable across its retries,
+unique across tenants and resets.
+
+## Workspace API
+
+Every workspace serves its collections and authored functions as HTTP under
+`<origin>/__bolt/request/api`, described by `GET …/openapi.json` (OpenAPI 3.1):
+
+| Request                                                               | Does                                                 |
+| --------------------------------------------------------------------- | ---------------------------------------------------- |
+| `GET  collections/{name}?limit&after`                                 | one page, `{ value, next }`; `order_by=field,-field` |
+| `GET  collections/{name}?updated_since=`                              | the delta read, in change order                      |
+| `GET  collections/{name}?{field}=value`                               | equality on a declared column                        |
+| `GET/PATCH/DELETE collections/{name}/{id}`, `POST collections/{name}` | one record; `202` when held for approval             |
+| `POST functions/{name}`                                               | the authored function, `{ value }`                   |
+
+Every call runs as its caller, so policies decide exactly what a browser with the same policies would
+see. A caller is a session, or an **API key**: an `+env.ts` variable declared with
+`apiKey: { policies: [...] }`, whose value (24+ characters) is presented as `Authorization: Bearer`.
+It acts as `api:<NAME>` with exactly those policies and no team.

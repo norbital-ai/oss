@@ -1,4 +1,5 @@
 import { lookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { promisify } from 'node:util';
@@ -111,14 +112,15 @@ const attemptPage = (
 	url: URL,
 	address: Address,
 	signal: AbortSignal,
-	headers: Readonly<Record<string, string>>
+	headers: Readonly<Record<string, string>>,
+	write: PageWrite | undefined
 ): Promise<PageResponse> =>
 	new Promise((resolve, reject) => {
 		let connected = false;
 		const req = request(
 			url,
 			{
-				method: 'GET',
+				method: write?.method ?? 'GET',
 				signal,
 				family: address.family,
 				agent: false,
@@ -191,8 +193,11 @@ const attemptPage = (
 			);
 		});
 		req.on('socket', (socket) => socket.once('connect', () => (connected = true)));
-		req.end();
+		req.end(write?.body);
 	});
+
+/** A request that is not a plain read: its method and, for the methods that carry one, its body. */
+export type PageWrite = Readonly<{ method: string; body?: string }>;
 
 /** Tries the checked addresses in order, IPv4 before IPv6, moving on after a connect-phase failure. */
 export const makeRequestPage =
@@ -201,14 +206,22 @@ export const makeRequestPage =
 		url: URL,
 		addresses: readonly Address[],
 		signal: AbortSignal,
-		headers: Readonly<Record<string, string>> = {}
+		headers: Readonly<Record<string, string>> = {},
+		write?: PageWrite
 	): Promise<PageResponse> => {
 		let last: ConnectFailure | undefined;
 		for (const address of orderAddresses(addresses)) {
 			signal.throwIfAborted();
 			try {
 				// repository-health:allow A6 -- Addresses are fallbacks for one another; the second is tried only after the first fails to connect.
-				return await attemptPage(request, url, address, signal, headers);
+				return await attemptPage(
+					url.protocol === 'http:' ? httpRequest : request,
+					url,
+					address,
+					signal,
+					headers,
+					write
+				);
 			} catch (cause) {
 				if (!(cause instanceof ConnectFailure)) throw cause;
 				last = cause;

@@ -657,8 +657,7 @@ export const integration = (declaration: IntegrationDeclaration): IntegrationDec
 	for (const binding of declaration.receive) {
 		if (binding.name.trim() === '')
 			throw new TypeError(`Integration ${declaration.name} has an unnamed receive binding.`);
-		if (binding.path.trim() === '')
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
+		// An empty path is the connection's root: an endpoint that is one URL has nothing below it.
 		if (binding.identityColumn.trim() === '') {
 			throw new TypeError(
 				`Integration ${declaration.name}.${binding.name} requires an identity column: without one a second run cannot recognise the rows the first run wrote.`
@@ -680,8 +679,6 @@ export const integration = (declaration: IntegrationDeclaration): IntegrationDec
 	for (const binding of declaration.send) {
 		if (binding.name.trim() === '')
 			throw new TypeError(`Integration ${declaration.name} has an unnamed send binding.`);
-		if (binding.path.trim() === '')
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
 		if (binding.events.length === 0) {
 			throw new TypeError(
 				`Integration ${declaration.name}.${binding.name} subscribes to no collection event, so nothing could ever queue a delivery for it.`
@@ -750,24 +747,37 @@ const assertVerifiableSignature = (binding: string, signature: WebhookSignatureS
 };
 export type { PrivateEnvReference, HttpConnection } from './contracts-schema.js';
 import type { HttpConnection, PrivateEnvReference } from './contracts-schema.js';
+/** An absolute API root without a trailing slash; plain HTTP only for this machine's own names. */
+export const checkedBaseUrl = (value: string): string => {
+	const url = new URL(value);
+	if (
+		url.protocol !== 'https:' &&
+		url.hostname !== 'localhost' &&
+		!url.hostname.endsWith('.localhost') &&
+		url.hostname !== '127.0.0.1'
+	) {
+		throw new TypeError('Connection URLs must use HTTPS outside localhost development.');
+	}
+	return url.toString().replace(/\/$/, '');
+};
+
 /** Owns define connection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const defineConnection = <const Connection extends HttpConnection>(
 	connection: Connection
 ): Connection => {
-	const url = new URL(connection.baseUrl);
-	if (url.protocol !== 'https:' && url.hostname !== 'localhost') {
-		throw new TypeError('Connection URLs must use HTTPS outside localhost development.');
-	}
 	if (
-		connection.authentication?.type === 'header' &&
-		connection.authentication.header.trim() === ''
+		(connection.authentication?.type === 'header' &&
+			connection.authentication.header.trim() === '') ||
+		(connection.authentication?.type === 'query' && connection.authentication.name.trim() === '')
 	) {
-		throw new TypeError('Header authentication requires a non-empty header name.');
+		throw new TypeError('Header and query authentication require a non-empty name.');
 	}
-	return Object.freeze({
-		...connection,
-		baseUrl: url.toString().replace(/\/$/, '')
-	});
+	if (typeof connection.baseUrl !== 'string') {
+		if (connection.baseUrl.env.trim() === '')
+			throw new TypeError('A connection base URL variable needs a name.');
+		return Object.freeze({ ...connection });
+	}
+	return Object.freeze({ ...connection, baseUrl: checkedBaseUrl(connection.baseUrl) });
 };
 
 /**
@@ -897,14 +907,13 @@ interface SendBinding<Row> {
 		readonly record: Row;
 		readonly previous?: Row;
 	}) => unknown;
+	readonly settle?: (answer: {
+		readonly status: number;
+		readonly body: unknown;
+	}) => Partial<Row> | undefined;
 }
 
 export const defineSend = <Row>(binding: SendBinding<Row>): typeof binding => {
-	if (binding.send.path.trim() === '') {
-		throw new TypeError(
-			'A send binding requires a path: there is nowhere to deliver to without one.'
-		);
-	}
 	const on: unknown = binding.on;
 	if (
 		isTriggerShape(on) &&

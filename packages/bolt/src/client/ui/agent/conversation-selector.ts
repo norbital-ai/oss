@@ -56,7 +56,9 @@ export function projectConversations(rows: readonly unknown[]): Conversation[] {
 				title: task.title ?? null,
 				status: task.status,
 				active_plan_id: task.active_plan_id ?? null,
-				active_turn_id: task.active_turn_id ?? null
+				active_turn_id: task.active_turn_id ?? null,
+				// The panel's checklist reads it from here; dropping it hid every goal.
+				...(task.todos === undefined ? {} : { todos: task.todos })
 			}
 		];
 	});

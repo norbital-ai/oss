@@ -34,7 +34,14 @@ const EnvironmentVariableSpecSchema = Schema.Struct({
 	 * Defaults to `true`. A declaration that says nothing is treated as a secret, because the cost of
 	 * guessing wrong in that direction is a leaked credential.
 	 */
-	secret: Schema.optional(Schema.Boolean)
+	secret: Schema.optional(Schema.Boolean),
+	/**
+	 * Makes the value an API key: a caller presenting it as `Authorization: Bearer <value>` acts as
+	 * the principal `api:<NAME>`, holding exactly these policies and no team — so it can read and
+	 * write what the policies grant and approve nothing. This is an ERP's communication user: a
+	 * credential the administrator issues to one outside system, scoped by the roles it is given.
+	 */
+	apiKey: Schema.optional(Schema.Struct({ policies: Schema.Array(Schema.String) }))
 });
 
 interface EnvironmentVariableSpec extends Schema.Schema.Type<
@@ -64,6 +71,14 @@ export const defineEnvironment = <
 		if (!NAME_PATTERN.test(name)) {
 			throw new TypeError(
 				`Environment variable "${name}" must be SCREAMING_SNAKE_CASE, so it reads the same in the vault, the form and the shell.`
+			);
+		}
+		if (
+			declaration.apiKey !== undefined &&
+			(declaration.secret === false || declaration.default !== undefined)
+		) {
+			throw new TypeError(
+				`Environment variable "${name}" is an API key, so it is a secret with no default.`
 			);
 		}
 		if (declaration.default !== undefined && declaration.secret !== false) {

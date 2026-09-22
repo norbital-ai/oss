@@ -48,6 +48,8 @@ export type AuthoredIntegrationBinding = Readonly<{
 	 */
 	readonly resolve?: (records: ReadonlyArray<unknown>, api: unknown) => unknown;
 	readonly map?: (record: unknown, resolved: unknown) => Readonly<Record<string, unknown>>;
+	/** Only rows that already carry the identity are written; an unknown one is skipped, not created. */
+	readonly existingOnly?: true;
 }>;
 
 /** One collection write, as an outbound binding's trigger and body see it. */
@@ -75,6 +77,8 @@ export type AuthoredIntegrationSend = Readonly<{
 	readonly events: ReadonlyArray<IntegrationSendEvent>;
 	readonly matches: (event: IntegrationSendEventContext) => boolean;
 	readonly body?: (event: IntegrationSendEventContext) => unknown;
+	/** The receiver's answer as a patch on the record it was about, or nothing to record. */
+	readonly settle?: (answer: { readonly status: number; readonly body: unknown }) => unknown;
 }>;
 
 /** The live half of one integration, keyed by binding name. */
@@ -105,12 +109,14 @@ type IntegrationBindingInput = Readonly<{
 	readonly identity?: unknown;
 	readonly resolve?: unknown;
 	readonly map?: unknown;
+	readonly existingOnly?: unknown;
 }>;
 /** What an authored outbound binding looks like from here — every field read defensively below. */
 type IntegrationSendBindingInput = Readonly<{
 	readonly send?: unknown;
 	readonly on?: unknown;
 	readonly body?: unknown;
+	readonly settle?: unknown;
 }>;
 type IntegrationsModuleInput = Readonly<
 	Record<
@@ -271,7 +277,9 @@ const connectionOf = (
 	required: boolean
 ): HttpConnection | undefined => {
 	const source = record(candidate);
-	const baseUrl = source === undefined ? undefined : text(source['baseUrl']);
+	const declaredBase = source?.['baseUrl'];
+	const baseVariable = text(record(declaredBase)?.['env']);
+	const baseUrl = baseVariable === undefined ? text(declaredBase) : { env: baseVariable };
 	if (baseUrl === undefined) {
 		if (!required) return undefined;
 		throw new TypeError(
@@ -281,9 +289,8 @@ const connectionOf = (
 	const authentication = record(source?.['authentication']);
 	if (authentication === undefined) return { baseUrl };
 	const type = text(authentication['type']);
+	const environment = text(record(authentication[type === 'bearer' ? 'token' : 'value'])?.['env']);
 	if (type === 'bearer') {
-		const token = record(authentication['token']);
-		const environment = token === undefined ? undefined : text(token['env']);
 		if (environment === undefined) {
 			throw new TypeError(
 				`Integration ${integrationName} declares bearer authentication without an { env } reference. A literal token in a workspace is a token in the artifact.`
@@ -291,16 +298,20 @@ const connectionOf = (
 		}
 		return { baseUrl, authentication: { type: 'bearer', token: { env: environment } } };
 	}
-	if (type === 'header') {
-		const header = text(authentication['header']);
-		const value_ = record(authentication['value']);
-		const environment = value_ === undefined ? undefined : text(value_['env']);
-		if (header === undefined || environment === undefined) {
+	if (type === 'header' || type === 'query') {
+		const name = text(authentication[type === 'header' ? 'header' : 'name']);
+		if (name === undefined || environment === undefined) {
 			throw new TypeError(
-				`Integration ${integrationName} declares header authentication without a header name and an { env } reference.`
+				`Integration ${integrationName} declares ${type} authentication without a name and an { env } reference.`
 			);
 		}
-		return { baseUrl, authentication: { type: 'header', header, value: { env: environment } } };
+		return {
+			baseUrl,
+			authentication:
+				type === 'header'
+					? { type, header: name, value: { env: environment } }
+					: { type, name, value: { env: environment } }
+		};
 	}
 	throw new TypeError(
 		`Integration ${integrationName} declares an unsupported authentication type.`
@@ -415,9 +426,15 @@ const authoredHalf = (
 			`Integration ${integrationName}.${bindingName} declares a resolve but no map; nothing would ever read what it looked up.`
 		);
 	}
+	if (binding.existingOnly === true && !Predicate.isFunction(map)) {
+		throw new TypeError(
+			`Integration ${integrationName}.${bindingName} is existingOnly without a map; say which columns it updates.`
+		);
+	}
 	return {
 		input,
 		identityColumn: column,
+		...(binding.existingOnly === true ? { existingOnly: true as const } : {}),
 		identityValue: (candidate: unknown) => {
 			const key: unknown = Reflect.apply(value, undefined, [candidate]);
 			if (!isString(key) || key.trim() === '') {
@@ -618,6 +635,10 @@ const sendDeclaration = (
 	if (body !== undefined && !Predicate.isFunction(body)) {
 		throw new TypeError(`Integration ${named} declares a body that is not a function.`);
 	}
+	const settle = binding.settle;
+	if (settle !== undefined && !Predicate.isFunction(settle)) {
+		throw new TypeError(`Integration ${named} declares a settle that is not a function.`);
+	}
 	return {
 		declaration: {
 			name: bindingName,
@@ -631,6 +652,12 @@ const sendDeclaration = (
 		authored: {
 			events: trigger.events,
 			matches: trigger.matches,
+			...(settle === undefined
+				? {}
+				: {
+						settle: (answer: { readonly status: number; readonly body: unknown }): unknown =>
+							Reflect.apply(settle, undefined, [answer])
+					}),
 			...(body === undefined
 				? {}
 				: {

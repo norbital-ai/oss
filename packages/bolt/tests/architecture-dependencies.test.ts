@@ -168,7 +168,10 @@ describe('Bolt architecture boundaries', () => {
 		// `inputs.d.ts` are deleted; `+collection.ts` is imported live instead. Measured 9,285.
 		// 9,415 -> 9,430 (2026-09-20): the `telemetry` system model and the administrator-only
 		// policy that reads it — the runtime keeps its own records in every tenant. Measured 9,426.
-		expect(total).toBeLessThanOrEqual(9_430);
+		// 9,430 -> 9,440 (2026-09-23): connections read their base URL from the environment and may
+		// carry the credential as a query parameter; a receive binding may be `existingOnly` and a
+		// binding may address the connection root. Measured 9,434.
+		expect(total).toBeLessThanOrEqual(9_440);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

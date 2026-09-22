@@ -1,4 +1,4 @@
-import { Clock, Effect, Result, Schema } from 'effect';
+import { Clock, Effect, Option, Result, Schema } from 'effect';
 import {
 	EffectId,
 	PluginTrustedContext,
@@ -12,6 +12,7 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import { answerAppRequest } from '#lib/runtime/pwa.js';
+import { answerApiRequest, apiSegments } from '#lib/runtime/open-api.js';
 import {
 	flushAll,
 	invocationAnnotations,
@@ -20,7 +21,9 @@ import {
 	recordSettled,
 	Sink
 } from '#lib/runtime/telemetry.js';
+import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
+import { Secrets } from '#lib/runtime/secrets/secrets.js';
 import {
 	decodeUnknownSchema,
 	isRecord as isObject,
@@ -162,6 +165,45 @@ const validateOutput = Effect.fn('Bolt.validateCommandOutput')(function* <E>(
 	return { ...response, headers, value } as DispatchResponse;
 });
 
+/** Equal without an early exit, so a guess learns nothing from how long the refusal took. */
+const sameSecret = (left: string, right: string): boolean => {
+	let difference = left.length ^ right.length;
+	for (let index = 0; index < left.length; index++)
+		difference |= left.charCodeAt(index) ^ right.charCodeAt(index % Math.max(right.length, 1));
+	return difference === 0;
+};
+
+/**
+ * The principal a declared API key names, when the credential is one.
+ *
+ * Tried only after the session store refused it, so a person's session never pays for the vault
+ * reads. A key shorter than 24 characters is never accepted: it is a password, not a key.
+ */
+const apiKeySubject = Effect.fn('Bolt.apiKeySubject')(function* (
+	effectId: EffectId,
+	credential: string,
+	tenantId: Invocation['scope']['tenantId']
+) {
+	const variables = (yield* Workspace.Service).definition.environment?.variables ?? {};
+	// Optional rather than required: a required vault would put its service in the exported
+	// dispatcher's type, which the declaration emitter cannot spell.
+	const secrets = yield* Effect.serviceOption(Secrets.Service);
+	if (Option.isNone(secrets)) return undefined;
+	for (const [name, declaration] of Object.entries(variables)) {
+		if (declaration.apiKey === undefined) continue;
+		const value = yield* secrets.value.read(effectId, name).pipe(Effect.orElseSucceed(() => null));
+		if (value !== null && value.length >= 24 && sameSecret(value, credential))
+			return {
+				userId: `api:${name}`,
+				tenantId: String(tenantId),
+				teamPath: [],
+				policies: [...declaration.apiKey.policies],
+				admin: false
+			} satisfies Identity.Subject;
+	}
+	return undefined;
+});
+
 const resolveSession = Effect.fn('Bolt.resolveSession')(function* (
 	effectId: EffectId,
 	credential: string | undefined,
@@ -172,7 +214,15 @@ const resolveSession = Effect.fn('Bolt.resolveSession')(function* (
 			code: 'unauthorized',
 			message: 'Missing command credential'
 		});
-	const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
+	const actor = yield* (yield* Identity.Service).authenticate(effectId, credential).pipe(
+		Effect.catchIf(
+			(error) => error instanceof Identity.AuthenticationError,
+			(refused) =>
+				Effect.flatMap(apiKeySubject(effectId, credential, tenantId), (subject) =>
+					subject === undefined ? Effect.fail(refused) : Effect.succeed(subject)
+				)
+		)
+	);
 	if (actor.tenantId !== tenantId)
 		return yield* new DispatchError({
 			code: 'tenant_mismatch',
@@ -333,6 +383,19 @@ const dispatch = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
 		const app = yield* answerAppRequest(invocation);
 		if (app !== undefined) return app;
 		const effectId = EffectId.make(invocation.id);
+		const api = apiSegments(invocation.url);
+		if (api !== undefined) {
+			const caller = yield* resolveSession(
+				effectId,
+				credentialFromHeaders(invocation.headers),
+				invocation.scope.tenantId
+			);
+			return yield* Effect.provideService(
+				answerApiRequest(invocation, api, effectId, caller),
+				Identity.CurrentSubject,
+				caller
+			);
+		}
 		const subject = yield* resolveSession(
 			effectId,
 			credentialFromHeaders(invocation.headers),
