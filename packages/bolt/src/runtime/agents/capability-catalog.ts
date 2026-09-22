@@ -37,6 +37,7 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
+import { conversationAttachmentError } from '#lib/runtime/agents/image-descriptors.js';
 import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from '@norbital-ai/bolt-protocol';
 
 export class SkillError extends Schema.TaggedError<SkillError>()(
@@ -296,7 +297,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_messages',
 		description:
-			'Read unread group messages in this chat that did not address you, oldest first, and mark them read; as the channel last reported them, from when recording began. Attachments are descriptors; admit an image with use_image.',
+			'Read unread group messages in this chat that did not address you, oldest first, and mark them read; as the channel last reported them, from when recording began. Attachments are descriptors; admit one with use_image.',
 		command: 'platform:read_messages',
 		inputSchema: objectInput({
 			limit: { type: 'integer', minimum: 1, maximum: 50 }
@@ -304,7 +305,8 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'use_image',
-		description: 'Admit one image descriptor for your next step; the host resolves the bytes.',
+		description:
+			'Admit one stored attachment for your next step: the host reads what it can and hands you an image, or a document as text. Descriptors ride the message that carried them and read_messages; a file the reader does not carry is read another way.',
 		command: 'platform:use_image',
 		inputSchema: objectInput(
 			{
@@ -957,6 +959,9 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 		}
 		case 'use_image': {
 			const asset = yield* decode(name, ImageAsset, input);
+			const refusal = conversationAttachmentError(context.conversationId, asset);
+			if (refusal !== undefined)
+				return yield* new InvalidToolInput({ tool: name, path: 'key', message: refusal });
 			return asset;
 		}
 		case 'read_collection': {

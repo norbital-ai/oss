@@ -45,9 +45,7 @@ import {
 	WorkbenchId
 } from '@norbital-ai/bolt-protocol/facilities';
 import {
-	attachmentAssetsFromMessage,
-	stripImageFileParts,
-	taskAssetKeyPrefix,
+	renderAttachmentDescriptors,
 	conversationAssetStorageKey as taskScopedImageKey,
 	userMessageWithImages
 } from './image-descriptors.js';
@@ -341,35 +339,6 @@ export const conversationAssetStorageKey = (
 	documentId: string,
 	fileName: string
 ): string => taskScopedImageKey(conversationId, documentId, fileName);
-const validateAttachments = (conversationId: ConversationId, assets: ReadonlyArray<ImageAsset>) =>
-	Effect.gen(function* () {
-		const prefix = taskAssetKeyPrefix(conversationId);
-		if (
-			assets.length > MAX_IMAGE_COUNT ||
-			assets.reduce((sum, asset) => sum + asset.size, 0) > MAX_IMAGE_SOURCE_BYTES
-		) {
-			return yield* new TaskRuntimeError({
-				operation: 'attachments',
-				message: 'The attachment count or source bytes exceed the provider boundary.'
-			});
-		}
-		for (const asset of assets) {
-			if (
-				!asset.key.startsWith(prefix) ||
-				asset.key.includes('..') ||
-				asset.key.split('/').length !== 3 ||
-				!/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)))$/.test(
-					asset.mimeType
-				) ||
-				asset.size <= 0
-			) {
-				return yield* new TaskRuntimeError({
-					operation: 'attachments',
-					message: 'An attachment descriptor is outside this conversation or malformed.'
-				});
-			}
-		}
-	});
 
 const generationAssets = (assets: ReadonlyArray<ImageAsset>) => {
 	const imageAssets = assets.filter((asset) => asset.mimeType.startsWith('image/'));
@@ -449,11 +418,7 @@ export const inboundAgentInput = (message: InboundAgentMessage) =>
 			...(message.sender.account === undefined
 				? []
 				: [`[registered account: ${message.sender.account}]`]),
-			...(message.text === '' ? [] : [message.text]),
-			...message.attachments.map(
-				({ provider, attachmentId, asset }) =>
-					`[image ${asset.name} · ${asset.mimeType} · ${asset.size} bytes] provider=${provider} attachment=${attachmentId} key=${asset.key}`
-			)
+			...(message.text === '' ? [] : [message.text])
 		].join('\n'),
 		message.attachments.map(({ asset }) => asset)
 	);
@@ -646,7 +611,7 @@ const projectPrompt = (input: {
 						)
 					]
 				: []),
-		...messages.map(({ message }) => stripImageFileParts(message)),
+		...messages.map(({ message }) => renderAttachmentDescriptors(message)),
 		...(input.ambient === undefined || input.ambient <= 0
 			? []
 			: [
@@ -2903,15 +2868,21 @@ export const layer = Layer.effect(
 			return true;
 		});
 
+		/**
+		 * The media a turn hands the provider: what this turn's own reader admitted.
+		 *
+		 * Nothing is attached because a message carried it. Every upload is a stored object whose
+		 * descriptor — name, type, size and key — rides the transcript as text, and the model takes
+		 * the bytes through `use_image` when a step needs them. That is what keeps a chat's older
+		 * media out of later requests, and what makes an object nobody can decode cost one step
+		 * rather than the conversation.
+		 */
 		const attachments = (
 			messages: ReadonlyArray<ConversationMessage>,
 			runId: TurnId
 		): ReadonlyArray<ImageAsset> => {
 			const assets: Array<ImageAsset> = [];
 			for (const row of messages) {
-				if (row.annotation?.tag === 'input' && row.annotation.consumedAfterSequence === undefined)
-					continue;
-				assets.push(...attachmentAssetsFromMessage(row.message));
 				if (row.turn_id !== runId) continue;
 				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
@@ -3883,7 +3854,7 @@ export const layer = Layer.effect(
 					...promptMessages(transcript.rows(), plan)
 						.filter(({ message }) => message.role !== 'system')
 						.map(({ message }) =>
-							stripImageFileParts(
+							renderAttachmentDescriptors(
 								message.role === 'assistant' && !isString(message.content)
 									? {
 											...message,
@@ -4209,7 +4180,6 @@ export const layer = Layer.effect(
 							task
 						);
 						let assets = attachments(promptMessages(messages, plan), run.id);
-						yield* validateAttachments(task.id, assets);
 						const unread =
 							agent.id === WEB_AGENT_NAME || Option.isNone(inbox)
 								? 0

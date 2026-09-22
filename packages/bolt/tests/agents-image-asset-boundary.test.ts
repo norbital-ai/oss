@@ -6,7 +6,7 @@ import {
 	attachmentAssetsFromMessage,
 	guestImageCommandHasNoBytes,
 	imageAssetsFromMessage,
-	stripImageFileParts,
+	renderAttachmentDescriptors,
 	userMessageWithImages
 } from '../src/runtime/agents/image-descriptors.js';
 
@@ -34,7 +34,7 @@ describe('Task image asset boundary', () => {
 		expect(conversationAssetStorageKey(second, 'document-a', 'site-plan.png')).not.toBe(key);
 	});
 
-	it('G5: guest turns carry descriptors only; host strips file parts before the facility wire', () => {
+	it('G5: guest turns carry descriptors only; the host renders them as text before the wire', () => {
 		const asset = ImageAsset.make({
 			key: conversationAssetStorageKey(
 				ConversationId.make('00000000-0000-4000-8000-000000000201'),
@@ -49,13 +49,17 @@ describe('Task image asset boundary', () => {
 		assertGuestImageDescriptorsOnly(message);
 		expect(guestImageCommandHasNoBytes({ message })).toBe(true);
 		expect(imageAssetsFromMessage(message)).toEqual([asset]);
-		const stripped = stripImageFileParts(message);
-		expect(JSON.stringify(stripped)).not.toContain('"type":"file"');
-		expect(JSON.stringify(stripped)).toContain('Inspect this site');
+		const rendered = renderAttachmentDescriptors(message);
+		// No bytes and no file part: the key is what the reader tool is called with.
+		expect(JSON.stringify(rendered)).not.toContain('"type":"file"');
+		expect(JSON.stringify(rendered)).toContain('Inspect this site');
+		expect(JSON.stringify(rendered)).toContain(asset.key);
+		expect(JSON.stringify(rendered)).toContain('site-plan.png');
+		expect(JSON.stringify(rendered)).toContain('1042884 bytes');
 	});
 
-	it('keeps tool-role content as a tool-part array after stripping files', () => {
-		const stripped = stripImageFileParts({
+	it('keeps tool-role content as a tool-part array after rendering files', () => {
+		const rendered = renderAttachmentDescriptors({
 			role: 'tool',
 			content: [
 				{
@@ -68,8 +72,8 @@ describe('Task image asset boundary', () => {
 				}
 			]
 		});
-		expect(stripped.role).toBe('tool');
-		expect(Array.isArray(stripped.content)).toBe(true);
+		expect(rendered.role).toBe('tool');
+		expect(Array.isArray(rendered.content)).toBe(true);
 	});
 });
 
@@ -87,9 +91,7 @@ describe('Task attachment boundary', () => {
 		});
 
 	it('carries the newest attachments that fit, oldest dropped first', () => {
-		const kept = boundedAttachments(
-			Array.from({ length: 10 }, (_, index) => attachment(index))
-		);
+		const kept = boundedAttachments(Array.from({ length: 10 }, (_, index) => attachment(index)));
 		expect(kept.map((entry) => entry.name)).toEqual(
 			[2, 3, 4, 5, 6, 7, 8, 9].map((index) => `photo-${index}.jpg`)
 		);

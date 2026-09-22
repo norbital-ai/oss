@@ -17,6 +17,36 @@ const keySegment = (value: string): string => {
 export const taskAssetKeyPrefix = (taskId: ConversationId | string): string =>
 	`agent-tasks/${keySegment(taskId)}/`;
 
+/**
+ * The media types the attachment boundary carries: images, text, and the documents the host
+ * extracts. Anything else is still a stored file — the agent reaches it with a script.
+ */
+const ATTACHMENT_MEDIA_TYPES =
+	/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)))$/;
+
+/**
+ * Why this conversation cannot read a descriptor, or `undefined` when it can.
+ *
+ * One predicate for the two sides that must agree: the reader tool refuses a descriptor the model
+ * may not use, and the turn re-checks whatever it is about to hand the provider. The key prefix is
+ * also what keeps one conversation out of another's stored objects.
+ */
+export const conversationAttachmentError = (
+	conversationId: ConversationId | string,
+	asset: ImageAsset
+): string | undefined => {
+	if (
+		!asset.key.startsWith(taskAssetKeyPrefix(conversationId)) ||
+		asset.key.includes('..') ||
+		asset.key.split('/').length !== 3
+	)
+		return `${asset.name} is not an object stored for this conversation.`;
+	if (!ATTACHMENT_MEDIA_TYPES.test(asset.mimeType))
+		return `${asset.name} is ${asset.mimeType}, which the attachment reader does not carry.`;
+	if (asset.size <= 0) return `${asset.name} declares no bytes.`;
+	return undefined;
+};
+
 /** Opaque Task-scoped object key. The guest names the key; the host stores and later resolves bytes. */
 export const conversationAssetStorageKey = (
 	taskId: ConversationId | string,
@@ -80,14 +110,27 @@ export const imageAssetsFromMessage = (message: Prompt.MessageEncoded): ImageAss
 	attachmentAssetsFromMessage(message).filter((asset) => asset.mimeType.startsWith('image/'));
 
 /**
- * Removes file parts before the AI facility wire.
+ * Replaces file parts with the descriptor line the model reads, before the AI facility wire.
  *
- * Colony refuses binary file parts on generate; descriptors travel as `imageAssets` instead.
+ * Colony refuses file parts on generate, and nothing attaches on a message's behalf: a descriptor
+ * becomes text — name, type, size and key — and `use_image` is what turns a stored object into an
+ * image or a document's text for the step that needs it. Bytes never reach the prompt this way.
  */
-export function stripImageFileParts(message: Prompt.MessageEncoded): Prompt.MessageEncoded {
+export function renderAttachmentDescriptors(message: Prompt.MessageEncoded): Prompt.MessageEncoded {
 	if (isString(message.content)) return message;
-	const content = message.content.filter((part) => part.type !== 'file');
-	if (content.length === message.content.length) return message;
+	if (!message.content.some((part) => part.type === 'file')) return message;
+	const content = message.content.flatMap((part): Array<Prompt.PartEncoded> => {
+		if (part.type !== 'file') return [part];
+		const asset = decodeAttachmentDescriptor(part.data);
+		return asset === undefined
+			? []
+			: [
+					{
+						type: 'text',
+						text: `[attachment ${asset.name} · ${asset.mimeType} · ${asset.size} bytes] key=${asset.key}`
+					} satisfies Prompt.TextPartEncoded
+				];
+	});
 	switch (message.role) {
 		case 'system':
 		case 'user':

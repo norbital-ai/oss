@@ -27,16 +27,26 @@ const catalog = {
 	defaultEmbeddingModelId: embeddingModelId
 } satisfies AIResponse;
 
+const assistantText = (text: string) =>
+	encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }));
+
+const assistantToolCall = (id: string, name: string, params: unknown) =>
+	encodeMessage(
+		Prompt.assistantMessage({
+			content: [Prompt.toolCallPart({ id, name, params, providerExecuted: false })]
+		})
+	);
+
 const generated = (
 	request: Extract<AIRequest, { readonly _tag: 'Generate' }>,
-	text: string
+	message: Prompt.MessageEncoded
 ): Extract<AIResponse, { readonly _tag: 'Generated' }> => {
 	if (request.output._tag !== 'Message') throw new Error('expected Message generation');
 	return {
 		_tag: 'Generated',
 		result: {
 			_tag: 'Message',
-			message: encodeMessage(Prompt.assistantMessage({ content: [Prompt.textPart({ text })] }))
+			message
 		},
 		observation: {
 			callId: request.callId,
@@ -146,7 +156,7 @@ afterEach(async () => {
 });
 
 describe('Envoy channel attachments', () => {
-	it('materializes inbound bytes at ingest and supplies the descriptor to Generate', async () => {
+	it('materializes inbound bytes at ingest and admits the descriptor through the reader', async () => {
 		const files = memoryFiles();
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
 		const sends: Array<CommunicationRequest> = [];
@@ -155,7 +165,22 @@ describe('Envoy channel attachments', () => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
 				if (request._tag !== 'Generate') throw new Error('expected language generation');
 				generations.push(request);
-				return { _tag: 'Success', value: generated(request, 'Recorded.') };
+				// The reader admits the stored image; every later step reads the answer.
+				return {
+					_tag: 'Success',
+					value:
+						generations.length === 1
+							? generated(
+									request,
+									assistantToolCall('read-image', 'use_image', {
+										key: [...files.objects.keys()][0],
+										name: 'whatsapp-message-1.png',
+										mimeType: 'image/png',
+										size: 3
+									})
+								)
+							: generated(request, assistantText('Recorded.'))
+				};
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
@@ -205,7 +230,13 @@ describe('Envoy channel attachments', () => {
 		).toMatchObject({ drained: 1, status: 'answered' });
 		const request = generations[0];
 		if (request === undefined) throw new Error('Envoy Task did not generate');
-		expect(request.imageAssets).toEqual([
+		// A message attaches nothing by itself: its descriptor is text the model reads, and the
+		// reader is the one tool that turns a stored object into media for the next step.
+		expect(request.imageAssets ?? []).toEqual([]);
+		expect(JSON.stringify(request.messages)).toContain(materialized[0]!);
+		expect(JSON.stringify(request.messages)).toContain('whatsapp-message-1.png');
+		expect(JSON.stringify(request.messages)).not.toContain('iVBO');
+		expect(generations[1]?.imageAssets).toEqual([
 			expect.objectContaining({
 				key: materialized[0],
 				name: 'whatsapp-message-1.png',
@@ -213,9 +244,6 @@ describe('Envoy channel attachments', () => {
 				size: 3
 			})
 		]);
-		expect(JSON.stringify(request.messages)).toContain('message-1:image:0');
-		expect(JSON.stringify(request.messages)).toContain('whatsapp-message-1.png');
-		expect(JSON.stringify(request.messages)).not.toContain('iVBO');
 		expect([...files.objects.keys()]).toEqual(materialized);
 		expect(sends).toEqual([
 			expect.objectContaining({ _tag: 'Send', payload: { text: 'Recorded.' } })
@@ -230,7 +258,7 @@ describe('Envoy channel attachments', () => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
 				if (request._tag !== 'Generate') throw new Error('expected language generation');
 				generations.push(request);
-				return { _tag: 'Success', value: generated(request, 'Recorded.') };
+				return { _tag: 'Success', value: generated(request, assistantText('Recorded.')) };
 			}
 		};
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
@@ -269,7 +297,7 @@ describe('Envoy channel attachments', () => {
 				envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)
 			)
 		).toMatchObject({ drained: 1, status: 'answered' });
-		expect(generations[0]?.imageAssets).toHaveLength(1);
+		expect(generations[0]?.imageAssets ?? []).toEqual([]);
 		const replicated = await harness.database.query(
 			`select attachments from bolt_envoy_messages where direction = 'inbound'`
 		);

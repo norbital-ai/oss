@@ -32,13 +32,7 @@ afterEach(async () => {
 });
 
 describe('canonical Task admission vertical slice', () => {
-	it('admits supported Office documents through the real conversation boundary and refuses executables', async () => {
-		const { ai, requests } = scriptedTranscript([
-			assistantText('Read DOCX.'),
-			assistantText('Read XLSX.')
-		]);
-		harness = await makeBoltTestRuntime(undefined, { ai });
-		const agents = await harness.runtime.runPromise(Agents.Service);
+	it('admits supported Office documents through the reader and refuses executables without failing the turn', async () => {
 		const formats = [
 			['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
 			['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
@@ -51,6 +45,12 @@ describe('canonical Task admission vertical slice', () => {
 				mimeType,
 				size: 1024
 			};
+			const { ai, requests } = scriptedTranscript([
+				assistantToolCall('use_image', file, `read-${extension}`),
+				assistantText(`Read ${extension}.`)
+			]);
+			harness = await makeBoltTestRuntime(undefined, { ai });
+			const agents = await harness.runtime.runPromise(Agents.Service);
 			await harness.runtime.runPromise(
 				agents.submit(harness.effectId(`office-${index}`), adminSubject, {
 					conversationId,
@@ -67,32 +67,52 @@ describe('canonical Task admission vertical slice', () => {
 					)
 				).status
 			).toBe('done');
-			expect(requests[index]?.fileAssets).toEqual([file]);
-			expect(requests[index]?.imageAssets ?? []).toEqual([]);
+			// A message attaches nothing by itself: its descriptor is text the model can read, and
+			// the reader is what admits the stored document for the step that needs it.
+			expect(requests[0]?.fileAssets ?? []).toEqual([]);
+			expect(requests[0]?.imageAssets ?? []).toEqual([]);
+			expect(JSON.stringify(requests[0]?.messages)).toContain(file.key);
+			expect(requests[1]?.fileAssets).toEqual([file]);
+			expect(requests[1]?.imageAssets ?? []).toEqual([]);
+			await harness.dispose();
+			harness = undefined;
 		}
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000309');
+		const executable = {
+			name: 'check.exe',
+			key: Agents.conversationAssetStorageKey(conversationId, 'binary', 'check.exe'),
+			mimeType: 'application/x-msdownload',
+			size: 1024
+		};
+		const { ai, requests } = scriptedTranscript([
+			assistantToolCall('use_image', executable, 'read-executable'),
+			assistantText('Cannot read it.')
+		]);
+		harness = await makeBoltTestRuntime(undefined, { ai });
+		const agents = await harness.runtime.runPromise(Agents.Service);
 		await harness.runtime.runPromise(
 			agents.submit(harness.effectId('executable'), adminSubject, {
 				conversationId,
 				agentId: AgentId.make('web'),
-				message: userMessageWithImages('Run this', [
-					{
-						name: 'check.exe',
-						key: Agents.conversationAssetStorageKey(conversationId, 'binary', 'check.exe'),
-						mimeType: 'application/x-msdownload',
-						size: 1024
-					}
-				]),
+				message: userMessageWithImages('Run this', [executable]),
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal')
 			})
 		);
-		await expect(
-			harness.runtime.runPromise(
-				agents.execute(harness.effectId('executable-run'), adminSubject, conversationId)
-			)
-		).rejects.toThrow('outside this conversation or malformed');
-		expect(requests).toHaveLength(2);
+		// The reader refuses the executable and the turn still answers: no attachment can leave a
+		// conversation unable to say anything.
+		expect(
+			(
+				await harness.runtime.runPromise(
+					agents.execute(harness.effectId('executable-run'), adminSubject, conversationId)
+				)
+			).status
+		).toBe('done');
+		expect(JSON.stringify(requests[1]?.messages)).toContain(
+			'which the attachment reader does not carry'
+		);
+		expect(requests[1]?.imageAssets ?? []).toEqual([]);
+		expect(requests[1]?.fileAssets ?? []).toEqual([]);
 	});
 
 	it('retains messages queued while a provider is working and answers them in the same conversation', async () => {

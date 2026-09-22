@@ -291,17 +291,18 @@ that is not a transcript. Whether an empty part is _rendered_ is the panel's dec
 whitespace-only part is not shown once it settles.
 
 Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
-in the active context. A transcript keeps every attachment it was ever sent, so a turn carries only
-the newest that fit: the oldest descriptors drop out of the request while their text — name, type,
-size and storage key — stays in the transcript for the model to reach with its tools. Images travel
-in `imageAssets`; PDF and text documents travel in `fileAssets`. The host resolves tenant storage,
-verifies sizes, and passes extracted document text to the provider. An attachment the host cannot
-read — an undecodable image, an unsupported document, a stored row that changed or vanished — is
-left unread, never failed: one bad attachment does not silence the conversation's later turns.
-Bytes never cross the guest invocation boundary. PDF extraction runs in a bounded
-worker, preserves page markers and the original SHA-256, and refuses unreadable pages rather than
-returning partial evidence. The standalone reader exports `extractDocumentText` for host adapters.
-The embedder supplies the workspace file store and download URLs through `WorkspaceFilesHost`.
+in the active context. Every attachment is a stored object: the message that carried it lists its
+descriptor — name, type, size and key — as text, and nothing attaches to a request because a message
+carried it. The model reads a stored file through `use_image`, the one reader tool; the host resolves
+tenant storage, verifies sizes, and hands the provider an image, or a document's extracted text, and
+only the newest that fit one turn ride it. A descriptor the reader refuses, or an object the host
+cannot read — an undecodable image, an unsupported document, a stored row that changed or vanished —
+is left unread and named to the model in the prompt, never failed: no attachment can leave a
+conversation unable to answer. Bytes never cross the guest invocation boundary. PDF extraction runs
+in a bounded worker, preserves page markers and the original SHA-256, and refuses unreadable pages
+rather than returning partial evidence. The standalone reader exports `extractDocumentText` for host
+adapters. The embedder supplies the workspace file store and download URLs through
+`WorkspaceFilesHost`.
 
 The ordering contract is strict:
 

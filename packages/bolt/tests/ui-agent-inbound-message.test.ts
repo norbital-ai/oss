@@ -18,14 +18,15 @@ it('unwraps the envoy envelope into sender, time, invocation and body', () => {
 	});
 });
 
-it('drops the attachment descriptors the model reads and keeps the words', () => {
+it('drops the attachment descriptor lines older transcripts carry and keeps the words', () => {
 	const envelope = parseInboundEnvelope(
 		[
 			'INBOUND MESSAGE',
 			'[2026-09-21T06:00:45.000Z] ~ YK - BCA · direct · 3A9788E4B5CAA66028CC',
 			'[registered account: Yu Kiat Tan]',
 			'Site photos attached.',
-			'[image IMG_1.jpg · image/jpeg · 1234 bytes] provider=whatsapp attachment=a1 key=envoy/IMG_1.jpg'
+			'[image IMG_1.jpg · image/jpeg · 1234 bytes] provider=whatsapp attachment=a1 key=envoy/IMG_1.jpg',
+			'[attachment IMG_2.jpg · image/jpeg · 1234 bytes] provider=whatsapp attachment=a2 key=envoy/IMG_2.jpg'
 		].join('\n')
 	);
 	// The registered account is attribution the metadata line already carries, not message text.
