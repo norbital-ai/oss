@@ -112,15 +112,16 @@ describe('collection module boundaries', () => {
 		);
 		expect(parts).toEqual({
 			_tag: 'Ready',
-			input: '',
-			imageAssets: [
-				{
-					key: 'tenant/photos/evidence.jpg',
-					name: 'evidence.jpg',
-					mimeType: 'image/jpeg',
-					size: 1_042_884
-				}
-			]
+			input: {
+				imageAssets: [
+					{
+						key: 'tenant/photos/evidence.jpg',
+						name: 'evidence.jpg',
+						mimeType: 'image/jpeg',
+						size: 1_042_884
+					}
+				]
+			}
 		});
 	});
 });

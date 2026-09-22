@@ -53,7 +53,8 @@ const guardedOperations = (
 				mimeType: null,
 				size: 0,
 				bytes: new Uint8Array()
-			})
+			}),
+		embed: () => record('embed', { collection: 'people', selected: 0, embedded: 0, failed: 0 })
 	};
 	return guardAuthoringOps(ops, (operation) => {
 		guards.push(operation);
@@ -112,7 +113,8 @@ describe('automation stoppage facility guard', () => {
 				file_size: 0,
 				mime_type: 'application/octet-stream'
 			}),
-			ops.runAutomation('child', {}, undefined)
+			ops.runAutomation('child', {}, undefined),
+			ops.embed({ collection: 'people' })
 		];
 
 		for (const attempt of attempts) {
@@ -128,7 +130,8 @@ describe('automation stoppage facility guard', () => {
 			'collection.people.create',
 			'ai.infer',
 			'files.read',
-			'automations.child.run'
+			'automations.child.run',
+			'ai.embed.people'
 		]);
 	});
 

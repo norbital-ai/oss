@@ -149,6 +149,7 @@ export {
 } from './sync.js';
 export {
 	SyncConnectionLane,
+	SyncInitialAnswerTooLargeError,
 	SyncRegistry,
 	type SyncPrefixExtensionDecision,
 	type SyncPrefixViewerState,
@@ -196,6 +197,7 @@ export {
 	DirectiveState,
 	ExactCharge,
 	ImageAsset,
+	EmbeddingInput,
 	FileAsset,
 	MessageId,
 	ModelCatalogEntry,

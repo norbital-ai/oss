@@ -105,7 +105,16 @@ test('an unbounded CollectionTable yields vertical scrolling to its record-detai
 	assert.match(types, /bounded\?: boolean/u);
 	assert.match(table, /bounded = true/u);
 	assert.match(table, /data-collection-table-bounded=\{bounded \? 'true' : 'false'\}/u);
-	assert.equal(table.match(/\{bounded\}/gu)?.length, 2, 'both responsive bodies receive bounded');
+	assert.match(
+		table,
+		/grow=\{bounded\}/u,
+		'a bounded surface grows into the height its parent grants'
+	);
+	assert.equal(
+		table.match(/\{bounded\}/gu)?.length,
+		3,
+		'the surface grows when bounded and both responsive bodies receive bounded'
+	);
 
 	assert.match(grid, /axis=\{bounded \? 'both' : 'x'\}/u);
 	assert.match(grid, /style=\{bounded \? undefined : 'height: auto; max-height: none;'\}/u);

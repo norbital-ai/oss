@@ -15,6 +15,7 @@ import {
 	SyncConnectEvaluation,
 	SyncExtendPrefixEvaluation,
 	SyncExtendPrefixRequest,
+	SyncInitialAnswerTooLargeError,
 	TransportRequest,
 	success,
 	type FacilityBindings,
@@ -611,6 +612,14 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				writeJson(response, 410, {
 					code: 'bolt_server.sync_connection_unavailable',
 					message: 'sync connection or its pinned release is no longer available'
+				});
+			} else if (failure instanceof SyncInitialAnswerTooLargeError) {
+				// Refused, not failed: the browser splits its batch and asks one key at a time, so the
+				// queries that fit open and this sentence lands on the one that does not. Answered as a
+				// 500 it was a transport failure the browser retried as the identical batch forever.
+				writeJson(response, 400, {
+					code: 'bolt_server.sync_answer_too_large',
+					message: failure.message
 				});
 			} else {
 				writeJson(response, 500, { code: 'bolt_server.internal_error' });

@@ -25,6 +25,10 @@ import type * as Workspace from '#lib/runtime/workspace.js';
 import type * as AccessControl from '#lib/runtime/access/access-control.js';
 import type * as Database from '#lib/runtime/facilities/database.js';
 import type { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
+import type {
+	EmbeddingPassSummary,
+	EmbedRecordsOptions
+} from '#lib/runtime/collections/services/embeddings.js';
 import type { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import type { NestingLimitExceeded } from '#lib/runtime/budget.js';
 import type { WhereCompileError } from '#lib/runtime/access/effective-plan.js';
@@ -527,20 +531,19 @@ export type Interface = Readonly<{
 		input: NearestQueryInput
 	) => Effect.Effect<ReadonlyArray<NearestQueryRow>, QueryError>;
 	/**
-	 * Fills in missing record embeddings for every collection that declares one.
+	 * Fills in missing record embeddings for collections that declare one.
 	 *
 	 * A backfill rather than only a write-path hook, because rows arrive without passing through
-	 * `mutate`: the seed loader writes its corpus as bulk SQL, so a workspace can be fully populated
-	 * and hold no vectors at all. Bounded per call and re-runnable — it selects only rows whose
-	 * embedding is null, so calling it twice embeds nothing twice.
+	 * `mutate`: a seed loader can write its corpus as bulk SQL, so a workspace can be fully
+	 * populated and hold no vectors at all. Bounded per call and re-runnable — it selects only rows
+	 * whose embedding is null, so calling it twice embeds nothing twice. `only` and `targets`
+	 * narrow one call to named collections and rows, which is how an authored pass embeds its own
+	 * worklist without paying for the whole workspace.
 	 */
 	readonly embedRecords: (
 		effectId: EffectId,
-		limit?: number
-	) => Effect.Effect<
-		ReadonlyArray<{ readonly collection: string; readonly embedded: number }>,
-		QueryError
-	>;
+		options?: EmbedRecordsOptions
+	) => Effect.Effect<ReadonlyArray<EmbeddingPassSummary>, QueryError>;
 	readonly findGrouped: (
 		effectId: EffectId,
 		subject: Subject,

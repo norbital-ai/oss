@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
+import type { TExportManifest } from '../src/authoring/contracts-schema.js';
 import { app, collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import { emptyAuthoredRuntime } from '../src/runtime/collections/authored.js';
 import * as Collections from '../src/runtime/collections/collections.js';
@@ -40,6 +41,18 @@ const definition = workspace({
 });
 
 let harness: BoltTestRuntime | undefined;
+
+/**
+ * The attachment's media label is open on purpose: a workspace's file is the workspace's format,
+ * and `name` carries the extension. A closed label union would make every new bank format, data
+ * feed or one-off listing a platform release. This compiles only while that stays true.
+ */
+const arbitraryMediaLabel: TExportManifest = [
+	{
+		label: 'Bank file',
+		attachments: [{ name: 'payments.psv', contentType: 'PSV', content: 'a|b\n' }]
+	}
+];
 
 type NoteRow = Readonly<{ readonly body: string }>;
 type ExportPipelineApi = Readonly<{

@@ -34,6 +34,10 @@ import { nearestQueryInput, queryInput } from './query-input.js';
 import type { CollectionHistoryAnchor } from '@norbital-ai/bolt-protocol';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { inferOp, type InferenceRequest } from '#lib/runtime/inference.js';
+import type {
+	EmbeddingPassSummary,
+	EmbedRecordsOptions
+} from '#lib/runtime/collections/services/embeddings.js';
 
 const isNumber = Schema.is(Schema.Number);
 const isString = Schema.is(Schema.String);
@@ -245,6 +249,22 @@ export type AuthoringOps<E = never> = AuthoringReadOps<E> &
 		) => Effect.Effect<{ readonly taskId: string }, E, never>;
 		readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, E, never>;
 		readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, E, never>;
+		/**
+		 * Fills missing platform record embeddings for one collection, host-side.
+		 *
+		 * A record embedding is a platform column, so no authored write can set it: the host reads
+		 * the declared fields, resolves a file field into its image, embeds, and writes the vector.
+		 * Bounded per call and re-runnable — it selects only rows that have none — so an authored
+		 * pass loops until nothing is selected. This is how a workspace keeps its own similarity
+		 * index current without a host-side seeding step.
+		 */
+		readonly embed: (
+			input: Readonly<{
+				readonly collection: string;
+				readonly ids?: ReadonlyArray<string>;
+				readonly limit?: number;
+			}>
+		) => Effect.Effect<EmbeddingPassSummary, E, never>;
 	}>;
 
 /** A preflight the runtime may place in front of an authored operation. */
@@ -279,7 +299,8 @@ export const guardAuthoringOps = <E, G>(
 	runAutomation: (name, input, options) =>
 		guard(`automations.${name}.run`).pipe(Effect.andThen(ops.runAutomation(name, input, options))),
 	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
-	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file)))
+	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file))),
+	embed: (input) => guard(`ai.embed.${input.collection}`).pipe(Effect.andThen(ops.embed(input)))
 });
 
 /** The Effect-native capability object supplied to authored handlers after invocation binding. */
@@ -298,6 +319,11 @@ export type RuntimeAuthoringApi<E = never> = Readonly<{
 	}>;
 	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, E, never>;
 	readonly readFileAsset: (file: FileRef) => Effect.Effect<FileAsset, E, never>;
+	readonly embed: (input: {
+		readonly collection: string;
+		readonly ids?: ReadonlyArray<string>;
+		readonly limit?: number;
+	}) => Effect.Effect<EmbeddingPassSummary, E, never>;
 }>;
 
 /** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
@@ -313,6 +339,9 @@ type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 			url: string
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
 		readonly progress: (value: AutomationProgression) => Effect.Effect<void, E, never>;
+		readonly notify: (
+			reminder: Parameters<AutomationApi['notify']>[0]
+		) => Effect.Effect<void, E, never>;
 	}>;
 
 /**
@@ -448,7 +477,12 @@ export const makeAuthoringApi = <E>(ops: AuthoringOps<E>): RuntimeAuthoringApi<E
 			) => ops.runAutomation(name, input, options)
 		},
 		infer: (input: InferenceRequest) => ops.infer(input),
-		readFileAsset: (file: FileRef) => ops.readFileAsset(file)
+		readFileAsset: (file: FileRef) => ops.readFileAsset(file),
+		embed: (input: {
+			readonly collection: string;
+			readonly ids?: ReadonlyArray<string>;
+			readonly limit?: number;
+		}) => ops.embed(input)
 	};
 };
 
@@ -469,8 +503,8 @@ export const makePolicyDecisionApi = <E>(ops: AuthoringReadOps<E>, subject: Subj
 		})
 	});
 
-/** Adds the current durable run's progression capability without widening the ordinary API. */
-export const makeAutomationApi = <E, P, W, C>(
+/** Adds the current durable run's progression and reminder capabilities without widening the ordinary API. */
+export const makeAutomationApi = <E, P, W, C, N>(
 	api: RuntimeAuthoringApi<E>,
 	progress: (value: AutomationProgression) => Effect.Effect<void, P, never>,
 	readUrl: (url: string) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, W, never>,
@@ -479,8 +513,16 @@ export const makeAutomationApi = <E, P, W, C>(
 		readonly get: (
 			input: Parameters<AutomationApi['connection']['get']>[0]
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').IntegrationHttpResponse, C>;
-	}
-): RuntimeAutomationApi<E | P | W | C> => ({ ...api, progress, readUrl, runId, connection });
+	},
+	notify: (reminder: Parameters<AutomationApi['notify']>[0]) => Effect.Effect<void, N, never>
+): RuntimeAutomationApi<E | P | W | C | N> => ({
+	...api,
+	progress,
+	readUrl,
+	runId,
+	connection,
+	notify
+});
 
 const effectLabel = (value: string): string => encodeURIComponent(value).replaceAll('%', '_');
 
@@ -542,6 +584,10 @@ export type AuthoringPorts<E = never> = Readonly<{
 	) => Effect.Effect<{ readonly taskId: string }, AuthoringError<E>>;
 	readonly infer: AuthoringOps<E>['infer'];
 	readonly readFileAsset: AuthoringOps<E>['readFileAsset'];
+	readonly embed: (
+		effectId: EffectIdType,
+		input: Parameters<AuthoringOps<E>['embed']>[0]
+	) => Effect.Effect<EmbeddingPassSummary, E, never>;
 }>;
 
 type AuthoringError<E> =
@@ -605,9 +651,49 @@ export const makeAuthoringOps = <E>(
 				}
 			),
 		infer: ports.infer,
-		readFileAsset: ports.readFileAsset
+		readFileAsset: ports.readFileAsset,
+		embed: (input) => ports.embed(effectId, input)
 	};
 };
+
+/**
+ * Maps one authored `embedRecords` call onto the collection backfill and its single summary.
+ *
+ * The backfill is a multi-collection pass; an authored call names exactly one collection and either
+ * a bounded page of its rows or every row still missing a vector. Shared so the automation
+ * dispatch, the bound ops and the collections layer all narrow the pass the same way.
+ */
+export const embedRecordsSummary = <E>(
+	collections: Readonly<{
+		embedRecords: (
+			effectId: EffectIdType,
+			options?: EmbedRecordsOptions
+		) => Effect.Effect<ReadonlyArray<EmbeddingPassSummary>, E>;
+	}>,
+	effectId: EffectIdType,
+	input: Readonly<{
+		readonly collection: string;
+		readonly ids?: ReadonlyArray<string>;
+		readonly limit?: number;
+	}>
+): Effect.Effect<EmbeddingPassSummary, E> =>
+	collections
+		.embedRecords(effectId, {
+			...(input.limit === undefined ? {} : { limit: input.limit }),
+			only: new Set([input.collection]),
+			...(input.ids === undefined ? {} : { targets: new Map([[input.collection, [...input.ids]]]) })
+		})
+		.pipe(
+			Effect.map(
+				(summaries) =>
+					summaries.find((summary) => summary.collection === input.collection) ?? {
+						collection: input.collection,
+						selected: 0,
+						embedded: 0,
+						failed: 0
+					}
+			)
+		);
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = (
@@ -637,7 +723,8 @@ export const makeBoundAuthoringOps = (
 				ai,
 				hostTools === undefined ? undefined : { effectId, subject, hostTools }
 			),
-			readFileAsset: (file) => readFileAsset(effectId, files, file)
+			readFileAsset: (file) => readFileAsset(effectId, files, file),
+			embed: (id, input) => embedRecordsSummary(collections, id, input)
 		},
 		effectId,
 		subject

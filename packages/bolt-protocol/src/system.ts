@@ -522,6 +522,18 @@ export const SystemCommandContracts = [
 	}),
 	commandContract({ name: 'collections.embed', input: EmptyInput, responses: [ok(Schema.Json)] }),
 	/**
+	 * A host liveness answer with no side effect.
+	 *
+	 * The routed-release probe needs a signed command that proves the route, the artifact and the
+	 * database are standing without doing work: an embedding checkpoint that finds a queue would
+	 * spend a provider call and could fail the probe for a reason unrelated to health.
+	 */
+	commandContract({
+		name: 'host.ping',
+		input: EmptyInput,
+		responses: [ok(Schema.Struct({ ok: Schema.Literal(true) }))]
+	}),
+	/**
 	 * One seed plan (RFC seeding.md §4): fixtures ordered by the runtime's model graph, each
 	 * collection one declared `createMany` as the administering subject. Host-origin only.
 	 */

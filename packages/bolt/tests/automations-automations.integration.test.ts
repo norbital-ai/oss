@@ -30,7 +30,7 @@ import {
 import { dispatchInvocation } from '../src/runtime/dispatch.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { adminSubject } from './support/bolt-test-layer.js';
-import { seedSession } from './support/fixture-identity.js';
+import { fixtureUserId, seedSession } from './support/fixture-identity.js';
 import { ActivationCommands } from '../src/runtime/app.js';
 
 const scope = {
@@ -848,6 +848,75 @@ describe('Automations owner', () => {
 					"select task_id, status from automation_run where task_id = 'daily-run'"
 				)
 			).toEqual([{ task_id: 'daily-run', status: 'stopped' }]);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
+	it('reminds each recipient once per key, however many times the check runs', async () => {
+		const authored = {
+			...emptyAuthoredRuntime,
+			automations: {
+				remind: {
+					name: 'remind',
+					policies: [],
+					trigger: { _tag: 'Manual' as const },
+					handler: (api: unknown) =>
+						Effect.gen(function* () {
+							const reminder = {
+								key: 'late:PUBEM0002:2026-09-22',
+								recipients: [fixtureUserId('reminder-person'), { team: 'Production' }],
+								title: 'Late for work',
+								body: 'PUBEM0002 has not clocked in for the 08:30 shift.'
+							};
+							yield* (api as AutomationApi).notify(reminder);
+							// The same reminder again — a retry, or a later run of the same check. The key is
+							// what makes it one reminder rather than one per tick.
+							yield* (api as AutomationApi).notify(reminder);
+							return { reminded: true };
+						})
+				}
+			}
+		};
+		const harness = await makeBoltTestRuntime(
+			{
+				...directDefinition,
+				automations: [automation({ name: 'remind', trigger: { _tag: 'Manual' }, command: 'remind', policies: [] })]
+			},
+			{ authored }
+		);
+		try {
+			await seedSession(harness, { token: 'automation-test-token', user: 'reminder-runner' });
+			await seedSession(harness, {
+				token: 'production-token',
+				user: 'production-manager',
+				team: 'Production'
+			});
+
+			const response = await harness.runtime.runPromise(
+				dispatchInvocation(manualStart('manual-remind', 'remind'))
+			);
+			expect(response.value).toMatchObject({ result: { reminded: true } });
+
+			// One row for the direct recipient and one for the team member, and no second pair for the
+			// repeat — a direct id and a team id are derived differently, so both are asserted by id.
+			const rows = await harness.database.query(
+				`select recipient, payload from bolt_notifications`
+			);
+			expect(new Set(rows.map((row) => row['recipient']))).toEqual(
+				new Set([fixtureUserId('production-manager'), fixtureUserId('reminder-person')])
+			);
+			for (const row of rows)
+				expect(row['payload']).toEqual({
+					channel: 'inbox',
+					title: 'Late for work',
+					body: 'PUBEM0002 has not clocked in for the 08:30 shift.'
+				});
+			expect(
+				await harness.database.query(
+					"select status from bolt_task where command = 'notifications.deliver'"
+				)
+			).toEqual([{ status: 'pending' }]);
 		} finally {
 			await harness.dispose();
 		}

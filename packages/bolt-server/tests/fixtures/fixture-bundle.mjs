@@ -33,6 +33,13 @@ export const manifest = {
 
 const ok = (response) => ({ _tag: 'Success', response });
 
+/**
+ * Row bytes a registration answers for named keys, so the wire suite can build a batched answer the
+ * 2 MiB ceiling refuses. Each query is under the per-prefix ceiling on its own; the batch is not,
+ * which is the case a page of medium live queries hits.
+ */
+const LARGE_CONNECT_ROWS = { 'large-a': 1_100_000, 'large-b': 1_400_000 };
+
 /** Last `sync.advance` this fixture saw, so the suite can prove the host signed it. */
 let lastAdvance = null;
 let notePayload = '';
@@ -82,7 +89,14 @@ export const dispatch = async (invocation, _facilities, signal) => {
 						authorityFingerprint: 'fixture-policy',
 						dependencies: ['fixture-notes'],
 						routing: [],
-						rows: [{ id: 'note-1' }]
+						rows: [
+							{
+								id: 'note-1',
+								...(LARGE_CONNECT_ROWS[query.queryKey]
+									? { payload: 'x'.repeat(LARGE_CONNECT_ROWS[query.queryKey]) }
+									: {})
+							}
+						]
 					})),
 					outcomes: []
 				}

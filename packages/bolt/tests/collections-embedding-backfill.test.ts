@@ -87,18 +87,19 @@ describe('record embedding backfill', () => {
 		expect(select?.request._tag).toBe('Query');
 		if (select?.request._tag !== 'Query') throw new Error('expected a database select');
 		expect(select.request.parameters[0]).toBe(512);
-		expect(aiCalls).toHaveLength(512);
+		// 512 records ride 16 provider requests of 32 inputs each, not 512 calls of one input.
+		expect(aiCalls).toHaveLength(16);
 		expect(
 			aiCalls.map(({ request }) => (request._tag === 'Embed' ? request.inputs.length : 0))
-		).toEqual(Array.from({ length: 512 }, () => 1));
+		).toEqual(Array.from({ length: 16 }, () => 32));
 		expect(
 			aiCalls.every(
 				({ request }) => request._tag === 'Embed' && request.modelId === 'test/embedding'
 			)
 		).toBe(true);
 		expect(peakAI).toBe(4);
-		expect(databaseCalls).toHaveLength(7);
-		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(519);
+		expect(databaseCalls).toHaveLength(5);
+		expect(new Set([...databaseCalls, ...aiCalls].map(({ id }) => id)).size).toBe(21);
 	});
 
 	it('keeps the provider reason when a batch cannot be embedded', async () => {
@@ -158,5 +159,45 @@ describe('record embedding backfill', () => {
 				issues: ['ai_provider_failure: provider gateway timed out']
 			}
 		]);
+	});
+
+	it('narrows a pass to one collection and its named rows', async () => {
+		const selects: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> = [];
+		const summary = await Effect.runPromise(
+			embedRecords(
+				{
+					database: {
+						execute: (_effectId, request) => {
+							if (request._tag === 'Query' && request.sql.startsWith('select ')) {
+								selects.push({ sql: request.sql, parameters: request.parameters ?? [] });
+								return Effect.succeed({ rows: [], affectedRows: 0 });
+							}
+							return Effect.succeed({ rows: [], affectedRows: 0 });
+						}
+					},
+					ai: { embed: () => Effect.die('no provider call expected') },
+					collections: [
+						{
+							name: 'photo_evidence',
+							fields: { photo: { type: 'json' } },
+							embedding: { fields: ['photo'], model: 'test/embedding' }
+						},
+						{
+							name: 'other_records',
+							fields: { note: { type: 'text' } },
+							embedding: { fields: ['note'], model: 'test/embedding' }
+						}
+					]
+				},
+				EffectId.make('embedding-narrowed'),
+				{ only: new Set(['photo_evidence']), limit: 7 }
+			)
+		);
+
+		expect(summary).toEqual([{ collection: 'photo_evidence', selected: 0, embedded: 0, failed: 0 }]);
+		expect(selects).toHaveLength(1);
+		expect(selects[0]?.sql).toContain('"photo_evidence"');
+		expect(selects[0]?.sql).not.toContain('other_records');
+		expect(selects[0]?.parameters[0]).toBe(7);
 	});
 });

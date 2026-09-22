@@ -253,7 +253,7 @@ describe('Envoy inbound queue', () => {
 					envoys.receive(
 						harness.effectId('receive:sam'),
 						'field_ops_whatsapp',
-						groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam', 'Pump done.')
+						groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam W.', 'Pump done.')
 					)
 				)
 			).status
@@ -264,7 +264,7 @@ describe('Envoy inbound queue', () => {
 					envoys.receive(
 						harness.effectId('receive:alex'),
 						'field_ops_whatsapp',
-						groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex', 'Valve done.')
+						groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex T.', 'Valve done.')
 					)
 				)
 			).status
@@ -280,8 +280,15 @@ describe('Envoy inbound queue', () => {
 			await harness.database.query(`select status, agent_id, audience from conversation`)
 		).toEqual([{ status: 'done', agent_id: 'field_ops_whatsapp', audience: 'workbench' }]);
 		expect(generations).toHaveLength(1);
-		expect(JSON.stringify(generations[0]?.messages)).toContain('Pump done.');
-		expect(JSON.stringify(generations[0]?.messages)).toContain('Valve done.');
+		const prompt = JSON.stringify(generations[0]?.messages);
+		expect(prompt).toContain('Pump done.');
+		expect(prompt).toContain('Valve done.');
+		// Each envelope names the workspace account behind the sender's transport address, so the
+		// turn reads who it serves instead of resolving a chat nickname against staff.
+		expect(prompt).toContain('registered account: Sam');
+		expect(prompt).toContain('registered account: Alex');
+		// The channel's own brief rides on an envoy turn, not on the shared one.
+		expect(prompt).toContain('Registration is the platform');
 		expect(sends).toHaveLength(1);
 	});
 

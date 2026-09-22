@@ -75,6 +75,15 @@ and scheduled invocations. The task queue's cleanup removes old execution envelo
 deleting those outcomes. Authored handlers can read `api.db.automation_run` to resume deferred
 work and recognise completed requests. Task inputs and credentials are not exposed by this record.
 
+## Automation reminders
+
+`api.notify({ key, recipients, title, body })` writes one inbox notification per recipient — user
+ids or `{ team }` names, resolved to the team's members inside the insert — and queues the delivery
+task in the same statement. The row id is derived from the reminder key and the recipient, so a
+retry, or a later run that states the same reminder, writes nothing twice; the key is the
+reminder's identity, not the run's. Hooks and functions do not receive this capability: a reminder
+belongs to a durable run, never to somebody else's atomic write.
+
 ## Managed automation connections
 
 An automation may declare one `connection: defineConnection({ baseUrl, authentication })` in its spec.

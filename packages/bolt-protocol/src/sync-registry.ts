@@ -580,6 +580,48 @@ const syncClientResponse = (
 	outcomes: evaluation.outcomes
 });
 
+/** Only computed when the answer is already over the ceiling, so the refusal names what to shrink. */
+const largestResult = (
+	results: ReadonlyArray<SyncConnectEvaluationResult>
+): Readonly<{ queryKey: string; bytes: number }> | undefined => {
+	let largest: { queryKey: string; bytes: number } | undefined;
+	for (const result of results) {
+		const bytes = syncJsonByteLength(result.rows);
+		if (largest === undefined || bytes > largest.bytes) largest = { queryKey: result.key, bytes };
+	}
+	return largest;
+};
+
+const sizeLabel = (bytes: number): string =>
+	bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB` : `${bytes} bytes`;
+
+/**
+ * One request's whole answer is over the wire ceiling, before any of its queries is.
+ *
+ * Refused, never failed: a batch of medium prefixes that sums past the ceiling is the browser's
+ * batching, so the host answers this as a 4xx and the browser re-registers its keys one request at a
+ * time — the queries that fit alone open, and the one that does not carries this sentence. Reported
+ * as a transport or server failure instead, the browser reconnected and re-sent the identical batch
+ * on every backoff tick while every query on the page sat pending, which is a hung page no amount of
+ * waiting heals. `largestQuery` names the query to shrink first.
+ */
+export class SyncInitialAnswerTooLargeError extends Error {
+	readonly name = 'SyncInitialAnswerTooLargeError';
+	readonly bytes: number;
+	readonly largestQuery: Readonly<{ queryKey: string; bytes: number }> | undefined;
+
+	constructor(bytes: number, largestQuery?: Readonly<{ queryKey: string; bytes: number }>) {
+		super(
+			`sync initial answer exceeds its encoded byte ceiling: ${sizeLabel(bytes)} (limit ${sizeLabel(MAX_SYNC_INITIAL_ANSWER_BYTES)})` +
+				(largestQuery === undefined
+					? ''
+					: `; the largest query is "${largestQuery.queryKey}" at ${sizeLabel(largestQuery.bytes)}`)
+		);
+		this.bytes = bytes;
+		this.largestQuery = largestQuery;
+	}
+}
+
 type SyncConnectionLaneOptions<
 	Connection extends SyncRegistryConnection & Readonly<{ id: string }>,
 	CloseReason
@@ -730,9 +772,10 @@ export class SyncConnectionLane<
 				evaluation,
 				(queryKey) => this.registry.prefixViewer(connection, queryKey)?.version
 			);
-			if (syncJsonByteLength(response) > MAX_SYNC_INITIAL_ANSWER_BYTES) {
+			const answerBytes = syncJsonByteLength(response);
+			if (answerBytes > MAX_SYNC_INITIAL_ANSWER_BYTES) {
 				this.registry.release(connection, requestedKeys);
-				throw new Error('sync initial answer exceeds its encoded byte ceiling');
+				throw new SyncInitialAnswerTooLargeError(answerBytes, largestResult(evaluation.results));
 			}
 			return response;
 		});

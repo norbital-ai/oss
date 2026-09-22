@@ -31,11 +31,11 @@ column is a type error where it is written. A page continued with `after` is one
 full `orderBy` vocabulary. Lexical search may be live;
 prefix continuation then needs an ordering cursor the search planner owns, or the wake resets.
 
-| Command             | Who calls it                    | Role                                                                                         |
-| ------------------- | ------------------------------- | -------------------------------------------------------------------------------------------- |
-| `sync.connect`      | Browser (and reconnect / reset) | Resolve each requested prefix, return rows plus the plan the host will file.                 |
+| Command             | Who calls it                               | Role                                                                                         |
+| ------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `sync.connect`      | Browser (and reconnect / reset)            | Resolve each requested prefix, return rows plus the plan the host will file.                 |
 | `sync.extendPrefix` | Host, on the browser's HTTP extend request | Append rows past the viewer's loaded prefix without bumping version.                         |
-| `sync.advance`      | Host, after a commit            | Re-evaluate filed prefixes against the commit's `SyncChange` list; return updates or resets. |
+| `sync.advance`      | Host, after a commit                       | Re-evaluate filed prefixes against the commit's `SyncChange` list; return updates or resets. |
 
 `sync.connect` carries `queries` (`queryKey`, `input`, `requestedPrefix`), `detached` keys, and
 `pending` write ids. `sync.extendPrefix` carries `queryKey`, `version`, `loadedPrefix`, and
@@ -129,7 +129,10 @@ unacknowledged for `STALE_WRITE_MS` (15 s) is retried.
 Ceilings (`bolt-protocol/src/sync.ts`, `runtime/sync/delta-engine.ts`): `MAX_SYNC_LOADED_KEYS` = 10 000,
 `MAX_SYNC_INITIAL_ANSWER_BYTES` = 2 MiB, `MAX_SYNC_OUTBOUND_FRAME_BYTES` = 2 MiB,
 `MAX_SYNC_RETAINED_PREFIX_BYTES` = 8 MiB, `MAX_IDS_PER_QUERY` = 500, `MAX_SQL_CALLS_PER_PLAN` = 32,
-`MAX_REVERSE_ROOTS` = 10 000.
+`MAX_REVERSE_ROOTS` = 10 000. The byte ceiling is per `sync.connect` request, not per prefix: the
+lane refuses an answer over it as a 400 (`SyncInitialAnswerTooLargeError`, naming the largest query),
+the browser answers that by re-registering one key per request, and a page whose registrations only
+exceed the ceiling together therefore still opens every query that fits alone.
 
 ---
 

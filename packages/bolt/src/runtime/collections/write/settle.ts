@@ -5,6 +5,7 @@ import {
 	type MutationPhaseFailure
 } from '#lib/runtime/collections/collections.contract.js';
 import type { AppliedDeclarativeGraph } from './engine.js';
+import type { EmbedRecordsOptions } from '#lib/runtime/collections/services/embeddings.js';
 
 type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
 	readonly emitChangeEventsMany: (
@@ -18,8 +19,7 @@ type SettleDeclarativeGraphPorts<EmitE = never, EmbedE = never> = Readonly<{
 	) => Effect.Effect<void, EmitE, never>;
 	readonly embedRecords: (
 		effectId: EffectId,
-		limit: number,
-		targets: ReadonlyMap<string, ReadonlyArray<string>>
+		options: EmbedRecordsOptions
 	) => Effect.Effect<unknown, EmbedE, never>;
 }>;
 
@@ -81,11 +81,10 @@ export const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGr
 		yield* settleStep(
 			'embedding-refresh',
 			[...embeddingTargets.keys()].join(','),
-			ports.embedRecords(
-				EffectId.make(`${effectId}:embedding-refresh`),
-				[...embeddingTargets.values()].reduce((count, ids) => count + ids.length, 0),
-				embeddingTargets
-			)
+			ports.embedRecords(EffectId.make(`${effectId}:embedding-refresh`), {
+				limit: [...embeddingTargets.values()].reduce((count, ids) => count + ids.length, 0),
+				targets: embeddingTargets
+			})
 		);
 	return records;
 });

@@ -779,7 +779,8 @@
 
 <Bound
 	size="full"
-	class="min-h-[24rem] w-full"
+	grow={bounded}
+	class="w-full"
 	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	data-collection-table-surface
 	data-collection-table-bounded={bounded ? 'true' : 'false'}
@@ -795,6 +796,12 @@
 		exactly one line around the whole surface rather than two. An unbounded table lets this box hug
 		its content so a record-detail scrollport can own the vertical axis; a bounded application
 		surface keeps the fixed height chain needed for virtual rows.
+
+		A bounded surface grows to the height its parent grants (`grow`) instead of forcing one: in a
+		shell content region the row body scrolls inside the table, so the page never overflows and
+		the toolbar and pagination bar stay put. It is `flex-1` so a sibling above it (filters,
+		notices) takes its own height first, and `min-h-0` so a short viewport shrinks the rows
+		region rather than the shell.
 	-->
 	<Cover
 		as="div"

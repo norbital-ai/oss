@@ -1,4 +1,5 @@
 import { Effect, Schema } from 'effect';
+import type { NotificationRecipient } from '@norbital-ai/bolt-protocol';
 import type {
 	AnySchema,
 	Api,
@@ -95,6 +96,20 @@ export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S>
 	};
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
 	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
+	/**
+	 * Sends one inbox notification to each recipient, keyed so a retry — or a later run that states
+	 * the same reminder — writes nothing twice.
+	 *
+	 * `key` is the reminder's durable identity: `late:EMP01:2026-09-22` is one reminder however many
+	 * times the check runs, and a key naming a new fact is a new reminder. Recipients are user ids or
+	 * `{ team }` — every member of that team at the moment the notification is written.
+	 */
+	readonly notify: (reminder: {
+		readonly key: string;
+		readonly recipients: ReadonlyArray<NotificationRecipient>;
+		readonly title: string;
+		readonly body: string;
+	}) => Effect.Effect<void>;
 };
 
 export type AutomationContext<

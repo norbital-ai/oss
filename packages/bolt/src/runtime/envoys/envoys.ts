@@ -45,7 +45,8 @@ const {
 	bolt_envoy_messages: envoyMessages,
 	bolt_envoy_receipts: boltEnvoyReceipts,
 	bolt_channel_links: boltChannelLinks,
-	conversation_message: conversationMessage
+	conversation_message: conversationMessage,
+	user: usersTable
 } = SYSTEM_MODEL_TABLES;
 
 class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
@@ -186,6 +187,9 @@ const InboundRow = Schema.Struct({
 });
 type InboundRow = Schema.Schema.Type<typeof InboundRow>;
 const decodeInboundRow = Schema.decodeUnknownOption(InboundRow);
+/** The workspace name behind a registered sender's account, for the envelope the model reads. */
+const NamedAccount = Schema.Struct({ id: Schema.NonEmptyString, name: Schema.NonEmptyString });
+const decodeNamedAccount = Schema.decodeUnknownOption(NamedAccount);
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
 const SendReceipt = Schema.Struct({
@@ -1036,6 +1040,40 @@ export const layerWith = (
 					}
 					const recipient = rows.at(-1)?.transport_conversation_id;
 
+					/**
+					 * The workspace names behind the registered senders in this batch.
+					 *
+					 * The envelope the model reads names the sender as the transport knows them — a
+					 * WhatsApp display name is whatever they typed — so the account their address is
+					 * linked to is what says who the turn serves. One bounded read by primary key for
+					 * the whole batch; `receive` already resolved the link itself.
+					 */
+					const accountIds = [
+						...new Set(
+							rows
+								.filter((row) => row.subject.userId !== envoyPrincipalId(envoyName))
+								.map((row) => row.subject.userId)
+						)
+					];
+					const accounts =
+						accountIds.length === 0
+							? new Map<string, string>()
+							: new Map(
+									(yield* executeBuilt(
+										EffectId.make(`${effectId}:accounts`),
+										database,
+										composer
+											.select({ id: usersTable.id, name: usersTable.name })
+											.from(usersTable)
+											.where(inArray(usersTable.id, accountIds))
+									)).rows.flatMap((row) => {
+										const decoded = decodeNamedAccount(row);
+										return decoded._tag === 'Some'
+											? [[decoded.value.id, decoded.value.name] as const]
+											: [];
+									})
+								);
+
 					const admit = Effect.gen(function* () {
 						for (const [index, row] of rows.entries()) {
 							const attachments: Array<Agents.InboundAttachment> = [];
@@ -1052,12 +1090,14 @@ export const layerWith = (
 									})
 								});
 							}
+							const account = accounts.get(row.subject.userId);
 							const message: Agents.InboundAgentMessage = {
 								sender: {
 									...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
 									...(row.sender_display_name === null
 										? {}
-										: { displayName: row.sender_display_name })
+										: { displayName: row.sender_display_name }),
+									...(account === undefined ? {} : { account })
 								},
 								sentAt: row.sent_at,
 								messageId: row.external_message_id,

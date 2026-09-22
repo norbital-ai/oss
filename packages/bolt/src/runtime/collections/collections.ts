@@ -7,10 +7,8 @@ import {
 	RECORD_EMBEDDING_COLUMN
 } from '#lib/authoring/model-introspection.js';
 import { emitChangeEventsMany as emitChangeEventsManyService } from '#lib/runtime/collections/services/change-events.js';
-import {
-	RECORD_EMBEDDING_BACKFILL_LIMIT,
-	embedRecords as embedRecordsService
-} from '#lib/runtime/collections/services/embeddings.js';
+import { sendReminder } from '#lib/runtime/notifications/reminder.js';
+import { embedRecords as embedRecordsService } from '#lib/runtime/collections/services/embeddings.js';
 import {
 	and,
 	asc,
@@ -74,7 +72,7 @@ import { isWorkspaceSubject, workspaceSubject } from '#lib/runtime/identity/stat
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { describeCause } from '#lib/runtime/workspace.js';
-import { AutomationProgression } from '#lib/authoring/automations-schema.js';
+import { AutomationProgression, type AutomationApi } from '#lib/authoring/automations-schema.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
@@ -233,6 +231,7 @@ import {
 	AuthoredRuntimeService,
 	guardAuthoringOps,
 	makeAutomationApi,
+	embedRecordsSummary,
 	makeAuthoringApi,
 	makeAuthoringOps,
 	makeAuthoringReadOps,
@@ -1674,7 +1673,15 @@ export const layerWith = (
 					Effect.die(
 						new Error(`api.infer needs an invocation: ${JSON.stringify(input).slice(0, 40)}`)
 					),
-				readFileAsset: (file) => readFileAsset(EffectId.make('unbound'), files, file)
+				readFileAsset: (file) => readFileAsset(EffectId.make('unbound'), files, file),
+				embed: (effectId, input) =>
+					embedRecordsSummary(
+						{
+							embedRecords: (id, options) => embedRecordsService(embeddingPorts, id, options)
+						},
+						effectId,
+						input
+					)
 			};
 			const portsFor = (
 				effectId: EffectId,
@@ -1713,6 +1720,7 @@ export const layerWith = (
 				| QueryError
 				| BatchMutationError
 				| Schema.SchemaError
+				| Database.FacilityError
 				| Automations.AutomationStopped
 				| Automations.AutomationDeferredUnsupported
 				| Automations.AutomationContinuationUnchanged
@@ -1727,6 +1735,10 @@ export const layerWith = (
 					const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
 					const readUrl = webReader(turnEffectId, connector);
 					const get = connectionReader(turnEffectId, declaration.connection, connector);
+					const notify = (reminder: Parameters<AutomationApi['notify']>[0]) =>
+						guard('notify').pipe(
+							Effect.andThen(sendReminder(turnEffectId, database, queue, reminder))
+						);
 					const api = makeAutomationApi(
 						makeAuthoringApi(
 							guardAuthoringOps(
@@ -1754,7 +1766,8 @@ export const layerWith = (
 									Effect.andThen(get(input)),
 									Effect.provideService(Secrets.Service, secrets)
 								)
-						}
+						},
+						notify
 					);
 					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
 						admitted.args
@@ -1890,7 +1903,7 @@ export const layerWith = (
 								AIRequest.cases.Embed.make({
 									callId: ProviderCallId.make(callScope),
 									modelId: ModelId.make(embedding.model),
-									inputs: [term],
+									inputs: [{ text: term }],
 									...(embedding.dimensions === undefined
 										? {}
 										: { dimensions: embedding.dimensions })
@@ -4137,8 +4150,8 @@ export const layerWith = (
 								records,
 								event
 							),
-						embedRecords: (embeddingEffectId, limit, targets) =>
-							embedRecordsService(embeddingPorts, embeddingEffectId, limit, targets)
+						embedRecords: (embeddingEffectId, options) =>
+							embedRecordsService(embeddingPorts, embeddingEffectId, options)
 					},
 					effectId,
 					applied
@@ -5112,8 +5125,7 @@ export const layerWith = (
 				}),
 				count,
 				findNearest,
-				embedRecords: (effectId, limit = RECORD_EMBEDDING_BACKFILL_LIMIT) =>
-					embedRecordsService(embeddingPorts, effectId, limit),
+				embedRecords: (effectId, options) => embedRecordsService(embeddingPorts, effectId, options),
 				findGrouped,
 				// SyncCommit owns the unavailable-host fallback queue and the app drains it after dispatch.
 				drainChanges: Effect.succeed([]),

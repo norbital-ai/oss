@@ -145,10 +145,13 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			.toSorted();
 		// Agents and envoys no longer write the row themselves: every agent turn and every envoy drain
 		// goes through the queue's claimed enqueue, which is the other reason neither is in this list.
+		// Automation reminders write their delivery task beside the inbox rows they insert, and wake
+		// the host before the write commits — the same order the collection drain row is announced in.
 		expect(writers).toEqual([
 			'approvals/approvals.ts',
 			'collections/collections.ts',
 			'integrations/integrations.ts',
+			'notifications/reminder.ts',
 			'tasks/queue.ts'
 		]);
 	});

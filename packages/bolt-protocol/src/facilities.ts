@@ -158,6 +158,19 @@ export const ImageAsset = Schema.Struct({
 });
 export interface ImageAsset extends Schema.Schema.Type<typeof ImageAsset> {}
 
+/**
+ * One embedding input: the text and/or images the model embeds as a single vector.
+ *
+ * A request carries an array of these, so a batch of records is one provider call with one input
+ * per record instead of one call per record. Which images belong to which input is structural, not
+ * positional, so a record with several images needs no pairing rule.
+ */
+export const EmbeddingInput = Schema.Struct({
+	text: Schema.optionalKey(Schema.String),
+	imageAssets: Schema.optionalKey(Schema.Array(ImageAsset))
+});
+export interface EmbeddingInput extends Schema.Schema.Type<typeof EmbeddingInput> {}
+
 /** Named exact billable units emitted by an adapter when Effect usage is insufficient. */
 const ProviderUsage = Schema.Struct({
 	billableUnits: Schema.Record(Schema.NonEmptyString, Schema.BigIntFromString)
@@ -278,9 +291,9 @@ export const AIRequest = Schema.TaggedUnion({
 	Embed: {
 		callId: ProviderCallId,
 		modelId: ModelId,
-		inputs: Schema.Array(Schema.Json),
-		dimensions: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
-		imageAssets: Schema.optionalKey(Schema.Array(ImageAsset))
+		/** One vector per input, in this order; a batch is one call, not one call per record. */
+		inputs: Schema.Array(EmbeddingInput),
+		dimensions: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)))
 	}
 });
 export type AIRequest = typeof AIRequest.Type;

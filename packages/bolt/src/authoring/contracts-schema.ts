@@ -48,9 +48,20 @@ export type NoApprovalFlow = Readonly<{
 	readonly [ApprovalFlowBrand]: true;
 }>;
 
+/**
+ * One file an export action hands out.
+ *
+ * `name` is the whole contract for what lands on disk, extension included: the client writes the
+ * attachment under exactly this name and never appends one of its own, which is what lets a
+ * workspace emit `payroll.txt`, `payroll.psv` or a bank's own fixed-width `.txt`. `contentType` is a
+ * media label, not a format registry — `CSV`, `PDF`, `XLSX`, `JSON`, `TEXT` and `HTML` are the ones
+ * whose blob type the client knows, and anything else it writes as `application/octet-stream` while
+ * `name` still decides the extension. It is an open string because a bank's file is the bank's name
+ * for it, not the platform's.
+ */
 interface TFileAttachment {
 	name: string;
-	contentType: 'HTML' | 'PDF' | 'CSV' | 'XLSX' | 'JSON' | 'TEXT' | 'BINARY';
+	contentType: string;
 	content: unknown;
 }
 interface TExportAction {
@@ -922,6 +933,28 @@ export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
 		readonly size: number;
 		readonly bytes: Uint8Array;
 	}>;
+	/**
+	 * Fills missing platform record embeddings for one collection, host-side.
+	 *
+	 * A record embedding is a platform column, so no authored write can set it: the host reads the
+	 * collection's declared embedding fields, resolves a file field into its image, embeds, and
+	 * writes the vector. One call is bounded and re-runnable — it selects only rows that have none —
+	 * so a scheduled pass loops until `selected` is zero. `ids` narrows the pass to named rows.
+	 */
+	readonly embed: (input: {
+		readonly collection: TableName<S>;
+		readonly ids?: ReadonlyArray<string>;
+		readonly limit?: number;
+	}) => Effect.Effect<
+		Readonly<{
+			readonly collection: string;
+			readonly selected: number;
+			readonly embedded: number;
+			readonly failed: number;
+			readonly issues?: ReadonlyArray<string>;
+		}>,
+		AuthoredRefusal
+	>;
 };
 export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 	readonly export?: {

@@ -2,6 +2,7 @@ import { Effect, Option, Schema } from 'effect';
 import {
 	AIRequest,
 	EffectId,
+	EmbeddingInput,
 	ImageAsset,
 	ModelId,
 	ProviderCallId
@@ -26,19 +27,37 @@ type EmbeddingCollection = Readonly<{
 }>;
 
 type RecordEmbeddingInput =
-	| Readonly<{
-			_tag: 'Ready';
-			input: Schema.Json;
-			imageAssets: ReadonlyArray<ImageAsset>;
-	  }>
-	| Readonly<{ _tag: 'Invalid'; issue: string }>;
+	Readonly<{ _tag: 'Ready'; input: EmbeddingInput }> | Readonly<{ _tag: 'Invalid'; issue: string }>;
 
 type EmbeddingAttempt =
 	Readonly<{ ok: true; embedding: ReadonlyArray<number> }> | Readonly<{ ok: false; issue: string }>;
 
 export const RECORD_EMBEDDING_BACKFILL_LIMIT = 512;
-const RECORD_EMBEDDING_BATCH_ROWS = 100;
+/**
+ * Rows per database batch. A multiple of the request size so the two levels divide evenly: one
+ * batch is a whole number of provider requests, never a partial one that would waste a call.
+ */
+const RECORD_EMBEDDING_BATCH_ROWS = 128;
+/** Records per provider request. The endpoint takes an array of inputs; this bounds its size. */
+const RECORD_EMBEDDING_REQUEST_ROWS = 32;
 const RECORD_EMBEDDING_REQUEST_CONCURRENCY = 4;
+
+/** One collection's outcome from a backfill pass, as the caller and its audit read it. */
+export type EmbeddingPassSummary = Readonly<{
+	readonly collection: string;
+	readonly selected: number;
+	readonly embedded: number;
+	readonly failed: number;
+	readonly issues?: ReadonlyArray<string>;
+}>;
+
+export type EmbedRecordsOptions = Readonly<{
+	readonly limit?: number;
+	/** Narrow the pass to these collection names; absent means every declared embedding. */
+	readonly only?: ReadonlySet<string>;
+	/** Narrow the pass to named rows per collection; absent means every row without one. */
+	readonly targets?: ReadonlyMap<string, ReadonlyArray<string>>;
+}>;
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
@@ -56,7 +75,7 @@ type EmbeddingPorts = Readonly<{
 	readonly collections: ReadonlyArray<EmbeddingCollection>;
 }>;
 
-/** Builds one provider-neutral input plus host-resolved image descriptors for one record. */
+/** Builds one provider-neutral embedding input plus host-resolved image descriptors per record. */
 export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput')(function* (
 	collection: EmbeddingCollection,
 	row: Readonly<Record<string, unknown>>
@@ -98,10 +117,13 @@ export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput'
 			issue: `${collection.name} contains no embeddable source value`
 		} satisfies RecordEmbeddingInput;
 	}
+	const joined = text.join('\n');
 	return {
 		_tag: 'Ready',
-		input: text.join('\n'),
-		imageAssets
+		input: {
+			...(joined === '' ? {} : { text: joined }),
+			...(imageAssets.length === 0 ? {} : { imageAssets })
+		}
 	} satisfies RecordEmbeddingInput;
 });
 
@@ -109,17 +131,12 @@ export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput'
 export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 	ports: EmbeddingPorts,
 	effectId: EffectId,
-	limit: number = RECORD_EMBEDDING_BACKFILL_LIMIT,
-	targets?: ReadonlyMap<string, ReadonlyArray<string>>
+	options: EmbedRecordsOptions = {}
 ) {
-	const summary: Array<{
-		readonly collection: string;
-		readonly selected: number;
-		readonly embedded: number;
-		readonly failed: number;
-		readonly issues?: ReadonlyArray<string>;
-	}> = [];
+	const { limit = RECORD_EMBEDDING_BACKFILL_LIMIT, only, targets } = options;
+	const summary: Array<EmbeddingPassSummary> = [];
 	for (const collection of ports.collections) {
+		if (only !== undefined && !only.has(collection.name)) continue;
 		const declared = collection.embedding;
 		if (declared === undefined) continue;
 		if (declared.model === undefined || declared.model.trim() === '') {
@@ -214,36 +231,62 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 						issues: inputIssues
 					};
 				}
+				/**
+				 * One provider call per request-sized slice of the batch.
+				 *
+				 * The embeddings endpoint takes an array of inputs, so a record is one input in a
+				 * shared call rather than a call of its own: 512 rows cost a handful of requests, not
+				 * 512. Requests run concurrently because the batching is what bounds the call count.
+				 */
+				const requestOffsets = Array.from(
+					{ length: Math.ceil(prepared.length / RECORD_EMBEDDING_REQUEST_ROWS) },
+					(_, index) => index * RECORD_EMBEDDING_REQUEST_ROWS
+				);
 				const attempts = yield* Effect.forEach(
-					prepared,
-					(item, position) =>
-						ports.ai
-							.embed(
-								EffectId.make(`${batchId}:embedding:${position}`),
-								AIRequest.cases.Embed.make({
-									callId: ProviderCallId.make(`${batchId}:embedding:${position}`),
-									modelId,
-									inputs: [item.input],
-									...(declared.dimensions === undefined ? {} : { dimensions: declared.dimensions }),
-									...(item.imageAssets.length === 0 ? {} : { imageAssets: item.imageAssets })
-								})
-							)
-							.pipe(
-								Effect.match({
-									onFailure: (failure): EmbeddingAttempt => ({
-										ok: false,
-										issue: `${failure.code}: ${failure.message}`
-									}),
-									onSuccess: (response): EmbeddingAttempt => {
-										const embedding = response.embeddings[0];
-										return embedding === undefined || embedding.length === 0
-											? { ok: false, issue: 'AI provider returned no usable vector' }
-											: { ok: true, embedding };
-									}
-								})
-							),
+					requestOffsets,
+					(requestOffset) =>
+						Effect.gen(function* () {
+							const items = prepared.slice(
+								requestOffset,
+								requestOffset + RECORD_EMBEDDING_REQUEST_ROWS
+							);
+							const requestId = `${batchId}:embedding:${requestOffset}`;
+							const response = yield* ports.ai
+								.embed(
+									EffectId.make(requestId),
+									AIRequest.cases.Embed.make({
+										callId: ProviderCallId.make(requestId),
+										modelId,
+										inputs: items.map((item) => item.input),
+										...(declared.dimensions === undefined
+											? {}
+											: { dimensions: declared.dimensions })
+									})
+								)
+								.pipe(
+									Effect.match({
+										onFailure: (failure): ReadonlyArray<EmbeddingAttempt> =>
+											items.map(() => ({
+												ok: false as const,
+												issue: `${failure.code}: ${failure.message}`
+											})),
+										onSuccess: (embedded): ReadonlyArray<EmbeddingAttempt> =>
+											items.map((_, position) => {
+												const embedding = embedded.embeddings[position];
+												return embedding === undefined || embedding.length === 0
+													? {
+															ok: false as const,
+															issue: 'AI provider returned no usable vector'
+														}
+													: { ok: true as const, embedding };
+											})
+									})
+								);
+							return response;
+						}),
 					{ concurrency: RECORD_EMBEDDING_REQUEST_CONCURRENCY }
 				);
+				const flattened = attempts.flat();
 				const writable: Array<{
 					readonly id: unknown;
 					readonly updated_at: unknown;
@@ -251,8 +294,8 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 					readonly embedding: ReadonlyArray<number>;
 				}> = [];
 				const providerIssues: Array<string> = [];
-				for (let position = 0; position < attempts.length; position += 1) {
-					const attempt = attempts[position];
+				for (let position = 0; position < flattened.length; position += 1) {
+					const attempt = flattened[position];
 					const item = prepared[position];
 					if (attempt === undefined || item === undefined) continue;
 					if (!attempt.ok) {

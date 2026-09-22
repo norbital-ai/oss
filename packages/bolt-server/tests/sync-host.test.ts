@@ -6,6 +6,7 @@ import {
 	MAX_SYNC_INITIAL_ANSWER_BYTES,
 	MAX_SYNC_OUTBOUND_FRAME_BYTES,
 	ReleaseId,
+	SyncInitialAnswerTooLargeError,
 	systemSignaturePayload,
 	SyncScopedApplyFrame,
 	TenantId,
@@ -479,8 +480,10 @@ describe('bolt-server Sync v2 host', () => {
 			sink: probe.connection.sink
 		});
 
-		await expect(
-			host.connect({
+		// The refusal names the query to shrink, not just the ceiling: the sentence is all the
+		// browser has to put on the failed query.
+		const refusal = await host
+			.connect({
 				connectionId: probe.connection.id,
 				principal: probe.connection.credential,
 				scope: configuration.scope,
@@ -497,7 +500,10 @@ describe('bolt-server Sync v2 host', () => {
 					pending: []
 				}
 			})
-		).rejects.toThrow(/encoded byte ceiling/u);
+			.catch((cause: unknown) => cause);
+		assert.ok(refusal instanceof SyncInitialAnswerTooLargeError);
+		assert.match((refusal as Error).message, /encoded byte ceiling/u);
+		assert.match((refusal as Error).message, /the largest query is "steps"/u);
 		assert.deepStrictEqual(probe.frames, []);
 		// The prefix is released, not admitted. Detaching here closed the physical
 		// EventSource and 410'd every other live query that still owned it.
@@ -976,6 +982,56 @@ describe('bolt-server Sync v2 wire', () => {
 			)
 		);
 	}
+
+	it.effect(
+		'refuses a batched answer over the byte ceiling as a 400 and answers one key alone',
+		() =>
+			Effect.acquireUseRelease(
+				startTestApplication(configuration),
+				(application) =>
+					Effect.gen(function* () {
+						const base = `http://${application.address.host}:${application.address.port}`;
+						const connectionId = 'browser-oversized-1';
+						const connect = (queryKeys: ReadonlyArray<string>) =>
+							Effect.tryPromise(() =>
+								fetch(`${base}/sync/connect`, {
+									method: 'POST',
+									headers: {
+										'content-type': 'application/json',
+										authorization: 'Bearer writer-1',
+										'x-bolt-sync-connection': connectionId
+									},
+									body: JSON.stringify({
+										queries: queryKeys.map((queryKey) => ({
+											queryKey,
+											input: { kind: 'findMany', collection: 'fixture-notes' },
+											requestedPrefix: 1
+										})),
+										detached: [],
+										pending: []
+									})
+								})
+							);
+
+						// Each query is under the per-prefix ceiling; the batch is not. A 400 is what lets the
+						// browser split it — a 500 was a transport failure it retried as the same batch forever.
+						const refused = yield* connect(['large-a', 'large-b']);
+						assert.strictEqual(refused.status, 400);
+						const refusal = (yield* Effect.tryPromise(() => refused.json())) as {
+							readonly code: string;
+							readonly message: string;
+						};
+						assert.strictEqual(refusal.code, 'bolt_server.sync_answer_too_large');
+						assert.match(refusal.message, /exceeds its encoded byte ceiling/u);
+						assert.match(refusal.message, /the largest query is "large-b" at 1\.3 MiB/u);
+
+						// The re-ask the browser answers a 400 with: one key fits, so the page opens.
+						const single = yield* connect(['large-b']);
+						assert.strictEqual(single.status, 200);
+					}),
+				(application) => Effect.promise(() => application.stop())
+			)
+	);
 
 	it.effect('refuses an unsigned sync.advance when no gateway secret is configured', () =>
 		Effect.acquireUseRelease(

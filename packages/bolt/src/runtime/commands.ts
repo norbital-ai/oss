@@ -19,18 +19,21 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { compileOrderTerms } from '#lib/runtime/access/effective-plan.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
-import { AutomationProgression } from '#lib/authoring/automations-schema.js';
+import { AutomationProgression, type AutomationApi } from '#lib/authoring/automations-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import { sendReminder } from '#lib/runtime/notifications/reminder.js';
 import type { QueryInput } from '#lib/runtime/collections/collections.contract.js';
 import {
 	AuthoredRuntimeService,
 	RemoteRegistry,
 	guardAuthoringOps,
 	makeAutomationApi,
+	embedRecordsSummary,
 	makeAuthoringApi,
 	makeAuthoringOps,
 	runAuthoredHandler
@@ -355,6 +358,7 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const ai = yield* AI.Service;
 	const files = yield* Files.Service;
 	const automations = yield* Automations.Service;
+	const database = yield* Database.Service;
 	const hostTools = yield* HostTools.Service;
 	const guard = Automations.stoppageGuard(automations, context.effectId, input.bolt_task_id);
 	const ops = guardAuthoringOps(
@@ -373,7 +377,8 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 					subject: runAs,
 					hostTools
 				}),
-				readFileAsset: (file) => readFileAsset(context.effectId, files, file)
+				readFileAsset: (file) => readFileAsset(context.effectId, files, file),
+				embed: (id, input) => embedRecordsSummary(collections, id, input)
 			},
 			context.effectId,
 			runAs,
@@ -385,6 +390,9 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const readUrl = webReader(context.effectId, connector);
 	const secrets = yield* Secrets.Service;
 	const get = connectionReader(context.effectId, automation.connection, connector);
+	const tasks = yield* TaskQueue.Service;
+	const notify = (reminder: Parameters<AutomationApi['notify']>[0]) =>
+		guard('notify').pipe(Effect.andThen(sendReminder(context.effectId, database, tasks, reminder)));
 	const api = makeAutomationApi(
 		makeAuthoringApi(ops),
 		(value) =>
@@ -402,7 +410,8 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 					Effect.andThen(get(input)),
 					Effect.provideService(Secrets.Service, secrets)
 				)
-		}
+		},
+		notify
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
 	const output = yield* runAuthoredHandler(() =>
@@ -872,6 +881,10 @@ const BINDINGS = [
 		Effect.flatMap(Collections.Service, (collections) =>
 			Effect.map(collections.embedRecords(context.effectId), json)
 		)
+	),
+	/** Answers without touching anything: the probe for a routed release that must not do work. */
+	binding('host.ping', { Command: system('host liveness') }, () =>
+		Effect.succeed(json({ ok: true }))
 	),
 	/**
 	 * The seed loader of RFC seeding.md: a host materialises the fixture tree and invokes this
