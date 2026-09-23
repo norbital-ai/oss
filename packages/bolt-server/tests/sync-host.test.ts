@@ -14,7 +14,8 @@ import {
 	type SyncApplyFrame,
 	type SyncConnectRequest,
 	type SyncExtendPrefixRequest,
-	type SyncQueryInput
+	type SyncQueryInput,
+	type SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
 import { Effect, Redacted, Schema } from 'effect';
 import { createHmac } from 'node:crypto';
@@ -85,6 +86,7 @@ const makeBridge = (hooks: {
 	readonly onConnect?: (request: SyncConnectRequest) => void;
 	readonly onExtend?: (request: SyncExtendPrefixRequest) => void;
 	readonly onAdvance?: (request: SyncAdvanceRequest) => void;
+	readonly status?: SyncWriteStatus;
 }): SyncGuestBridge => ({
 	connect: async ({ request }) => {
 		hooks.onConnect?.(request);
@@ -171,7 +173,7 @@ const makeBridge = (hooks: {
 			resets: [],
 			outcomes: request.pending.map((id) => ({
 				id,
-				status: { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
+				status: hooks.status ?? { resolution: 'accepted', schemaFingerprint: 'fixture-schema' }
 			}))
 		};
 	}
@@ -408,6 +410,49 @@ describe('bolt-server Sync v2 host', () => {
 					})
 				).rejects.toThrow(/not available|reset/u)
 			);
+		})
+	);
+
+	it.effect('keeps the writer’s prefixes when a settlement without changes was refused', () =>
+		Effect.gen(function* () {
+			const refused: SyncWriteStatus = {
+				resolution: 'rejected',
+				code: 'refused',
+				message: 'payroll_runs.period is required by the declared create input.',
+				schemaFingerprint: 'fixture-schema'
+			};
+			const host = makeSyncHost(makeBridge({ status: refused }));
+			const { probe } = yield* Effect.tryPromise(() =>
+				openAndConnect(
+					host,
+					'conn-refused',
+					'steps',
+					{ kind: 'findMany', collection: 'steps' },
+					'writer'
+				)
+			);
+
+			// A refused write committed nothing, so nothing can be stale. Resetting here blanked every
+			// live query on the page and unmounted the form that was showing the refusal.
+			yield* Effect.tryPromise(() =>
+				host.committed({
+					scope: configuration.scope,
+					writerConnectionId: 'conn-refused',
+					writerCredential: 'writer',
+					changes: [],
+					pending: [CollectionMutationIdempotencyKey.make('write-refused')]
+				})
+			);
+
+			assert.deepStrictEqual(probe.frames, [
+				scopedFrame({
+					updates: [],
+					resets: [],
+					outcomes: [
+						{ id: CollectionMutationIdempotencyKey.make('write-refused'), status: refused }
+					]
+				})
+			]);
 		})
 	);
 

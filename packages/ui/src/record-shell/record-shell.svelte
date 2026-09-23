@@ -11,6 +11,12 @@
 		/** One muted line under the heading (state, owner, summary). */
 		subtitle?: string;
 		/**
+		 * What the record is, in the reader's words ("Employment contract"). Inside the record sheet
+		 * it replaces the collection name in the chrome, so two representations of related
+		 * collections read as the two different things they are.
+		 */
+		kind?: string;
+		/**
 		 * Iconify icon inside the state pill (for example a lock on a read-only record). Inside the
 		 * record sheet the pill trails the sheet's own record label; elsewhere it trails the shell's
 		 * heading. Muted either way: the shell stays subordinate to the chrome.
@@ -51,6 +57,7 @@
 	let {
 		title,
 		subtitle,
+		kind,
 		icon,
 		badge,
 		hint,
@@ -71,6 +78,11 @@
 		if (!stateInHeader || sheetHeader == null) return;
 		sheetHeader.registerTrailing(recordState);
 		return () => sheetHeader.registerTrailing(null);
+	});
+	$effect(() => {
+		if (sheetHeader == null || kind == null) return;
+		sheetHeader.registerKind(kind);
+		return () => sheetHeader.registerKind(null);
 	});
 </script>
 

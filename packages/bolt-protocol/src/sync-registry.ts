@@ -870,8 +870,16 @@ export class SyncConnectionLane<
 		// ledger answers with the outcome alone, and no delta exists to publish. The writer's own
 		// prefixes are the only state that can be stale then — nothing else on the stream has a
 		// reason to refetch — so reset them to registration rather than let a written row stay
-		// invisible until the next reload.
-		if (options.changes.length === 0 && writer !== undefined && response.outcomes.length > 0) {
+		// invisible until the next reload. A refused or quarantined write committed nothing, so it
+		// stales nothing: resetting on one blanked every live query on the page — the create sheet
+		// that submitted it unmounted with the refusal it was showing.
+		if (
+			options.changes.length === 0 &&
+			writer !== undefined &&
+			response.outcomes.some(
+				({ status }) => status.resolution === 'accepted' || status.resolution === 'rebased'
+			)
+		) {
 			for (const subId of writer.subscriptions.values()) {
 				if (!resets.has(subId)) resets.set(subId, 'settled-without-changes');
 			}

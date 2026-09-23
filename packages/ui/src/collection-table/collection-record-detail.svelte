@@ -72,12 +72,16 @@
 	 */
 	let headerNotice = $state<Snippet | null>(null);
 	let headerTrailing = $state<Snippet | null>(null);
+	let headerKind = $state<string | null>(null);
 	setCollectionRecordNoticeContext({
 		registerNotice: (notice) => {
 			headerNotice = notice;
 		},
 		registerTrailing: (trailing) => {
 			headerTrailing = trailing;
+		},
+		registerKind: (kind) => {
+			headerKind = kind;
 		}
 	});
 	const definition = $derived(
@@ -416,8 +420,8 @@
 
 {#if client && definition}
 	<CollectionRecordDetailTabs
-		title={record ? recordTitle(record) : humanize(collectionName)}
-		description={t('table.recordDetails', { name: humanize(collectionName) })}
+		title={record ? recordTitle(record) : (headerKind ?? humanize(collectionName))}
+		description={t('table.recordDetails', { name: headerKind ?? humanize(collectionName) })}
 		loading={recordLoading}
 		error={recordError}
 		found={Boolean(record)}

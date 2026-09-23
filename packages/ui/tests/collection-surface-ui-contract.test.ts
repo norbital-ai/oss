@@ -133,3 +133,16 @@ test('CollectionTable paginates a growing live window instead of requiring a fir
 	assert.match(table, /collectionTablePageRows\(rowsQuery\?\.current, pageWindow\)/u);
 	assert.doesNotMatch(table, /rowsQuery\?\.nextCursor/u);
 });
+
+test('a RecordShell kind names the record in the sheet chrome instead of the collection', () => {
+	const shell = componentSource('record-shell/record-shell.svelte');
+	const detail = componentSource('collection-table/collection-record-detail.svelte');
+
+	assert.match(shell, /sheetHeader\.registerKind\(kind\)/u);
+	assert.match(shell, /return \(\) => sheetHeader\.registerKind\(null\)/u);
+	assert.match(detail, /registerKind: \(kind\) => \{\s*headerKind = kind;/u);
+	assert.match(
+		detail,
+		/description=\{t\('table\.recordDetails', \{ name: headerKind \?\? humanize\(collectionName\) \}\)\}/u
+	);
+});

@@ -154,6 +154,8 @@ const COLLECTION_RECORD_NOTICE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-
 export interface CollectionRecordNoticeRegistry {
 	registerNotice(notice: Snippet | null): void;
 	registerTrailing(trailing: Snippet | null): void;
+	/** What the record is, in the reader's words; the header names it instead of the collection. */
+	registerKind(kind: string | null): void;
 }
 
 export function setCollectionRecordNoticeContext(registry: CollectionRecordNoticeRegistry): void {
