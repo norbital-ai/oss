@@ -131,6 +131,8 @@ type Patch<S extends AnySchema, N extends TableName<S>> = Partial<MutationInsert
  * that caused it. Only that record, and only the fields returned; `undefined` records nothing.
  */
 export type ChannelEvents<S extends AnySchema, T extends Transport, N extends TableName<S>> = {
+	/** The relay accepted the message: it has left this workspace. Fired by the runtime, every transport. */
+	readonly sent?: (event: { readonly at: string }) => Patch<S, N> | undefined;
 	readonly delivered?: (event: { readonly at: string }) => Patch<S, N> | undefined;
 	readonly bounced?: (event: { readonly at: string; readonly reason: string }) => Patch<S, N> | undefined;
 	readonly opened?: (event: { readonly at: string }) => Patch<S, N> | undefined;
@@ -192,7 +194,7 @@ export interface ChannelDeclaration {
 		readonly from: string;
 		readonly events: ReadonlyArray<'create' | 'update' | 'delete'>;
 	}>;
-	readonly events: ReadonlyArray<'delivered' | 'bounced' | 'opened' | 'failed' | 'replied'>;
+	readonly events: ReadonlyArray<'sent' | 'delivered' | 'bounced' | 'opened' | 'failed' | 'replied'>;
 }
 
 /** The live half: the functions that cannot cross a manifest. */
@@ -215,12 +217,12 @@ export interface AuthoredChannel {
 		>
 	>;
 	readonly events: Readonly<
-		Partial<Record<'delivered' | 'bounced' | 'opened' | 'failed' | 'replied', (event: never) => unknown>>
+		Partial<Record<'sent' | 'delivered' | 'bounced' | 'opened' | 'failed' | 'replied', (event: never) => unknown>>
 	>;
 }
 
 const OPERATIONS = ['create', 'update', 'delete'] as const;
-const EVENT_KINDS = ['delivered', 'bounced', 'opened', 'failed', 'replied'] as const;
+const EVENT_KINDS = ['sent', 'delivered', 'bounced', 'opened', 'failed', 'replied'] as const;
 const LOCAL_PART = /^[a-z0-9](?:[a-z0-9-]{0,40}[a-z0-9])?$/;
 
 const validateChannel = (name: string, declaration: unknown): void => {

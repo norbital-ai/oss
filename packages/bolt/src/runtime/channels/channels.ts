@@ -484,7 +484,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 			effectId: EffectId,
 			channel: ChannelDeclaration,
 			outbox: Values,
-			kind: 'delivered' | 'bounced' | 'opened' | 'failed' | 'replied',
+			kind: 'sent' | 'delivered' | 'bounced' | 'opened' | 'failed' | 'replied',
 			payload: Values
 		) {
 			const collection = text(outbox['source_collection']);
@@ -697,6 +697,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				if (outcome.status === 'sent') {
 					sent += 1;
 					yield* query(EffectId.make(`${effectId}:${id}:sent`), `update bolt_channel_outbox set status = 'sent', provider_message_id = $2, sent_at = now(), last_error = null, updated_at = now() where id = $1::uuid`, [id, 'providerMessageId' in outcome ? outcome.providerMessageId ?? null : null]);
+					yield* patchSource(EffectId.make(`${effectId}:${id}:sent-event`), channel, row, 'sent', { at: new Date(yield* Clock.currentTimeMillis).toISOString() });
 					continue;
 				}
 				const retry = outcome.status === 'retry' && attempts < MAX_ATTEMPTS;
@@ -706,6 +707,9 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					`update bolt_channel_outbox set status = $2, last_error = $3, next_attempt_at = now() + make_interval(secs => $4), updated_at = now() where id = $1::uuid`,
 					[id, retry ? 'pending' : outcome.status === 'skipped' ? 'skipped' : 'failed', outcome.error.slice(0, 2000), delay]
 				);
+				// A send refused for good is the record's failure too; the relay never reports one it never took.
+				if (!retry && outcome.status !== 'skipped')
+					yield* patchSource(EffectId.make(`${effectId}:${id}:failed-event`), channel, row, 'failed', { at: new Date(yield* Clock.currentTimeMillis).toISOString(), reason: outcome.error.slice(0, 500) });
 			}
 			const due = decodeRows((yield* query(EffectId.make(`${effectId}:due`), `select min(next_attempt_at) as due from bolt_channel_outbox where channel = $1 and status = 'pending'`, [name])).rows)[0]?.['due'];
 			const dueAt = typeof due === 'string' ? Date.parse(due) : Number.NaN;

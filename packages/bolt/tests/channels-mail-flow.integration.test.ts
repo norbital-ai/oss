@@ -44,6 +44,7 @@ const pcnMail = describeChannel(
 			}
 		},
 		events: {
+			sent: ({ at }: { readonly at: string }) => ({ status: 'sent', sent_at: at }),
 			delivered: () => ({ status: 'delivered' }),
 			bounced: ({ reason }: { readonly reason: string }) => ({ status: 'bounced', failure_reason: reason }),
 			opened: ({ at }: { readonly at: string }) => ({ opened_at: at }),
@@ -84,6 +85,7 @@ const collections = [
 			body_html: field.string(),
 			status: field.string(),
 			failure_reason: field.string(),
+			sent_at: field.string(),
 			opened_at: field.string(),
 			replied_at: field.string(),
 			reply_excerpt: field.string()
@@ -200,6 +202,9 @@ describe('the PCN mail flow on channels', () => {
 		]);
 		const [sent] = await database.query(`select status, provider_message_id from bolt_channel_outbox`);
 		expect(sent).toEqual({ status: 'sent', provider_message_id: 'wire-1' });
+		// The relay took it: the notice records that it left, before any provider event arrives.
+		const [left] = await database.query(`select status, sent_at is not null as stamped from sent_emails`);
+		expect(left).toEqual({ status: 'sent', stamped: true });
 
 		// 2. The provider reports back: each event patches the notice, and only the notice.
 		await runtime.runPromise(
