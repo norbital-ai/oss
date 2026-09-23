@@ -353,6 +353,9 @@ The fast path for "find X and change it": one filtered read, one write, one plai
 
 ## Update
 
+- \`describe_workspace\` already states each collection's write contract. Do not read source
+  files, sample other rows or search history to plan a record change: write, and a refusal names
+  exactly what is missing.
 - One \`write_collection\` update carries everything: the changed fields and any child rows.
 - Child rows go under their relation name with an action:
   \`{ id, values: { status: 'completed', job_assignment_photo_evidence: { create: [ { photo, source } ] } } }\`.
