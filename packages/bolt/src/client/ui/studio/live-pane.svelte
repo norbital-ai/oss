@@ -12,6 +12,7 @@
 		type LiveReleaseRow,
 		type ManifestDestination,
 		type ManifestSection,
+		type RuntimeLogLine,
 		type WorkspaceManifest
 	} from '#lib/client/ui/studio/studio-state.js';
 
@@ -28,6 +29,7 @@
 		environment = [],
 		environmentError,
 		liveLogs = [],
+		runtimeLog = () => [],
 		onrestore,
 		onopenSource,
 		onopenDestination,
@@ -46,6 +48,7 @@
 		environment?: ReadonlyArray<EnvironmentVariable>;
 		environmentError?: string | undefined;
 		liveLogs?: AuthoringLiveState['logs'];
+		runtimeLog?: (releaseId: string) => ReadonlyArray<RuntimeLogLine>;
 		onrestore?: (() => void) | undefined;
 		onopenSource?: ((path: string) => void) | undefined;
 		onopenDestination?: ((destination: ManifestDestination) => void) | undefined;
@@ -133,7 +136,7 @@
 			/>
 		{:else}
 			<Scroll name={t('bolt.studio.changes.logs')} grow class="p-4 sm:p-6">
-				<BundleLogs build={selected.build} deploy={selected.deploy} {liveLogs} />
+				<BundleLogs build={selected.build} runtime={runtimeLog(selected.releaseId)} {liveLogs} />
 			</Scroll>
 		{/if}
 	</Stack>

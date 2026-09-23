@@ -18,6 +18,7 @@ import {
 	CHANGES_DIFF_BASELINE_KEY,
 	editorLanguage,
 	liveReleaseTimeline,
+	runtimeLogFor,
 	newCommitsBehindHead,
 	sourceFileMark,
 	sourceTreeEntryBadge,
@@ -75,7 +76,6 @@ const request = (overrides: Partial<MergeRequest> = {}): MergeRequest => ({
 		summary: 'Preview ready',
 		stdout: 'built'
 	},
-	deployLog: [],
 	changedFiles: [],
 	diagnosis: {
 		sourceDigest: 'a'.repeat(64),
@@ -408,7 +408,6 @@ describe('workspace navigation sections', () => {
 
 	it('lists Live releases from routed history, not the workbench', () => {
 		const build = request().buildReceipt;
-		const deploy = [{ at: '2026-09-02T00:00:00.000Z', level: 'log', line: 'guest-ok' }];
 		expect(
 			liveReleaseTimeline({
 				entries: [
@@ -421,10 +420,7 @@ describe('workspace navigation sections', () => {
 					}
 				],
 				deploymentHistory: ['release-old', 'release-live'],
-				releases: [
-					{ releaseId: 'release-old', deployLog: [] },
-					{ releaseId: 'release-live', buildLog: build, deployLog: deploy }
-				],
+				releases: [{ releaseId: 'release-old' }, { releaseId: 'release-live', buildLog: build }],
 				mergeRequests: [],
 				tracking: 'live'
 			} as unknown as HostSnapshot)
@@ -435,8 +431,7 @@ describe('workspace navigation sections', () => {
 				current: true,
 				commit: build.commit,
 				checkpointAt: undefined,
-				build,
-				deploy
+				build
 			},
 			{
 				releaseId: 'release-old',
@@ -444,10 +439,41 @@ describe('workspace navigation sections', () => {
 				current: false,
 				commit: undefined,
 				checkpointAt: undefined,
-				build: undefined,
-				deploy: []
+				build: undefined
 			}
 		]);
+	});
+
+	it('reads a release runtime log from its telemetry records, oldest first', () => {
+		const records = [
+			{
+				at: '2026-09-23T08:30:27.188Z',
+				severity: 'ERROR',
+				event: '[field-ops-suspicion-review] 426 photo embedding(s) failed',
+				attributes: { release: 'release-live', command: 'automations.start' }
+			},
+			{
+				at: '2026-09-23T08:30:26.000Z',
+				severity: 'WARN',
+				event: 'dispatch.refused',
+				attributes: { release: 'release-live', error: 'policy refused' }
+			},
+			{
+				at: '2026-09-23T08:30:28.000Z',
+				severity: 'INFO',
+				event: 'dispatch.settled',
+				attributes: { release: 'release-old' }
+			}
+		];
+		expect(runtimeLogFor(records, 'release-live')).toEqual([
+			{ at: '2026-09-23T08:30:26.000Z', level: 'WARN', line: 'dispatch.refused: policy refused' },
+			{
+				at: '2026-09-23T08:30:27.188Z',
+				level: 'ERROR',
+				line: '[field-ops-suspicion-review] 426 photo embedding(s) failed'
+			}
+		]);
+		expect(runtimeLogFor(records, undefined)).toEqual([]);
 	});
 
 	it('attaches a commit-tagged database checkpoint to a past Live release', () => {
@@ -464,10 +490,7 @@ describe('workspace navigation sections', () => {
 					}
 				],
 				deploymentHistory: ['release-old', 'release-live'],
-				releases: [
-					{ releaseId: 'release-old', buildLog: build, deployLog: [] },
-					{ releaseId: 'release-live', deployLog: [] }
-				],
+				releases: [{ releaseId: 'release-old', buildLog: build }, { releaseId: 'release-live' }],
 				checkpoints: [
 					{
 						at: '2026-09-04T00:00:00.000Z',

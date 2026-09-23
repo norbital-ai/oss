@@ -35,6 +35,7 @@
 		manifestSections,
 		newCommitsBehindHead,
 		releaseControls,
+		runtimeLogFor,
 		workbenchDiffBaselineKey,
 		workspaceEnvoys,
 		type ChangesView,
@@ -93,6 +94,17 @@
 		entries: environmentQuery?.current ?? [],
 		error: queryMessage(environmentQuery?.error)
 	});
+	// The runtime keeps its own records in `telemetry`; a release's log is the ones that name it.
+	const telemetryQuery = $derived(
+		browserReady
+			? client.db.telemetry.findMany({
+					columns: { at: true, severity: true, event: true, attributes: true },
+					orderBy: { at: 'desc' },
+					limit: 500
+				})
+			: undefined
+	);
+	const runtimeLog = (releaseId: string) => runtimeLogFor(telemetryQuery?.current ?? [], releaseId);
 	let host = $state({ status: 'Loading workspace state…', busy: false });
 	let live = $state<AuthoringLiveState>(emptyAuthoringLiveState());
 	let selectedRequestId = $state<string | undefined>();
@@ -562,6 +574,7 @@
 					environment={vault.entries}
 					environmentError={vault.error}
 					liveLogs={live.logs}
+					{runtimeLog}
 					onview={(next) => (view.changes = next)}
 					onpreview={(requestId) => void Effect.runPromise(actions.reviewPreview(requestId))}
 					onapprove={(requestId) => void Effect.runPromise(actions.approveRelease(requestId))}
@@ -593,6 +606,7 @@
 					environment={vault.entries}
 					environmentError={vault.error}
 					liveLogs={live.logs}
+					{runtimeLog}
 					onrestore={() => void Effect.runPromise(actions.rollback(selectedRelease?.releaseId))}
 					onopenSource={openSource}
 					onopenDestination={openDestination}

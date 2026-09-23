@@ -408,7 +408,7 @@ const boltConversationMessages = defineMessages({
 		'bolt.studio.severity.warning': 'Warning',
 		'bolt.studio.severity.hint': 'Hint',
 		'bolt.studio.noBuildLog': 'No build log.',
-		'bolt.studio.noDeployLog': 'No deploy log.'
+		'bolt.studio.noRuntimeLog': 'No runtime records for this release.'
 	},
 	zh: {
 		'bolt.agent.contextReceiptNote': '最近一次已报告的模型输入，尚未包含待处理消息和工具结果。',
@@ -802,7 +802,7 @@ const boltConversationMessages = defineMessages({
 		'bolt.studio.severity.warning': '警告',
 		'bolt.studio.severity.hint': '提示',
 		'bolt.studio.noBuildLog': '没有构建日志。',
-		'bolt.studio.noDeployLog': '没有部署日志。'
+		'bolt.studio.noRuntimeLog': '此版本没有运行记录。'
 	}
 });
 

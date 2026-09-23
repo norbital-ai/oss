@@ -5,19 +5,19 @@
 		authoringLogTone,
 		type AuthoringLiveState
 	} from '#lib/client/ui/studio/authoring-live.js';
-	import type { WorkbenchBuildReceipt } from '#lib/client/ui/studio/studio-state.js';
+	import type {
+		RuntimeLogLine,
+		WorkbenchBuildReceipt
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	let {
 		build,
-		deploy = [],
+		runtime = [],
 		liveLogs = []
 	}: {
 		build?: WorkbenchBuildReceipt | undefined;
-		deploy?: ReadonlyArray<{
-			readonly at: string;
-			readonly level: string;
-			readonly line: string;
-		}>;
+		/** The release's records from the tenant's `telemetry` collection. */
+		runtime?: ReadonlyArray<RuntimeLogLine>;
 		liveLogs?: AuthoringLiveState['logs'];
 	} = $props();
 	const { t } = useI18n();
@@ -141,12 +141,12 @@
 
 	<Stack as="section" gap="sm">
 		<h3 class="text-overline">{t('bolt.studio.runtimeDetails')}</h3>
-		{#if deploy.length === 0 && liveLogs.length === 0}
-			<p class="text-meta">{t('bolt.studio.noDeployLog')}</p>
+		{#if runtime.length === 0 && liveLogs.length === 0}
+			<p class="text-meta">{t('bolt.studio.noRuntimeLog')}</p>
 		{:else}
-			<Scroll name="Deploy log" class="max-h-64">
+			<Scroll name="Runtime log" class="max-h-64">
 				<ul class="rounded-md bg-muted/35 p-3 font-mono text-xs leading-5 text-foreground">
-					{#each deploy as line, index (`${line.at}:${index}`)}
+					{#each runtime as line, index (`${line.at}:${index}`)}
 						<li class="whitespace-pre-wrap break-all {logToneClass(line.level)}">
 							{line.at}
 							{line.level}

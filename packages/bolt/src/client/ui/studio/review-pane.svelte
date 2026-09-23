@@ -27,6 +27,7 @@
 		schemaPlanSentence,
 		type ChangesView,
 		type EnvironmentVariable,
+		type RuntimeLogLine,
 		type ManifestDestination,
 		type ManifestSection,
 		type MergeRequest,
@@ -51,6 +52,7 @@
 		environment = [],
 		environmentError,
 		liveLogs = [],
+		runtimeLog = () => [],
 		onview,
 		onpreview,
 		onapprove,
@@ -86,6 +88,7 @@
 		environment?: ReadonlyArray<EnvironmentVariable>;
 		environmentError?: string | undefined;
 		liveLogs?: AuthoringLiveState['logs'];
+		runtimeLog?: (releaseId: string) => ReadonlyArray<RuntimeLogLine>;
 		onview?: ((next: ChangesView) => void) | undefined;
 		onpreview?: ((requestId: string) => void) | undefined;
 		onapprove?: ((requestId: string) => void) | undefined;
@@ -474,7 +477,7 @@
 			</Scroll>
 		{:else}
 			<Scroll name={t('bolt.studio.changes.logs')} grow class="p-4 sm:p-6">
-				<BundleLogs build={logs.build} deploy={logs.deploy} {liveLogs} />
+				<BundleLogs build={logs.build} runtime={runtimeLog(selected.releaseId)} {liveLogs} />
 			</Scroll>
 		{/if}
 	</Stack>

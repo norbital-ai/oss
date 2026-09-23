@@ -144,13 +144,6 @@ export const HostSnapshotSchema = Schema.Struct({
 			createdAt: Schema.String,
 			updatedAt: Schema.String,
 			buildReceipt: WorkbenchBuildReceiptSchema,
-			deployLog: Schema.Array(
-				Schema.Struct({
-					at: Schema.String,
-					level: Schema.NonEmptyString,
-					line: Schema.String
-				})
-			),
 			changedFiles: Schema.Array(SourceFileChangeSchema),
 			diagnosis: Schema.Struct({
 				sourceDigest: Schema.NonEmptyString,
@@ -211,14 +204,7 @@ export const HostSnapshotSchema = Schema.Struct({
 	releases: Schema.Array(
 		Schema.Struct({
 			releaseId: Schema.NonEmptyString,
-			buildLog: Schema.optionalKey(WorkbenchBuildReceiptSchema),
-			deployLog: Schema.Array(
-				Schema.Struct({
-					at: Schema.String,
-					level: Schema.NonEmptyString,
-					line: Schema.String
-				})
-			)
+			buildLog: Schema.optionalKey(WorkbenchBuildReceiptSchema)
 		})
 	),
 	facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean }))
@@ -226,7 +212,6 @@ export const HostSnapshotSchema = Schema.Struct({
 export type HostSnapshot = typeof HostSnapshotSchema.Type;
 export type MatrixEntry = HostSnapshot['entries'][number];
 export type MergeRequest = HostSnapshot['mergeRequests'][number];
-type ReleaseEvidence = HostSnapshot['releases'][number];
 
 type MergeRequestState = MergeRequest['state'];
 
@@ -374,11 +359,50 @@ export const mergeRequestEvidence = (
 	request: MergeRequest | undefined
 ): Readonly<{
 	readonly build: WorkbenchBuildReceipt | undefined;
-	readonly deploy: ReleaseEvidence['deployLog'];
-}> => {
-	if (request === undefined) return { build: undefined, deploy: [] };
-	return { build: request.buildReceipt, deploy: request.deployLog };
-};
+}> => ({ build: request?.buildReceipt });
+
+/** One runtime record as Studio's log lists it. */
+export type RuntimeLogLine = Readonly<{
+	readonly at: string;
+	readonly level: string;
+	readonly line: string;
+}>;
+
+/**
+ * A release's runtime log is the tenant's `telemetry` records that carry its id, oldest first. The
+ * record's event is the line; a refusal's reason or a failure's cause follows it, because for those
+ * the event name alone says nothing.
+ */
+export const runtimeLogFor = (
+	records: ReadonlyArray<
+		Readonly<{
+			readonly at: string;
+			readonly severity: string;
+			readonly event: string;
+			readonly attributes: unknown;
+		}>
+	>,
+	releaseId: string | undefined
+): ReadonlyArray<RuntimeLogLine> =>
+	releaseId === undefined
+		? []
+		: records
+				.flatMap((record) => {
+					const attributes =
+						typeof record.attributes === 'object' && record.attributes !== null
+							? (record.attributes as Readonly<Record<string, unknown>>)
+							: {};
+					if (attributes['release'] !== releaseId) return [];
+					const detail = attributes['error'] ?? attributes['cause'];
+					return [
+						{
+							at: record.at,
+							level: record.severity,
+							line: typeof detail === 'string' ? `${record.event}: ${detail}` : record.event
+						}
+					];
+				})
+				.toSorted((left, right) => left.at.localeCompare(right.at));
 
 export type LiveReleaseRow = Readonly<{
 	readonly releaseId: string;
@@ -387,7 +411,6 @@ export type LiveReleaseRow = Readonly<{
 	readonly commit: string | undefined;
 	readonly checkpointAt: string | undefined;
 	readonly build: WorkbenchBuildReceipt | undefined;
-	readonly deploy: ReleaseEvidence['deployLog'];
 }>;
 
 export const liveReleaseTimeline = (
@@ -424,8 +447,7 @@ export const liveReleaseTimeline = (
 			current: current?.releaseId === releaseId,
 			commit,
 			checkpointAt: tagged?.at,
-			build: row?.buildLog,
-			deploy: row?.deployLog ?? []
+			build: row?.buildLog
 		};
 	});
 };
