@@ -61,6 +61,7 @@ const definition = workspace({
 	prompt: 'Hold a decision whose preparation read the world.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: []
 });

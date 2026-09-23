@@ -5,12 +5,9 @@ import {
 	AgentId,
 	DirectiveMode,
 	DirectivePriority,
-	EnvoyDelivery,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
-	type CommunicationRequest,
-	type CommunicationResponse,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
@@ -20,7 +17,11 @@ import { envoySubject } from '../src/runtime/identity/static-identity.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
-	type BoltTestRuntime
+	receiveChat,
+	recordingCommunication,
+	testChannels,
+	type BoltTestRuntime,
+	type TestChatDelivery
 } from './support/bolt-test-layer.js';
 
 const languageModelId = ModelId.make('test:language');
@@ -72,10 +73,11 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: testChannels('whatsapp'),
 	envoys: [
 		envoy({
 			name: 'field_ops_whatsapp',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['operator'],
 			groupMessages: 'mention_or_reply',
@@ -87,7 +89,7 @@ const definition = workspace({
 	requiredFacilities: []
 });
 
-const delivery = (messageId: string, text: string): EnvoyDelivery => ({
+const delivery = (messageId: string, text: string): TestChatDelivery => ({
 	conversationId: '6591234567@s.whatsapp.net',
 	conversationKind: 'dm',
 	messageId,
@@ -121,7 +123,7 @@ afterEach(async () => {
 describe('Envoy inbound queue', () => {
 	it('queues each message as a steer on the chat conversation and answers the turn once', async () => {
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const sends: Array<CommunicationRequest> = [];
+		const { sends, binding: communication } = recordingCommunication();
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
@@ -130,37 +132,23 @@ describe('Envoy inbound queue', () => {
 				return { _tag: 'Success', value: generated(request, 'Both updates recorded.') };
 			}
 		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async (_metadata, request) => {
-				sends.push(request);
-				return { _tag: 'Success', value: { receipt: { id: `wire-${sends.length}` } } };
-			}
-		};
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:one'),
-						'field_ops_whatsapp',
-						delivery('one', 'Start.')
-					)
+					receiveChat('whatsapp', delivery('one', 'Start.'), 'receive:one')
 				)
-			).status
-		).toBe('buffered');
+			).admitted.length
+		).toBe(1);
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:two'),
-						'field_ops_whatsapp',
-						delivery('two', 'Also include the pump reading.')
-					)
+					receiveChat('whatsapp', delivery('two', 'Also include the pump reading.'), 'receive:two')
 				)
-			).status
-		).toBe('buffered');
+			).admitted.length
+		).toBe(1);
 
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
 		expect(
@@ -175,22 +163,21 @@ describe('Envoy inbound queue', () => {
 		expect(prompt).toContain('Start.');
 		expect(prompt).toContain('Also include the pump reading.');
 		expect(sends).toEqual([
-			{
+			expect.objectContaining({
 				_tag: 'Send',
 				channel: 'whatsapp',
-				recipient: '6591234567@s.whatsapp.net',
-				payload: { text: 'Both updates recorded.' }
-			}
+				message: { to: '6591234567@s.whatsapp.net', text: 'Both updates recorded.' }
+			})
 		]);
 		expect(
 			await harness.database.query(
-				`select external_message_id, status from bolt_envoy_messages
-				 where transport_conversation_id = $1 and direction = 'inbound' order by external_message_id`,
+				`select provider_message_id, answered_at is not null as answered from channel_messages
+				 where conversation_id = $1 and direction = 'inbound' order by provider_message_id`,
 				['6591234567@s.whatsapp.net']
 			)
 		).toEqual([
-			{ external_message_id: 'one', status: 'answered' },
-			{ external_message_id: 'two', status: 'answered' }
+			{ provider_message_id: 'one', answered: true },
+			{ provider_message_id: 'two', answered: true }
 		]);
 		// One chat, one conversation — the second message continues the first, it does not open a
 		// second one.
@@ -206,19 +193,13 @@ describe('Envoy inbound queue', () => {
 
 	it('keeps one conversation per group channel and lets every linked member steer it', async () => {
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const sends: Array<CommunicationRequest> = [];
+		const { sends, binding: communication } = recordingCommunication();
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
 				if (request._tag !== 'Generate') throw new Error('expected language generation');
 				generations.push(request);
 				return { _tag: 'Success', value: generated(request, 'Group update recorded.') };
-			}
-		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async (_metadata, request) => {
-				sends.push(request);
-				return { _tag: 'Success', value: {} };
 			}
 		};
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
@@ -237,7 +218,7 @@ describe('Envoy inbound queue', () => {
 			sender: string,
 			displayName: string,
 			text: string
-		): EnvoyDelivery => ({
+		): TestChatDelivery => ({
 			conversationId: '120363000000000000@g.us',
 			conversationKind: 'group',
 			messageId,
@@ -250,25 +231,17 @@ describe('Envoy inbound queue', () => {
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:sam'),
-						'field_ops_whatsapp',
-						groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam W.', 'Pump done.')
-					)
+					receiveChat('whatsapp', groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam W.', 'Pump done.'), 'receive:sam')
 				)
-			).status
-		).toBe('buffered');
+			).admitted.length
+		).toBe(1);
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:alex'),
-						'field_ops_whatsapp',
-						groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex T.', 'Valve done.')
-					)
+					receiveChat('whatsapp', groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex T.', 'Valve done.'), 'receive:alex')
 				)
-			).status
-		).toBe('buffered');
+			).admitted.length
+		).toBe(1);
 		const conversationId = 'field_ops_whatsapp:group:120363000000000000@g.us';
 		expect(
 			await harness.runtime.runPromise(
@@ -345,9 +318,7 @@ describe('Envoy inbound queue', () => {
 				return { _tag: 'Success', value: generated(request, 'Safety alarm handled.') };
 			}
 		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async () => ({ _tag: 'Success', value: {} })
-		};
+		const { binding: communication } = recordingCommunication();
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
@@ -355,25 +326,17 @@ describe('Envoy inbound queue', () => {
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:first'),
-						'field_ops_whatsapp',
-						delivery('priority', text)
-					)
+					receiveChat('whatsapp', delivery('priority', text), 'receive:first')
 				)
-			).status
-		).toBe('buffered');
+			).admitted.length
+		).toBe(1);
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('receive:duplicate'),
-						'field_ops_whatsapp',
-						delivery('priority', text)
-					)
+					receiveChat('whatsapp', delivery('priority', text), 'receive:duplicate')
 				)
-			).status
-		).toBe('duplicate');
+			).rows.length
+		).toBe(0); // a redelivery is the same history row: nothing changes, nothing is admitted
 		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
 		await harness.runtime.runPromise(
 			envoys.drain(harness.effectId('drain'), 'field_ops_whatsapp', conversationId)

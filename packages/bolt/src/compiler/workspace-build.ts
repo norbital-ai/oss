@@ -14,6 +14,8 @@ import {
 	type TenantRelease
 } from '@norbital-ai/bolt-protocol';
 import { toError } from '@norbital-ai/std';
+import type { CollectionWriteContract, CollectionWriteSelection } from '@norbital-ai/std/collection';
+import type { SyncDeclaration } from '../authoring/integrations-schema.js';
 import ts from 'typescript';
 import {
 	collection,
@@ -222,6 +224,7 @@ type RenderAuthoringTypesInput = Readonly<{
 	readonly functions: ReadonlyArray<string>;
 	readonly tools: ReadonlyArray<string>;
 	readonly envoys: ReadonlyArray<string>;
+	readonly integrations?: ReadonlyArray<string>;
 	readonly mcpServers: ReadonlyArray<string>;
 	readonly skills: ReadonlyArray<string>;
 	readonly datatypes: ReadonlyArray<string>;
@@ -305,6 +308,43 @@ const resolveMutationRelation = (
 	};
 };
 
+/**
+ * What the browser may write to a synced collection. The runtime refuses a write to anything a sync
+ * owns; this keeps the UI from offering one. A one-way mirror has no create or delete, and a column
+ * a sync writes — its identity, a mirrored field, a two-way field the remote owns or never receives
+ * — is left out of every form.
+ */
+export const browserWrite = (
+	write: CollectionWriteContract | undefined,
+	syncs: ReadonlyArray<SyncDeclaration>
+): CollectionWriteContract | undefined => {
+	if (write === undefined || syncs.length === 0) return write;
+	const mirrored = syncs.some(({ direction }) => direction === 'one_way');
+	const owned = new Set(
+		syncs.flatMap((sync) => [
+			sync.identity,
+			...(sync.direction === 'one_way'
+				? sync.fields.map(({ column }) => column)
+				: [...sync.owns.remote, ...sync.fields.filter(({ pushed }) => !pushed).map(({ column }) => column)])
+		])
+	);
+	const narrow = (selection: CollectionWriteSelection | undefined): CollectionWriteSelection | undefined => {
+		if (selection === undefined) return undefined;
+		const columns = Object.fromEntries(Object.entries(selection.columns ?? {}).filter(([column]) => !owned.has(column)));
+		if (Object.keys(columns).length === 0 && selection.with === undefined) return undefined;
+		return { ...selection, columns };
+	};
+	const create = mirrored ? undefined : narrow(write.create);
+	const update = narrow(write.update);
+	return create === undefined && update === undefined && (mirrored || write.delete === undefined)
+		? undefined
+		: {
+				...(create === undefined ? {} : { create }),
+				...(update === undefined ? {} : { update }),
+				...(mirrored || write.delete === undefined ? {} : { delete: write.delete })
+			};
+};
+
 export const systemCollectionCatalog = (): ReadonlyArray<CollectionCatalogEntry> =>
 	Object.entries(SYSTEM_COLLECTION_MODELS).map(([name, declaration]) => {
 		const write = SYSTEM_COLLECTION_WRITES[name];
@@ -358,6 +398,7 @@ type RenderArtifactInput = Readonly<{
 	readonly customTypeDefinitions: ReadonlyArray<string>;
 	readonly migrations: ReadonlyArray<WorkspaceMigrationEntry>;
 	readonly schemaFingerprint: string;
+	readonly channelFiles?: ReadonlyArray<string>;
 	readonly integrationFiles?: ReadonlyArray<string>;
 	readonly environmentFile: string | undefined;
 	readonly anonymousLimitFile?: string | undefined;
@@ -532,7 +573,13 @@ class WorkspaceCompiler {
 		`export type { PolicyName, TeamName } from '../../generated/authoring-types.js';\nimport type { Teams as TeamsDeclaration } from '@norbital-ai/bolt/authoring';\nexport type Teams = TeamsDeclaration;\n`;
 
 	static readonly renderEnvoyTypes = (): string =>
-		`import type { EnvoyDefinition } from '@norbital-ai/bolt/authoring';\nexport type { EnvoyName, PolicyName } from '../../generated/authoring-types.js';\nexport type Envoy = EnvoyDefinition;\n`;
+		`import type { EnvoyDefinition } from '@norbital-ai/bolt/authoring';\nexport type { ConversationChannel } from '@norbital-ai/bolt/authoring';\nexport type { EnvoyName, PolicyName } from '../../generated/authoring-types.js';\nexport type Envoy = EnvoyDefinition;\n`;
+
+	static readonly renderChannelTypes = (): string =>
+		`export type { ChannelName, ConversationChannel, EnvelopeFor, MessageFor, PersonChannel, TransportOf } from '@norbital-ai/bolt/authoring';\nexport type { CollectionName, PolicyName } from '../../generated/authoring-types.js';\n`;
+
+	static readonly renderIntegrationTypes = (): string =>
+		`export type { ChannelName } from '@norbital-ai/bolt/authoring';\nexport type { CollectionName, IntegrationName, PolicyName } from '../../generated/authoring-types.js';\n`;
 
 	static readonly renderHandlerTypes = (): string =>
 		`import type { AutomationContext, AutomationTrigger } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from '../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AutomationName, CollectionName, FunctionName, PolicyName, ToolName } from '../../generated/authoring-types.js';\nexport type Trigger = AutomationTrigger<WorkspaceSchema>;\nexport type Scope<T extends Trigger> = AutomationContext<T, WorkspaceSchema>['scope'];\n`;
@@ -831,6 +878,7 @@ export const renderAuthoringTypes = (input: RenderAuthoringTypesInput): string =
 		`export type McpServerName = ${union(input.mcpServers)};`,
 		`export type SkillName = ${union(input.skills)};`,
 		`export type EnvoyName = ${union(input.envoys)};`,
+		`export type IntegrationName = ${union(input.integrations ?? [])};`,
 		`export type AutomationName = ${union(input.automations)};`,
 		`export type FunctionName = ${union(input.functions)};`,
 		`export type DatatypeName = ${union(input.datatypes)};`,
@@ -842,10 +890,10 @@ export const renderWorkspaceTypes = (relations: ReadonlyArray<RelationDefinition
 	`import type { Api as AuthoringApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations };\nexport type Api = AuthoringApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n`;
 
 export const renderCollectionTypes = (name: string): string =>
-	`import type { CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { CollectionClientInput } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = CollectionClientInput<${JSON.stringify(name)}, 'create'>;\nexport type UpdateInput = CollectionClientInput<${JSON.stringify(name)}, 'update'>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+	`import type { CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { CollectionClientInput } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = CollectionClientInput<${JSON.stringify(name)}, 'create'>;\nexport type UpdateInput = CollectionClientInput<${JSON.stringify(name)}, 'update'>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
 export const renderWorkspaceAuthoring = (): string =>
-	`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceCollections } from '../generated/declared-collections.js';\nimport type { Models } from '../generated/models.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly models: Models; readonly collections: WorkspaceCollections; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
+	`import type { DeclaredChannels } from '../generated/declared-channels.js';\nimport type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, IntegrationName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceCollections } from '../generated/declared-collections.js';\nimport type { Models } from '../generated/models.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly models: Models; readonly collections: WorkspaceCollections; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } interface WorkspaceChannelAuthoringTypes { readonly channels: DeclaredChannels; readonly integrationName: IntegrationName } }\nexport {};\n`;
 
 /** One `typeof import` per `+collection.ts`: the declarations every write surface is typed from. */
 const renderCollectionsDeclaration = (
@@ -860,6 +908,15 @@ const renderCollectionsDeclaration = (
 		);
 	return `export type WorkspaceCollections = {\n${entries.join('\n')}\n};\n`;
 };
+
+/** One `typeof import` per `src/channels/+<name>.ts`: the transports every channel surface is typed by. */
+export const renderChannelsDeclaration = (channelFiles: ReadonlyArray<string>, root: string): string =>
+	`export type DeclaredChannels = {\n${channelFiles
+		.map(
+			(path) =>
+				`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
+		)
+		.join('\n')}\n};\n`;
 
 export const renderClientDeclaration = (
 	functions: ReadonlyArray<string>,
@@ -879,7 +936,7 @@ export const renderClientDeclaration = (
 const renderArtifactImports = (imports: ReadonlyArray<string>): string =>
 	[
 		"import { buildManifest, makeBundle } from '@norbital-ai/bolt/runtime';",
-		"import { describeEnvoy, describeIntegrations, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';",
+		"import { describeChannel, describeEnvoy, describeIntegration, describePolicy } from '@norbital-ai/bolt/authoring/internals';",
 		...imports
 	]
 		.filter((line) => line !== '')
@@ -889,6 +946,7 @@ const renderCompiledDeclarations = (input: {
 	readonly policyEntries: string;
 	readonly customTypeEntries: string;
 	readonly envoyEntries: string;
+	readonly channelEntries: string;
 	readonly pipelineEntries: string;
 	readonly integrationEntries: string;
 	readonly automationEntries: string;
@@ -901,14 +959,14 @@ const policies = Object.entries(authoredPolicies).map(([name, declaration]) => d
 const declaredCustomTypes = { ...platformCustomTypes, ${input.customTypeEntries} };
 const declaredEnvoys = {${input.envoyEntries}};
 const declaredPipelines = {${input.pipelineEntries}};
-const declaredIntegrationModules = {${input.integrationEntries}};
-const describedIntegrations = describeIntegrations(declaredIntegrationModules);
+const describedChannels = Object.entries({${input.channelEntries}}).map(([name, declaration]) => describeChannel(name, declaration));
+const describedIntegrations = Object.entries({${input.integrationEntries}}).map(([name, declaration]) => describeIntegration(name, declaration));
 const declaredAutomations = Object.fromEntries([${input.automationEntries}].map((automation) => [automation.name, automation]));
 const declaredWorkspace = ${JSON.stringify(input.workspace, null, 2)};
 const collections = declaredWorkspace.collections;
 const envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));
 const automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));
-const workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${input.environmentEntry}${input.rateLimitEntry}${input.teamsEntry} };`;
+const workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, channels: describedChannels.map(({ declaration }) => declaration), integrations: describedIntegrations.map(({ declaration }) => declaration)${input.environmentEntry}${input.rateLimitEntry}${input.teamsEntry} };`;
 
 const renderArtifactManifest = (input: {
 	readonly metadata: PackageMetadata;
@@ -916,7 +974,7 @@ const renderArtifactManifest = (input: {
 	readonly assets: TenantReleaseAssets;
 }): string => `const browserAssets = ${JSON.stringify(input.assets.browser)};
 const serverAssets = ${JSON.stringify(input.assets.server)};
-const manifestValue = { ...buildManifest(workspace, { artifactId: ${JSON.stringify(`${input.metadata.name}:local`)} }), requiredFacilities: ${JSON.stringify(input.facilities)}, browserAssets, serverAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };`;
+const manifestValue = { ...buildManifest(workspace, { artifactId: ${JSON.stringify(`${input.metadata.name}:local`)} }), requiredFacilities: ${JSON.stringify(input.facilities)}, browserAssets, serverAssets };`;
 
 const renderArtifactHandlers = (
 	remoteEntries: string,
@@ -926,7 +984,7 @@ const renderArtifactHandlers = (
 	`const remoteHandlers = {\n\t${remoteEntries}\n};
 const toolHandlers = {\n\t${toolEntries}\n};
 const declaredCollections = {${collectionEntries}};
-const authoredRuntime = { collections: declaredCollections, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };`;
+const authoredRuntime = { collections: declaredCollections, pipelines: declaredPipelines, automations: declaredAutomations, channels: Object.fromEntries(describedChannels.map(({ declaration, authored }) => [declaration.name, authored])), integrations: Object.fromEntries(describedIntegrations.map(({ declaration, authored }) => [declaration.name, authored])) };`;
 
 const renderArtifactExports =
 	(): string => `const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);
@@ -958,6 +1016,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		environmentFile,
 		migrations,
 		schemaFingerprint,
+		channelFiles = [],
 		integrationFiles = [],
 		anonymousLimitFile,
 		teamsFile
@@ -968,7 +1027,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 	const tools = toolFiles.map((path) => basename(path).slice(1, -3));
 	const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
 	const hasMcp = compiledAuthoring.capabilities.mcp.length > 0;
-	const hasConnector = hasMcp || automations.length > 0;
+	const hasConnector = hasMcp || automations.length > 0 || integrationFiles.length > 0 || channelFiles.length > 0;
 	const authoredTools = tools.map((name) => ({
 		name,
 		description: `Workspace tool ${name}`,
@@ -1001,6 +1060,9 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		envoySourcePaths: Object.fromEntries(
 			envoyFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
 		),
+		channelSourcePaths: Object.fromEntries(
+			channelFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
+		),
 		automationSourcePaths: Object.fromEntries(
 			automationFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
 		),
@@ -1011,7 +1073,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			pipelineFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
 		),
 		integrationSourcePaths: Object.fromEntries(
-			integrationFiles.map((path) => [basename(dirname(path)), relativeSourcePath(path)])
+			integrationFiles.map((path) => [basename(path).slice(1, -3), relativeSourcePath(path)])
 		),
 		...(environmentFile === undefined
 			? {}
@@ -1047,6 +1109,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			policies: []
 		})),
 		envoys: envoys.map((name) => ({ name })),
+		channels: [],
 		integrations: [],
 		requiredFacilities,
 		migrations,
@@ -1125,7 +1188,16 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 		)
 		.join('\n');
 	const integrationEntries = integrationFiles
-		.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: integrations${index}`)
+		.map((path, index) => `${JSON.stringify(basename(path).slice(1, -3))}: integrations${index}`)
+		.join(', ');
+	const channelImports = channelFiles
+		.map(
+			(path, index) =>
+				`import channel${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+		)
+		.join('\n');
+	const channelEntries = channelFiles
+		.map((path, index) => `${JSON.stringify(basename(path).slice(1, -3))}: channel${index}`)
 		.join(', ');
 	const rateLimitImport =
 		anonymousLimitFile === undefined
@@ -1172,6 +1244,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			automationImports,
 			pipelineImports,
 			envoyImports,
+			channelImports,
 			customTypeImports,
 			integrationImports,
 			environmentImport,
@@ -1182,6 +1255,7 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 			policyEntries,
 			customTypeEntries,
 			envoyEntries,
+			channelEntries,
 			pipelineEntries: pipelineEntriesByCollection,
 			integrationEntries,
 			automationEntries,
@@ -1519,12 +1593,10 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			);
 		}
 		const pipelineFiles = files.filter((path) => basename(path) === '+pipelines.ts').sort();
-		const integrationFiles = files
-			.filter(
-				(path) =>
-					basename(path) === '+integrations.ts' && compiler.posix(path).includes('/collections/')
-			)
-			.sort();
+		const integrationFiles = declaredIn('integrations');
+		const integrationNames = namesOf(integrationFiles);
+		const channelFiles = declaredIn('channels');
+		const channelNames = namesOf(channelFiles);
 		const toolFiles = declaredIn('capabilities/tools');
 		const toolNames = namesOf(toolFiles);
 		const mcpFiles = declaredIn('capabilities/mcp');
@@ -1549,6 +1621,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			...collectionFiles,
 			...pipelineFiles,
 			...integrationFiles,
+			...channelFiles,
 			...representationFiles,
 			...toolFiles,
 			...mcpFiles,
@@ -1584,7 +1657,9 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 						'  a team                        access/+teams.ts',
 						'  pre-sign-in limits            access/+anonymous_limits.ts',
 						'  a tool, MCP, or tenant skill  capabilities/tools|mcp|skills/',
-						'  an agent on a transport       envoys/+<name>.ts',
+						'  a communication endpoint      channels/+<name>.ts',
+						'  an agent on a channel         envoys/+<name>.ts',
+						'  records kept with a system    integrations/+<name>.ts',
 						'  something on a schedule       automations/+<name>.ts',
 						'  something a page calls        functions/+<name>.ts',
 						'  a page                        apps/+<name>.svelte',
@@ -1623,6 +1698,9 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			functions,
 			collectionFiles,
 			integrationFiles,
+			integrationNames,
+			channelFiles,
+			channelNames,
 			representationFiles,
 			customRendererFiles,
 			environmentFile,
@@ -1662,6 +1740,8 @@ const WorkspaceSynchronization = {
 				functions,
 				collectionFiles,
 				integrationFiles,
+				integrationNames,
+				channelFiles,
 				representationFiles,
 				customRendererFiles,
 				datatypeNames,
@@ -1684,6 +1764,7 @@ const WorkspaceSynchronization = {
 				importWorkspaceModels,
 				importWorkspaceCollections,
 				importWorkspaceRelationships,
+				importWorkspaceSyncs,
 				validateWorkspaceMigrationLineage
 			} = yield* Effect.tryPromise({
 				try: () => import('./schema-migrations.js'),
@@ -1729,9 +1810,16 @@ const WorkspaceSynchronization = {
 			const i18nMessages = yield* compiler.readI18nMessages(root);
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
-			const collectionCatalog = compiledAuthoring.collections.map((entry) =>
-				collectionCatalogEntry(entry, relations)
-			);
+			const syncs = yield* importWorkspaceSyncs(integrationFiles);
+			const collectionCatalog = compiledAuthoring.collections.map((entry) => {
+				const catalogued = collectionCatalogEntry(entry, relations);
+				const write = browserWrite(
+					catalogued.write,
+					syncs.filter(({ collection }) => collection === entry.name)
+				);
+				const { write: _declared, ...rest } = catalogued;
+				return write === undefined ? rest : { ...rest, write };
+			});
 			const appMetaEntries = yield* Effect.all(
 				appFiles.map((path) =>
 					Effect.map(
@@ -1808,6 +1896,7 @@ const WorkspaceSynchronization = {
 							functions,
 							tools: toolNames,
 							envoys: envoyNames,
+							integrations: integrationNames,
 							mcpServers: capabilities.mcp.map(({ name }) => name),
 							skills: capabilities.skills.map(({ name }) => name),
 							datatypes: [...Object.keys(platformCustomTypes), ...datatypeNames].toSorted(),
@@ -1856,6 +1945,10 @@ const WorkspaceSynchronization = {
 						renderCollectionsDeclaration(collectionFiles, root)
 					),
 					compiler.write(
+						join(generated, 'declared-channels.d.ts'),
+						renderChannelsDeclaration(channelFiles, root)
+					),
+					compiler.write(
 						join(generated, 'client.js'),
 						compiler.renderClientRuntime(
 							appFiles,
@@ -1890,6 +1983,11 @@ const WorkspaceSynchronization = {
 					),
 					compiler.write(join(types, 'access', '$types.d.ts'), compiler.renderAccessTypes()),
 					compiler.write(join(types, 'envoys', '$types.d.ts'), compiler.renderEnvoyTypes()),
+					compiler.write(join(types, 'channels', '$types.d.ts'), compiler.renderChannelTypes()),
+					compiler.write(
+						join(types, 'integrations', '$types.d.ts'),
+						compiler.renderIntegrationTypes()
+					),
 					compiler.write(join(types, 'functions', '$types.d.ts'), compiler.renderHandlerTypes()),
 					compiler.write(join(types, 'automations', '$types.d.ts'), compiler.renderHandlerTypes()),
 					compiler.write(join(root, '.norbital', 'tsconfig.json'), compiler.renderTsconfig()),
@@ -1972,6 +2070,7 @@ const WorkspaceSynchronization = {
 					functions: functionFiles,
 					toolFiles,
 					envoyFiles,
+					channelFiles,
 					automations: automationNames,
 					automationFiles,
 					pipelineFiles,

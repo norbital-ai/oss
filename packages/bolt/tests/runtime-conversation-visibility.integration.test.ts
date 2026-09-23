@@ -61,7 +61,7 @@ const workspace = testWorkspace({
 	envoys: [
 		{
 			name: 'wa_private',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['whatsapp_contractor'],
 			task: 'Answer contractors.',
@@ -69,7 +69,7 @@ const workspace = testWorkspace({
 		},
 		{
 			name: 'wa_public',
-			transport: 'whatsapp',
+			channel: 'whatsapp_public',
 			audience: 'public',
 			policies: ['whatsapp_contractor'],
 			task: 'Answer anyone.',

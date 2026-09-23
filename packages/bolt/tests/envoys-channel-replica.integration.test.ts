@@ -2,7 +2,6 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-	EnvoyDelivery,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
@@ -14,7 +13,15 @@ import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
 import * as EnvoyInbox from '../src/runtime/envoys/inbox.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import * as Channels from '../src/runtime/channels/channels.js';
+import {
+	makeBoltTestRuntime,
+	receiveChat,
+	recordingCommunication,
+	testChannels,
+	type BoltTestRuntime,
+	type TestChatDelivery
+} from './support/bolt-test-layer.js';
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -65,10 +72,11 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: testChannels('whatsapp'),
 	envoys: [
 		envoy({
 			name: 'field_ops_whatsapp',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['operator'],
 			groupMessages: 'mention_or_reply',
@@ -90,8 +98,8 @@ const groupDelivery = (
 	sender: string,
 	displayName: string,
 	text: string,
-	overrides: Partial<EnvoyDelivery> = {}
-): EnvoyDelivery => ({
+	overrides: Partial<TestChatDelivery> = {}
+): TestChatDelivery => ({
 	conversationId: GROUP,
 	conversationKind: 'group',
 	messageId,
@@ -137,7 +145,7 @@ describe('Envoy channel replica', () => {
 				sends.push(request);
 				return {
 					_tag: 'Success',
-					value: { receipt: { messageId: `wire-${sends.length}`, body: 'Noted.' } }
+					value: { providerMessageId: `wire-${sends.length}`, body: 'Noted.' }
 				};
 			}
 		};
@@ -149,16 +157,15 @@ describe('Envoy channel replica', () => {
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('ambient'),
-						'field_ops_whatsapp',
+					receiveChat(
+						'whatsapp',
 						groupDelivery('group-1', '6591234567@s.whatsapp.net', 'Sam', 'Pump is loud.', {
 							sentAt: '2026-08-31T03:59:00.000Z'
 						})
-					)
+					, 'ambient')
 				)
-			).status
-		).toBe('silent');
+			).admitted
+		).toEqual([]);
 		expect(await harness.database.query(`select count(*)::int as count from conversation`)).toEqual(
 			[{ count: 0 }]
 		);
@@ -170,9 +177,8 @@ describe('Envoy channel replica', () => {
 
 		// An addressed message wakes the turn, which carries the unread preempt.
 		await harness.runtime.runPromise(
-			envoys.receive(
-				harness.effectId('mention'),
-				'field_ops_whatsapp',
+			receiveChat(
+						'whatsapp',
 				groupDelivery('group-2', '6598765432@s.whatsapp.net', 'Alex', 'Valve is done.', {
 					invocation: 'mention'
 				})
@@ -193,12 +199,12 @@ describe('Envoy channel replica', () => {
 		expect(sends).toHaveLength(1);
 		expect(
 			await harness.database.query(
-				`select direction, external_message_id, text from bolt_envoy_messages order by sent_at, id`
+				`select direction, provider_message_id, text from channel_messages order by sent_at, id`
 			)
 		).toEqual([
-			{ direction: 'inbound', external_message_id: 'group-1', text: 'Pump is loud.' },
-			{ direction: 'inbound', external_message_id: 'group-2', text: 'Valve is done.' },
-			{ direction: 'outbound', external_message_id: 'wire-1', text: 'Noted.' }
+			{ direction: 'inbound', provider_message_id: 'group-1', text: 'Pump is loud.' },
+			{ direction: 'inbound', provider_message_id: 'group-2', text: 'Valve is done.' },
+			{ direction: 'outbound', provider_message_id: 'wire-1', text: 'Noted.' }
 		]);
 
 		// Reading marks the batch; a replay of the same call returns the same batch.
@@ -235,16 +241,15 @@ describe('Envoy channel replica', () => {
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('history'),
-						'field_ops_whatsapp',
+					receiveChat(
+						'whatsapp',
 						groupDelivery('group-old', '6591234567@s.whatsapp.net', 'Sam', 'Before the link.', {
 							historical: true
 						})
-					)
+					, 'history')
 				)
-			).status
-		).toBe('recorded');
+			).admitted
+		).toEqual([]);
 		const inbox = await harness.runtime.runPromise(EnvoyInbox.Service);
 		expect(
 			await harness.runtime.runPromise(inbox.unread(harness.effectId('unread'), REPLICA))
@@ -254,9 +259,8 @@ describe('Envoy channel replica', () => {
 		).toEqual([{ count: 0 }]);
 
 		await harness.runtime.runPromise(
-			envoys.receive(
-				harness.effectId('mention'),
-				'field_ops_whatsapp',
+			receiveChat(
+						'whatsapp',
 				groupDelivery('group-new', '6598765432@s.whatsapp.net', 'Alex', 'Valve is done.', {
 					invocation: 'mention'
 				})
@@ -272,21 +276,21 @@ describe('Envoy channel replica', () => {
 		expect(
 			(
 				await harness.runtime.runPromise(
-					envoys.receive(
-						harness.effectId('edit'),
-						'field_ops_whatsapp',
+					receiveChat(
+						'whatsapp',
 						groupDelivery('group-new', '6598765432@s.whatsapp.net', 'Alex', 'Valve is finished.', {
 							invocation: 'mention',
-							edited: true
-						})
+							version: '2026-08-31T04:05:00.000Z'
+						}),
+						'edit'
 					)
 				)
-			).status
-		).toBe('edited');
+			).rows.map(({ inserted }) => inserted)
+		).toEqual([false]);
 
 		expect(
 			await harness.database.query(
-				`select text, edited_at is not null as edited from bolt_envoy_messages where external_message_id = 'group-new'`
+				`select text, edited_at is not null as edited from channel_messages where provider_message_id = 'group-new'`
 			)
 		).toEqual([{ text: 'Valve is finished.', edited: true }]);
 		expect(
@@ -296,5 +300,41 @@ describe('Envoy channel replica', () => {
 		).toEqual(before);
 		// The edit woke no new turn: the transcript is history, the replica converges.
 		expect(generations).toHaveLength(1);
+	});
+
+	it('honours a sender delete, even one that arrives before the message it deletes', async () => {
+		harness = await makeBoltTestRuntime(definition, {
+			communication: recordingCommunication().binding
+		});
+		await seedSenders(harness);
+		const channels = await harness.runtime.runPromise(Channels.Service);
+		const inbox = await harness.runtime.runPromise(EnvoyInbox.Service);
+		const tombstone = (messageId: string) =>
+			harness!.runtime.runPromise(
+				channels.ingest(harness!.effectId(`revoke:${messageId}`), 'whatsapp', [{ _tag: 'Tombstone', messageId }], {})
+			);
+
+		await harness.runtime.runPromise(
+			receiveChat('whatsapp', groupDelivery('said', '6591234567@s.whatsapp.net', 'Sam', 'Wrong valve.'))
+		);
+		await tombstone('said');
+		// Reordered: the revoke is seen first, and the late message lands on a deleted row.
+		await tombstone('late');
+		await harness.runtime.runPromise(
+			receiveChat('whatsapp', groupDelivery('late', '6591234567@s.whatsapp.net', 'Sam', 'Also wrong.'))
+		);
+		// Duplicated delete: nothing moves twice.
+		await tombstone('said');
+
+		expect(
+			await harness.database.query(
+				`select provider_message_id, text, deleted_at is not null as deleted from channel_messages order by provider_message_id`
+			)
+		).toEqual([
+			{ provider_message_id: 'late', text: '', deleted: true },
+			{ provider_message_id: 'said', text: '', deleted: true }
+		]);
+		const read = await harness.runtime.runPromise(inbox.read(harness.effectId('read'), REPLICA, 'call', 20));
+		expect(read.messages).toEqual([]);
 	});
 });

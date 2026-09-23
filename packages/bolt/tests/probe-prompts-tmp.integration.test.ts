@@ -31,6 +31,7 @@ const definition = workspace({
 	],
 	teams: { operator: ['operator'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the skilled operations agent.',

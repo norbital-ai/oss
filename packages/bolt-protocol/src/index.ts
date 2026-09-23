@@ -59,12 +59,8 @@ export {
 	COMPILED_MANIFEST_VERSION,
 	decodeBoltBundleModule,
 	DispatchResponse,
-	ManifestIntegration,
-	ManifestIntegrationBinding,
 	ManifestDestination,
 	ManifestOrigin,
-	ManifestPullCursor,
-	ManifestPullPages,
 	ManifestSchemaPlan,
 	ManifestSchemaStep,
 	missingFacilities,
@@ -168,7 +164,9 @@ export {
 	type FacilityProgress,
 	CommunicationRequest,
 	CommunicationResponse,
-	ChannelSendPayload,
+	TransactionalMailKind,
+	TransactionalMailRequest,
+	TransactionalMailResponse,
 	ConnectorRequest,
 	ConnectorResponse,
 	DatabaseRequest,
@@ -218,14 +216,11 @@ export {
 	ConversationStatus,
 	UsageObservation,
 	WorkbenchId,
-	NotificationChannels,
-	NotificationRecipient,
-	NOTIFICATION_CHANNELS
+	NotificationRecipient
 } from './facilities.js';
 export type {
 	FacilityBinding,
 	FacilityBindings,
-	NotificationChannel,
 	TransactionStatement
 } from './facilities.js';
 
@@ -234,17 +229,11 @@ export { Activation, Invocation, InvocationScope, PluginTrustedContext } from '.
 export {
 	ApprovalState,
 	DataBrowserCommandContract,
-	EnvoyDelivery,
-	EnvoyStatus,
-	InboundAttachment,
 	PushConfiguration,
-	PushSubscription,
 	SecretsStatus,
 	SystemCommandContracts,
-	WEB_PUSH_CHANNEL,
 	WEB_PUSH_PUBLIC_KEY_CONFIG_KEY,
 	WEB_PUSH_SUBSCRIPTION_GONE,
-	WebPushPayload,
 	ConversationControlRequest,
 	ConversationControlResult,
 	ConversationEditMessageRequest,
@@ -300,5 +289,35 @@ export {
 export {
 	INTEGRATION_HTTP_OPERATION,
 	IntegrationHttpRequest,
-	IntegrationHttpResponse
+	IntegrationHttpResponse,
+	IntegrationSyncStatus,
+	SyncReport,
+	SyncState
 } from './integration-http.js';
+
+export {
+	ChannelEnvelope,
+	ChannelEvent,
+	ChannelEventKind,
+	ChannelStatus,
+	ChatEnvelope,
+	ChatMessage,
+	CONVERSATION_TRANSPORTS,
+	EmailEnvelope,
+	EmailMessage,
+	HistoryChange,
+	HistoryState,
+	HOST_TRANSPORTS,
+	HttpDelivery,
+	HttpRequest,
+	InboundAttachment,
+	InboxMessage,
+	ManifestChannel,
+	MessageSchemas,
+	OutboundFile,
+	PERSON_TRANSPORTS,
+	PushSubscription,
+	Transport,
+	TRANSPORTS,
+	type MailAddress
+} from './channels.js';

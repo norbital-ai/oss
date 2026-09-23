@@ -39,11 +39,16 @@ const validModule = {
 		schemaPlan: { fingerprint: 'schema-one', steps: [] },
 		requiredFacilities: [],
 		browserAssets: [boltFixtureAsset],
-		serverAssets: [],
-		integrations: []
+		serverAssets: []
 	},
 	dispatch: async () => ({ _tag: 'Success', response: { status: 204, headers: {} } }),
-	activate: async () => ({ _tag: 'Activated', registrations: [], nextDueAtEpochMs: null })
+	activate: async () => ({
+		_tag: 'Activated',
+		registrations: [],
+		nextDueAtEpochMs: null,
+		channels: [],
+		webhooks: []
+	})
 };
 
 /** Loads one stubbed module through the real layer and returns whatever the load produced. */

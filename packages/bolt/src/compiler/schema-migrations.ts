@@ -34,6 +34,7 @@ import {
 	searchTextExpression
 } from '../authoring/model-introspection.js';
 import type { AuthoredCollectionModule } from '../authoring/collection-schema.js';
+import { describeIntegration, type SyncDeclaration } from '../authoring/integrations-schema.js';
 import {
 	referenceDatabaseIdentifier,
 	type ModelDeclaration,
@@ -826,6 +827,28 @@ export const importWorkspaceCollections = (collectionFiles: ReadonlyArray<string
 			Effect.map((declaration) => [basename(dirname(collectionFile)), declaration] as const)
 		)
 	).pipe(Effect.map((entries) => Object.fromEntries(entries)));
+
+/**
+ * Imports each `src/integrations/+<name>.ts` and describes its syncs, so the browser catalog can
+ * withhold what a sync owns: a mirror has no create or delete, and nobody edits a synced column.
+ */
+export const importWorkspaceSyncs = (integrationFiles: ReadonlyArray<string>) =>
+	Effect.forEach(integrationFiles, (integrationFile) =>
+		Effect.tryPromise({
+			try: async () => {
+				registerAuthoredResolution();
+				const source = await readFile(integrationFile, 'utf8');
+				const revision = createHash('sha256').update(source).digest('hex');
+				const module: unknown = await import(`${pathToFileURL(integrationFile).href}?bolt-integration=${revision}`);
+				const declaration = isRecord(module) ? module['default'] : undefined;
+				return describeIntegration(basename(integrationFile).slice(1, -3), declaration as never).declaration.syncs;
+			},
+			catch: (caught) =>
+				new Error(`Could not import ${integrationFile} to read its syncs.\n\nNode said:\n${getErrorMessage(caught)}`, {
+					cause: caught
+				})
+		})
+	).pipe(Effect.map((syncs): ReadonlyArray<SyncDeclaration> => syncs.flat()));
 
 /** Imports the optional relationship function through the same content-revision boundary as models. */
 export const importWorkspaceRelationships = (relationshipFile: string) =>

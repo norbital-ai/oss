@@ -109,6 +109,7 @@ const definition = workspace({
 	prompt: 'Exercise the policy lifecycle.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: []
 });
@@ -325,6 +326,7 @@ describe('policy and transform lifecycle', () => {
 			prompt: 'Exercise an atomic reviewed transition.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});

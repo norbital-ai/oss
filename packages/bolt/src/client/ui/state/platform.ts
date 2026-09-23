@@ -51,7 +51,7 @@ export type PlatformUser = Readonly<{
  */
 export type PlatformEnvoy = Readonly<{
 	readonly name: string;
-	readonly transport: string;
+	readonly channel: string;
 	readonly audience: string;
 	readonly delegation: 'enabled' | 'disabled';
 }>;

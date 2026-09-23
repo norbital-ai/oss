@@ -12,6 +12,7 @@ const fixture = workspace({
 	apps: [app({ name: 'people', label: 'People' })],
 	policies: [],
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -56,6 +57,7 @@ const effectiveDated = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: ['database']
 });

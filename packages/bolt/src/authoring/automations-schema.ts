@@ -1,5 +1,6 @@
 import { Effect, Schema } from 'effect';
-import type { NotificationRecipient } from '@norbital-ai/bolt-protocol';
+import type { ChannelsApi, NotifyApi } from './channels-schema.js';
+import type { IntegrationsApi } from './integrations-schema.js';
 import type {
 	AnySchema,
 	Api,
@@ -82,7 +83,15 @@ export type AutomationProgression = Schema.Schema.Type<typeof AutomationProgress
  * a hook is part of somebody else's atomic write and must never acquire an I/O checkpoint API that
  * can outlive or partially report that write.
  */
-export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S> & {
+export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S> &
+	NotifyApi & {
+	/**
+	 * One-off sends on the declared channels, typed by each channel's transport. The message is
+	 * committed to the channel outbox and delivered, retried and recorded there.
+	 */
+	readonly channels: ChannelsApi;
+	/** `api.integrations.<name>.reconcile()`: a full reconcile of every sync the integration declares, queued. */
+	readonly integrations: IntegrationsApi;
 	/** Runtime-owned occurrence identity, stable across retries. Use it to key durable receipts. */
 	readonly runId: string;
 	/** Retrieves a bounded public HTTPS page through the host connector, without stored sign-ins. */
@@ -96,20 +105,6 @@ export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S>
 	};
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
 	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
-	/**
-	 * Sends one inbox notification to each recipient, keyed so a retry — or a later run that states
-	 * the same reminder — writes nothing twice.
-	 *
-	 * `key` is the reminder's durable identity: `late:EMP01:2026-09-22` is one reminder however many
-	 * times the check runs, and a key naming a new fact is a new reminder. Recipients are user ids or
-	 * `{ team }` — every member of that team at the moment the notification is written.
-	 */
-	readonly notify: (reminder: {
-		readonly key: string;
-		readonly recipients: ReadonlyArray<NotificationRecipient>;
-		readonly title: string;
-		readonly body: string;
-	}) => Effect.Effect<void>;
 };
 
 export type AutomationContext<

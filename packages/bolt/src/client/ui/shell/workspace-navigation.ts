@@ -22,7 +22,8 @@ type ShellMessageKey =
 	| 'bolt.shell.kiosk'
 	| 'bolt.shell.workspaceStudio'
 	| 'bolt.shell.organization'
-	| 'bolt.shell.envoys'
+	| 'bolt.shell.channels'
+	| 'bolt.shell.integrations'
 	| 'bolt.shell.secrets';
 
 export type HostPlugin = Readonly<{
@@ -47,7 +48,8 @@ const humanize = (value: string): string =>
 const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
-const ENVOYS_SETTINGS_PATH = hostPluginSurfaceHref('envoys');
+const CHANNELS_SETTINGS_PATH = hostPluginSurfaceHref('channels');
+const INTEGRATIONS_SETTINGS_PATH = hostPluginSurfaceHref('integrations');
 const ENVIRONMENT_SETTINGS_PATH = hostPluginSurfaceHref('environment_secrets');
 
 const applicationHref = (name: string): string => `/app/${name}`;
@@ -72,7 +74,8 @@ export const manifestDestinationHref = (destination: ManifestDestination): strin
 	if (destination.kind === 'app') return applicationHref(destination.name);
 	if (destination.surface === 'approvals') return APPROVALS_PATH;
 	if (destination.surface === 'automations') return automationsHref(destination.selection);
-	if (destination.surface === 'envoys') return ENVOYS_SETTINGS_PATH;
+	if (destination.surface === 'channels') return CHANNELS_SETTINGS_PATH;
+	if (destination.surface === 'integrations') return INTEGRATIONS_SETTINGS_PATH;
 	if (destination.surface === 'environment') return ENVIRONMENT_SETTINGS_PATH;
 	return null;
 };
@@ -98,10 +101,18 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		adminOnly: true
 	},
 	{
-		key: 'envoys',
-		label: 'Envoys',
-		icon: 'lucide:bot',
-		entry: ENVOYS_SETTINGS_PATH,
+		key: 'channels',
+		label: 'Channels',
+		icon: 'lucide:radio-tower',
+		entry: CHANNELS_SETTINGS_PATH,
+		placement: 'settings',
+		adminOnly: true
+	},
+	{
+		key: 'integrations',
+		label: 'Integrations',
+		icon: 'lucide:refresh-cw',
+		entry: INTEGRATIONS_SETTINGS_PATH,
 		placement: 'settings',
 		adminOnly: true
 	},
@@ -384,8 +395,10 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 				? 'bolt.shell.workspaceStudio'
 				: plugin.key === 'organization'
 					? 'bolt.shell.organization'
-					: plugin.key === 'envoys'
-						? 'bolt.shell.envoys'
+					: plugin.key === 'channels'
+						? 'bolt.shell.channels'
+						: plugin.key === 'integrations'
+						? 'bolt.shell.integrations'
 						: plugin.key === 'environment_secrets'
 							? 'bolt.shell.secrets'
 							: undefined;

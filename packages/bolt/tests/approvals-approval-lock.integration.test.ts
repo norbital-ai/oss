@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { testChannels } from './support/channels.js';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { approveBy, noApproval } from '../src/authoring/approval-flow.js';
@@ -82,6 +83,7 @@ const definition = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: testChannels('inbox'),
 	envoys: [],
 	requiredFacilities: []
 });
@@ -246,7 +248,7 @@ const revisions = (runtime: BoltTestRuntime, target: string, id: string) =>
 
 const notifications = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
-		"select recipient, payload->>'title' as title, payload->>'approvalRequestId' as request from bolt_notifications order by created_at, recipient"
+		"select recipient_user as recipient, message->>'title' as title, message->>'approvalRequestId' as request from bolt_channel_outbox order by created_at, recipient_user"
 	);
 
 describe('approval hold, seal and restore', () => {
@@ -360,15 +362,15 @@ describe('approval hold, seal and restore', () => {
 		});
 		const decided = await decide(runtime, 'approve-order', requestId, 'approve');
 		expect(decided._tag).toBe('Approved');
-		// The decision's notification rides its own delivery wake beside the lifecycle task.
+		// The decision's notification rides its own channel drain beside the lifecycle task.
 		expect(
 			await runtime.database.query(
-				"select command from bolt_task where command = 'notifications.deliver'"
+				"select command from bolt_task where command = 'channels.drain'"
 			)
 		).toHaveLength(1);
 		expect(
 			await runtime.database.query(
-				"select command, input from bolt_task where command <> 'notifications.deliver'"
+				"select command, input from bolt_task where command <> 'channels.drain'"
 			)
 		).toEqual([{ command: 'collections.resume', input: { requestId } }]);
 		await resume(runtime, 'resume-order', requestId);
@@ -490,15 +492,15 @@ describe('approval hold, seal and restore', () => {
 			_tag: 'ChangesRequested',
 			reason: 'Please add the missing evidence.'
 		});
-		// The decision's notification rides its own delivery wake beside the lifecycle task.
+		// The decision's notification rides its own channel drain beside the lifecycle task.
 		expect(
 			await runtime.database.query(
-				"select command from bolt_task where command = 'notifications.deliver'"
+				"select command from bolt_task where command = 'channels.drain'"
 			)
 		).toHaveLength(1);
 		expect(
 			await runtime.database.query(
-				"select command from bolt_task where command <> 'notifications.deliver'"
+				"select command from bolt_task where command <> 'channels.drain'"
 			)
 		).toEqual([{ command: 'collections.discard' }]);
 		await discard(runtime, 'discard-order', requestId);

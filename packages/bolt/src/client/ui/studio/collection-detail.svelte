@@ -12,7 +12,7 @@
 	} from '#lib/client/ui/system/automation-presentation.js';
 	import {
 		writeSummaryKey,
-		integrationBindingSummary,
+		integrationSyncSummary,
 		type ManifestCollection,
 		type WorkspaceManifest
 	} from '#lib/client/ui/studio/studio-state.js';
@@ -34,7 +34,9 @@
 	const writes = $derived(collection.writes ?? []);
 	const pipelines = $derived(collection.pipelines ?? []);
 	const integrations = $derived(
-		manifest.integrations.filter((integration) => integration.collection === collection.name)
+		manifest.integrations.filter((integration) =>
+			integration.syncs.some((sync) => sync.collection === collection.name)
+		)
 	);
 </script>
 
@@ -173,15 +175,8 @@
 					<ProductIcon name="integrations" class="size-3.5 shrink-0 text-muted-foreground" />
 					<Stack gap="none" grow class="min-w-0">
 						<span class="truncate font-medium text-foreground">{integration.name}</span>
-						{#if integration.description !== undefined}
-							<span class="text-meta">{integration.description}</span>
-						{/if}
-						{#each integration.bindings ?? [] as binding (binding.name)}
-							<span class="text-micro text-muted-foreground">
-								{binding.direction} · {integrationBindingSummary(binding)}
-								{#if binding.targetCollection !== undefined}
-									· {binding.targetCollection}{/if}
-							</span>
+						{#each integration.syncs.filter((sync) => sync.collection === collection.name) as sync (sync.name)}
+							<span class="text-micro text-muted-foreground">{integrationSyncSummary(sync)}</span>
 						{/each}
 					</Stack>
 					{@render sourceLink(integration.sourcePath, integration.name)}

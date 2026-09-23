@@ -13,11 +13,12 @@ import {
 	identitiesOf,
 	identityMatches
 } from '../src/runtime/envoys/transport-identity.js';
+import { testChannels } from './support/channels.js';
 
 const contractorEnvoy = () =>
 	envoy({
 		name: 'field_ops_whatsapp',
-		transport: 'whatsapp',
+		channel: 'whatsapp',
 		audience: 'authenticated',
 		policies: ['contractor'],
 		delegation: 'enabled',
@@ -44,6 +45,7 @@ const envoyWorkspace = (teams: Readonly<Record<string, ReadonlyArray<string>>> =
 		tools: [],
 		skills: [],
 		automations: [],
+		channels: testChannels('whatsapp'),
 		envoys: [contractorEnvoy()],
 		integrations: [],
 		requiredFacilities: []
@@ -256,16 +258,17 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 		expect(steps.find((step) => step.id === 'collection:user')?.sql).toContain('"channels" jsonb');
 	});
 
-	it('creates envoy tables without compatibility steps', () => {
+	it('creates channel tables without compatibility steps', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
 		const ids = steps.map(({ id }) => id);
-		for (const created of [
-			'collection:bolt_channel_links',
+		for (const created of ['collection:bolt_channel_links', 'collection:channel_messages'])
+			expect(ids).toContain(created);
+		for (const retired of [
+			'collection:bolt_envoy_registrations',
 			'collection:bolt_envoy_receipts',
 			'collection:bolt_envoy_messages'
 		])
-			expect(ids).toContain(created);
-		expect(ids).not.toContain('collection:bolt_envoy_registrations');
+			expect(ids).not.toContain(retired);
 
 		const claims = steps.find(({ id }) => id === 'collection:bolt_channel_links')?.sql ?? '';
 		for (const field of [
@@ -279,9 +282,6 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 			'"expires_at" timestamp with time zone'
 		])
 			expect(claims).toContain(field);
-
-		const receipts = steps.find(({ id }) => id === 'collection:bolt_envoy_receipts')?.sql ?? '';
-		expect(receipts).toContain('"receipt_key" text');
 	});
 
 	/**
@@ -289,7 +289,7 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 	 * An Envoy Task is attributed by `subject_id` and `agent_id`, routed by its typed audience and
 	 * workbench, and never carries transport cursor state inside the Task lifecycle row.
 	 */
-	it('creates Task ownership and keeps transport progress in Envoy projections', () => {
+	it('creates Task ownership and keeps transport progress in channel history', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
 		const task = steps.find(({ id }) => id === 'collection:conversation')?.sql ?? '';
 		for (const field of [
@@ -305,26 +305,21 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 		expect(task).not.toContain('"external_message_id"');
 		expect(task).not.toContain('"receipt_key"');
 
-		const inbound = steps.find(({ id }) => id === 'collection:bolt_envoy_messages')?.sql ?? '';
+		const history = steps.find(({ id }) => id === 'collection:channel_messages')?.sql ?? '';
 		for (const field of [
-			'"envoy_name" text not null',
+			'"channel" text not null',
 			'"conversation_id" text not null',
-			'"transport_conversation_id" text not null',
 			'"direction" text not null',
-			'"origin" text default \'live\' not null',
-			'"external_message_id" text not null',
-			'"receipt_key" text not null',
+			'"origin" text not null',
+			'"provider_message_id" text not null',
+			'"version" text not null',
+			'"addressed" boolean default false not null',
+			'"agent_conversation_id" text',
 			'"read_by" text',
 			'"edited_at" timestamp with time zone',
-			'"status" text default \'pending\' not null',
+			'"deleted_at" timestamp with time zone',
 			'"answered_at" timestamp with time zone'
 		])
-			expect(inbound).toContain(field);
-
-		const receipts = steps.find(({ id }) => id === 'collection:bolt_envoy_receipts')?.sql ?? '';
-		expect(receipts).toContain('"envoy_name" text not null');
-		expect(receipts).toContain('"conversation_id" text not null');
-		expect(receipts).toContain('"direction" text not null');
-		expect(receipts).toContain('"receipt_key" text');
+			expect(history).toContain(field);
 	});
 });

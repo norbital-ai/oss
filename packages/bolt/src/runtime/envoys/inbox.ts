@@ -6,14 +6,14 @@ import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 
-const { bolt_envoy_messages: envoyMessages } = SYSTEM_MODEL_TABLES;
+const { channel_messages: messages } = SYSTEM_MODEL_TABLES;
 
 /**
- * One attachment as the replica stores it: provider facts plus the durable key when bytes were
+ * One attachment as history stores it: provider facts plus the durable key when bytes were
  * materialized at ingest. A descriptor without a key is media the provider could not hand over —
  * it is listed to the reader, never silently missing.
  */
-export const ReplicaAttachment = Schema.Struct({
+const ReplicaAttachment = Schema.Struct({
 	provider: Schema.NonEmptyString,
 	attachmentId: Schema.NonEmptyString,
 	kind: Schema.Literals(['image', 'video', 'audio', 'document', 'sticker', 'other']),
@@ -22,12 +22,11 @@ export const ReplicaAttachment = Schema.Struct({
 	size: Schema.Natural,
 	key: Schema.optionalKey(Schema.NonEmptyString)
 });
-export interface ReplicaAttachment extends Schema.Schema.Type<typeof ReplicaAttachment> {}
 
 const ReplicaMessage = Schema.Struct({
 	sent_at: Schema.NonEmptyString,
-	sender_external_id: Schema.NullOr(Schema.String),
-	sender_display_name: Schema.NullOr(Schema.String),
+	sender_id: Schema.NullOr(Schema.String),
+	sender_name: Schema.NullOr(Schema.String),
 	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
 	text: Schema.String,
 	attachments: Schema.Array(ReplicaAttachment)
@@ -49,7 +48,8 @@ type ReadResult = Readonly<{
 }>;
 
 /**
- * The read half of the channel replica.
+ * The read half of a channel's history, for its envoy: the ambient messages a turn was not asked
+ * about. A message its sender deleted is gone from every read.
  *
  * Separate from the Envoys service on purpose: the agent runtime needs it, and the agent runtime is
  * what the Envoys service is built on — so this module depends on the database alone and never on
@@ -94,18 +94,18 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 				database,
 				composer
 					.select({
-						floor_at: sql<string | null>`min(${envoyMessages.sent_at})`.as('floor_at'),
+						floor_at: sql<string | null>`min(${messages.sent_at})`.as('floor_at'),
 						first_live_at: sql<
 							string | null
-						>`min(${envoyMessages.created_at}) filter (where ${envoyMessages.origin} = 'live')`.as(
+						>`min(${messages.created_at}) filter (where ${messages.origin} = 'live')`.as(
 							'first_live_at'
 						)
 					})
-					.from(envoyMessages)
+					.from(messages)
 					.where(
 						and(
-							eq(envoyMessages.conversation_id, conversationId),
-							eq(envoyMessages.direction, 'inbound')
+							eq(messages.agent_conversation_id, conversationId),
+							eq(messages.direction, 'inbound')
 						)
 					)
 			);
@@ -118,13 +118,13 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 				database,
 				composer
 					.select({ count: count() })
-					.from(envoyMessages)
+					.from(messages)
 					.where(
 						and(
-							eq(envoyMessages.conversation_id, conversationId),
-							eq(envoyMessages.direction, 'inbound'),
-							eq(envoyMessages.origin, 'sync'),
-							sql`${envoyMessages.sent_at} < ${firstLiveAt}`
+							eq(messages.agent_conversation_id, conversationId),
+							eq(messages.direction, 'inbound'),
+							eq(messages.origin, 'sync'),
+							sql`${messages.sent_at} < ${firstLiveAt}`
 						)
 					)
 			);
@@ -141,13 +141,14 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 					database,
 					composer
 						.select({ count: count() })
-						.from(envoyMessages)
+						.from(messages)
 						.where(
 							and(
-								eq(envoyMessages.conversation_id, conversationId),
-								eq(envoyMessages.direction, 'inbound'),
-								eq(envoyMessages.addressed, false),
-								isNull(envoyMessages.read_by)
+								eq(messages.agent_conversation_id, conversationId),
+								eq(messages.direction, 'inbound'),
+								eq(messages.addressed, false),
+								isNull(messages.deleted_at),
+								isNull(messages.read_by)
 							)
 						)
 				);
@@ -155,31 +156,32 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 			}),
 
 			read: Effect.fn('EnvoyInbox.read')(function* (effectId, conversationId, readBy, limit) {
-				const readable = or(isNull(envoyMessages.read_by), eq(envoyMessages.read_by, readBy));
+				const readable = or(isNull(messages.read_by), eq(messages.read_by, readBy));
 				const bounded = Math.max(1, Math.min(50, Math.floor(limit)));
 				const rows = yield* executeBuilt(
 					EffectId.make(`${effectId}:rows`),
 					database,
 					composer
 						.select({
-							id: envoyMessages.id,
-							sent_at: envoyMessages.sent_at,
-							sender_external_id: envoyMessages.sender_external_id,
-							sender_display_name: envoyMessages.sender_display_name,
-							invocation: envoyMessages.invocation,
-							text: envoyMessages.text,
-							attachments: envoyMessages.attachments
+							id: messages.id,
+							sent_at: messages.sent_at,
+							sender_id: messages.sender_id,
+							sender_name: messages.sender_name,
+							invocation: messages.invocation,
+							text: messages.text,
+							attachments: messages.attachments
 						})
-						.from(envoyMessages)
+						.from(messages)
 						.where(
 							and(
-								eq(envoyMessages.conversation_id, conversationId),
-								eq(envoyMessages.direction, 'inbound'),
-								eq(envoyMessages.addressed, false),
+								eq(messages.agent_conversation_id, conversationId),
+								eq(messages.direction, 'inbound'),
+								eq(messages.addressed, false),
+								isNull(messages.deleted_at),
 								readable
 							)
 						)
-						.orderBy(asc(envoyMessages.sent_at), asc(envoyMessages.id))
+						.orderBy(asc(messages.sent_at), asc(messages.id))
 						.limit(bounded)
 				);
 				const decoded = rows.rows.flatMap((row) => {
@@ -196,16 +198,17 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 						EffectId.make(`${effectId}:mark`),
 						database,
 						composer
-							.update(envoyMessages)
+							.update(messages)
 							.set({ read_by: readBy })
 							.where(
 								and(
-									isNull(envoyMessages.read_by),
-									eq(envoyMessages.conversation_id, conversationId),
-									eq(envoyMessages.direction, 'inbound'),
-									eq(envoyMessages.addressed, false),
+									isNull(messages.read_by),
+									eq(messages.agent_conversation_id, conversationId),
+									eq(messages.direction, 'inbound'),
+									eq(messages.addressed, false),
+								isNull(messages.deleted_at),
 									inArray(
-										envoyMessages.id,
+										messages.id,
 										decoded.map(({ id }) => id)
 									)
 								)
@@ -216,29 +219,23 @@ export const layer: Layer.Layer<Interface, never, Database.Interface> = Layer.ef
 					database,
 					composer
 						.select({ count: count() })
-						.from(envoyMessages)
+						.from(messages)
 						.where(
 							and(
-								eq(envoyMessages.conversation_id, conversationId),
-								eq(envoyMessages.direction, 'inbound'),
-								eq(envoyMessages.addressed, false),
-								isNull(envoyMessages.read_by)
+								eq(messages.agent_conversation_id, conversationId),
+								eq(messages.direction, 'inbound'),
+								eq(messages.addressed, false),
+								isNull(messages.deleted_at),
+								isNull(messages.read_by)
 							)
 						)
 				);
 				return {
 					messages: decoded.map(
-						({
+						({ sent_at, sender_id, sender_name, invocation, text, attachments }) => ({
 							sent_at,
-							sender_external_id,
-							sender_display_name,
-							invocation,
-							text,
-							attachments
-						}) => ({
-							sent_at,
-							sender_external_id,
-							sender_display_name,
+							sender_id,
+							sender_name,
 							invocation,
 							text,
 							attachments

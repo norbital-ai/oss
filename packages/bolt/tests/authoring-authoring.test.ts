@@ -4,7 +4,6 @@ import {
 	defineAutomation,
 	defineAgentTool,
 	defineCommandHandler,
-	defineConnection,
 	defineModel,
 	custom,
 	file,
@@ -84,12 +83,7 @@ describe('Bolt authoring contracts', () => {
 			schema: Schema.Struct({ id: Schema.String }),
 			handler: ({ id }) => id
 		});
-		const connection = defineConnection({
-			baseUrl: 'https://example.test',
-			authentication: { type: 'bearer', token: { env: 'TOKEN' } }
-		});
 		expect(command.kind).toBe('command');
-		expect(connection.authentication.token.env).toBe('TOKEN');
 	});
 
 	it('declares a workspace agent tool with a non-empty description', () => {

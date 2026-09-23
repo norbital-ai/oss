@@ -578,140 +578,196 @@ const auditModel = defineModel(
 	{ history: false, indexes: [systemIndex('sequence'), systemIndex('request_id')] }
 );
 
-const envoyReceiptModel = defineModel(
-	{
-		sequence: bigserial({ mode: 'number' }).unique(),
-		envoy_name: text().notNull(),
-		conversation_id: text().notNull(),
-		direction: text().notNull(),
-		sender_id: text(),
-		/** Provider-stable message identity. Null only on receipts written before this field existed. */
-		receipt_key: text().unique()
-	},
-	{
-		history: false,
-		indexes: [
-			{ name: 'bolt_envoy_receipts_window', columns: ['envoy_name', 'direction', 'created_at'] }
-		]
-	}
-);
-
 /**
- * The channel replica: every message the chat shows, both directions, in arrival-independent order.
- *
- * This is not a drain buffer. A row is appended once, keyed by the provider's own message identity,
- * and stays durable: addressed rows are also admitted to the agent transcript, ambient rows are read
- * on demand through `read_messages`, and outbound rows are written from the send receipt. Sync and
- * backfill append with `origin` set and land pre-read, so the unread count is live ambient only.
+ * A channel's history: every message the provider shows, both directions, kept by a one-way sync
+ * (channels.md §7). Identity is the provider's message id; an edit converges the row, a sender's
+ * delete tombstones it (its text and attachments leave every read), and nothing but the channel's
+ * own sync writes here — read-only to every workspace surface.
  */
-const envoyMessageModel = defineModel(
+const channelMessageModel = defineModel(
 	{
-		envoy_name: text().notNull(),
-		/** The agent conversation this chat projects to; the read tool and preempt query by it. */
+		channel: text().notNull(),
+		transport: text().notNull(),
+		/** The provider conversation: a chat id, a mail thread's root Message-ID, an http delivery. */
 		conversation_id: text().notNull(),
-		transport_conversation_id: text().notNull(),
+		conversation_kind: text().notNull(),
 		direction: text().notNull(),
-		/** `live` | `sync` | `backfill` | `send`. */
-		origin: text().notNull().default('live'),
-		external_message_id: text().notNull(),
-		receipt_key: text().notNull().unique(),
-		sender_external_id: text(),
-		sender_display_name: text(),
+		/** `live` | `sync`: only a live inbound row can be answered. */
+		origin: text().notNull(),
+		provider_message_id: text().notNull(),
+		version: text().notNull(),
+		sender_id: text(),
+		sender_name: text(),
 		sent_at: instant().notNull(),
-		invocation: text().notNull(),
+		invocation: text(),
+		subject: text(),
 		text: text().notNull(),
+		/** The whole normalised envelope, attachment bytes excluded. */
+		envelope: jsonb().notNull(),
 		attachments: jsonb()
 			.notNull()
 			.default(sql`'[]'::jsonb`),
-		subject: jsonb().notNull(),
-		addressed: boolean().notNull(),
+		/** The outbox row a sent message came from, for event correlation. */
+		outbox_id: text(),
+		/** Whether this inbound row asks the channel's envoy for an answer. */
+		addressed: boolean().notNull().default(false),
+		/** The agent conversation the channel's envoy admitted this row to. */
+		agent_conversation_id: text(),
+		answered_at: instant(),
 		/** Null is unread; `sync` for history, the tool call's effect id for an on-demand read. */
 		read_by: text(),
 		edited_at: instant(),
-		status: text().notNull().default('pending'),
-		answered_at: instant()
+		deleted_at: instant()
 	},
 	{
 		history: false,
 		indexes: [
+			{ name: 'channel_messages_identity', columns: ['channel', 'provider_message_id'], unique: true },
+			{ name: 'channel_messages_conversation', columns: ['channel', 'conversation_id', 'sent_at'] },
+			{ name: 'channel_messages_agent', columns: ['agent_conversation_id', 'direction', 'sent_at'] },
 			{
-				name: 'bolt_envoy_messages_order',
-				columns: ['conversation_id', 'direction', 'sent_at']
-			},
-			{
-				name: 'bolt_envoy_messages_unread',
-				columns: ['conversation_id', 'direction', 'read_by', 'sent_at']
-			},
-			{
-				name: 'bolt_envoy_messages_pending',
-				columns: ['conversation_id', 'status', 'sent_at']
+				name: 'channel_messages_unanswered',
+				columns: ['channel', 'conversation_id', 'sent_at'],
+				where: "addressed and answered_at is null and deleted_at is null and direction = 'inbound' and origin = 'live'"
 			}
 		]
 	}
 );
 
-const integrationModel = defineModel(
+/** The history sync's lifecycle per channel, as the host last reported it. */
+const channelStateModel = defineModel(
 	{
-		name: text().notNull().unique(),
-		enabled: boolean().notNull().default(true),
-		cursor: jsonb(),
+		channel: text().notNull().unique(),
+		state: text().notNull().default('unlinked'),
+		horizon: text(),
+		last_inbound_at: instant()
+	},
+	{ history: false }
+);
+
+/**
+ * The channel outbox: every outbound message — an envoy reply, a notification, an outbound rule, an
+ * `api.channels.<n>.send` — committed in the transaction that caused it, then drained, retried and
+ * settled here. One delivery record for every sender.
+ */
+const channelOutboxModel = defineModel(
+	{
+		sequence: bigserial({ mode: 'number' }).unique(),
+		channel: text().notNull(),
+		transport: text().notNull(),
+		/** `pending` | `inflight` | `sent` | `failed` | `skipped`. */
+		status: text().notNull().default('pending'),
+		message: jsonb(),
+		/** A notification's recipient user id; the address is resolved at send time. */
+		recipient_user: text(),
+		/** The conversation an envoy reply belongs to, so the sent message lands in its history. */
+		conversation_id: text(),
+		/** The record an outbound rule sent from; events patch it. */
+		source_collection: text(),
+		source_record_id: text(),
+		rule: text(),
+		thread_key: text(),
+		provider_message_id: text(),
+		attempts: integer().notNull().default(0),
+		next_attempt_at: instant().notNull().defaultNow(),
+		last_error: text(),
+		sent_at: instant()
+	},
+	{
+		history: false,
+		indexes: [
+			{ name: 'bolt_channel_outbox_due', columns: ['channel', 'status', 'next_attempt_at'] },
+			{ name: 'bolt_channel_outbox_provider', columns: ['channel', 'provider_message_id'] },
+			{ name: 'bolt_channel_outbox_thread', columns: ['channel', 'thread_key'] }
+		]
+	}
+);
+
+/** One sync's lifecycle, cursors and last report (integrations.md §7). */
+const syncStateModel = defineModel(
+	{
+		/** `<integration>.<sync>`. */
+		sync: text().notNull().unique(),
+		state: text().notNull().default('unlinked'),
+		detail: text(),
+		/** The sweep in progress: `{ id, mode, page, pageCursor, counts, samples }`. */
+		sweep: jsonb(),
+		changes_cursor: text(),
+		report: jsonb(),
 		lease_until: instant()
 	},
 	{ history: false }
 );
 
-const integrationInboxModel = defineModel(
+/**
+ * The link between a local row and a remote identity, and the shadow both sides last agreed on.
+ *
+ * `shadow` holds the synced fields in their local form; `version` the source's version token (or a
+ * content hash). A row is `linked`, `pending_link` (created locally, not yet acknowledged) or
+ * `local_only`. `swept` is the id of the last sweep that saw the remote record: a full sweep that
+ * finishes without touching a linked row is the only place absence becomes a delete.
+ */
+const syncLinkModel = defineModel(
 	{
-		integration_name: text().notNull(),
-		receipt_id: text().notNull(),
-		binding_name: text(),
-		payload: jsonb().notNull(),
-		status: text().notNull().default('pending'),
-		processed_at: instant(),
-		received_at: instant().notNull().defaultNow()
+		sync: text().notNull(),
+		record_id: text().notNull(),
+		identity: text(),
+		status: text().notNull(),
+		shadow: jsonb()
+			.notNull()
+			.default(sql`'{}'::jsonb`),
+		version: text(),
+		swept: text()
 	},
 	{
 		history: false,
 		indexes: [
-			{
-				name: 'bolt_integration_inbox_receipt',
-				columns: ['integration_name', 'receipt_id'],
-				unique: true
-			}
+			{ name: 'bolt_integration_links_record', columns: ['sync', 'record_id'], unique: true },
+			{ name: 'bolt_integration_links_identity', columns: ['sync', 'identity'], unique: true },
+			{ name: 'bolt_integration_links_swept', columns: ['sync', 'swept'] }
 		]
 	}
 );
 
-const integrationOutboxModel = defineModel(
+/**
+ * Local intent to push, one row per record: the marker is written in the local write's own
+ * transaction, and the change itself is re-derived from the row and its shadow when it is pushed,
+ * so later edits coalesce into it and a dead letter is repaired from state, not a stale payload.
+ */
+const syncOutboxModel = defineModel(
 	{
-		sequence: bigserial({ mode: 'number' }).unique(),
-		integration_name: text().notNull(),
-		binding_name: text().notNull(),
-		collection_name: text().notNull(),
+		sync: text().notNull(),
 		record_id: text().notNull(),
-		operation: text().notNull(),
-		path: text(),
-		payload: jsonb(),
+		/** Bumped by every local write; a push settles only the revision it claimed. */
+		revision: integer().notNull().default(1),
 		status: text().notNull().default('pending'),
 		attempts: integer().notNull().default(0),
 		next_attempt_at: instant().notNull().defaultNow(),
 		last_status: integer(),
-		last_error: text(),
-		delivered_at: instant()
+		last_error: text()
 	},
 	{
 		history: false,
 		indexes: [
-			{
-				name: 'bolt_integration_outbox_due',
-				columns: ['integration_name', 'status', 'next_attempt_at']
-			},
-			{
-				name: 'bolt_integration_outbox_record',
-				columns: ['collection_name', 'record_id', 'sequence']
-			}
+			{ name: 'bolt_integration_pushes_record', columns: ['sync', 'record_id'], unique: true },
+			{ name: 'bolt_integration_pushes_due', columns: ['sync', 'status', 'next_attempt_at'] }
 		]
 	}
+);
+
+/** Every conflict a declared rule resolved: nothing about a conflict is silent (§8.3). */
+const syncConflictModel = defineModel(
+	{
+		sync: text().notNull(),
+		record_id: text().notNull(),
+		field: text().notNull(),
+		base: jsonb(),
+		local: jsonb(),
+		remote: jsonb(),
+		rule: text().notNull(),
+		winner: text().notNull()
+	},
+	{ history: false, indexes: [{ name: 'bolt_integration_conflicts_sync', columns: ['sync', 'created_at'] }] }
 );
 
 const collectionHistoryModel = defineModel(
@@ -933,17 +989,19 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	turn_usage: turnUsageModel,
 	automation_run: automationRunModel,
 	telemetry: telemetryModel,
-	bolt_notifications: notificationModel
+	bolt_notifications: notificationModel,
+	channel_messages: channelMessageModel
 });
 
 export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_approvals: approvalStateModel,
 	bolt_audit: auditModel,
-	bolt_envoy_receipts: envoyReceiptModel,
-	bolt_envoy_messages: envoyMessageModel,
-	bolt_integrations: integrationModel,
-	bolt_integration_inbox: integrationInboxModel,
-	bolt_integration_outbox: integrationOutboxModel,
+	bolt_channel_state: channelStateModel,
+	bolt_channel_outbox: channelOutboxModel,
+	bolt_integration_state: syncStateModel,
+	bolt_integration_links: syncLinkModel,
+	bolt_integration_pushes: syncOutboxModel,
+	bolt_integration_conflicts: syncConflictModel,
 	bolt_collection_history: collectionHistoryModel,
 	bolt_external_subjects: externalSubjectModel,
 	bolt_invitations: invitationModel,

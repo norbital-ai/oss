@@ -54,6 +54,7 @@ const vaultWorkspace = workspace({
 		admin: ['admin']
 	},
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

@@ -27,7 +27,8 @@
 	import { EMPTY_WORKSPACE_ACCESS } from '#lib/client/ui/settings/rows.js';
 	import { SYSTEM_COLLECTION_SURFACES } from '#lib/client/ui/system/system-collection-surfaces.js';
 	import { setMembershipEditor } from '#lib/client/ui/system/membership-editor.svelte.js';
-	import EnvoysSettings from '../org/envoys-settings.svelte';
+	import ChannelsSettings from '../org/channels-settings.svelte';
+	import IntegrationsSettings from '../org/integrations-settings.svelte';
 	import ClaimPage from '../identity/claim-page.svelte';
 	import { ENVOY_REGISTRATION_PATH, INVITATION_PATH } from '@norbital-ai/bolt-protocol';
 	import OrganizationSettings from '../org/organization-settings.svelte';
@@ -608,8 +609,10 @@
 		/>
 	{:else if hostPlugin === 'organization'}
 		<OrganizationSettings tenantId={view.organization.id} client={workspace.frameworkClient} />
-	{:else if hostPlugin === 'envoys'}
-		<EnvoysSettings client={workspace.frameworkClient} />
+	{:else if hostPlugin === 'channels'}
+		<ChannelsSettings client={workspace.frameworkClient} />
+	{:else if hostPlugin === 'integrations'}
+		<IntegrationsSettings client={workspace.frameworkClient} />
 	{:else if path === ENVOY_REGISTRATION_PATH || path === INVITATION_PATH}
 		<ClaimPage
 			client={workspace.frameworkClient}

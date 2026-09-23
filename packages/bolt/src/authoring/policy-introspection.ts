@@ -69,7 +69,7 @@ const AuthoredPolicy = Schema.Struct({
 	)
 });
 const AuthoredEnvoy = Schema.Struct({
-	transport: Schema.String,
+	channel: Schema.String,
 	audience: Schema.Literals(['public', 'authenticated', 'private']),
 	policies: Schema.Array(Schema.String),
 	task: Schema.String,
@@ -373,7 +373,7 @@ export const describeEnvoy = (
 	declaration: unknown
 ): {
 	readonly name: string;
-	readonly transport: string;
+	readonly channel: string;
 	readonly audience: 'public' | 'authenticated' | 'private';
 	readonly policies: ReadonlyArray<string>;
 	readonly task: string;
@@ -383,11 +383,11 @@ export const describeEnvoy = (
 	const decoded = Schema.decodeUnknownResult(AuthoredEnvoy)(declaration);
 	if (Result.isFailure(decoded)) {
 		throw new TypeError(
-			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, delegation, groupMessages? }.`
+			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { channel, audience, policies, task, delegation, groupMessages? }.`
 		);
 	}
-	if (decoded.success.transport.trim() === '') {
-		throw new TypeError(`Envoy ${name} requires a transport.`);
+	if (decoded.success.channel.trim() === '') {
+		throw new TypeError(`Envoy ${name} requires a channel.`);
 	}
 	if (decoded.success.policies.length === 0) {
 		throw new TypeError(
@@ -399,7 +399,7 @@ export const describeEnvoy = (
 	}
 	return Object.freeze({
 		name,
-		transport: decoded.success.transport,
+		channel: decoded.success.channel,
 		audience: decoded.success.audience,
 		policies: Object.freeze(decoded.success.policies),
 		task: decoded.success.task.trim(),

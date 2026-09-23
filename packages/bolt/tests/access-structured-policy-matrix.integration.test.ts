@@ -232,6 +232,7 @@ const definition: WorkspaceDefinition = withSystemCollections(
 		tools: [],
 		skills: [],
 		automations: [],
+		channels: [],
 		envoys: [],
 		integrations: [],
 		requiredFacilities: []

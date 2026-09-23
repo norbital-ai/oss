@@ -44,7 +44,7 @@ describe('facility contract', () => {
 	});
 
 	it('exports the current compiled-manifest contract as runtime protocol values', () => {
-		expect(COMPILED_MANIFEST_VERSION).toBe(2);
+		expect(COMPILED_MANIFEST_VERSION).toBe(3);
 		expect(
 			Schema.decodeUnknownSync(ManifestDestination)({
 				kind: 'system',
@@ -60,6 +60,7 @@ describe('facility contract', () => {
 				apps: [],
 				policies: [],
 				automations: [],
+				channels: [],
 				envoys: [],
 				integrations: [],
 				principals: [],
@@ -78,8 +79,7 @@ describe('facility contract', () => {
 			schemaPlan,
 			requiredFacilities: ['database', 'ai', 'transport'],
 			browserAssets: [],
-			serverAssets: [],
-			integrations: []
+			serverAssets: []
 		};
 		const bindings: FacilityBindings = {
 			scope: { tenantId: 'tenant-1', environment: 'test', releaseId: 'release-1' }
@@ -97,8 +97,7 @@ describe('facility contract', () => {
 			schemaPlan,
 			requiredFacilities: ['communication', 'transport'],
 			browserAssets: [],
-			serverAssets: [],
-			integrations: []
+			serverAssets: []
 		};
 		const bindings: FacilityBindings = {
 			scope: { tenantId: 'tenant-1', environment: 'test', releaseId: 'release-1' },
@@ -119,8 +118,7 @@ describe('facility contract', () => {
 			schemaPlan,
 			requiredFacilities: [],
 			browserAssets: [],
-			serverAssets: [],
-			integrations: []
+			serverAssets: []
 		};
 		const decoded = await Effect.runPromise(
 			decodeBoltBundleModule({
@@ -144,8 +142,7 @@ describe('facility contract', () => {
 			schemaPlan,
 			requiredFacilities: [],
 			browserAssets: [],
-			serverAssets: [],
-			integrations: []
+			serverAssets: []
 		};
 
 		expect(Schema.decodeUnknownResult(BundleManifest)(manifest)._tag).toBe('Success');
@@ -176,6 +173,7 @@ describe('facility contract', () => {
 			apps: [],
 			policies: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			principals: [
@@ -196,6 +194,7 @@ describe('facility contract', () => {
 			apps: [{ name: 'billing', label: 'Billing', origin: 'authored' }],
 			policies: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			principals: [],
@@ -253,8 +252,7 @@ describe('artifact asset index', () => {
 			schemaPlan,
 			requiredFacilities: [],
 			browserAssets: [entry],
-			serverAssets: [{ ...entry, path: 'node_modules/pdq-wasm/wasm/pdq.wasm' }],
-			integrations: []
+			serverAssets: [{ ...entry, path: 'node_modules/pdq-wasm/wasm/pdq.wasm' }]
 		});
 		expect(manifest.browserAssets.map(({ path }) => path)).toEqual(['/workspace.js']);
 		expect(manifest.serverAssets.map(({ path }) => path)).toEqual([
@@ -271,8 +269,7 @@ describe('artifact asset index', () => {
 				schemaFingerprint: 'sha256:test',
 				schemaPlan,
 				requiredFacilities: [],
-				browserAssets: [],
-				integrations: []
+				browserAssets: []
 			})._tag
 		).toBe('Failure');
 	});

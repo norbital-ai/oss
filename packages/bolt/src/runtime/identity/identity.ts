@@ -3,7 +3,7 @@ import { EffectId, INVITATION_PATH } from '@norbital-ai/bolt-protocol';
 import { workspaceLink } from '#lib/runtime/host-links.js';
 import { decodeNumber } from '@norbital-ai/std/json';
 import { and, asc, count, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
-import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
+import { IdentityHooks, Mail } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { Subject } from './subject.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -310,7 +310,7 @@ export type Interface = Readonly<{
 		invitationId: string,
 		subject: Subject
 	) => Effect.Effect<InvitationAcceptance, Database.FacilityError>;
-	/** Persists a sign-in code and submits it to the host's communication provider. */
+	/** Persists a sign-in code and submits it to the host's transactional mail facility. */
 	readonly sendCode: (
 		effectId: EffectId,
 		email: string
@@ -461,7 +461,7 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Identity');
  *
  * Bolt cannot read an environment variable to learn it is running locally, and should not: it is
  * the same bundle everywhere. What differs is the capability the host binds. A host that binds no
- * communication facility cannot deliver a code, so a random one would be unusable and nobody could
+ * transactional mail facility cannot deliver a code, so a random one would be unusable and nobody could
  * sign in at all — there, the fixed development code is the only value that makes the flow work.
  *
  * Stated as "can this host deliver" rather than "is this development", because that is the fact
@@ -477,7 +477,7 @@ export const layerWith = (
 		Service,
 		Effect.gen(function* () {
 			const database = yield* Database.Service;
-			const communication = yield* Communication.Service;
+			const mail = yield* Mail.Service;
 			const identityHooks = yield* IdentityHooks.Service;
 			const teamProjection = {
 				id: teamsTable.id,
@@ -636,17 +636,13 @@ export const layerWith = (
 							 * it. The effect id is the provider idempotency key, so an uncertain transport outcome
 							 * can be retried without sending the same code twice. Once accepted, Resend owns delivery.
 							 */
-							communication.execute(EffectId.make(`${effectId}:code-delivery`), {
-								_tag: 'Send',
-								channel: 'email',
-								recipient: message.email,
-								payload: {
-									kind: 'sign_in_code',
+							mail.execute(EffectId.make(`${effectId}:code-delivery`), {
+								kind: 'sign_in_code',
+								to: message.email,
+								data: {
 									code: message.code,
 									purpose: message.purpose,
-									expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
-									subject: 'Your sign-in code',
-									body: `Your sign-in code is ${message.code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
+									expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60
 								}
 							})
 					},
@@ -945,23 +941,14 @@ export const layerWith = (
 					// The invitation is written here, link included, so the host's mailer only sends it:
 					// what an invitee reads is part of what a workspace is, not of who delivers it.
 					const link = yield* workspaceLink(tenantId, INVITATION_PATH, { claim: invitationId });
-					yield* communication.execute(effectId, {
-						_tag: 'Notify',
-						recipient: normalizedEmail,
-						payload: {
-							kind: 'workspace_invitation',
+					yield* mail.execute(effectId, {
+						kind: 'workspace_invitation',
+						to: normalizedEmail,
+						data: {
 							invitationId,
-							tenantId,
-							expiresInDays: INVITATION_EXPIRES_SECONDS / 86_400,
-							subject: `You have been invited to ${tenantId}`,
-							text: [
-								`You have been invited to the ${tenantId} workspace.`,
-								'',
-								'Accept invitation:',
-								link,
-								'',
-								`Sign in with this email address to accept. The invitation expires in ${INVITATION_EXPIRES_SECONDS / 86_400} days.`
-							].join('\n')
+							workspace: tenantId,
+							link,
+							expiresInDays: INVITATION_EXPIRES_SECONDS / 86_400
 						}
 					});
 					yield* identityHooks.emit(effectId, {
@@ -1031,7 +1018,7 @@ export const layerWith = (
 						return { state: 'accepted' as const };
 					}
 				),
-				/** Persists a sign-in code, then submits it directly to the host communication facility. */
+				/** Persists a sign-in code, then submits it directly to the host transactional mail facility. */
 				sendCode: Effect.fn('Identity.sendCode')(function* (effectId, email) {
 					const auth = yield* authFor(effectId).pipe(
 						Effect.mapError((cause) =>
@@ -1050,7 +1037,7 @@ export const layerWith = (
 					 * Better Auth's public send endpoint deliberately treats its courier callback as background
 					 * work and logs rather than propagates a rejection. That is useful for non-interactive mail
 					 * and wrong for sign-in: the UI must not say "sent" when the provider refused the request.
-					 * Create the persisted challenge through Better Auth, then await the communication facility
+					 * Create the persisted challenge through Better Auth, then await the transactional mail facility
 					 * ourselves. Unknown addresses take the same two steps, preserving non-enumeration.
 					 */
 					const code = yield* Effect.tryPromise({
@@ -1066,18 +1053,10 @@ export const layerWith = (
 										outcome: 'unknown'
 									})
 					});
-					yield* communication.execute(EffectId.make(`${effectId}:code-delivery`), {
-						_tag: 'Send',
-						channel: 'email',
-						recipient: email,
-						payload: {
-							kind: 'sign_in_code',
-							code,
-							purpose: 'sign-in',
-							expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60,
-							subject: 'Your sign-in code',
-							body: `Your sign-in code is ${code}. It expires in ${SIGN_IN_CODE_EXPIRES_SECONDS / 60} minutes.`
-						}
+					yield* mail.execute(EffectId.make(`${effectId}:code-delivery`), {
+						kind: 'sign_in_code',
+						to: email,
+						data: { code, purpose: 'sign-in', expiresInMinutes: SIGN_IN_CODE_EXPIRES_SECONDS / 60 }
 					});
 				}),
 				/**
@@ -1796,5 +1775,5 @@ export const layerWith = (
 		})
 	);
 
-/** The default binding: a host that has bound communication. */
+/** The default binding: a host that has bound transactional mail. */
 export const layer = layerWith(true);

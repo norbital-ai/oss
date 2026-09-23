@@ -43,3 +43,51 @@ export const IntegrationHttpResponse = Schema.Struct({
 export interface IntegrationHttpResponse extends Schema.Schema.Type<
 	typeof IntegrationHttpResponse
 > {}
+
+/** One sync's lifecycle (integrations.md §7). */
+export const SyncState = Schema.Literals([
+	'unlinked',
+	'backfilling',
+	'live',
+	'reconciling',
+	'paused',
+	'failed'
+]);
+export type SyncState = typeof SyncState.Type;
+
+/** What one backfill or reconcile did: counts per class, and up to 20 sample identities each. */
+export const SyncReport = Schema.Struct({
+	mode: Schema.Literals(['backfill', 'changes', 'reconcile']),
+	finishedAt: Schema.String,
+	matched: Schema.Number,
+	created: Schema.Number,
+	updated: Schema.Number,
+	deleted: Schema.Number,
+	pushed: Schema.Number,
+	unmatched: Schema.Number,
+	rejected: Schema.Number,
+	conflicts: Schema.Number,
+	samples: Schema.Record(Schema.String, Schema.Array(Schema.String))
+});
+export interface SyncReport extends Schema.Schema.Type<typeof SyncReport> {}
+
+export const IntegrationSyncStatus = Schema.Struct({
+	integration: Schema.NonEmptyString,
+	sync: Schema.NonEmptyString,
+	collection: Schema.NonEmptyString,
+	direction: Schema.Literals(['one_way', 'two_way']),
+	state: SyncState,
+	detail: Schema.NullOr(Schema.String),
+	/** The consistency bound: the slowest path a change may take (§8.5). */
+	bound: Schema.Struct({
+		subscribe: Schema.Boolean,
+		changes: Schema.NullOr(Schema.String),
+		reconcile: Schema.String
+	}),
+	page: Schema.NullOr(Schema.Number),
+	report: Schema.NullOr(SyncReport),
+	pending: Schema.Number,
+	deadLetters: Schema.Number,
+	conflicts: Schema.Number
+}).annotate({ identifier: 'BoltIntegrationSyncStatus' });
+export interface IntegrationSyncStatus extends Schema.Schema.Type<typeof IntegrationSyncStatus> {}

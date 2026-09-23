@@ -7,7 +7,9 @@ import {
 	RECORD_EMBEDDING_COLUMN
 } from '#lib/authoring/model-introspection.js';
 import { emitChangeEventsMany as emitChangeEventsManyService } from '#lib/runtime/collections/services/change-events.js';
-import { sendReminder } from '#lib/runtime/notifications/reminder.js';
+import { automationChannels, notifyStatements, outboundRows } from '#lib/runtime/channels/channels.js';
+import type { NotifyInput } from '#lib/authoring/channels-schema.js';
+import { syncOwnershipRefusal } from '#lib/runtime/integrations/integrations.js';
 import { embedRecords as embedRecordsService } from '#lib/runtime/collections/services/embeddings.js';
 import {
 	and,
@@ -91,13 +93,6 @@ import {
 	lowerDeclaredPayload,
 	type DeclaredLowering
 } from '#lib/runtime/collections/write/declared.js';
-import {
-	eventRecord,
-	outboxEntriesFor,
-	sendSubscriptions,
-	watchesOperation,
-	type SendSubscription
-} from '#lib/runtime/integrations/outbox.js';
 import {
 	SEARCH_DOCUMENT_COLUMN,
 	prepareSearchPlan,
@@ -270,7 +265,6 @@ import {
 
 const {
 	bolt_collection_history: collectionHistoryTable,
-	bolt_integration_outbox: integrationOutboxTable,
 	bolt_task: boltTaskTable
 } = SYSTEM_MODEL_TABLES;
 
@@ -1469,61 +1463,105 @@ export const layerWith = (
 				Record<string, RelationalBuilder | undefined>
 			>;
 			/**
-			 * Every outbound integration binding, indexed by the collection whose writes it watches.
-			 *
-			 * Computed once here rather than per mutation. Almost no collection has one, so the cost of
-			 * outbound delivery on a workspace that declares none is a single failed map lookup per write.
+			 * What a write owes the outside world, committed in the write's own transaction (§4.3):
+			 * the channel messages its collection's outbound rules fire, and a push marker for each
+			 * two-way sync over it. A post-commit enqueue has a window where the row exists and the
+			 * intent to tell anybody does not; committing them together closes it.
 			 */
-			const sendsByCollection = sendSubscriptions(
-				workspace.definition.integrations,
-				authored.integrations
-			);
-			const subscriptionsFor = (collection: string): ReadonlyArray<SendSubscription> =>
-				sendsByCollection.get(collection) ?? [];
-			/**
-			 * The statements that queue this write's outbound deliveries, to be run in the write's own
-			 * transaction.
-			 *
-			 * In the transaction and not after it, deliberately. A post-commit enqueue has a window where
-			 * the row exists and the intent to tell anybody about it does not, and a process that dies in
-			 * that window drops the event with nothing anywhere to show for it. Committing the row and the
-			 * queue entry together is what makes "the outbox is the truth" a fact rather than a hope.
-			 *
-			 * An entry carrying a refusal — an authored trigger or body that threw — is queued straight to
-			 * `failed`. That is the visible middle ground between failing a tenant's write over a mistyped
-			 * predicate and silently dropping the event: the write lands, and the reason is a row an
-			 * operator can find.
-			 */
-			/** The columns a batched integration delivery writes, in stable parameter order. */
-			const outboxDeliveryColumns = [
-				'integration_name',
-				'binding_name',
-				'collection_name',
-				'record_id',
-				'operation',
-				'path',
-				'payload',
+			const OUTBOX_COLUMNS = [
+				'id',
+				'channel',
+				'transport',
+				'message',
+				'source_collection',
+				'source_record_id',
+				'rule',
+				'thread_key',
 				'status',
 				'last_error'
 			] as const;
-			type OutboxDeliveryValues = Readonly<{
-				readonly integration_name: string;
-				readonly binding_name: string;
-				readonly collection_name: string;
-				readonly record_id: string;
-				readonly operation: 'create' | 'update' | 'delete';
-				readonly path: string | null;
-				readonly payload: string | null;
-				readonly status: 'pending' | 'failed';
-				readonly last_error: string | null;
-			}>;
-			/** The row as JSON for a typed recordset: the payload is the object, not its encoding. */
-			const outboxDeliveryValues = (values: OutboxDeliveryValues): ReadonlyArray<Schema.Json> =>
-				outboxDeliveryColumns.map((column) =>
-					column === 'payload' && values.payload !== null
-						? (JSON.parse(values.payload) as Schema.Json)
-						: values[column]
+			/** The follow-up task a write's outbound work needs, keyed so a batch says it once. */
+			type Follow = Readonly<{ readonly command: string; readonly input: Schema.Json; readonly key: string }>;
+			const writesOutward = (collection: string): boolean =>
+				workspace.definition.channels.some(({ outbound }) =>
+					outbound.some(({ from }) => from === collection)
+				) ||
+				workspace.definition.integrations.some(({ syncs }) =>
+					syncs.some((sync) => sync.collection === collection && sync.direction === 'two_way')
 				);
+			const outwardRows = (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				id: string,
+				operation: 'create' | 'update' | 'delete',
+				values: Readonly<Record<string, Schema.Json>>,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): Readonly<{ readonly bookkeeping: ReadonlyArray<PlannedInsert>; readonly follows: ReadonlyArray<Follow> }> => {
+				if (!writesOutward(collection)) return { bookkeeping: [], follows: [] };
+				const record =
+					operation === 'delete' ? { ...(previous ?? {}), id } : { ...(previous ?? {}), ...values, id };
+				const messages = outboundRows(
+					workspace.definition.channels,
+					authored.channels,
+					collection,
+					operation,
+					record,
+					operation === 'create' ? undefined : previous
+				);
+				const syncs = workspace.definition.integrations.flatMap((integration) =>
+					integration.syncs
+						.filter(
+							(sync) =>
+								sync.collection === collection &&
+								sync.direction === 'two_way' &&
+								subject.userId !== `integration:${integration.name}`
+						)
+						.map((sync) => ({ integration: integration.name, sync: sync.name }))
+				);
+				return {
+					bookkeeping: [
+						...messages.map(
+							(row): PlannedInsert => ({
+								table: 'bolt_channel_outbox',
+								columns: OUTBOX_COLUMNS,
+								values: [
+									deriveRecordId(`${effectId}:${row.channel}:${row.rule}:${id}`),
+									row.channel,
+									row.transport,
+									(row.message ?? null) as Schema.Json,
+									collection,
+									id,
+									row.rule,
+									row.thread,
+									row.error === null ? 'pending' : 'failed',
+									row.error
+								],
+								onConflict: 'on conflict (id) do nothing'
+							})
+						),
+						...syncs.map(
+									({ integration, sync }): PlannedInsert => ({
+										table: 'bolt_integration_pushes',
+										columns: ['id', 'sync', 'record_id'],
+										values: [deriveRecordId(`${integration}.${sync}:${id}`), `${integration}.${sync}`, id],
+										onConflict:
+											"on conflict (sync, record_id) do update set revision = bolt_integration_pushes.revision + 1, status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()"
+									})
+								)
+					],
+					follows: [
+						...messages
+							.filter(({ error }) => error === null)
+							.map(({ channel }) => ({ command: 'channels.drain', input: { channel }, key: `channels.drain:${channel}` })),
+						...syncs.map(({ integration, sync }) => ({
+							command: 'integrations.push',
+							input: { integration, sync },
+							key: `integrations.push:${integration}.${sync}`
+						}))
+					]
+				};
+			};
 			const HISTORY_COLUMNS = [
 				'collection_name',
 				'record_id',
@@ -1534,114 +1572,30 @@ export const layerWith = (
 				'snapshot'
 			] as const;
 			/**
-			 * The deliveries this write queues, as structured values rather than SQL.
-			 *
-			 * A create batch flattens these values into a grouped insert, while update and delete compose
-			 * typed Drizzle inserts in `outboxStatements`. Both paths therefore share the same row shape
-			 * without keeping a handwritten domain statement beside it.
+			 * The tasks that carry a write's outbound work, in this same transaction: one per channel
+			 * and per sync per batch, keyed `<effectId>:<key>` so a batch of many rows says it once.
 			 */
-			const outboxDeliveries = (
-				subject: Identity.Subject,
-				collection: string,
-				id: string,
-				operation: 'create' | 'update' | 'delete',
-				values: Readonly<Record<string, Schema.Json>>,
-				previous: Readonly<Record<string, unknown>> | undefined
-			): ReadonlyArray<{
-				readonly integration: string;
-				readonly values: OutboxDeliveryValues;
-			}> => {
-				const subscriptions = subscriptionsFor(collection);
-				if (subscriptions.length === 0 || !watchesOperation(subscriptions, operation)) return [];
-				const entries = outboxEntriesFor(subscriptions, subject, {
-					operation,
-					recordId: id,
-					record: eventRecord(operation, id, values, previous),
-					previous
-				});
-				return entries.map((entry) => ({
-					integration: entry.integration,
-					values: {
-						integration_name: entry.integration,
-						binding_name: entry.binding,
-						collection_name: entry.collection,
-						record_id: entry.recordId,
-						operation: entry.operation,
-						path: entry.path,
-						payload: entry.payload === null ? null : JSON.stringify(entry.payload),
-						status: entry.refusal === null ? 'pending' : 'failed',
-						last_error: entry.refusal
-					}
-				}));
-			};
-			/**
-			 * The job that drains them, in this same transaction.
-			 *
-			 * This is what replaced a fixed `* * * * *` drain per sending integration — 1440 wakes a day
-			 * against every sending tenant's database whether or not anything was ever queued, which was
-			 * the single largest standing cost in the runtime. The delivery is now told about by the write
-			 * that caused it: the row and the job commit together, so the job cannot exist without the
-			 * delivery and the delivery cannot exist without the record change, and there is no window
-			 * where one is true and the other is not.
-			 *
-			 * One task per *integration*, not per delivery and not per record. Per integration is what the
-			 * drain already claims at — `distinct on (collection_name, record_id)` gives per-record
-			 * ordering inside one drain — and it keeps the property the minute cron had for the right
-			 * reason: a partner that is down backs off its own queue and nobody else's.
-			 *
-			 * Per integration *per batch*, too. The task id is `<effectId>:flush:<integration>` and the
-			 * enqueue is `on conflict (effect_id) do nothing`, so a batch of 89 rows watched by one
-			 * integration was already writing the same row 89 times and keeping one; it now says it once.
-			 */
-			const drainRows = (
-				effectId: EffectId,
-				integrations: ReadonlyArray<string>
-			): ReadonlyArray<PlannedInsert> =>
-				[...new Set(integrations)].toSorted().map((integration) => ({
-					table: 'bolt_task',
-					columns: ['command', 'input', 'effect_id', 'status'],
-					values: [
-						'integrations.flush',
-						{ name: integration },
-						`${effectId}:flush:${integration}`,
-						'pending'
-					],
-					onConflict: 'on conflict (effect_id) do nothing'
-				}));
+			const followRows = (effectId: EffectId, follows: ReadonlyArray<Follow>): ReadonlyArray<PlannedInsert> =>
+				[...new Map(follows.map((follow) => [follow.key, follow])).values()]
+					.toSorted((left, right) => left.key.localeCompare(right.key))
+					.map((follow) => ({
+						table: 'bolt_task',
+						columns: ['command', 'input', 'effect_id', 'status'],
+						values: [follow.command, follow.input, `${effectId}:${follow.key}`, 'pending'],
+						onConflict: 'on conflict (effect_id) do nothing'
+					}));
 
 			/**
-			 * One delivery task per write that lands inbox rows, in the write's own statement like the
-			 * flush rows above: the task drains every undelivered row, so a burst of writes collapses
-			 * into however many tasks got claimed, and a crash after the commit leaves the task, not a
-			 * row nobody comes back for.
+			 * Tells the host to come back now, because this write is about to queue outbound work. Sent
+			 * *before* the commit: a crash between costs a false alarm, never a delivery nobody returns for.
 			 */
-			const deliverNotificationsRow = (effectId: EffectId): PlannedInsert => ({
-				table: 'bolt_task',
-				columns: ['command', 'input', 'effect_id', 'status'],
-				values: ['notifications.deliver', {}, `${effectId}:deliver`, 'pending'],
-				onConflict: 'on conflict (effect_id) do nothing'
-			});
-
-			/**
-			 * Tells the host to come back now, because this write is about to queue a delivery.
-			 *
-			 * Sent *before* the commit, never after. A crash between the message and the commit costs a
-			 * false alarm — the host wakes, finds nothing due, re-arms — while a crash the other way round
-			 * costs a committed delivery nobody ever comes back for. That asymmetry is the whole reason the
-			 * order is fixed rather than convenient.
-			 */
-			const announceFlush = Effect.fn('Collections.announceFlush')(function* (
+			const announceOutward = Effect.fn('Collections.announceOutward')(function* (
 				effectId: EffectId,
-				collection: string,
-				operation: 'create' | 'update' | 'delete'
+				collection: string
 			) {
-				const subscriptions = subscriptionsFor(collection);
-				if (subscriptions.length === 0 || !watchesOperation(subscriptions, operation)) return;
+				if (!writesOutward(collection)) return;
 				yield* queue.wake(EffectId.make(`${effectId}:wake`), yield* Clock.currentTimeMillis);
 			});
-			/** Whether this collection has an outbound binding that needs the row as it was before the write. */
-			const needsPreviousRow = (collection: string, operation: 'update' | 'delete'): boolean =>
-				watchesOperation(subscriptionsFor(collection), operation);
 			const embeddingPorts = {
 				database,
 				ai,
@@ -1734,10 +1688,24 @@ export const layerWith = (
 					const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
 					const readUrl = webReader(turnEffectId, connector);
 					const get = connectionReader(turnEffectId, declaration.connection, connector);
-					const notify = (reminder: Parameters<AutomationApi['notify']>[0]) =>
-						guard('notify').pipe(
-							Effect.andThen(sendReminder(turnEffectId, database, queue, reminder))
-						);
+					const channelOps = automationChannels(
+						database,
+						queue,
+						workspace.definition.channels,
+						workspace.definition.integrations,
+						turnEffectId
+					);
+					const notify = (notification: NotifyInput) =>
+						guard('notify').pipe(Effect.andThen(channelOps.notify(notification)));
+					const channels = Object.fromEntries(
+						Object.entries(channelOps.channels).map(([name, channel]) => [
+							name,
+							{
+								send: (message: unknown) =>
+									guard('channels.send').pipe(Effect.andThen(channel.send(message)))
+							}
+						])
+					);
 					const api = makeAutomationApi(
 						makeAuthoringApi(
 							guardAuthoringOps(
@@ -1766,7 +1734,17 @@ export const layerWith = (
 									Effect.provideService(Secrets.Service, secrets)
 								)
 						},
-						notify
+						notify,
+						channels,
+						Object.fromEntries(
+							Object.entries(channelOps.integrations).map(([integration, operations]) => [
+								integration,
+								{
+									reconcile: () =>
+										guard('integrations.reconcile').pipe(Effect.andThen(operations.reconcile()))
+								}
+							])
+						)
 					);
 					const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
 						admitted.args
@@ -2338,11 +2316,11 @@ export const layerWith = (
 			): Readonly<{
 				readonly records: ReadonlyArray<PlannedInsert>;
 				readonly bookkeeping: ReadonlyArray<PlannedInsert>;
-				readonly integrations: ReadonlyArray<string>;
+				readonly follows: ReadonlyArray<Follow>;
 			}> => {
 				const records: Array<PlannedInsert> = [];
 				const bookkeeping: Array<PlannedInsert> = [];
-				const integrations: Array<string> = [];
+				const follows: Array<Follow> = [];
 				for (const { input, effectId: nodeEffectId, definition, visibility } of nodes) {
 					const values = encodeMutationValues(input.values, definition.fields);
 					const writable = writableValues(values, definition);
@@ -2397,27 +2375,11 @@ export const layerWith = (
 							],
 							...after
 						});
-					for (const delivery of outboxDeliveries(
-						subject,
-						input.collection,
-						input.id,
-						'create',
-						values,
-						undefined
-					)) {
-						bookkeeping.push({
-							table: 'bolt_integration_outbox',
-							columns: outboxDeliveryColumns,
-							values: outboxDeliveryValues(delivery.values),
-							...after
-						});
-						// The drain itself stays unconditional. It is one job per integration per batch that
-						// looks for pending deliveries and exits when it finds none, so a refused row costs a
-						// wake with nothing to do rather than a delivery that should not exist.
-						integrations.push(delivery.integration);
-					}
+					const outward = outwardRows(nodeEffectId, subject, input.collection, input.id, 'create', values, undefined);
+					for (const row of outward.bookkeeping) bookkeeping.push({ ...row, ...after });
+					follows.push(...outward.follows);
 				}
-				return { records, bookkeeping, integrations };
+				return { records, bookkeeping, follows };
 			};
 			/**
 			 * The request a write belongs to, taken from the record it is changing.
@@ -2454,7 +2416,7 @@ export const layerWith = (
 			): Readonly<{
 				readonly row: PlannedUpdate | null;
 				readonly bookkeeping: ReadonlyArray<PlannedInsert>;
-				readonly integrations: ReadonlyArray<string>;
+				readonly follows: ReadonlyArray<Follow>;
 			}> => {
 				const values = encodeMutationValues(input.values, definition.fields);
 				const writable = writableValues(values, definition);
@@ -2468,7 +2430,7 @@ export const layerWith = (
 							JSON.stringify(previous[name] ?? null) !== JSON.stringify(value ?? null)
 					)
 					.sort(([left], [right]) => left.localeCompare(right));
-				if (entries.length === 0) return { row: null, bookkeeping: [], integrations: [] };
+				if (entries.length === 0) return { row: null, bookkeeping: [], follows: [] };
 				const row: PlannedUpdate = {
 					table: input.collection,
 					id: input.id,
@@ -2476,14 +2438,7 @@ export const layerWith = (
 					columns: entries.map(([name]) => name),
 					values: entries.map(([, value]) => value)
 				};
-				const deliveries = outboxDeliveries(
-					subject,
-					input.collection,
-					input.id,
-					'update',
-					values,
-					previous
-				);
+				const outward = outwardRows(effectId, subject, input.collection, input.id, 'update', values, previous);
 				return {
 					row,
 					bookkeeping: [
@@ -2504,13 +2459,9 @@ export const layerWith = (
 									}
 								]
 							: []),
-						...deliveries.map(({ values: delivery }) => ({
-							table: 'bolt_integration_outbox',
-							columns: outboxDeliveryColumns,
-							values: outboxDeliveryValues(delivery)
-						}))
+						...outward.bookkeeping
 					],
-					integrations: deliveries.map(({ integration }) => integration)
+					follows: outward.follows
 				};
 			};
 
@@ -2527,9 +2478,9 @@ export const layerWith = (
 			): Readonly<{
 				readonly row: PlannedDelete;
 				readonly bookkeeping: ReadonlyArray<PlannedInsert>;
-				readonly integrations: ReadonlyArray<string>;
+				readonly follows: ReadonlyArray<Follow>;
 			}> => {
-				const deliveries = outboxDeliveries(subject, collection, id, 'delete', {}, previous);
+				const outward = outwardRows(effectId, subject, collection, id, 'delete', {}, previous);
 				return {
 					row: { table: collection, id, rowVersion },
 					bookkeeping: [
@@ -2551,13 +2502,9 @@ export const layerWith = (
 									}
 								]
 							: []),
-						...deliveries.map(({ values: delivery }) => ({
-							table: 'bolt_integration_outbox',
-							columns: outboxDeliveryColumns,
-							values: outboxDeliveryValues(delivery)
-						}))
+						...outward.bookkeeping
 					],
-					integrations: deliveries.map(({ integration }) => integration)
+					follows: outward.follows
 				};
 			};
 			const policyDecisionFailure = (
@@ -2738,8 +2685,7 @@ export const layerWith = (
 					definition: operation.definition,
 					visibility: AccessControl.unrestricted
 				});
-				for (const operation of operations)
-					yield* announceFlush(effectId, operation.collection, operation.action);
+				for (const operation of operations) yield* announceOutward(effectId, operation.collection);
 				/**
 				 * Every sentence a policy guard in this statement may raise, and whose refusal it is.
 				 *
@@ -2799,7 +2745,7 @@ export const layerWith = (
 				const untouched = new Map<string, Array<string>>();
 				const untouchedIds = new Set<string>();
 				const inserts: Array<PlannedInsert> = [];
-				const integrations: Array<string> = [];
+				const follows: Array<Follow> = [];
 				const holdRevision = (operation: GraphPreparedOperation): PlannedInsert | undefined =>
 					hold === undefined || !operation.definition.history
 						? undefined
@@ -2847,7 +2793,7 @@ export const layerWith = (
 						);
 						plannedDeletes.push(planned.row);
 						inserts.push(...planned.bookkeeping);
-						integrations.push(...planned.integrations);
+						follows.push(...planned.follows);
 					}
 					if (operation.action === 'update') {
 						const planned = plannedUpdate(
@@ -2875,14 +2821,14 @@ export const layerWith = (
 							untouchedIds.add(rowKey(operation.collection, operation.id));
 						}
 						inserts.push(...planned.bookkeeping);
-						integrations.push(...planned.integrations);
+						follows.push(...planned.follows);
 					}
 				}
 				const created = plannedCreates(subject, creates.map(createNodeFor), hold?.requestId);
 				inserts.push(...created.records, ...created.bookkeeping);
-				inserts.push(...drainRows(effectId, [...integrations, ...created.integrations]));
+				inserts.push(...followRows(effectId, [...follows, ...created.follows]));
 				if (bookkeeping.length > 0) {
-					inserts.push(deliverNotificationsRow(effectId));
+					// Notification rows carry their own drain tasks; the host is woken for them.
 					yield* queue.wake(
 						EffectId.make(`${effectId}:wake:deliver`),
 						yield* Clock.currentTimeMillis
@@ -3126,6 +3072,15 @@ export const layerWith = (
 				AuthoredRefusal | Workspace.WorkspaceLookupError | AccessControl.AccessDenied
 			> =>
 				Effect.gen(function* () {
+					const owned = syncOwnershipRefusal(
+						workspace.definition.integrations,
+						definition.name,
+						subject.userId,
+						action,
+						Object.keys(submission).filter((key) => key !== 'id')
+					);
+					if (owned !== undefined)
+						return yield* Effect.fail(declaredRefusal(definition.name, action, owned));
 					const columns = selection.columns ?? {};
 					const relations = selection.with ?? {};
 					const own: Record<string, unknown> = {};
@@ -3178,6 +3133,15 @@ export const layerWith = (
 								);
 							const list = Array.isArray(entries) ? entries : [entries];
 							if (childAction === 'delete') {
+								const owned = syncOwnershipRefusal(
+									workspace.definition.integrations,
+									edge.childCollection,
+									subject.userId,
+									'delete',
+									[]
+								);
+								if (owned !== undefined)
+									return yield* Effect.fail(declaredRefusal(edge.childCollection, 'delete', owned));
 								for (const entry of list)
 									yield* judge(
 										subject,
@@ -3469,7 +3433,10 @@ export const layerWith = (
 					}
 				});
 
-			/** The lifecycle notifications a collection declares for one event, as ledger inserts. */
+			/**
+			 * The lifecycle notifications a collection declares for one event, as channel outbox rows:
+			 * one per recipient on the rule's person channel, resolved inside the write's own statement.
+			 */
 			const notificationStatements = (
 				collection: string,
 				event: CollectionLifecycleEvent
@@ -3478,29 +3445,23 @@ export const layerWith = (
 				readonly parameters: ReadonlyArray<Schema.Json>;
 			}> => {
 				const rules = declaredModuleOf(collection)?.notifications?.[event.event] ?? [];
-				return rules.flatMap((rule) => {
-					const recipients = rule.recipients(event);
+				const occurrence = `${collection}:${event.event}:${event.ids.join(',')}:${event.approval?.requestId ?? ''}:${event.approval?.step.index ?? ''}`;
+				return rules.flatMap((rule, index) => {
 					const message = rule.message(event);
-					const payload = JSON.stringify({
-						channel: rule.channel,
-						...message,
-						collection,
-						ids: event.ids,
-						...(event.approval === undefined ? {} : { approvalRequestId: event.approval.requestId })
-					});
-					const occurrence = `${collection}:${event.event}:${event.ids.join(',')}:${event.approval?.requestId ?? ''}:${event.approval?.step.index ?? ''}`;
-					return recipients.map((recipient) =>
-						typeof recipient === 'string'
-							? transactionSql(
-									`insert into bolt_notifications (id, recipient, payload, read) values ($1, $2, $3::jsonb, false) on conflict (id) do nothing`,
-									[deriveRecordId(`${occurrence}:${recipient}`), recipient, payload]
-								)
-							: // A team is its members at commit time, resolved in the write's own statement; the
-								// row id is derived the same way per member so a retry writes nobody twice.
-								transactionSql(
-									`insert into bolt_notifications (id, recipient, payload, read) select md5($1 || ':' || u.id::text)::uuid, u.id::text, $2::jsonb, false from "user" as u join "team" as t on t.id = u.team_id where lower(t.name) = lower($3) on conflict (id) do nothing`,
-									[occurrence, payload, recipient.team]
-								)
+					return notifyStatements(
+						workspace.definition.channels,
+						{
+							key: occurrence,
+							recipients: rule.recipients(event),
+							via: [rule.channel],
+							message: {
+								...message,
+								collection,
+								ids: [...event.ids],
+								...(event.approval === undefined ? {} : { approvalRequestId: event.approval.requestId })
+							}
+						},
+						`${occurrence}:${index}`
 					);
 				});
 			};
@@ -3564,6 +3525,15 @@ export const layerWith = (
 						);
 					for (const input of group.inputs) {
 						if (group.action === 'delete') {
+							const owned = syncOwnershipRefusal(
+								workspace.definition.integrations,
+								group.collection,
+								subject.userId,
+								'delete',
+								[]
+							);
+							if (owned !== undefined)
+								return yield* Effect.fail(declaredRefusal(group.collection, 'delete', owned));
 							if (!isNonEmptyString(input['id']))
 								return yield* Effect.fail(
 									declaredRefusal(

@@ -21,6 +21,7 @@ const definition: WorkspaceDefinition = {
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	requiredFacilities: []

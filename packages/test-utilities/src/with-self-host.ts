@@ -70,11 +70,13 @@ export type WithSelfHostInput = {
 	/** Portable connector providers, including a fixture or the public HTTPS page reader. */
 	readonly connector?: FacilityBindings['connector'];
 	/**
-	 * The transport seam an envoy answers on. Absent, a workspace has no channel and an envoy's
-	 * reply refuses as facility_unavailable; a suite that drives the envoy pipeline passes a
-	 * recording double here and reads the `Send` requests back instead of talking to WhatsApp.
+	 * The transport adapters a channel sends through. Absent, an outbox send fails as
+	 * facility_unavailable and is retried; a suite that drives a channel passes a recording double
+	 * here and reads the `Send` requests back instead of talking to WhatsApp.
 	 */
 	readonly communication?: FacilityBindings['communication'];
+	/** Transactional mail (sign-in codes, invitations): a recording double, when a suite reads them. */
+	readonly mail?: FacilityBindings['mail'];
 	/**
 	 * The host capabilities an authored `api.infer` or agent may name — the browser a drift run
 	 * drives, for instance. Absent, a request that names one refuses rather than silently
@@ -324,6 +326,7 @@ export const startSelfHostSession = async (
 			ai: input.ai ?? catalogAi(),
 			connector: input.connector ?? makeDefaultConnectorBinding(),
 			...(input.communication !== undefined ? { communication: input.communication } : {}),
+			...(input.mail !== undefined ? { mail: input.mail } : {}),
 			...(input.hostTools !== undefined ? { hostTools: input.hostTools } : {}),
 			...(held.files !== undefined ? { files: held.files.binding } : {}),
 			config: makeConfigBinding({

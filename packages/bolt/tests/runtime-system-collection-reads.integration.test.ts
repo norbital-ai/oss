@@ -154,6 +154,7 @@ const fieldOpsWorkspace = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: [],
 	schemaFingerprint: MUTATION_SCHEMA_FINGERPRINT

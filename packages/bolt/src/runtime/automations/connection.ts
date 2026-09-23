@@ -8,7 +8,7 @@ import type { AutomationApi } from '#lib/authoring/automations-schema.js';
 import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
 import { FacilityError } from '#lib/runtime/facilities/database.js';
 import type { ConnectorInterface } from '#lib/runtime/facilities/services.js';
-import { resolveConnection, type ResolvedConnection } from '#lib/runtime/integrations/pull.js';
+import { resolveConnection, type ResolvedConnection } from '#lib/runtime/integrations/http.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
 
 type GetInput = Parameters<AutomationApi['connection']['get']>[0];

@@ -83,6 +83,7 @@ const definition = workspace({
 	],
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	teams: { admin: ['admin-data'] },
 	automations: [],

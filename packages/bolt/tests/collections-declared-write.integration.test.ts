@@ -1,4 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { testChannels } from './support/channels.js';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../src/authoring/workspace-schema.js';
@@ -74,6 +75,7 @@ const baseDefinition = workspace({
 	prompt: 'Declared write fixture.',
 	tools: [],
 	skills: [],
+	channels: testChannels('inbox'),
 	envoys: [],
 	requiredFacilities: [],
 	customTypes: platformCustomTypes
@@ -617,18 +619,18 @@ describe('declared writes', () => {
 		);
 		await write(runtime, 'create', { customer: 'Ada' });
 		const rows = (await runtime.database.query(
-			'select recipient, payload from bolt_notifications'
+			`select recipient_user as recipient, message as payload, channel from bolt_channel_outbox`
 		)) as ReadonlyArray<{ recipient: string; payload: Record<string, unknown> }>;
 		expect(rows).toHaveLength(1);
 		seen.push({
-			channel: String(rows[0]?.payload['channel']),
+			channel: String((rows[0] as { channel?: string } | undefined)?.channel),
 			recipient: rows[0]?.recipient ?? ''
 		});
 		expect(seen).toEqual([{ channel: 'inbox', recipient: 'ada' }]);
 		// The same statement queues the one task that pushes what it wrote; a write that lands no
 		// inbox row queues nothing.
 		const tasks = (await runtime.database.query(
-			`select command from bolt_task where command = 'notifications.deliver'`
+			`select command from bolt_task where command = 'channels.drain'`
 		)) as ReadonlyArray<{ command: string }>;
 		expect(tasks).toHaveLength(1);
 	});
@@ -661,7 +663,7 @@ describe('declared writes', () => {
 		);
 		await write(runtime, 'create', { customer: 'Ada' });
 		const rows = (await runtime.database.query(
-			'select recipient from bolt_notifications order by recipient'
+			'select recipient_user as recipient from bolt_channel_outbox order by recipient_user'
 		)) as ReadonlyArray<{ recipient: string }>;
 		expect(rows.map((row) => row.recipient)).toEqual([
 			'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
@@ -671,6 +673,6 @@ describe('declared writes', () => {
 		const folded = runtime.database.statements.filter((sql) =>
 			sql.includes('anchor as materialized')
 		);
-		expect(folded.at(-1)).toContain('insert into bolt_notifications');
+		expect(folded.at(-1)).toContain('insert into bolt_channel_outbox');
 	});
 });

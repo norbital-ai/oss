@@ -1,4 +1,4 @@
-type EnvoyTransportConnectionView = Readonly<{
+type ChannelConnectionView = Readonly<{
 	state: 'disconnected' | 'connecting' | 'pairing' | 'connected' | 'error';
 	stored: boolean;
 	retrying?: boolean;
@@ -6,16 +6,16 @@ type EnvoyTransportConnectionView = Readonly<{
 
 /** A retry is still an active connection attempt, never a terminal transport failure. */
 export const connectionIsRecovering = (
-	connection: EnvoyTransportConnectionView | undefined
+	connection: ChannelConnectionView | undefined
 ): boolean => connection?.state === 'connecting' && connection.retrying === true;
 
 /** Destructive presentation is reserved for the provider's unrecoverable state. */
 export const connectionIsTerminalError = (
-	connection: EnvoyTransportConnectionView | undefined
+	connection: ChannelConnectionView | undefined
 ): boolean => connection?.state === 'error';
 
 export const connectionLabel = (
-	connection: EnvoyTransportConnectionView | undefined,
+	connection: ChannelConnectionView | undefined,
 	provider: string
 ): string => {
 	if (connection === undefined) return 'Reading…';

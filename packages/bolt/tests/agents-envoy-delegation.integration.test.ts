@@ -9,7 +9,7 @@ import {
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import { SUBAGENT_TOOL_NAME } from '../src/runtime/agents/capability-catalog.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import { makeBoltTestRuntime, testChannels, type BoltTestRuntime } from './support/bolt-test-layer.js';
 import { fixtureUserId, seedSession } from './support/fixture-identity.js';
 import { bindTaskRunner } from './support/task-runner.js';
 import * as Identity from '../src/runtime/identity/identity.js';
@@ -40,10 +40,11 @@ const definition = workspace({
 	],
 	teams: { operator: ['operator'] },
 	automations: [],
+	channels: testChannels('whatsapp', 'whatsapp_desk'),
 	envoys: [
 		envoy({
 			name: 'ingress',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['operator'],
 			task: 'Record field updates.',
@@ -51,7 +52,7 @@ const definition = workspace({
 		}),
 		envoy({
 			name: 'desk',
-			transport: 'whatsapp',
+			channel: 'whatsapp_desk',
 			audience: 'authenticated',
 			policies: ['operator'],
 			task: 'Coordinate field support.',

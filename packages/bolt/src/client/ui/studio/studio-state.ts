@@ -1,7 +1,6 @@
 import { Result, Schema } from 'effect';
 import {
 	COMPILED_MANIFEST_VERSION,
-	EnvoyStatus as EnvoyStatusContract,
 	ManifestDestination as ManifestDestinationSchema,
 	SecretsStatus,
 	WorkspaceAuthoringManifest
@@ -735,9 +734,6 @@ export const manifestInspectionState = (
 const EnvironmentStatusSchema = SecretsStatus;
 export type EnvironmentVariable = (typeof EnvironmentStatusSchema.Type)[number];
 
-const EnvoyStatusSchema = EnvoyStatusContract;
-export type EnvoyStatus = typeof EnvoyStatusSchema.Type;
-
 const decodeManifest = (value: unknown): WorkspaceManifest | undefined => {
 	const decoded = Schema.decodeUnknownResult(ManifestSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : undefined;
@@ -746,11 +742,6 @@ const decodeManifest = (value: unknown): WorkspaceManifest | undefined => {
 const decodeEnvironmentStatus = (value: unknown): ReadonlyArray<EnvironmentVariable> => {
 	const decoded = Schema.decodeUnknownResult(EnvironmentStatusSchema)(value);
 	return Result.isSuccess(decoded) ? decoded.success : [];
-};
-
-const decodeEnvoyStatus = (value: unknown): EnvoyStatus | undefined => {
-	const decoded = Schema.decodeUnknownResult(EnvoyStatusSchema)(value);
-	return Result.isSuccess(decoded) ? decoded.success : undefined;
 };
 
 type ManifestEntry = Readonly<{
@@ -850,16 +841,7 @@ export const writeSummaryKey = (
 	name: 'create' | 'update' | 'delete' | 'transform'
 ): WriteSummaryMessageKey => `bolt.studio.write.${name}`;
 
-type IntegrationBinding = NonNullable<
-	WorkspaceManifest['integrations'][number]['bindings']
->[number];
+type IntegrationSync = WorkspaceManifest['integrations'][number]['syncs'][number];
 
-export const integrationBindingSummary = (binding: IntegrationBinding): string => {
-	const timing =
-		binding.schedule === undefined
-			? binding.events === undefined || binding.events.length === 0
-				? undefined
-				: binding.events.join(', ')
-			: binding.schedule;
-	return `${binding.method} ${binding.path}${timing === undefined ? '' : ` · ${timing}`}`;
-};
+export const integrationSyncSummary = (sync: IntegrationSync): string =>
+	`${sync.collection} · ${sync.direction.replace('_', '-')} · ${sync.source} · ${sync.fields.join(', ')}`;

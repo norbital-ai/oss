@@ -1,4 +1,8 @@
-export type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
+export type {
+	WorkspaceAuthoringTypes,
+	WorkspaceChannelAuthoringTypes,
+	WorkspaceTeamAuthoringTypes
+} from './authoring-types.js';
 
 export { AutomationProgression, defineAutomation } from './automations-schema.js';
 export type {
@@ -45,7 +49,6 @@ export type {
 	CollectionHistoryAnchor,
 	CollectionRevision,
 	CollectionWriteApi,
-	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,
 	InferenceTool,
@@ -107,13 +110,39 @@ export type {
 	ReferenceTargets
 } from './models-schema.js';
 
-export {
-	defineConnection,
-	definePull,
-	defineWebhook,
-	McpRegistrationDefinition,
-	SkillDeclaration
-} from './workspace-schema.js';
+export { McpRegistrationDefinition, SkillDeclaration } from './workspace-schema.js';
+
+export { defineChannel } from './channels-schema.js';
+export type {
+	ChannelDefinition,
+	ChannelEvents,
+	ChannelName,
+	ChannelsApi,
+	ConversationChannel,
+	EnvelopeFor,
+	MessageFor,
+	NotifyApi,
+	NotifyInput,
+	OutboundRule,
+	PersonChannel,
+	Transport,
+	TransportOf
+} from './channels-schema.js';
+
+export { channel, defineConnection, defineIntegration, http } from './integrations-schema.js';
+export type {
+	ChangesSpec,
+	ConflictRule,
+	FieldMapping,
+	HttpRecordsSpec,
+	IntegrationDefinition,
+	ListSpec,
+	OneWaySync,
+	PageSpec,
+	Source,
+	SyncDefinition,
+	TwoWaySync
+} from './integrations-schema.js';
 
 export { anonymousLimits } from './rate-limits-schema.js';
 

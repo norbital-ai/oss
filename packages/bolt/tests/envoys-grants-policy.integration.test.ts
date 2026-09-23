@@ -5,14 +5,19 @@ import {
 	ModelId,
 	type AIRequest,
 	type AIResponse,
-	type CommunicationRequest,
-	type CommunicationResponse,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { collection, envoy, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as AccessControl from '../src/runtime/access/access-control.js';
+import * as Channels from '../src/runtime/channels/channels.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import {
+	makeBoltTestRuntime,
+	receiveChat,
+	recordingCommunication,
+	testChannels,
+	type BoltTestRuntime
+} from './support/bolt-test-layer.js';
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -50,10 +55,11 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: testChannels('whatsapp'),
 	envoys: [
 		envoy({
 			name: 'field_ops_whatsapp',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['contractor'],
 			groupMessages: 'mention_or_reply',
@@ -73,7 +79,7 @@ afterEach(async () => {
 
 describe('Envoy on a grants-only policy', () => {
 	it('answers a linked sender although its policy opens no app', async () => {
-		const sends: Array<CommunicationRequest> = [];
+		const { sends, binding: communication } = recordingCommunication();
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
@@ -99,12 +105,6 @@ describe('Envoy on a grants-only policy', () => {
 				};
 			}
 		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async (_metadata, request) => {
-				sends.push(request);
-				return { _tag: 'Success', value: { receipt: { id: `wire-${sends.length}` } } };
-			}
-		};
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await harness.database.query(
 			`insert into "user" ("id", "name", "email", "tenantId", "channels")
@@ -124,9 +124,8 @@ describe('Envoy on a grants-only policy', () => {
 			access.explain({ ...principal, policies: [] }, 'agent', 'field_ops_whatsapp').allowed
 		).toBe(false);
 
-		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		const received = await harness.runtime.runPromise(
-			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', {
+			receiveChat('whatsapp', {
 				conversationId: '6591234567@s.whatsapp.net',
 				conversationKind: 'dm',
 				messageId: 'one',
@@ -137,7 +136,8 @@ describe('Envoy on a grants-only policy', () => {
 				attachments: []
 			})
 		);
-		expect(received.status).toBe('buffered');
+		expect(received.admitted).toEqual(['one']);
+		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		const drained = await harness.runtime.runPromise(
 			envoys.drain(
 				harness.effectId('drain'),
@@ -147,16 +147,15 @@ describe('Envoy on a grants-only policy', () => {
 		);
 		expect(drained).toMatchObject({ drained: 1, status: 'answered' });
 		expect(sends).toEqual([
-			{
+			expect.objectContaining({
 				_tag: 'Send',
 				channel: 'whatsapp',
-				recipient: '6591234567@s.whatsapp.net',
-				payload: { text: 'Recorded.' }
-			}
+				transport: 'whatsapp',
+				message: { to: '6591234567@s.whatsapp.net', text: 'Recorded.' }
+			})
 		]);
-		const status = await harness.runtime.runPromise(
-			envoys.status(harness.effectId('status'), 'field_ops_whatsapp')
-		);
-		expect(status).toEqual({ envoy: 'field_ops_whatsapp', received: 1, replied: 1 });
+		const channels = await harness.runtime.runPromise(Channels.Service);
+		const status = await harness.runtime.runPromise(channels.status(harness.effectId('status'), 'whatsapp'));
+		expect(status).toMatchObject({ channel: 'whatsapp', received: 1, sent: 1, failed: 0 });
 	});
 });

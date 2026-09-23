@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import {
-	type CommunicationRequest,
-	type CommunicationResponse,
+	type TransactionalMailRequest,
+	type TransactionalMailResponse,
 	type FacilityBinding,
 	type FacilityCall
 } from '@norbital-ai/bolt-protocol';
@@ -15,10 +15,10 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const recordingCommunication = () => {
-	const calls: Array<Readonly<{ metadata: FacilityCall; request: CommunicationRequest }>> = [];
+const recordingMail = () => {
+	const calls: Array<Readonly<{ metadata: FacilityCall; request: TransactionalMailRequest }>> = [];
 	let failNext = false;
-	const binding: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+	const binding: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse> = {
 		call: async (metadata, request) => {
 			calls.push({ metadata, request });
 			if (failNext) {
@@ -54,8 +54,8 @@ const sendCode = (runtime: BoltTestRuntime, effectId: string, email: string) =>
 
 describe('direct sign-in code delivery', () => {
 	it('persists challenges and submits known and unknown addresses directly to the provider', async () => {
-		const communication = recordingCommunication();
-		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
+		const mail = recordingMail();
+		harness = await makeBoltTestRuntime(undefined, { mail: mail.binding });
 		await harness.database.query(
 			`insert into "user" ("id", "name", "email", "tenantId")
 			 values (md5('known'::text)::uuid, 'Known', 'known@example.test', 'test-tenant')`,
@@ -67,11 +67,11 @@ describe('direct sign-in code delivery', () => {
 
 		// Both address states persist the challenge and take the same provider path, so the response
 		// cannot be used as an account-existence oracle.
-		expect(communication.calls.map(({ request }) => request)).toEqual([
-			expect.objectContaining({ _tag: 'Send', recipient: 'known@example.test' }),
-			expect.objectContaining({ _tag: 'Send', recipient: 'unknown@example.test' })
+		expect(mail.calls.map(({ request }) => request)).toEqual([
+			expect.objectContaining({ kind: 'sign_in_code', to: 'known@example.test' }),
+			expect.objectContaining({ kind: 'sign_in_code', to: 'unknown@example.test' })
 		]);
-		expect(communication.calls.map(({ metadata }) => metadata.idempotencyKey)).toEqual([
+		expect(mail.calls.map(({ metadata }) => metadata.idempotencyKey)).toEqual([
 			'challenge-known:code-delivery',
 			'challenge-unknown:code-delivery'
 		]);
@@ -89,20 +89,20 @@ describe('direct sign-in code delivery', () => {
 	});
 
 	it('surfaces a provider rejection and allows the caller to request a fresh code', async () => {
-		const communication = recordingCommunication();
-		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
-		communication.failOnce();
+		const mail = recordingMail();
+		harness = await makeBoltTestRuntime(undefined, { mail: mail.binding });
+		mail.failOnce();
 		await expect(
 			sendCode(harness, 'challenge-rejected', 'retry@example.test')
 		).rejects.toBeDefined();
 		await sendCode(harness, 'challenge-retry', 'retry@example.test');
-		expect(communication.calls.map(({ metadata }) => String(metadata.idempotencyKey))).toEqual([
+		expect(mail.calls.map(({ metadata }) => String(metadata.idempotencyKey))).toEqual([
 			'challenge-rejected:code-delivery',
 			'challenge-retry:code-delivery'
 		]);
-		expect(communication.calls.map(({ request }) => request)).toEqual([
-			expect.objectContaining({ _tag: 'Send', recipient: 'retry@example.test' }),
-			expect.objectContaining({ _tag: 'Send', recipient: 'retry@example.test' })
+		expect(mail.calls.map(({ request }) => request)).toEqual([
+			expect.objectContaining({ kind: 'sign_in_code', to: 'retry@example.test' }),
+			expect.objectContaining({ kind: 'sign_in_code', to: 'retry@example.test' })
 		]);
 		expect(
 			await harness.database.query(
@@ -113,13 +113,13 @@ describe('direct sign-in code delivery', () => {
 	});
 
 	it('refuses the request and leaves no courier when challenge persistence fails', async () => {
-		const communication = recordingCommunication();
-		harness = await makeBoltTestRuntime(undefined, { communication: communication.binding });
+		const mail = recordingMail();
+		harness = await makeBoltTestRuntime(undefined, { mail: mail.binding });
 		await harness.database.query('drop table "verification"', []);
 
 		await expect(
 			sendCode(harness, 'challenge-unpersisted', 'lost@example.test')
 		).rejects.toBeDefined();
-		expect(communication.calls).toEqual([]);
+		expect(mail.calls).toEqual([]);
 	});
 });

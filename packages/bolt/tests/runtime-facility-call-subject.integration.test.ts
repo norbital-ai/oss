@@ -104,6 +104,7 @@ const peopleWorkspace = workspace({
 		admin: ['admin']
 	},
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -145,6 +146,7 @@ const gatedWorkspace = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: []
 });

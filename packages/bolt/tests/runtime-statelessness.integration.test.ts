@@ -27,6 +27,7 @@ describe('artifact statelessness', () => {
 				apps: [app({ name, label: name })],
 				policies: [],
 				automations: [],
+				channels: [],
 				envoys: [],
 				integrations: [],
 				prompt: 'You are the test workspace agent.',

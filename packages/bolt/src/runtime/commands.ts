@@ -26,7 +26,6 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { sendReminder } from '#lib/runtime/notifications/reminder.js';
 import type { QueryInput } from '#lib/runtime/collections/collections.contract.js';
 import {
 	AuthoredRuntimeService,
@@ -41,13 +40,18 @@ import {
 import { AI, Connector, Files, HostTools } from '#lib/runtime/facilities/services.js';
 import { readFileAsset } from '#lib/runtime/collections/file-assets.js';
 import { inferOp } from '#lib/runtime/inference.js';
+import * as Channels from '#lib/runtime/channels/channels.js';
+import { automationChannels } from '#lib/runtime/channels/channels.js';
+import type { NotifyInput } from '#lib/authoring/channels-schema.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { ADMIN_STATUS, Subject } from '#lib/runtime/identity/identity.js';
 import {
 	automationPrincipalId,
+	channelPrincipalId,
 	envoyPrincipalId,
+	integrationPrincipalId,
 	SEED_PRINCIPAL_ID,
 	seedSubject
 } from '#lib/runtime/identity/static-identity.js';
@@ -152,6 +156,18 @@ const authorizeMembership = Effect.fn('Bolt.command.authorizeMembership')(functi
 ) {
 	if (principal(context).admin === true) return;
 	yield* protect('manage', 'identity')(context, undefined);
+});
+
+/** Operating a workspace's channels and integrations is an administrator's job. */
+const authorizeAdministrator = Effect.fn('Bolt.command.authorizeAdministrator')(function* (
+	context: ExecutionContext
+) {
+	if (principal(context).admin === true) return;
+	return yield* new AccessControl.AccessDenied({
+		action: 'operate',
+		resource: 'channels',
+		reason: 'Only an administrator operates channels and integrations.'
+	});
 });
 
 const membershipRefusal = (reason: string) =>
@@ -325,7 +341,21 @@ const workspaceManifest = Effect.fn('Bolt.command.workspaceManifest')(function* 
 				label: automation.name,
 				kind: 'automation',
 				policies: [...automation.policies]
-			}))
+			})),
+			...definition.integrations.map((integration) => ({
+				id: integrationPrincipalId(integration.name),
+				label: integration.name,
+				kind: 'integration',
+				policies: [...integration.policies]
+			})),
+			...definition.channels
+				.filter(({ policies }) => policies.length > 0)
+				.map((channel) => ({
+					id: channelPrincipalId(channel.name),
+					label: channel.name,
+					kind: 'channel',
+					policies: [...channel.policies]
+				}))
 		],
 		requiredFacilities: [...definition.requiredFacilities]
 	};
@@ -391,8 +421,22 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const secrets = yield* Secrets.Service;
 	const get = connectionReader(context.effectId, automation.connection, connector);
 	const tasks = yield* TaskQueue.Service;
-	const notify = (reminder: Parameters<AutomationApi['notify']>[0]) =>
-		guard('notify').pipe(Effect.andThen(sendReminder(context.effectId, database, tasks, reminder)));
+	const { definition } = yield* Workspace.Service;
+	const channelOps = automationChannels(
+		database,
+		tasks,
+		definition.channels,
+		definition.integrations,
+		context.effectId
+	);
+	const notify = (notification: NotifyInput) =>
+		guard('notify').pipe(Effect.andThen(channelOps.notify(notification)));
+	const channels = Object.fromEntries(
+		Object.entries(channelOps.channels).map(([name, channel]) => [
+			name,
+			{ send: (message: unknown) => guard('channels.send').pipe(Effect.andThen(channel.send(message))) }
+		])
+	);
 	const api = makeAutomationApi(
 		makeAuthoringApi(ops),
 		(value) =>
@@ -411,7 +455,14 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 					Effect.provideService(Secrets.Service, secrets)
 				)
 		},
-		notify
+		notify,
+		channels,
+		Object.fromEntries(
+			Object.entries(channelOps.integrations).map(([name, integration]) => [
+				name,
+				{ reconcile: () => guard('integrations.reconcile').pipe(Effect.andThen(integration.reconcile())) }
+			])
+		)
 	);
 	const args = yield* Schema.decodeUnknownEffect(automation.input ?? Schema.Json)(input.args);
 	const output = yield* runAuthoredHandler(() =>
@@ -1174,14 +1225,6 @@ const BINDINGS = [
 			})
 	),
 	binding(
-		'envoys.receive',
-		{ Command: system('host-authenticated transport delivery') },
-		(context, input) =>
-			Effect.flatMap(Envoys.Service, (envoys) =>
-				Effect.map(envoys.receive(context.effectId, input.envoy, input.delivery), json)
-			)
-	),
-	binding(
 		'envoys.registration.inspect',
 		{ Command: system('host registration claim inspection') },
 		(context, input) =>
@@ -1211,38 +1254,130 @@ const BINDINGS = [
 				)
 			)
 	),
-	binding('envoys.status', { Command: session('envoy status visibility') }, (context, input) =>
-		Effect.flatMap(Envoys.Service, (envoys) =>
-			Effect.map(envoys.status(context.effectId, input.envoy), json)
-		)
+	binding(
+		'channels.ingest',
+		{ Command: system('host-authenticated channel history') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const channels = yield* Channels.Service;
+				const workspace = yield* Workspace.Service;
+				const envoy = workspace.definition.envoys.find(({ channel }) => channel === input.channel);
+				const rows = yield* channels.ingest(context.effectId, input.channel, input.changes, {
+					...(input.state === undefined ? {} : { state: input.state }),
+					...(input.horizon === undefined ? {} : { horizon: input.horizon }),
+					...(envoy === undefined ? {} : { attachmentKey: Envoys.envoyAttachmentKey(envoy.name) })
+				});
+				// The channel's consumers, in order: its envoy (one per channel), then every sync that
+				// uses it as a source. Neither writes the other's rows.
+				const admitted = yield* (yield* Envoys.Service).admit(
+					EffectId.make(`${context.effectId}:envoy`),
+					input.channel,
+					rows
+				);
+				yield* (yield* Integrations.Service).applyChannel(
+					EffectId.make(`${context.effectId}:syncs`),
+					input.channel,
+					rows
+						.filter(({ direction }) => direction === 'inbound')
+						.map(({ envelope, providerMessageId, version, deleted }) => ({
+							record: { ...envelope, direction: 'inbound' },
+							identity: providerMessageId,
+							version,
+							deleted
+						}))
+				);
+				return json({ applied: rows.length, admitted: admitted.length });
+			})
 	),
 	binding(
-		'integrations.pull',
-		{ Command: session('integration binding'), Task: task('integration binding') },
+		'channels.event',
+		{ Command: system('host-authenticated provider report') },
+		(context, input) =>
+			Effect.flatMap(Channels.Service, (channels) =>
+				Effect.map(channels.event(context.effectId, input.channel, input.events), json)
+			)
+	),
+	binding(
+		'channels.drain',
+		{ Command: system('channel outbox'), Task: task('channel outbox') },
+		(context, input) =>
+			Effect.flatMap(Channels.Service, (channels) =>
+				Effect.map(channels.drain(context.effectId, input.channel), json)
+			)
+	),
+	binding(
+		'channels.status',
+		{ Command: { ...session('channel status visibility'), authorize: authorizeAdministrator } },
+		(context, input) =>
+			Effect.flatMap(Channels.Service, (channels) =>
+				Effect.map(channels.status(context.effectId, input.channel), (status) => json(status))
+			)
+	),
+	binding(
+		'webhooks.receive',
+		{ Command: system('host-authenticated webhook delivery') },
+		(context, input) =>
+			Effect.gen(function* () {
+				const delivery = { headers: input.headers, body: input.body };
+				if ('channel' in input.target) {
+					const channel = input.target.channel;
+					const rows = yield* (yield* Channels.Service).receiveWebhook(context.effectId, channel, delivery);
+					yield* (yield* Integrations.Service).applyChannel(
+						EffectId.make(`${context.effectId}:syncs`),
+						channel,
+						rows.map(({ envelope, providerMessageId, version, deleted }) => ({
+							record: { ...envelope, direction: 'inbound' },
+							identity: providerMessageId,
+							version,
+							deleted
+						}))
+					);
+					return json({ applied: rows.length });
+				}
+				return json(
+					yield* (yield* Integrations.Service).receive(
+						context.effectId,
+						input.target.integration,
+						input.target.sync,
+						delivery
+					)
+				);
+			})
+	),
+	binding(
+		'integrations.run',
+		{ Command: system('integration sync'), Task: task('integration sync') },
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) =>
+				Effect.map(integrations.run(context.effectId, input.integration, input.sync, input.mode), json)
+			)
+	),
+	binding(
+		'integrations.push',
+		{ Command: system('integration outbox'), Task: task('integration outbox') },
+		(context, input) =>
+			Effect.flatMap(Integrations.Service, (integrations) =>
+				Effect.map(integrations.push(context.effectId, input.integration, input.sync), json)
+			)
+	),
+	binding(
+		'integrations.status',
+		{ Command: { ...session('integration status visibility'), authorize: authorizeAdministrator } },
+		(context) =>
+			Effect.flatMap(Integrations.Service, (integrations) =>
+				Effect.map(integrations.status(context.effectId), (status) => json(status))
+			)
+	),
+	binding(
+		'integrations.control',
+		{ Command: { ...session('integration operation'), authorize: authorizeAdministrator } },
 		(context, input) =>
 			Effect.flatMap(Integrations.Service, (integrations) =>
 				Effect.map(
-					integrations.pull(context.effectId, input.name, input.cursor, input.binding),
+					integrations.control(context.effectId, input.integration, input.sync, input.action),
 					json
 				)
 			)
-	),
-	binding(
-		'integrations.flush',
-		{ Command: session('integration outbox'), Task: task('integration outbox') },
-		(context, input) =>
-			Effect.flatMap(Integrations.Service, (integrations) =>
-				Effect.map(integrations.flush(context.effectId, input.name, input.input ?? null), json)
-			)
-	),
-	binding(
-		'notifications.deliver',
-		{ Command: session('undelivered notifications'), Task: task('undelivered notifications') },
-		(context) =>
-			Effect.gen(function* () {
-				const delivered = yield* (yield* Notifications.Service).deliver(context.effectId);
-				return json({ delivered });
-			})
 	),
 	binding('notifications.pushConfiguration', { Command: session('push configuration') }, () =>
 		Effect.gen(function* () {

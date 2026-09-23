@@ -66,9 +66,14 @@ const definition = {
 		},
 		{ name: 'nightly', trigger: { _tag: 'Schedule', cron: '0 2 * * *' }, command: 'y' }
 	],
+	channels: [{ name: 'sales_whatsapp', transport: 'whatsapp' }],
 	envoys: [{ name: 'whatsapp' }],
 	integrations: [
-		{ name: 'erp', collection: 'customers', policies: [], receive: [{}], webhooks: [], send: [] }
+		{
+			name: 'erp',
+			policies: [],
+			syncs: [{ name: 'customers', collection: 'customers', direction: 'one_way', source: 'http' }]
+		}
 	],
 	teams: { 'R&D': ['color_matcher'], Reviewers: ['submission_reviewer'] }
 } as unknown as WorkspaceDefinition;
@@ -113,7 +118,8 @@ describe('describe_workspace', () => {
 			'post_stock [stock created]',
 			'nightly [schedule 0 2 * * *]'
 		]);
-		expect(described.integrations).toEqual(['erp on customers (1 pull)']);
+		expect(described.channels).toEqual(['sales_whatsapp (whatsapp)']);
+		expect(described.integrations).toEqual(['erp: customers (one-way, http)']);
 		expect(described.teams).toEqual(['R&D: color_matcher', 'Reviewers: submission_reviewer']);
 		expect(described.you).toBe('teams R&D; policies color_matcher');
 		expect(described.tools).toEqual(['read_collection', 'write_collection']);

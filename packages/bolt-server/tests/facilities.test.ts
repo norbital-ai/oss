@@ -493,7 +493,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 			})
 		});
 		const communication = makeCommunicationBinding({
-			call: async () => ({ receipt: { id: 'message-1' } })
+			call: async () => ({ providerMessageId: 'message-1' })
 		});
 		const connector = makeConnectorBinding({
 			call: async (_metadata, input) => ({ output: { operation: input.operation } })
@@ -518,8 +518,9 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 					metadata,
 					CommunicationRequest.cases.Send.make({
 						channel: 'test',
-						recipient: 'user-1',
-						payload: { text: 'hello' }
+						transport: 'whatsapp',
+						outboxId: 'outbox-1',
+						message: { to: 'user-1', text: 'hello' }
 					}),
 					signal
 				)

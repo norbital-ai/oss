@@ -4,8 +4,8 @@ import {
 	PUBLIC_WORKSPACE_ROOT_CONFIG_KEY,
 	type AIRequest,
 	type AIResponse,
-	type CommunicationRequest,
-	type CommunicationResponse,
+	type TransactionalMailRequest,
+	type TransactionalMailResponse,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { HostConfig } from '../src/runtime/access/system-principal.js';
@@ -23,23 +23,22 @@ afterEach(async () => {
 });
 
 /**
- * An invitation is written by the runtime, link included, beneath the host's declared workspace
- * root. The host's mailer only sends it: what an invitee reads is the workspace's own, and a host
- * that has said where it serves the shell gets a working link without composing anything.
+ * An invitation's link is minted by the runtime beneath the host's declared workspace root, and
+ * the invitation is transactional mail: the host's mail facility renders and sends it.
  */
 describe('inviting somebody to a workspace', () => {
 	it('sends a notice that carries the subject, the text and a link into the shell', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async () => ({ _tag: 'Failure', error: { code: 'unused', message: 'unused' } }) as never
 		};
-		const notices: Array<CommunicationRequest> = [];
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+		const notices: Array<TransactionalMailRequest> = [];
+		const mail: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse> = {
 			call: async (_metadata, request) => {
 				notices.push(request);
-				return { _tag: 'Success', value: { receipt: { id: `wire-${notices.length}` } } };
+				return { _tag: 'Success', value: { id: `mail-${notices.length}` } };
 			}
 		};
-		harness = await makeBoltTestRuntime(testWorkspace(), { ai, communication });
+		harness = await makeBoltTestRuntime(testWorkspace(), { ai, mail });
 		const identity = await harness.runtime.runPromise(Identity.Service);
 		const invitationId = await harness.runtime.runPromise(
 			identity
@@ -55,16 +54,15 @@ describe('inviting somebody to a workspace', () => {
 					})
 				)
 		);
-		const notice = notices.find((request) => request._tag === 'Notify');
-		expect(notice?._tag).toBe('Notify');
-		if (notice?._tag !== 'Notify') return;
-		expect(notice.recipient).toBe('invitee@example.test');
-		expect(notice.payload).toMatchObject({
+		// Transactional mail, never a channel: a host-owned template renders it from this data.
+		expect(notices).toHaveLength(1);
+		const notice = notices[0]!;
+		expect(notice).toMatchObject({
 			kind: 'workspace_invitation',
-			invitationId,
-			subject: 'You have been invited to test-tenant'
+			to: 'invitee@example.test',
+			data: { invitationId, workspace: 'test-tenant' }
 		});
-		expect(JSON.stringify(notice.payload)).toContain(
+		expect(JSON.stringify(notice.data)).toContain(
 			`https://host.example/__bolt/invitation?workspace=test-tenant&claim=${encodeURIComponent(invitationId)}`
 		);
 	});

@@ -85,6 +85,7 @@ const definition = workspace({
 			policies: ['automation-data']
 		})
 	],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -160,6 +161,7 @@ const dynamicDefinition = workspace({
 	apps: [app({ name: 'dynamic-write-waves', label: 'Dynamic write waves' })],
 	teams: { admin: ['admin-data'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

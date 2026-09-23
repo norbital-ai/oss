@@ -28,7 +28,6 @@ export const manifest = {
 	],
 	// Present and empty, not absent: the manifest schema requires the field so a host can tell a
 	// workspace that declares no integrations from an artifact built before manifests carried them.
-	integrations: []
 };
 
 const ok = (response) => ({ _tag: 'Success', response });
@@ -292,5 +291,7 @@ export const dispatch = async (invocation, _facilities, signal) => {
 export const activate = async () => ({
 	_tag: 'Activated',
 	registrations: [],
-	nextDueAtEpochMs: null
+	nextDueAtEpochMs: null,
+	channels: [],
+	webhooks: []
 });

@@ -3,7 +3,7 @@ import { getErrorMessage } from '@norbital-ai/std';
 import webPush from 'web-push';
 import {
 	WEB_PUSH_SUBSCRIPTION_GONE,
-	WebPushPayload,
+	type CommunicationRequest,
 	type WireError
 } from '@norbital-ai/bolt-protocol';
 
@@ -15,29 +15,19 @@ export type WebPushKeys = Readonly<{
 	readonly subject: string;
 }>;
 
-const decodePayload = Schema.decodeUnknownResult(WebPushPayload);
 /** `web-push` rejects with a `WebPushError` carrying the push service's status; anything else has none. */
 const pushServiceStatus = Schema.decodeUnknownOption(Schema.Struct({ statusCode: Schema.Number }));
 
 /**
- * Sends one `webpush` channel payload. Every host that offers pushes calls this from its
- * communication facility, so the wire shape and the failure vocabulary are the same on each: a
- * dead endpoint is `WEB_PUSH_SUBSCRIPTION_GONE` and not retryable; the push service being down
- * is retryable; a malformed payload is the workspace's fault and neither.
+ * Sends one `inbox` transport push. Every host that offers pushes calls this from its
+ * communication facility, so the failure vocabulary is the same on each: a dead endpoint is
+ * `WEB_PUSH_SUBSCRIPTION_GONE` and not retryable; the push service being down is retryable.
  */
 export const sendWebPush = (
 	keys: WebPushKeys,
-	payload: unknown
+	push: Extract<CommunicationRequest, { readonly _tag: 'Push' }>
 ): Effect.Effect<void, WireError> => {
-	const decoded = decodePayload(payload);
-	if (decoded._tag === 'Failure')
-		return Effect.fail({
-			code: 'communication_payload_unrenderable',
-			message: 'Send on webpush carried no push payload: expected { subscription, title, body }',
-			retryable: false,
-			outcome: 'known'
-		});
-	const { subscription, title, body, url } = decoded.success;
+	const { subscription, title, body, url } = push;
 	return Effect.tryPromise({
 		try: () =>
 			webPush.sendNotification(subscription, JSON.stringify({ title, body, url }), {

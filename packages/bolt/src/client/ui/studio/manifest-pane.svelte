@@ -111,13 +111,14 @@
 		if (destination.kind === 'app') return t('bolt.studio.openApp');
 		if (destination.surface === 'approvals') return t('bolt.studio.openApprovals');
 		if (destination.surface === 'automations') return t('bolt.studio.openAutomations');
-		if (destination.surface === 'envoys') return t('bolt.studio.configureEnvoy');
+		if (destination.surface === 'channels') return t('bolt.studio.configureChannel');
+		if (destination.surface === 'integrations') return t('bolt.studio.openIntegrations');
 		if (destination.surface === 'environment') return t('bolt.studio.manageSecrets');
 		return t('bolt.studio.openData');
 	};
 	const destinationAriaLabel = (destination: ManifestDestination, entity: string): string => {
 		if (destination.kind === 'app') return t('bolt.studio.openEntityApp', { entity });
-		if (destination.surface === 'envoys') return t('bolt.studio.configureNamedEnvoy', { entity });
+		if (destination.surface === 'channels') return t('bolt.studio.configureNamedChannel', { entity });
 		if (destination.surface === 'environment')
 			return t('bolt.studio.manageNamedSecret', { entity });
 		return `${destinationLabel(destination)}: ${entity}`;
@@ -154,7 +155,7 @@
 			return envoys.map((entry) => ({
 				name: entry.name,
 				detail: t('bolt.studio.envoyFacts', {
-					transport: entry.transport,
+					channel: entry.channel,
 					audience: entry.audience,
 					delegation: entry.delegation
 				}),
@@ -278,7 +279,7 @@
 
 {#snippet collectionBehaviors(entry: ManifestCollection, workspace: WorkspaceManifest)}
 	<Stack gap="md" class="pl-7">
-		{#each [{ title: t('bolt.studio.writes'), empty: t('bolt.studio.noWrites'), entries: entry.writes ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.collection === entry.name) }] as group (group.title)}
+		{#each [{ title: t('bolt.studio.writes'), empty: t('bolt.studio.noWrites'), entries: entry.writes ?? [] }, { title: t('bolt.studio.pipelines'), empty: t('bolt.studio.noPipelines'), entries: entry.pipelines ?? [] }, { title: t('bolt.studio.integrations'), empty: t('bolt.studio.noIntegrations'), entries: workspace.integrations.filter((integration) => integration.syncs.some((sync) => sync.collection === entry.name)).map((integration) => ({ name: integration.name, description: integration.syncs.filter((sync) => sync.collection === entry.name).map((sync) => `${sync.direction.replace('_', '-')} · ${sync.source}`).join(', ') })) }] as group (group.title)}
 			<Stack as="section" gap="xs">
 				<h4 class="text-xs font-medium text-foreground">{group.title}</h4>
 				{#if group.entries.length === 0}

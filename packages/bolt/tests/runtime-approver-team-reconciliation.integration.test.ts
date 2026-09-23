@@ -84,6 +84,7 @@ const definition = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: [],
 	schemaFingerprint: 'sha256:approver-teams-fixture'

@@ -93,8 +93,8 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		// and their drain task enter through `drainRows`, so a call site — a spread into the write's
 		// insert rows, never the `const` definition — is a path that can emit a delivery, and every
 		// one of them must announce the flush.
-		const emits = named(blocks, /\.\.\.drainRows\(/u);
-		const announces = named(blocks, /announceFlush\(/u);
+		const emits = named(blocks, /\.\.\.followRows\(/u);
+		const announces = named(blocks, /announceOutward\(/u);
 		// Printed on failure rather than only compared, so a diff says *which* path lost its drain.
 		expect({ emits, announces }).toEqual({ emits, announces: emits });
 	});
@@ -105,8 +105,8 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		// a crash the other way round costs a committed delivery nobody ever comes back for.
 		const body = blocks.get('Collections.applyDeclarativeGraph');
 		expect(body).toBeDefined();
-		const flushAt = body?.search(/announceFlush\(/u) ?? -1;
-		const statementsAt = body?.search(/\.\.\.drainRows\(/u) ?? -1;
+		const flushAt = body?.search(/announceOutward\(/u) ?? -1;
+		const statementsAt = body?.search(/\.\.\.followRows\(/u) ?? -1;
 		expect(flushAt).toBeGreaterThan(-1);
 		expect(statementsAt).toBeGreaterThan(-1);
 		expect(flushAt).toBeLessThan(statementsAt);
@@ -117,9 +117,9 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		// the check silently becoming decorative after a refactor renames the builders.
 		// The declarative engine consolidated the per-record builders into one apply pass; the
 		// delivery builder keeps at least its definition plus its commit-path call sites.
-		expect(occurrences(source, /outboxDeliveries\(/u)).toBeGreaterThanOrEqual(2);
+		expect(occurrences(source, /outwardRows\(/u)).toBeGreaterThanOrEqual(2);
 		expect(
-			occurrences(source, /\.\.\.drainRows\(|applyDeclarativeGraph\(/u)
+			occurrences(source, /\.\.\.followRows\(|applyDeclarativeGraph\(/u)
 		).toBeGreaterThanOrEqual(1);
 	});
 });
@@ -145,13 +145,13 @@ describe('instance 3 — every task row written is announced to the host', () =>
 			.toSorted();
 		// Agents and envoys no longer write the row themselves: every agent turn and every envoy drain
 		// goes through the queue's claimed enqueue, which is the other reason neither is in this list.
-		// Automation reminders write their delivery task beside the inbox rows they insert, and wake
-		// the host before the write commits — the same order the collection drain row is announced in.
+		// Channels write their drain task beside the outbox rows they insert, and wake the host
+		// before the write commits — the same order the collection follow-up rows are announced in.
 		expect(writers).toEqual([
 			'approvals/approvals.ts',
+			'channels/channels.ts',
 			'collections/collections.ts',
 			'integrations/integrations.ts',
-			'notifications/reminder.ts',
 			'tasks/queue.ts'
 		]);
 	});

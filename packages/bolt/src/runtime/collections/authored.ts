@@ -7,7 +7,8 @@ import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
 import type { AutomationProgression, AutomationApi } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
 import type { AuthoredCollectionModule } from '#lib/authoring/collection-schema.js';
-import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
+import type { AuthoredChannel, NotifyInput } from '#lib/authoring/channels-schema.js';
+import type { AuthoredSync } from '#lib/authoring/integrations-schema.js';
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
@@ -98,14 +99,13 @@ export type AuthoredRuntime = Readonly<{
 	readonly policyAuthorizations: Readonly<Record<string, PolicyRuntimeFunction>>;
 	/** Server-only approval routers. Each call must return one branded concrete ApprovalFlow. */
 	readonly approvalFlows: Readonly<Record<string, PolicyRuntimeFunction>>;
+	/** The live half of every `src/channels/+<name>.ts`: outbound message builders and event patches. */
+	readonly channels: Readonly<Record<string, AuthoredChannel>>;
 	/**
-	 * The live half of every `+integrations.ts`, keyed by `<collection>.<integration>`.
-	 *
-	 * A binding's record schema and its identity reader are a `Schema.Codec` and a closure. Neither
-	 * survives the JSON the workspace definition is, so the declaration carries the request and this
-	 * carries the parts that have to be called.
+	 * The live half of every `src/integrations/+<name>.ts`, per sync: the source spec, the record
+	 * schema and the field mappings — none of which survive the JSON the definition is.
 	 */
-	readonly integrations: Readonly<Record<string, AuthoredIntegrationModule>>;
+	readonly integrations: Readonly<Record<string, Readonly<Record<string, AuthoredSync>>>>;
 }>;
 
 export const emptyAuthoredRuntime: AuthoredRuntime = {
@@ -114,6 +114,7 @@ export const emptyAuthoredRuntime: AuthoredRuntime = {
 	automations: {},
 	policyAuthorizations: {},
 	approvalFlows: {},
+	channels: {},
 	integrations: {}
 };
 
@@ -338,9 +339,11 @@ type RuntimeAutomationApi<E = never> = RuntimeAuthoringApi<E> &
 			url: string
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').WebPage, E, never>;
 		readonly progress: (value: AutomationProgression) => Effect.Effect<void, E, never>;
-		readonly notify: (
-			reminder: Parameters<AutomationApi['notify']>[0]
-		) => Effect.Effect<void, E, never>;
+		readonly notify: (notification: NotifyInput) => Effect.Effect<void, E, never>;
+		readonly channels: Readonly<
+			Record<string, { readonly send: (message: unknown) => Effect.Effect<{ readonly outboxId: string }, E, never> }>
+		>;
+		readonly integrations: Readonly<Record<string, { readonly reconcile: () => Effect.Effect<void, E, never> }>>;
 	}>;
 
 /**
@@ -515,14 +518,20 @@ export const makeAutomationApi = <E, P, W, C, N>(
 			input: Parameters<AutomationApi['connection']['get']>[0]
 		) => Effect.Effect<import('@norbital-ai/bolt-protocol').IntegrationHttpResponse, C>;
 	},
-	notify: (reminder: Parameters<AutomationApi['notify']>[0]) => Effect.Effect<void, N, never>
+	notify: (notification: NotifyInput) => Effect.Effect<void, N, never>,
+	channels: Readonly<
+		Record<string, { readonly send: (message: unknown) => Effect.Effect<{ readonly outboxId: string }, N, never> }>
+	>,
+	integrations: Readonly<Record<string, { readonly reconcile: () => Effect.Effect<void, N, never> }>>
 ): RuntimeAutomationApi<E | P | W | C | N> => ({
 	...api,
 	progress,
 	readUrl,
 	runId,
 	connection,
-	notify
+	notify,
+	channels,
+	integrations
 });
 
 const effectLabel = (value: string): string => encodeURIComponent(value).replaceAll('%', '_');

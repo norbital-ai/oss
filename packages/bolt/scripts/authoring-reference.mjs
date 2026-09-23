@@ -51,7 +51,43 @@ export const SECTIONS = [
 				'CollectionNotificationRule',
 				'CollectionNotifications'
 			],
-			[`${PROTOCOL}facilities.d.ts`]: ['NotificationRecipient', 'NotificationChannels']
+			[`${PROTOCOL}facilities.d.ts`]: ['NotificationRecipient']
+		}
+	},
+	{
+		title: 'Channels',
+		files: {
+			[`${AUTHORING}channels-schema.d.ts`]: [
+				'MessageFor',
+				'EnvelopeFor',
+				'ChannelsApi',
+				'NotifyInput',
+				'NotifyApi',
+				'OutboundRule',
+				'ChannelEvents',
+				'ChannelDefinition',
+				'defineChannel'
+			],
+			[`${PROTOCOL}channels.d.ts`]: ['ChatMessage', 'EmailMessage', 'InboxMessage', 'HttpRequest']
+		}
+	},
+	{
+		title: 'Integrations',
+		files: {
+			[`${AUTHORING}integrations-schema.d.ts`]: [
+				'PageSpec',
+				'ListSpec',
+				'ChangesSpec',
+				'HttpRecordsSpec',
+				'FieldMapping',
+				'ConflictRule',
+				'OneWaySync',
+				'TwoWaySync',
+				'IntegrationDefinition',
+				'defineIntegration',
+				'http',
+				'channel'
+			]
 		}
 	},
 	{

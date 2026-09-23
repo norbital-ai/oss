@@ -1,18 +1,10 @@
 import type { FacilityName } from '@norbital-ai/bolt-protocol';
-import { Schema, type Effect } from 'effect';
+import { Schema } from 'effect';
 import type { AutomationDeclaration } from './automations-schema.js';
-import type {
-	Api,
-	EnvoyDefinition,
-	PullCursorSpec,
-	PullPagesSpec,
-	PullRecordsSpec,
-	PullRequestSpec,
-	PullRetrySpec,
-	SendRequestSpec,
-	WebhookRequestSpec,
-	WebhookSignatureSpec
-} from './contracts-schema.js';
+import { CONVERSATION_TRANSPORTS } from '@norbital-ai/bolt-protocol';
+import type { EnvoyDefinition } from './contracts-schema.js';
+import type { ChannelDeclaration } from './channels-schema.js';
+import type { IntegrationDeclaration } from './integrations-schema.js';
 import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
 import type { CollectionInputSelection } from './collection-schema.js';
 import type {
@@ -509,8 +501,7 @@ export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
 			`Envoy "${WEB_AGENT_NAME}" is reserved: the web agent already occupies that name in the conversation selector, so an envoy called "${WEB_AGENT_NAME}" would never be reachable. Name it after what it is for.`
 		);
 	}
-	if (declaration.transport.trim() === '')
-		throw new TypeError(`Envoy ${name} requires a transport.`);
+	if (declaration.channel.trim() === '') throw new TypeError(`Envoy ${name} requires a channel.`);
 	if (!['public', 'authenticated', 'private'].includes(declaration.audience)) {
 		throw new TypeError(`Envoy ${name} has an unsupported audience.`);
 	}
@@ -530,403 +521,7 @@ export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
 		policies: Object.freeze([...declaration.policies])
 	});
 };
-/**
- * One inbound binding as the *declaration* — everything about a pull that survives `JSON.stringify`.
- *
- * The half that cannot: the record schema, the identity reader, and the optional mapper are live
- * objects and functions, so they ride beside the declaration in the artifact's authored runtime
- * (`AuthoredRuntime.integrations`) exactly as models, hooks and pipelines already do. This half is
- * what a host can read out of a manifest — most importantly `schedule`, which is the only thing a
- * host scheduler needs to know to run the job.
- */
-export interface IntegrationPullDeclaration {
-	readonly name: string;
-	readonly schedule: string;
-	readonly method: 'GET' | 'POST';
-	readonly path: string;
-	readonly query?: Readonly<Record<string, string>>;
-	readonly headers?: Readonly<Record<string, string>>;
-	readonly cursor?: PullCursorSpec;
-	readonly pages?: PullPagesSpec;
-	readonly retry?: PullRetrySpec;
-	readonly records?: PullRecordsSpec;
-	/** The collection column the external key lands in — the column the idempotent upsert matches on. */
-	readonly identityColumn: string;
-}
-
-/**
- * One authored integration, scoped to the collection whose directory declared it.
- *
- * `name` is `<collection>.<integration>` because that is what the file system said: two collections
- * may both mirror "erp", and they are two integrations with two cursors, not one.
- *
- * The `connector`/`conflict` pair this interface used to carry is gone. `connector` named a
- * host-side connector registry that no host ever had an entry in, and `conflict` named a
- * three-valued merge policy no line of code has ever read — the source of record is the source of
- * record, and the upsert is keyed by the external identity.
- */
-/**
- * One *pushed* inbound binding as the declaration — the half of a webhook that survives
- * `JSON.stringify`.
- *
- * It carries the whole signature specification, secret name included. That is deliberate and it is
- * safe: `{ env: 'NAME' }` is a *name*, and the vault it names is the host's. The artifact says which
- * secret verifies this route, exactly as it already says which secret authenticates a pull's bearer
- * token; nothing about the value travels. An artifact that omitted the specification would leave the
- * host to guess a scheme, and a guessed verification scheme is an unverified route.
- */
-export interface IntegrationWebhookDeclaration {
-	readonly name: string;
-	/** The route the host mounts for this binding. */
-	readonly path: string;
-	readonly signature: WebhookSignatureSpec;
-	readonly eventIdHeader?: string;
-	readonly records?: PullRecordsSpec;
-	/** The collection column the external key lands in — the column the idempotent upsert matches on. */
-	readonly identityColumn: string;
-}
-
-/** Which collection writes an outbound binding subscribes to. */
-export type IntegrationSendEvent = 'create' | 'update' | 'delete';
-
-/**
- * One *outbound* binding as the declaration — the half of a send that survives `JSON.stringify`.
- *
- * `events` is the list the trigger normalised to, and it is here rather than only in the live half
- * because the write path has to decide whether a row change concerns this binding *before* it is
- * willing to call anything: an integration with no `update` binding must cost an update nothing. The
- * predicates themselves are closures and travel in the authored half beside `map` and `identity`.
- */
-export interface IntegrationSendDeclaration {
-	readonly name: string;
-	readonly method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-	/** May carry `{column}` tokens, filled from the stored record at delivery time. */
-	readonly path: string;
-	readonly headers?: Readonly<Record<string, string>>;
-	readonly retry?: PullRetrySpec;
-	/** The header the platform's derived delivery key rides in. Defaults to `idempotency-key`. */
-	readonly idempotencyHeader?: string;
-	readonly events: ReadonlyArray<IntegrationSendEvent>;
-}
-
-/**
- * One authored integration, scoped to the collection whose directory declared it.
- *
- * `name` is `<collection>.<integration>` because that is what the file system said: two collections
- * may both mirror "erp", and they are two integrations with two cursors, not one.
- *
- * The `connector`/`conflict` pair this interface used to carry is gone. `connector` named a
- * host-side connector registry that no host ever had an entry in, and `conflict` named a
- * three-valued merge policy no line of code has ever read — the source of record is the source of
- * record, and the upsert is keyed by the external identity.
- *
- * `receive` and `webhooks` are two arrays rather than one union-typed array because a host does two
- * different things with them — register a cron job, or mount a route — and the declarations have
- * almost nothing in common to read: a pull has a schedule, a cursor and paging, and a webhook has a
- * path and a signature. Collapsing them would make every consumer narrow before it could do either.
- * The authoring surface *is* unified, where the author sees it: both are declared in the single
- * `receive` map of `+integrations.ts`, so a binding name is unique across both by construction.
- */
-export interface IntegrationDeclaration {
-	readonly name: string;
-	readonly collection: string;
-	/** Explicit policies held by this integration's static principal. */
-	readonly policies: ReadonlyArray<string>;
-	/**
-	 * Where this integration's requests go — absent for an integration that only receives pushes.
-	 *
-	 * A webhook has nothing to request: it is delivered to, so there is no base URL and no outbound
-	 * credential. `describeIntegrations` still requires one the moment a pull is declared, so a pull
-	 * can never reach the runtime without somewhere to go.
-	 */
-	readonly connection?: HttpConnection;
-	readonly receive: ReadonlyArray<IntegrationPullDeclaration>;
-	readonly webhooks: ReadonlyArray<IntegrationWebhookDeclaration>;
-	/**
-	 * The outbound bindings, in their own array for the reason the other two are in theirs: a host
-	 * and the runtime do a different thing with each. A pull is a cron, a webhook is a route, and a
-	 * send is a queue drained on a schedule — they share a connection and nothing else.
-	 */
-	readonly send: ReadonlyArray<IntegrationSendDeclaration>;
-}
-/** Owns integration behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const integration = (declaration: IntegrationDeclaration): IntegrationDeclaration => {
-	if (declaration.name.trim() === '') throw new TypeError('Integration name cannot be empty.');
-	if (declaration.collection.trim() === '')
-		throw new TypeError(`Integration ${declaration.name} requires a collection.`);
-	for (const binding of declaration.receive) {
-		if (binding.name.trim() === '')
-			throw new TypeError(`Integration ${declaration.name} has an unnamed receive binding.`);
-		// An empty path is the connection's root: an endpoint that is one URL has nothing below it.
-		if (binding.identityColumn.trim() === '') {
-			throw new TypeError(
-				`Integration ${declaration.name}.${binding.name} requires an identity column: without one a second run cannot recognise the rows the first run wrote.`
-			);
-		}
-	}
-	for (const binding of declaration.webhooks) {
-		if (binding.name.trim() === '')
-			throw new TypeError(`Integration ${declaration.name} has an unnamed webhook binding.`);
-		if (binding.path.trim() === '')
-			throw new TypeError(`Integration ${declaration.name}.${binding.name} requires a path.`);
-		if (binding.identityColumn.trim() === '') {
-			throw new TypeError(
-				`Integration ${declaration.name}.${binding.name} requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.`
-			);
-		}
-		assertVerifiableSignature(`${declaration.name}.${binding.name}`, binding.signature);
-	}
-	for (const binding of declaration.send) {
-		if (binding.name.trim() === '')
-			throw new TypeError(`Integration ${declaration.name} has an unnamed send binding.`);
-		if (binding.events.length === 0) {
-			throw new TypeError(
-				`Integration ${declaration.name}.${binding.name} subscribes to no collection event, so nothing could ever queue a delivery for it.`
-			);
-		}
-	}
-	return Object.freeze({
-		...declaration,
-		name: declaration.name.trim(),
-		receive: Object.freeze([...declaration.receive]),
-		webhooks: Object.freeze([...declaration.webhooks]),
-		send: Object.freeze([...declaration.send])
-	});
-};
-
-/** The replay window a binding gets when it does not name one: five minutes, in seconds. */
-export const WEBHOOK_DEFAULT_TOLERANCE_SECONDS = 300;
-
-/**
- * Refuses a signature specification that cannot actually verify anything.
- *
- * Both refusals are here rather than left to the runtime because both produce a route that *looks*
- * verified. A binding that names no secret would verify against an empty key, and a binding whose
- * freshness check reads a timestamp the signature does not cover would reject nothing at all: an
- * attacker replaying a captured body edits the unsigned timestamp header and the window slides with
- * them. That second one is the trap worth failing the build over — it is invisible in review, and
- * every test of it passes.
- */
-const assertVerifiableSignature = (binding: string, signature: WebhookSignatureSpec): void => {
-	if (signature.header.trim() === '') {
-		throw new TypeError(
-			`Integration ${binding} declares no signature header; there is nowhere to read the proof from.`
-		);
-	}
-	if (signature.secret.env.trim() === '') {
-		throw new TypeError(
-			`Integration ${binding} declares no signature secret; verification against an empty key accepts a digest anybody can compute.`
-		);
-	}
-	const template = signature.signedPayload ?? '{body}';
-	if (!template.includes('{body}')) {
-		throw new TypeError(
-			`Integration ${binding} signs a payload template that omits {body}, so the signature would not cover the delivery at all.`
-		);
-	}
-	if (signature.timestamp !== undefined && !template.includes('{timestamp}')) {
-		throw new TypeError(
-			`Integration ${binding} reads a timestamp for replay defence but signs a payload that omits {timestamp}. An unsigned timestamp is attacker-controlled, so the freshness window would refuse nothing.`
-		);
-	}
-	if (signature.toleranceSeconds !== undefined && !(signature.toleranceSeconds > 0)) {
-		throw new TypeError(
-			`Integration ${binding} declares a replay window of ${signature.toleranceSeconds}s; a window that is not positive refuses every delivery including the live one.`
-		);
-	}
-	if (
-		Object.hasOwn(signature.timestamp ?? {}, 'parameter') &&
-		signature.parameter === undefined &&
-		signature.prefix === undefined
-	) {
-		// Stripe's shape: both values live in one `k=v,k=v` header, so the signature has to be named too.
-		throw new TypeError(
-			`Integration ${binding} reads its timestamp from a parameter of ${signature.header} but does not say which parameter carries the signature.`
-		);
-	}
-};
 export type { PrivateEnvReference, HttpConnection } from './contracts-schema.js';
-import type { HttpConnection, PrivateEnvReference } from './contracts-schema.js';
-/** An absolute API root without a trailing slash; plain HTTP only for this machine's own names. */
-export const checkedBaseUrl = (value: string): string => {
-	const url = new URL(value);
-	if (
-		url.protocol !== 'https:' &&
-		url.hostname !== 'localhost' &&
-		!url.hostname.endsWith('.localhost') &&
-		url.hostname !== '127.0.0.1'
-	) {
-		throw new TypeError('Connection URLs must use HTTPS outside localhost development.');
-	}
-	return url.toString().replace(/\/$/, '');
-};
-
-/** Owns define connection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const defineConnection = <const Connection extends HttpConnection>(
-	connection: Connection
-): Connection => {
-	if (
-		(connection.authentication?.type === 'header' &&
-			connection.authentication.header.trim() === '') ||
-		(connection.authentication?.type === 'query' && connection.authentication.name.trim() === '')
-	) {
-		throw new TypeError('Header and query authentication require a non-empty name.');
-	}
-	if (typeof connection.baseUrl !== 'string') {
-		if (connection.baseUrl.env.trim() === '')
-			throw new TypeError('A connection base URL variable needs a name.');
-		return Object.freeze({ ...connection });
-	}
-	return Object.freeze({ ...connection, baseUrl: checkedBaseUrl(connection.baseUrl) });
-};
-
-/**
- * Declares one inbound binding, with the record type flowing from `input` into everything that
- * reads a record.
- *
- * The builder exists for inference and nothing else. `receive` is a `Record<string, …>` in the
- * collection's `Integrations` type, and a record's value type cannot vary per key — so an inline
- * object literal gets `never` for its record parameter and `(vendor) => vendor.external_code` fails
- * to compile on a perfectly correct declaration. Wrapping the binding in a generic function is how
- * `defineAgentTool` and `defineCustomType` already solve the same problem.
- *
- * What is checked, and where: `input` fixes the record type; `identity.value`, `resolve` and `map`
- * are then checked against it here, and `map`'s *return* is checked against the collection's insert
- * type by the `satisfies Integrations` on the module's default export. `Resolved` is inferred from
- * `resolve` alone — `map`'s second parameter is a `NoInfer` position — so a `map` that reads the
- * resolution wrongly is an error at `map` rather than a silently widened `resolve`.
- */
-type InboundResolution<Resolved, E = never> =
-	| Effect.Effect<Resolved, E, never>
-	// repository-health:allow EFF2 -- Inbound integrations accept third-party async resolvers and the runtime immediately lifts this Promise branch into Effect.
-	| Promise<Resolved>
-	| Resolved;
-
-interface InboundBinding<Record_, Encoded, Row, Resolved, E = never> {
-	readonly input: Schema.Codec<Record_, Encoded>;
-	readonly records?: PullRecordsSpec;
-	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
-	readonly resolve?: (context: {
-		readonly records: ReadonlyArray<Record_>;
-		readonly api: Api;
-	}) => InboundResolution<Resolved, E>;
-	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
-}
-
-interface PullBinding<Record_, Encoded, Row, Resolved, E = never> extends InboundBinding<
-	Record_,
-	Encoded,
-	Row,
-	Resolved,
-	E
-> {
-	readonly pull: PullRequestSpec;
-}
-
-interface WebhookBinding<Record_, Encoded, Row, Resolved, E = never> extends InboundBinding<
-	Record_,
-	Encoded,
-	Row,
-	Resolved,
-	E
-> {
-	readonly webhook: WebhookRequestSpec;
-}
-
-export const definePull = <Record_, Encoded, Row, Resolved = undefined, E = never>(
-	binding: PullBinding<Record_, Encoded, Row, Resolved, E>
-): typeof binding => binding;
-
-/**
- * Declares one *pushed* inbound binding — a route the source delivers to, verified before it counts.
- *
- * The same builder-for-inference reason as `definePull`, and the same three record-typed members:
- * `input` fixes the record type, `identity.value` and `map` are checked against it here, and `map`'s
- * return is checked against the collection's insert type by the `satisfies Integrations` on the
- * module's default export.
- *
- * What is different is that the specification is checked *now*, at authoring time, rather than
- * carried and hoped for. A pull that is misdeclared fails visibly on its next run: it fetches
- * nothing, or it fetches and rejects every record, and the report says so. A webhook that is
- * misdeclared fails invisibly in the only direction that matters — it accepts. So the two
- * declarations that would produce a route that looks verified and is not (no secret, or a freshness
- * check over an unsigned timestamp) throw here, where the workspace is compiled, rather than
- * degrading quietly at delivery time.
- *
- * `map` is still pure and synchronous, and `resolve` is what lets a binding fill a required `uuid`
- * foreign key anyway — the limit that once killed the field-operations `jobs` webhook. It runs once
- * per delivery with an `api`, and its result is `map`'s second argument, so a body carrying a site
- * *code* becomes a row carrying a `site_id`. One lookup per delivery, not one per event in it.
- */
-export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined, E = never>(
-	binding: WebhookBinding<Record_, Encoded, Row, Resolved, E>
-): typeof binding => {
-	if (binding.webhook.path.trim() === '') {
-		throw new TypeError(
-			'A webhook binding requires a path: a route with no path is a route nothing can deliver to.'
-		);
-	}
-	if (binding.identity.column.trim() === '') {
-		throw new TypeError(
-			'A webhook binding requires an identity column: webhook delivery is at-least-once, so without one a redelivery becomes a second row.'
-		);
-	}
-	assertVerifiableSignature(binding.webhook.path, binding.webhook.signature);
-	return binding;
-};
-
-/**
- * Declares one *outbound* binding — a row changed here, so a request goes out about it.
- *
- * The builder exists for the same inference reason `definePull` does, and for one more: `on` is
- * where the row type has to land. `Row` flows into the trigger predicates and into `body`, so an
- * author writes `(context) => context.record.status === 'shipped'` and gets a checked field access
- * rather than `never`.
- *
- * What this deliberately does **not** offer is a hook that fires the request. `on` is a predicate
- * evaluated on the write path, and `body` is a pure function of the event; both are synchronous and
- * neither may reach the network, because the alternative is every tenant write waiting on somebody
- * else's availability. The request is queued in the same transaction as the row and drained
- * afterwards, which is why the delivery contract is at-least-once rather than exactly-once: an HTTP
- * boundary cannot be crossed exactly once, and a platform that claimed it would be lying about the
- * one case it exists to handle.
- */
-interface SendBinding<Row> {
-	readonly send: SendRequestSpec;
-	readonly on:
-		| 'create'
-		| 'update'
-		| 'delete'
-		| {
-				readonly create?: (context: { readonly record: Row }) => boolean;
-				readonly update?: (context: { readonly previous: Row; readonly record: Row }) => boolean;
-				readonly delete?: (context: { readonly record: Row }) => boolean;
-		  };
-	readonly body?: (event: {
-		readonly operation: 'create' | 'update' | 'delete';
-		readonly record: Row;
-		readonly previous?: Row;
-	}) => unknown;
-	readonly settle?: (answer: {
-		readonly status: number;
-		readonly body: unknown;
-	}) => Partial<Row> | undefined;
-}
-
-export const defineSend = <Row>(binding: SendBinding<Row>): typeof binding => {
-	const on: unknown = binding.on;
-	if (
-		isTriggerShape(on) &&
-		Reflect.get(on, 'create') === undefined &&
-		Reflect.get(on, 'update') === undefined &&
-		Reflect.get(on, 'delete') === undefined
-	) {
-		throw new TypeError(
-			'A send binding subscribes to no collection event, so nothing could ever queue a delivery for it.'
-		);
-	}
-	return binding;
-};
 
 /** The MCP server and remote tool behind one entry in the agent's ordinary tool registry. */
 export const McpToolRoute = Schema.Struct({
@@ -1270,6 +865,7 @@ export interface WorkspaceDefinition {
 	/** Runtime Skill declarations; shared package bytes are named by the release capability index. */
 	readonly skills: ReadonlyArray<SkillDeclaration>;
 	readonly automations: ReadonlyArray<AutomationDeclaration>;
+	readonly channels: ReadonlyArray<ChannelDeclaration>;
 	readonly envoys: ReadonlyArray<EnvoyDeclaration>;
 	readonly integrations: ReadonlyArray<IntegrationDeclaration>;
 	readonly requiredFacilities: ReadonlyArray<FacilityName>;
@@ -1303,6 +899,7 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 		definition.tools,
 		definition.skills,
 		definition.automations,
+		definition.channels,
 		definition.envoys,
 		definition.integrations
 	];
@@ -1310,6 +907,17 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 		const names = registry.map(({ name }) => name);
 		if (new Set(names).size !== names.length)
 			throw new TypeError(`Workspace ${definition.name} contains duplicate declarations.`);
+	}
+	const envoyChannels = new Set<string>();
+	for (const declared of definition.envoys) {
+		const channel = definition.channels.find(({ name }) => name === declared.channel);
+		if (channel === undefined)
+			throw new TypeError(`Envoy ${declared.name} speaks on channel ${declared.channel}, which is not declared in src/channels.`);
+		if (!CONVERSATION_TRANSPORTS.includes(channel.transport))
+			throw new TypeError(`Envoy ${declared.name}: channel ${channel.name} is ${channel.transport}, which carries no conversation.`);
+		if (envoyChannels.has(channel.name))
+			throw new TypeError(`Channel ${channel.name} has more than one envoy; one consumer per channel.`);
+		envoyChannels.add(channel.name);
 	}
 	if (new Set(definition.requiredFacilities).size !== definition.requiredFacilities.length) {
 		throw new TypeError(`Workspace ${definition.name} contains duplicate required facilities.`);

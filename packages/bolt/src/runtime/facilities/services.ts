@@ -21,6 +21,8 @@ import type {
 	SyncCommitResponse,
 	TaskRequest,
 	TaskResponse,
+	TransactionalMailRequest,
+	TransactionalMailResponse,
 	TransportRequest,
 	TransportResponse
 } from '@norbital-ai/bolt-protocol';
@@ -149,6 +151,33 @@ const CommunicationLayers = {
 export const Communication = Object.freeze({
 	Service: CommunicationService,
 	layer: CommunicationLayers.make
+});
+
+/**
+ * Transactional mail: sign-in codes and invitations, a host facility with its own binding. Never a
+ * channel, and never reachable from a tenant command.
+ */
+export type MailInterface = Readonly<{
+	readonly execute: (
+		effectId: EffectId,
+		request: TransactionalMailRequest
+	) => Effect.Effect<TransactionalMailResponse, BoundFacilityError>;
+}>;
+const MailService = Context.Service<MailInterface>('@norbital-ai/bolt/TransactionalMail');
+export const Mail = Object.freeze({
+	Service: MailService,
+	layer: (
+		binding: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse> | undefined,
+		context: CallContext
+	) =>
+		Layer.succeed(
+			MailService,
+			MailService.of({
+				execute: Effect.fn('Mail.execute')((id, request) =>
+					invokeBinding('mail', binding, context, id, request)
+				)
+			})
+		)
 });
 
 /** Provider connector capability bound by the host. */

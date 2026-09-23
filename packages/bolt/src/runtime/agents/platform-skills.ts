@@ -56,7 +56,9 @@ src/
   datatypes/<name>/+definition.ts + +renderer.svelte  named domain values
   apps/+<app>.svelte              an app surface
   automations/+<name>.ts          durable, after-commit work
-  envoys/+<name>.ts               a channel persona
+  channels/+<name>.ts             a communication endpoint: inbox, email, whatsapp, telegram, http
+  envoys/+<name>.ts               an agent persona on one conversation channel
+  integrations/+<name>.ts         records kept consistent with an external system
   functions/+<name>.ts            request/response handlers
   i18n/messages.en.json + messages.zh.json  bilingual catalogs (both required)
 \`\`\`
@@ -172,10 +174,13 @@ titles are listed with the skill) instead of the whole skill. What the reference
 does not exist: never read the installed \`@norbital-ai\` packages to look for more — a missing
 capability is an answer to give, not a thing to find.
 
-Notifications are declared, never sent from code. A \`+collection.ts\` carries
-\`notifications: { committed: [{ channel: 'inbox', recipients: ({ action }) => [{ team: 'R&D' }],
-message: ({ ids }) => ({ title, body }) }] }\` (events: \`committed\`, and the approval events);
-recipients are user ids or \`{ team }\`; \`inbox\` is the only channel. The builders receive only
+Notifications reach people only through a declared person channel (\`src/channels/+inbox.ts\` is
+\`defineChannel({ transport: 'inbox' })\`; an email or chat channel works the same). A
+\`+collection.ts\` carries \`notifications: { committed: [{ channel: 'inbox', recipients: ({ action })
+=> [{ team: 'R&D' }], message: ({ ids }) => ({ title, body }) }] }\` (events: \`committed\`, and the
+approval events); recipients are user ids or \`{ team }\`; \`channel\` names a declared person
+channel. An automation calls \`api.notify({ key, recipients, title, body, via: ['inbox'] })\` —
+\`via\` is required, and with no person channel declared \`api.notify\` does not exist. The builders receive only
 \`{ action, collection, ids, requestor, approval? }\` — never the row's values — so a message says
 what happened and where to look, and the detail lives in the row. Work that must notify on a
 schedule writes a row of a collection whose rule fans out; a listing belongs in that row.

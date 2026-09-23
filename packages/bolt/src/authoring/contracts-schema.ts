@@ -15,8 +15,9 @@ import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './aut
 import type { AuthoredRefusal } from './refusal.js';
 import type { CollectionInputOf, CollectionOperationDeclaration } from './collection-schema.js';
 import type { CollectionSearch } from '@norbital-ai/std/collection';
+import type { ConversationChannel } from './channels-schema.js';
 
-/** A pull or webhook connection's environment binding, validated by `defineConnection`. */
+/** An environment binding a connection or webhook secret names, validated by `http.source`. */
 export interface PrivateEnvReference {
 	readonly env: string;
 }
@@ -628,7 +629,7 @@ export type SchemaQueryRow<
 > = Omit<SelectColumns<SchemaRow<S, N>, Config>, keyof WithRows<S, N, Config>> &
 	WithRows<S, N, Config>;
 
-type MutationInsertFor<
+export type MutationInsertFor<
 	S extends AnySchema,
 	N extends TableName<S>
 > = S['tables'][N]['$inferInsert'];
@@ -986,170 +987,11 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 			| ReadonlyArray<DeclaredCreate<DeclaredCollection<N>>>;
 	};
 };
-type CollectionEventTrigger<S extends AnySchema, N extends TableName<S>> =
-	| 'create'
-	| 'update'
-	| 'delete'
-	| {
-			readonly create?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
-			readonly update?: (context: {
-				readonly previous: SchemaRow<S, N>;
-				readonly record: SchemaRow<S, N>;
-			}) => boolean;
-			readonly delete?: (context: { readonly record: SchemaRow<S, N> }) => boolean;
-	  };
-/**
- * The request half of an outbound binding: where a delivery goes and how hard the platform tries.
- *
- * `path` may carry `{column}` tokens, filled from the **stored record** and percent-encoded — a
- * `PUT /orders/{external_id}` is otherwise inexpressible, and every real update-or-delete API needs
- * the external key in the URL. They are read off the row the platform wrote, never off the body an
- * author's `body` function produced, for the same reason an inbound identity is read through the
- * declared `identity` and never from the payload: a value the delivery itself supplies is a value
- * the delivery gets to choose.
- *
- * `retry` is the pull's own spec, reused rather than restated: the two policies are the same policy
- * (a 429 or a 5xx is worth asking again, a 4xx never is), and one attempt count means one place to
- * read when a partner complains.
- *
- * `idempotencyHeader` names the header the platform's own delivery key rides in. Outbound delivery
- * here is **at-least-once**, so the key is what lets a receiver collapse a repeat; it is derived
- * from the outbox row and is byte-identical across every retry of that row.
- */
-export type SendRequestSpec = {
-	readonly method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-	readonly path: string;
-	readonly headers?: Readonly<Record<string, string>>;
-	readonly retry?: PullRetrySpec;
-	/** Defaults to `idempotency-key`. */
-	readonly idempotencyHeader?: string;
-};
-
-/**
- * One outbound binding: a row changed here, so something is told about it there.
- *
- * `on` decides which writes are worth telling anyone about, and the predicate form is evaluated on
- * the write path — it is pure and synchronous by construction, like a binding's `map`, because
- * anything else would put a tenant's write behind somebody else's I/O.
- *
- * `body` builds the payload at the moment of the event, and the payload is stored with the queued
- * delivery rather than recomputed at send time. That is what makes a delivery mean "this happened"
- * instead of "here is the current state": a row updated twice sends two bodies, and a row deleted
- * after an update still sends the update it caused. It defaults to
- * `{ event, collection, id, record }` when a binding declares none.
- */
-type CollectionSendBinding<S extends AnySchema, N extends TableName<S>> = {
-	readonly on: CollectionEventTrigger<S, N>;
-	readonly send: SendRequestSpec;
-	readonly body?: (event: {
-		readonly operation: 'create' | 'update' | 'delete';
-		readonly record: SchemaRow<S, N>;
-		readonly previous?: SchemaRow<S, N>;
-	}) => unknown;
-	/**
-	 * What the receiver's answer says about the record, written back onto it: the id a provider
-	 * assigned, the reference an ERP numbered it with — or, on a final refusal (a 4xx, or a 5xx after
-	 * the last retry), why it was refused. Called once per delivery that ends with an answer; read
-	 * `status` to tell the two apart. `undefined` records nothing. Pure, like `body`.
-	 */
-	readonly settle?: (answer: {
-		readonly status: number;
-		readonly body: unknown;
-	}) => Partial<MutationInsertFor<S, N>> | undefined;
-};
-/**
- * Where the platform sends the cursor it kept, and where it reads the next one from.
- *
- * `send` is omitted for a feed that has no incremental mode: the binding then re-reads the whole
- * source every run, which is a full refresh, and the idempotent upsert is what makes that cheap
- * rather than destructive.
- */
-export type PullCursorSpec = {
-	readonly send: { readonly query: string } | { readonly header: string };
-	readonly next:
-		| { readonly header: string }
-		| { readonly field: string }
-		/**
-		 * The same read as `field`, for a cursor the source buried in an envelope.
-		 *
-		 * Present because `field` alone could only reach the top level, and an enveloped body is the
-		 * common case rather than the exotic one — Crossref answers `{ message: { next-cursor } }` and
-		 * MediaWiki answers `{ continue: { apcontinue } }`. A top-level-only read does not fail loudly
-		 * against either: it finds nothing, reports no next page, and the run silently stops after one.
-		 */
-		| { readonly path: ReadonlyArray<string> }
-		/** The greatest value of this field across the records just read — the usual `updated_at` watermark. */
-		| { readonly maxOf: string };
-};
-
-/**
- * How the source pages, in the four shapes real APIs actually use.
- *
- * `max` bounds the run: a paging bug on either side must cost one run, not an unbounded loop
- * against someone else's API.
- */
-export type PullPagesSpec =
-	| {
-			readonly style: 'page';
-			readonly pageQuery: string;
-			readonly sizeQuery?: string;
-			readonly size?: number;
-			readonly firstPage?: number;
-			readonly max?: number;
-	  }
-	| {
-			readonly style: 'offset';
-			readonly offsetQuery: string;
-			readonly limitQuery: string;
-			readonly size: number;
-			readonly max?: number;
-	  }
-	| {
-			readonly style: 'cursor';
-			readonly query: string;
-			readonly next:
-				| { readonly header: string }
-				| { readonly field: string }
-				| { readonly path: ReadonlyArray<string> };
-			readonly max?: number;
-	  }
-	| { readonly style: 'link-header'; readonly max?: number };
-
 /** Retry with exponential backoff. `Retry-After` on a 429 or 503 wins over the computed delay. */
 export type PullRetrySpec = {
 	readonly attempts: number;
 	readonly initialDelayMs?: number;
 	readonly maxDelayMs?: number;
-};
-
-/** The request half of a pull binding: everything needed to ask the source for the next batch. */
-export type PullRequestSpec = {
-	/** Cron, in the host's scheduler. Carried into the manifest so the host can register the job. */
-	readonly schedule: string;
-	readonly method?: 'GET' | 'POST';
-	readonly path: string;
-	readonly query?: Readonly<Record<string, string>>;
-	readonly headers?: Readonly<Record<string, string>>;
-	readonly body?: unknown;
-	readonly cursor?: PullCursorSpec;
-	readonly pages?: PullPagesSpec;
-	readonly retry?: PullRetrySpec;
-};
-
-/** Where the records live in a response body. Omitted when the body *is* the array. */
-export type PullRecordsSpec = { readonly field: string } | { readonly path: ReadonlyArray<string> };
-
-/**
- * What makes the sync idempotent, stated as a column of this collection.
- *
- * `column` is the collection's own external-key column and `value` reads that key off one decoded
- * record. Every run matches on it, so a re-run updates the row it wrote last time instead of
- * inserting a second one — and the guarantee is visible in the schema (put a unique index on the
- * column) rather than buried in a handler.
- */
-type PullIdentitySpec = {
-	readonly column: string;
-	readonly value: (record: never) => string;
 };
 
 /**
@@ -1165,8 +1007,8 @@ type PullIdentitySpec = {
  * - Stripe — `Stripe-Signature: t=<ts>,v1=<hex>` over `<ts>.<body>`, timestamp inside the same
  *   header. `{ header, parameter: 'v1', timestamp: { parameter: 't' }, signedPayload: '{timestamp}.{body}' }`.
  *
- * `secret` is a vault reference and never a literal, for the reason `defineConnection` already
- * refuses a literal bearer token: a secret written into a workspace is a secret in the artifact.
+ * `secret` is a vault reference and never a literal, as a connection token is: a secret written
+ * into a workspace is a secret in the artifact.
  *
  * `signedPayload` is the template the source signed, over the **raw request body** — `{body}` is
  * the bytes as they arrived, not a re-serialisation of the parsed JSON. Those are different strings
@@ -1176,7 +1018,7 @@ type PullIdentitySpec = {
  *
  * `timestamp` is the replay defence, and it is only a defence when the timestamp is *inside*
  * `signedPayload`: a timestamp the signature does not cover is a value the attacker replaying the
- * body can set to whatever they like. `defineWebhook` refuses that combination rather than
+ * body can set to whatever they like. `http.source` refuses that combination rather than
  * accepting a declaration whose freshness check does nothing.
  */
 export type WebhookSignatureSpec = {
@@ -1197,144 +1039,6 @@ export type WebhookSignatureSpec = {
 	/** How far out of date a delivery may be, in seconds. Defaults to 300. */
 	readonly toleranceSeconds?: number;
 };
-
-/**
- * The push half of an inbound binding: where the delivery lands and what makes it trustworthy.
- *
- * `signature` is not optional. A route that accepts an unsigned body is an unauthenticated write
- * port into a collection, and this codebase has already shipped one of those once.
- *
- * `eventIdHeader` names the header carrying the source's own delivery id — `X-GitHub-Delivery`,
- * `X-Shopify-Event-Id`, the field-operations template's `x-dispatch-event-id`. It is used for the
- * delivery ledger's key, so a redelivery of the same event is recognised as the same delivery
- * before any record is read. It is a *header* and never a body field, because the body is the thing
- * under suspicion; when it is absent the platform keys the ledger on the verified digest instead,
- * which is a value only somebody holding the secret could have produced.
- */
-export type WebhookRequestSpec = {
-	/** The route the host mounts for this binding, relative to the workspace's webhook root. */
-	readonly path: string;
-	readonly signature: WebhookSignatureSpec;
-	readonly eventIdHeader?: string;
-};
-
-/**
- * What every inbound binding shares, whichever direction the bytes travel.
- *
- * `input` is the schema for **one record**, not for the whole body. A whole-body schema cannot
- * express partial failure — one malformed vendor in a page of five hundred fails the decode and
- * discards the other four hundred and ninety-nine — so the platform selects the records first and
- * decodes each one on its own, keeping the good ones and reporting the rest. It is the one part of
- * the pull's design that transferred to push unchanged, and it is the reason a webhook carrying a
- * batch of events does not lose the batch to one bad member.
- *
- * The row a record becomes is decided by the nearest declaration that says so: `map` here if the
- * binding declares one, otherwise the collection's `import` pipeline if it has one, otherwise the
- * decoded record itself.
- *
- * `map` is still `(record) => Row` — pure and synchronous, with no `api` and no Effect — because a
- * function called once per record must not be allowed to reach the database. `resolve` is what
- * lifts the limitation that used to follow from that: it runs **once for the whole batch**, holds
- * an `api`, and hands `map` whatever it looked up as a second argument. So a record carrying a
- * foreign *code* can become a `uuid` foreign key, and an import of five thousand rows costs one
- * lookup rather than five thousand.
- *
- * The arithmetic is the whole reason it is shaped this way. A per-record `api` reads beautifully on
- * ten rows and, at a round trip of roughly 250ms, turns a 5,000-row import into about twenty
- * minutes of sequential waiting for one foreign key and twice that for two. A per-batch step turns
- * the same import into one query per page.
- *
- * A code that resolves to nothing is not this step's failure — `resolve` succeeded, the code simply
- * is not there — so `map` refuses that record by throwing, and the platform rejects that record and
- * keeps its siblings. `resolve` itself failing is a batch failure, because a database that will not
- * answer is not attributable to any one record and the run should be retried rather than have its
- * cursor advanced past records nothing was written for.
- */
-type CollectionInboundBinding<S extends AnySchema, N extends TableName<S>> = {
-	readonly input: Schema.Codec<unknown, unknown>;
-	readonly records?: PullRecordsSpec;
-	readonly identity: PullIdentitySpec;
-	/**
-	 * One lookup for the whole batch, whose result is handed to every `map` call.
-	 *
-	 * `records` is the decoded batch — every record that survived the schema and produced an
-	 * identity — so the step sees exactly the set that is about to be written and can gather its
-	 * keys in one `in (…)`.
-	 */
-	readonly resolve?: (context: {
-		readonly records: ReadonlyArray<never>;
-		readonly api: Api<S>;
-	}) => unknown;
-} & (
-	| {
-			readonly existingOnly?: false;
-			readonly map?: (record: never, resolved: never) => MutationInsertFor<S, N>;
-	  }
-	| {
-			/**
-			 * Enriches rows this collection already has and never creates one: `map` states only the
-			 * columns this source owns, and a record whose identity matches no row is skipped. For a
-			 * source that knows more things than this collection keeps — an ERP's whole material master
-			 * onto the parts one desk carries.
-			 */
-			readonly existingOnly: true;
-			readonly map: (record: never, resolved: never) => Partial<MutationInsertFor<S, N>>;
-	  }
-);
-
-/** One inbound binding driven by the platform's own scheduler. */
-type CollectionPullBinding<S extends AnySchema, N extends TableName<S>> = CollectionInboundBinding<
-	S,
-	N
-> & {
-	readonly pull: PullRequestSpec;
-	readonly webhook?: never;
-};
-
-/**
- * One inbound binding driven by the source, which pushes.
- *
- * `identity` is required here for the same reason it is required on a pull, and it matters more:
- * webhook delivery is at-least-once by design — every provider retries on a non-2xx and several
- * retry on a timeout they caused themselves — so a binding without an identity would turn one event
- * into as many rows as the source felt like sending. The identity is read from the decoded record
- * and stamped into the identity column by the platform, never taken from whatever the record claims
- * its primary key is.
- */
-type CollectionWebhookBinding<
-	S extends AnySchema,
-	N extends TableName<S>
-> = CollectionInboundBinding<S, N> & {
-	readonly webhook: WebhookRequestSpec;
-	readonly pull?: never;
-};
-
-/**
- * One inbound binding: a pull the platform schedules, or a webhook the source pushes.
- *
- * The two are one union rather than two sibling maps because they are the same authoring question —
- * how does this collection learn about the outside world — answered two ways, and because the half
- * that is genuinely shared (`input`, `identity`, `records`, `map`) is the half that took the longest
- * to get right. `pull` and `webhook` are mutually exclusive: a binding is scheduled or it is pushed,
- * and the `never` on each side makes declaring both a compile error rather than a silent precedence
- * rule.
- */
-type CollectionReceiveBinding<S extends AnySchema, N extends TableName<S>> =
-	CollectionPullBinding<S, N> | CollectionWebhookBinding<S, N>;
-
-export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> = Readonly<
-	Record<
-		string,
-		{
-			/** The complete authority this static integration principal holds. Empty means no data access. */
-			readonly policies: ReadonlyArray<PolicyName>;
-			/** Omitted by an integration that only receives pushed deliveries: there is nothing to request. */
-			readonly connection?: HttpConnection;
-			readonly receive?: Readonly<Record<string, CollectionReceiveBinding<S, N>>>;
-			readonly send?: Readonly<Record<string, CollectionSendBinding<S, N>>>;
-		}
-	>
->;
 
 /**
  * The exact prepared JavaScript value a write rule decides against.
@@ -1422,8 +1126,11 @@ export type PolicyDecisionApi<S extends AnySchema = DefaultWorkspaceSchema> = Re
  * There is no `agent` back-pointer either. An envoy *is* the agent.
  */
 export interface EnvoyDefinition {
-	/** How it is reached: `telegram`, `whatsapp`. Not what it may do. */
-	readonly transport: string;
+	/**
+	 * The declared channel it speaks on (`src/channels/+<name>.ts`), not what it may do. One envoy per
+	 * channel; an `http` or `inbox` channel carries no conversation and is a type error here.
+	 */
+	readonly channel: ConversationChannel;
 	/**
 	 * Who may reach it, and whose authority a turn carries. One literal, so no combination of fields
 	 * can hand a stranger a member's authority:

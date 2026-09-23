@@ -95,6 +95,7 @@ const definition = {
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	requiredFacilities: []

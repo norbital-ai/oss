@@ -62,6 +62,7 @@ const definitionWith = (mcpServers: ReadonlyArray<string>) =>
 		],
 		teams: { operator: ['operator'] },
 		automations: [],
+		channels: [],
 		envoys: [],
 		integrations: [],
 		prompt: 'You are the MCP operations agent.',

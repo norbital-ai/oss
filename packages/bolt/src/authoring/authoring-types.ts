@@ -9,3 +9,6 @@
 export interface WorkspaceAuthoringTypes {}
 
 export interface WorkspaceTeamAuthoringTypes {}
+
+/** The declared channels map; separate so channel files can be typed against the schema. */
+export interface WorkspaceChannelAuthoringTypes {}

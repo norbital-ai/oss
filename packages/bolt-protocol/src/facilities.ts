@@ -2,6 +2,7 @@ import { Schema } from 'effect';
 import { Prompt, Response } from 'effect/unstable/ai';
 import { HostScheduleOccurrence } from './host.js';
 import { InvocationScope } from './invocation.js';
+import { PushSubscription, Transport } from './channels.js';
 import { ChangeBatch } from './sync.js';
 import { EffectId, FacilityCall, FacilityResult, ReleaseId } from './wire.js';
 
@@ -316,48 +317,75 @@ export const AIResponse = Schema.TaggedUnion({
 });
 export type AIResponse = typeof AIResponse.Type;
 
+/**
+ * What the runtime asks a host's transport adapters to do.
+ *
+ * `Send` hands one typed outbound message to the adapter for `transport`, on the binding the host
+ * provisioned for `channel`; the message was already validated against `MessageSchemas[transport]`
+ * and committed to the channel outbox, so the host performs it and answers with the provider's id.
+ * `outboxId` is the idempotency key: a retry of the same outbox row is the same send.
+ * `inReplyTo` / `references` are resolved by the runtime from the channel's own history, so an
+ * email reply lands in-thread without the host keeping thread state.
+ *
+ * `Push` is the `inbox` transport's browser push: the runtime owns the ledger and the subscriptions,
+ * the host owns the VAPID keys.
+ */
 export const CommunicationRequest = Schema.TaggedUnion({
-	VerifyInbound: { channel: Schema.NonEmptyString, envelope: Schema.Json },
-	Send: { channel: Schema.NonEmptyString, recipient: Schema.NonEmptyString, payload: Schema.Json },
-	Notify: { recipient: Schema.NonEmptyString, payload: Schema.Json },
-	Wake: { topic: Schema.NonEmptyString }
+	Send: {
+		channel: Schema.NonEmptyString,
+		transport: Transport,
+		outboxId: Schema.NonEmptyString,
+		message: Schema.Json,
+		inReplyTo: Schema.optionalKey(Schema.NonEmptyString),
+		references: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
+	},
+	Push: {
+		subscription: PushSubscription,
+		title: Schema.NonEmptyString,
+		body: Schema.String,
+		url: Schema.optionalKey(Schema.String)
+	}
 });
 export type CommunicationRequest = typeof CommunicationRequest.Type;
 
 /**
- * The notification channels a collection may declare rules on (RFC §4.5), typed per channel.
+ * Transactional mail: platform mail a workspace needs to function. A host facility, never a channel.
  *
- * `inbox` is the workspace notification ledger delivered through `Notify`: a recipient is a user
- * id, or `{ team }` — every member of that team at commit time, resolved inside the write's own
- * statement (an approval step's approvers are team names, and so is "the HR controllers"). The
- * message is a title and a body. A rule naming a channel absent here is refused at sync; the
- * catalogue is the intersection the deployment grants, and a rule cannot grant itself one.
+ * `kind` is a closed host union with host-owned templates. No tenant command reaches it and no
+ * authored type names it; it has its own provider binding, sending domain and failure mode, apart
+ * from every email channel.
+ */
+export const TransactionalMailKind = Schema.Literals(['sign_in_code', 'workspace_invitation']);
+export type TransactionalMailKind = typeof TransactionalMailKind.Type;
+export const TransactionalMailRequest = Schema.Struct({
+	kind: TransactionalMailKind,
+	to: Schema.NonEmptyString,
+	locale: Schema.optionalKey(Schema.NonEmptyString),
+	data: Schema.Record(Schema.String, Schema.Json)
+});
+export interface TransactionalMailRequest extends Schema.Schema.Type<
+	typeof TransactionalMailRequest
+> {}
+export const TransactionalMailResponse = Schema.Struct({ id: Schema.optionalKey(Schema.String) });
+export interface TransactionalMailResponse extends Schema.Schema.Type<
+	typeof TransactionalMailResponse
+> {}
+
+/**
+ * Who a notification is for: a user id, or `{ team }` — every member of that team at commit time,
+ * resolved inside the write's own statement.
  */
 export const NotificationRecipient = Schema.Union([
 	Schema.NonEmptyString,
 	Schema.Struct({ team: Schema.NonEmptyString })
 ]);
 export type NotificationRecipient = typeof NotificationRecipient.Type;
-export const NotificationChannels = {
-	inbox: {
-		recipients: Schema.Array(NotificationRecipient),
-		message: Schema.Struct({ title: Schema.NonEmptyString, body: Schema.String })
-	}
-} as const;
-export type NotificationChannel = keyof typeof NotificationChannels;
-export const NOTIFICATION_CHANNELS: ReadonlyArray<NotificationChannel> = ['inbox'];
-/**
- * The payload shape a workspace puts on a *channel* send, so the host reads the same field nobody
- * has to guess: the text.
- *
- * Email keeps `Schema.Json` — its rendering is the host mailer's business, and the OTP mail it
- * re-templates has its own shapes.
- */
-export const ChannelSendPayload = Schema.Struct({
-	text: Schema.NonEmptyString
+export const CommunicationResponse = Schema.Struct({
+	/** The provider's id for what was sent: the key its events and history rows carry. */
+	providerMessageId: Schema.optionalKey(Schema.NonEmptyString),
+	/** The body exactly as the provider rendered it, for the outbound history row. */
+	body: Schema.optionalKey(Schema.String)
 });
-export type ChannelSendPayload = Schema.Schema.Type<typeof ChannelSendPayload>;
-export const CommunicationResponse = Schema.Struct({ receipt: Schema.optionalKey(Schema.Json) });
 export interface CommunicationResponse extends Schema.Schema.Type<typeof CommunicationResponse> {}
 
 export const ConnectorRequest = Schema.Struct({
@@ -449,8 +477,8 @@ export interface HostToolCatalog extends Schema.Schema.Type<typeof HostToolCatal
  *
  * Bolt owns users, invitations, and sessions. Colony keeps only a user → organization map so the
  * organization selector can list workspaces a person already belongs to. These events are that
- * projection's input. They are a facility rather than `Communication.Notify` because Notify is a
- * message to a person; this is an observation the host stores.
+ * projection's input. They are a facility rather than a channel message because a message is for a
+ * person; this is an observation the host stores.
  */
 export const IdentityHookRequest = Schema.TaggedUnion({
 	UserInvited: {
@@ -600,6 +628,7 @@ export type FacilityBindings = Readonly<{
 	readonly files?: FacilityBinding<FileRequest, FileResponse>;
 	readonly ai?: FacilityBinding<AIRequest, AIResponse>;
 	readonly communication?: FacilityBinding<CommunicationRequest, CommunicationResponse>;
+	readonly mail?: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse>;
 	readonly connector?: FacilityBinding<ConnectorRequest, ConnectorResponse>;
 	readonly tasks?: FacilityBinding<TaskRequest, TaskResponse>;
 	readonly hostTools?: FacilityBinding<HostToolRequest, HostToolResponse>;

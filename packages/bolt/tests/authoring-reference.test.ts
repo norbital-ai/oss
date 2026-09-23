@@ -23,6 +23,8 @@ describe('the authoring reference is generated, never written', () => {
 			'Server api',
 			'Automations',
 			'Collections and notifications',
+			'Channels',
+			'Integrations',
 			'Model columns',
 			'Policies, approvals, teams',
 			'Functions'
@@ -32,7 +34,13 @@ describe('the authoring reference is generated, never written', () => {
 		expect(automations).toContain('export declare const defineAutomation');
 		const collections = AUTHORING_REFERENCE[2]!.body;
 		expect(collections).toContain('export interface CollectionLifecycleEvent');
-		expect(collections).toContain('NotificationChannels');
+		expect(collections).toContain('CollectionNotificationRule');
+		const channels = AUTHORING_REFERENCE[3]!.body;
+		expect(channels).toContain('export declare const defineChannel');
+		expect(channels).toContain('export type NotifyApi');
+		const integrations = AUTHORING_REFERENCE[4]!.body;
+		expect(integrations).toContain('export declare const defineIntegration');
+		expect(integrations).toContain('export type TwoWaySync');
 	});
 
 	it('is read by section through read_skill, and the sections are listed', async () => {

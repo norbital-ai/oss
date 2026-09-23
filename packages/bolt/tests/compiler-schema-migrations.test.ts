@@ -136,6 +136,7 @@ describe('schema plan scope', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});

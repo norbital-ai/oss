@@ -100,6 +100,7 @@ const vaultWorkspace = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({ GEOCODING_API_KEY: { label: 'Geocoding key' } })

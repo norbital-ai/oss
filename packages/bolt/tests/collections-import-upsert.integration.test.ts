@@ -27,6 +27,7 @@ const definition = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: [],
 	policies: [

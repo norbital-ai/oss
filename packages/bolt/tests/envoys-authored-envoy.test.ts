@@ -13,7 +13,7 @@ const compiledAuthoring = {
 } satisfies CompiledAuthoring;
 
 const authoredModule = {
-	transport: 'telegram',
+	channel: 'telegram',
 	audience: 'public',
 	policies: ['sales_rep'],
 	groupMessages: 'disabled',
@@ -82,7 +82,7 @@ describe('an authored Envoy declaration unit', () => {
 	it('rejects reserved names and incomplete authority declarations', () => {
 		expect(() => envoy({ name: 'web', ...authoredModule })).toThrow(/reserved/);
 		const missingDelegation = {
-			transport: 'telegram',
+			channel: 'telegram',
 			audience: 'public',
 			policies: ['sales_rep'],
 			groupMessages: 'disabled',

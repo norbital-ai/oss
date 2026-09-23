@@ -22,6 +22,7 @@ const schemaPlan = buildSchemaPlan(
 		apps: [],
 		policies: [],
 		automations: [],
+		channels: [],
 		envoys: [],
 		integrations: [],
 		prompt: '',

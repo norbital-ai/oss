@@ -60,13 +60,17 @@ const conversationFence = (
  * seed populates it through the same door. The inputs are every authored column, with no transform;
  * policy still decides who may reach them — a person writes `bolt_notifications.read` and nothing
  * else, and the browser catalog says so. `approval_request` and `requestor` are the approval
- * machine's projections, written only by it.
+ * machine's projections, written only by it; `channel_messages` is a channel's history, written only
+ * by that channel's one-way sync — it has no write contract, so no caller can reach it.
  */
 export const systemCollectionModules: Readonly<Record<string, AuthoredCollectionModule>> =
 	Object.freeze(
 		Object.fromEntries(
 			Object.entries(collections)
-				.filter(([name]) => name !== 'approval_request' && name !== 'requestor')
+				.filter(
+					([name]) =>
+						name !== 'approval_request' && name !== 'requestor' && name !== 'channel_messages'
+				)
 				.map(([name, definition]) => {
 					const columns = Object.fromEntries(
 						Object.keys(definition.fields).map((field) => [field, true as const])
@@ -123,7 +127,8 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.turn_usage,
 	collections.automation_run,
 	collections.telemetry,
-	collections.bolt_notifications
+	collections.bolt_notifications,
+	collections.channel_messages
 ]);
 
 /** Runtime-owned names, used at boundaries that must expose only a workspace's authored model. */

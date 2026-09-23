@@ -17,6 +17,7 @@ describe('compiler template generation', () => {
 			],
 			policies: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			prompt: 'You are the test workspace agent.',

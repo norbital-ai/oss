@@ -166,6 +166,7 @@ const gatedWorkspace = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: []
 });
@@ -196,7 +197,8 @@ describe('invocation provenance', () => {
 		expect(FIXED_COMMANDS).not.toContain('identity.authenticate');
 		expect(FIXED_COMMANDS).not.toContain('agents.enqueue');
 		expect(FIXED_COMMANDS).not.toContain('agents.updateVerifier');
-		expect(FIXED_COMMANDS).toContain('notifications.deliver');
+		expect(FIXED_COMMANDS).not.toContain('notifications.deliver');
+		expect(FIXED_COMMANDS).toContain('channels.drain');
 		expect(FIXED_COMMANDS).toContain('collections.resume');
 		expect(new Set(FIXED_COMMANDS).size).toBe(FIXED_COMMANDS.length);
 		expect([...FixedCommandBindings.keys()].sort()).toEqual([...FIXED_COMMANDS].sort());

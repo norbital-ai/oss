@@ -43,10 +43,10 @@ export const automationPrincipalId = (automationName: string): string =>
  *   belong to an envoy turn. Carrying it across would widen the declared envoy principal even
  *   though tenant data still requires an explicit policy.
  *
- * A `private` envoy's direct message is the one turn that does not use this: `envoys.receive`
+ * A `private` envoy's direct message is the one turn that does not use this: `Envoys.drain`
  * resolves the member's own subject instead, and still bounds it by this subject's rate limits.
  *
- * Extracted rather than left inline in `receive` so it can be asserted on directly. An invariant
+ * Extracted rather than left inline in the drain so it can be asserted on directly. An invariant
  * that can only be tested by running an agent turn is an invariant that gets tested once.
  */
 export const envoySubject = (
@@ -80,6 +80,39 @@ export const automationSubject = (
 	tenantId,
 	teamPath: [],
 	policies: [...automation.policies],
+	admin: false
+});
+
+/** The `subject_id` an integration's sync writes carry: every mirrored row names its writer. */
+export const integrationPrincipalId = (integrationName: string): string =>
+	`integration:${integrationName}`;
+
+/**
+ * The sync subject: what an integration writes as. Its authority is exactly the policies the
+ * integration declares; naming a collection in a sync is routing, not authorization.
+ */
+export const integrationSubject = (
+	integration: { readonly name: string; readonly policies: ReadonlyArray<string> },
+	tenantId: string
+): Identity.Subject => ({
+	userId: integrationPrincipalId(integration.name),
+	tenantId,
+	teamPath: [],
+	policies: [...integration.policies],
+	admin: false
+});
+
+/** The `subject_id` a channel's outbound rules read under and its event patches write under. */
+export const channelPrincipalId = (channelName: string): string => `channel:${channelName}`;
+
+export const channelSubject = (
+	channel: { readonly name: string; readonly policies: ReadonlyArray<string> },
+	tenantId: string
+): Identity.Subject => ({
+	userId: channelPrincipalId(channel.name),
+	tenantId,
+	teamPath: [],
+	policies: [...channel.policies],
 	admin: false
 });
 

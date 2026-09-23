@@ -1,58 +1,45 @@
-import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from '@norbital-ai/bolt-protocol';
 import { Clock, Context, Effect, Layer, Result, Schema } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
-import { and, asc, count, eq, inArray, isNull, lt, lte, min, or } from 'drizzle-orm';
-import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
-import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import { EffectId, type IntegrationSyncStatus, type SyncReport } from '@norbital-ai/bolt-protocol';
+import type {
+	AuthoredSync,
+	HttpRecordsSpec,
+	IntegrationDeclaration,
+	SyncDeclaration
+} from '#lib/authoring/integrations-schema.js';
+import type { HttpConnection } from '#lib/authoring/contracts-schema.js';
 import {
 	AuthoredRuntimeService,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
-	runAuthoredHandler,
-	type AuthoredRuntime
+	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
-import {
-	AI,
-	Connector,
-	Files,
-	type AIInterface,
-	type ConnectorInterface,
-	type FilesInterface
-} from '#lib/runtime/facilities/services.js';
-import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
-import * as Automations from '#lib/runtime/automations/automations.js';
+import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
+import { AI, Connector, Files } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
-import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
+import { integrationSubject } from '#lib/runtime/identity/static-identity.js';
+import {
+	canonical,
+	contentVersion,
+	localChanges,
+	mergeRemote,
+	same,
+	syncedValues,
+	versionOrder,
+	type Conflict
+} from '#lib/runtime/integrations/engine.js';
+import { place, resolveConnection, retryDelayMs, walk } from '#lib/runtime/integrations/http.js';
+import { verifyDelivery } from '#lib/runtime/integrations/signature.js';
+import { describeSourceFailure, httpSource, type SourceAdapter, type SourceFailure } from '#lib/runtime/integrations/sources.js';
+import { Secrets } from '#lib/runtime/secrets/secrets.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import {
-	composer,
-	dbNow,
-	dbNowPlusSeconds,
-	executeBuilt,
-	increment
-} from '#lib/runtime/persistence.js';
 import { describeCause } from '#lib/runtime/workspace.js';
-import {
-	runOutboxDrain,
-	DRAIN_BATCH_DEFAULT,
-	type ClaimedDelivery,
-	type DeliverDependencies
-} from '#lib/runtime/integrations/deliver.js';
-import {
-	runPullBinding,
-	type BindingReport,
-	type PullDependencies
-} from '#lib/runtime/integrations/pull.js';
-import {
-	runWebhookDelivery,
-	type LedgerState,
-	type WebhookDependencies
-} from '#lib/runtime/integrations/webhook.js';
 
-/** Carries integration error through the typed integrations failure channel without losing diagnostic context. */
-class IntegrationError extends Schema.TaggedError<IntegrationError>()('Bolt.Integrations.Error', {
+/** Carries an integration failure through its typed channel without losing the sentence. */
+export class IntegrationError extends Schema.TaggedError<IntegrationError>()('Bolt.Integrations.Error', {
 	integration: Schema.NonEmptyString,
 	message: Schema.NonEmptyString
 }) {
@@ -60,1162 +47,990 @@ class IntegrationError extends Schema.TaggedError<IntegrationError>()('Bolt.Inte
 	readonly retryable = false;
 }
 
-const DatabaseNumber = Schema.Union([Schema.Number, Schema.NumberFromString]);
-const UnknownRow = Schema.Record(Schema.String, Schema.Unknown);
-const IdentifiedJsonRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
-	Schema.Record(Schema.String, Schema.Json)
-]);
-/**
- * Whether every value a record maps to is already what the row holds.
- *
- * Compared as values, not spellings: the database answers `numeric` as `"0.28"` and an instant in
- * its own zone, where a source says `0.28` and `…Z`.
- */
-/** JSON with object keys sorted: `jsonb` hands keys back in its own order. */
-const canonical = (value: Schema.Json | undefined): string =>
-	JSON.stringify(value, (_key, inner: unknown) =>
-		inner !== null && typeof inner === 'object' && !Array.isArray(inner)
-			? Object.fromEntries(Object.entries(inner).toSorted(([a], [b]) => a.localeCompare(b)))
-			: inner
-	);
-const unchanged = (
-	row: Readonly<Record<string, Schema.Json>> | undefined,
-	values: Readonly<Record<string, Schema.Json>>
-): boolean =>
-	row !== undefined &&
-	Object.entries(values).every(([column, value]) => {
-		const current = row[column];
-		if (canonical(current) === canonical(value)) return true;
-		if (typeof current === 'string' && typeof value === 'number') return Number(current) === value;
-		if (typeof current === 'string' && typeof value === 'string') {
-			const [a, b] = [Date.parse(current), Date.parse(value)];
-			return /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(a) && a === b;
-		}
-		return false;
+type Values = Readonly<Record<string, unknown>>;
+type Failure = IntegrationError | Database.FacilityError;
+
+/** Pages one run may read before it hands the rest of a sweep to a continuation (§13.4). */
+const PAGE_BUDGET = 20;
+/** Markers one push drains before it re-queues itself. */
+const PUSH_BATCH = 50;
+/** How long one claimed run may hold a sync before another may start. */
+const LEASE_SECONDS = 600;
+const SAMPLES = 20;
+
+const syncKey = (integration: string, sync: string): string => `${integration}.${sync}`;
+
+const Row = Schema.Record(Schema.String, Schema.Unknown);
+const decodeRows = (rows: ReadonlyArray<unknown>): ReadonlyArray<Values> =>
+	rows.flatMap((row) => {
+		const decoded = Schema.decodeUnknownResult(Row)(row);
+		return Result.isSuccess(decoded) ? [decoded.success] : [];
 	});
-const DueAtRow = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
-
-/**
- * The two decoders this module applies per response, built once.
- *
- * Constructing a decoder compiles it; both of these sit on a per-record path — one per HTTP page,
- * one per imported row — so building them here keeps that cost off the loop.
- */
-const decodeIntegrationHttpResponse = Schema.decodeUnknownEffect(IntegrationHttpResponse);
-const decodePipelineRows = Schema.decodeUnknownEffect(Schema.Array(UnknownRow));
-const ClaimedDeliveryRow = Schema.Struct({
-	sequence: DatabaseNumber,
-	binding_name: Schema.String,
-	collection_name: Schema.String,
-	record_id: Schema.String,
-	operation: Schema.String,
-	path: Schema.NullOr(Schema.String),
-	payload: Schema.Json,
-	attempts: DatabaseNumber
-});
-const decodeClaimedDeliveryRow = Schema.decodeUnknownResult(ClaimedDeliveryRow);
-const CursorMap = Schema.Record(Schema.String, Schema.String);
-const InboxStatusRow = Schema.Struct({ status: Schema.String });
-const PullCursorRow = Schema.Struct({ cursor: Schema.Json });
-const FlushInput = Schema.Struct({ limit: Schema.optionalKey(Schema.Number) });
-const IntegrationStateRow = Schema.Struct({ enabled: Schema.Boolean, cursor: Schema.Json });
-const IntegrationCountRow = Schema.Struct({ count: DatabaseNumber });
-/**
- * What an operator can see about one integration without opening a database.
- *
- * `pending` and `failed` count the outbound ledger, and `failed` is the one that matters: a
- * delivery that exhausted its retries has to be *findable*, or the platform has quietly dropped
- * something a tenant believes was sent. `pending` was a hard-coded `0` for as long as there was
- * nothing to count.
- */
-const IntegrationStatus = Schema.Struct({
-	name: Schema.NonEmptyString,
-	enabled: Schema.Boolean,
-	cursor: Schema.Json,
-	pending: Schema.Number,
-	failed: Schema.Number
-});
-interface IntegrationStatus extends Schema.Schema.Type<typeof IntegrationStatus> {}
-export type Interface = Readonly<{
-	readonly install: (
-		effectId: EffectId,
-		name: string
-	) => Effect.Effect<void, IntegrationError | Database.FacilityError>;
-	/**
-	 * Runs the integration's receive bindings, or the one named by `binding`.
-	 *
-	 * `binding` exists because a schedule is declared per binding: the host registers one recurrence
-	 * per `+integrations.ts` binding and names it here, so an hourly feed and a nightly feed in the
-	 * same integration run on their own clocks instead of both on the faster one.
-	 */
-	readonly pull: (
-		effectId: EffectId,
-		name: string,
-		cursor: Schema.Json,
-		binding?: string
-	) => Effect.Effect<Schema.Json, IntegrationError | Database.FacilityError>;
-	/**
-	 * Absorbs one pushed delivery into the collection, if its signature verifies.
-	 *
-	 * `delivery.body` is the **raw request body**, as a string. It is not a convenience: the source's
-	 * digest was taken over exactly those bytes, and a re-serialisation of the parsed document is a
-	 * different string for the same JSON. Handing this a parsed payload would make verification
-	 * impossible, which is the state the previous signature — `(name, receiptId, input: Schema.Json)` —
-	 * left it in.
-	 *
-	 * The receipt is not a parameter either. It is derived from the header the binding declares or from
-	 * the verified digest, because a caller-supplied receipt is a caller-supplied dedup key.
-	 */
-	readonly receive: (
-		effectId: EffectId,
-		name: string,
-		binding: string,
-		delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string }
-	) => Effect.Effect<Schema.Json, IntegrationError | Database.FacilityError>;
-	readonly flush: (
-		effectId: EffectId,
-		name: string,
-		input: Schema.Json
-	) => Effect.Effect<Schema.Json, IntegrationError | Database.FacilityError>;
-	readonly reconcile: (
-		effectId: EffectId,
-		name: string
-	) => Effect.Effect<void, IntegrationError | Database.FacilityError>;
-	readonly disable: (
-		effectId: EffectId,
-		name: string
-	) => Effect.Effect<void, IntegrationError | Database.FacilityError>;
-	readonly status: (
-		effectId: EffectId,
-		name: string
-	) => Effect.Effect<IntegrationStatus, IntegrationError | Database.FacilityError>;
-}>;
-/** Identifies the integrations service in Effect's context so dependency wiring remains explicit and type checked. */
-export const Service = Context.Service<Interface>('@norbital-ai/bolt/Integrations');
-
-/**
- * Who an integration writes as.
- *
- * A pull is enqueued work with no person behind it, so there is no credential to carry and nothing
- * to impersonate. The subject is minted here, once, and it says what it is: the user id is
- * `integration:<name>`, so every row the mirror writes is attributable in `bolt_collection_history`
- * to the integration that wrote it rather than to whoever last touched the workspace.
- *
- * Its authority is exactly the policies the integration declaration opts into. Naming a target
- * collection in `+integrations.ts` is routing, not authorization: if none of those policies grants
- * the required read/create/update coordinate, the mirror is refused like any other principal.
- */
-const integrationSubject = (name: string, policies: ReadonlyArray<string>): Identity.Subject => ({
-	userId: `integration:${name}`,
-	tenantId: 'system',
-	teamPath: [],
-	policies: [...policies]
-});
-
-/**
- * How long one claimed pull may run before the host may start another.
- *
- * The expiry is the guarantee, not the release statement below it: a run killed by a deadline, a
- * crashed isolate or a host that lost the artifact never reaches its own release, and a lease with
- * no expiry would then stop the schedule permanently — a failure that presents as "the mirror
- * silently stopped", which is precisely the class of defect a schedule is supposed to end. Long
- * enough to cover a fifty-page pull whose every page backed off, short enough that a lost lease
- * costs one cycle of any realistic cron rather than a day of them.
- */
-const PULL_LEASE_MS = 10 * 60 * 1000;
-
-/**
- * How long a claimed delivery may stay in flight before another drain may take it back.
- *
- * The same guarantee `PULL_LEASE_MS` makes, for the same reason: a drain killed by a deadline or a
- * lost isolate never reaches its own settlement, and a claim with no expiry would leave that
- * delivery `inflight` forever — visible in `status`, and never sent. Reclaiming it costs at most a
- * duplicate delivery, which is a thing the at-least-once contract and the idempotency key already
- * account for; *not* reclaiming it costs the delivery.
- */
-const OUTBOX_CLAIM_LEASE_MS = 10 * 60 * 1000;
-
-/**
- * Which rows a drain may take: due and pending, or claimed so long ago the claimant must be gone.
- *
- * Written once and used twice — inside the candidate select and again as the outer update's
- * predicate — because those two have to agree exactly. The outer one is the concurrency arbiter: a
- * second drain that computed the same candidates from its own snapshot blocks on the row, re-checks
- * this against the version the first wrote, and finds a fresh `updated_at`.
- */
-const {
-	bolt_integrations: boltIntegrations,
-	bolt_integration_inbox: boltIntegrationInbox,
-	bolt_integration_outbox: boltIntegrationOutbox,
-	bolt_task: boltTaskTable
-} = SYSTEM_MODEL_TABLES;
-
-/** Writes one durable task row for the runtime to pick up, keyed on its effect id. */
-const enqueueTaskRow = (
-	command: string,
-	input: Schema.Json,
-	taskEffectId: string,
-	runAtEpochMs: number | undefined
-) =>
-	composer
-		.insert(boltTaskTable)
-		.values({
-			command,
-			input: JSON.stringify(input),
-			effect_id: taskEffectId,
-			...(runAtEpochMs === undefined ? {} : { run_at: new Date(runAtEpochMs).toISOString() }),
-			status: 'pending'
-		})
-		.onConflictDoNothing({ target: boltTaskTable.effect_id });
-
-const outboxClaimable = (staleBefore: ReturnType<typeof dbNowPlusSeconds>) =>
-	or(
-		eq(boltIntegrationOutbox.status, 'pending'),
-		and(
-			eq(boltIntegrationOutbox.status, 'inflight'),
-			lt(boltIntegrationOutbox.updated_at, staleBefore)
-		)
-	);
-
-/**
- * Reads `min(next_attempt_at)` back out of the facility's JSON.
- *
- * `undefined` for a null — an integration with nothing claimable — which is the case that must arm
- * no timer at all. Defensive about the type for the same reason `claimedDeliveries` is: what a
- * driver hands back for a timestamp is a string here and could be a `Date` elsewhere, and the
- * failure of guessing wrong would be a wake that never happens rather than an error anybody sees.
- */
-/**
- * An epoch instant as ISO-8601 text, for the label a follow-up task is keyed on.
- *
- * A pure conversion of an instant the row already carries — nothing here reads a clock — so it sits
- * beside `readDueAt` rather than inside the drain that uses it.
- */
-const instantLabel = (epochMs: number): string => new Date(epochMs).toISOString();
-
-/**
- * The one aggregate the due-time query answers. Read by position, not by name: the composer renders
- * `min(...)` without its alias, so the key is `min` and a read by `due_at` found nothing — and a
- * delivery that met a 503 was never looked at again.
- */
-const readDueAt = (row: Schema.Json | undefined): number | undefined => {
-	const decoded = Schema.decodeUnknownResult(DueAtRow)(row);
-	if (Result.isFailure(decoded)) return undefined;
-	const [value] = Object.values(decoded.success);
-	if (value === undefined || value === null) return undefined;
-	const parsed = Date.parse(value);
-	return Number.isFinite(parsed) ? parsed : undefined;
+const text = (value: unknown): string | null =>
+	typeof value === 'string' ? value : typeof value === 'number' ? String(value) : null;
+const numeric = (value: unknown): number => {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : 0;
 };
 
-/**
- * Reads claimed outbox rows back out of the facility's JSON.
- *
- * Defensive per field rather than decoded as a schema, for one specific reason: `sequence` is a
- * `bigint` column and drivers disagree about whether that arrives as a number or as its decimal
- * text. A decode that insisted on one would fail against one of the drivers the runtime supports,
- * and the failure would present as an empty drain rather than as a type error.
- */
-const claimedDeliveries = (rows: ReadonlyArray<Schema.Json>): ReadonlyArray<ClaimedDelivery> =>
-	rows.flatMap((row) => {
-		const decoded = decodeClaimedDeliveryRow(row);
-		if (Result.isFailure(decoded)) return [];
-		const value = decoded.success;
-		return [
-			{
-				sequence: value.sequence,
-				binding: value.binding_name,
-				collection: value.collection_name,
-				recordId: value.record_id,
-				operation: value.operation,
-				path: value.path,
-				payload: value.payload,
-				attempts: value.attempts
-			}
-		];
-	});
+type Counts = Record<
+	'matched' | 'created' | 'updated' | 'deleted' | 'pushed' | 'unmatched' | 'rejected' | 'conflicts',
+	number
+>;
+const emptyCounts = (): Counts => ({
+	matched: 0,
+	created: 0,
+	updated: 0,
+	deleted: 0,
+	pushed: 0,
+	unmatched: 0,
+	rejected: 0,
+	conflicts: 0
+});
+type Sweep = {
+	readonly id: string;
+	readonly mode: 'backfill' | 'reconcile';
+	page: number;
+	pageCursor: string | null;
+	counts: Counts;
+	samples: Record<string, Array<string>>;
+	complete: boolean;
+};
+const Sweep = Schema.Struct({
+	id: Schema.String,
+	mode: Schema.Literals(['backfill', 'reconcile']),
+	page: Schema.Number,
+	pageCursor: Schema.NullOr(Schema.String),
+	counts: Schema.Record(Schema.String, Schema.Number),
+	samples: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+	complete: Schema.Boolean
+});
 
-const cursorsOf = (value: Schema.Json): Readonly<Record<string, string>> =>
-	Result.getOrElse(Schema.decodeUnknownResult(CursorMap)(value), () => ({}));
+type Link = Readonly<{
+	readonly record_id: string;
+	readonly identity: string | null;
+	readonly status: string;
+	readonly shadow: Values;
+	readonly version: string | null;
+}>;
 
-/** Drizzle's connection-free `.toSQL()` path does not run JSONB column encoders. */
-const encodedJson = (value: Schema.Json): string => JSON.stringify(value) ?? 'null';
+/** One remote record, decoded and mapped to local form, or a tombstone. */
+type Change =
+	| Readonly<{
+			readonly kind: 'upsert';
+			readonly identity: string;
+			readonly version: string;
+			readonly values: Values;
+			readonly key?: string;
+	  }>
+	| Readonly<{ readonly kind: 'tombstone'; readonly identity: string }>;
 
-/**
- * How many rows one source record is assumed to be able to fan out into.
- *
- * A bound rather than an unbounded read: the lookup exists to find the rows a previous run wrote for
- * these keys, and a mapping that produced more than this per record would be pathological. Sizing it
- * to `keys.length` — one row per key — was the original bug, because it truncated exactly the extra
- * rows a fan-out creates.
- */
-const MAX_FAN_OUT = 64;
+/** A channel message as a channel-sourced sync reads it. */
+export type ChannelRecord = Readonly<{
+	readonly record: Values;
+	readonly identity: string;
+	readonly version: string;
+	readonly deleted: boolean;
+}>;
 
-/** A ceiling on the whole lookup, so a large batch times a wide fan-out still cannot page unboundedly. */
-const MAX_EXISTING_ROWS = 5000;
+export type Interface = Readonly<{
+	/** A scheduled or manual run: `changes` reads the delta; `reconcile` sweeps (a first one backfills). */
+	readonly run: (
+		effectId: EffectId,
+		integration: string,
+		sync: string,
+		mode: 'changes' | 'reconcile'
+	) => Effect.Effect<Schema.Json, Failure>;
+	/** Drains local intent to the source (two-way). */
+	readonly push: (effectId: EffectId, integration: string, sync: string) => Effect.Effect<Schema.Json, Failure>;
+	/** One raw webhook delivery for a sync whose source subscribes by webhook. */
+	readonly receive: (
+		effectId: EffectId,
+		integration: string,
+		sync: string,
+		delivery: Readonly<{ readonly headers: Readonly<Record<string, string>>; readonly body: string }>
+	) => Effect.Effect<Schema.Json, Failure>;
+	/** A channel's history changed: every sync sourced from it applies the change (subscribe). */
+	readonly applyChannel: (
+		effectId: EffectId,
+		channel: string,
+		records: ReadonlyArray<ChannelRecord>
+	) => Effect.Effect<void, Failure>;
+	readonly status: (effectId: EffectId) => Effect.Effect<ReadonlyArray<IntegrationSyncStatus>, Failure>;
+	readonly control: (
+		effectId: EffectId,
+		integration: string,
+		sync: string,
+		action: 'start' | 'reconcile' | 'pause' | 'resume' | 'retry'
+	) => Effect.Effect<Schema.Json, Failure>;
+}>;
+
+export const Service = Context.Service<Interface>('@norbital-ai/bolt/Integrations');
 
 type LayerServices =
 	| Workspace.Interface
-	| ConnectorInterface
 	| Database.Interface
 	| TaskQueue.Interface
-	| Automations.Interface
 	| Collections.Interface
-	| SecretsInterface
-	| AIInterface
-	| FilesInterface
-	| AuthoredRuntime;
+	| TenantScope.Interface
+	| import('#lib/runtime/facilities/services.js').ConnectorInterface
+	| import('#lib/runtime/facilities/services.js').AIInterface
+	| import('#lib/runtime/facilities/services.js').FilesInterface
+	| import('#lib/runtime/secrets/secrets.js').Interface
+	| import('#lib/runtime/collections/authored.js').AuthoredRuntime;
 
 export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 	Service,
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
-		const connector = yield* Connector.Service;
 		const database = yield* Database.Service;
 		const queue = yield* TaskQueue.Service;
-		const automations = yield* Automations.Service;
 		const collections = yield* Collections.Service;
-		const secrets = yield* Secrets.Service;
+		const tenant = yield* TenantScope.Service;
+		const connector = yield* Connector.Service;
 		const ai = yield* AI.Service;
 		const files = yield* Files.Service;
+		const secrets = yield* Secrets.Service;
 		const authored = yield* AuthoredRuntimeService;
-		const requireIntegration = Effect.fn('Integrations.require')(function* (name: string) {
-			const integration = workspace.definition.integrations.find(
-				(candidate) => candidate.name === name
-			);
-			if (integration === undefined)
-				return yield* new IntegrationError({ integration: name, message: 'Unknown integration' });
-			return integration;
+
+		const query = (effectId: EffectId, sql: string, parameters: ReadonlyArray<Schema.Json>) =>
+			database.execute(effectId, { _tag: 'Query', sql, parameters });
+		const transaction = (
+			effectId: EffectId,
+			statements: ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }>
+		) => database.execute(effectId, { _tag: 'Transaction', statements });
+
+		const refuse = (integration: string, message: string) => new IntegrationError({ integration, message });
+
+		const requireSync = Effect.fn('Integrations.requireSync')(function* (integration: string, sync: string) {
+			const declared = workspace.definition.integrations.find(({ name }) => name === integration);
+			const found = declared?.syncs.find(({ name }) => name === sync);
+			const live = authored.integrations[integration]?.[sync];
+			if (declared === undefined || found === undefined || live === undefined)
+				return yield* refuse(integration, `Unknown sync ${syncKey(integration, sync)}`);
+			return { integration: declared, sync: found, live };
 		});
 
-		/**
-		 * The physical work a pull needs, bound once to this invocation's services.
-		 *
-		 * Assembled here rather than inside `pull.ts` so the loop has no idea what a facility is: it asks
-		 * for a request and gets a response, asks for existing rows and gets a map. That is what makes
-		 * every branch of it — paging, backoff, partial failure — testable without a database.
-		 */
-		const dependencies = (integrationName: string, subject: Identity.Subject): PullDependencies => {
-			// The rows the identity lookup read, so a write that would change nothing is not made: a
-			// full re-read then costs reads and no history, and never re-fires a send binding.
-			const stored = new Map<string, Readonly<Record<string, Schema.Json>>>();
-			const integrationAuthoringApi = (effectId: EffectId) =>
-				makeAuthoringApi(makeBoundAuthoringOps(effectId, subject, collections, ai, files));
-			return {
-				request: (effectId, connectorName, descriptor) =>
-					connector
-						.execute(effectId, {
-							connector: connectorName,
-							operation: INTEGRATION_HTTP_OPERATION,
-							input: descriptor
-						})
-						.pipe(
-							Effect.flatMap((response) =>
-								decodeIntegrationHttpResponse(response.output).pipe(
-									Effect.mapError((issue) => ({
-										message: `connector answered something that is not an HTTP response: ${describeCause(issue)}`,
-										retryable: false
-									}))
-								)
-							),
-							// A facility failure the host marked retryable is a transport hiccup; one it did not is a
-							// refusal, and the retry policy needs to be able to tell them apart.
-							Effect.catch((error) =>
-								Schema.is(Database.FacilityError)(error)
-									? Effect.fail({ message: error.message, retryable: error.retryable })
-									: Effect.fail(error)
-							)
-						),
-				secret: (effectId, name) =>
-					secrets.read(effectId, name).pipe(
-						Effect.mapError((error) => ({ message: describeCause(error) })),
-						Effect.flatMap((value) =>
-							value === null
-								? Effect.fail({
-										message: `${integrationName} needs the environment variable ${name}, and the vault has no value for it`
-									})
-								: Effect.succeed(value)
-						)
-					),
-				existing: (effectId, collection, column, keys) =>
-					collections
-						.findMany(effectId, subject, {
-							collection,
-							where: { [column]: { in: [...keys] } },
-							// Not `keys.length`: a record may fan out into several rows sharing one identity value, and
-							// a limit sized for one row per key truncates the very rows that make a re-run an update
-							// rather than a duplicate. Bounded well above any sane fan-out so a runaway mapping still
-							// cannot pull an unbounded page into memory.
-							limit: Math.min(keys.length * MAX_FAN_OUT, MAX_EXISTING_ROWS)
-						})
-						.pipe(
-							Effect.map((rows) => {
-								const found = new Map<string, Array<string>>();
-								for (const row of rows) {
-									const decoded = Schema.decodeUnknownResult(IdentifiedJsonRow)(row);
-									if (Result.isFailure(decoded)) continue;
-									const key = Schema.decodeUnknownResult(Schema.String)(decoded.success[column]);
-									if (Result.isFailure(key)) continue;
-									stored.set(decoded.success.id, decoded.success);
-									const bucket = found.get(key.success);
-									if (bucket === undefined) found.set(key.success, [decoded.success.id]);
-									else bucket.push(decoded.success.id);
-								}
-								// Sorted so `before[offset]` is a stable address across runs: the derived ids do not come
-								// back from the database in any guaranteed order, and an unstable pairing would rewrite
-								// each fanned-out row into a different sibling's id on every run.
-								for (const bucket of found.values()) bucket.sort();
-								return found;
-							}),
-							Effect.mapError((error) => ({ message: describeCause(error) }))
-						),
-				remove: (effectId, collection, ids) =>
-					ids.length === 0
-						? Effect.void
-						: collections
-								.write(effectId, subject, [
-									{ collection, action: 'delete', inputs: ids.map((id) => ({ id })) }
-								])
-								.pipe(
-									Effect.asVoid,
-									Effect.mapError((error) => ({ message: describeCause(error) }))
-								),
-				write: (effectId, collection, id, values, mode) =>
-					mode === 'update' && unchanged(stored.get(id), values)
-						? Effect.void
-						: collections
-								.write(effectId, subject, [
-									{ collection, action: mode, inputs: [{ ...values, id }] }
-								])
-								.pipe(
-									Effect.asVoid,
-									Effect.mapError((error) => ({ message: describeCause(error) }))
-								),
-				pipeline: (effectId, collection, record) => {
-					const declared = authored.pipelines[collection]?.import;
-					if (declared === undefined) return undefined;
-					// One source document per call, matching the collection import surface exactly. A pipeline
-					// that refuses this document costs this record and cannot partially settle a hidden batch.
-					const api = integrationAuthoringApi(effectId);
-					return runAuthoredHandler(() => declared.handler({ input: record }, api)).pipe(
-						Effect.flatMap(decodePipelineRows),
-						Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
-					);
-				},
-				resolve: (effectId, run) => {
-					// The same api a hook and an import pipeline receive, built through the same two functions, so
-					// a batch lookup queries under exactly the integration's own subject and nothing wider.
-					const api = integrationAuthoringApi(effectId);
-					// `catchCause` rather than `catch`: a rejected promise or a genuine throw arrives here as a
-					// defect because `runAuthoredHandler` dies on one, and either would otherwise escape as an
-					// unhandled defect and take down a run that should have failed with a sentence naming the
-					// integration. A synchronous throw no longer needs the `suspend` it used to — the handler is
-					// invoked inside `runAuthoredHandler` now, not in its argument position.
-					return runAuthoredHandler(() => run(api)).pipe(
-						Effect.catchCause((cause) =>
-							Effect.fail({
-								message: `${integrationName} failed to resolve a batch: ${describeCause(cause)}`
-							})
-						)
-					);
-				},
-				sleep: (milliseconds) => Effect.sleep(milliseconds),
-				now: Clock.currentTimeMillis
-			};
-		};
+		const subjectOf = (integration: IntegrationDeclaration): Identity.Subject =>
+			integrationSubject(integration, tenant.tenantId);
 
-		/**
-		 * The physical work a pushed delivery needs, which is the pull's set plus the delivery ledger.
-		 *
-		 * Built on top of `dependencies` rather than beside it, so the secret a webhook verifies against is
-		 * resolved by literally the same function that resolves a pull's bearer token: one vault read, one
-		 * "the vault has no value for it" message, one place where a missing secret is refused. A second
-		 * resolver would be a second place for the two to disagree about what a configured secret is.
-		 */
-		const webhookDependencies = (
-			integrationName: string,
-			subject: Identity.Subject
-		): WebhookDependencies => {
-			const bound = dependencies(integrationName, subject);
-			return {
-				existing: bound.existing,
-				remove: bound.remove,
-				write: bound.write,
-				pipeline: bound.pipeline,
-				resolve: bound.resolve,
-				secret: bound.secret,
-				now: bound.now,
-				/**
-				 * Records the delivery and answers what the ledger held before.
-				 *
-				 * `on conflict do nothing ... returning` is the arbiter rather than a preceding `select`,
-				 * because providers retry in parallel and two concurrent deliveries of one event would both
-				 * read an empty table and both absorb. Postgres returns a row only to the insert that won, so
-				 * exactly one caller sees `new`.
-				 */
-				remember: (effectId, entry) =>
-					executeBuilt(
-						effectId,
-						database,
-						composer
-							.insert(boltIntegrationInbox)
-							.values({
-								integration_name: integrationName,
-								binding_name: entry.binding,
-								receipt_id: entry.receiptId,
-								payload: encodedJson(entry.payload),
-								status: 'pending'
-							})
-							.onConflictDoNothing({
-								target: [boltIntegrationInbox.integration_name, boltIntegrationInbox.receipt_id]
-							})
-							.returning({ receipt_id: boltIntegrationInbox.receipt_id })
-					).pipe(
-						Effect.flatMap((inserted): Effect.Effect<LedgerState, Database.FacilityError> =>
-							inserted.rows.length === 1
-								? Effect.succeed('new')
-								: executeBuilt(
-										effectId,
-										database,
-										composer
-											.select({ status: boltIntegrationInbox.status })
-											.from(boltIntegrationInbox)
-											.where(
-												and(
-													eq(boltIntegrationInbox.integration_name, integrationName),
-													eq(boltIntegrationInbox.receipt_id, entry.receiptId)
-												)
-											)
-											.limit(1)
-									).pipe(
-										Effect.map((existing) => {
-											const status = Schema.decodeUnknownResult(InboxStatusRow)(existing.rows[0]);
-											// Anything other than a recorded `absorbed` is treated as unfinished and
-											// absorbed again. The upsert makes that harmless, and the opposite default
-											// would silently drop the redelivery meant to finish an interrupted batch.
-											return Result.isSuccess(status) && status.success.status === 'absorbed'
-												? 'absorbed'
-												: 'pending';
-										})
-									)
-						),
-						Effect.mapError((error) => ({ message: describeCause(error) }))
-					),
-				settle: (effectId, entry) =>
-					executeBuilt(
-						effectId,
-						database,
-						composer
-							.update(boltIntegrationInbox)
-							.set({ status: 'absorbed', processed_at: dbNow() })
-							.where(
-								and(
-									eq(boltIntegrationInbox.integration_name, entry.integration),
-									eq(boltIntegrationInbox.receipt_id, entry.receiptId)
-								)
-							)
-					).pipe(
-						Effect.asVoid,
-						Effect.mapError((error) => ({ message: describeCause(error) }))
-					)
-			};
-		};
-
-		/**
-		 * The physical work a drain needs: the pull's request and credential, plus the outbound ledger.
-		 *
-		 * Built on `dependencies` for the reason `webhookDependencies` is — the credential a send presents
-		 * is resolved by literally the same function that resolves a pull's bearer token, so a
-		 * header-authenticated connection cannot work in one direction and not the other.
-		 */
-		const deliverDependencies = (integrationName: string): DeliverDependencies => {
-			const declared = workspace.definition.integrations.find(
-				(integration) => integration.name === integrationName
-			);
-			const bound = dependencies(
-				integrationName,
-				integrationSubject(integrationName, declared?.policies ?? [])
-			);
-			return {
-				request: bound.request,
-				secret: bound.secret,
-				now: bound.now,
-				/**
-				 * Claims the next due deliveries and marks them in flight, in one statement.
-				 *
-				 * Two things are happening here and both are load-bearing.
-				 *
-				 * The inner `distinct on (collection_name, record_id)` is the **ordering guarantee**: only the
-				 * lowest pending sequence for each record is ever a candidate, so two updates to one row go
-				 * out in the order they happened and the second waits while the first is backing off. The
-				 * due-time filter is applied *after* that pick rather than inside it — filtering first would
-				 * skip a record's backing-off head and select the delivery behind it, which is exactly the
-				 * silent reordering this is written to prevent.
-				 *
-				 * The outer `outboxClaimable` is the **concurrency arbiter**, and the same predicate is what
-				 * recovers an abandoned claim. A cron drain and a manual flush genuinely overlap, and both
-				 * would compute the same candidate set from their own snapshot; under read-committed the
-				 * second update blocks on the row and then re-checks this predicate against the version the
-				 * first one wrote, sees a fresh `updated_at`, and skips. A drain that instead *died* leaves
-				 * the same `inflight` row with an `updated_at` that keeps ageing, so the lease expires and
-				 * the next drain takes it back rather than leaving it queued forever.
-				 */
-				claim: (effectId, integrationName_, limit) => {
-					const staleBefore = dbNowPlusSeconds(-OUTBOX_CLAIM_LEASE_MS / 1000);
-					const heads = composer
-						.selectDistinctOn(
-							[boltIntegrationOutbox.collection_name, boltIntegrationOutbox.record_id],
-							{
-								sequence: boltIntegrationOutbox.sequence,
-								next_attempt_at: boltIntegrationOutbox.next_attempt_at
-							}
-						)
-						.from(boltIntegrationOutbox)
-						.where(
-							and(
-								eq(boltIntegrationOutbox.integration_name, integrationName_),
-								outboxClaimable(staleBefore)
-							)
-						)
-						.orderBy(
-							asc(boltIntegrationOutbox.collection_name),
-							asc(boltIntegrationOutbox.record_id),
-							asc(boltIntegrationOutbox.sequence)
-						)
-						.as('head');
-					const candidates = composer
-						.select({ sequence: heads.sequence })
-						.from(heads)
-						.where(lte(heads.next_attempt_at, dbNow()))
-						.orderBy(asc(heads.sequence))
-						.limit(limit);
-					return executeBuilt(
-						effectId,
-						database,
-						composer
-							.update(boltIntegrationOutbox)
-							.set({
-								status: 'inflight',
-								attempts: increment(boltIntegrationOutbox.attempts),
-								updated_at: dbNow()
-							})
-							.where(
-								and(
-									inArray(boltIntegrationOutbox.sequence, candidates),
-									outboxClaimable(staleBefore)
-								)
-							)
-							.returning({
-								sequence: boltIntegrationOutbox.sequence,
-								binding_name: boltIntegrationOutbox.binding_name,
-								collection_name: boltIntegrationOutbox.collection_name,
-								record_id: boltIntegrationOutbox.record_id,
-								operation: boltIntegrationOutbox.operation,
-								path: boltIntegrationOutbox.path,
-								payload: boltIntegrationOutbox.payload,
-								attempts: boltIntegrationOutbox.attempts
-							})
-					).pipe(
-						// Sorted here rather than trusted from `returning`, which has no defined order: the
-						// drain delivers in the order it reads, so an unsorted batch would undo the ordering the
-						// claim just went to the trouble of establishing.
-						Effect.map((result) =>
-							claimedDeliveries(result.rows).toSorted(
-								(left, right) => left.sequence - right.sequence
-							)
-						),
-						Effect.mapError((error) => ({ message: describeCause(error) }))
-					);
-				},
-				answered: (effectId, delivery, answer) => {
-					const settle = authored.integrations[integrationName]?.send[delivery.binding]?.settle;
-					if (settle === undefined) return Effect.void;
-					return Effect.try({
-						try: () => settle({ status: answer.status, body: answer.body }),
-						catch: (cause) => ({ message: describeCause(cause) })
-					}).pipe(
-						Effect.flatMap((patch) =>
-							patch === undefined || patch === null || typeof patch !== 'object'
-								? Effect.void
-								: bound.write(
-										EffectId.make(`${effectId}:answered:${delivery.sequence}`),
-										delivery.collection,
-										delivery.recordId,
-										patch as Readonly<Record<string, Schema.Json>>,
-										'update'
-									)
-						)
-					);
-				},
-				settle: (effectId, settlement) => {
-					const changes =
-						settlement._tag === 'Delivered'
-							? {
-									status: 'delivered',
-									delivered_at: dbNow(),
-									last_status: settlement.status,
-									last_error: null,
-									updated_at: dbNow()
-								}
-							: settlement._tag === 'Retry'
-								? {
-										// Back to `pending` with a future due time. The backoff lives in the row rather
-										// than in a sleep, so a partner that is down for an hour costs an hour of ticks
-										// and not an invocation held open until a host's deadline kills it.
-										status: 'pending',
-										next_attempt_at: dbNowPlusSeconds(settlement.delayMs / 1000),
-										last_status: settlement.status,
-										last_error: settlement.reason,
-										updated_at: dbNow()
-									}
-								: {
-										status: 'failed',
-										last_status: settlement.status,
-										last_error: settlement.reason,
-										updated_at: dbNow()
-									};
-					return executeBuilt(
-						effectId,
-						database,
-						composer
-							.update(boltIntegrationOutbox)
-							.set(changes)
-							.where(eq(boltIntegrationOutbox.sequence, settlement.sequence))
-					).pipe(
-						Effect.asVoid,
-						Effect.mapError((error) => ({ message: describeCause(error) }))
-					);
-				}
-			};
-		};
-
-		/**
-		 * Claims the exclusive right to pull this integration, and reads the resumption point with it.
-		 *
-		 * One statement rather than a read followed by a write, because the two-statement version is the
-		 * race: with the schedule now firing pulls on its own clock, a slow run and the next tick overlap,
-		 * both read the same stored cursor, and the one that finishes second persists a cursor computed
-		 * from a page the first had already moved past. Nothing errors; the mirror just re-reads the same
-		 * window forever.
-		 *
-		 * Returns `null` when another run holds the lease — `on conflict do update ... where` updates no
-		 * row and therefore returns none, so "somebody else is pulling" and "I now hold it" are told
-		 * apart by the row count rather than by a second query that could be stale by the time it runs.
-		 */
-		const claimPull = Effect.fn('Integrations.claimPull')(function* (
-			effectId: EffectId,
-			name: string
-		) {
-			const leaseUntil = dbNowPlusSeconds(PULL_LEASE_MS / 1000);
-			const result = yield* executeBuilt(
-				effectId,
-				database,
-				composer
-					.insert(boltIntegrations)
-					.values({ name, enabled: true, cursor: null, lease_until: leaseUntil })
-					.onConflictDoUpdate({
-						target: boltIntegrations.name,
-						set: { lease_until: leaseUntil },
-						setWhere: or(
-							isNull(boltIntegrations.lease_until),
-							lt(boltIntegrations.lease_until, dbNow())
-						)!
-					})
-					.returning({ cursor: boltIntegrations.cursor })
-			);
-			const row = result.rows[0];
-			if (row === undefined) return null;
-			return yield* Schema.decodeUnknownEffect(PullCursorRow)(row).pipe(
-				Effect.mapError(
-					() =>
-						new IntegrationError({
-							integration: name,
-							message: 'Pull lease query returned an invalid cursor row'
-						})
+		const secretReader = (integration: string) => (effectId: EffectId, name: string) =>
+			secrets.read(effectId, name).pipe(
+				Effect.mapError((error) => ({ message: describeCause(error) })),
+				Effect.flatMap((value) =>
+					value === null || value === ''
+						? Effect.fail({ message: `${integration} needs the environment variable ${name}, and the vault has no value for it` })
+						: Effect.succeed(value)
 				)
 			);
+
+		/** The source adapter one sync calls. A channel source reads the channel's own history. */
+		const sourceFor = (integration: IntegrationDeclaration, sync: SyncDeclaration, live: AuthoredSync): SourceAdapter => {
+			if (sync.source === 'http') {
+				const spec = live.spec as HttpRecordsSpec<unknown> & { readonly connection: HttpConnection };
+				return httpSource(connector, (effectId) => resolveConnection(secretReader(integration.name), effectId, spec.connection), spec);
+			}
+			const channel = sync.channel!;
+			return {
+				list: (effectId, page) =>
+					Effect.gen(function* () {
+						const after = page ?? '';
+						const rows = yield* query(
+							effectId,
+							`select provider_message_id, version, direction, envelope, deleted_at from channel_messages where channel = $1 and provider_message_id > $2 ${channel.inbound ? "and direction = 'inbound'" : ''} order by provider_message_id limit 200`,
+							[channel.name, after]
+						).pipe(Effect.mapError((error): SourceFailure => ({ message: error.message, retryable: error.retryable })));
+						const decoded = decodeRows(rows.rows);
+						const last = text(decoded.at(-1)?.['provider_message_id']);
+						return {
+							records: decoded.map((row) => ({
+								...(row['envelope'] as Values),
+								direction: row['direction'],
+								__version: row['version'],
+								__deleted: row['deleted_at'] !== null
+							})),
+							...(decoded.length === 200 && last !== null ? { next: last } : {})
+						};
+					})
+			};
+		};
+
+		/** Reads one remote record into a change: decode, identity, mapping, version. */
+		const changeOf = (
+			sync: SyncDeclaration,
+			live: AuthoredSync,
+			record: unknown,
+			resolved: unknown
+		): Change => {
+			const spec = live.spec as Partial<HttpRecordsSpec<unknown>>;
+			const decoded =
+				live.record === undefined ? record : Schema.decodeUnknownSync(live.record)(record);
+			const identity =
+				sync.source === 'channel'
+					? text(walk(decoded, 'messageId'))
+					: text(walk(decoded, spec.identity));
+			if (identity === null || identity === '') throw new Error('the record carries no identity');
+			const deleted =
+				sync.source === 'channel'
+					? walk(decoded, '__deleted') === true
+					: spec.deleted !== undefined && Boolean(walk(decoded, spec.deleted));
+			if (deleted) return { kind: 'tombstone', identity };
+			const values: Record<string, unknown> = { [sync.identity]: identity };
+			for (const [column, mapping] of Object.entries(live.fields)) {
+				values[column] =
+					typeof mapping === 'string'
+						? walk(decoded, mapping) ?? null
+						: (mapping.in as (remote: unknown, context: { readonly resolve: unknown }) => unknown)(decoded, { resolve: resolved });
+			}
+			const version =
+				sync.source === 'channel'
+					? String(walk(decoded, '__version'))
+					: spec.version === undefined
+						? contentVersion(values)
+						: String(walk(decoded, spec.version) ?? contentVersion(values));
+			const key =
+				spec.idempotencyKey !== undefined && 'field' in spec.idempotencyKey
+					? text(walk(decoded, spec.idempotencyKey.field))
+					: null;
+			return { kind: 'upsert', identity, version, values, ...(key === null ? {} : { key }) };
+		};
+
+		/** The body a local row pushes: each pushed field placed at its remote path. */
+		const remoteBody = (sync: SyncDeclaration, live: AuthoredSync, values: Values): Record<string, unknown> => {
+			const body: Record<string, unknown> = {};
+			for (const { column, pushed } of sync.fields) {
+				if (!pushed || !(column in values)) continue;
+				const mapping = live.fields[column]!;
+				if (typeof mapping === 'string') place(body, mapping, values[column]);
+				else if (mapping.out !== undefined && mapping.field !== undefined)
+					place(body, mapping.field, (mapping.out as (local: unknown) => unknown)(values[column]));
+			}
+			return body;
+		};
+
+		const linksFor = Effect.fn('Integrations.links')(function* (
+			effectId: EffectId,
+			key: string,
+			column: 'identity' | 'record_id',
+			values: ReadonlyArray<string>
+		) {
+			if (values.length === 0) return new Map<string, Link>();
+			const rows = yield* query(
+				effectId,
+				`select record_id, identity, status, shadow, version from bolt_integration_links where sync = $1 and ${column} = any($2::text[])`,
+				[key, [...values]]
+			);
+			return new Map(
+				decodeRows(rows.rows).map((row) => {
+					const link: Link = {
+						record_id: String(row['record_id']),
+						identity: text(row['identity']),
+						status: String(row['status']),
+						shadow: (row['shadow'] as Values | null) ?? {},
+						version: text(row['version'])
+					};
+					return [String(row[column]), link] as const;
+				})
+			);
 		});
 
-		return Service.of({
-			install: Effect.fn('Integrations.install')(function* (effectId, name) {
-				yield* requireIntegration(name);
-				yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.insert(boltIntegrations)
-						.values({ name, enabled: true, cursor: null })
-						.onConflictDoUpdate({
-							target: boltIntegrations.name,
-							set: { enabled: true }
-						})
-				);
-				// The first pull is durable work the runtime wrote itself; arm the host timer for it.
-				const pullEffectId = `${effectId}:pull`;
-				const now = yield* Clock.currentTimeMillis;
-				yield* queue.wake(EffectId.make(`${pullEffectId}:wake`), now);
-				yield* executeBuilt(
-					effectId,
-					database,
-					enqueueTaskRow('integrations.pull', { name, cursor: null }, pullEffectId, undefined)
-				);
-			}),
-			/**
-			 * Runs every receive binding this integration declares, and returns what each one did.
-			 *
-			 * `cursor` is an override, not the resumption point: pass `null` — which is what the enqueued
-			 * task carries — and each binding resumes from the cursor the last run persisted. Pass a
-			 * `{ binding: cursor }` object to replay from a chosen point, which is what a backfill is.
-			 *
-			 * A binding that fails does not stop the ones after it, and the cursor is written for every
-			 * binding that got as far as reading a page. The report is the return value rather than a log
-			 * line because "the pull ran" and "the pull imported nothing" look identical from the outside,
-			 * and only one of them is fine.
-			 *
-			 * `binding` narrows the run to one, which is what the host's schedule sends: each binding
-			 * declares its own cron and is registered on its own. A run that could not claim the lease
-			 * answers `skipped: true` rather than failing — the next tick of a cron is not an error, and a
-			 * scheduled pull that reported failure every time a longer one was still running would page
-			 * somebody nightly about a system working exactly as designed.
-			 */
-			pull: Effect.fn('Integrations.pull')(function* (effectId, name, cursor, binding) {
-				const integration = yield* requireIntegration(name);
-				const module: AuthoredIntegrationModule | undefined = authored.integrations[name];
-				if (module === undefined) {
-					return yield* new IntegrationError({
-						integration: name,
-						message: `${name} is declared but its authored module did not reach the runtime`
-					});
-				}
-				const selected =
-					binding === undefined
-						? integration.receive
-						: integration.receive.filter((candidate) => candidate.name === binding);
-				// A schedule that names a binding the workspace no longer declares is a broken registration,
-				// not an empty run: reporting "0 bindings, no failures" would look identical to a feed that
-				// had nothing new, and the host would never learn its registration had gone stale.
-				if (selected.length === 0) {
-					return yield* new IntegrationError({
-						integration: name,
-						message: `${name} declares no receive binding named ${String(binding)}`
-					});
-				}
-				const claim = yield* claimPull(effectId, name);
-				if (claim === null) {
-					return {
-						integration: name,
-						collection: integration.collection,
-						skipped: true,
-						reason: 'another run of this integration still holds the pull lease',
-						bindings: [],
-						failures: []
-					};
-				}
-				const overrides = cursorsOf(cursor);
-				const stored = cursorsOf(claim.cursor);
-				const subject = integrationSubject(name, integration.policies);
-				const bound = dependencies(name, subject);
-				const reports: Array<BindingReport> = [];
-				const failures: Array<{ readonly binding: string; readonly reason: string }> = [];
-				for (const declared of selected) {
-					const authoredBinding = module.receive[declared.name];
-					if (authoredBinding === undefined) {
-						failures.push({
-							binding: declared.name,
-							reason: 'the authored binding did not reach the runtime'
-						});
-						continue;
-					}
-					const from = overrides[declared.name] ?? stored[declared.name] ?? null;
-					const outcome = yield* Effect.result(
-						runPullBinding(bound, effectId, integration, declared, authoredBinding, from)
-					);
-					if (Result.isFailure(outcome)) {
-						failures.push({ binding: declared.name, reason: outcome.failure.message });
-						continue;
-					}
-					reports.push(outcome.success);
-				}
-				// Only what this run advanced. Everything else comes from the cursor snapshot acquired with
-				// this run's exclusive lease, so a binding this run did not touch keeps its stored position.
-				const cursors: Record<string, string> = {};
-				for (const report of reports)
-					if (report.cursor !== null) cursors[report.binding] = report.cursor;
-				yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.update(boltIntegrations)
-						.set({
-							cursor: encodedJson({ ...stored, ...cursors }),
-							lease_until: null,
-							updated_at: dbNow()
-						})
-						.where(eq(boltIntegrations.name, name))
-				);
-				return {
-					integration: name,
-					collection: integration.collection,
-					skipped: false,
-					// Stated as `null` rather than omitted, so both shapes this function returns have the same
-					// keys and a reader never has to tell "no reason" from "a key this branch does not carry".
-					reason: null,
-					bindings: reports.map((report) => ({
-						...report,
-						rejected: report.rejected.map(({ index, reason }) => ({ index, reason }))
-					})),
-					failures
-				};
-			}),
-			/**
-			 * Absorbs one pushed delivery, if it proves it came from the source.
-			 *
-			 * The signature is the credential. Everything else about a webhook is attacker-controlled by
-			 * construction: the route is public, the body is whatever was posted, and the headers are
-			 * whatever was sent. So the only question worth asking first is whether the bytes carry a digest
-			 * that only a holder of the declared secret could have produced, and this refuses before it
-			 * reads anything if they do not.
-			 *
-			 * `body` is a string and not the parsed document, and that is not an inconvenience to route
-			 * around — it is the requirement. The digest was taken over the exact bytes the source sent, and
-			 * `JSON.stringify(JSON.parse(body))` is a different string for the same document. The previous
-			 * shape of this method took `input: Schema.Json` and a caller-supplied `receiptId`, which could
-			 * not have verified anything even if there had been code here to verify it with.
-			 *
-			 * Nothing here trusts the caller for identity either. The receipt is derived from a header the
-			 * source set or from the verified digest, and each record's identity is read through the
-			 * binding's declared `identity` — never from a field the body nominates.
-			 */
-			receive: Effect.fn('Integrations.receive')(function* (effectId, name, bindingName, delivery) {
-				const integration = yield* requireIntegration(name);
-				const binding = integration.webhooks.find((candidate) => candidate.name === bindingName);
-				if (binding === undefined) {
-					// Named rather than fallen through to a generic handler. A route that answers "fine" for a
-					// binding nobody declared is the shape of the unauthenticated command port this codebase
-					// already shipped once.
-					return yield* new IntegrationError({
-						integration: name,
-						message: `${name} declares no webhook binding named ${bindingName}`
-					});
-				}
-				const module: AuthoredIntegrationModule | undefined = authored.integrations[name];
-				const authoredBinding = module?.receive[bindingName];
-				if (authoredBinding === undefined) {
-					return yield* new IntegrationError({
-						integration: name,
-						message: `${name}.${bindingName} is declared but its authored binding did not reach the runtime`
-					});
-				}
-				const subject = integrationSubject(name, integration.policies);
-				const report = yield* runWebhookDelivery(
-					webhookDependencies(name, subject),
-					effectId,
-					integration,
-					binding,
-					authoredBinding,
-					delivery
-				).pipe(
-					Effect.mapError(
-						(error) => new IntegrationError({ integration: name, message: error.message })
-					)
-				);
-				return { integration: name, collection: integration.collection, ...report };
-			}),
-			/**
-			 * Drains this integration's outbox: the sending half of the pattern.
-			 *
-			 * Nothing here decides *whether* to send. That was decided on the write path, inside the same
-			 * transaction as the row, by the binding's own trigger — so by the time this runs the queue is
-			 * a list of facts about writes that already committed, and this is only responsible for getting
-			 * them there and recording what happened.
-			 *
-			 * That split is the answer to the question a send binding actually poses. A hook firing the
-			 * request inline is the obvious shape and the wrong one: every create in the collection would
-			 * then wait on a partner's response time, a partner's outage would present to a tenant as a
-			 * failed write, and a crash between the commit and the request would lose the event with no
-			 * trace. Enqueue-then-drain costs a delay — a delivery is sent on the next drain rather than in
-			 * the same millisecond — and that is the price of the other three properties.
-			 *
-			 * `input` may narrow the batch (`{ limit }`). It carries no delivery identity and no payload:
-			 * what is sent is what the write path queued, and a caller that could name a delivery could
-			 * replay one.
-			 */
-			flush: Effect.fn('Integrations.flush')(function* (effectId, name, input) {
-				const integration = yield* requireIntegration(name);
-				if (integration.send.length === 0) {
-					// Refused rather than answered with an empty report, for the reason a scheduled pull
-					// refuses a binding the workspace no longer declares: "drained nothing" and "there is
-					// nothing here that could ever be drained" look identical from a host's side, and a
-					// registration pointing at a removed binding should be discoverable.
-					return yield* new IntegrationError({
-						integration: name,
-						message: `${name} declares no send binding, so it has no outbox to flush.`
-					});
-				}
-				const decodedInput = Schema.decodeUnknownResult(FlushInput)(input);
-				const limit = Result.isSuccess(decodedInput)
-					? (decodedInput.success.limit ?? DRAIN_BATCH_DEFAULT)
-					: DRAIN_BATCH_DEFAULT;
-				const report = yield* runOutboxDrain(
-					deliverDependencies(name),
-					effectId,
-					integration,
-					limit
-				).pipe(
-					Effect.mapError(
-						(error) => new IntegrationError({ integration: name, message: error.message })
-					)
-				);
-				/**
-				 * The drain schedules its own return, which is what replaced the minute cron.
-				 *
-				 * A delivery that met a 503 is due again at its own `next_attempt_at`, and something has to
-				 * come back and look. That something used to be a fixed `* * * * *` registration per sending
-				 * integration — 1440 wakes a day against the tenant's database whether or not anything was
-				 * ever queued. Now the only thing that comes back is a task due at the exact instant the
-				 * earliest backoff expires, so an integration with nothing pending costs nothing at all and
-				 * one that is backing off costs one wake per backoff rather than sixty per hour.
-				 *
-				 * Read after the drain rather than before it, so it sees what this drain just settled: a
-				 * delivery that succeeded is no longer claimable and does not pull the next wake earlier.
-				 */
-				const pending = yield* executeBuilt(
-					EffectId.make(`${effectId}:due`),
-					database,
-					composer
-						.select({ due_at: min(boltIntegrationOutbox.next_attempt_at) })
-						.from(boltIntegrationOutbox)
-						.where(
-							and(
-								eq(boltIntegrationOutbox.integration_name, name),
-								outboxClaimable(dbNowPlusSeconds(-OUTBOX_CLAIM_LEASE_MS / 1000))
-							)
-						)
-				);
-				const dueAt = readDueAt(pending.rows[0]);
-				if (dueAt !== undefined) {
-					const taskId = `flush:${name}@${instantLabel(dueAt)}`;
-					// Keyed on the instant rather than on this invocation, so two drains that both find the
-					// same next backoff queue one task between them instead of two. The row is written by
-					// the runtime itself and the host timer is armed before it commits.
-					yield* queue
-						.wake(EffectId.make(`${effectId}:next-wake`), dueAt)
-						.pipe(
-							Effect.mapError(
-								(error) => new IntegrationError({ integration: name, message: error.message })
-							)
-						);
-					yield* executeBuilt(
-						EffectId.make(`${effectId}:next`),
-						database,
-						enqueueTaskRow('integrations.flush', { name }, taskId, dueAt)
-					).pipe(
-						Effect.mapError(
-							(error) => new IntegrationError({ integration: name, message: error.message })
-						)
-					);
-				}
-				return {
-					integration: report.integration,
-					collection: report.collection,
-					claimed: report.claimed,
-					delivered: report.delivered,
-					retrying: report.retrying,
-					failed: report.failed,
-					deliveries: report.deliveries.map((delivery) => ({ ...delivery }))
-				};
-			}),
-			reconcile: Effect.fn('Integrations.reconcile')(function* (effectId, name) {
-				yield* requireIntegration(name);
-				// A reconcile is a full re-read: the cursor is cleared first, so the enqueued pull starts
-				// from the beginning and the idempotent upsert absorbs everything it has already seen.
-				yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.update(boltIntegrations)
-						.set({ cursor: null })
-						.where(eq(boltIntegrations.name, name))
-				);
-				// The pull is durable work the runtime wrote itself; arm the host timer for it.
-				const now = yield* Clock.currentTimeMillis;
-				yield* queue.wake(EffectId.make(`${effectId}:pull-wake`), now);
-				yield* executeBuilt(
-					effectId,
-					database,
-					enqueueTaskRow('integrations.pull', { name, cursor: null }, `${effectId}:pull`, undefined)
-				);
-			}),
-			disable: Effect.fn('Integrations.disable')(function* (effectId, name) {
-				yield* requireIntegration(name);
-				yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.update(boltIntegrations)
-						.set({ enabled: false })
-						.where(eq(boltIntegrations.name, name))
-				);
-			}),
-			status: Effect.fn('Integrations.status')(function* (effectId, name) {
-				yield* requireIntegration(name);
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ enabled: boltIntegrations.enabled, cursor: boltIntegrations.cursor })
-						.from(boltIntegrations)
-						.where(eq(boltIntegrations.name, name))
-						.limit(1)
-				);
-				const record = Result.getOrElse(
-					Schema.decodeUnknownResult(IntegrationStateRow)(result.rows[0]),
-					() => ({ enabled: false, cursor: null })
-				);
-				// The outbound queue's depth, counted rather than assumed. `inflight` counts as pending
-				// because a drain that died mid-batch left rows in it, and reporting those as neither
-				// pending nor failed is how a stuck queue looks empty.
-				const pendingRows = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ count: count() })
-						.from(boltIntegrationOutbox)
-						.where(
-							and(
-								eq(boltIntegrationOutbox.integration_name, name),
-								inArray(boltIntegrationOutbox.status, ['pending', 'inflight'])
-							)
-						)
-				);
-				const failedRows = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ count: count() })
-						.from(boltIntegrationOutbox)
-						.where(
-							and(
-								eq(boltIntegrationOutbox.integration_name, name),
-								eq(boltIntegrationOutbox.status, 'failed')
-							)
-						)
-				);
-				const pending = Result.getOrElse(
-					Schema.decodeUnknownResult(IntegrationCountRow)(pendingRows.rows[0]),
-					() => ({ count: 0 })
-				).count;
-				const failed = Result.getOrElse(
-					Schema.decodeUnknownResult(IntegrationCountRow)(failedRows.rows[0]),
-					() => ({ count: 0 })
-				).count;
-				return {
-					name,
-					enabled: record.enabled,
-					cursor: record.cursor,
-					pending,
-					failed
-				};
-			})
+		/** Local rows by id or by the identity column, read as the sync subject. */
+		const localRows = Effect.fn('Integrations.localRows')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			column: string,
+			values: ReadonlyArray<string>
+		) {
+			if (values.length === 0) return new Map<string, Values>();
+			const rows = yield* collections
+				.findMany(effectId, subject, { collection, where: { [column]: { in: [...values] } }, limit: values.length * 2 })
+				.pipe(Effect.mapError((error) => refuse(subject.userId, describeCause(error))));
+			return new Map(decodeRows(rows).map((row) => [String(row[column]), row] as const));
 		});
+
+		const write = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			action: 'create' | 'update' | 'delete',
+			inputs: ReadonlyArray<Values>
+		) =>
+			inputs.length === 0
+				? Effect.void
+				: collections.write(effectId, subject, [{ collection, action, inputs }]).pipe(
+						Effect.asVoid,
+						Effect.mapError((error) => refuse(subject.userId, `${action} ${collection} refused: ${describeCause(error)}`))
+					);
+
+		/** The marker statement: one pending push per record, coalescing later edits into it. */
+		const markStatement = (key: string, recordIds: ReadonlyArray<string>) => ({
+			sql: `insert into bolt_integration_pushes (id, sync, record_id) select md5($1 || ':' || r)::uuid, $1, r from unnest($2::text[]) as r on conflict (sync, record_id) do update set revision = bolt_integration_pushes.revision + 1, status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()`,
+			parameters: [key, [...recordIds]] as ReadonlyArray<Schema.Json>
+		});
+		const pushTask = (integration: string, sync: string, label: string) => ({
+			sql: `insert into bolt_task (command, input, effect_id, status) values ('integrations.push', $1::jsonb, $2, 'pending') on conflict (effect_id) do nothing`,
+			parameters: [JSON.stringify({ integration, sync }), `integrations.push:${syncKey(integration, sync)}:${label}`] as ReadonlyArray<Schema.Json>
+		});
+
+		const logConflicts = (key: string, recordId: string, conflicts: ReadonlyArray<Conflict>) =>
+			conflicts.map((conflict) => ({
+				sql: `insert into bolt_integration_conflicts (sync, record_id, field, base, local, remote, rule, winner) values ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8)`,
+				parameters: [
+					key,
+					recordId,
+					conflict.field,
+					canonical(conflict.base),
+					canonical(conflict.local),
+					canonical(conflict.remote),
+					conflict.rule,
+					conflict.winner
+				] as ReadonlyArray<Schema.Json>
+			}));
+
+		/**
+		 * Applies one page of remote changes (§8.1): idempotent, version-guarded, adopting existing
+		 * rows by identity before creating any, writing as the sync subject and updating the shadow
+		 * with the row. Returns what it did, for the sweep's report.
+		 */
+		const applyChanges = Effect.fn('Integrations.applyChanges')(function* (
+			effectId: EffectId,
+			integration: IntegrationDeclaration,
+			sync: SyncDeclaration,
+			changes: ReadonlyArray<Change>,
+			sweepId: string | null,
+			counts: Counts,
+			samples: Record<string, Array<string>>
+		) {
+			const key = syncKey(integration.name, sync.name);
+			const subject = subjectOf(integration);
+			const sample = (kind: string, identity: string) => {
+				const bucket = (samples[kind] ??= []);
+				if (bucket.length < SAMPLES) bucket.push(identity);
+			};
+			const identities = changes.map(({ identity }) => identity);
+			const links = yield* linksFor(EffectId.make(`${effectId}:links`), key, 'identity', identities);
+			const unlinked = identities.filter((identity) => !links.has(identity));
+			const adoptable = yield* localRows(EffectId.make(`${effectId}:adopt`), subject, sync.collection, sync.identity, unlinked);
+			// A create whose answer was lost: the source stored our key, so the pending row is found by it.
+			const keyed = changes.flatMap((change) =>
+				change.kind === 'upsert' && change.key !== undefined && !links.has(change.identity) ? [change.key] : []
+			);
+			const pendingByKey = yield* linksFor(EffectId.make(`${effectId}:keyed`), key, 'record_id', keyed);
+			const linkedIds = [...links.values(), ...pendingByKey.values()].map(({ record_id }) => record_id);
+			const rows = yield* localRows(EffectId.make(`${effectId}:rows`), subject, sync.collection, 'id', linkedIds);
+			const now = yield* Clock.currentTimeMillis;
+
+			const creates: Array<Values> = [];
+			const updates: Array<Values> = [];
+			const deletes: Array<Values> = [];
+			const linkRows: Array<Values> = [];
+			const unlinks: Array<string> = [];
+			const marks: Array<string> = [];
+			const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> = [];
+			const touched: Array<string> = [];
+
+			const remoteDelete = (link: Link, row: Values | undefined, identity: string) => {
+				const edited = row !== undefined && Object.keys(localChanges(sync, link.shadow, row)).length > 0;
+				if (sync.direction === 'two_way' && edited && sync.deletes === 'edit_wins') {
+					statements.push(...logConflicts(key, link.record_id, [{ field: '*', base: link.shadow, local: row, remote: null, rule: 'remote_wins', winner: 'local' }]));
+					counts.conflicts += 1;
+					linkRows.push({ record_id: link.record_id, identity: null, status: 'pending_link', shadow: {}, version: null, swept: sweepId });
+					marks.push(link.record_id);
+					return;
+				}
+				if (row !== undefined) deletes.push({ id: link.record_id });
+				unlinks.push(link.record_id);
+				counts.deleted += 1;
+				sample('deleted', identity);
+			};
+
+			for (const change of changes) {
+				const link = links.get(change.identity) ?? (change.kind === 'upsert' && change.key !== undefined ? pendingByKey.get(change.key) : undefined);
+				if (change.kind === 'tombstone') {
+					if (link !== undefined) remoteDelete(link, rows.get(link.record_id), change.identity);
+					continue;
+				}
+				if (link !== undefined && link.status === 'linked') {
+					const order = versionOrder(link.version, change.version);
+					if (order <= 0) {
+						touched.push(link.record_id);
+						counts.matched += 1;
+						continue;
+					}
+				}
+				const row = link === undefined ? adoptable.get(change.identity) : rows.get(link.record_id);
+				if (link !== undefined && row === undefined) {
+					// Linked but gone locally: a local delete waiting to push. The rule decides.
+					if (sync.direction === 'two_way' && sync.deletes === 'delete_wins') {
+						marks.push(link.record_id);
+						continue;
+					}
+					creates.push({ id: link.record_id, ...change.values });
+					linkRows.push({ record_id: link.record_id, identity: change.identity, status: 'linked', shadow: change.values, version: change.version, swept: sweepId });
+					counts.created += 1;
+					continue;
+				}
+				if (row === undefined) {
+					const id = deriveRecordId(`${key}:${change.identity}`);
+					creates.push({ id, ...change.values });
+					linkRows.push({ record_id: id, identity: change.identity, status: 'linked', shadow: change.values, version: change.version, swept: sweepId });
+					counts.created += 1;
+					sample('created', change.identity);
+					continue;
+				}
+				const recordId = String(row['id']);
+				const merge = mergeRemote(
+					sync,
+					link === undefined || link.status !== 'linked' ? undefined : link.shadow,
+					row,
+					change.values,
+					{ local: text(row['updated_at']), remote: change.version }
+				);
+				if (Object.keys(merge.write).length > 0) {
+					updates.push({ id: recordId, ...merge.write });
+					counts.updated += 1;
+				} else counts.matched += 1;
+				if (merge.conflicts.length > 0) {
+					statements.push(...logConflicts(key, recordId, merge.conflicts));
+					counts.conflicts += merge.conflicts.length;
+					sample('conflicts', change.identity);
+				}
+				if (merge.push && sync.direction === 'two_way') marks.push(recordId);
+				linkRows.push({ record_id: recordId, identity: change.identity, status: 'linked', shadow: merge.shadow, version: change.version, swept: sweepId });
+			}
+
+			yield* write(EffectId.make(`${effectId}:create`), subject, sync.collection, 'create', creates);
+			yield* write(EffectId.make(`${effectId}:update`), subject, sync.collection, 'update', updates);
+			yield* write(EffectId.make(`${effectId}:delete`), subject, sync.collection, 'delete', deletes);
+			if (linkRows.length > 0)
+				statements.push({
+					sql: `insert into bolt_integration_links (id, sync, record_id, identity, status, shadow, version, swept) select md5($1 || ':' || x.record_id)::uuid, $1, x.record_id, x.identity, x.status, x.shadow, x.version, x.swept from jsonb_to_recordset($2::jsonb) as x(record_id text, identity text, status text, shadow jsonb, version text, swept text) on conflict (sync, record_id) do update set identity = excluded.identity, status = excluded.status, shadow = excluded.shadow, version = excluded.version, swept = coalesce(excluded.swept, bolt_integration_links.swept), updated_at = now()`,
+					parameters: [key, JSON.stringify(linkRows)]
+				});
+			if (touched.length > 0 && sweepId !== null)
+				statements.push({
+					sql: `update bolt_integration_links set swept = $3 where sync = $1 and record_id = any($2::text[])`,
+					parameters: [key, touched, sweepId]
+				});
+			if (unlinks.length > 0)
+				statements.push(
+					{ sql: `delete from bolt_integration_links where sync = $1 and record_id = any($2::text[])`, parameters: [key, unlinks] },
+					// A record gone from both sides has nothing left to push.
+					{ sql: `delete from bolt_integration_pushes where sync = $1 and record_id = any($2::text[])`, parameters: [key, unlinks] }
+				);
+			if (marks.length > 0) {
+				statements.push(markStatement(key, marks), pushTask(integration.name, sync.name, `${effectId}`));
+				counts.pushed += marks.length;
+			}
+			if (statements.length > 0) {
+				if (marks.length > 0) yield* queue.wake(EffectId.make(`${effectId}:wake`), now);
+				yield* transaction(EffectId.make(`${effectId}:links`), statements);
+			}
+		});
+
+		/** Decodes and maps one page; a record that fails is one rejection, never the page. */
+		const readPage = Effect.fn('Integrations.readPage')(function* (
+			effectId: EffectId,
+			integration: IntegrationDeclaration,
+			sync: SyncDeclaration,
+			live: AuthoredSync,
+			records: ReadonlyArray<unknown>,
+			counts: Counts,
+			samples: Record<string, Array<string>>
+		) {
+			const decodedRecords = records.flatMap((record) => {
+				if (live.record === undefined) return [record];
+				const decoded = Schema.decodeUnknownResult(live.record)(record);
+				return Result.isSuccess(decoded) ? [decoded.success] : [];
+			});
+			const resolved =
+				live.resolve === undefined
+					? undefined
+					: yield* runAuthoredHandler(() =>
+							(live.resolve as (context: { readonly records: ReadonlyArray<unknown>; readonly api: unknown }) => unknown)({
+								records: decodedRecords,
+								api: makeAuthoringApi(makeBoundAuthoringOps(effectId, subjectOf(integration), collections, ai, files))
+							})
+						).pipe(Effect.catchCause((cause) => Effect.fail(refuse(integration.name, `resolve failed: ${describeCause(cause)}`))));
+			const changes: Array<Change> = [];
+			for (const [index, record] of records.entries()) {
+				try {
+					changes.push(changeOf(sync, live, record, resolved));
+				} catch (cause) {
+					counts.rejected += 1;
+					const bucket = (samples['rejected'] ??= []);
+					if (bucket.length < SAMPLES) bucket.push(`#${index}: ${describeCause(cause)}`);
+				}
+			}
+			return changes;
+		});
+
+		const readState = Effect.fn('Integrations.readState')(function* (effectId: EffectId, key: string) {
+			const rows = yield* query(effectId, `select state, detail, sweep, changes_cursor, report from bolt_integration_state where sync = $1`, [key]);
+			return decodeRows(rows.rows)[0];
+		});
+
+		/** Claims the sync for one run; `undefined` when another run holds it or it is paused. */
+		const claim = Effect.fn('Integrations.claim')(function* (effectId: EffectId, key: string) {
+			const rows = yield* query(
+				effectId,
+				`insert into bolt_integration_state (sync, state, lease_until) values ($1, 'unlinked', now() + make_interval(secs => $2)) on conflict (sync) do update set lease_until = excluded.lease_until where bolt_integration_state.state <> 'paused' and (bolt_integration_state.lease_until is null or bolt_integration_state.lease_until < now()) returning state, sweep, changes_cursor`,
+				[key, LEASE_SECONDS]
+			);
+			return decodeRows(rows.rows)[0];
+		});
+
+		const settleState = (
+			effectId: EffectId,
+			key: string,
+			state: string,
+			detail: string | null,
+			sweep: Sweep | null,
+			cursor: string | null | undefined,
+			report: SyncReport | undefined
+		) =>
+			query(
+				effectId,
+				`update bolt_integration_state set state = $2, detail = $3, sweep = $4::jsonb, changes_cursor = case when $7 then $6 else changes_cursor end, report = coalesce($5::jsonb, report), lease_until = null, updated_at = now() where sync = $1`,
+				[
+					key,
+					state,
+					detail,
+					sweep === null ? null : JSON.stringify(sweep),
+					report === undefined ? null : JSON.stringify(report),
+					cursor ?? null,
+					cursor !== undefined
+				]
+			);
+
+		/**
+		 * Every local row the sync has never linked, in one anti-join. The collection name is a
+		 * compiled declaration, never input, and is quoted as an identifier.
+		 */
+		const unmatchedLocal = Effect.fn('Integrations.unmatchedLocal')(function* (
+			effectId: EffectId,
+			key: string,
+			collection: string
+		) {
+			const rows = yield* query(
+				effectId,
+				`select t.id::text as id from "${collection.replaceAll('"', '""')}" as t where not exists (select 1 from bolt_integration_links l where l.sync = $1 and l.record_id = t.id::text) order by t.id`,
+				[key]
+			);
+			return decodeRows(rows.rows).map((row) => String(row['id']));
+		});
+
+		/** A completed sweep: absence becomes deletes, unmatched local rows are handled, a report lands. */
+		const finishSweep = Effect.fn('Integrations.finishSweep')(function* (
+			effectId: EffectId,
+			integration: IntegrationDeclaration,
+			sync: SyncDeclaration,
+			sweep: Sweep
+		) {
+			const key = syncKey(integration.name, sync.name);
+			const subject = subjectOf(integration);
+			// Absence is inferred here and only here (§4.5): linked rows the full sweep never saw.
+			const absent = decodeRows(
+				(yield* query(
+					EffectId.make(`${effectId}:absent`),
+					`select record_id, identity, status, shadow, version from bolt_integration_links where sync = $1 and status = 'linked' and swept is distinct from $2`,
+					[key, sweep.id]
+				)).rows
+			);
+			if (absent.length > 0) {
+				const changes: Array<Change> = absent.map((row) => ({ kind: 'tombstone', identity: String(row['identity']) }));
+				yield* applyChanges(EffectId.make(`${effectId}:absence`), integration, sync, changes, sweep.id, sweep.counts, sweep.samples);
+			}
+			if (sync.direction === 'two_way') {
+				const pending = decodeRows(
+					(yield* query(EffectId.make(`${effectId}:pending`), `select record_id from bolt_integration_links where sync = $1 and status = 'pending_link'`, [key])).rows
+				).map((row) => String(row['record_id']));
+				const unmatched = yield* unmatchedLocal(EffectId.make(`${effectId}:unmatched`), key, sync.collection);
+				sweep.counts.unmatched += unmatched.length;
+				(sweep.samples['unmatched'] ??= []).push(...unmatched.slice(0, SAMPLES));
+				const pushing = sweep.mode === 'backfill' && sync.onUnmatchedLocal === 'push' ? unmatched : [];
+				const keeping = sync.onUnmatchedLocal === 'keep' ? unmatched : [];
+				const statements = [
+					...(pushing.length + keeping.length === 0
+						? []
+						: [
+								{
+									sql: `insert into bolt_integration_links (id, sync, record_id, status) select md5($1 || ':' || r.id)::uuid, $1, r.id, r.status from jsonb_to_recordset($2::jsonb) as r(id text, status text) on conflict (sync, record_id) do nothing`,
+									parameters: [key, JSON.stringify([...pushing.map((id) => ({ id, status: 'pending_link' })), ...keeping.map((id) => ({ id, status: 'local_only' }))])] as ReadonlyArray<Schema.Json>
+								}
+							]),
+					...([...pending, ...pushing].length === 0 ? [] : [markStatement(key, [...pending, ...pushing]), pushTask(integration.name, sync.name, sweep.id)])
+				];
+				sweep.counts.pushed += pushing.length + pending.length;
+				if (statements.length > 0) {
+					yield* queue.wake(EffectId.make(`${effectId}:wake`), yield* Clock.currentTimeMillis);
+					yield* transaction(EffectId.make(`${effectId}:unmatched-links`), statements);
+				}
+			} else {
+				const unmatched = yield* unmatchedLocal(EffectId.make(`${effectId}:unmatched`), key, sync.collection);
+				sweep.counts.unmatched += unmatched.length;
+				(sweep.samples['unmatched'] ??= []).push(...unmatched.slice(0, SAMPLES));
+			}
+			return {
+				mode: sweep.mode,
+				finishedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+				...sweep.counts,
+				samples: sweep.samples
+			} satisfies SyncReport;
+		});
+
+		const run: Interface['run'] = Effect.fn('Integrations.run')(function* (effectId, integrationName, syncName, mode) {
+			const { integration, sync, live } = yield* requireSync(integrationName, syncName);
+			const key = syncKey(integrationName, syncName);
+			const claimed = yield* claim(EffectId.make(`${effectId}:claim`), key);
+			if (claimed === undefined) return { sync: key, skipped: true };
+			const source = sourceFor(integration, sync, live);
+			const stored = Schema.decodeUnknownResult(Sweep)(claimed['sweep']);
+			let sweep: Sweep | null = Result.isSuccess(stored) ? (stored.success as Sweep) : null;
+			const state = String(claimed['state']);
+			const cursor = text(claimed['changes_cursor']);
+			const failed = (failure: SourceFailure | IntegrationError, current: Sweep | null) =>
+				settleState(
+					EffectId.make(`${effectId}:failed`),
+					key,
+					'failed',
+					'message' in failure && !('_tag' in failure) ? describeSourceFailure(failure as SourceFailure) : (failure as IntegrationError).message,
+					current,
+					undefined,
+					undefined
+				).pipe(Effect.as({ sync: key, state: 'failed' }));
+
+			const sweeping = sweep !== null || mode === 'reconcile' || state === 'unlinked' || state === 'backfilling';
+			if (sweeping) {
+				sweep ??= {
+					id: `${effectId}`,
+					mode: state === 'unlinked' || state === 'backfilling' || (state === 'failed' && cursor === null) ? 'backfill' : 'reconcile',
+					page: 0,
+					pageCursor: null,
+					counts: emptyCounts(),
+					samples: {},
+					complete: false
+				};
+				const active = sweep;
+				yield* settleState(EffectId.make(`${effectId}:start`), key, active.mode === 'backfill' ? 'backfilling' : 'reconciling', null, active, undefined, undefined).pipe(
+					// the lease stays held: settleState clears it, so re-take it for the pages below
+					Effect.andThen(query(EffectId.make(`${effectId}:relet`), `update bolt_integration_state set lease_until = now() + make_interval(secs => $2) where sync = $1`, [key, LEASE_SECONDS]))
+				);
+				for (let budget = 0; budget < PAGE_BUDGET; budget += 1) {
+					const page = yield* source.list(EffectId.make(`${effectId}:list:${active.page}`), active.pageCursor ?? undefined).pipe(Effect.result);
+					if (Result.isFailure(page)) return yield* failed(page.failure, active);
+					const changes = yield* readPage(EffectId.make(`${effectId}:read:${active.page}`), integration, sync, live, page.success.records, active.counts, active.samples);
+					const applied = yield* applyChanges(EffectId.make(`${effectId}:apply:${active.page}`), integration, sync, changes, active.id, active.counts, active.samples).pipe(Effect.result);
+					if (Result.isFailure(applied)) return yield* failed(applied.failure as IntegrationError, active);
+					active.page += 1;
+					active.pageCursor = page.success.next ?? null;
+					if (page.success.next === undefined) {
+						active.complete = true;
+						break;
+					}
+					yield* query(EffectId.make(`${effectId}:progress:${active.page}`), `update bolt_integration_state set sweep = $2::jsonb, updated_at = now() where sync = $1`, [key, JSON.stringify(active)]);
+				}
+				if (!active.complete) {
+					// Out of budget: the rest of the sweep is a continuation, resumed at this page.
+					yield* settleState(EffectId.make(`${effectId}:pause`), key, active.mode === 'backfill' ? 'backfilling' : 'reconciling', null, active, undefined, undefined);
+					yield* queue.enqueueClaimed(EffectId.make(`${effectId}:continue`), {
+						command: 'integrations.run',
+						input: { integration: integrationName, sync: syncName, mode: 'reconcile' },
+						effectId: `integrations.run:${key}:${active.id}:${active.page}`,
+						nowEpochMs: yield* Clock.currentTimeMillis
+					});
+					return { sync: key, state: active.mode === 'backfill' ? 'backfilling' : 'reconciling', page: active.page };
+				}
+				const report = yield* finishSweep(EffectId.make(`${effectId}:finish`), integration, sync, active);
+				yield* settleState(EffectId.make(`${effectId}:live`), key, 'live', null, null, undefined, report);
+				return { sync: key, state: 'live', report };
+			}
+
+			if (source.changes === undefined) {
+				yield* settleState(EffectId.make(`${effectId}:idle`), key, 'live', null, null, undefined, undefined);
+				return { sync: key, state: 'live' };
+			}
+			const counts = emptyCounts();
+			const samples: Record<string, Array<string>> = {};
+			let page: string | undefined;
+			let next: string | null = cursor;
+			for (let budget = 0; budget < PAGE_BUDGET; budget += 1) {
+				const read = yield* source.changes(EffectId.make(`${effectId}:changes:${budget}`), cursor, page).pipe(Effect.result);
+				if (Result.isFailure(read)) return yield* failed(read.failure, null);
+				const changes = yield* readPage(EffectId.make(`${effectId}:read:${budget}`), integration, sync, live, read.success.records, counts, samples);
+				const applied = yield* applyChanges(EffectId.make(`${effectId}:apply:${budget}`), integration, sync, changes, null, counts, samples).pipe(Effect.result);
+				if (Result.isFailure(applied)) return yield* failed(applied.failure as IntegrationError, null);
+				if (read.success.cursor !== undefined) next = read.success.cursor;
+				if (read.success.next === undefined) break;
+				page = read.success.next;
+			}
+			yield* settleState(EffectId.make(`${effectId}:live`), key, 'live', null, null, next, undefined);
+			return { sync: key, state: 'live', ...counts };
+		});
+
+		const push: Interface['push'] = Effect.fn('Integrations.push')(function* (effectId, integrationName, syncName) {
+			const { integration, sync, live } = yield* requireSync(integrationName, syncName);
+			if (sync.direction !== 'two_way') return { sync: syncName, pushed: 0 };
+			const key = syncKey(integrationName, syncName);
+			const subject = subjectOf(integration);
+			const source = sourceFor(integration, sync, live);
+			const claimed = decodeRows(
+				(yield* query(
+					EffectId.make(`${effectId}:claim`),
+					`update bolt_integration_pushes set status = 'inflight', attempts = attempts + 1, updated_at = now() where id in (select id from bolt_integration_pushes where sync = $1 and (status = 'pending' or (status = 'inflight' and updated_at < now() - interval '10 minutes')) and next_attempt_at <= now() order by next_attempt_at limit $2 for update skip locked) returning record_id, revision, attempts`,
+					[key, PUSH_BATCH]
+				)).rows
+			);
+			const ids = claimed.map((row) => String(row['record_id']));
+			const links = yield* linksFor(EffectId.make(`${effectId}:links`), key, 'record_id', ids);
+			const rows = yield* localRows(EffectId.make(`${effectId}:rows`), subject, sync.collection, 'id', ids);
+			let pushed = 0;
+			for (const marker of claimed) {
+				const recordId = String(marker['record_id']);
+				const revision = numeric(marker['revision']);
+				const attempts = numeric(marker['attempts']);
+				const row = rows.get(recordId);
+				const link = links.get(recordId);
+				const step = EffectId.make(`${effectId}:${recordId}:${revision}`);
+				const outcome = yield* Effect.gen(function* () {
+					if (row !== undefined && (link === undefined || link.status !== 'linked')) {
+						const answer = yield* source.create!(step, remoteBody(sync, live, row), recordId);
+						const change = changeOf(sync, live, answer, undefined);
+						const identity = change.identity;
+						const version = change.kind === 'upsert' ? change.version : contentVersion(syncedValues(sync, row));
+						if (!same(row[sync.identity], identity))
+							yield* write(EffectId.make(`${step}:identity`), subject, sync.collection, 'update', [{ id: recordId, [sync.identity]: identity }]);
+						return { identity, status: 'linked', shadow: syncedValues(sync, row), version };
+					}
+					if (row !== undefined && link !== undefined) {
+						const changes = localChanges(sync, link.shadow, row);
+						if (Object.keys(changes).length === 0) return undefined;
+						const answer = yield* source.update!(step, link.identity!, remoteBody(sync, live, changes), link.version);
+						const shadow = { ...link.shadow, ...changes };
+						const version = (live.spec as Partial<HttpRecordsSpec<unknown>>).version === undefined ? contentVersion(shadow) : text(walk(answer, (live.spec as HttpRecordsSpec<unknown>).version)) ?? contentVersion(shadow);
+						return { identity: link.identity, status: 'linked', shadow, version };
+					}
+					if (row === undefined && link !== undefined && link.identity !== null) {
+						yield* source.delete!(step, link.identity, link.version);
+						return null;
+					}
+					return undefined;
+				}).pipe(Effect.result);
+				if (Result.isFailure(outcome)) {
+					const failure = outcome.failure as SourceFailure | IntegrationError;
+					if ('conflict' in failure && failure.conflict === true && source.get !== undefined && link?.identity) {
+						// The source moved under us: re-read it, merge it (§8.2), and push what is still ours.
+						const fresh = yield* source.get(EffectId.make(`${step}:reread`), link.identity).pipe(Effect.orElseSucceed(() => undefined));
+						if (fresh !== undefined) {
+							const counts = emptyCounts();
+							const changes = yield* readPage(EffectId.make(`${step}:merge`), integration, sync, live, [fresh], counts, {});
+							yield* applyChanges(EffectId.make(`${step}:apply`), integration, sync, changes, null, counts, {});
+						}
+						yield* query(EffectId.make(`${step}:retry`), `update bolt_integration_pushes set status = 'pending', next_attempt_at = now() where sync = $1 and record_id = $2`, [key, recordId]);
+						continue;
+					}
+					// A record the source no longer has is a remote delete the next reconcile settles; until
+					// then the push waits rather than dead-lettering a change nobody can apply.
+					const gone = 'status' in failure && failure.status === 404 && link !== undefined;
+					const retryable = gone || ('retryable' in failure && failure.retryable === true);
+					const message = 'message' in failure ? String(failure.message) : describeCause(failure);
+					const delay = retryDelayMs(attempts - 1, { initialDelayMs: 1000, maxDelayMs: 300_000 }, undefined, 0);
+					yield* query(
+						EffectId.make(`${step}:failed`),
+						`update bolt_integration_pushes set status = $3, last_error = $4, last_status = $5, next_attempt_at = now() + make_interval(secs => $6), updated_at = now() where sync = $1 and record_id = $2`,
+						[key, recordId, retryable && attempts < 8 ? 'pending' : 'failed', message.slice(0, 2000), 'status' in failure && typeof failure.status === 'number' ? failure.status : null, Math.ceil(delay / 1000)]
+					);
+					continue;
+				}
+				const settled = outcome.success;
+				yield* transaction(EffectId.make(`${step}:settle`), [
+					...(settled === undefined
+						? []
+						: settled === null
+							? [{ sql: `delete from bolt_integration_links where sync = $1 and record_id = $2`, parameters: [key, recordId] as ReadonlyArray<Schema.Json> }]
+							: [
+									{
+										sql: `insert into bolt_integration_links (id, sync, record_id, identity, status, shadow, version) values (md5($1 || ':' || $2)::uuid, $1, $2, $3, $4, $5::jsonb, $6) on conflict (sync, record_id) do update set identity = excluded.identity, status = excluded.status, shadow = excluded.shadow, version = excluded.version, updated_at = now()`,
+										parameters: [key, recordId, settled.identity, settled.status, JSON.stringify(settled.shadow), settled.version] as ReadonlyArray<Schema.Json>
+									}
+								]),
+					// Only the revision this push claimed: an edit made meanwhile keeps its marker.
+					{ sql: `delete from bolt_integration_pushes where sync = $1 and record_id = $2 and revision = $3`, parameters: [key, recordId, revision] }
+				]);
+				if (settled !== undefined) pushed += 1;
+			}
+			const due = decodeRows(
+				(yield* query(EffectId.make(`${effectId}:due`), `select min(next_attempt_at) as due from bolt_integration_pushes where sync = $1 and status = 'pending'`, [key])).rows
+			)[0]?.['due'];
+			const dueAt = typeof due === 'string' ? Date.parse(due) : Number.NaN;
+			if (Number.isFinite(dueAt)) {
+				yield* queue.wake(EffectId.make(`${effectId}:wake`), dueAt);
+				yield* query(
+					EffectId.make(`${effectId}:again`),
+					`insert into bolt_task (command, input, effect_id, run_at, status) values ('integrations.push', $1::jsonb, $2, $3, 'pending') on conflict (effect_id) do nothing`,
+					[JSON.stringify({ integration: integrationName, sync: syncName }), `integrations.push:${key}:${new Date(dueAt).toISOString()}`, new Date(dueAt).toISOString()]
+				);
+			}
+			return { sync: key, pushed, claimed: claimed.length };
+		});
+
+		const receive: Interface['receive'] = Effect.fn('Integrations.receive')(function* (effectId, integrationName, syncName, delivery) {
+			const { integration, sync, live } = yield* requireSync(integrationName, syncName);
+			const spec = live.spec as Partial<HttpRecordsSpec<unknown>>;
+			const webhook = spec.subscribe?.webhook;
+			if (webhook === undefined) return yield* refuse(integrationName, `${syncName} does not subscribe by webhook`);
+			const secret = yield* secretReader(integrationName)(effectId, webhook.signature.secret.env).pipe(Effect.mapError((error) => refuse(integrationName, error.message)));
+			const verdict = yield* verifyDelivery(webhook.signature, secret, delivery, yield* Clock.currentTimeMillis).pipe(
+				Effect.mapError((error) => refuse(integrationName, describeCause(error)))
+			);
+			if (!verdict.verified) return yield* refuse(integrationName, `delivery refused: ${verdict.refusal.reason}`);
+			const body = yield* Effect.try({ try: () => JSON.parse(delivery.body) as unknown, catch: () => refuse(integrationName, 'delivery body is not JSON') });
+			const found = walk(body, webhook.records);
+			const records = Array.isArray(found) ? found : [found];
+			const counts = emptyCounts();
+			const samples: Record<string, Array<string>> = {};
+			const changes = yield* readPage(EffectId.make(`${effectId}:read`), integration, sync, live, records, counts, samples);
+			yield* applyChanges(EffectId.make(`${effectId}:apply`), integration, sync, changes, null, counts, samples);
+			return { sync: syncKey(integrationName, syncName), ...counts, samples };
+		});
+
+		const applyChannel: Interface['applyChannel'] = Effect.fn('Integrations.applyChannel')(function* (effectId, channel, records) {
+			for (const integration of workspace.definition.integrations)
+				for (const sync of integration.syncs) {
+					if (sync.channel?.name !== channel) continue;
+					const live = authored.integrations[integration.name]?.[sync.name];
+					if (live === undefined) continue;
+					const wanted = records
+						.filter(({ record }) => !sync.channel!.inbound || record['direction'] === 'inbound')
+						.map(({ record, version, deleted }) => ({ ...record, __version: version, __deleted: deleted }));
+					if (wanted.length === 0) continue;
+					const counts = emptyCounts();
+					const step = EffectId.make(`${effectId}:${integration.name}.${sync.name}`);
+					const changes = yield* readPage(step, integration, sync, live, wanted, counts, {});
+					yield* applyChanges(EffectId.make(`${step}:apply`), integration, sync, changes, null, counts, {});
+				}
+		});
+
+		const status: Interface['status'] = Effect.fn('Integrations.status')(function* (effectId) {
+			const states = new Map(
+				decodeRows(
+					(yield* query(
+						effectId,
+						`select s.sync, s.state, s.detail, s.sweep, s.report, (select count(*) from bolt_integration_pushes o where o.sync = s.sync and o.status <> 'failed') as pending, (select count(*) from bolt_integration_pushes o where o.sync = s.sync and o.status = 'failed') as dead, (select count(*) from bolt_integration_conflicts c where c.sync = s.sync) as conflicts from bolt_integration_state s`,
+						[]
+					)).rows
+				).map((row) => [String(row['sync']), row] as const)
+			);
+			return workspace.definition.integrations.flatMap((integration) =>
+				integration.syncs.map((sync): IntegrationSyncStatus => {
+					const row = states.get(syncKey(integration.name, sync.name));
+					const sweep = row?.['sweep'] as { page?: number } | null | undefined;
+					return {
+						integration: integration.name,
+						sync: sync.name,
+						collection: sync.collection,
+						direction: sync.direction,
+						state: (row?.['state'] as IntegrationSyncStatus['state'] | undefined) ?? 'unlinked',
+						detail: text(row?.['detail']),
+						bound: { subscribe: sync.webhook || sync.source === 'channel', changes: sync.changesSchedule ?? null, reconcile: sync.reconcileSchedule },
+						page: typeof sweep?.page === 'number' ? sweep.page : null,
+						report: (row?.['report'] as SyncReport | null | undefined) ?? null,
+						pending: numeric(row?.['pending']),
+						deadLetters: numeric(row?.['dead']),
+						conflicts: numeric(row?.['conflicts'])
+					};
+				})
+			);
+		});
+
+		const control: Interface['control'] = Effect.fn('Integrations.control')(function* (effectId, integrationName, syncName, action) {
+			yield* requireSync(integrationName, syncName);
+			const key = syncKey(integrationName, syncName);
+			const now = yield* Clock.currentTimeMillis;
+			if (action === 'pause') {
+				yield* query(effectId, `insert into bolt_integration_state (sync, state) values ($1, 'paused') on conflict (sync) do update set state = 'paused', updated_at = now()`, [key]);
+				return { sync: key, state: 'paused' };
+			}
+			if (action === 'resume') {
+				yield* query(effectId, `update bolt_integration_state set state = case when changes_cursor is null and report is null then 'unlinked' else 'live' end, lease_until = null, updated_at = now() where sync = $1 and state = 'paused'`, [key]);
+				return { sync: key, state: 'resumed' };
+			}
+			if (action === 'retry') {
+				yield* query(effectId, `update bolt_integration_pushes set status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now() where sync = $1 and status = 'failed'`, [key]);
+				yield* queue.enqueueClaimed(EffectId.make(`${effectId}:push`), { command: 'integrations.push', input: { integration: integrationName, sync: syncName }, effectId: `integrations.push:${key}:retry:${now}`, nowEpochMs: now });
+				return { sync: key, retried: true };
+			}
+			yield* queue.enqueueClaimed(EffectId.make(`${effectId}:run`), {
+				command: 'integrations.run',
+				input: { integration: integrationName, sync: syncName, mode: 'reconcile' },
+				effectId: `integrations.run:${key}:${action}:${now}`,
+				nowEpochMs: now
+			});
+			return { sync: key, queued: action };
+		});
+
+		return Service.of({ run, push, receive, applyChannel, status, control });
 	})
 );
+
+/**
+ * The statements a local write owes the syncs over its collection, committed in that write's own
+ * transaction (§4.3): one coalescing marker per record for each two-way sync, and the push task.
+ * The sync subject's own writes owe nothing — the loop is broken by the writer and by the shadow.
+ */
+export const syncMarkStatements = (
+	integrations: ReadonlyArray<IntegrationDeclaration>,
+	collection: string,
+	writer: string,
+	recordIds: ReadonlyArray<string>,
+	effectId: string
+): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> =>
+	recordIds.length === 0
+		? []
+		: integrations.flatMap((integration) =>
+				integration.syncs
+					.filter((sync) => sync.collection === collection && sync.direction === 'two_way' && writer !== `integration:${integration.name}`)
+					.flatMap((sync) => {
+						const key = syncKey(integration.name, sync.name);
+						return [
+							{
+								sql: `insert into bolt_integration_pushes (id, sync, record_id) select md5($1 || ':' || r)::uuid, $1, r from unnest($2::text[]) as r on conflict (sync, record_id) do update set revision = bolt_integration_pushes.revision + 1, status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()`,
+								parameters: [key, [...recordIds]]
+							},
+							{
+								sql: `insert into bolt_task (command, input, effect_id, status) values ('integrations.push', $1::jsonb, $2, 'pending') on conflict (effect_id) do nothing`,
+								parameters: [JSON.stringify({ integration: integration.name, sync: sync.name }), `integrations.push:${key}:${effectId}`]
+							}
+						];
+					})
+			);
+
+/**
+ * Why a principal other than a sync's subject may not make this write (§6), or `undefined`.
+ *
+ * A one-way mirror is read-only: no create, no delete, no change to a synced column — only its
+ * local-only columns stay writable. A two-way sync refuses local changes to fields the remote owns.
+ */
+export const syncOwnershipRefusal = (
+	integrations: ReadonlyArray<IntegrationDeclaration>,
+	collection: string,
+	writer: string,
+	action: 'create' | 'update' | 'delete',
+	columns: ReadonlyArray<string>
+): string | undefined => {
+	for (const integration of integrations)
+		for (const sync of integration.syncs) {
+			if (sync.collection !== collection || writer === `integration:${integration.name}`) continue;
+			if (sync.direction === 'one_way') {
+				if (action !== 'update') return `${collection} is owned by ${integration.name}: rows arrive from the source, and cannot be ${action}d here.`;
+				const owned = new Set([sync.identity, ...sync.fields.map(({ column }) => column)]);
+				const touched = columns.filter((column) => owned.has(column));
+				if (touched.length > 0) return `${collection}.${touched.join(', ')} is owned by ${integration.name}.`;
+			} else {
+				const touched = columns.filter((column) => sync.owns.remote.includes(column));
+				if (touched.length > 0) return `${collection}.${touched.join(', ')} is owned by ${integration.name}'s source.`;
+			}
+		}
+	return undefined;
+};

@@ -3,8 +3,8 @@ import { fixtureUserId } from './support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	EffectId,
-	type CommunicationRequest,
-	type CommunicationResponse,
+	type TransactionalMailRequest,
+	type TransactionalMailResponse,
 	type FacilityBinding,
 	type IdentityHookRequest,
 	type IdentityHookResponse
@@ -18,7 +18,7 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const acknowledgeCommunication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+const acknowledgeMail: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse> = {
 	call: async () => ({ _tag: 'Success', value: {} })
 };
 
@@ -42,7 +42,7 @@ describe('identity lifecycle hooks', () => {
 	it('invite emits UserInvited with organizationId equal to the tenant id', async () => {
 		const hooks = recordingHooks();
 		harness = await makeBoltTestRuntime(undefined, {
-			communication: acknowledgeCommunication,
+			mail: acknowledgeMail,
 			identityHooks: hooks.binding
 		});
 		const invitationId = await harness.runtime.runPromise(
@@ -219,7 +219,7 @@ describe('identity lifecycle hooks', () => {
 	});
 
 	it('invite and startSession still succeed when identityHooks is unbound', async () => {
-		harness = await makeBoltTestRuntime(undefined, { communication: acknowledgeCommunication });
+		harness = await makeBoltTestRuntime(undefined, { mail: acknowledgeMail });
 		// `startSession` mints for an existing subject and refuses an unknown one, so the person has
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.

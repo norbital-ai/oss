@@ -139,9 +139,8 @@ describe('generated declared write types', () => {
 		expect(rendered).toContain(
 			'export type Pipelines = CollectionPipelines<WorkspaceSchema, "accounts">'
 		);
-		expect(rendered).toContain(
-			'export type Integrations = CollectionIntegrations<WorkspaceSchema, "accounts">'
-		);
+		// Integrations are workspace-level (`src/integrations/`), never a collection's own type.
+		expect(rendered).not.toContain('Integrations');
 		expect(rendered).not.toContain('Hooks');
 	});
 });

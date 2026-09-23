@@ -43,6 +43,7 @@ const definition = workspace({
 	apps: [app({ name: 'capture', label: 'Capture' })],
 	teams: { admin: ['admin-data'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the capture test workspace agent.',

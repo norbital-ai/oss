@@ -22,6 +22,7 @@ describe('WorkspaceSchema owner', () => {
 			apps: [],
 			policies: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			prompt: 'You are the test workspace agent.',

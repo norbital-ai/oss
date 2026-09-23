@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
-import { EffectId, ENVOY_REGISTRATION_PATH, EnvoyDelivery } from '@norbital-ai/bolt-protocol';
+import { EffectId, ENVOY_REGISTRATION_PATH } from '@norbital-ai/bolt-protocol';
 import {
 	AgentId,
 	DirectiveMode,
@@ -10,25 +10,20 @@ import {
 	type ConversationId
 } from '@norbital-ai/bolt-protocol/facilities';
 import { getErrorMessage } from '@norbital-ai/std';
-import { and, asc, count, eq, gt, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull } from 'drizzle-orm';
+import type { ChannelDeclaration } from '#lib/authoring/channels-schema.js';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import { conversationAssetStorageKey } from '#lib/runtime/agents/image-descriptors.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import {
-	Communication,
-	Files,
-	type CommunicationInterface,
-	type FilesInterface
-} from '#lib/runtime/facilities/services.js';
+import * as Channels from '#lib/runtime/channels/channels.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import { canonicalTransportIdentity } from '#lib/runtime/envoys/transport-identity.js';
-import { countOf, ReplicaAttachment } from '#lib/runtime/envoys/inbox.js';
 import { workspaceLink } from '#lib/runtime/host-links.js';
 import { envoyPrincipalId, envoySubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -42,8 +37,7 @@ import {
 } from '#lib/runtime/persistence.js';
 
 const {
-	bolt_envoy_messages: envoyMessages,
-	bolt_envoy_receipts: boltEnvoyReceipts,
+	channel_messages: channelMessages,
 	bolt_channel_links: boltChannelLinks,
 	conversation_message: conversationMessage,
 	user: usersTable
@@ -57,38 +51,7 @@ class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
 	readonly retryable = false;
 }
 
-type EnvoyStatus = Readonly<{ envoy: string; received: number; replied: number }>;
-
-const isObjectLike = Schema.is(
-	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
-);
 const isString = Schema.is(Schema.String);
-
-/**
- * The two receipt directions the status answers with, read from one grouped query's rows.
- *
- * `count(*)` is an eight-byte integer, and the driver hands it over as a JSON-safe *string* — the
- * facility normalises a `bigint`, not the text Postgres sends — so decoding it as a number rejected
- * every row and reported every envoy as idle. `countOf` reads either shape.
- */
-export const envoyReceiptCounts = (
-	rows: ReadonlyArray<Schema.Json>
-): Readonly<{ received: number; replied: number }> => {
-	const countFor = (direction: string): number => {
-		const row = rows.find(
-			(candidate) => isObjectLike(candidate) && Reflect.get(candidate, 'direction') === direction
-		);
-		return countOf(Reflect.get((row as object | undefined) ?? {}, 'count') ?? 0);
-	};
-	return { received: countFor('inbound'), replied: countFor('outbound') };
-};
-
-type EnvoyOutcome = Readonly<{
-	status: 'buffered' | 'recorded' | 'duplicate' | 'edited' | 'silent' | 'registration_required';
-	envoy: string;
-	conversationId: string;
-	text?: string;
-}>;
 
 type EnvoyRegistrationClaim =
 	| Readonly<{
@@ -115,6 +78,9 @@ type DrainReport = Readonly<{
 	status: 'queued' | 'answered' | 'failed' | 'skipped';
 }>;
 
+/** An envoy with the channel it speaks on and that channel's transport. */
+type Envoy = EnvoyDefinition & { readonly name: string; readonly transport: ChannelDeclaration['transport'] };
+
 const MAX_DRAIN_MESSAGES = 32;
 /** A turn per admitted message, plus the quiet check that ends the drain. */
 const MAX_DRAIN_TURNS = MAX_DRAIN_MESSAGES + 1;
@@ -124,63 +90,52 @@ const REGISTRATION_NOTICE_LIMITS = {
 const ENVOY_REGISTRATION_EXPIRES_SECONDS = 15 * 60;
 
 /**
- * One agent conversation per transport chat.
- *
- * A direct message and a group channel are each exactly one conversation, and it is the same
- * conversation for every message that arrives in it. That is what makes `steer` mean something:
- * a follow-up written while the assistant is working joins the turn already running instead of
- * opening a second one, and a follow-up written after it starts the next turn on the same
- * transcript.
+ * One agent conversation per channel conversation: a chat, a mail thread. It is the same
+ * conversation for every message that arrives in it, which is what makes `steer` mean something.
+ * `internal` is `<envoy>:<dm|group>:<provider conversation>`.
  */
-const conversationFor = (conversationId: string): ConversationId =>
-	Agents.conversationIdFor(`envoy:${conversationId}`);
+const conversationFor = (internal: string): ConversationId => Agents.conversationIdFor(`envoy:${internal}`);
+const internalConversation = (envoy: string, kind: string, conversation: string): string =>
+	`${envoy}:${kind}:${conversation}`;
 
-/**
- * The conversation message one inbound row becomes, stable across every retry of it.
- *
- * The row is submitted with this as its `submissionId`, so a drain that runs again after a
- * partial failure re-submits the same message rather than appending a duplicate — and settlement
- * can ask whether the row's message was consumed without storing a second pointer to it.
- */
+/** Where the channel stores one message's attachment for this envoy: its conversation's own prefix. */
+export const envoyAttachmentKey =
+	(envoy: string) =>
+	(conversation: string, kind: string, messageId: string, index: number, fileName: string): string =>
+		conversationAssetStorageKey(
+			conversationFor(internalConversation(envoy, kind, conversation)),
+			`${messageId}:${index}`,
+			fileName
+		);
+
+/** The conversation message one history row becomes, stable across every retry of it. */
 const inboundMessageId = (conversationId: string, externalMessageId: string): MessageId =>
 	Agents.messageIdFor(`envoy-inbound:${conversationId}:${externalMessageId}`);
 
-/**
- * The text this turn owes the chat: the last text part it wrote.
- *
- * Everything before that part was handed over as it was written, so delivering the whole message
- * here would repeat it. A turn that wrote no text at all owes nothing.
- */
+/** The text this turn owes the chat: the last text part it wrote. */
 const finalAnswerText = (message: Prompt.MessageEncoded): string => {
 	if (isString(message.content)) return message.content;
 	return message.content.findLast((part) => part.type === 'text')?.text ?? '';
 };
 
-const InboundRow = Schema.Struct({
+const Attachment = Channels.StoredAttachment;
+const PendingRow = Schema.Struct({
 	id: Schema.NonEmptyString,
-	conversation_id: Schema.NonEmptyString,
-	transport_conversation_id: Schema.NonEmptyString,
-	external_message_id: Schema.NonEmptyString,
-	sender_external_id: Schema.NullOr(Schema.String),
-	sender_display_name: Schema.NullOr(Schema.String),
+	provider_message_id: Schema.NonEmptyString,
+	sender_id: Schema.NullOr(Schema.String),
+	sender_name: Schema.NullOr(Schema.String),
 	sent_at: Schema.NonEmptyString,
-	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
+	invocation: Schema.NullOr(Schema.String),
+	subject: Schema.NullOr(Schema.String),
 	text: Schema.String,
-	attachments: Schema.Array(ReplicaAttachment),
-	subject: Identity.Subject,
-	addressed: Schema.Boolean
+	attachments: Schema.Array(Attachment)
 });
-type InboundRow = Schema.Schema.Type<typeof InboundRow>;
-const decodeInboundRow = Schema.decodeUnknownOption(InboundRow);
-/** The workspace name behind a registered sender's account, for the envelope the model reads. */
+type PendingRow = Schema.Schema.Type<typeof PendingRow>;
+const decodePendingRow = Schema.decodeUnknownOption(PendingRow);
 const NamedAccount = Schema.Struct({ id: Schema.NonEmptyString, name: Schema.NonEmptyString });
 const decodeNamedAccount = Schema.decodeUnknownOption(NamedAccount);
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
-const SendReceipt = Schema.Struct({
-	messageId: Schema.optionalKey(Schema.NonEmptyString),
-	body: Schema.optionalKey(Schema.String)
-});
 const ChannelLinkRow = Schema.Struct({
 	link_id: Schema.NonEmptyString,
 	envoy: Schema.NonEmptyString,
@@ -195,14 +150,20 @@ type EnvoyFailure =
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
 	| Database.FacilityError
-	| RateLimits.RateLimited;
+	| RateLimits.RateLimited
+	| Channels.ChannelError;
 
 export type Interface = Readonly<{
-	readonly receive: (
+	/**
+	 * The envoy's half of ingest: new live inbound history rows on its channel. Admission is a query
+	 * on history (addressed, inbound, live, unanswered); an unknown sender on a non-public envoy gets
+	 * the host-authored registration notice over the same channel instead.
+	 */
+	readonly admit: (
 		effectId: EffectId,
-		envoyName: string,
-		delivery: EnvoyDelivery
-	) => Effect.Effect<EnvoyOutcome, EnvoyFailure>;
+		channel: string,
+		rows: ReadonlyArray<Channels.IngestedRow>
+	) => Effect.Effect<ReadonlyArray<string>, EnvoyFailure>;
 	/** Read-only claim probe; safe for mail scanners, link previews, and ordinary GET requests. */
 	readonly inspectRegistration: (
 		effectId: EffectId,
@@ -219,15 +180,10 @@ export type Interface = Readonly<{
 		conversationId: string,
 		/**
 		 * The host task claim that woke this drain, when one did. A drain that finds the chat's
-		 * turn still running defers its own claim instead of polling, so nothing spins and the
-		 * message is answered the moment the turn frees.
+		 * turn still running defers its own claim instead of polling.
 		 */
 		claim?: Readonly<{ readonly id: string; readonly attempt: number }>
 	) => Effect.Effect<DrainReport, EnvoyFailure>;
-	readonly status: (
-		effectId: EffectId,
-		envoyName: string
-	) => Effect.Effect<EnvoyStatus, EnvoyError | Database.FacilityError>;
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Envoys');
@@ -236,8 +192,7 @@ type LayerServices =
 	| Workspace.Interface
 	| Agents.Interface
 	| Identity.Interface
-	| CommunicationInterface
-	| FilesInterface
+	| Channels.Interface
 	| Database.Interface
 	| TaskQueue.Interface
 	| RateLimits.Interface
@@ -250,25 +205,24 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		const workspace = yield* Workspace.Service;
 		const agents = yield* Agents.Service;
 		const identity = yield* Identity.Service;
-		const communication = yield* Communication.Service;
-		const files = yield* Files.Service;
+		const channels = yield* Channels.Service;
 		const database = yield* Database.Service;
 		const queue = yield* TaskQueue.Service;
 		const rateLimits = yield* RateLimits.Service;
 		const access = yield* AccessControl.Service;
 		const tenant = yield* TenantScope.Service;
 
+		const envoyOf = (declared: EnvoyDefinition & { readonly name: string }): Envoy | undefined => {
+			const channel = workspace.definition.channels.find(({ name }) => name === declared.channel);
+			return channel === undefined ? undefined : { ...declared, transport: channel.transport };
+		};
 		const requireEnvoy = Effect.fn('Envoys.requireEnvoy')(function* (envoyName: string) {
-			const envoy = workspace.definition.envoys.find(({ name }) => name === envoyName);
+			const declared = workspace.definition.envoys.find(({ name }) => name === envoyName);
+			const envoy = declared === undefined ? undefined : envoyOf(declared);
 			if (envoy === undefined)
 				return yield* new EnvoyError({ envoy: envoyName, message: 'Unknown envoy' });
 			return envoy;
 		});
-
-		const bytesOf = (base64: string): Uint8Array => {
-			const binary = atob(base64);
-			return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-		};
 
 		/** The whole notice, link included: see `workspaceLink` for where the link comes from. */
 		const registrationNotice = Effect.fn('Envoys.registrationNotice')(function* (
@@ -295,29 +249,6 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 						envoy: envoyName,
 						message: `${operation} failed: ${getErrorMessage(failure)}`
 					})
-			);
-
-		const recordReceipt = (
-			effectId: EffectId,
-			envoyName: string,
-			conversationId: string,
-			direction: 'inbound' | 'outbound',
-			senderId?: string,
-			receiptKey?: string
-		) =>
-			executeBuilt(
-				effectId,
-				database,
-				composer
-					.insert(boltEnvoyReceipts)
-					.values({
-						envoy_name: envoyName,
-						conversation_id: conversationId,
-						direction,
-						sender_id: senderId ?? null,
-						receipt_key: receiptKey ?? null
-					})
-					.onConflictDoNothing({ target: boltEnvoyReceipts.receipt_key })
 			);
 
 		const readChannelLink = Effect.fn('Envoys.readChannelLink')(function* (
@@ -378,7 +309,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 
 		const issueRegistration = Effect.fn('Envoys.issueRegistration')(function* (
 			effectId: EffectId,
-			envoy: EnvoyDefinition & { readonly name: string },
+			envoy: Envoy,
 			senderId: string
 		) {
 			const canonical = canonicalTransportIdentity(envoy.transport, senderId);
@@ -564,78 +495,51 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		});
 
 		/**
-		 * Delivers one outbound message, answering whether the transport took it.
-		 *
-		 * Never fails: a transport that refused answers `false`. Delivery is the only thing that
-		 * turns text into a channel message, and a receipt counts one delivered message, so a
-		 * refused send is retried by the caller's own claim rather than recorded as a reply.
-		 *
-		 * The receipt carries the provider's message id and the exact rendered body; the
-		 * outbound half of the replica is written from it, so the chat the agent reads back is
-		 * what the transport actually sent.
+		 * Sends one reply over the envoy's channel: an outbox row, committed, then drained at once.
+		 * A send that fails now is retried by the outbox; the reply is never lost. Answers whether the
+		 * reply was committed.
 		 */
-		const deliver = Effect.fn('Envoys.deliver')(function* (
+		const deliver = (
 			effectId: EffectId,
-			envoy: EnvoyDefinition & { readonly name: string },
+			envoy: Envoy,
 			conversationId: string,
-			recipient: string,
-			payload: Schema.Json
+			text: string,
+			mail?: Readonly<{ readonly to: ReadonlyArray<string>; readonly subject: string }>
+		) =>
+			channels
+				.send(
+					effectId,
+					envoy.channel,
+					envoy.transport === 'email'
+						? { to: mail?.to ?? [], subject: mail?.subject ?? 'Re:', text }
+						: { to: conversationId, text },
+					{ conversationId }
+				)
+				.pipe(
+					Effect.tap(() => channels.drain(EffectId.make(`${effectId}:drain`), envoy.channel).pipe(Effect.ignore)),
+					Effect.as(true),
+					Effect.catch(() => Effect.succeed(false))
+				);
+
+		/** Whose authority a row's turn carries: the envoy's, or a private envoy's member in a DM. */
+		const subjectFor = Effect.fn('Envoys.subjectFor')(function* (
+			effectId: EffectId,
+			envoy: Envoy,
+			kind: string,
+			senderId: string | null
 		) {
-			const response = yield* communication
-				.execute(EffectId.make(`${effectId}:send`), {
-					_tag: 'Send',
-					channel: envoy.transport,
-					recipient,
-					payload
-				})
-				.pipe(Effect.option);
-			if (Option.isNone(response)) return false;
-			const receipt = Schema.decodeUnknownOption(SendReceipt)(response.value.receipt);
-			const asked = isObjectLike(payload) ? Reflect.get(payload, 'text') : undefined;
-			const body =
-				receipt._tag === 'Some' && receipt.value.body !== undefined
-					? receipt.value.body
-					: isString(asked)
-						? asked
-						: '';
-			const messageId =
-				receipt._tag === 'Some' && receipt.value.messageId !== undefined
-					? receipt.value.messageId
-					: effectId;
-			const agentConversationId = conversationFor(conversationId);
-			yield* executeBuilt(
-				EffectId.make(`${effectId}:replica`),
-				database,
-				composer
-					.insert(envoyMessages)
-					.values({
-						envoy_name: envoy.name,
-						conversation_id: agentConversationId,
-						transport_conversation_id: recipient,
-						direction: 'outbound',
-						origin: 'send',
-						external_message_id: messageId,
-						receipt_key: `${envoy.name}:${conversationId}:${messageId}:outbound`,
-						sent_at: dbNow(),
-						invocation: 'direct',
-						text: body,
-						attachments: JSON.stringify([]),
-						subject: JSON.stringify(envoySubject(envoy, tenant.tenantId, undefined)),
-						addressed: false,
-						read_by: 'send',
-						status: 'recorded'
-					})
-					.onConflictDoNothing({ target: envoyMessages.receipt_key })
-			);
-			yield* recordReceipt(
-				EffectId.make(`${effectId}:receipt`),
-				envoy.name,
-				recipient,
-				'outbound',
-				undefined,
-				`${envoy.name}:${recipient}:${effectId}:outbound`
-			);
-			return true;
+			const linked =
+				envoy.audience !== 'public' && senderId !== null
+					? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
+					: undefined;
+			if (envoy.audience !== 'public' && linked === undefined) return undefined;
+			const envoyTurn = envoySubject(envoy, tenant.tenantId, linked);
+			if (envoy.audience === 'private' && kind === 'dm' && linked !== undefined)
+				return yield* identity.resolveUser(effectId, linked.userId).pipe(
+					Effect.map((member) => ({ ...member, admin: false })),
+					Effect.catchTag('Bolt.Identity.AuthenticationError', () => Effect.succeed(undefined))
+				);
+			return envoyTurn;
 		});
 
 		/**
@@ -656,15 +560,15 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				database,
 				composer
 					.select({
-						id: envoyMessages.id,
-						external_message_id: envoyMessages.external_message_id
+						id: channelMessages.id,
+						provider_message_id: channelMessages.provider_message_id
 					})
-					.from(envoyMessages)
+					.from(channelMessages)
 					.where(
 						and(
-							eq(envoyMessages.conversation_id, conversationId),
-							eq(envoyMessages.addressed, true),
-							ne(envoyMessages.status, 'answered')
+							eq(channelMessages.agent_conversation_id, conversationId),
+							eq(channelMessages.addressed, true),
+							isNull(channelMessages.answered_at)
 						)
 					)
 			);
@@ -672,7 +576,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				const decoded = Schema.decodeUnknownOption(
 					Schema.Struct({
 						id: Schema.NonEmptyString,
-						external_message_id: Schema.NonEmptyString
+						provider_message_id: Schema.NonEmptyString
 					})
 				)(row);
 				return decoded._tag === 'Some' ? [decoded.value] : [];
@@ -680,7 +584,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 			if (rows.length === 0) return { answered: 0, remaining: 0 };
 			const candidates = rows.map((row) => ({
 				rowId: row.id,
-				messageId: inboundMessageId(conversationId, row.external_message_id)
+				messageId: inboundMessageId(conversationId, row.provider_message_id)
 			}));
 			const consumed = yield* executeBuilt(
 				EffectId.make(`${effectId}:consumed`),
@@ -712,9 +616,9 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					EffectId.make(`${effectId}:answer`),
 					database,
 					composer
-						.update(envoyMessages)
-						.set({ status: 'answered', answered_at: dbNow() })
-						.where(inArray(envoyMessages.id, answeredIds))
+						.update(channelMessages)
+						.set({ answered_at: dbNow() })
+						.where(inArray(channelMessages.id, answeredIds))
 				);
 			}
 			return {
@@ -726,312 +630,170 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		return Service.of({
 			inspectRegistration,
 			redeemRegistration,
-
-			receive: Effect.fn('Envoys.receive')(function* (effectId, envoyName, delivery) {
-				const envoy = yield* requireEnvoy(envoyName);
-				const historical = delivery.historical === true;
-				const edited = delivery.edited === true;
-				const senderId = delivery.sender?.id;
-				const internal = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
-				if (!historical && !edited)
-					yield* recordReceipt(
-						EffectId.make(`${effectId}:receipt`),
-						envoyName,
-						delivery.conversationId,
-						'inbound',
-						senderId,
-						`${envoyName}:${delivery.conversationId}:${delivery.messageId}:inbound`
-					);
-				const groupEnabled =
-					delivery.conversationKind !== 'group' || envoy.groupMessages !== 'disabled';
-				if (!groupEnabled) {
-					return {
-						status: 'silent' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-				}
-				const addressed =
-					delivery.conversationKind !== 'group' ||
-					envoy.groupMessages === 'all' ||
-					delivery.invocation === 'mention' ||
-					delivery.invocation === 'reply';
-
-				const linked =
-					envoy.audience !== 'public' && senderId !== undefined
-						? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
-						: undefined;
-				if (envoy.audience !== 'public' && linked === undefined) {
-					// History never mints a registration notice: the reply is owed to a live
-					// sender, and a backfilled row has nobody waiting on it.
-					if (!addressed || senderId === undefined || historical) {
-						return {
-							status: 'silent' as const,
-							envoy: envoyName,
-							conversationId: delivery.conversationId
-						};
-					}
-					const principal = envoySubject(envoy, tenant.tenantId, undefined);
-					const declared = access.limits(principal);
-					const noticeLimits = {
-						...declared,
-						'envoys.registration':
-							declared['envoys.registration'] ?? REGISTRATION_NOTICE_LIMITS['envoys.registration']
-					};
-					const admitted = yield* rateLimits
-						.admit(
-							'envoys.registration',
-							{
-								tenantId: tenant.tenantId,
-								userId: envoyPrincipalId(envoyName),
-								sender: senderId
-							},
-							noticeLimits
-						)
-						.pipe(
-							Effect.as(true),
-							Effect.catch(() => Effect.succeed(false))
-						);
-					const claimId = admitted
-						? yield* issueRegistration(EffectId.make(`${effectId}:registration`), envoy, senderId)
-						: undefined;
-					const text = `Register this ${envoy.transport} account with ${tenant.tenantId} to continue.`;
-					const delivered =
-						claimId !== undefined &&
-						(yield* deliver(effectId, envoy, internal, senderId, {
-							text: yield* registrationNotice(text, claimId)
-						}));
-					return {
-						status: 'registration_required' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId,
-						...(delivered ? { text } : {})
-					};
-				}
-
-				const envoyTurn = envoySubject(envoy, tenant.tenantId, linked);
-				// A private envoy's direct message is the member's own session, reached from a phone:
-				// their current policies, never `admin`. A group always speaks as the envoy.
-				const subject =
-					envoy.audience === 'private' && delivery.conversationKind === 'dm' && linked !== undefined
-						? yield* identity.resolveUser(effectId, linked.userId).pipe(
-								Effect.map((member) => ({ ...member, admin: false })),
-								Effect.catchTag('Bolt.Identity.AuthenticationError', () =>
-									Effect.succeed(undefined)
-								)
-							)
-						: envoyTurn;
-				if (subject === undefined)
-					return {
-						status: 'silent' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-				// The envoy's own limits bound every turn, whoever's authority it carries.
-				if (!historical)
-					yield* rateLimits.admit(
-						'envoys.receive',
-						{
-							tenantId: subject.tenantId,
-							userId: envoyPrincipalId(envoyName),
-							sender: senderId
-						},
-						access.limits(envoyTurn)
-					);
-
-				const agentConversationId = conversationFor(internal);
-				const stored: Array<Schema.Schema.Type<typeof ReplicaAttachment>> = [];
-				for (const [index, attachment] of delivery.attachments.entries()) {
-					if (attachment.bytesBase64 === undefined) {
-						stored.push({
-							provider: attachment.provider,
-							attachmentId: attachment.attachmentId,
-							kind: attachment.kind,
-							mimeType: attachment.mimeType,
-							fileName: attachment.fileName,
-							size: attachment.byteLength
-						});
-						continue;
-					}
-					const bytes = bytesOf(attachment.bytesBase64);
-					if (bytes.byteLength !== attachment.byteLength) {
-						return yield* new EnvoyError({
-							envoy: envoyName,
-							message: `attachment ${attachment.attachmentId} did not match its declared byte length`
-						});
-					}
-					// Materialized once, at ingest: the replica is the durable home of the media,
-					// so a read never has to copy bytes and a sync never has to re-fetch them.
-					const key = conversationAssetStorageKey(
-						agentConversationId,
-						`${delivery.messageId}:${index}`,
-						attachment.fileName
-					);
-					yield* files.execute(EffectId.make(`${effectId}:attachment:${index}`), {
-						_tag: 'Write',
-						key,
-						bytes
-					});
-					stored.push({
-						provider: attachment.provider,
-						attachmentId: attachment.attachmentId,
-						kind: attachment.kind,
-						mimeType: attachment.mimeType,
-						fileName: attachment.fileName,
-						size: bytes.byteLength,
-						key
-					});
-				}
-
-				const recorded = yield* executeBuilt(
-					EffectId.make(`${effectId}:claim`),
-					database,
-					composer
-						.insert(envoyMessages)
-						.values({
-							envoy_name: envoyName,
-							conversation_id: agentConversationId,
-							transport_conversation_id: delivery.conversationId,
-							direction: 'inbound',
-							origin: historical ? 'sync' : 'live',
-							external_message_id: delivery.messageId,
-							receipt_key: `${envoyName}:${internal}:${delivery.messageId}`,
-							sender_external_id: senderId ?? null,
-							sender_display_name: delivery.sender?.displayName ?? null,
-							sent_at: delivery.sentAt,
-							invocation: delivery.invocation,
-							text: delivery.text,
-							attachments: JSON.stringify(stored),
-							subject: JSON.stringify(subject),
-							addressed,
-							read_by: historical ? 'sync' : null,
-							status: historical || edited ? 'recorded' : 'pending'
-						})
-						.onConflictDoNothing({ target: envoyMessages.receipt_key })
-						.returning({ id: envoyMessages.id })
-				);
-				const claimed = decodeIdRow(recorded.rows[0]);
-				if (claimed._tag === 'None') {
-					if (edited) {
-						// The replica converges; the transcript never does. A message a turn
-						// already answered keeps the wording that turn was answered against.
+			admit: Effect.fn('Envoys.admit')(function* (effectId, channelName, rows) {
+				const declared = workspace.definition.envoys.find(({ channel }) => channel === channelName);
+				const envoy = declared === undefined ? undefined : envoyOf(declared);
+				if (envoy === undefined) return [];
+				const admitted: Array<string> = [];
+				for (const row of rows) {
+					if (row.direction !== 'inbound' || !row.inserted || row.deleted) continue;
+					const envelope = row.envelope;
+					if (envelope._tag === 'http') continue;
+					const kind = row.conversationKind;
+					if (row.origin === 'sync') {
+						// Backfilled history joins the conversation already read: nobody is waiting on it.
 						yield* executeBuilt(
-							EffectId.make(`${effectId}:edit`),
+							EffectId.make(`${effectId}:${row.providerMessageId}:history`),
 							database,
 							composer
-								.update(envoyMessages)
-								.set({ text: delivery.text, edited_at: dbNow() })
-								.where(
-									and(
-										eq(envoyMessages.conversation_id, agentConversationId),
-										eq(envoyMessages.direction, 'inbound'),
-										eq(envoyMessages.external_message_id, delivery.messageId)
-									)
-								)
+								.update(channelMessages)
+								.set({
+									agent_conversation_id: conversationFor(internalConversation(envoy.name, kind, row.conversationId)),
+									read_by: 'sync'
+								})
+								.where(eq(channelMessages.id, row.id))
 						);
-						return {
-							status: 'edited' as const,
-							envoy: envoyName,
-							conversationId: delivery.conversationId
-						};
+						continue;
 					}
-					return {
-						status: 'duplicate' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-				}
-				// The drain is keyed by the message that caused it, so a redelivery cannot start a
-				// second one, and a new message starts one now rather than after a batch window.
-				if (addressed && !historical && !edited)
-					yield* queue.enqueueClaimed(EffectId.make(`${effectId}:enqueue`), {
+					const senderId = envelope._tag === 'chat' ? envelope.sender?.id ?? null : envelope.from.address.toLowerCase();
+					const internal = internalConversation(envoy.name, kind, row.conversationId);
+					const step = EffectId.make(`${effectId}:${row.providerMessageId}`);
+					if (kind === 'group' && envoy.groupMessages === 'disabled') continue;
+					const invocation = envelope._tag === 'chat' ? envelope.invocation : 'direct';
+					const addressed =
+						kind !== 'group' ||
+						envelope._tag === 'email' ||
+						envoy.groupMessages === 'all' ||
+						invocation === 'mention' ||
+						invocation === 'reply';
+					if (!addressed) {
+						// Ambient: history the envoy may read with read_messages, never a turn.
+						yield* executeBuilt(
+							EffectId.make(`${step}:ambient`),
+							database,
+							composer
+								.update(channelMessages)
+								.set({ agent_conversation_id: conversationFor(internal) })
+								.where(eq(channelMessages.id, row.id))
+						);
+						continue;
+					}
+					if (envoy.audience !== 'public') {
+						const linked =
+							senderId === null
+								? undefined
+								: yield* identity.accountByTransportIdentity(step, envoy.transport, senderId);
+						if (linked === undefined) {
+							if (senderId === null) continue;
+							const principal = envoySubject(envoy, tenant.tenantId, undefined);
+							const declaredLimits = access.limits(principal);
+							const noticeLimits = {
+								...declaredLimits,
+								'envoys.registration':
+									declaredLimits['envoys.registration'] ?? REGISTRATION_NOTICE_LIMITS['envoys.registration']
+							};
+							const allowed = yield* rateLimits
+								.admit('envoys.registration', { tenantId: tenant.tenantId, userId: envoyPrincipalId(envoy.name), sender: senderId }, noticeLimits)
+								.pipe(
+									Effect.as(true),
+									Effect.catch(() => Effect.succeed(false))
+								);
+							const claimId = allowed ? yield* issueRegistration(EffectId.make(`${step}:registration`), envoy, senderId) : undefined;
+							if (claimId !== undefined)
+								yield* deliver(
+									EffectId.make(`${step}:notice`),
+									envoy,
+									row.conversationId,
+									yield* registrationNotice(`Register this ${envoy.transport} account with ${tenant.tenantId} to continue.`, claimId),
+									envelope._tag === 'email' ? { to: [senderId], subject: `Re: ${envelope.subject}` } : undefined
+								);
+							continue;
+						}
+					}
+					// The envoy's own limits bound every turn, whoever's authority it carries.
+					const bounded = yield* rateLimits
+						.admit('envoys.receive', { tenantId: tenant.tenantId, userId: envoyPrincipalId(envoy.name), ...(senderId === null ? {} : { sender: senderId }) }, access.limits(envoySubject(envoy, tenant.tenantId, undefined)))
+						.pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)));
+					if (!bounded) continue;
+					yield* executeBuilt(
+						EffectId.make(`${step}:admit`),
+						database,
+						composer
+							.update(channelMessages)
+							.set({ addressed: true, agent_conversation_id: conversationFor(internal) })
+							.where(eq(channelMessages.id, row.id))
+					);
+					// The drain is keyed by the message that caused it, so a redelivery cannot start a
+					// second one, and a new message starts one now.
+					yield* queue.enqueueClaimed(EffectId.make(`${step}:enqueue`), {
 						command: 'envoys.drain',
-						input: { envoy: envoyName, conversationId: internal },
-						effectId: `envoys.drain:${internal}:${delivery.messageId}`,
+						input: { envoy: envoy.name, conversationId: internal },
+						effectId: `envoys.drain:${internal}:${row.providerMessageId}`,
 						nowEpochMs: yield* Clock.currentTimeMillis
 					});
-				return {
-					status: historical
-						? ('recorded' as const)
-						: edited
-							? ('edited' as const)
-							: addressed
-								? ('buffered' as const)
-								: ('silent' as const),
-					envoy: envoyName,
-					conversationId: delivery.conversationId
-				};
+					admitted.push(row.providerMessageId);
+				}
+				return admitted;
 			}),
 
 			drain: Effect.fn('Envoys.drain')(function* (effectId, envoyName, conversationId, claim) {
 				const envoy = yield* requireEnvoy(envoyName);
 				const internal = conversationFor(conversationId);
+				const scoped = conversationId.slice(envoyName.length + 1);
+				const kind = scoped.slice(0, scoped.indexOf(':'));
+				const providerConversation = scoped.slice(scoped.indexOf(':') + 1);
 				const pending = yield* executeBuilt(
 					EffectId.make(`${effectId}:pending`),
 					database,
 					composer
 						.select({
-							id: envoyMessages.id,
-							conversation_id: envoyMessages.conversation_id,
-							transport_conversation_id: envoyMessages.transport_conversation_id,
-							external_message_id: envoyMessages.external_message_id,
-							sender_external_id: envoyMessages.sender_external_id,
-							sender_display_name: envoyMessages.sender_display_name,
-							sent_at: envoyMessages.sent_at,
-							invocation: envoyMessages.invocation,
-							text: envoyMessages.text,
-							attachments: envoyMessages.attachments,
-							subject: envoyMessages.subject,
-							addressed: envoyMessages.addressed
+							id: channelMessages.id,
+							provider_message_id: channelMessages.provider_message_id,
+							sender_id: channelMessages.sender_id,
+							sender_name: channelMessages.sender_name,
+							sent_at: channelMessages.sent_at,
+							invocation: channelMessages.invocation,
+							subject: channelMessages.subject,
+							text: channelMessages.text,
+							attachments: channelMessages.attachments
 						})
-						.from(envoyMessages)
+						.from(channelMessages)
 						.where(
 							and(
-								eq(envoyMessages.conversation_id, internal),
-								eq(envoyMessages.status, 'pending'),
-								eq(envoyMessages.addressed, true)
+								eq(channelMessages.agent_conversation_id, internal),
+								eq(channelMessages.direction, 'inbound'),
+								eq(channelMessages.origin, 'live'),
+								eq(channelMessages.addressed, true),
+								isNull(channelMessages.answered_at),
+								isNull(channelMessages.deleted_at)
 							)
 						)
-						.orderBy(asc(envoyMessages.sent_at), asc(envoyMessages.created_at))
+						.orderBy(asc(channelMessages.sent_at), asc(channelMessages.created_at))
 						.limit(MAX_DRAIN_MESSAGES)
 				);
 				const rows = pending.rows
 					.flatMap((row) => {
-						const decoded = decodeInboundRow(row);
+						const decoded = decodePendingRow(row);
 						return decoded._tag === 'Some' ? [decoded.value] : [];
 					})
-					.toSorted(
-						(left, right) =>
-							left.sent_at.localeCompare(right.sent_at) || left.id.localeCompare(right.id)
-					);
+					.toSorted((left, right) => left.sent_at.localeCompare(right.sent_at) || left.id.localeCompare(right.id));
 				if (rows.length === 0) {
-					// Nothing addressed is waiting: settle whatever this conversation already answered
-					// and leave the rest to the message that will wake it.
 					const settled = yield* settleAnswered(effectId, internal);
-					return {
-						envoy: envoyName,
-						conversationId,
-						drained: 0,
-						status: settled.remaining > 0 ? ('queued' as const) : ('skipped' as const)
-					};
+					return { envoy: envoyName, conversationId, drained: 0, status: settled.remaining > 0 ? ('queued' as const) : ('skipped' as const) };
 				}
-				const recipient = rows.at(-1)?.transport_conversation_id;
+				const subjects: Array<Identity.Subject> = [];
+				for (const [index, row] of rows.entries()) {
+					const subject = yield* subjectFor(EffectId.make(`${effectId}:subject:${index}`), envoy, kind, row.sender_id);
+					subjects.push(subject ?? envoySubject(envoy, tenant.tenantId, undefined));
+				}
+				const last = rows.at(-1)!;
+				const mail =
+					envoy.transport === 'email' && last.sender_id !== null
+						? { to: [last.sender_id], subject: /^re:/i.test(last.subject ?? '') ? (last.subject ?? '') : `Re: ${last.subject ?? ''}` }
+						: undefined;
 
-				/**
-				 * The workspace names behind the registered senders in this batch.
-				 *
-				 * The envelope the model reads names the sender as the transport knows them — a
-				 * WhatsApp display name is whatever they typed — so the account their address is
-				 * linked to is what says who the turn serves. One bounded read by primary key for
-				 * the whole batch; `receive` already resolved the link itself.
-				 */
-				const accountIds = [
-					...new Set(
-						rows
-							.filter((row) => row.subject.userId !== envoyPrincipalId(envoyName))
-							.map((row) => row.subject.userId)
-					)
-				];
+				/** The workspace names behind the registered senders in this batch. */
+				const accountIds = [...new Set(subjects.filter(({ userId }) => userId !== envoyPrincipalId(envoyName)).map(({ userId }) => userId))];
 				const accounts =
 					accountIds.length === 0
 						? new Map<string, string>()
@@ -1039,184 +801,98 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 								(yield* executeBuilt(
 									EffectId.make(`${effectId}:accounts`),
 									database,
-									composer
-										.select({ id: usersTable.id, name: usersTable.name })
-										.from(usersTable)
-										.where(inArray(usersTable.id, accountIds))
+									composer.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, accountIds))
 								)).rows.flatMap((row) => {
 									const decoded = decodeNamedAccount(row);
-									return decoded._tag === 'Some'
-										? [[decoded.value.id, decoded.value.name] as const]
-										: [];
+									return decoded._tag === 'Some' ? [[decoded.value.id, decoded.value.name] as const] : [];
 								})
 							);
 
-				const admit = Effect.gen(function* () {
-					for (const [index, row] of rows.entries()) {
-						const attachments = row.attachments.flatMap((attachment) =>
-							attachment.key === undefined
-								? []
-								: [
-										ImageAsset.make({
-											key: attachment.key,
-											name: attachment.fileName,
-											mimeType: attachment.mimeType,
-											size: attachment.size
-										})
-									]
-						);
-						const account = accounts.get(row.subject.userId);
-						const message: Agents.InboundAgentMessage = {
-							sender: {
-								...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
-								...(row.sender_display_name === null
-									? {}
-									: { displayName: row.sender_display_name }),
-								...(account === undefined ? {} : { account })
-							},
-							sentAt: row.sent_at,
-							messageId: row.external_message_id,
-							// Media the channel could not hand over is named, not dropped, so the model can ask.
-							text: [
-								row.text,
-								...row.attachments.flatMap((attachment) =>
-									attachment.key === undefined
-										? [
-												`[attachment ${attachment.fileName} · ${attachment.mimeType} · not received; ask the sender to send it again]`
-											]
-										: []
-								)
-							]
-								.filter((line) => line !== '')
-								.join('\n'),
-							attachments,
-							invocation: row.invocation
-						};
-						// Every message is a steer: it joins the turn already running at its next step,
-						// and when nothing is running it is the message the next turn answers.
-						yield* agents
-							.submit(EffectId.make(`${effectId}:submit:${index}`), row.subject, {
-								conversationId: internal,
-								submissionId: inboundMessageId(internal, row.external_message_id),
-								agentId: AgentId.make(envoyName),
-								message: Agents.inboundAgentInput(message),
-								mode: DirectiveMode.make('agent'),
-								priority: DirectivePriority.make('steer')
-							})
-							.pipe(taskFailure(envoyName, 'message admission'));
-					}
-				});
-				yield* admit;
+				for (const [index, row] of rows.entries()) {
+					const attachments = row.attachments.flatMap((attachment) =>
+						attachment.key === undefined
+							? []
+							: [ImageAsset.make({ key: attachment.key, name: attachment.fileName, mimeType: attachment.mimeType, size: attachment.size })]
+					);
+					const account = accounts.get(subjects[index]!.userId);
+					const message: Agents.InboundAgentMessage = {
+						sender: {
+							...(row.sender_id === null ? {} : { id: row.sender_id }),
+							...(row.sender_name === null ? {} : { displayName: row.sender_name }),
+							...(account === undefined ? {} : { account })
+						},
+						sentAt: row.sent_at,
+						messageId: row.provider_message_id,
+						// Media the channel could not hand over is named, not dropped, so the model can ask.
+						text: [
+							...(envoy.transport === 'email' && row.subject !== null ? [`Subject: ${row.subject}`] : []),
+							row.text,
+							...row.attachments.flatMap((attachment) =>
+								attachment.key === undefined
+									? [`[attachment ${attachment.fileName} · ${attachment.mimeType} · not received; ask the sender to send it again]`]
+									: []
+							)
+						]
+							.filter((line) => line !== '')
+							.join('\n'),
+						attachments,
+						invocation: (row.invocation ?? 'direct') as Agents.InboundAgentMessage['invocation']
+					};
+					// Every message is a steer: it joins the turn already running at its next step.
+					yield* agents
+						.submit(EffectId.make(`${effectId}:submit:${index}`), subjects[index]!, {
+							conversationId: internal,
+							submissionId: inboundMessageId(internal, row.provider_message_id),
+							agentId: AgentId.make(envoyName),
+							message: Agents.inboundAgentInput(message),
+							mode: DirectiveMode.make('agent'),
+							priority: DirectivePriority.make('steer')
+						})
+						.pipe(taskFailure(envoyName, 'message admission'));
+				}
 
 				const onAssistantText = (part: Agents.AssistantTextPart) =>
-					recipient === undefined
+					envoy.transport === 'email'
 						? Effect.void
-						: deliver(
-								EffectId.make(`${effectId}:update:${part.callId}:${part.index}`),
-								envoy,
-								conversationId,
-								recipient,
-								{ text: part.text }
-							).pipe(Effect.ignore, Effect.asVoid);
+						: deliver(EffectId.make(`${effectId}:update:${part.callId}:${part.index}`), envoy, providerConversation, part.text).pipe(Effect.asVoid);
 
 				let answered = 0;
 				let remaining = rows.length;
 				let answerOwed = false;
 				let delivered = false;
-				/**
-				 * A turn that dies owes the sender a sentence. The failure is recorded on the
-				 * conversation for whoever reads the transcript; the person on the transport sees
-				 * none of that, and a chat that answers "Let me look that up" and then nothing is
-				 * indistinguishable from one that was never delivered.
-				 */
+				/** A turn that dies owes the sender a sentence. */
 				const notifyFailure = (turn: number, reason: string) =>
-					recipient === undefined
-						? Effect.void
-						: deliver(
-								EffectId.make(`${effectId}:failure:${turn}`),
-								envoy,
-								conversationId,
-								recipient,
-								{ text: `Sorry, I could not finish that: ${reason.slice(0, 500)}` }
-							).pipe(Effect.ignore, Effect.asVoid);
-				const runTurns = Effect.gen(function* () {
-					for (let turn = 0; turn < MAX_DRAIN_TURNS; turn += 1) {
-						const subject = rows[turn]?.subject ?? rows.at(-1)!.subject;
-						const executed = yield* agents
-							.execute(
-								EffectId.make(`${effectId}:execute:${turn}`),
-								subject,
-								internal,
-								onAssistantText
-							)
-							.pipe(
-								Effect.tapError((failure) => notifyFailure(turn, getErrorMessage(failure))),
-								taskFailure(envoyName, 'Task execution')
-							);
-						if (executed.status === 'failed')
-							yield* notifyFailure(turn, 'the request could not be completed.');
-						if (executed.output !== undefined) {
-							const answer = finalAnswerText(executed.output).trim();
-							if (answer !== '' && recipient !== undefined) {
-								answerOwed = true;
-								delivered =
-									(yield* deliver(
-										EffectId.make(`${effectId}:answer:${turn}`),
-										envoy,
-										conversationId,
-										recipient,
-										{ text: answer }
-									)) || delivered;
-							}
-						}
-						const settled = yield* settleAnswered(
-							EffectId.make(`${effectId}:settle:${turn}`),
-							internal
+					deliver(EffectId.make(`${effectId}:failure:${turn}`), envoy, providerConversation, `Sorry, I could not finish that: ${reason.slice(0, 500)}`, mail).pipe(Effect.asVoid);
+				for (let turn = 0; turn < MAX_DRAIN_TURNS; turn += 1) {
+					const subject = subjects[turn] ?? subjects.at(-1)!;
+					const executed = yield* agents
+						.execute(EffectId.make(`${effectId}:execute:${turn}`), subject, internal, onAssistantText)
+						.pipe(
+							Effect.tapError((failure) => notifyFailure(turn, getErrorMessage(failure))),
+							taskFailure(envoyName, 'Task execution')
 						);
-						answered = settled.answered;
-						remaining = settled.remaining;
-						if (remaining === 0) break;
-						// A turn that answered while another message stayed queued reports `idle` with
-						// an output; only an idle with no output means another driver holds the chat.
-						if (executed.output === undefined && executed.status !== 'done') break;
+					if (executed.status === 'failed') yield* notifyFailure(turn, 'the request could not be completed.');
+					if (executed.output !== undefined) {
+						const answer = finalAnswerText(executed.output).trim();
+						if (answer !== '') {
+							answerOwed = true;
+							delivered = (yield* deliver(EffectId.make(`${effectId}:answer:${turn}`), envoy, providerConversation, answer, mail)) || delivered;
+						}
 					}
-				});
-				yield* runTurns;
-				// A queued message another turn is still working through keeps this claim alive: the
-				// host re-runs the drain when the turn frees, and the message is answered then.
-				if (remaining > 0 && claim !== undefined) {
-					yield* queue.defer(EffectId.make(`${effectId}:defer`), claim.id, claim.attempt);
+					const settled = yield* settleAnswered(EffectId.make(`${effectId}:settle:${turn}`), internal);
+					answered = settled.answered;
+					remaining = settled.remaining;
+					if (remaining === 0) break;
+					if (executed.output === undefined && executed.status !== 'done') break;
 				}
+				// A queued message another turn is still working through keeps this claim alive.
+				if (remaining > 0 && claim !== undefined) yield* queue.defer(EffectId.make(`${effectId}:defer`), claim.id, claim.attempt);
 				return {
 					envoy: envoyName,
 					conversationId,
 					drained: answered,
-					status:
-						remaining > 0
-							? ('queued' as const)
-							: answerOwed && !delivered
-								? ('failed' as const)
-								: ('answered' as const)
+					status: remaining > 0 ? ('queued' as const) : answerOwed && !delivered ? ('failed' as const) : ('answered' as const)
 				};
-			}),
-
-			status: Effect.fn('Envoys.status')(function* (effectId, envoyName) {
-				yield* requireEnvoy(envoyName);
-				// One pass per call, not two: the counters the status answers with are the
-				// directions of the same row set, so one grouped query reads both.
-				const counts = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							direction: boltEnvoyReceipts.direction,
-							count: count()
-						})
-						.from(boltEnvoyReceipts)
-						.where(eq(boltEnvoyReceipts.envoy_name, envoyName))
-						.groupBy(boltEnvoyReceipts.direction)
-				);
-				return { envoy: envoyName, ...envoyReceiptCounts(counts.rows) };
 			})
 		});
 	})

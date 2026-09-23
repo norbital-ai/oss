@@ -46,6 +46,7 @@ const definition = workspace({
 	],
 	teams: { 'field-worker': ['field-worker'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'Test workspace.',

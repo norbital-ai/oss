@@ -82,47 +82,21 @@ const integrationEntries = (
 	definition: WorkspaceDefinition,
 	projection: unknown
 ): ReadonlyArray<Readonly<Record<string, Schema.Json>>> =>
-	definition.integrations.map((integration) => {
-		const sourcePath = sourcePathFor(projection, 'integrationSourcePaths', integration.collection);
-		return jsonObject({
+	definition.integrations.map((integration) =>
+		jsonObject({
 			name: integration.name,
-			collection: integration.collection,
-			...provenance(sourcePath),
-			bindings: [
-				...integration.receive.map((binding) =>
-					jsonObject({
-						name: binding.name,
-						direction: 'receive',
-						method: binding.method,
-						path: binding.path,
-						schedule: binding.schedule,
-						targetCollection: integration.collection,
-						source: integration.name
-					})
-				),
-				...integration.webhooks.map((binding) =>
-					jsonObject({
-						name: binding.name,
-						direction: 'receive',
-						method: 'POST',
-						path: binding.path,
-						targetCollection: integration.collection,
-						source: integration.name
-					})
-				),
-				...integration.send.map((binding) =>
-					jsonObject({
-						name: binding.name,
-						direction: 'send',
-						method: binding.method,
-						path: binding.path,
-						events: [...binding.events],
-						source: integration.collection
-					})
-				)
-			]
-		});
-	});
+			...provenance(sourcePathFor(projection, 'integrationSourcePaths', integration.name)),
+			syncs: integration.syncs.map((sync) =>
+				jsonObject({
+					name: sync.name,
+					collection: sync.collection,
+					direction: sync.direction,
+					source: sync.source,
+					fields: sync.fields.map(({ column }) => column)
+				})
+			)
+		})
+	);
 
 const appGroups = (projection: unknown): ReadonlyArray<Readonly<Record<string, Schema.Json>>> => {
 	const groups = property(projection, 'appGroups');
@@ -242,15 +216,23 @@ export const authoredManifestDeclarations = (
 				destination: { kind: 'system', surface: 'automations', selection: name }
 			})
 		),
-		envoys: definition.envoys.map(({ name, transport, audience, groupMessages, delegation }) =>
+		channels: definition.channels.map(({ name, transport, address }) =>
 			jsonObject({
 				name,
 				transport,
+				address,
+				...provenance(sourcePathFor(projection, 'channelSourcePaths', name))
+			})
+		),
+		envoys: definition.envoys.map(({ name, channel, audience, groupMessages, delegation }) =>
+			jsonObject({
+				name,
+				channel,
 				audience,
 				groupMessages,
 				delegation,
 				...provenance(sourcePathFor(projection, 'envoySourcePaths', name)),
-				destination: { kind: 'system', surface: 'envoys', selection: name }
+				destination: { kind: 'system', surface: 'channels', selection: channel }
 			})
 		),
 		integrations: integrationEntries(definition, projection),

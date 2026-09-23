@@ -235,7 +235,8 @@ describe('workspace navigation', () => {
 		expect(utilities[1]?.children?.map(({ key }) => key)).toEqual([
 			'workspace-people',
 			'organization',
-			'envoys',
+			'channels',
+			'integrations',
 			'environment_secrets',
 			'workspace-studio'
 		]);

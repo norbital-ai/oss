@@ -26,6 +26,7 @@ const taskSchemaSteps = () =>
 			tools: [],
 			skills: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			requiredFacilities: []

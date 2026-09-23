@@ -180,13 +180,13 @@ describe('Bolt authored source discovery', () => {
 	 */
 	it('refuses a + file it has no rule for, and says where it belongs', async () => {
 		const root = await workspaceRoot();
-		await mkdir(join(root, 'src', 'channels'), { recursive: true });
-		await writeFile(join(root, 'src', 'channels', '+inbox.channel.ts'), 'export default {}');
+		await mkdir(join(root, 'src', 'webhooks'), { recursive: true });
+		await writeFile(join(root, 'src', 'webhooks', '+inbox.ts'), 'export default {}');
 		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
-			/src\/channels\/\+inbox\.channel\.ts/
+			/src\/webhooks\/\+inbox\.ts/
 		);
 		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
-			/envoys\/\+<name>\.ts/
+			/channels\/\+<name>\.ts/
 		);
 	});
 

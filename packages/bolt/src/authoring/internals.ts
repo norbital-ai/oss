@@ -5,7 +5,8 @@ import type { TableName, TablesForModels } from './contracts-schema.js';
 export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
 export { compileModel } from './model-introspection.js';
 export { describeEnvoy, describePolicy } from './policy-introspection.js';
-export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
+export { describeChannel } from './channels-schema.js';
+export { describeIntegration } from './integrations-schema.js';
 export { agentTools } from './workspace-schema.js';
 
 /** Owns generated model registration without changing the inferred authored declaration types. */

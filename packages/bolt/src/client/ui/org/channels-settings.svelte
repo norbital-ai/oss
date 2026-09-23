@@ -14,31 +14,16 @@
 		connectionIsRecovering,
 		connectionIsTerminalError,
 		connectionLabel
-	} from './envoy-connection-presentation.js';
+	} from './channel-connection-presentation.js';
 
 	/**
-	 * The Envoys surface: every agent this workspace exposes on a transport, and how each is doing.
+	 * Settings → Channels: every channel this workspace declares, how its history sync and its outbox
+	 * are doing, and — for the transports a host must pair — the pairing itself (channels.md §12).
 	 *
-	 * An envoy is an agent that is not the web agent — it has its own identity, its own declared
-	 * policies, and one transport it answers on. It is not a collection's integration, which syncs
-	 * records for one collection and lives under that collection's own tab in Workspace Studio. The
-	 * two were previously shown together and read as one thing; keeping them on separate surfaces is
-	 * what stops that.
-	 *
-	 * **One envoy is one row, and there is no grouping above it.** This page used to draw an agent
-	 * card and nest the channels under it, because a channel pointed at an agent — a back-pointer
-	 * whose value was the single synthesized agent, in every workspace, always. So every reader paid
-	 * for a level of hierarchy that had exactly one node. An envoy *is* the agent; the card is the
-	 * envoy.
-	 *
-	 * Pairing is folded in here too, for the same reason. It was a separate component because it
-	 * looked like a separate object; it is a *state* of an envoy — whether the host is holding an open
-	 * socket for it — and it belongs on the envoy's own card beside the traffic the runtime reports.
-	 *
-	 * Every state on this page is one somebody actually published. `workspace.manifest` names the
-	 * envoys, `envoys.status` reports registration and traffic, the host answers for the connection,
-	 * and where a command answers with neither — a failure, or a field the projection never carried —
-	 * the page says so rather than filling the gap with a default that would read as "connected".
+	 * Every state on this page is one somebody published: `workspace.manifest` names the channels and
+	 * the envoy on each, `channels.status` reports history and delivery, and the host answers for the
+	 * connection. Where a command answers with neither, the page says so rather than filling the gap
+	 * with a default that would read as "connected".
 	 */
 
 	/**
@@ -51,16 +36,14 @@
 	let { client }: { client: WorkspaceClient } = $props();
 	const { operations } = workspaceSession();
 
-	/**
-	 * Exactly the projection `workspace.manifest` publishes for an envoy.
-	 *
-	 * No `agent`. The manifest stopped carrying one because there is nothing to point at.
-	 */
+	/** Exactly the projection `workspace.manifest` publishes for a channel. */
+	type DeclaredChannel = WorkspaceManifest['channels'][number];
 	type DeclaredEnvoy = WorkspaceManifest['envoys'][number];
-	/** Exactly what `envoys.status` returns — one owner: the Studio's `EnvoyStatusSchema`, decoded. */
+	/** The transports a host pairs: a QR to scan, or a credential to paste. */
+	const PAIRED_TRANSPORTS: ReadonlyArray<string> = ['whatsapp', 'telegram'];
 	/** Exactly the projection the host's `transport` operation answers with. */
 	const ConnectionSchema = Schema.Struct({
-		envoy: Schema.String,
+		channel: Schema.String,
 		provider: Schema.String,
 		state: Schema.Literals(['disconnected', 'connecting', 'pairing', 'connected', 'error']),
 		revision: Schema.optionalKey(
@@ -69,7 +52,7 @@
 		pairedAs: Schema.optionalKey(Schema.String),
 		pairing: Schema.optionalKey(Schema.String),
 		pairingExpiresAt: Schema.optionalKey(Schema.Number),
-		/** How an unpaired envoy is paired: scan a QR, or submit a credential. */
+		/** How an unpaired channel is paired: scan a QR, or submit a credential. */
 		pairingKind: Schema.optionalKey(Schema.Literals(['qr', 'credential'])),
 		/** True only while the host is automatically reopening a recoverable connection. */
 		retrying: Schema.optionalKey(Schema.Boolean),
@@ -89,14 +72,16 @@
 		browserReady = true;
 	});
 	const manifestQuery = $derived(browserReady ? client.system.workspace.manifest({}) : undefined);
-	const envoys = $derived<ReadonlyArray<DeclaredEnvoy>>(manifestQuery?.current?.envoys ?? []);
+	const channels = $derived<ReadonlyArray<DeclaredChannel>>(manifestQuery?.current?.channels ?? []);
+	const envoyOn = (channel: string): DeclaredEnvoy | undefined =>
+		manifestQuery?.current?.envoys.find((declared) => declared.channel === channel);
 	const statusQueries = $derived(
-		envoys.map((envoy) => {
+		channels.map((channel) => {
 			const deadline = AbortSignal.timeout(STATUS_DEADLINE_MS);
 			return {
-				name: envoy.name,
+				name: channel.name,
 				deadline,
-				query: client.system.envoys.status({ envoy: envoy.name }, deadline)
+				query: client.system.channels.status({ channel: channel.name }, deadline)
 			};
 		})
 	);
@@ -122,7 +107,7 @@
 									? `The runtime did not answer within ${Math.round(STATUS_DEADLINE_MS / 1000)}s.`
 									: query.error instanceof Error
 										? query.error.message
-										: 'The runtime did not report this envoy.'
+										: 'The runtime did not report this channel.'
 							] as const
 						]
 			)
@@ -135,8 +120,8 @@
 	// Closing the dialog must not clear it: the underlying operations.run Promise cannot be cancelled.
 	let pairingBusy = $state<Record<string, boolean>>({});
 	let unpairingBusy = $state<Record<string, boolean>>({});
-	let pairingTarget = $state<DeclaredEnvoy | undefined>(undefined);
-	/** The token being typed for a credential-paired transport, per envoy. */
+	let pairingTarget = $state<DeclaredChannel | undefined>(undefined);
+	/** The token being typed for a credential-paired transport, per channel. */
 	let credentialInput = $state<Record<string, string>>({});
 	let pairingReconnects = $state<Record<string, boolean>>({});
 	const connectionRequestVersions = new Map<string, number>();
@@ -155,16 +140,16 @@
 	const STATUS_DEADLINE_MS = 15_000;
 
 	/** Renders the transport's pairing payload as a QR the phone's camera can read. */
-	const renderQr = (envoy: string, payload: string | undefined) =>
+	const renderQr = (channel: string, payload: string | undefined) =>
 		Effect.gen(function* () {
 			if (payload === undefined) {
-				delete qrCodes[envoy];
+				delete qrCodes[channel];
 				return;
 			}
 			const { toDataURL } = yield* Effect.tryPromise(() => import('qrcode'));
 			// Fixed colours rather than the theme's: a QR is read by a camera, not by a person, and a
 			// low-contrast pairing code in dark mode is one that simply does not scan.
-			qrCodes[envoy] = yield* Effect.tryPromise(() =>
+			qrCodes[channel] = yield* Effect.tryPromise(() =>
 				toDataURL(payload, {
 					margin: 2,
 					width: 240,
@@ -176,24 +161,20 @@
 	/**
 	 * Pairing, which is host-owned and asked through `operations` rather than through the runtime.
 	 *
-	 * The workspace declares the envoy and its policies; the host holds the credential and the
-	 * socket — so "is this connected" is a question only the host can answer. `envoys.status` answers
-	 * a deliberately different one (whether anything ever registered, and how many messages have
-	 * passed) and is rendered separately for that reason.
-	 *
-	 * `action: 'transport'`, not `'envoy'`. Colony supplies the wire and never sees a policy, so its
-	 * half of this is named for the wire.
+	 * The workspace declares the channel; the host holds the credential and the socket — so "is this
+	 * connected" is a question only the host can answer. `channels.status` answers a different one
+	 * (the history sync and the delivery record) and is rendered separately for that reason.
 	 */
 	const runPairingRequest = (
-		envoy: string,
+		channel: string,
 		provider: string,
 		operation: 'pair' | 'status' | 'observe' | 'unpair',
 		afterRevision?: number,
 		credential?: string
 	): Effect.Effect<void> =>
 		Effect.suspend(() => {
-			const requestVersion = (connectionRequestVersions.get(envoy) ?? 0) + 1;
-			connectionRequestVersions.set(envoy, requestVersion);
+			const requestVersion = (connectionRequestVersions.get(channel) ?? 0) + 1;
+			connectionRequestVersions.set(channel, requestVersion);
 
 			return Effect.gen(function* () {
 				const answer = yield* Schema.decodeUnknownEffect(ConnectionAnswerSchema)(
@@ -202,7 +183,7 @@
 							{
 								action: 'transport',
 								operation,
-								envoy,
+								channel,
 								provider,
 								...(afterRevision === undefined ? {} : { afterRevision }),
 								...(credential === undefined ? {} : { credential })
@@ -213,20 +194,20 @@
 				);
 				const next = answer.connection;
 				if (next === undefined)
-					return yield* Effect.fail(new Error('The host did not report this envoy.'));
-				// The page starts one status read per envoy. If somebody clicks Pair before that read
+					return yield* Effect.fail(new Error('The host did not report this channel.'));
+				// The page starts one status read per channel. If somebody clicks Pair before that read
 				// settles, its older "disconnected" answer must not overwrite the newer pairing socket.
-				if (connectionRequestVersions.get(envoy) !== requestVersion) return;
-				connections[envoy] = next;
-				delete connectionErrors[envoy];
-				yield* renderQr(envoy, next.pairing);
+				if (connectionRequestVersions.get(channel) !== requestVersion) return;
+				connections[channel] = next;
+				delete connectionErrors[channel];
+				yield* renderQr(channel, next.pairing);
 			}).pipe(
 				Effect.catch((cause) => {
-					if (connectionRequestVersions.get(envoy) !== requestVersion) return Effect.void;
+					if (connectionRequestVersions.get(channel) !== requestVersion) return Effect.void;
 					// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
-					// transport for this provider, no secret key to seal a credential with, two envoys open on
-					// one transport — and replacing them with "pairing failed" throws all of that away.
-					connectionErrors[envoy] =
+					// adapter for this transport, no secret key to seal a credential with — and replacing
+					// them with "pairing failed" throws all of that away.
+					connectionErrors[channel] =
 						cause instanceof Error ? cause.message : 'The host refused this operation.';
 					return Effect.void;
 				})
@@ -234,7 +215,7 @@
 		});
 
 	/**
-	 * Owns the one host-side socket open that may be unresolved for an envoy.
+	 * Owns the one host-side socket open that may be unresolved for a channel.
 	 *
 	 * The socket open itself deliberately outlives the modal fiber. Releasing `pairingBusy` when a
 	 * dialog closes would make interruption look like cancellation while the host is still opening,
@@ -242,68 +223,68 @@
 	 * the real host request settles. Every dialog opened meanwhile awaits that same Promise; the event
 	 * observation after it is interruptible.
 	 */
-	const ownPairingOpen = (envoy: string, provider: string): Promise<void> => {
-		const existing = pairingOpens.get(envoy);
+	const ownPairingOpen = (channel: string, provider: string): Promise<void> => {
+		const existing = pairingOpens.get(channel);
 		if (existing !== undefined) return existing;
 
-		pairingBusy[envoy] = true;
+		pairingBusy[channel] = true;
 		let completion: Promise<void>;
-		completion = Effect.runPromise(runPairingRequest(envoy, provider, 'pair')).finally(() => {
+		completion = Effect.runPromise(runPairingRequest(channel, provider, 'pair')).finally(() => {
 			// Identity matters if this code ever grows a retry hand-off: an older completion must not
 			// release ownership held by a newer request.
-			if (pairingOpens.get(envoy) !== completion) return;
-			pairingOpens.delete(envoy);
-			pairingBusy[envoy] = false;
+			if (pairingOpens.get(channel) !== completion) return;
+			pairingOpens.delete(channel);
+			pairingBusy[channel] = false;
 		});
-		pairingOpens.set(envoy, completion);
+		pairingOpens.set(channel, completion);
 		return completion;
 	};
 
-	const runUnpairing = (envoy: string, provider: string): Effect.Effect<void> =>
+	const runUnpairing = (channel: string, provider: string): Effect.Effect<void> =>
 		Effect.suspend(() => {
-			if (pairingBusy[envoy] === true || unpairingBusy[envoy] === true) return Effect.void;
-			unpairingBusy[envoy] = true;
-			return runPairingRequest(envoy, provider, 'unpair').pipe(
+			if (pairingBusy[channel] === true || unpairingBusy[channel] === true) return Effect.void;
+			unpairingBusy[channel] = true;
+			return runPairingRequest(channel, provider, 'unpair').pipe(
 				Effect.ensuring(
 					Effect.sync(() => {
-						unpairingBusy[envoy] = false;
+						unpairingBusy[channel] = false;
 					})
 				)
 			);
 		});
 
 	/** Waits for provider-published revisions; it performs no timed status reads. */
-	const observePairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
+	const observePairing = (channel: DeclaredChannel): Effect.Effect<void> =>
 		Effect.suspend(() => {
-			const current = connections[envoy.name];
+			const current = connections[channel.name];
 			const revision = current?.revision;
 			if (
-				pairingTarget?.name !== envoy.name ||
-				connectionErrors[envoy.name] !== undefined ||
+				pairingTarget?.name !== channel.name ||
+				connectionErrors[channel.name] !== undefined ||
 				current === undefined ||
 				revision === undefined ||
 				current.state === 'connected' ||
 				current.state === 'error'
 			)
 				return Effect.void;
-			return runPairingRequest(envoy.name, envoy.transport, 'observe', revision).pipe(
+			return runPairingRequest(channel.name, channel.transport, 'observe', revision).pipe(
 				Effect.andThen(
 					Effect.suspend(() => {
-						const nextRevision = connections[envoy.name]?.revision;
+						const nextRevision = connections[channel.name]?.revision;
 						return nextRevision !== undefined && nextRevision > revision
-							? observePairing(envoy)
+							? observePairing(channel)
 							: Effect.void;
 					})
 				)
 			);
 		});
 
-	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
+	const followPairing = (channel: DeclaredChannel): Effect.Effect<void> =>
 		Effect.tryPromise({
-			try: () => ownPairingOpen(envoy.name, envoy.transport),
+			try: () => ownPairingOpen(channel.name, channel.transport),
 			catch: toError
 		}).pipe(
-			Effect.andThen(observePairing(envoy)),
+			Effect.andThen(observePairing(channel)),
 			Effect.catch((cause) => {
 				// `runPairingRequest` reports its own refusals and cannot fail, so a rejection here is the
 				// owned open itself breaking — a defect in the fiber holding it. The dialog is waiting on
@@ -311,23 +292,23 @@
 				// below forks this and a failure left in the channel would be discarded there, leaving the
 				// card on a spinner for a socket nobody is still opening. Shown on the card, like every
 				// other pairing failure this page reports.
-				connectionErrors[envoy.name] =
+				connectionErrors[channel.name] =
 					cause.message === '' ? 'The pairing request could not be started.' : cause.message;
 				return Effect.void;
 			})
 		);
 
-	function openPairing(envoy: DeclaredEnvoy): void {
-		const resumingOpen = pairingOpens.has(envoy.name);
+	function openPairing(channel: DeclaredChannel): void {
+		const resumingOpen = pairingOpens.has(channel.name);
 		if (!resumingOpen) {
-			pairingReconnects[envoy.name] = connections[envoy.name]?.stored === true;
-			delete connectionErrors[envoy.name];
-			delete qrCodes[envoy.name];
+			pairingReconnects[channel.name] = connections[channel.name]?.stored === true;
+			delete connectionErrors[channel.name];
+			delete qrCodes[channel.name];
 			// Do not paint the card's older disconnected snapshot as the outcome of the pair request that
 			// has only just started. The dialog owns a fresh host workflow and waits for its first answer.
-			delete connections[envoy.name];
+			delete connections[channel.name];
 		}
-		pairingTarget = envoy;
+		pairingTarget = channel;
 	}
 
 	function closePairing(): void {
@@ -347,19 +328,19 @@
 		};
 	});
 
-	const submitCredential = (envoy: DeclaredEnvoy): void => {
-		const credential = credentialInput[envoy.name]?.trim();
-		if (credential === undefined || credential === '' || pairingBusy[envoy.name] === true) return;
-		pairingBusy[envoy.name] = true;
+	const submitCredential = (channel: DeclaredChannel): void => {
+		const credential = credentialInput[channel.name]?.trim();
+		if (credential === undefined || credential === '' || pairingBusy[channel.name] === true) return;
+		pairingBusy[channel.name] = true;
 		Effect.runFork(
-			runPairingRequest(envoy.name, envoy.transport, 'pair', undefined, credential).pipe(
+			runPairingRequest(channel.name, channel.transport, 'pair', undefined, credential).pipe(
 				Effect.ensuring(
 					Effect.sync(() => {
-						pairingBusy[envoy.name] = false;
-						delete credentialInput[envoy.name];
+						pairingBusy[channel.name] = false;
+						delete credentialInput[channel.name];
 					})
 				),
-				Effect.andThen(observePairing(envoy))
+				Effect.andThen(observePairing(channel))
 			)
 		);
 	};
@@ -402,27 +383,26 @@
 		}
 	);
 
-	// The read is the browser's, as it is in `studio/envoys-panel.svelte`: server rendering must not
-	// issue a Bolt command, and a reader who opens Envoys has already asked the question it answers.
-	// It ran at component init here, which happens on the server too under any host that renders this
-	// surface — `workspaceSession()` throws there rather than returning a session to command with.
+	// The read is the browser's: server rendering must not issue a Bolt command, and a reader who opens
+	// Channels has already asked the question it answers.
 	const pairingStarted = new Set<string>();
-	const pairingStatusTargets = $derived(envoys.map((envoy) => envoy.name));
+	const hostChannels = $derived(channels.filter(({ transport }) => transport !== 'inbox'));
+	const pairingStatusTargets = $derived(hostChannels.map((channel) => channel.name));
 	watch(
 		() => pairingStatusTargets,
 		(names) => {
-			for (const envoy of envoys) {
-				if (!names.includes(envoy.name) || pairingStarted.has(envoy.name)) continue;
-				pairingStarted.add(envoy.name);
-				Effect.runFork(runPairingRequest(envoy.name, envoy.transport, 'status'));
+			for (const channel of hostChannels) {
+				if (!names.includes(channel.name) || pairingStarted.has(channel.name)) continue;
+				pairingStarted.add(channel.name);
+				Effect.runFork(runPairingRequest(channel.name, channel.transport, 'status'));
 			}
 		}
 	);
 </script>
 
-{#snippet pairingPanel(envoy: DeclaredEnvoy)}
-	{@const connection = connections[envoy.name]}
-	{@const failure = connectionErrors[envoy.name]}
+{#snippet pairingPanel(channel: DeclaredChannel)}
+	{@const connection = connections[channel.name]}
+	{@const failure = connectionErrors[channel.name]}
 	<Stack as="section" gap="sm" class="border-t pt-4">
 		<Inline align="center" justify="between" gap="md">
 			<div>
@@ -432,23 +412,29 @@
 						Asking the host…
 					{:else if connection?.state === 'connected'}
 						{connection.pairedAs === undefined
-							? 'This host holds an open session for this envoy.'
-							: `Paired to ${connection.pairedAs}.`}
+							? 'This host holds an open session for this channel.'
+							: channel.transport === 'email'
+								? `Receiving at ${connection.pairedAs}.`
+								: channel.transport === 'http'
+									? `Webhook URL: ${connection.pairedAs}`
+									: `Paired to ${connection.pairedAs}.`}
 					{:else if connection?.state === 'pairing'}
-						{envoy.transport === 'whatsapp'
-							? 'Open WhatsApp on the phone this envoy should answer as, then Linked devices → Link a device.'
+						{channel.transport === 'whatsapp'
+							? 'Open WhatsApp on the phone this channel should answer as, then Linked devices → Link a device.'
 							: 'The transport provider is waiting for pairing to finish.'}
 					{:else if connectionIsRecovering(connection)}
-						The host is reopening the {envoy.transport} session automatically.
+						The host is reopening the {channel.transport} session automatically.
 					{:else if connection?.stored === true}
 						A credential is stored, but this host has no open session for it.
+					{:else if PAIRED_TRANSPORTS.includes(channel.transport)}
+						No credential is stored for this channel yet.
 					{:else}
-						No credential is stored for this envoy yet.
+						The host provisions this channel with the workspace; nothing to pair.
 					{/if}
 				</p>
 			</div>
 			<span class="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-meta">
-				{connectionLabel(connection, envoy.transport)}
+				{connectionLabel(connection, channel.transport)}
 			</span>
 		</Inline>
 
@@ -456,10 +442,12 @@
 			<p class="text-xs text-destructive" role="alert">{failure}</p>
 		{/if}
 
-		<p class="text-meta">
-			Pairing only links this envoy to its {envoy.transport} account. Sender registration happens later,
-			when an unknown person messages an authenticated envoy.
-		</p>
+		{#if PAIRED_TRANSPORTS.includes(channel.transport)}
+			<p class="text-meta">
+				Pairing only links this channel to its {channel.transport} account. Sender registration happens
+				later, when an unknown person messages an authenticated channel on it.
+			</p>
+		{/if}
 
 		{#if connection?.detail !== undefined}
 			<p class="text-meta" aria-live="polite">{connection.detail}</p>
@@ -469,30 +457,32 @@
 			<p class="text-xs text-destructive" role="alert">{connection.error}</p>
 		{/if}
 
+		{#if PAIRED_TRANSPORTS.includes(channel.transport)}
 		<Inline gap="sm" align="center">
 			<button
 				type="button"
 				class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
-				disabled={unpairingBusy[envoy.name] === true}
-				onclick={() => openPairing(envoy)}
+				disabled={unpairingBusy[channel.name] === true}
+				onclick={() => openPairing(channel)}
 			>
-				{pairingBusy[envoy.name] === true
+				{pairingBusy[channel.name] === true
 					? 'Resume pairing'
 					: connection?.stored === true
 						? 'Reconnect'
-						: 'Pair this envoy'}
+						: 'Pair this channel'}
 			</button>
 			{#if connection?.stored === true}
 				<button
 					type="button"
 					class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
-					disabled={pairingBusy[envoy.name] === true || unpairingBusy[envoy.name] === true}
-					onclick={() => void Effect.runPromise(runUnpairing(envoy.name, envoy.transport))}
+					disabled={pairingBusy[channel.name] === true || unpairingBusy[channel.name] === true}
+					onclick={() => void Effect.runPromise(runUnpairing(channel.name, channel.transport))}
 				>
 					Unpair
 				</button>
 			{/if}
 		</Inline>
+		{/if}
 
 		<!--
 			Said where the person scanning can see it, which is the only place saying it is any use.
@@ -500,7 +490,7 @@
 			get banned for it. Someone about to link their own number is entitled to know that before they
 			do, not from a commit message afterwards.
 		-->
-		{#if envoy.transport === 'whatsapp'}
+		{#if channel.transport === 'whatsapp'}
 			<p class="text-meta">
 				This links a real WhatsApp account through an unofficial client. That is against WhatsApp's
 				terms of service and accounts are sometimes banned for it — use a number the business owns
@@ -511,7 +501,7 @@
 
 				A paired session is a socket held in one host process, and neither of these is something
 				the person clicking this button can see from here: a redeploy drops it, and a host running
-				more than one instance has two of them fighting over one account. Both surface as an envoy
+				more than one instance has two of them fighting over one account. Both surface as an channel
 				that answered yesterday and does not today, which is the hardest kind of fault to
 				attribute — so the warning is worth more here, before the first pairing, than in any
 				runbook.
@@ -525,65 +515,74 @@
 	</Stack>
 {/snippet}
 
-{#snippet envoyCard(declared: DeclaredEnvoy)}
+{#snippet channelCard(declared: DeclaredChannel)}
 	{@const status = statuses[declared.name]}
 	{@const failure = statusErrors[declared.name]}
-	<!--
-		The same card the Workspace Studio manifest draws, at the same density. The name is mono
-		because it is an identifier the workspace source declares, not a title somebody chose.
-	-->
+	{@const speaker = envoyOn(declared.name)}
 	<Stack as="section" gap="sm" class="rounded-lg border border-border bg-card p-4 shadow-card">
 		<Inline gap="sm" align="start" class="min-w-0">
 			<div
 				class="flex size-6 shrink-0 items-center justify-center rounded-md border border-border/60"
 			>
-				<IconWrapper name="lucide:bot" class="size-3.5 text-muted-foreground" />
+				<IconWrapper name="lucide:radio-tower" class="size-3.5 text-muted-foreground" />
 			</div>
 			<div class="min-w-0">
 				<p class="truncate font-mono text-sm font-semibold text-foreground">{declared.name}</p>
 				<p class="text-meta">Declared in the workspace source.</p>
 			</div>
 		</Inline>
-		<!-- Outside the status block on purpose. The transport and the audience are declared in the
-		     workspace source, so they are known whether or not `envoys.status` answered; folding them
-		     in would hide what the envoy *is* behind a failure to read how it is *doing*. -->
+		<!-- What the channel *is* is declared in source, so it shows whether or not the runtime answered. -->
 		<Grid as="dl" gap="sm" minimum="compact" class="border-t pt-4 text-xs">
 			<Stack gap="xs">
 				<dt class="font-medium text-foreground">Transport</dt>
 				<dd class="text-muted-foreground">{declared.transport}</dd>
 			</Stack>
 			<Stack gap="xs">
-				<dt class="font-medium text-foreground">Audience</dt>
+				<dt class="font-medium text-foreground">Envoy</dt>
 				<dd class="text-muted-foreground">
-					{declared.audience === 'public'
-						? 'Public — anyone who can reach the transport.'
-						: declared.audience === 'authenticated'
-							? 'Authenticated — known senders are matched to a workspace identity; unknown senders receive a private 15-minute registration link.'
-							: declared.audience === 'private'
-								? "Private — as authenticated, but a direct message runs under the sender's own policies. Group chats use the envoy's policies."
-								: declared.audience}
+					{#if speaker === undefined}
+						None — history only.
+					{:else}
+						<span class="font-mono">{speaker.name}</span> ·
+						{speaker.audience === 'public'
+							? 'public'
+							: speaker.audience === 'authenticated'
+								? 'authenticated senders; unknown senders get a 15-minute registration link'
+								: "private: a direct message runs under the sender's own policies"}
+					{/if}
 				</dd>
 			</Stack>
 		</Grid>
-		<!-- The runtime answers only for traffic; the host answers only for its live transport. -->
-		{@render pairingPanel(declared)}
+		{#if declared.transport !== 'inbox'}
+			{@render pairingPanel(declared)}
+		{/if}
 		{#if failure !== undefined}
-			<!-- The message is shown verbatim: an operator who sees a blank card concludes the envoy is
-			     idle, when the runtime in fact refused to answer for it. -->
 			<p class="border-t pt-4 text-xs text-destructive">{failure}</p>
 		{:else if status !== undefined}
 			<Grid as="dl" gap="sm" minimum="compact" class="border-t pt-4 text-xs">
 				<Stack gap="xs">
-					<dt class="font-medium text-foreground">Messages received</dt>
+					<dt class="font-medium text-foreground">History</dt>
+					<dd class="text-muted-foreground">
+						{status.history}{status.horizon === null ? '' : ` · recorded from ${status.horizon}`}
+					</dd>
+				</Stack>
+				<Stack gap="xs">
+					<dt class="font-medium text-foreground">Last inbound</dt>
+					<dd class="text-muted-foreground">{status.lastInboundAt ?? '—'}</dd>
+				</Stack>
+				<Stack gap="xs">
+					<dt class="font-medium text-foreground">Received</dt>
 					<dd class="text-muted-foreground">{status.received}</dd>
 				</Stack>
 				<Stack gap="xs">
-					<dt class="font-medium text-foreground">Replies sent</dt>
-					<dd class="text-muted-foreground">{status.replied}</dd>
+					<dt class="font-medium text-foreground">Sent · queued · failed</dt>
+					<dd class={status.failed > 0 ? 'text-destructive' : 'text-muted-foreground'}>
+						{status.sent} · {status.pending} · {status.failed}
+					</dd>
 				</Stack>
 			</Grid>
 		{:else}
-			<p class="border-t pt-4 text-meta">Reading this envoy's traffic…</p>
+			<p class="border-t pt-4 text-meta">Reading this channel's status…</p>
 		{/if}
 	</Stack>
 {/snippet}
@@ -591,19 +590,16 @@
 <!-- Root navigation follows the product's page-heading rhythm, as Workspace Studio does: title, one
      line of what the page is for, then the body. The header sits on the background, not in a card.
 
-     There is no tab strip. It carried exactly one tab, "Channels", under a heading that already said
-     the same word — a rail with one rung, kept against the day an agent grew other facets. Those
-     facets are policies now, and they are not configured here. -->
+     -->
 <Cover class="relative bg-background" gap="none">
 	{#snippet top()}
 		<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">
 			<Stack as="header" gap="xs">
-				<h1 class="text-heading">Envoys</h1>
+				<h1 class="text-heading">Channels</h1>
 				<p class="max-w-2xl text-meta">
-					The agents this workspace exposes on a transport, and how each one is reachable. What an
-					envoy may <em>do</em> is the policies it declares, in the workspace source. A collection's own
-					record sync is not configured here — it belongs to the collection, under its tab in Workspace
-					Studio.
+					Where this workspace sends and receives messages: each channel's history, its delivery
+					record, and the pairing a host needs. What an channel on a channel may <em>do</em> is the
+					policies it declares, in the workspace source.
 				</p>
 			</Stack>
 		</Stack>
@@ -614,14 +610,10 @@
 	<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
 		<Bound size="full" grow clip class="relative min-w-0 bg-background font-sans">
 			<!--
-				The panel owns its scroll, because the frame around it does not.
-
-				`Bound … clip` clips what overflows and scrolls nothing, so a workspace with more than a
-				screenful of envoys — or one showing a pairing code, which is tall — had content that could
-				not be reached at all. `organization-general` already wraps its pane this way; this one was
-				the outlier, and the symptom was a page that looked complete and would not move.
+				The panel owns its scroll, because the frame around it does not: `Bound … clip` clips what
+				overflows and scrolls nothing.
 			-->
-			<Scroll name="Envoys">
+			<Scroll name="Channels">
 				<Stack gap="md" class="min-h-0">
 					{#if manifestQuery === undefined || (manifestQuery.current === undefined && manifestQuery.loading)}
 						<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
@@ -631,17 +623,17 @@
 								? manifestQuery.error.message
 								: 'Unable to read the workspace manifest.'}
 						</p>
-					{:else if envoys.length === 0}
+					{:else if channels.length === 0}
 						<div
 							class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
 						>
-							No envoys declared. Author one in <code>src/envoys/</code> to put this workspace's agent
-							on a transport.
+							No channels declared. Author one in <code>src/channels/</code> to give this workspace a
+							place to send and receive messages.
 						</div>
 					{:else}
 						<Stack gap="md">
-							{#each envoys as declared (declared.name)}
-								{@render envoyCard(declared)}
+							{#each channels as declared (declared.name)}
+								{@render channelCard(declared)}
 							{/each}
 						</Stack>
 					{/if}
@@ -672,7 +664,7 @@
 						The host is reopening the saved {target.transport} session. Keep this dialog open while it
 						connects.
 					{:else if target.transport === 'whatsapp'}
-						Open WhatsApp on the phone this envoy should answer as, then choose Linked devices →
+						Open WhatsApp on the phone this channel should answer as, then choose Linked devices →
 						Link a device.
 					{:else}
 						Keep this dialog open while the host starts the {target.transport} transport. Follow any verification
@@ -717,7 +709,7 @@
 			{:else if connection?.state === 'connected'}
 				<Stack gap="sm" align="center" class="rounded-lg border border-success/30 p-6 text-center">
 					<IconWrapper name="lucide:circle-check" class="size-9 text-success" />
-					<p class="text-sm font-medium text-foreground">Envoy connected</p>
+					<p class="text-sm font-medium text-foreground">Channel connected</p>
 					<p class="text-meta">
 						{connection.pairedAs === undefined
 							? 'The transport connection is open.'
@@ -725,7 +717,7 @@
 					</p>
 					<p class="max-w-sm text-meta">
 						Pairing is complete. People register their own numbers only when they first message an
-						authenticated envoy.
+						authenticated channel on this channel.
 					</p>
 				</Stack>
 			{:else if connectionIsRecovering(connection)}
@@ -800,7 +792,7 @@
 						{pairingExpired
 							? 'The previous code expired, so it was taken off screen. A new one appears when the provider rotates it.'
 							: reconnecting
-								? 'The host is using the saved credential for this envoy.'
+								? 'The host is using the saved credential for this channel.'
 								: target.transport === 'whatsapp'
 									? 'The code will appear when WhatsApp publishes it.'
 									: `The host is starting the ${target.transport} connection.`}

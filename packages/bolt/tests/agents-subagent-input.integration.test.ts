@@ -30,7 +30,7 @@ const definition = testWorkspace({
 	envoys: [
 		envoy({
 			name: 'worker',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['admin'],
 			task: 'Report field status.',

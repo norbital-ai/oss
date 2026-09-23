@@ -1,17 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { defineConnection } from '../src/authoring/index.js';
+import { defineChannel } from '../src/authoring/index.js';
+import { describeChannel } from '../src/authoring/channels-schema.js';
 import {
 	app,
 	collection,
-	defineSend,
 	field,
 	policy,
 	workspace,
 	type WorkspaceDefinition
 } from '../src/authoring/workspace-schema.js';
-import { describeIntegrations } from '../src/authoring/integration-introspection.js';
 import { automation } from '../src/authoring/automations-schema.js';
 import * as Collections from '../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime, type AuthoredRuntime } from '../src/runtime/collections/authored.js';
@@ -44,7 +43,7 @@ const authorizeUnlessBody =
 		);
 	};
 
-const workspaceWith = (integrations: WorkspaceDefinition['integrations']): WorkspaceDefinition =>
+const workspaceWith = (channels: WorkspaceDefinition['channels']): WorkspaceDefinition =>
 	workspace({
 		name: 'refused-readback',
 		version: '1.0.0',
@@ -61,10 +60,11 @@ const workspaceWith = (integrations: WorkspaceDefinition['integrations']): Works
 				policies: []
 			})
 		],
-		integrations,
+		integrations: [],
 		prompt: 'You are the test workspace agent.',
 		tools: [],
 		skills: [],
+		channels,
 		envoys: [],
 		requiredFacilities: [],
 		policies: [
@@ -292,29 +292,33 @@ describe('a batch the subject may write only part of', () => {
  * runtime's answer is the half the refusal itself already settles. This is the transaction itself.
  */
 describe('what a refused row must leave in the bookkeeping tables', () => {
-	/** A binding that would deliver every created note, so a phantom create would be a phantom send. */
-	const described = describeIntegrations({
-		notes: {
-			partner: {
-				policies: [],
-				connection: defineConnection({ baseUrl: 'https://integration.invalid' }),
-				send: {
-					note_created: defineSend<{ readonly id: string; readonly body: string }>({
-						send: { method: 'POST', path: '/notes' },
-						on: 'create',
-						body: ({ record }) => ({ body: record.body })
+	/** A channel rule that sends every created note, so a phantom create would be a phantom send. */
+	const described = describeChannel(
+		'partner',
+		defineChannel({
+			transport: 'http',
+			connection: { baseUrl: 'https://integration.invalid' },
+			policies: ['note-quota'],
+			outbound: {
+				note_created: {
+					from: 'notes',
+					on: 'create',
+					message: ({ record }: { readonly record: Readonly<Record<string, unknown>> }) => ({
+						method: 'POST',
+						path: '/notes',
+						body: { body: String(record['body']) }
 					})
 				}
 			}
-		}
-	});
+		} as never)
+	);
 
 	it('writes history, sync and delivery rows for the stored records only', async () => {
-		harness = await makeBoltTestRuntime(workspaceWith(described.declarations), {
+		harness = await makeBoltTestRuntime(workspaceWith([described.declaration]), {
 			authored: {
 				...emptyAuthoredRuntime,
 				collections: notesModule,
-				integrations: described.authored
+				channels: { partner: described.authored }
 			}
 		});
 
@@ -344,7 +348,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		);
 		expect(history).toEqual([]);
 		const deliveries = await harness.database.query(
-			'select record_id from bolt_integration_outbox where collection_name = $1',
+			'select source_record_id as record_id from bolt_channel_outbox where source_collection = $1',
 			['notes']
 		);
 		expect(deliveries).toEqual([]);
@@ -359,9 +363,9 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 	 * third the caller never sent.
 	 */
 	it('keeps the bookkeeping of a batch the predicate allowed in full', async () => {
-		const admitted = workspaceWith(described.declarations);
+		const admitted = workspaceWith([described.declaration]);
 		harness = await makeBoltTestRuntime(admitted, {
-			authored: { ...authored, integrations: described.authored }
+			authored: { ...authored, channels: { partner: described.authored } }
 		});
 
 		await harness.runtime.runPromise(
@@ -386,7 +390,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		);
 		expect(history.map((row) => String(row['record_id'])).toSorted()).toEqual(storedIds);
 		const deliveries = await harness.database.query(
-			'select record_id from bolt_integration_outbox where collection_name = $1',
+			'select source_record_id as record_id from bolt_channel_outbox where source_collection = $1',
 			['notes']
 		);
 		expect(deliveries.map((row) => String(row['record_id'])).toSorted()).toEqual(storedIds);

@@ -5,7 +5,7 @@ import type { TurntimeConfig } from '../src/client/ui/agent/client.svelte.js';
 import type { AutomationRunsClient } from '../src/client/ui/studio/workspace-client.js';
 import {
 	ManifestSchema,
-	integrationBindingSummary,
+	integrationSyncSummary,
 	manifestInspectionState,
 	manifestSections,
 	reviewFreshness,
@@ -191,32 +191,38 @@ describe('Workspace Studio manifest handoff', () => {
 					policies: []
 				}
 			],
+			channels: [
+				{
+					name: 'support_mail',
+					transport: 'email',
+					address: 'support',
+					sourcePath: 'src/channels/+support_mail.ts',
+					origin: 'authored'
+				}
+			],
 			envoys: [
 				{
 					name: 'support',
-					transport: 'web',
+					channel: 'support_mail',
 					audience: 'authenticated',
 					delegation: 'disabled',
 					sourcePath: 'src/envoys/+support.ts',
 					origin: 'authored',
-					destination: { kind: 'system', surface: 'envoys', selection: 'support' }
+					destination: { kind: 'system', surface: 'channels', selection: 'support_mail' }
 				}
 			],
 			integrations: [
 				{
-					name: 'jobs.erp',
-					collection: 'jobs',
-					sourcePath: 'src/collections/jobs/+integrations.ts',
+					name: 'erp',
+					sourcePath: 'src/integrations/+erp.ts',
 					origin: 'authored',
-					bindings: [
+					syncs: [
 						{
-							name: 'pull',
-							direction: 'receive',
-							method: 'GET',
-							path: '/jobs',
-							schedule: '0 * * * *',
-							targetCollection: 'jobs',
-							source: 'jobs.erp'
+							name: 'jobs',
+							collection: 'jobs',
+							direction: 'one_way',
+							source: 'http',
+							fields: ['title', 'status']
 						}
 					]
 				}
@@ -247,6 +253,7 @@ describe('Workspace Studio manifest handoff', () => {
 			manifest.appGroups?.[0]?.sourcePath,
 			manifest.policies[0]?.sourcePath,
 			manifest.automations[0]?.sourcePath,
+			manifest.channels[0]?.sourcePath,
 			manifest.envoys[0]?.sourcePath,
 			manifest.integrations[0]?.sourcePath,
 			manifest.remotes?.[0]?.sourcePath,
@@ -256,13 +263,13 @@ describe('Workspace Studio manifest handoff', () => {
 		expect(manifestDestinationHref(manifest.collections[0]!.destination!)).toBeNull();
 		expect(workspaceEnvoys(manifest)[0]?.destination).toEqual({
 			kind: 'system',
-			surface: 'envoys',
-			selection: 'support'
+			surface: 'channels',
+			selection: 'support_mail'
 		});
 		expect(writeSummaryKey('create')).toBe('bolt.studio.write.create');
 		expect(writeSummaryKey('transform')).toBe('bolt.studio.write.transform');
-		expect(integrationBindingSummary(manifest.integrations[0]!.bindings![0]!)).toBe(
-			'GET /jobs · 0 * * * *'
+		expect(integrationSyncSummary(manifest.integrations[0]!.syncs[0]!)).toBe(
+			'jobs · one-way · http · title, status'
 		);
 	});
 
@@ -274,6 +281,7 @@ describe('Workspace Studio manifest handoff', () => {
 			apps: [],
 			policies: [],
 			automations: [],
+			channels: [],
 			envoys: [],
 			integrations: [],
 			principals: [],
@@ -302,6 +310,7 @@ describe('Workspace Studio manifest handoff', () => {
 				apps: [],
 				policies: [],
 				automations: [],
+				channels: [],
 				envoys: [],
 				integrations: [],
 				principals: [],

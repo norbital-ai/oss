@@ -38,7 +38,8 @@ const AGENT_COLLECTION_NAMES = [
 	'automation_run',
 	'telemetry',
 	'user',
-	'bolt_notifications'
+	'bolt_notifications',
+	'channel_messages'
 ] as const;
 const refuseWrite = async (): Promise<never> => {
 	throw new Error('The empty agent client does not execute writes');
@@ -62,6 +63,7 @@ type AgentCollections = Pick<
 	| 'telemetry'
 	| 'user'
 	| 'bolt_notifications'
+	| 'channel_messages'
 >;
 
 export const settledQuery = <T>(current: T): RemoteQuery<T> => ({
@@ -159,7 +161,8 @@ export const emptyAgentClient = (transport: BoltTransport): TurntimeConfig['clie
 			automation_run: emptyOperations<AgentCollections['automation_run']>(),
 			telemetry: emptyOperations<AgentCollections['telemetry']>(),
 			user: emptyOperations<AgentCollections['user']>(),
-			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
+			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>(),
+			channel_messages: emptyOperations<AgentCollections['channel_messages']>()
 		},
 		collection: perCollection(() => ({
 			create: refuseWrite,

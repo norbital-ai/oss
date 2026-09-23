@@ -49,6 +49,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});
@@ -114,6 +115,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});
@@ -216,6 +218,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});

@@ -4,9 +4,10 @@
 	import { getErrorMessage } from '@norbital-ai/std';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
+	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
-	import { Bound, Cover, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import AutomationProgressRenderer from './automation-progress.renderer.svelte';
@@ -37,6 +38,32 @@
 	let browserReady = $state(false);
 	let actionFailure = $state<string | undefined>();
 	const styles = $derived(FEATURE_COLOR_STYLES.automations);
+	type Trigger = WorkspaceManifest['automations'][number]['trigger'];
+	const TRIGGER_ICONS = {
+		Schedule: 'lucide:repeat',
+		Change: 'lucide:webhook',
+		Manual: 'lucide:hand'
+	} satisfies Record<Trigger['_tag'], string>;
+	const triggerDetail = (trigger: Trigger): { description?: string } =>
+		trigger._tag === 'Schedule'
+			? { description: trigger.cron }
+			: trigger._tag === 'Change'
+				? {
+						description: t('bolt.automations.trigger.change', {
+							collection: trigger.collection,
+							event: trigger.event
+						})
+					}
+				: {};
+	const options = $derived(
+		automations.map((candidate) => ({
+			value: candidate.name,
+			label: candidate.name,
+			icon: TRIGGER_ICONS[candidate.trigger._tag],
+			type: t(`bolt.automations.trigger.${candidate.trigger._tag}`),
+			...triggerDetail(candidate.trigger)
+		}))
+	);
 	const automation = $derived(
 		automations.find((candidate) => candidate.name === selected) ?? automations[0]
 	);
@@ -108,33 +135,41 @@
 <Cover gap="none" class="bg-background">
 	{#snippet top()}
 		<Stack gap="md" class="border-b border-border/60 px-4 py-4 sm:px-6 sm:py-6">
-			<Stack gap="xs">
-				<h1 class="text-heading">{t('bolt.automations.title')}</h1>
-				<p class="max-w-2xl text-meta">
-					{t('bolt.automations.description')}
-				</p>
-			</Stack>
+			<Inline justify="between" align="start" gap="md">
+				<Stack gap="xs" class="min-w-0">
+					<h1 class="text-heading">{t('bolt.automations.title')}</h1>
+					<p class="max-w-2xl text-meta">
+						{t('bolt.automations.description')}
+					</p>
+				</Stack>
 
-			{#if automations.length > 0}
-				<Scroll
-					axis="x"
-					name={t('bolt.automations.selector')}
-					layout="inline"
-					gap="xs"
-					fade={false}
-				>
-					{#each automations as candidate (candidate.name)}
-						<Button
-							size="sm"
-							variant={candidate.name === automation?.name ? 'secondary' : 'ghost'}
-							aria-current={candidate.name === automation?.name ? 'page' : undefined}
-							onclick={() => onselect?.(candidate.name)}
-						>
-							{candidate.name}
-						</Button>
-					{/each}
-				</Scroll>
-			{/if}
+				{#if automations.length > 0}
+					<Combobox
+						{options}
+						value={automation?.name ?? null}
+						onValueChange={(next) => {
+							if (next !== null) onselect?.(next);
+						}}
+						ariaLabel={t('bolt.automations.selector')}
+						searchPlaceholder={t('bolt.automations.search')}
+						preserveOptionOrder
+						class="w-72 shrink-0"
+					>
+						{#snippet display(name)}
+							{@const trigger = automations.find((candidate) => candidate.name === name)?.trigger}
+							<Inline as="span" gap="xs" class="min-w-0">
+								{#if trigger !== undefined}
+									<Icon
+										icon={TRIGGER_ICONS[trigger._tag]}
+										class="size-3.5 shrink-0 text-muted-foreground"
+									/>
+								{/if}
+								<span class="truncate">{name}</span>
+							</Inline>
+						{/snippet}
+					</Combobox>
+				{/if}
+			</Inline>
 
 			{#if automation !== undefined}
 				<Inline align="start" gap="sm">

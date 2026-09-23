@@ -2,19 +2,23 @@ import { Schema } from 'effect';
 import { Prompt } from 'effect/unstable/ai';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-	EnvoyDelivery,
 	ModelId,
 	type AIRequest,
 	type AIResponse,
-	type CommunicationRequest,
-	type CommunicationResponse,
 	type FacilityBinding,
 	type FileRequest,
 	type FileResponse
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from './support/bolt-test-layer.js';
+import {
+	makeBoltTestRuntime,
+	receiveChat,
+	recordingCommunication,
+	testChannels,
+	type BoltTestRuntime,
+	type TestChatDelivery
+} from './support/bolt-test-layer.js';
 
 const languageModelId = ModelId.make('test:language');
 const embeddingModelId = ModelId.make('test:embedding');
@@ -75,10 +79,11 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	automations: [],
+	channels: testChannels('whatsapp'),
 	envoys: [
 		envoy({
 			name: 'field_ops_whatsapp',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'authenticated',
 			policies: ['contractor'],
 			groupMessages: 'mention_or_reply',
@@ -90,7 +95,7 @@ const definition = workspace({
 	requiredFacilities: []
 });
 
-const delivery = (): EnvoyDelivery => ({
+const delivery = (): TestChatDelivery => ({
 	conversationId: '6591234567@s.whatsapp.net',
 	conversationKind: 'dm',
 	messageId: 'message-1',
@@ -159,7 +164,7 @@ describe('Envoy channel attachments', () => {
 	it('materializes inbound bytes at ingest and admits the descriptor through the reader', async () => {
 		const files = memoryFiles();
 		const generations: Array<Extract<AIRequest, { readonly _tag: 'Generate' }>> = [];
-		const sends: Array<CommunicationRequest> = [];
+		const { sends, binding: communication } = recordingCommunication();
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: async (_metadata, request) => {
 				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
@@ -183,12 +188,6 @@ describe('Envoy channel attachments', () => {
 				};
 			}
 		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async (_metadata, request) => {
-				sends.push(request);
-				return { _tag: 'Success', value: {} };
-			}
-		};
 		harness = await makeBoltTestRuntime(definition, {
 			ai,
 			communication,
@@ -196,15 +195,13 @@ describe('Envoy channel attachments', () => {
 		});
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
-		await harness.runtime.runPromise(
-			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', delivery())
-		);
+		await harness.runtime.runPromise(receiveChat('whatsapp', delivery()));
 		const materialized = [...files.objects.keys()];
 		expect(materialized).toEqual([expect.stringMatching(/^agent-tasks\/.+\/.+\.png$/)]);
 		expect(Array.from(files.objects.get(materialized[0]!) ?? [])).toEqual([137, 80, 78]);
 		expect(
 			await harness.database.query(
-				`select attachments from bolt_envoy_messages where direction = 'inbound'`
+				`select attachments from channel_messages where direction = 'inbound'`
 			)
 		).toEqual([
 			{
@@ -246,7 +243,7 @@ describe('Envoy channel attachments', () => {
 		]);
 		expect([...files.objects.keys()]).toEqual(materialized);
 		expect(sends).toEqual([
-			expect.objectContaining({ _tag: 'Send', payload: { text: 'Recorded.' } })
+			expect.objectContaining({ _tag: 'Send', message: { to: '6591234567@s.whatsapp.net', text: 'Recorded.' } })
 		]);
 	});
 
@@ -261,14 +258,12 @@ describe('Envoy channel attachments', () => {
 				return { _tag: 'Success', value: generated(request, assistantText('Recorded.')) };
 			}
 		};
-		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
-			call: async () => ({ _tag: 'Success', value: {} })
-		};
+		const { binding: communication } = recordingCommunication();
 		harness = await makeBoltTestRuntime(definition, { ai, communication, files: files.binding });
 		await seedSender(harness);
 		const envoys = await harness.runtime.runPromise(Envoys.Service);
 		await harness.runtime.runPromise(
-			envoys.receive(harness.effectId('receive'), 'field_ops_whatsapp', {
+			receiveChat('whatsapp', {
 				...delivery(),
 				attachments: [
 					{
@@ -303,7 +298,7 @@ describe('Envoy channel attachments', () => {
 			'[attachment clip.mp4 · video/mp4 · not received; ask the sender to send it again]'
 		);
 		const replicated = await harness.database.query(
-			`select attachments from bolt_envoy_messages where direction = 'inbound'`
+			`select attachments from channel_messages where direction = 'inbound'`
 		);
 		const serialized = JSON.stringify(replicated);
 		expect(serialized).toContain('"kind":"video"');

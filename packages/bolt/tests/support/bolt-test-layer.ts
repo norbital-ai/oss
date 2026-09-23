@@ -9,8 +9,11 @@ import {
 	InvocationId,
 	type AIRequest,
 	type AIResponse,
+	type ChatEnvelope,
 	type CommunicationRequest,
 	type CommunicationResponse,
+	type TransactionalMailRequest,
+	type TransactionalMailResponse,
 	type ConnectorRequest,
 	type ConnectorResponse,
 	type DatabaseRequest,
@@ -212,6 +215,9 @@ export const provisioningStatements = async (
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
+import * as Channels from '../../src/runtime/channels/channels.js';
+import { testChannels } from './channels.js';
+export { testChannels } from './channels.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as EnvoyInbox from '../../src/runtime/envoys/inbox.js';
 import * as Integrations from '../../src/runtime/integrations/integrations.js';
@@ -232,6 +238,7 @@ import type { CallContext } from '../../src/runtime/facilities/database.js';
 import {
 	AI,
 	Communication,
+	Mail,
 	Connector,
 	Files,
 	HostTools,
@@ -444,7 +451,9 @@ export type TestWorkspaceInput = Readonly<{
 	/** The workspace's authored tools; a policy still has to name one for anybody to reach it. */
 	readonly tools?: WorkspaceDefinition['tools'];
 	readonly skills?: WorkspaceDefinition['skills'];
+	readonly channels?: WorkspaceDefinition['channels'];
 	readonly envoys?: WorkspaceDefinition['envoys'];
+	readonly integrations?: WorkspaceDefinition['integrations'];
 	readonly automations?: WorkspaceDefinition['automations'];
 	/** The `.norbital/migrations` lineage the artifact would have carried, oldest first. */
 	readonly migrations?: ReadonlyArray<WorkspaceMigrationEntry>;
@@ -496,8 +505,11 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 		tools: input.tools ?? [],
 		skills: input.skills ?? [],
 		automations: input.automations ?? [],
+		// An envoy needs a declared channel; a fixture that names none gets one per envoy channel.
+		channels:
+			input.channels ?? testChannels(...new Set((input.envoys ?? []).map(({ channel }) => channel))),
 		envoys: input.envoys ?? [],
-		integrations: [],
+		integrations: input.integrations ?? [],
 		requiredFacilities: [],
 		...(input.migrations === undefined ? {} : { migrations: input.migrations })
 	});
@@ -521,6 +533,7 @@ export const makeBoltTestRuntime = async (
 		readonly ai?: FacilityBinding<AIRequest, AIResponse>;
 		readonly connector?: FacilityBinding<ConnectorRequest, ConnectorResponse>;
 		readonly communication?: FacilityBinding<CommunicationRequest, CommunicationResponse>;
+		readonly mail?: FacilityBinding<TransactionalMailRequest, TransactionalMailResponse>;
 		readonly files?: FacilityBinding<FileRequest, FileResponse>;
 		readonly identityHooks?: FacilityBinding<IdentityHookRequest, IdentityHookResponse>;
 		readonly hostTools?: FacilityBinding<HostToolRequest, HostToolResponse>;
@@ -597,6 +610,7 @@ export const makeBoltTestRuntime = async (
 		Database.layer(database.binding, context),
 		AI.layer(bindings.ai, context),
 		Communication.layer(bindings.communication, context),
+		Mail.layer(bindings.mail, context),
 		Connector.layer(bindings.connector, context),
 		Files.layer(bindings.files, context),
 		HostTools.layer(bindings.hostTools, context),
@@ -718,6 +732,10 @@ export const makeBoltTestRuntime = async (
 		Layer.merge(Agents.layer, EnvoyInbox.layer),
 		Layer.mergeAll(remotes, taskQueue, facilities, budget)
 	);
+	const channels = Layer.provideMerge(
+		Channels.layer,
+		Layer.mergeAll(vault, agents, authoredLayer, taskQueue, tenantScope)
+	);
 	const surfaces = Layer.provideMerge(
 		Layer.mergeAll(
 			Envoys.layer,
@@ -728,6 +746,7 @@ export const makeBoltTestRuntime = async (
 		Layer.mergeAll(
 			vault,
 			agents,
+			channels,
 			authoredLayer,
 			budget,
 			taskQueue,
@@ -841,4 +860,46 @@ export const recordId = (name: string): string => {
 	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
 	// Stamped to v5/variant-8 so Postgres accepts it as a well-formed UUID rather than merely hex.
 	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+};
+
+/** One chat message as a host hands it over, for a test: the envelope plus history facts. */
+export type TestChatDelivery = Omit<ChatEnvelope, '_tag'> &
+	Readonly<{ readonly historical?: boolean; readonly version?: string }>;
+
+/**
+ * What `channels.ingest` does for one chat message: the history row, then the channel's envoy.
+ * Answers the rows history wrote and the provider ids the envoy admitted as work.
+ */
+export const receiveChat = (channel: string, delivery: TestChatDelivery, label = delivery.messageId) =>
+	Effect.gen(function* () {
+		const { historical, version, ...envelope } = delivery;
+		const envoy = (yield* Workspace.Service).definition.envoys.find((declared) => declared.channel === channel);
+		const rows = yield* (yield* Channels.Service).ingest(
+			EffectId.make(`ingest:${label}`),
+			channel,
+			[
+				{
+					_tag: 'Upsert',
+					envelope: { _tag: 'chat', ...envelope },
+					version: version ?? delivery.sentAt,
+					origin: historical === true ? 'sync' : 'live',
+					direction: 'inbound'
+				}
+			],
+			envoy === undefined ? {} : { attachmentKey: Envoys.envoyAttachmentKey(envoy.name) }
+		);
+		const admitted = yield* (yield* Envoys.Service).admit(EffectId.make(`admit:${label}`), channel, rows);
+		return { rows, admitted };
+	});
+
+/** A recording transport double: every `Send` it took, answered with a stable provider id. */
+export const recordingCommunication = () => {
+	const sends: Array<Extract<CommunicationRequest, { readonly _tag: 'Send' }>> = [];
+	const binding: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+		call: async (_metadata, request) => {
+			if (request._tag === 'Send') sends.push(request);
+			return { _tag: 'Success', value: { providerMessageId: `wire-${sends.length}` } };
+		}
+	};
+	return { sends, binding };
 };

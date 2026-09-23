@@ -10,6 +10,7 @@ import {
 	type BundleResult,
 	type FacilityBindings,
 	type Invocation,
+	type ManifestChannel,
 	type Registration
 } from '@norbital-ai/bolt-protocol';
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
@@ -19,6 +20,7 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import type { Declaration } from '#lib/runtime/tasks/queue.js';
+import * as Channels from '#lib/runtime/channels/channels.js';
 import * as Envoys from '#lib/runtime/envoys/envoys.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
@@ -38,7 +40,7 @@ import {
 	hostConfigFromProcessEnv
 } from '#lib/runtime/access/system-principal.js';
 import { AI } from '#lib/runtime/facilities/services.js';
-import { Communication } from '#lib/runtime/facilities/services.js';
+import { Communication, Mail } from '#lib/runtime/facilities/services.js';
 import { Connector } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type { CallContext } from '#lib/runtime/facilities/database.js';
@@ -110,6 +112,7 @@ const InvocationLayers = {
 		const files = Files.layer(facilities.files, context);
 		const ai = AI.layer(facilities.ai, context);
 		const communication = Communication.layer(facilities.communication, context);
+		const mail = Mail.layer(facilities.mail, context);
 		const identityHooks = IdentityHooks.layer(facilities.identityHooks, context);
 		const connector = Connector.layer(facilities.connector, context);
 		const tasks = Tasks.layer(facilities.tasks, context);
@@ -140,7 +143,7 @@ const InvocationLayers = {
 		// not heard of gets random codes, which is the safe direction for an unknown to fail in. Delivery
 		// is queued only after Better Auth persists the challenge, so identity also owns the task queue.
 		const identity = Identity.layerWith(context.environment !== 'development').pipe(
-			Layer.provide(Layer.mergeAll(database, communication, identityHooks, taskQueue))
+			Layer.provide(Layer.mergeAll(database, mail, identityHooks, taskQueue))
 		);
 		const approvals = Approvals.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncCommit))
@@ -236,18 +239,36 @@ const InvocationLayers = {
 		const personalSecrets = PersonalSecrets.layer.pipe(
 			Layer.provide(Layer.merge(database, secretCipher))
 		);
-		// `access` and `rateLimits`, because an envoy's own ceiling is now the `limits` of the policies
-		// it declares — resolved for its minted subject rather than counted in SQL against a per-envoy
-		// column that only ever said the same thing twice. `tenantScope`, because a static identity is
-		// minted with a tenant and has no row to read one off.
+		const hostConfigLayer = Layer.succeed(HostConfig, hostConfigShape);
+		// The channel runtime: history, the outbox and its drain, events. Collections because an event
+		// patches the record an outbound rule sent from; secrets and connector for an `http` channel.
+		const channels = Channels.layer.pipe(
+			Layer.provide(
+				Layer.mergeAll(
+					workspaceLayer,
+					database,
+					taskQueue,
+					collections,
+					tenantScope,
+					communication,
+					connector,
+					files,
+					secrets,
+					authoredLayer,
+					hostConfigLayer
+				)
+			)
+		);
+		// `access` and `rateLimits`, because an envoy's own ceiling is the `limits` of the policies it
+		// declares, resolved for its minted subject. `tenantScope`, because a static identity is minted
+		// with a tenant and has no row to read one off.
 		const envoys = Envoys.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
 					workspaceLayer,
 					identity,
 					agents,
-					communication,
-					files,
+					channels,
 					database,
 					access,
 					rateLimits,
@@ -257,17 +278,16 @@ const InvocationLayers = {
 			)
 		);
 		// Secrets, because a connection's credential is an `{ env }` reference the vault resolves; AI and
-		// Files, because a pull may route a record through the collection's authored `import` pipeline and
-		// an authored handler's api carries `infer` and `readFileAsset` whether it uses them or not.
+		// Files, because a sync's `resolve` receives the authored api, which carries both.
 		const integrations = Integrations.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
 					workspaceLayer,
 					collections,
-					automations,
 					connector,
 					database,
 					taskQueue,
+					tenantScope,
 					secrets,
 					ai,
 					files,
@@ -276,9 +296,9 @@ const InvocationLayers = {
 			)
 		);
 		const notifications = Notifications.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, identity, database, communication, tasks))
+			Layer.provide(Layer.mergeAll(database, hostConfigLayer))
 		);
-		const hostConfig = Layer.succeed(HostConfig, hostConfigShape);
+		const hostConfig = hostConfigLayer;
 		return Layer.mergeAll(
 			workspaceLayer,
 			access,
@@ -291,6 +311,7 @@ const InvocationLayers = {
 			secrets,
 			personalSecrets,
 			automations,
+			channels,
 			envoys,
 			integrations,
 			notifications,
@@ -298,6 +319,7 @@ const InvocationLayers = {
 			files,
 			ai,
 			communication,
+			mail,
 			identityHooks,
 			connector,
 			tasks,
@@ -320,9 +342,7 @@ const invocationLayer = InvocationLayers.make;
  * One registration, plus the key that keeps two registrations of the same command apart.
  *
  * The key becomes the `EffectId` of the `Register` facility call, and a host treats that id as the
- * idempotency key for the operation. `integrations.pull` is registered once for routing and once per
- * scheduled binding, so keying purely on the command name would collapse every scheduled pull into
- * the routing registration and the host would hold exactly one of them.
+ * idempotency key for the operation, so two registrations of one command keep apart.
  */
 type KeyedRegistration = Readonly<{ readonly key: string; readonly registration: Registration }>;
 
@@ -353,26 +373,23 @@ export const ActivationCommands = {
 		[
 			'collections.resume',
 			'collections.discard',
-			'notifications.deliver',
-			'integrations.pull',
-			'integrations.flush',
-			'envoys.receive',
+			'channels.ingest',
+			'channels.event',
+			'channels.drain',
+			'webhooks.receive',
+			'integrations.run',
+			'integrations.push',
 			...workspace.automations.map(({ name }) => `automations.${name}`)
 		]
 			.filter((command, index, commands) => commands.indexOf(command) === index)
 			.toSorted()
 			.map((command): KeyedRegistration => ({ key: command, registration: { command } })),
 	/**
-	 * Everything this release says should happen on a cron, as rows for `bolt_schedule`.
+	 * Everything this release says should happen on a cron, as rows for `bolt_schedule`: one key per
+	 * sync and mode, because an hourly delta and a nightly reconcile are two schedules.
 	 *
-	 * One key per *binding* rather than per integration, because a vendors feed that is hourly and an
-	 * invoices feed that is nightly are two schedules and not one wearing two hats.
-	 *
-	 * There is deliberately nothing here for outbound deliveries. Those used to carry a fixed
-	 * `* * * * *` drain per sending integration — which is what pinned every sending tenant's database
-	 * awake permanently, 1440 wakes a day, whether or not anything was ever queued. A delivery is now
-	 * enqueued by the write that caused it, in that write's own transaction, and a delivery that backs
-	 * off schedules its own return. Nothing needs to come and look.
+	 * There is deliberately nothing here for outbound work. A push or a channel send is enqueued by the
+	 * write that caused it, in that write's own transaction, and backs off by scheduling its own return.
 	 */
 	schedulesFor: (workspace: WorkspaceDefinition, tenantId: string): ReadonlyArray<Declaration> =>
 		[
@@ -402,23 +419,27 @@ export const ActivationCommands = {
 						]
 					: []
 			),
+			// A sync reconciles on its own clock and, when its source has `changes`, polls on another;
+			// a webhook-pushed or channel-sourced sync needs no poll to be live.
 			...workspace.integrations.flatMap((integration) =>
-				integration.receive.flatMap((binding) =>
-					binding.schedule == null
+				integration.syncs.flatMap((sync) => [
+					{
+						key: `integrations.run:${integration.name}.${sync.name}:reconcile`,
+						command: 'integrations.run',
+						crontab: sync.reconcileSchedule,
+						input: { integration: integration.name, sync: sync.name, mode: 'reconcile' }
+					},
+					...(sync.changesSchedule === undefined
 						? []
 						: [
 								{
-									key: `integrations.pull:${integration.name}.${binding.name}`,
-									command: 'integrations.pull',
-									crontab: binding.schedule,
-									input: {
-										name: integration.name,
-										binding: binding.name,
-										cursor: null
-									}
+									key: `integrations.run:${integration.name}.${sync.name}:changes`,
+									command: 'integrations.run',
+									crontab: sync.changesSchedule,
+									input: { integration: integration.name, sync: sync.name, mode: 'changes' }
 								}
-							]
-				)
+							])
+				])
 			)
 		].toSorted((left, right) => left.key.localeCompare(right.key))
 };
@@ -489,6 +510,8 @@ const BundleActivation = {
 					_tag: 'Activated';
 					registrations: ReadonlyArray<Registration>;
 					nextDueAtEpochMs: number | null;
+					channels: ReadonlyArray<ManifestChannel>;
+					webhooks: ReadonlyArray<{ integration: string; sync: string }>;
 			  }
 		> =
 			missing.length > 0
@@ -568,7 +591,20 @@ const BundleActivation = {
 							return {
 								_tag: 'Activated' as const,
 								registrations,
-								nextDueAtEpochMs: declared.nextDueAtEpochMs ?? null
+								nextDueAtEpochMs: declared.nextDueAtEpochMs ?? null,
+								channels: workspace.channels.map((channel) => ({
+									name: channel.name,
+									transport: channel.transport,
+									...(channel.address === undefined ? {} : { address: channel.address }),
+									receives:
+										channel.transport !== 'inbox' &&
+										(channel.transport !== 'http' || channel.webhook !== undefined)
+								})),
+								webhooks: workspace.integrations.flatMap((integration) =>
+									integration.syncs
+										.filter(({ webhook }) => webhook)
+										.map((sync) => ({ integration: integration.name, sync: sync.name }))
+								)
 							};
 						}).pipe(
 							Effect.provide(activationLayer(activation, facilities)),

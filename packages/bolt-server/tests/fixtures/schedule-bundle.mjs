@@ -8,8 +8,7 @@ export const manifest = {
 	schemaPlan: { fingerprint: 'fixture-schema', steps: [] },
 	requiredFacilities: [],
 	browserAssets: [],
-	serverAssets: [],
-	integrations: []
+	serverAssets: []
 };
 
 /**
@@ -95,5 +94,7 @@ export const dispatch = async (invocation, facilities, signal) => {
 export const activate = async () => ({
 	_tag: 'Activated',
 	registrations: [],
-	nextDueAtEpochMs: Date.now()
+	nextDueAtEpochMs: Date.now(),
+	channels: [],
+	webhooks: []
 });

@@ -20,7 +20,13 @@ import * as InvocationBudget from '../src/runtime/budget.js';
 import * as TenantScope from '../src/runtime/tenant.js';
 import { collection, field, workspace } from '../src/authoring/workspace-schema.js';
 import { automation, type AutomationApi } from '../src/authoring/automations-schema.js';
-import { makeBoltTestRuntime, testCallContext } from './support/bolt-test-layer.js';
+import * as Channels from '../src/runtime/channels/channels.js';
+import {
+	makeBoltTestRuntime,
+	recordingCommunication,
+	testCallContext,
+	testChannels
+} from './support/bolt-test-layer.js';
 import {
 	afterMillisOf,
 	emptyAuthoredRuntime,
@@ -67,6 +73,7 @@ const directDefinition = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: []
 });
@@ -261,6 +268,7 @@ describe('Automations owner', () => {
 				prompt: 'You are the test workspace agent.',
 				tools: [],
 				skills: [],
+				channels: [],
 				envoys: [],
 				requiredFacilities: []
 			})
@@ -403,6 +411,7 @@ describe('Automations owner', () => {
 				prompt: 'You are the test workspace agent.',
 				tools: [],
 				skills: [],
+				channels: [],
 				envoys: [],
 				requiredFacilities: []
 			})
@@ -471,6 +480,7 @@ describe('Automations owner', () => {
 				prompt: 'You are the test workspace agent.',
 				tools: [],
 				skills: [],
+				channels: [],
 				envoys: [],
 				requiredFacilities: []
 			})
@@ -697,6 +707,7 @@ describe('Automations owner', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});
@@ -802,6 +813,7 @@ describe('Automations owner', () => {
 			prompt: 'You are the test workspace agent.',
 			tools: [],
 			skills: [],
+			channels: [],
 			envoys: [],
 			requiredFacilities: []
 		});
@@ -867,7 +879,8 @@ describe('Automations owner', () => {
 								key: 'late:PUBEM0002:2026-09-22',
 								recipients: [fixtureUserId('reminder-person'), { team: 'Production' }],
 								title: 'Late for work',
-								body: 'PUBEM0002 has not clocked in for the 08:30 shift.'
+								body: 'PUBEM0002 has not clocked in for the 08:30 shift.',
+								via: ['inbox', 'email_notices'] as const
 							};
 							yield* (api as AutomationApi).notify(reminder);
 							// The same reminder again — a retry, or a later run of the same check. The key is
@@ -878,12 +891,14 @@ describe('Automations owner', () => {
 				}
 			}
 		};
+		const email = recordingCommunication();
 		const harness = await makeBoltTestRuntime(
 			{
 				...directDefinition,
+				channels: testChannels('inbox', 'email_notices'),
 				automations: [automation({ name: 'remind', trigger: { _tag: 'Manual' }, command: 'remind', policies: [] })]
 			},
-			{ authored }
+			{ authored, communication: email.binding }
 		);
 		try {
 			await seedSession(harness, { token: 'automation-test-token', user: 'reminder-runner' });
@@ -898,25 +913,43 @@ describe('Automations owner', () => {
 			);
 			expect(response.value).toMatchObject({ result: { reminded: true } });
 
-			// One row for the direct recipient and one for the team member, and no second pair for the
-			// repeat — a direct id and a team id are derived differently, so both are asserted by id.
-			const rows = await harness.database.query(
-				`select recipient, payload from bolt_notifications`
-			);
+			// One outbox row per recipient per channel — the direct recipient and the team member, on
+			// the inbox and by mail — and no second set for the repeat: the key is the identity.
+			expect(
+				await harness.database.query(
+					`select channel, count(*)::int as count from bolt_channel_outbox group by channel order by channel`
+				)
+			).toEqual([
+				{ channel: 'email_notices', count: 2 },
+				{ channel: 'inbox', count: 2 }
+			]);
+			const channels = await harness.runtime.runPromise(Channels.Service);
+			for (const channel of ['inbox', 'email_notices'])
+				await harness.runtime.runPromise(channels.drain(harness.effectId(`drain:${channel}`), channel));
+			// The inbox transport is the ledger the shell reads.
+			const rows = await harness.database.query(`select recipient, payload from bolt_notifications`);
 			expect(new Set(rows.map((row) => row['recipient']))).toEqual(
 				new Set([fixtureUserId('production-manager'), fixtureUserId('reminder-person')])
 			);
 			for (const row of rows)
-				expect(row['payload']).toEqual({
+				expect(row['payload']).toMatchObject({
 					channel: 'inbox',
 					title: 'Late for work',
 					body: 'PUBEM0002 has not clocked in for the 08:30 shift.'
 				});
-			expect(
-				await harness.database.query(
-					"select status from bolt_task where command = 'notifications.deliver'"
-				)
-			).toEqual([{ status: 'pending' }]);
+			// Mail goes to the address the person signs in with; a person with none is skipped, not failed.
+			const outcomes = await harness.database.query(
+				`select status, count(*)::int as count from bolt_channel_outbox where channel = 'email_notices' group by status`
+			);
+			const sent = email.sends.length;
+			expect(outcomes.reduce((total, row) => total + Number(row['count']), 0)).toBe(2);
+			for (const request of email.sends)
+				expect(request).toMatchObject({
+					transport: 'email',
+					message: { subject: 'Late for work', text: 'PUBEM0002 has not clocked in for the 08:30 shift.' }
+				});
+			expect(outcomes.find((row) => row['status'] === 'failed')).toBeUndefined();
+			expect(sent).toBe(Number(outcomes.find((row) => row['status'] === 'sent')?.['count'] ?? 0));
 		} finally {
 			await harness.dispose();
 		}

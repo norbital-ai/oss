@@ -24,6 +24,7 @@ const definition = workspace({
 	apps: [app({ name: 'notes', label: 'Notes' })],
 	teams: { admin: ['admin-data'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

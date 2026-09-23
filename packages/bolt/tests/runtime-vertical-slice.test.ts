@@ -82,6 +82,7 @@ const definition = workspace({
 	prompt: 'You are the test workspace agent.',
 	tools: [],
 	skills: [],
+	channels: [],
 	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks'],
 	schemaFingerprint: 'sha256:vertical-slice-fixture'
@@ -767,18 +768,23 @@ describe('runnable Bolt vertical slice', () => {
 			registrations: [
 				// A refused approval has durable hold and browser-ledger cleanup to do. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
+				{ command: 'channels.drain' },
+				{ command: 'channels.event' },
+				{ command: 'channels.ingest' },
 				{ command: 'collections.discard' },
 				{ command: 'collections.resume' },
-				{ command: 'envoys.receive' },
-				{ command: 'integrations.flush' },
-				{ command: 'integrations.pull' },
-				{ command: 'notifications.deliver' }
+				{ command: 'integrations.push' },
+				{ command: 'integrations.run' },
+				{ command: 'webhooks.receive' }
 			],
 			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
 			// a timer to — which is the state an idle workspace spends almost all of its life in, and it
 			// has to cost nothing rather than a heartbeat.
-			nextDueAtEpochMs: null
+			nextDueAtEpochMs: null,
+			// Nothing for the host to provision: no channel, no webhook-pushed sync.
+			channels: [],
+			webhooks: []
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(6);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(8);
 	});
 });

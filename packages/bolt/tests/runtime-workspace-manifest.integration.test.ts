@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import { testChannels } from './support/channels.js';
 import {
 	COMPILED_MANIFEST_VERSION,
 	InvocationId,
@@ -173,10 +174,11 @@ describe('workspace.manifest command', () => {
 					admin: ['admin']
 				},
 				automations: [],
+				channels: testChannels('whatsapp'),
 				envoys: [
 					envoy({
 						name: 'support',
-						transport: 'whatsapp',
+						channel: 'whatsapp',
 						audience: 'public',
 						policies: ['member'],
 						groupMessages: 'mention_or_reply',
@@ -198,12 +200,12 @@ describe('workspace.manifest command', () => {
 		expect(value(response)['envoys']).toEqual([
 			{
 				name: 'support',
-				transport: 'whatsapp',
+				channel: 'whatsapp',
 				audience: 'public',
 				groupMessages: 'mention_or_reply',
 				delegation: 'enabled',
 				origin: 'system',
-				destination: { kind: 'system', surface: 'envoys', selection: 'support' }
+				destination: { kind: 'system', surface: 'channels', selection: 'whatsapp' }
 			}
 		]);
 	});
@@ -241,10 +243,11 @@ describe('workspace.manifest command', () => {
 						policies: ['member']
 					})
 				],
+				channels: testChannels('whatsapp'),
 				envoys: [
 					envoy({
 						name: 'support',
-						transport: 'whatsapp',
+						channel: 'whatsapp',
 						audience: 'public',
 						policies: ['member'],
 						delegation: 'enabled',
@@ -656,10 +659,11 @@ describe('workspace.manifest command', () => {
 					],
 					teams: { admin: ['admin'] },
 					automations: [],
+					channels: testChannels('whatsapp'),
 					envoys: [
 						envoy({
 							name: 'support',
-							transport: 'whatsapp',
+							channel: 'whatsapp',
 							audience: 'public',
 							policies: ['admin'],
 							delegation: 'disabled',
@@ -741,12 +745,12 @@ describe('workspace.manifest command', () => {
 			expect(manifest['envoys']).toEqual([
 				{
 					name: 'support',
-					transport: 'whatsapp',
+					channel: 'whatsapp',
 					audience: 'public',
 					delegation: 'disabled',
 					origin: 'authored',
 					sourcePath: 'src/envoys/+support.ts',
-					destination: { kind: 'system', surface: 'envoys', selection: 'support' }
+					destination: { kind: 'system', surface: 'channels', selection: 'whatsapp' }
 				}
 			]);
 		});

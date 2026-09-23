@@ -52,6 +52,7 @@ const peopleWorkspace = workspace({
 	],
 	teams: { Employee: ['Employee'], Payroll: ['Employee'] },
 	automations: [],
+	channels: [],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

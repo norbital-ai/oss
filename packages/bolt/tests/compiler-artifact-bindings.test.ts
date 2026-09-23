@@ -182,6 +182,7 @@ describe('emitted artifact bindings', () => {
 			'envoys',
 			'policies',
 			'declaredCustomTypes',
+			'describedChannels',
 			'describedIntegrations',
 			'declaredEnvironment',
 			`${artifact.slice(start, end)}\nreturn workspace;`
@@ -202,7 +203,8 @@ describe('emitted artifact bindings', () => {
 			[],
 			[],
 			{},
-			{ declarations: [] },
+			[],
+			[],
 			{}
 		) as { readonly automations: ReadonlyArray<{ readonly policies: ReadonlyArray<string> }> };
 

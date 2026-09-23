@@ -25,7 +25,7 @@ import type * as Identity from '../src/runtime/identity/identity.js';
  */
 const worker = envoy({
 	name: 'worker',
-	transport: 'whatsapp',
+	channel: 'whatsapp',
 	audience: 'authenticated',
 	policies: ['admin'],
 	task: 'Report field status.',
@@ -33,7 +33,7 @@ const worker = envoy({
 });
 const auditor = envoy({
 	name: 'auditor',
-	transport: 'whatsapp',
+	channel: 'whatsapp',
 	audience: 'authenticated',
 	policies: ['admin'],
 	task: 'Audit the ledger.',

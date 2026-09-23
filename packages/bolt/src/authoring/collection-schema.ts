@@ -27,11 +27,8 @@
  * ```
  */
 import { Effect, Schema } from 'effect';
-import {
-	NOTIFICATION_CHANNELS,
-	type NotificationChannel,
-	type NotificationRecipient
-} from '@norbital-ai/bolt-protocol';
+import type { NotificationRecipient } from '@norbital-ai/bolt-protocol';
+import type { PersonChannel } from './channels-schema.js';
 import type { WorkspaceAuthoringTypes } from './authoring-types.js';
 import type {
 	AnySchema,
@@ -380,17 +377,19 @@ export interface CollectionLifecycleEvent {
 	}>;
 }
 
-/** One declared notification rule, typed by the channel it names. */
+/**
+ * One declared notification rule: a person channel, who, and what. The channel is one of the
+ * workspace's declared channels that can reach a person (`inbox`, `email`, a chat); naming none is a
+ * type error, and a workspace that declares none has no notification rules to write.
+ */
 export type CollectionNotificationRule = {
-	readonly [Name in NotificationChannel]: {
-		readonly channel: Name;
-		/** User ids, or `{ team }` for every member of a team — an approval step's approvers are teams. */
-		readonly recipients: (event: CollectionLifecycleEvent) => ReadonlyArray<NotificationRecipient>;
-		readonly message: (
-			event: CollectionLifecycleEvent
-		) => Readonly<{ readonly title: string; readonly body: string }>;
-	};
-}[NotificationChannel];
+	readonly channel: PersonChannel;
+	/** User ids, or `{ team }` for every member of a team — an approval step's approvers are teams. */
+	readonly recipients: (event: CollectionLifecycleEvent) => ReadonlyArray<NotificationRecipient>;
+	readonly message: (
+		event: CollectionLifecycleEvent
+	) => Readonly<{ readonly title: string; readonly body: string }>;
+};
 
 export type CollectionNotifications = Readonly<
 	Partial<Record<CollectionNotificationEvent, ReadonlyArray<CollectionNotificationRule>>>
@@ -493,10 +492,6 @@ export const defineCollection = <
 			for (const rule of rules) {
 				if (!isRecord(rule) || typeof rule['channel'] !== 'string')
 					throw new TypeError(`notifications.${event} has a rule without a channel.`);
-				if (!(NOTIFICATION_CHANNELS as ReadonlyArray<string>).includes(rule['channel']))
-					throw new TypeError(
-						`notifications.${event} names channel ${JSON.stringify(rule['channel'])}; the channels are ${NOTIFICATION_CHANNELS.join(', ')}.`
-					);
 				if (typeof rule['recipients'] !== 'function' || typeof rule['message'] !== 'function')
 					throw new TypeError(
 						`notifications.${event}: a ${rule['channel']} rule needs recipients and message builders.`

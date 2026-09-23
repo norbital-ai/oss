@@ -3,7 +3,7 @@ import {
 	connectionIsRecovering,
 	connectionIsTerminalError,
 	connectionLabel
-} from '../src/client/ui/org/envoy-connection-presentation.js';
+} from '../src/client/ui/org/channel-connection-presentation.js';
 
 describe('envoy transport connection presentation', () => {
 	it('presents an automatic retry as progress rather than an error', () => {

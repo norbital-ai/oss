@@ -2,7 +2,7 @@ import { Effect, Result } from 'effect';
 import { toError } from '@norbital-ai/std';
 import { decodeNumber } from '@norbital-ai/std/json';
 import type { WebhookSignatureSpec } from '#lib/authoring/contracts-schema.js';
-import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-schema.js';
+import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/integrations-schema.js';
 
 /**
  * Whether a pushed delivery really came from the source, decided before anything reads its body.
@@ -24,7 +24,7 @@ import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-sche
  * re-serialisation of parsed JSON. `JSON.stringify(JSON.parse(x))` is not `x` — key order,
  * whitespace, unicode escaping and number formatting all move — so a digest over a reparsed body
  * matches nothing the sender computed, and the only way to make such a scheme "work" is to stop
- * checking. The caller has to keep the raw text, which is why `Integrations.receive` takes a string.
+ * checking. The caller has to keep the raw text, which is why `webhooks.receive` takes a string.
  *
  * **A correctly signed delivery is not automatically a fresh one.** A body and its signature stay
  * valid together forever; anyone who captures one can send it again. Where the source signs a

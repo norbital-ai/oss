@@ -57,6 +57,7 @@ export const FacilityName = Schema.Literals([
 	'files',
 	'ai',
 	'communication',
+	'mail',
 	'connector',
 	'tasks',
 	'hostTools',

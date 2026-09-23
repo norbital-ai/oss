@@ -2,6 +2,7 @@ import { Effect, Predicate, Schema } from 'effect';
 import type { FacilityBindings } from './facilities.js';
 import type { Activation, Invocation } from './invocation.js';
 import { SyncChange } from './sync.js';
+import { ManifestChannel, Transport } from './channels.js';
 import { FacilityName, ProtocolVersion, WireError } from './wire.js';
 
 /**
@@ -213,96 +214,7 @@ export const RealtimeOutput = Schema.Struct({
 }).annotate({ identifier: 'BoltRealtimeOutput' });
 export interface RealtimeOutput extends Schema.Schema.Type<typeof RealtimeOutput> {}
 
-const Count = Schema.Number.check(Schema.isInt());
 
-/** Where a source puts the next-page token: a response header, or a place in the body. */
-const pageTokenLocations = [
-	Schema.Struct({ header: Schema.NonEmptyString }),
-	Schema.Struct({ field: Schema.NonEmptyString }),
-	Schema.Struct({ path: Schema.Array(Schema.NonEmptyString) })
-] as const;
-const PageTokenLocation = Schema.Union(pageTokenLocations);
-
-/**
- * Where the resumption point comes from, including the one place a page token cannot come from:
- * `maxOf` is the greatest value of a field across the records just read, so it is a watermark for
- * the *next run* rather than a token that can advance a page within this one.
- */
-const CursorLocation = Schema.Union([
-	...pageTokenLocations,
-	Schema.Struct({ maxOf: Schema.NonEmptyString })
-]);
-
-/** How a binding resumes: where the kept cursor is sent, and where the next one is read from. */
-export const ManifestPullCursor = Schema.Struct({
-	send: Schema.Union([
-		Schema.Struct({ query: Schema.NonEmptyString }),
-		Schema.Struct({ header: Schema.NonEmptyString })
-	]),
-	next: CursorLocation
-}).annotate({ identifier: 'BoltManifestPullCursor' });
-export interface ManifestPullCursor extends Schema.Schema.Type<typeof ManifestPullCursor> {}
-
-/** How the source pages, in the four shapes the pull loop knows how to walk. */
-export const ManifestPullPages = Schema.Union([
-	Schema.Struct({
-		style: Schema.Literal('page'),
-		pageQuery: Schema.NonEmptyString,
-		sizeQuery: Schema.optionalKey(Schema.NonEmptyString),
-		size: Schema.optionalKey(Count),
-		firstPage: Schema.optionalKey(Count),
-		max: Schema.optionalKey(Count)
-	}),
-	Schema.Struct({
-		style: Schema.Literal('offset'),
-		offsetQuery: Schema.NonEmptyString,
-		limitQuery: Schema.NonEmptyString,
-		size: Count,
-		max: Schema.optionalKey(Count)
-	}),
-	Schema.Struct({
-		style: Schema.Literal('cursor'),
-		query: Schema.NonEmptyString,
-		next: PageTokenLocation,
-		max: Schema.optionalKey(Count)
-	}),
-	Schema.Struct({ style: Schema.Literal('link-header'), max: Schema.optionalKey(Count) })
-]);
-export type ManifestPullPages = typeof ManifestPullPages.Type;
-
-/**
- * One inbound binding, as a host reads it.
- *
- * This is the declaration half of an authored `+integrations.ts` binding — the half that survives
- * `JSON.stringify`. The other half is a live `Schema.Codec`, an identity closure and an optional
- * mapper, which cannot cross a manifest boundary and stay in the artifact's authored runtime.
- *
- * `schedule` is why this is published at all: without it a pull only ever runs when something
- * enqueues one by hand, and a host has no way to learn that the artifact wanted it run hourly.
- */
-export const ManifestIntegrationBinding = Schema.Struct({
-	name: Schema.NonEmptyString,
-	/** Cron, in the host's scheduler. */
-	schedule: Schema.NonEmptyString,
-	method: Schema.Literals(['GET', 'POST']),
-	/** Relative to the connection root; empty is the root itself. */
-	path: Schema.String,
-	cursor: Schema.optionalKey(ManifestPullCursor),
-	pages: Schema.optionalKey(ManifestPullPages),
-	/** The collection column the external key lands in — what makes a second run an update. */
-	identityColumn: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltManifestIntegrationBinding' });
-export interface ManifestIntegrationBinding extends Schema.Schema.Type<
-	typeof ManifestIntegrationBinding
-> {}
-
-/** One integration a tenant runtime offers, named `<collection>.<integration>` as the workspace named it. */
-export const ManifestIntegration = Schema.Struct({
-	name: Schema.NonEmptyString,
-	collection: Schema.NonEmptyString,
-	receive: Schema.Array(ManifestIntegrationBinding)
-}).annotate({ identifier: 'BoltManifestIntegration' });
-export interface ManifestIntegration extends Schema.Schema.Type<typeof ManifestIntegration> {}
 
 /** One ordered DDL statement carried by an immutable Preview. */
 export const ManifestSchemaStep = Schema.Struct({
@@ -351,14 +263,14 @@ export interface SyncSchemaFacts extends Schema.Schema.Type<typeof SyncSchemaFac
  * release may remain runnable while its authoring projection is too old to inspect safely; Studio
  * fails that case closed and asks for a rebuild instead of reconstructing source paths.
  */
-export const COMPILED_MANIFEST_VERSION = 2 as const;
+export const COMPILED_MANIFEST_VERSION = 3 as const;
 
 /** Meaning carried by an artifact and resolved by the Bolt shell's shared navigation builder. */
 export const ManifestDestination = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal('app'), name: Schema.NonEmptyString }),
 	Schema.Struct({
 		kind: Schema.Literal('system'),
-		surface: Schema.Literals(['approvals', 'automations', 'data', 'envoys', 'environment']),
+		surface: Schema.Literals(['approvals', 'automations', 'channels', 'data', 'environment', 'integrations']),
 		selection: Schema.optionalKey(Schema.NonEmptyString)
 	})
 ]).annotate({ identifier: 'BoltManifestDestination' });
@@ -385,19 +297,22 @@ const ManifestPipeline = Schema.Struct({
 	description: Schema.optionalKey(Schema.String),
 	...ManifestAuthoredEntryFields
 });
-const ManifestStudioIntegrationBinding = Schema.Struct({
+const ManifestStudioSync = Schema.Struct({
 	name: Schema.NonEmptyString,
-	direction: Schema.Literals(['receive', 'send']),
-	method: Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-	path: Schema.String,
-	schedule: Schema.optionalKey(Schema.NonEmptyString),
-	events: Schema.optionalKey(Schema.Array(Schema.Literals(['create', 'update', 'delete']))),
-	targetCollection: Schema.optionalKey(Schema.NonEmptyString),
-	source: Schema.NonEmptyString
+	collection: Schema.NonEmptyString,
+	direction: Schema.Literals(['one_way', 'two_way']),
+	source: Schema.Literals(['http', 'channel']),
+	fields: Schema.Array(Schema.NonEmptyString)
+});
+const ManifestStudioChannel = Schema.Struct({
+	name: Schema.NonEmptyString,
+	transport: Transport,
+	address: Schema.optionalKey(Schema.NonEmptyString),
+	...ManifestAuthoredEntryFields
 });
 const ManifestEnvoy = Schema.Struct({
 	name: Schema.NonEmptyString,
-	transport: Schema.NonEmptyString,
+	channel: Schema.NonEmptyString,
 	audience: Schema.NonEmptyString,
 	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
 	delegation: Schema.Literals(['enabled', 'disabled']),
@@ -510,14 +425,13 @@ const WorkspaceAuthoringManifestShape = Schema.Struct({
 			policies: Schema.Array(Schema.String)
 		})
 	),
+	channels: Schema.Array(ManifestStudioChannel),
 	envoys: Schema.Array(ManifestEnvoy),
 	integrations: Schema.Array(
 		Schema.Struct({
 			name: Schema.NonEmptyString,
-			collection: Schema.optionalKey(Schema.String),
-			description: Schema.optionalKey(Schema.String),
 			...ManifestAuthoredEntryFields,
-			bindings: Schema.optionalKey(Schema.Array(ManifestStudioIntegrationBinding))
+			syncs: Schema.Array(ManifestStudioSync)
 		})
 	),
 	remotes: Schema.optionalKey(
@@ -549,7 +463,7 @@ const WorkspaceAuthoringManifestShape = Schema.Struct({
 		Schema.Struct({
 			id: Schema.NonEmptyString,
 			label: Schema.NonEmptyString,
-			kind: Schema.Literals(['host', 'seed', 'envoy', 'automation']),
+			kind: Schema.Literals(['host', 'seed', 'envoy', 'automation', 'integration', 'channel']),
 			policies: Schema.Array(Schema.String)
 		})
 	),
@@ -582,6 +496,7 @@ const authoredManifestSourcePathProblem = (
 	for (const group of manifest.appGroups ?? []) requirePath('app-group', group);
 	for (const policy of manifest.policies) requirePath('policy', policy);
 	for (const automation of manifest.automations) requirePath('automation', automation);
+	for (const channel of manifest.channels) requirePath('channel', channel);
 	for (const envoy of manifest.envoys) requirePath('envoy', envoy);
 	for (const integration of manifest.integrations) requirePath('integration', integration);
 	for (const remote of manifest.remotes ?? []) requirePath('remote', remote);
@@ -617,14 +532,6 @@ export const BundleManifest = Schema.Struct({
 	 */
 	browserAssets: Schema.Array(AssetIndexEntry),
 	serverAssets: Schema.Array(AssetIndexEntry),
-	/**
-	 * What this artifact mirrors from the outside world, and when it wants each mirror refreshed.
-	 *
-	 * A required field, empty for a workspace that declares none, for the same reason
-	 * `requiredFacilities` is: a host has to be able to tell "declares no integrations" from "was
-	 * built before the manifest carried them", and an optional field cannot say that.
-	 */
-	integrations: Schema.Array(ManifestIntegration)
 }).annotate({ identifier: 'BoltBundleManifest' });
 export interface BundleManifest extends Schema.Schema.Type<typeof BundleManifest> {}
 
@@ -762,7 +669,17 @@ export const ActivationResult = Schema.TaggedUnion({
 		 * It rides the activation answer rather than a message of its own because activation has just
 		 * written the schedules and is already holding the connection that knows.
 		 */
-		nextDueAtEpochMs: Schema.Union([Schema.Number, Schema.Null])
+		nextDueAtEpochMs: Schema.Union([Schema.Number, Schema.Null]),
+		/**
+		 * What the host provisions for this release: an adapter and an ingress binding per receiving
+		 * channel (an email channel's address is minted here), and an ingress binding per sync whose
+		 * source pushes by webhook. It rides the activation answer, as routing does, so a channel is
+		 * reachable the moment its release is live — no dashboard step.
+		 */
+		channels: Schema.Array(ManifestChannel),
+		webhooks: Schema.Array(
+			Schema.Struct({ integration: Schema.NonEmptyString, sync: Schema.NonEmptyString })
+		)
 	},
 	Failure: { error: WireError }
 });

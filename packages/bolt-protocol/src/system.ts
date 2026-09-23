@@ -8,7 +8,15 @@ import {
 	CollectionMutationPush,
 	CollectionQueryRequest
 } from './collections.js';
+import {
+	ChannelEvent,
+	ChannelStatus,
+	HistoryChange,
+	HistoryState,
+	PushSubscription
+} from './channels.js';
 import { CommandHeaders, commandContract } from './host.js';
+import { IntegrationSyncStatus } from './integration-http.js';
 import {
 	AgentId,
 	PlanAction,
@@ -175,12 +183,6 @@ export const SecretsStatus = Schema.Array(
 ).annotate({ identifier: 'BoltSecretsStatus' });
 export type SecretsStatus = typeof SecretsStatus.Type;
 
-export const EnvoyStatus = Schema.Struct({
-	envoy: Schema.NonEmptyString,
-	received: Schema.Number,
-	replied: Schema.Number
-}).annotate({ identifier: 'BoltEnvoyStatus' });
-export type EnvoyStatus = typeof EnvoyStatus.Type;
 
 const WorkspaceAccessRole = Schema.Literals(['admin', 'manager', 'basic']);
 export const WorkspaceAccess = Schema.Struct({
@@ -258,84 +260,15 @@ const AutomationStopInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString
 });
-/**
- * The hard wire bound on one attachment crossing the host boundary.
- *
- * Per-kind caps live in the transport — this is the outer ceiling that keeps one invocation from
- * carrying an unbounded payload. Bytes are absent when the provider could not supply them (an
- * over-cap video, an expired document), which is recorded rather than dropped.
- */
-const MaxInboundAttachmentBytes = 32 * 1024 * 1024;
-export const InboundAttachment = Schema.Struct({
-	provider: Schema.NonEmptyString,
-	attachmentId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-	kind: Schema.Literals(['image', 'video', 'audio', 'document', 'sticker', 'other']),
-	mimeType: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
-	fileName: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-	byteLength: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isBetween({ minimum: 1, maximum: MaxInboundAttachmentBytes })
-	),
-	bytesBase64: Schema.optionalKey(
-		Schema.String.check(
-			Schema.isMinLength(1),
-			Schema.isMaxLength(Math.ceil(MaxInboundAttachmentBytes / 3) * 4),
-			Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
-		)
-	)
-});
-export interface InboundAttachment extends Schema.Schema.Type<typeof InboundAttachment> {}
 
-/** One message a host took off a transport: wire facts, no claimed authority. */
-export const EnvoyDelivery = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	conversationKind: Schema.Literals(['dm', 'group']),
-	messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-	sentAt: Schema.String.check(
-		Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/)
-	),
-	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
-	text: Schema.String,
-	attachments: Schema.Array(InboundAttachment).check(
-		Schema.makeFilter(
-			(attachments) => attachments.length <= 8 || 'at most 8 inbound attachments are accepted'
-		)
-	),
-	/** Backfilled or synced history: recorded in the replica, never a turn. */
-	historical: Schema.optionalKey(Schema.Boolean),
-	/** A provider-reported edit of an already-seen message. */
-	edited: Schema.optionalKey(Schema.Boolean),
-	sender: Schema.optionalKey(
-		Schema.Struct({
-			id: Schema.NonEmptyString,
-			displayName: Schema.optionalKey(Schema.NonEmptyString),
-			username: Schema.optionalKey(Schema.NonEmptyString)
-		})
-	)
-});
-export interface EnvoyDelivery extends Schema.Schema.Type<typeof EnvoyDelivery> {}
 
 /** The host config key naming the VAPID public key a browser subscribes against. */
 export const WEB_PUSH_PUBLIC_KEY_CONFIG_KEY = 'BOLT_WEB_PUSH_PUBLIC_KEY';
-export const WEB_PUSH_CHANNEL = 'webpush';
 /** The failure code a push service answering 404 or 410 becomes; the runtime drops the subscription on it. */
 export const WEB_PUSH_SUBSCRIPTION_GONE = 'communication_recipient_gone';
 export const PushConfiguration = Schema.Struct({ publicKey: Schema.NullOr(Schema.NonEmptyString) });
 export interface PushConfiguration extends Schema.Schema.Type<typeof PushConfiguration> {}
-/** What `PushSubscription.toJSON()` gives a browser: the endpoint and the two keys it minted. */
-export const PushSubscription = Schema.Struct({
-	endpoint: Schema.NonEmptyString,
-	keys: Schema.Struct({ p256dh: Schema.NonEmptyString, auth: Schema.NonEmptyString })
-});
-export interface PushSubscription extends Schema.Schema.Type<typeof PushSubscription> {}
-/** The `webpush` channel's Send payload: which subscription, and what the worker shows. */
-export const WebPushPayload = Schema.Struct({
-	subscription: PushSubscription,
-	title: Schema.NonEmptyString,
-	body: Schema.String,
-	url: Schema.optionalKey(Schema.String)
-});
-export interface WebPushPayload extends Schema.Schema.Type<typeof WebPushPayload> {}
+
 const AutomationTaskInput = Schema.Struct({
 	args: Schema.Json,
 	scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
@@ -697,12 +630,6 @@ export const SystemCommandContracts = [
 		responses: [ok(Schema.Struct({ stopped: Schema.Literal(true) }))]
 	}),
 	commandContract({
-		name: 'envoys.receive',
-		input: Schema.Struct({ envoy: Schema.NonEmptyString, delivery: EnvoyDelivery }),
-		responses: [ok(Schema.Json)],
-		budgetKey: 'envoys.registration'
-	}),
-	commandContract({
 		name: 'envoys.registration.inspect',
 		input: Schema.Struct({ claimId: Schema.NonEmptyString }),
 		responses: [ok(Schema.Json)],
@@ -721,31 +648,89 @@ export const SystemCommandContracts = [
 		input: Schema.Struct({ envoy: Schema.NonEmptyString, conversationId: Schema.NonEmptyString }),
 		responses: [ok(Schema.Json)]
 	}),
+	/**
+	 * A host hands the runtime changes to one channel's history: live traffic, a backfill page, or
+	 * the re-listing after a reconnect. Applied idempotently, keyed by the provider's message id.
+	 */
 	commandContract({
-		name: 'envoys.status',
-		input: Schema.Struct({ envoy: Schema.NonEmptyString }),
-		responses: [ok(EnvoyStatus)],
-		clientPath: ['envoys', 'status'],
-		clientMode: 'query'
-	}),
-	commandContract({
-		name: 'integrations.pull',
+		name: 'channels.ingest',
 		input: Schema.Struct({
-			name: Schema.NonEmptyString,
-			cursor: Schema.Json,
-			binding: Schema.optionalKey(Schema.NonEmptyString)
+			channel: Schema.NonEmptyString,
+			changes: Schema.Array(HistoryChange).check(Schema.isMaxLength(500)),
+			state: Schema.optionalKey(HistoryState),
+			horizon: Schema.optionalKey(Schema.String)
+		}),
+		responses: [ok(Schema.Json)],
+		budgetKey: 'envoys.registration'
+	}),
+	/** Provider reports about messages the channel sent, correlated by the provider's message id. */
+	commandContract({
+		name: 'channels.event',
+		input: Schema.Struct({
+			channel: Schema.NonEmptyString,
+			events: Schema.Array(ChannelEvent).check(Schema.isMaxLength(500))
 		}),
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({
-		name: 'integrations.flush',
-		input: Schema.Struct({ name: Schema.NonEmptyString, input: Schema.optionalKey(Schema.Json) }),
+		name: 'channels.drain',
+		input: Schema.Struct({ channel: Schema.NonEmptyString }),
 		responses: [ok(Schema.Json)]
 	}),
 	commandContract({
-		name: 'notifications.deliver',
-		input: EmptyInput,
+		name: 'channels.status',
+		input: Schema.Struct({ channel: Schema.NonEmptyString }),
+		responses: [ok(ChannelStatus)],
+		clientPath: ['channels', 'status'],
+		clientMode: 'query'
+	}),
+	/**
+	 * One raw webhook delivery for an `http` channel or an integration sync's `subscribe.webhook`.
+	 * `body` is the raw request body: the signature was taken over those bytes.
+	 */
+	commandContract({
+		name: 'webhooks.receive',
+		input: Schema.Struct({
+			target: Schema.Union([
+				Schema.Struct({ channel: Schema.NonEmptyString }),
+				Schema.Struct({ integration: Schema.NonEmptyString, sync: Schema.NonEmptyString })
+			]),
+			headers: Schema.Record(Schema.String, Schema.String),
+			body: Schema.String
+		}),
 		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'integrations.run',
+		input: Schema.Struct({
+			integration: Schema.NonEmptyString,
+			sync: Schema.NonEmptyString,
+			mode: Schema.Literals(['changes', 'reconcile'])
+		}),
+		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'integrations.push',
+		input: Schema.Struct({ integration: Schema.NonEmptyString, sync: Schema.NonEmptyString }),
+		responses: [ok(Schema.Json)]
+	}),
+	commandContract({
+		name: 'integrations.status',
+		input: EmptyInput,
+		responses: [ok(Schema.Array(IntegrationSyncStatus))],
+		clientPath: ['integrations', 'status'],
+		clientMode: 'query'
+	}),
+	commandContract({
+		name: 'integrations.control',
+		input: Schema.Struct({
+			integration: Schema.NonEmptyString,
+			sync: Schema.NonEmptyString,
+			action: Schema.Literals(['start', 'reconcile', 'pause', 'resume', 'retry'])
+		}),
+		responses: [ok(Schema.Json)],
+		clientPath: ['integrations', 'control'],
+		clientMode: 'operation'
 	}),
 	/**
 	 * Push: the host's VAPID public key (null when the host sends no pushes, so the shell offers

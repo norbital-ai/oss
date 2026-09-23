@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { testChannels } from './support/channels.js';
 import type { AIRequest } from '@norbital-ai/bolt-protocol';
 import {
 	AgentId,
@@ -39,10 +40,11 @@ const definition = workspace({
 	],
 	teams: { 'field-envoy': ['field-envoy'] },
 	automations: [],
+	channels: testChannels('whatsapp'),
 	envoys: [
 		{
 			name: 'whatsapp-field',
-			transport: 'whatsapp',
+			channel: 'whatsapp',
 			audience: 'public',
 			policies: ['field-envoy'],
 			task: 'Update only the assignment supplied by the sender.',

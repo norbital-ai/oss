@@ -643,7 +643,7 @@ const describeCollection = (
 		...(write?.similarity ?? []).map((index) => `/${index.name}`)
 	];
 	const integrations = definition.integrations
-		.filter((integration) => integration.collection === collection.name)
+		.filter((integration) => integration.syncs.some((sync) => sync.collection === collection.name))
 		.map((integration) => integration.name);
 	return {
 		name: collection.name,
@@ -718,15 +718,12 @@ export const describeWorkspace = (
 					? 'admin (every collection, no policy scope)'
 					: `teams ${context.subject.teamPath.join(' > ')}; policies ${context.subject.policies.join(', ')}`,
 		envoys: definition.envoys.map((envoy) => envoy.name),
+		channels: definition.channels.map((channel) => `${channel.name} (${channel.transport})`),
 		integrations: definition.integrations.map(
 			(integration) =>
-				`${integration.name} on ${integration.collection} (${[
-					integration.receive.length > 0 ? `${integration.receive.length} pull` : '',
-					integration.webhooks.length > 0 ? `${integration.webhooks.length} webhook` : '',
-					integration.send.length > 0 ? `${integration.send.length} send` : ''
-				]
-					.filter((part) => part !== '')
-					.join(', ')})`
+				`${integration.name}: ${integration.syncs
+					.map((sync) => `${sync.collection} (${sync.direction.replace('_', '-')}, ${sync.source})`)
+					.join(', ')}`
 		),
 		tools: context.toolNames,
 		skills: context.skills.map(({ name: skill }) => skill)
@@ -930,15 +927,15 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				messages: result.messages.map(
 					({
 						sent_at,
-						sender_external_id,
-						sender_display_name,
+						sender_id,
+						sender_name,
 						invocation,
 						text,
 						attachments
 					}) => ({
 						sentAt: sent_at,
-						...(sender_external_id === null ? {} : { senderId: sender_external_id }),
-						...(sender_display_name === null ? {} : { senderName: sender_display_name }),
+						...(sender_id === null ? {} : { senderId: sender_id }),
+						...(sender_name === null ? {} : { senderName: sender_name }),
 						invocation,
 						text,
 						attachments: attachments.map(({ key, fileName, mimeType, size, provider }) => ({
