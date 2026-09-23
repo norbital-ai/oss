@@ -83,6 +83,7 @@
 		selectable = false,
 		title,
 		description,
+		navigation,
 		exportPipelines = [],
 		importPipelines = [],
 		bulkPipelines = [],
@@ -446,6 +447,7 @@
 			query={queryState}
 			{title}
 			about={description ? { description } : undefined}
+			{navigation}
 			filterPersistenceKey={resolvedView}
 			operations={{
 				exportPipelines,

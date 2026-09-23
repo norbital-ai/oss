@@ -2,6 +2,7 @@ import { and, type AnyDBQueryConfig, type AnyRelations, type SQL } from 'drizzle
 import { Effect, Result, Schema } from 'effect';
 import type { FieldDefinition, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
+import { RECORD_EMBEDDING_COLUMN } from '#lib/authoring/model-introspection.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import {
 	boundedCount,
@@ -71,14 +72,29 @@ const fieldsOf = (
 ): Readonly<Record<string, FieldDefinition>> =>
 	definition.collections.find((entry) => entry.name === collection)?.fields ?? {};
 
+/**
+ * The SELECT a `columns` projection names.
+ *
+ * The record embedding is a column the model's `embedding` declaration adds, not a declared field,
+ * so it is listed here by that declaration: left out, naming it dropped it from the SELECT without a
+ * word and every row came back without its vector.
+ */
 const physicalSelection = (
-	fields: Readonly<Record<string, FieldDefinition>>,
+	definition: WorkspaceDefinition,
+	collection: string,
 	columns: ColumnSelection | undefined
 ): Readonly<Record<string, true>> | undefined => {
 	if (columns === undefined) return undefined;
+	const fields = fieldsOf(definition, collection);
+	const embedded =
+		definition.collections.find((entry) => entry.name === collection)?.embedding !== undefined;
 	const selection: Record<string, true> = {};
 	for (const name of selectedColumnNames(
-		[...SYSTEM_COLUMN_NAMES, ...Object.keys(fields)],
+		[
+			...SYSTEM_COLUMN_NAMES,
+			...Object.keys(fields),
+			...(embedded ? [RECORD_EMBEDDING_COLUMN] : [])
+		],
 		columns
 	)) {
 		const reference = fields[name]?.reference;
@@ -143,7 +159,7 @@ const levelConfig = (
 > =>
 	Effect.gen(function* () {
 		const fields = fieldsOf(context.definition, collection);
-		const selection = physicalSelection(fields, requestedColumns(spec));
+		const selection = physicalSelection(context.definition, collection, requestedColumns(spec));
 		const nested = yield* planWith(context, collection, nestedWith(spec), depth);
 		if (
 			selection !== undefined &&
@@ -430,10 +446,7 @@ export const readRelational = Effect.fn('Collections.readRelational')(function* 
 	// they were applied only after the read, so every row crossed the facility bridge whole: a
 	// `{ id, code }` read of sixteen statutory rows moved 1.5 MB of rules into the guest and
 	// decoded them, and a payroll run paid that three times over.
-	const rootSelection = physicalSelection(
-		fieldsOf(ports.planContext.definition, collection),
-		config.columns
-	);
+	const rootSelection = physicalSelection(ports.planContext.definition, collection, config.columns);
 	const query = builder.findMany({
 		...(rootSelection === undefined || Object.keys(rootSelection).length === 0
 			? {}

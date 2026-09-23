@@ -97,6 +97,8 @@ export interface CollectionKanbanProps<
 	selectable?: boolean;
 	title?: string;
 	description?: string;
+	/** Leads the toolbar: the scope the board steps through (a day, a month). */
+	navigation?: Snippet;
 	exportPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];
 	importPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];
 	bulkPipelines?: readonly CollectionPipeline<CollectionRow<TCollections[TName]>>[];

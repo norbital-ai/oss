@@ -175,7 +175,10 @@ const compiledAuthoringFor = (definition: WorkspaceDefinition) => {
 				{
 					__kind: 'model' as const,
 					columns: drizzleColumns(collection),
-					metadata: { indexes: declaredIndexMetadata(collection) }
+					metadata: {
+						indexes: declaredIndexMetadata(collection),
+						...(collection.embedding === undefined ? {} : { embedding: collection.embedding })
+					}
 				}
 			])
 		),
