@@ -598,7 +598,7 @@
 				<h1 class="text-heading">Channels</h1>
 				<p class="max-w-2xl text-meta">
 					Where this workspace sends and receives messages: each channel's history, its delivery
-					record, and the pairing a host needs. What an channel on a channel may <em>do</em> is the
+					record, and the pairing a host needs. What an envoy on a channel may <em>do</em> is the
 					policies it declares, in the workspace source.
 				</p>
 			</Stack>
