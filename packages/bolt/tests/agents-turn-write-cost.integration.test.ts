@@ -114,10 +114,12 @@ describe('what one agent turn costs the database', () => {
 	it('does not re-read the whole transcript once per streamed part', async () => {
 		const { statements } = await runTurn('agents-admission-hello');
 
-		// Two history reads plus five queue checks, including Plan revision at both boundaries. The
-		// admission started the turn, so nothing is read to claim one. The streaming suite asserts
-		// the same count with eight provider part boundaries.
-		expect(transcriptReads(statements)).toHaveLength(7);
+		// One history read plus four queue checks: one per iteration answering Plan revision and
+		// steering together, the final steer, the settle's queued check and Plan revision at the finish.
+		// A new row reads only the newest sequence, not the transcript. The admission started the turn,
+		// so nothing is read to claim one. The streaming suite asserts the same count with eight
+		// provider part boundaries.
+		expect(transcriptReads(statements)).toHaveLength(5);
 	});
 
 	it('writes each row once, to its own collection', async () => {

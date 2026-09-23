@@ -795,7 +795,9 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				 * turn under the other.
 				 */
 				const owned = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-					claim === undefined ? effect : Effect.provideService(effect, Agents.ExecutionOwner, claim.id);
+					(claim === undefined ? effect : Effect.provideService(effect, Agents.ExecutionOwner, claim.id)).pipe(
+						Effect.provideService(Agents.EnvoyTurn, envoy.name)
+					);
 				const subjects: Array<Identity.Subject> = [];
 				for (const [index, row] of rows.entries()) {
 					const subject = yield* subjectFor(EffectId.make(`${effectId}:subject:${index}`), envoy, row.sender_id);

@@ -52,9 +52,7 @@ describe('searchable field opt-in', () => {
 		const compiled = compileModel(collection({ name: 'products', fields: {} }), opted);
 		expect(compiled.search).toEqual({
 			fields: ['hotline', 'status', 'title'],
-			documentColumn: 'search_document',
-			configuration: 'simple',
-			ranking: { lexical: 'ts_rank_cd', fuzzy: 'similarity' }
+			documentColumn: 'search_document'
 		});
 	});
 
@@ -146,15 +144,12 @@ describe('searchable field opt-in', () => {
 			.toSorted();
 		expect(searchable).toEqual(['hotline', 'status', 'title']);
 		expect(ddl).toContain('"search_document" tsvector');
-		expect(ddl).toContain("to_tsvector('simple'::regconfig");
+		expect(ddl).toContain('bolt_search_document(');
 		for (const field of searchable) expect(ddl).toContain(`coalesce("${field}", '')`);
 		expect(ddl).not.toContain(`coalesce("summary", '')`);
 		expect(ddl).not.toContain(`coalesce("contact", '')`);
 		expect(ddl).toContain('"products_search_document_gin_idx"');
-		expect(ddl).toContain('"products_search_text_trgm_idx"');
-		expect(ddl).toContain('gin_trgm_ops');
-		for (const field of searchable)
-			expect(ddl).not.toContain(`"products_${field}_search_trgm_idx"`);
+		expect(ddl).not.toContain('gin_trgm_ops');
 	});
 
 	it('inlines a generated searchable field into the generated document', async () => {
@@ -174,8 +169,7 @@ describe('searchable field opt-in', () => {
 		);
 		const ddl = migration?.statements.join('\n') ?? '';
 		expect(ddl).toContain(
-			`"search_document" tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, coalesce((upper("code")), ''))) STORED`
+			`"search_document" tsvector GENERATED ALWAYS AS (bolt_search_document(coalesce((upper("code")), ''))) STORED`
 		);
-		expect(ddl).toContain(`coalesce("summary", '')`);
 	});
 });

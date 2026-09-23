@@ -6,6 +6,7 @@ import {
 	SEARCH_DOCUMENT_COLUMN,
 	searchableColumns
 } from '#lib/authoring/model-introspection.js';
+import { PINYIN_READINGS } from './pinyin.js';
 
 export { RECORD_EMBEDDING_COLUMN, SEARCH_DOCUMENT_COLUMN };
 
@@ -173,16 +174,77 @@ const searchableText = (context: SearchContext, names: ReadonlyArray<string>): S
 		sql`, `
 	)})`;
 
-const prefixTsquery = (term: string): string =>
-	term
-		.normalize('NFKC')
-		.split(/\s+/u)
-		.map((token) => token.replaceAll(/[^\p{L}\p{N}_-]/gu, ''))
-		.filter((token) => token !== '')
-		.map((token) => `${token}:*`)
-		.join(' & ');
+/** Han, kana, bopomofo and Hangul: scripts written without spaces between words. */
+const CJK = String.raw`\u2e80-\u2fdf\u3040-\u30ff\u3100-\u312f\u3190-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff`;
+/** Separators after NFKC: ASCII/Latin-1, general and CJK punctuation, symbols, full-width forms. */
+const SEPARATOR = String.raw`\x01-\x2f\x3a-\x40\x5b-\x60\x7b-\xbf\xd7\xf7\u2000-\u2bff\u3000-\u303f\ufe10-\ufe6f\uff00-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65`;
 
-/** Compiles indexed multilingual lexical matching and its deterministic rank expression. */
+/**
+ * The pinyin lookup: two bytes per code point of U+4E00–U+9FFF naming the character's readings,
+ * so each character is one `get_byte` pair and one jsonb array index — constant time, no scan.
+ */
+const pinyinFunction = (): string => {
+	const codes = new Uint16Array(0xa000 - 0x4e00);
+	const readings = PINYIN_READINGS.split('|').map((group, index) => {
+		const [reading = '', characters = ''] = group.split(':');
+		for (const character of characters) codes[(character.codePointAt(0) ?? 0) - 0x4e00] = index + 1;
+		return reading;
+	});
+	const hex = Array.from(codes, (code) => code.toString(16).padStart(4, '0')).join('');
+	return `create or replace function bolt_search_pinyin(run text) returns text[] language plpgsql immutable strict parallel safe as $bolt_search$ begin return array(select case when code between 0 and ${codes.length - 1} then readings ->> (nullif(get_byte(codes, 2 * code) * 256 + get_byte(codes, 2 * code + 1), 0) - 1) end from (select decode('${hex}', 'hex') as codes, '${JSON.stringify(readings)}'::jsonb as readings) as lookup, regexp_split_to_table(run, '') with ordinality as t(glyph, position), lateral (select ascii(glyph) - 19968 as code) as offsets order by position); end $bolt_search$`;
+};
+
+/**
+ * The database half of lexical search, installed by the schema plan's foundation.
+ *
+ * One implementation folds and tokenises both the stored document and the query, so the two can
+ * never disagree. `bolt_search_fold`: NFKD, combining marks (accents, pinyin tones) removed, NFKC
+ * (full-width to half-width), lower case, apostrophes dropped, punctuation to spaces, CJK runs set
+ * apart. `bolt_search_terms` then emits, per word: the word (`w`); for Latin words a consonant
+ * skeleton (`s`, `#`-prefixed) so vowel slips, doubled letters and c/k, z/s, ph/f spellings meet;
+ * for CJK runs every suffix of up to eight characters (`r` for the whole run, `c` for the rest),
+ * so any partial phrase is a prefix of some lexeme; and for Han the toneless pinyin syllables
+ * (`p`), every reading pair (`j`) and the common-reading join of each suffix up to eight syllables
+ * (`j`). Pinyin is computed when the row is written, never per query.
+ */
+export const lexicalSearchSteps = (): ReadonlyArray<Readonly<{ id: string; sql: string }>> => [
+	{
+		id: 'bolt:function-search-1-fold',
+		sql: String.raw`create or replace function bolt_search_fold(value text) returns text language sql immutable strict parallel safe return btrim(regexp_replace(regexp_replace(regexp_replace(lower(case when octet_length(value) = char_length(value) then value else normalize(regexp_replace(normalize(value, NFKD), '[\u0300-\u036f]', '', 'g'), NFKC) end), '[''\u2019]', '', 'g'), '[${SEPARATOR}]+|([${CJK}]+)', ' \1 ', 'g'), '\s+', ' ', 'g'))`
+	},
+	{ id: 'bolt:function-search-2-pinyin', sql: pinyinFunction() },
+	{
+		id: 'bolt:function-search-3-terms',
+		sql: String.raw`create or replace function bolt_search_terms(value text) returns table(kind text, lexeme text) language plpgsql immutable strict parallel safe set jit = off as $bolt_search$ begin return query
+with words as (select word from regexp_split_to_table(bolt_search_fold(value), ' ') as word where word <> ''),
+runs as (select distinct word, bolt_search_pinyin(word) as readings from words where word ~ '^[${CJK}]'),
+latin as (select regexp_replace(translate(replace(replace(word, 'ph', 'f'), 'ck', 'k'), 'cqzx', 'kkss'), '(.)\1+', '\1', 'g') as folded from words where word ~ '^[a-z]{3,}$')
+select 'w', word from words where word !~ '^[${CJK}]'
+union all select 's', '#' || left(folded, 1) || regexp_replace(substr(folded, 2), '[aeiouyhw]', '', 'g') from latin
+union all select case when position = 1 then 'r' else 'c' end, substr(word, position, 8) from runs, generate_series(1, char_length(word)) as position
+union all select 'p', syllable from runs, unnest(readings) as reading, unnest(string_to_array(reading, ' ')) as syllable
+union all select 'j', head || tail from runs, generate_series(1, cardinality(readings) - 1) as position, unnest(string_to_array(readings[position], ' ')) as head, unnest(string_to_array(readings[position + 1], ' ')) as tail
+union all select 'j', string_agg(split_part(readings[position + step], ' ', 1), '' order by step) from runs, generate_series(1, cardinality(readings) - 2) as position, generate_series(0, least(7, cardinality(readings) - position)) as step group by word, position;
+end $bolt_search$`
+	},
+	{
+		id: 'bolt:function-search-4-document',
+		sql: "create or replace function bolt_search_document(value text) returns tsvector language plpgsql immutable strict parallel safe as $bolt_search$ begin return array_to_tsvector(array(select distinct lexeme from bolt_search_terms(value) where lexeme <> '' and octet_length(lexeme) <= 256)); end $bolt_search$"
+	},
+	{
+		// `every`: each query word and CJK run, as a prefix. Otherwise any lexeme that can place a row.
+		id: 'bolt:function-search-5-query',
+		sql: "create or replace function bolt_search_query(term text, every boolean) returns tsquery language plpgsql immutable strict parallel safe as $bolt_search$ begin return (select string_agg(distinct quote_literal(lexeme) || case when kind = 'j' then '' else ':*' end, case when every then ' & ' else ' | ' end)::tsquery from bolt_search_terms(term) where lexeme <> '' and (kind in ('w', 'r') or (not every and (kind = 'j' or (kind = 's' and char_length(lexeme) >= 4))))); end $bolt_search$"
+	}
+];
+
+/**
+ * Compiles indexed multilingual lexical matching and its deterministic rank.
+ *
+ * A row is a candidate when any query lexeme meets its document (GIN). The rank puts rows holding
+ * every query word first, then orders by how much of the query landed and how closely the folded
+ * text resembles the folded term; the read path breaks ties by id.
+ */
 export const compileLexicalSearch = (
 	term: string,
 	context: SearchContext
@@ -212,20 +274,19 @@ export const compileLexicalSearch = (
 	}
 
 	const document = qualifiedColumn(context, context.searchDocumentColumn);
-	const text = searchableText(context, names);
-	const webQuery = sql`websearch_to_tsquery('simple', ${term})`;
-	const prefix = prefixTsquery(term);
-	const prefixMatch =
-		prefix === '' ? sql`false` : sql`${document} @@ to_tsquery('simple', ${prefix})`;
-	const match = sql`(${document} @@ ${webQuery} or ${prefixMatch} or similarity(${text}, ${term}) > 0.2 or word_similarity(${term}, ${text}) > 0.35)`;
+	const text = sql`bolt_search_fold(${searchableText(context, names)})`;
+	const folded = sql`bolt_search_fold(${term})`;
+	const any = sql`bolt_search_query(${term}, false)`;
 	const rank = sql<number>`(
-		ts_rank_cd(${document}, ${webQuery}) * 0.7 +
-		greatest(similarity(${text}, ${term}), word_similarity(${term}, ${text})) * 0.3
+		(${document} @@ bolt_search_query(${term}, true))::int * 2 +
+		ts_rank('{1,1,1,1}', ${document}, ${any}) +
+		word_similarity(${folded}, ${text}) +
+		0.1 / (1 + length(${document}))
 	)`;
 	return Result.succeed({
 		mode: 'lexical',
 		term,
-		predicate: conjunction([context.basePredicate, match]),
+		predicate: conjunction([context.basePredicate, sql`${document} @@ ${any}`]),
 		rank,
 		orderBy: [{ expression: rank, direction: 'desc' }],
 		corpusRelative: true,

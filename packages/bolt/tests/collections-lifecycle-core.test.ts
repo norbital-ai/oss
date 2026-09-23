@@ -79,8 +79,8 @@ describe('collection lifecycle core', () => {
 		if (Result.isSuccess(lexical)) {
 			const query = render(lexical.success.predicate);
 			expect(query.sql).toContain('"search_document" @@');
-			expect(query.sql).toContain('websearch_to_tsquery');
-			expect(render(lexical.success.rank).sql).toContain('ts_rank_cd');
+			expect(query.sql).toContain('bolt_search_query(');
+			expect(render(lexical.success.rank).sql).toContain('ts_rank(');
 		}
 		const semantic = compileSemanticSearch('similar', [0.1, 0.2], context);
 		expect(Result.isSuccess(semantic)).toBe(true);

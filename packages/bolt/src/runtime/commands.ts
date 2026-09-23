@@ -434,7 +434,10 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 	const channels = Object.fromEntries(
 		Object.entries(channelOps.channels).map(([name, channel]) => [
 			name,
-			{ send: (message: unknown) => guard('channels.send').pipe(Effect.andThen(channel.send(message))) }
+			{
+				send: (message: unknown) =>
+					guard('channels.send').pipe(Effect.andThen(channel.send(message)))
+			}
 		])
 	);
 	const api = makeAutomationApi(
@@ -460,7 +463,10 @@ const executeAutomationBody = Effect.fn('Bolt.command.executeAutomationBody')(fu
 		Object.fromEntries(
 			Object.entries(channelOps.integrations).map(([name, integration]) => [
 				name,
-				{ reconcile: () => guard('integrations.reconcile').pipe(Effect.andThen(integration.reconcile())) }
+				{
+					reconcile: () =>
+						guard('integrations.reconcile').pipe(Effect.andThen(integration.reconcile()))
+				}
 			])
 		)
 	);
@@ -928,10 +934,13 @@ const BINDINGS = [
 	binding('sync.advance', { Command: system('host commit delta evaluation') }, (context, input) =>
 		Effect.flatMap(Sync.Service, (sync) => Effect.map(sync.advance(context.effectId, input), json))
 	),
-	binding('collections.embed', { Command: system('host embedding checkpoint') }, (context) =>
-		Effect.flatMap(Collections.Service, (collections) =>
-			Effect.map(collections.embedRecords(context.effectId), json)
-		)
+	binding(
+		'collections.embed',
+		{ Command: system('host embedding checkpoint'), Task: task('embedding refresh after a write') },
+		(context) =>
+			Effect.flatMap(Collections.Service, (collections) =>
+				Effect.map(collections.embedRecords(context.effectId), json)
+			)
 	),
 	/** Answers without touching anything: the probe for a routed release that must not do work. */
 	binding('host.ping', { Command: system('host liveness') }, () =>
@@ -1321,7 +1330,11 @@ const BINDINGS = [
 				const delivery = { headers: input.headers, body: input.body };
 				if ('channel' in input.target) {
 					const channel = input.target.channel;
-					const rows = yield* (yield* Channels.Service).receiveWebhook(context.effectId, channel, delivery);
+					const rows = yield* (yield* Channels.Service).receiveWebhook(
+						context.effectId,
+						channel,
+						delivery
+					);
 					yield* (yield* Integrations.Service).applyChannel(
 						EffectId.make(`${context.effectId}:syncs`),
 						channel,
@@ -1349,7 +1362,10 @@ const BINDINGS = [
 		{ Command: system('integration sync'), Task: task('integration sync') },
 		(context, input) =>
 			Effect.flatMap(Integrations.Service, (integrations) =>
-				Effect.map(integrations.run(context.effectId, input.integration, input.sync, input.mode), json)
+				Effect.map(
+					integrations.run(context.effectId, input.integration, input.sync, input.mode),
+					json
+				)
 			)
 	),
 	binding(

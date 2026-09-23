@@ -338,7 +338,7 @@ export const describeModelColumns = (
 /**
  * The columns a collection opted into free-text search, sorted.
  *
- * One reader, because the generated tsvector, trigram expression, and ranking have to cover exactly
+ * One reader, because the generated tsvector and the ranking have to cover exactly
  * the same columns: an index over a field search never reads is dead weight, and a searched field
  * absent from the document is a sequential scan or a false negative. The opt-in is decided once —
  * `boltSearch` is written only by `text()`, `phone()` and `enums()`, and `describeModelColumns` is the only
@@ -358,17 +358,13 @@ export const searchableColumns = (
 /** Platform column containing the immutable, generated lexical document. */
 export const SEARCH_DOCUMENT_COLUMN = 'search_document';
 
-/** The PostgreSQL text expression shared by generated DDL, trigram matching, and ranking. */
-export const searchTextExpression = (columns: ReadonlyArray<string>): string =>
-	columns.map((column) => `coalesce("${column.replaceAll('"', '""')}", '')`).join(" || ' ' || ");
-
 /**
- * The stored document expression. The explicit regconfig selects PostgreSQL's immutable overload.
+ * The stored document expression: the searchable text handed to `bolt_search_document`, the
+ * schema plan's lexical tokeniser (folding, CJK n-grams, pinyin, consonant skeletons).
  *
  * PostgreSQL does not allow one generated column to reference another. A searchable authored field
  * may itself be generated, so the document has to inline that field's owning expression rather than
- * name the generated column. Ordinary fields keep the exact expression used by runtime ranking and
- * the trigram index.
+ * name the generated column.
  */
 export const searchDocumentExpression = (
 	columns: ReadonlyArray<string>,
@@ -382,7 +378,7 @@ export const searchDocumentExpression = (
 				: `coalesce((${generated}), '')`;
 		})
 		.join(" || ' ' || ");
-	return `to_tsvector('simple'::regconfig, ${text})`;
+	return `bolt_search_document(${text})`;
 };
 
 /** Describes a whole `defineModel` declaration, tolerating a module that failed to export one. */
@@ -476,9 +472,7 @@ export const compileModel = (
 			: {
 					search: {
 						fields: lexicalFields,
-						documentColumn: SEARCH_DOCUMENT_COLUMN,
-						configuration: 'simple',
-						ranking: { lexical: 'ts_rank_cd', fuzzy: 'similarity' }
+						documentColumn: SEARCH_DOCUMENT_COLUMN
 					}
 				}),
 		...(metadata?.embedding === undefined

@@ -4128,8 +4128,17 @@ export const layerWith = (
 								records,
 								event
 							),
-						embedRecords: (embeddingEffectId, options) =>
-							embedRecordsService(embeddingPorts, embeddingEffectId, options)
+						// A written record's embedding is a provider call (~1 s); the write answers without it
+						// and a task queued now embeds whatever is stale, right after the commit.
+						embedRecords: (embeddingEffectId) =>
+							Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
+								queue.enqueueClaimed(EffectId.make(`${embeddingEffectId}:enqueue`), {
+									command: 'collections.embed',
+									input: {},
+									effectId: `collections.embed:${embeddingEffectId}`,
+									nowEpochMs
+								})
+							)
 					},
 					effectId,
 					applied

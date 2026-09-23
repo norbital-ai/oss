@@ -30,8 +30,7 @@ import {
 	SEARCH_DOCUMENT_COLUMN,
 	compileWorkspaceAuthoring,
 	DEFAULT_RECORD_EMBEDDING_DIMENSIONS,
-	searchDocumentExpression,
-	searchTextExpression
+	searchDocumentExpression
 } from '../authoring/model-introspection.js';
 import type { AuthoredCollectionModule } from '../authoring/collection-schema.js';
 import { describeIntegration, type SyncDeclaration } from '../authoring/integrations-schema.js';
@@ -51,8 +50,7 @@ import type {
 } from '../authoring/workspace-schema.js';
 import {
 	collectionIndexName,
-	collectionSearchDocumentIndexName,
-	collectionSearchTextTrigramIndexName
+	collectionSearchDocumentIndexName
 } from '../runtime/schema/schema-plan.js';
 import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './workspace-build.js';
 import { workspaceSchemaFingerprint } from './schema-fingerprint.js';
@@ -204,7 +202,7 @@ const declaredIndexes = (
 			return index(collectionIndexName(collection.name, columnName)).on(column);
 		});
 
-/** GIN indexes over the compiled lexical document and its exact fuzzy-search text. */
+/** The GIN index over the compiled lexical document. */
 const searchIndexes = (
 	collection: CompiledCollection,
 	self: Readonly<Record<string, ExtraConfigColumn>>
@@ -214,13 +212,7 @@ const searchIndexes = (
 	const document = self[SEARCH_DOCUMENT_COLUMN];
 	if (document === undefined)
 		throw new Error(`Missing generated search document for "${collection.name}"`);
-	return [
-		index(collectionSearchDocumentIndexName(collection.name)).using('gin', document),
-		index(collectionSearchTextTrigramIndexName(collection.name)).using(
-			'gin',
-			sql.raw(`(${searchTextExpression(searchable)}) gin_trgm_ops`)
-		)
-	];
+	return [index(collectionSearchDocumentIndexName(collection.name)).using('gin', document)];
 };
 
 /** Exclusive-arc constraints and per-arm indexes for every logical polymorphic reference. */

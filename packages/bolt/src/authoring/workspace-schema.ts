@@ -192,12 +192,6 @@ interface CollectionSearchDefinition {
 	/** The authored `search: true` fields, sorted for stable DDL and ranking. */
 	readonly fields: ReadonlyArray<string>;
 	readonly documentColumn: 'search_document';
-	readonly configuration: 'simple';
-	/** The two database ranking primitives the read resolver blends. */
-	readonly ranking: Readonly<{
-		readonly lexical: 'ts_rank_cd';
-		readonly fuzzy: 'similarity';
-	}>;
 }
 
 /** Model embedding declaration plus the platform columns settle maintains. */

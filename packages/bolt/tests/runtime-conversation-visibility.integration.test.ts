@@ -122,6 +122,9 @@ const open = (
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal')
 			})
+		).pipe(
+			// An envoy chat is written through that envoy's drain, which is what this stands in for.
+			agentId === 'web' ? (effect) => effect : Effect.provideService(Agents.EnvoyTurn, agentId)
 		)
 	);
 

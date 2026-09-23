@@ -11,7 +11,7 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import { and, asc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { composer, executeBuilt, jsonTextEquals } from '#lib/runtime/persistence.js';
 import { AiError, Prompt, Tool, Toolkit } from 'effect/unstable/ai';
@@ -122,6 +122,13 @@ export {
 
 /** Supplied only by the durable task route; children inherit the same execution owner. */
 export const ExecutionOwner = Context.Service<string>('@norbital-ai/bolt/AgentExecutionOwner');
+
+/**
+ * The envoy whose drain is running this work. An envoy chat is shared by every sender it serves,
+ * so only that envoy's own drain may reach into a conversation another sender started — never a
+ * web call naming its id.
+ */
+export const EnvoyTurn = Context.Service<string>('@norbital-ai/bolt/AgentEnvoyTurn');
 
 /** The durable task that answers `messageId`: one per admitted message, named by it. */
 export const executionTaskId = (messageId: MessageId): string => `agent:${messageId}`;
@@ -1463,16 +1470,11 @@ export const layer = Layer.effect(
 		 */
 		const envoyConversation = (
 			conversation: Pick<Conversation, 'agent_id' | 'parent_id' | 'audience'>,
-			subject: Identity.Subject
-		): boolean => {
-			if (conversation.parent_id != null || conversation.audience !== 'workbench') return false;
-			const envoy = workspace.definition.envoys.find(({ name }) => name === conversation.agent_id);
-			return (
-				envoy !== undefined &&
-				envoy.policies.length > 0 &&
-				envoy.policies.every((policy) => subject.policies.includes(policy))
-			);
-		};
+			envoyTurn: Option.Option<string>
+		): boolean =>
+			conversation.parent_id == null &&
+			conversation.audience === 'workbench' &&
+			Option.contains(envoyTurn, conversation.agent_id);
 
 		const requireOwnedConversation = Effect.fn('Agents.requireOwnedConversation')(function* (
 			effectId: EffectId,
@@ -1482,7 +1484,8 @@ export const layer = Layer.effect(
 			const task = yield* conversationById(effectId, subject, conversationId);
 			if (
 				task === undefined ||
-				(task.subject_id !== subject.userId && !envoyConversation(task, subject))
+				(task.subject_id !== subject.userId &&
+					!envoyConversation(task, yield* Effect.serviceOption(EnvoyTurn)))
 			) {
 				return yield* new AccessControl.AccessDenied({
 					action: 'agent',
@@ -1524,6 +1527,30 @@ export const layer = Layer.effect(
 				messages.push(...(yield* decodeRows(ConversationMessageRow, rows)));
 			}
 			return messages;
+		});
+
+		/**
+		 * The sequence the next message takes: the newest one's, read alone. A message admitted while
+		 * the turn worked holds a sequence the ledger has not seen, so this is read fresh — but only
+		 * the one number, not the transcript that used to be re-read in full for it on every append.
+		 */
+		const nextSequence = Effect.fn('Agents.nextSequence')(function* (
+			effectId: EffectId,
+			conversationId: ConversationId
+		) {
+			const table = SYSTEM_MODEL_TABLES.conversation_message;
+			const { rows } = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ sequence: table.sequence })
+					.from(table)
+					.where(eq(table.conversation_id, conversationId))
+					.orderBy(desc(table.sequence))
+					.limit(1)
+			);
+			const [newest] = yield* decodeRows(Schema.Struct({ sequence: Schema.Int }), rows);
+			return (newest?.sequence ?? 0) + 1;
 		});
 
 		type RelatedMutation = Readonly<Record<string, unknown>> & Readonly<{ id: string }>;
@@ -1720,7 +1747,8 @@ export const layer = Layer.effect(
 					existing.status === 'attention');
 			if (existing !== undefined) {
 				if (
-					(existing.subject_id !== subject.userId && !envoyConversation(existing, subject)) ||
+					(existing.subject_id !== subject.userId &&
+						!envoyConversation(existing, yield* Effect.serviceOption(EnvoyTurn))) ||
 					existing.agent_id !== input.agentId ||
 					existing.audience !== agent.audience ||
 					(existing.status === 'done' && !conversation) ||
@@ -2577,27 +2605,37 @@ export const layer = Layer.effect(
 		const consumeSteering = Effect.fn('Agents.consumeSteering')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: Turn
+			run: Turn,
+			/** The conversation as the caller just fenced it; delivery must not outlive the turn. */
+			task: Conversation,
+			/** The conversation's queue, when the caller has just read it for another question. */
+			queued?: ReadonlyArray<
+				Pick<ConversationMessage, 'id' | 'priority' | 'mode' | 'sequence'> & {
+					readonly row_version: number;
+				}
+			>
 		) {
-			const task = yield* fencedConversation(effectId, subject, run);
-			const rows = yield* collections.findMany(effectId, subject, {
-				collection: 'conversation_message',
-				where: {
-					conversation_id: { eq: task.id },
-					state: { eq: 'queued' },
-					priority: { eq: 'steer' },
-					mode: { eq: run.mode }
-				},
-				orderBy: { sequence: 'asc' },
-				limit: 500
-			});
-			const steering = yield* decodeRows(
-				Schema.Struct({ id: MessageId, row_version: Schema.Natural }),
-				rows
-			);
+			const steering =
+				queued === undefined
+					? yield* decodeRows(
+							Schema.Struct({ id: MessageId, row_version: Schema.Natural }),
+							yield* collections.findMany(effectId, subject, {
+								collection: 'conversation_message',
+								where: {
+									conversation_id: { eq: task.id },
+									state: { eq: 'queued' },
+									priority: { eq: 'steer' },
+									mode: { eq: run.mode }
+								},
+								orderBy: { sequence: 'asc' },
+								limit: 500
+							})
+						)
+					: queued
+							.filter((row) => row.priority === 'steer' && row.mode === run.mode)
+							.toSorted((left, right) => left.sequence - right.sequence);
 			if (steering.length === 0) return false;
-			const messages = yield* messageRows(effectId, subject, task.id);
-			const consumedAfterSequence = lastSequence(messages);
+			const consumedAfterSequence = (yield* nextSequence(effectId, task.id)) - 1;
 			// Delivery and its receipt are the same write, under the same fence: a retry cannot
 			// deliver twice, and the conversation's own columns are unchanged by a delivery.
 			yield* writeGraph(
@@ -2635,13 +2673,10 @@ export const layer = Layer.effect(
 			const fingerprint = semanticHash({ runId: run.id, effectId, author, message, annotation });
 			const existing = transcript.bySemanticHash(fingerprint);
 			if (existing !== undefined) return existing;
-			// A new sequence, so a fresh read: a message admitted into this conversation while the turn
-			// was working holds a sequence this ledger has never seen.
-			const current = yield* messageRows(effectId, subject, task.id);
 			const row = {
 				id: messageIdFor(`${task.id}:${fingerprint}`),
 				conversation_id: task.id,
-				sequence: lastSequence(current) + 1,
+				sequence: yield* nextSequence(effectId, task.id),
 				turn_id: run.id,
 				author,
 				message,
@@ -2738,9 +2773,7 @@ export const layer = Layer.effect(
 			}
 			// Parts after the first continue the row they already have, and read nothing at all — that
 			// is the per-token-boundary cost this exists to remove.
-			const sequence =
-				previous?.sequence ??
-				lastSequence(yield* messageRows(effectId, subject, run.conversation_id)) + 1;
+			const sequence = previous?.sequence ?? (yield* nextSequence(effectId, run.conversation_id));
 			const row = {
 				id,
 				conversation_id: run.conversation_id,
@@ -2771,12 +2804,8 @@ export const layer = Layer.effect(
 			run: Turn,
 			observation: ProviderObservation
 		) {
-			// A late receipt still belongs in accounting after Stop; it must not restart execution.
-			yield* requireOwnedConversation(
-				EffectId.make(`${effectId}:owner`),
-				subject,
-				run.conversation_id
-			);
+			// A late receipt still belongs in accounting after Stop; it must not restart execution. No
+			// owner read: every caller is inside a turn it already reached through its owned conversation.
 			yield* writeRows(
 				EffectId.make(`${effectId}:usage`),
 				subject,
@@ -2865,14 +2894,13 @@ export const layer = Layer.effect(
 		const pauseForPlanRevision = Effect.fn('Agents.pauseForPlanRevision')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			run: Turn
+			run: Turn,
+			queued?: Effect.Success<ReturnType<typeof queuedRows>>
 		) {
 			if (run.mode !== 'agent') return false;
-			const pending = yield* queuedRows(
-				EffectId.make(`${effectId}:queue`),
-				subject,
-				run.conversation_id
-			);
+			const pending =
+				queued ??
+				(yield* queuedRows(EffectId.make(`${effectId}:queue`), subject, run.conversation_id));
 			if (!pending.some((row) => row.mode === 'plan')) return false;
 			const obsolete = pending.filter((row) => row.annotation?.tag === 'plan-verdict');
 			if (obsolete.length > 0)
@@ -4205,30 +4233,50 @@ export const layer = Layer.effect(
 			let compactRequested = false;
 			let requestedCompactions = 0;
 			const runEffect = Effect.gen(function* () {
+				let ledger: Transcript | undefined;
 				for (let iteration = 0; ; iteration += 1) {
 					task = yield* fencedConversation(
 						EffectId.make(`${effectId}:fence:${iteration}`),
 						subject,
 						run
 					);
+					// One queue read answers both boundary questions: a Plan revision waiting, and steering.
+					const queued = yield* queuedRows(
+						EffectId.make(`${effectId}:queue:${iteration}`),
+						subject,
+						run.conversation_id
+					);
 					if (
 						yield* pauseForPlanRevision(
 							EffectId.make(`${effectId}:plan-pause:${iteration}`),
 							subject,
-							run
+							run,
+							queued
 						)
 					)
 						return { conversationId, status: 'idle' } satisfies TurnResult;
-					yield* consumeSteering(EffectId.make(`${effectId}:steer:${iteration}`), subject, run);
-					/**
-					 * One paginated history read per iteration. Every write below records itself
-					 * into the ledger, so the re-reads that used to follow each of them are gone.
-					 * `consumeSteering` above can still write outside it, which is why this is rebuilt
-					 * per iteration rather than per turn; when the inbox goes, so does the rebuild.
-					 */
-					const transcript = makeTranscript(
-						yield* messageRows(EffectId.make(`${effectId}:messages:${iteration}`), subject, task.id)
+					const steered = yield* consumeSteering(
+						EffectId.make(`${effectId}:steer:${iteration}`),
+						subject,
+						run,
+						task,
+						queued
 					);
+					/**
+					 * One paginated history read when the ledger may be behind. Every write below
+					 * records itself into the ledger, so the re-reads that used to follow each of them
+					 * are gone. `consumeSteering` above writes outside it, which is the one reason to
+					 * rebuild after the first iteration: a delivery just changed which inputs count.
+					 */
+					if (ledger === undefined || steered)
+						ledger = makeTranscript(
+							yield* messageRows(
+								EffectId.make(`${effectId}:messages:${iteration}`),
+								subject,
+								task.id
+							)
+						);
+					const transcript = ledger;
 					let messages = transcript.rows();
 					let calls = unresolvedToolCalls(messages);
 					if (calls.length === 0) {
@@ -4505,10 +4553,17 @@ export const layer = Layer.effect(
 							yield* consumeSteering(
 								EffectId.make(`${effectId}:final-steer:${iteration}`),
 								subject,
-								run
+								run,
+								yield* fencedConversation(
+									EffectId.make(`${effectId}:final-steer:${iteration}`),
+									subject,
+									run
+								)
 							)
 						) {
 							output = undefined;
+							// The delivery wrote outside the ledger.
+							ledger = undefined;
 							continue;
 						}
 						const openJobs = [...jobs]
@@ -4542,25 +4597,21 @@ export const layer = Layer.effect(
 					/**
 					 * A step's calls run together: the model emits them as one batch precisely because none
 					 * depends on another's answer, so three reads or two child spawns take the time of the
-					 * slowest, not the sum. The fences come first in order (a stop or a Plan revision ends
-					 * the step before any call runs), the results are appended in call order so the
-					 * durable transcript reads as the model wrote it.
+					 * slowest, not the sum. The fence comes first, once for the batch (a stop or a Plan
+					 * revision ends the step before any call runs — one check per call asked the same
+					 * question N times in the same instant), the results are appended in call order so
+					 * the durable transcript reads as the model wrote it.
 					 */
-					for (const call of calls) {
-						yield* fencedConversation(
-							EffectId.make(`${effectId}:tool-fence:${call.id}`),
+					const batch = calls.map(({ id }) => id).join(',');
+					yield* fencedConversation(EffectId.make(`${effectId}:tool-fence:${batch}`), subject, run);
+					if (
+						yield* pauseForPlanRevision(
+							EffectId.make(`${effectId}:plan-pause:${batch}`),
 							subject,
 							run
-						);
-						if (
-							yield* pauseForPlanRevision(
-								EffectId.make(`${effectId}:plan-pause:${call.id}`),
-								subject,
-								run
-							)
 						)
-							return { conversationId, status: 'idle' } satisfies TurnResult;
-					}
+					)
+						return { conversationId, status: 'idle' } satisfies TurnResult;
 					const handledAll = yield* Effect.forEach(
 						calls,
 						(call) =>

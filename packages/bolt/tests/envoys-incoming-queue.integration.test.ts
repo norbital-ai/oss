@@ -402,7 +402,7 @@ describe('Envoy inbound queue', () => {
 			'registered account: Alex · not an administrator · team Contractor · policies none'
 		);
 		// The channel's own brief rides on an envoy turn, not on the shared one.
-		expect(prompt).toContain('Registration is the platform');
+		expect(prompt).toContain('already proves its sender is registered');
 		expect(sends).toHaveLength(1);
 	});
 

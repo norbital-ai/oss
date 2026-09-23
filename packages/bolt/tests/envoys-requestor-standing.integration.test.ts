@@ -200,7 +200,7 @@ describe('An envoy turn for a linked member', () => {
 		const prompt = JSON.stringify(requests[0]?.messages);
 		expect(system).toContain(`This turn runs under: ${standing}.`);
 		// The shared brief explains access instead of a task encoding it.
-		expect(system).toContain("Your tools run under the requester's own access policies");
+		expect(system).toContain("every tool runs with the requester's own permissions");
 		expect(prompt).toContain(
 			'[registered account: dion · workspace administrator · no team · policies none]'
 		);
@@ -228,7 +228,8 @@ describe('An envoy turn for a linked member', () => {
 		expect(collections.find(({ name }) => name === 'team')?.fields).toEqual([
 			'name:string!(search)'
 		]);
-		expect(collections.some(({ name }) => name === 'notes')).toBe(false);
+		// The administrator's turn runs as the administrator: nothing the envoy declares narrows it.
+		expect(collections.some(({ name }) => name === 'notes')).toBe(true);
 		// The administrator lists every project the envoy declares — no prompt had to allow it.
 		expect(
 			(results['projects']?.rows as ReadonlyArray<{ title: string }>)

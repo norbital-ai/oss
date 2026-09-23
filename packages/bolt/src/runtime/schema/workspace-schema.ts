@@ -288,7 +288,7 @@ export const layer = (schemaPlan: SchemaPlan) =>
 						composer.insert(schemaState).values({ fingerprint: schemaPlan.fingerprint })
 					]);
 					// The lineage runs after the plan, never before: its DDL calls `bolt_date` and
-					// `bolt_daterange` and indexes with `gin_trgm_ops`, all of which the plan's foundation
+					// `bolt_daterange` and generates `bolt_search_document`, all of which the plan's foundation
 					// installs, and it records itself in a ledger the plan creates.
 					// Framework tables and upgrades belong to the plan; authored tables to committed lineage.
 					yield* applyLineage(effectId);

@@ -124,7 +124,11 @@ apply to the projected answer rather than changing predicate meaning.
 - Live ordering is typed: a live read's `orderBy` accepts only the collection's scalar columns
   (`CollectionLiveOrderBy`); json, custom-typed and vector columns fail at authoring time and are
   refused by the planner. A read continued with `after` is one-shot and may order by any column.
-- Lexical search is opt-in per field with `search: true`.
+- Lexical search is opt-in per field with `search: true`. The generated `search_document` is
+  `bolt_search_document(text)` (schema-plan functions in `read/search.ts`): NFKC, case and accent
+  folding, CJK suffixes, toneless pinyin for Han, and consonant skeletons for typos. A query
+  matches through that GIN index and is ranked closest first (all words present, share of the
+  query matched, trigram closeness), ties by id.
 - Semantic search performs one embedding request, then one policy-filtered nearest-neighbour query.
 - Every collection also offers `/text` and `/semantic`; a declared `similarity` index adds
   `/<index>`, whose target is a capture-form value the workspace embeds. Raw vectors are never

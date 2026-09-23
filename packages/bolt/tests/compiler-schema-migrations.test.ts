@@ -335,15 +335,12 @@ describe('Bolt Drizzle-driven schema migration', () => {
 
 		const ddl = migration?.statements.join('\n') ?? '';
 		expect(ddl).toContain(
-			`ADD COLUMN "search_document" tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, coalesce("name", ''))) STORED`
+			`ADD COLUMN "search_document" tsvector GENERATED ALWAYS AS (bolt_search_document(coalesce("name", ''))) STORED`
 		);
 		expect(ddl).toContain(
 			'CREATE INDEX "jurisdictions_search_document_gin_idx" ON "jurisdictions" USING gin ("search_document")'
 		);
-		expect(ddl).toContain('CREATE INDEX "jurisdictions_search_text_trgm_idx"');
-		expect(ddl).toContain(`coalesce("name", '')`);
-		expect(ddl).toContain('gin_trgm_ops');
-		expect(ddl).not.toContain('jurisdictions_name_search_trgm_idx');
+		expect(ddl).not.toContain('gin_trgm_ops');
 	});
 
 	/**

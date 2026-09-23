@@ -77,11 +77,11 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 
 	/**
 	 * The two guarantees #44 and #46 are about, against a real Postgres rather than a string match:
-	 * the trigram index exists and is used by the `ilike '%term%'` that free-text search compiles to,
+	 * the lexical document's GIN index exists and answers the query free-text search compiles to,
 	 * and the effective-dating EXCLUDE actually refuses the overlapping row the application assumes
 	 * cannot exist. Both were unreachable until the plan installed `pg_trgm` and `btree_gist`.
 	 */
-	it('creates a usable trigram index and enforces the effective-dating exclusion', async () => {
+	it('creates a usable search index and enforces the effective-dating exclusion', async () => {
 		const database = new PGlite({ extensions: { pg_trgm, btree_gist, vector } });
 		databases.push(database);
 		const definition = workspace({
@@ -131,10 +131,10 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		}
 
 		const indexes = await database.query<{ indexdef: string }>(
-			`select indexdef from pg_indexes where tablename = 'jurisdictions' and indexname = 'jurisdictions_search_text_trgm_idx'`
+			`select indexdef from pg_indexes where tablename = 'jurisdictions' and indexname = 'jurisdictions_search_document_gin_idx'`
 		);
 		expect(indexes.rows).toHaveLength(1);
-		expect(indexes.rows[0]?.indexdef).toContain('gin_trgm_ops');
+		expect(indexes.rows[0]?.indexdef).toContain('gin (search_document)');
 
 		// Enough rows that the planner has a reason to prefer the index over reading the table.
 		await database.exec(`insert into jurisdictions (code, name, effective_range)
@@ -142,10 +142,10 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		await database.exec('analyze jurisdictions');
 		await database.exec('set enable_seqscan = off');
 		const explain = await database.query<{ 'QUERY PLAN': string }>(
-			`explain (costs off) select * from jurisdictions where (coalesce(name, '')) ilike '%1234%'`
+			`explain (costs off) select * from jurisdictions where search_document @@ bolt_search_query('jurisdiktion 1234', false)`
 		);
 		expect(explain.rows.map((row) => row['QUERY PLAN']).join('\n')).toContain(
-			'jurisdictions_search_text_trgm_idx'
+			'jurisdictions_search_document_gin_idx'
 		);
 
 		const period = (start: string, end: string): string => JSON.stringify({ start, end });

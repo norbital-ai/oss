@@ -8,9 +8,9 @@ import {
 	describeModel,
 	SEARCH_DOCUMENT_COLUMN,
 	searchDocumentExpression,
-	searchTextExpression,
 	searchableColumns
 } from '../../authoring/model-introspection.js';
+import { lexicalSearchSteps } from '../collections/read/search.js';
 import { INTERNAL_SYSTEM_MODELS, SYSTEM_MODELS } from '../../authoring/system-models.js';
 import { defineSystemRowModel } from '../../authoring/system-row-model.js';
 import type {
@@ -118,9 +118,6 @@ const boundedCollectionIndexName = (fullName: string, suffix: string): string =>
 
 export const collectionSearchDocumentIndexName = (collectionName: string): string =>
 	boundedCollectionIndexName(`${collectionName}_search_document_gin_idx`, 'search_gin_idx');
-
-export const collectionSearchTextTrigramIndexName = (collectionName: string): string =>
-	boundedCollectionIndexName(`${collectionName}_search_text_trgm_idx`, 'trgm_idx');
 
 export const APPROVAL_REQUEST_ONGOING_INDEX_NAME =
 	'approval_request_collection_record_ongoing_uidx';
@@ -255,10 +252,6 @@ const searchIndexSteps = (
 		{
 			id: `collection:${collection.name}:search:1-document-gin`,
 			sql: `create index if not exists ${quoteIdentifier(collectionSearchDocumentIndexName(collection.name))} on ${table} using gin (${document})`
-		},
-		{
-			id: `collection:${collection.name}:search:2-trigram-gin`,
-			sql: `create index if not exists ${quoteIdentifier(collectionSearchTextTrigramIndexName(collection.name))} on ${table} using gin ((${searchTextExpression(columns)}) gin_trgm_ops)`
 		}
 	];
 };
@@ -302,6 +295,7 @@ export const buildSchemaPlan = (
 		{ id: 'bolt:extension-btree-gist', sql: 'create extension if not exists btree_gist' },
 		{ id: 'bolt:extension-pg-trgm', sql: 'create extension if not exists pg_trgm' },
 		{ id: 'bolt:extension-vector', sql: 'create extension if not exists vector' },
+		...lexicalSearchSteps(),
 		{
 			id: 'bolt:function-assert',
 			sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql volatile parallel unsafe as $bolt_assert$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $bolt_assert$"

@@ -29,6 +29,8 @@ import {
 	type HostScheduleOccurrence,
 	type TaskRequest,
 	type TaskResponse,
+	type SyncCommitRequest,
+	type SyncCommitResponse,
 	TransportRequest,
 	TransportResponse
 } from '@norbital-ai/bolt-protocol';
@@ -507,7 +509,8 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 		automations: input.automations ?? [],
 		// An envoy needs a declared channel; a fixture that names none gets one per envoy channel.
 		channels:
-			input.channels ?? testChannels(...new Set((input.envoys ?? []).map(({ channel }) => channel))),
+			input.channels ??
+			testChannels(...new Set((input.envoys ?? []).map(({ channel }) => channel))),
 		envoys: input.envoys ?? [],
 		integrations: input.integrations ?? [],
 		requiredFacilities: [],
@@ -541,6 +544,8 @@ export const makeBoltTestRuntime = async (
 		readonly remoteHandlers?: Readonly<Record<string, RuntimeRemoteHandler>>;
 		/** Bound when a test wants to observe what the write path announces on the sync topic. */
 		readonly transport?: FacilityBinding<TransportRequest, TransportResponse>;
+		/** Bound when a test counts the host commit hook, as Colony binds it; unbound defers changes. */
+		readonly syncCommit?: FacilityBinding<SyncCommitRequest, SyncCommitResponse>;
 		readonly authored?: AuthoredRuntime;
 		/**
 		 * The vault encryption key this runtime is built with.
@@ -615,7 +620,7 @@ export const makeBoltTestRuntime = async (
 		Files.layer(bindings.files, context),
 		HostTools.layer(bindings.hostTools, context),
 		IdentityHooks.layer(bindings.identityHooks, context),
-		SyncCommit.layer(undefined, context),
+		SyncCommit.layer(bindings.syncCommit, context),
 		Tasks.layer(tasks.binding, context),
 		Transport.layer(bindings.transport, context)
 	);
@@ -870,10 +875,16 @@ export type TestChatDelivery = Omit<ChatEnvelope, '_tag'> &
  * What `channels.ingest` does for one chat message: the history row, then the channel's envoy.
  * Answers the rows history wrote and the provider ids the envoy admitted as work.
  */
-export const receiveChat = (channel: string, delivery: TestChatDelivery, label = delivery.messageId) =>
+export const receiveChat = (
+	channel: string,
+	delivery: TestChatDelivery,
+	label = delivery.messageId
+) =>
 	Effect.gen(function* () {
 		const { historical, version, ...envelope } = delivery;
-		const envoy = (yield* Workspace.Service).definition.envoys.find((declared) => declared.channel === channel);
+		const envoy = (yield* Workspace.Service).definition.envoys.find(
+			(declared) => declared.channel === channel
+		);
 		const rows = yield* (yield* Channels.Service).ingest(
 			EffectId.make(`ingest:${label}`),
 			channel,
@@ -888,7 +899,11 @@ export const receiveChat = (channel: string, delivery: TestChatDelivery, label =
 			],
 			envoy === undefined ? {} : { attachmentKey: Envoys.envoyAttachmentKey(envoy.name) }
 		);
-		const admitted = yield* (yield* Envoys.Service).admit(EffectId.make(`admit:${label}`), channel, rows);
+		const admitted = yield* (yield* Envoys.Service).admit(
+			EffectId.make(`admit:${label}`),
+			channel,
+			rows
+		);
 		return { rows, admitted };
 	});
 
