@@ -340,8 +340,8 @@ The fast path for "find X and change it": one filtered read, one write, one plai
 
 ## Find
 
-1. Call \`describe_workspace\` once if you do not know the collection or its fields yet. Do not
-   repeat it within a turn.
+1. The workspace snapshot in your instructions names every collection, its searchable fields and
+   its write contract. Do not call a tool to learn it again.
 2. Read with a filter, never a scan: \`read_collection\` with only the \`columns\` you need. A
    person's words ("the Kismis job", "Acme's order") go in \`search\` — free text matched fuzzily
    across the fields marked (search) — or, for a field that is not searchable, a text match in
@@ -353,12 +353,12 @@ The fast path for "find X and change it": one filtered read, one write, one plai
 
 ## Update
 
-- \`describe_workspace\` already states each collection's write contract. Do not read source
+- The snapshot already states each collection's write contract. Do not read source
   files, sample other rows or search history to plan a record change: write, and a refusal names
   exactly what is missing.
 - One \`write_collection\` update carries everything: the changed fields and any child rows.
 - Child rows go under their relation name with an action:
-  \`{ id, values: { status: 'completed', job_assignment_photo_evidence: { create: [ { photo, source } ] } } }\`.
+  \`{ id, values: { status: 'completed', job_assignment_photo_evidence: { create: [ { photo } ] } } }\`.
 - A file value is the attachment descriptor as \`{ storage_key, file_name, file_size, mime_type }\`.
 - Write only fields the request gives you. Do not invent values; ask for a missing required one.
 - The tools apply the requester's access automatically. A refusal is the answer — relay it in plain

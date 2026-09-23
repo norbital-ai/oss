@@ -10,7 +10,7 @@ import {
 	type InputRequiredResult,
 	type StandardSchemaV1
 } from '@modelcontextprotocol/client';
-import { Effect, Option, Schema, SchemaIssue } from 'effect';
+import { Clock, Effect, Option, Schema, SchemaIssue } from 'effect';
 import type { Context as EffectContext } from 'effect/Context';
 import { Prompt } from 'effect/unstable/ai';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
@@ -264,7 +264,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'describe_workspace',
 		description:
-			'This workspace in one answer: each reachable collection with its fields, values, relations and write contract; apps, automations, envoys, integrations; where the source lives. Call once, first.',
+			'Refreshes the workspace snapshot already in your instructions: each reachable collection with its fields and write contract, apps, automations, channels, envoys, integrations. Call only when the structure may have changed during the turn.',
 		command: 'platform:describe_workspace'
 	},
 	{
@@ -524,10 +524,10 @@ const heaviestColumns = (
 export const boundedCollectionReadResult = (
 	fetchedRows: ReadonlyArray<Schema.Json>,
 	requestedRows: number
-): Schema.Json => {
+): Schema.JsonObject => {
 	const pageRows = fetchedRows.slice(0, requestedRows);
 	const providerHasMore = fetchedRows.length > requestedRows;
-	const fullResult: Schema.Json = {
+	const fullResult: Schema.JsonObject = {
 		rows: pageRows,
 		truncated: false,
 		rowCount: {
@@ -552,7 +552,7 @@ export const boundedCollectionReadResult = (
 	for (let count = pageRows.length - 1; count >= 0; count -= 1) {
 		const omitted = pageRows.length - count;
 		const hasMore = providerHasMore || omitted > 0;
-		const result: Schema.Json = {
+		const result: Schema.JsonObject = {
 			rows: pageRows.slice(0, count),
 			truncated: true,
 			rowCount: {
@@ -764,6 +764,116 @@ export const describeWorkspace = (
 		tools: context.toolNames,
 		skills: context.skills.map(({ name: skill }) => skill)
 	};
+};
+
+/** `a/b` authored at `src/<kind>/a/+b.<ext>`: the authored-filesystem convention, one place. */
+const authoredPath = (kind: string, name: string, extension: string): string => {
+	const slash = name.lastIndexOf('/');
+	return `src/${kind}/${name.slice(0, slash + 1)}+${name.slice(slash + 1)}.${extension}`;
+};
+
+/** A YAML scalar that never needs quoting rules: one line, trimmed, capped. */
+const line = (text: string, max = 140): string => {
+	const flat = text.replace(/\s+/g, ' ').trim();
+	return JSON.stringify(flat.length > max ? `${flat.slice(0, max - 1)}…` : flat);
+};
+
+/**
+ * The workspace as a compact YAML block for the head of a turn's system prompt, so no turn spends a
+ * call learning the shape it operates. Built once per turn and stamped with that moment: the
+ * structure is stable within the turn (and the prompt prefix stays cacheable), while the rows it
+ * describes are not — they are always read fresh. Every concept names the file it is authored in.
+ */
+export const workspaceSnapshot = (
+	context: Parameters<typeof describeWorkspace>[0],
+	asOf: string
+): string => {
+	const described = describeWorkspace(context);
+	const definition = context.workspace.definition;
+	const list = (key: string, entries: ReadonlyArray<string>) =>
+		entries.length === 0 ? [] : [`${key}:`, ...entries.map((entry) => `  ${entry}`)];
+	const collections = (described['collections'] as ReadonlyArray<Schema.JsonObject>).flatMap(
+		(collection) => {
+			const name = String(collection['name']);
+			const source =
+				definition.collections.find((declared) => declared.name === name)?.sourcePath ??
+				`src/collections/${name}/+model.ts`;
+			const write = collection['write'] as Schema.JsonObject | null;
+			return [
+				`  ${name}:`,
+				...(collection['description'] === undefined
+					? []
+					: [`    about: ${line(String(collection['description']))}`]),
+				`    src: ${source.replace(/\/\+model\.ts$/, '').replace(/\/?$/, '/')}`,
+				`    fields: ${(collection['fields'] as ReadonlyArray<string>).join(', ')}`,
+				...(write === null
+					? ['    write: none']
+					: [
+							...(write['create'] === undefined ? [] : [`    create: ${String(write['create'])}`]),
+							...(write['update'] === undefined ? [] : [`    update: ${String(write['update'])}`]),
+							...(write['delete'] === true ? ['    delete: yes'] : [])
+						]),
+				...(collection['search'] === undefined
+					? []
+					: [`    search: ${(collection['search'] as ReadonlyArray<string>).join(' ')}`])
+			];
+		}
+	);
+	return [
+		`# Workspace snapshot — valid as of ${asOf} only. Its structure holds for this turn; records change, so read them fresh. describe_workspace refreshes it.`,
+		`workspace: ${definition.name} v${definition.version}`,
+		`you: ${line(context.standing, 200)}`,
+		'fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), (search) searchable by read_collection `search`',
+		'collections:',
+		...collections,
+		...list(
+			'apps',
+			definition.apps.map(
+				(app) =>
+					`${app.name}: ${line(app.label, 60)} ${(app as { readonly sourcePath?: string }).sourcePath ?? authoredPath('apps', app.name, 'svelte')}`
+			)
+		),
+		...list(
+			'automations',
+			definition.automations.map(
+				(automation) =>
+					`${automation.name}: ${
+						automation.trigger._tag === 'Schedule'
+							? `schedule ${automation.trigger.cron}`
+							: automation.trigger._tag === 'Change'
+								? `on ${automation.trigger.collection} ${automation.trigger.event}`
+								: 'manual'
+					} ${authoredPath('automations', automation.name, 'ts')}`
+			)
+		),
+		...list(
+			'channels',
+			definition.channels.map(
+				(channel) => `${channel.name}: ${channel.transport} ${authoredPath('channels', channel.name, 'ts')}`
+			)
+		),
+		...list(
+			'envoys',
+			definition.envoys.map(
+				(envoy) => `${envoy.name}: on ${envoy.channel} ${authoredPath('envoys', envoy.name, 'ts')}`
+			)
+		),
+		...list(
+			'integrations',
+			definition.integrations.map(
+				(integration) =>
+					`${integration.name}: ${integration.syncs.map((sync) => `${sync.collection} ${sync.direction.replace('_', '-')}`).join(', ')} ${authoredPath('integrations', integration.name, 'ts')}`
+			)
+		),
+		...list(
+			'teams',
+			Object.entries(definition.teams ?? {}).map(([team, policies]) => `${team}: ${policies.join(', ')}`)
+		),
+		'more src: policies src/access/policies/+<name>.ts, teams src/access/+teams.ts, relations src/collections/+relationship.ts, workspace prompt src/+agents.md, skills src/capabilities/skills/<name>/SKILL.md',
+		...(context.skills.length === 0
+			? []
+			: [`skills: ${context.skills.map(({ name }) => name).join(', ')} (read_skill by name)`])
+	].join('\n');
 };
 
 const TodoInput = Schema.Union([
@@ -1033,7 +1143,11 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				...(parsed.search === undefined ? {} : { search: { mode: 'lexical' as const, term: parsed.search } }),
 				...(columns === undefined ? {} : { columns })
 			});
-			return boundedCollectionReadResult(rows, limit);
+			// Rows are true only as of the read: stated on the result, as the snapshot states its own.
+			return {
+				...boundedCollectionReadResult(rows, limit),
+				asOf: new Date(yield* Clock.currentTimeMillis).toISOString()
+			};
 		}
 		case 'write_collection': {
 			const parsed = yield* decode(name, CollectionWriteInput, input);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { describeWorkspace, subjectStanding } from '../src/runtime/agents/capability-catalog.js';
+import {
+	describeWorkspace,
+	subjectStanding,
+	workspaceSnapshot
+} from '../src/runtime/agents/capability-catalog.js';
 import type { WorkspaceDefinition } from '../src/authoring/workspace-schema.js';
 
 const field = (
@@ -161,5 +165,32 @@ describe('subjectStanding', () => {
 		).toBe(
 			'workspace administrator (reads and writes every authored collection, whatever the policies); no team; policies none'
 		);
+	});
+
+	it('puts the same shape in the prompt as a stamped YAML snapshot with every source path', () => {
+		const snapshot = workspaceSnapshot(
+			{
+				workspace: { definition } as never,
+				collectionNames: ['projects', 'customers'],
+				readableCollectionNames: ['projects', 'customers'],
+				writableCollectionNames: ['projects'],
+				readFields: {},
+				standing: 'not an administrator; team R&D; policies color_matcher',
+				toolNames: ['read_collection'],
+				skills: [{ name: 'intake' } as never]
+			},
+			'2026-09-24T00:00:00.000Z'
+		);
+		const lines = snapshot.split('\n');
+		expect(lines[0]).toBe(
+			'# Workspace snapshot — valid as of 2026-09-24T00:00:00.000Z only. Its structure holds for this turn; records change, so read them fresh. describe_workspace refreshes it.'
+		);
+		expect(lines).toContain('  projects:');
+		expect(lines).toContain('    src: src/collections/projects/');
+		expect(lines).toContain('    update: status, trials{…}');
+		expect(lines).toContain('  board: "Board" src/apps/+board.svelte');
+		expect(lines).toContain('  nightly: schedule 0 2 * * * src/automations/+nightly.ts');
+		expect(lines).toContain('  sales_whatsapp: whatsapp src/channels/+sales_whatsapp.ts');
+		expect(lines).toContain('skills: intake (read_skill by name)');
 	});
 });
