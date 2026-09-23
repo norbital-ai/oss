@@ -14,7 +14,7 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
-import { memberSubject } from '#lib/runtime/identity/static-identity.js';
+import { envoyPrincipalId } from '#lib/runtime/identity/static-identity.js';
 import { rateLimitWindowMillis, type RateLimitRule } from '#lib/authoring/rate-limits-schema.js';
 import {
 	AccessDenied,
@@ -485,59 +485,6 @@ const mergeLimitRule = (
 	if (existing === undefined || rate(rule) > rate(existing)) byKey.set(rule.key, rule);
 };
 
-/** Both sides of a capped subject must allow; the first refusal is the reason. */
-const bothDecisions = (envoy: Decision, member: Decision): Decision =>
-	!envoy.allowed
-		? envoy
-		: !member.allowed
-			? { ...member, reason: `sender: ${member.reason}` }
-			: envoy;
-
-const bothFields = (
-	left: ReadonlyArray<string> | undefined,
-	right: ReadonlyArray<string> | undefined
-): ReadonlyArray<string> | undefined =>
-	left === undefined
-		? right
-		: right === undefined
-			? left
-			: left.filter((field) => right.includes(field));
-
-/**
- * The rows both predicates admit, the fields both grants return, and every write authorization
- * either side declares. Two approval routes cannot be ordered against each other, so a write both
- * sides route for approval is refused rather than one route silently dropped.
- */
-const bothPredicates = (envoy: RowPredicate, member: RowPredicate): RowPredicate => {
-	if (!envoy.allowed) return envoy;
-	if (!member.allowed) return { ...member, reason: `sender: ${member.reason}` };
-	if (envoy.approval !== undefined && member.approval !== undefined)
-		return {
-			...envoy,
-			allowed: false,
-			reason: 'both the envoy and the sender route this write for approval',
-			expression: { kind: 'constant', value: false }
-		};
-	const authorizations = [envoy.authorization, member.authorization].filter(
-		(marker): marker is Schema.Json => marker !== undefined
-	);
-	const fields = bothFields(envoy.fields, member.fields);
-	return {
-		allowed: true,
-		reason: envoy.reason,
-		expression: { kind: 'and', expressions: [envoy.expression, member.expression] },
-		actorBound: envoy.actorBound || member.actorBound,
-		...(fields === undefined ? {} : { fields }),
-		...(authorizations.length === 0
-			? {}
-			: { authorization: authorizations.length === 1 ? authorizations[0] : authorizations }),
-		...((envoy.approval ?? member.approval) === undefined
-			? {}
-			: { approval: envoy.approval ?? member.approval }),
-		semantics: mergePredicateSemantics([envoy.semantics, member.semantics])
-	};
-};
-
 export type Interface = Readonly<{
 	/** Creates the only cache whose lifetime may span policy calls: exactly one runtime invocation. */
 	readonly invocation: () => Invocation;
@@ -676,6 +623,9 @@ export const layer = Layer.effect(
 			if (action !== 'agent') return undefined;
 			const declared = envoyPolicies.get(resource);
 			if (declared === undefined) return undefined;
+			// A linked member's turn runs as that member, who need not hold anything naming the envoy.
+			if (subject.system !== true && subject.userId !== envoyPrincipalId(resource))
+				return { allowed: true, reason: 'envoy member' };
 			return declared.some((name) => subjectHeld.has(name))
 				? { allowed: true, reason: 'declared envoy policy' }
 				: undefined;
@@ -718,27 +668,7 @@ export const layer = Layer.effect(
 							)
 			};
 		};
-		/**
-		 * An envoy subject answering a linked member is judged twice, as the envoy and as the member,
-		 * and a collection action needs both (see `Subject.member`). Running the envoy's own agent is
-		 * the envoy's question alone: the member need not hold anything that names it.
-		 */
-		const makeInvocation = createInvocationFactory((subject) => {
-			const envoy = evaluatorFor(subject);
-			const member = memberSubject(subject);
-			if (member === undefined) return envoy;
-			const own = evaluatorFor(member);
-			return {
-				decision: (action, resource) =>
-					action === 'agent'
-						? envoy.decision(action, resource)
-						: bothDecisions(envoy.decision(action, resource), own.decision(action, resource)),
-				predicate: (action, resource) =>
-					action === 'agent'
-						? envoy.predicate(action, resource)
-						: bothPredicates(envoy.predicate(action, resource), own.predicate(action, resource))
-			};
-		});
+		const makeInvocation = createInvocationFactory(evaluatorFor);
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
 			action: string,
@@ -941,7 +871,7 @@ export const layer = Layer.effect(
 				);
 			},
 			policies: (subject) => {
-				const holds = held(memberSubject(subject) ?? subject);
+				const holds = held(subject);
 				return workspace.definition.policies
 					.map(({ name }) => name)
 					.filter((name) => holds.has(name.toLocaleLowerCase()));

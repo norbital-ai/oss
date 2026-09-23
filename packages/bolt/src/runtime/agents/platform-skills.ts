@@ -330,7 +330,48 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
    and failed invocation, with \`severity\`, \`event\`, \`attributes\` and the ids that join them —
    and automation runs are the \`automation_run\` collection; read both with \`read_collection\`.`;
 
+/**
+ * Finding and changing records with the collection tools — the everyday job of an operator turn and
+ * of every envoy. Kept apart from authoring so a chat assistant never reads source-authoring material.
+ */
+const RECORDS = `# Finding and updating records
+
+The fast path for "find X and change it": one filtered read, one write, one plain answer.
+
+## Find
+
+1. Call \`describe_workspace\` once if you do not know the collection or its fields yet. Do not
+   repeat it within a turn.
+2. Read with a filter, never a scan: \`read_collection\` with only the \`columns\` you need. A
+   person's words ("the Kismis job", "Acme's order") go in \`search\` — free text matched fuzzily
+   across the fields marked (search) — or, for a field that is not searchable, a text match in
+   \`where\`: \`{ title: { ilike: '%kismis%' } }\`. Every condition in \`where\` must hold;
+   \`in\`, \`ne\` and \`gt\`/\`lt\` ranges are there too.
+   A reference to another collection: filter that collection first, then this one by the id.
+3. One match: use it. Several: ask which one, naming each plainly (title, date, who). None: say so
+   and ask for another detail. Never page through a whole collection to search it.
+
+## Update
+
+- One \`write_collection\` update carries everything: the changed fields and any child rows.
+- Child rows go under their relation name with an action:
+  \`{ id, values: { status: 'completed', job_assignment_photo_evidence: { create: [ { photo, source } ] } } }\`.
+- A file value is the attachment descriptor as \`{ storage_key, file_name, file_size, mime_type }\`.
+- Write only fields the request gives you. Do not invent values; ask for a missing required one.
+- The tools apply the requester's access automatically. A refusal is the answer — relay it in plain
+  words; do not probe with further writes to work out the rule.
+
+## Answer
+
+Confirm what changed in one or two sentences a non-technical person understands — the record by its
+everyday name, what is now true — only after the write succeeds.`;
+
 export const PLATFORM_SKILLS: ReadonlyArray<SkillDeclaration> = [
+	{
+		name: 'working-with-records',
+		description: 'Find a record from a description and update it (fields, child rows, files) efficiently.',
+		body: RECORDS
+	},
 	{
 		name: 'authoring-tenant-workspace',
 		description:

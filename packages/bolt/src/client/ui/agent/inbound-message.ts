@@ -15,7 +15,8 @@ export type InboundEnvelope = Readonly<{
 	readonly body: string;
 }>;
 
-const ENVELOPE_META = /^\[([^\]]+)\]\s+(.*?)\s+·\s+(direct|mention|reply|ambient)\s+·\s+(\S+)\s*$/;
+const ENVELOPE_META =
+	/^\[([^\]]+)\]\s+(.*?)\s+·\s+(direct|mention|reply|ambient)\s+·\s+chat\s+\S+\s+·\s+message\s+(\S+)(?:\s+·\s+sender\s+\S+)?\s*$/;
 /** The model's attribution line, not something the sender said: the sender line already names them. */
 const ACCOUNT_LINE = /^\[registered account: .+\]$/;
 

@@ -322,7 +322,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_collection',
 		description:
-			'Read one page of a collection (default 50 rows); continue with cursor. Narrow it with `where` (exact field matches) and read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
+			'Read one page of a collection (default 50 rows); continue with cursor. `search` is free text matched fuzzily across the collection\'s searchable fields (describe_workspace marks them (search)) — the fastest way to find a record from a person\'s words. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: \'%kismis%\' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
@@ -330,6 +330,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 				limit: { type: 'integer', minimum: 1, maximum: 50 },
 				cursor: { type: 'string', minLength: 1 },
 				where: { type: 'object', additionalProperties: true },
+				search: { type: 'string', minLength: 1 },
 				columns: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1 }
 			},
 			['collection']
@@ -396,11 +397,22 @@ const skillSection = (body: string, title: string): string | undefined => {
 };
 const CompactInput = Schema.Struct({ reason: Schema.NonEmptyString });
 /** Exact matches only: a filter is a field and the value it must equal. */
+const FilterScalar = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
+/** A field equalling a value, or the operators a person's description needs: text match, sets, ranges. */
 const CollectionFilterValue = Schema.Union([
-	Schema.String,
-	Schema.Number,
-	Schema.Boolean,
-	Schema.Null
+	FilterScalar,
+	Schema.Struct({
+		eq: Schema.optionalKey(FilterScalar),
+		ne: Schema.optionalKey(FilterScalar),
+		gt: Schema.optionalKey(FilterScalar),
+		gte: Schema.optionalKey(FilterScalar),
+		lt: Schema.optionalKey(FilterScalar),
+		lte: Schema.optionalKey(FilterScalar),
+		in: Schema.optionalKey(Schema.Array(FilterScalar)),
+		notIn: Schema.optionalKey(Schema.Array(FilterScalar)),
+		ilike: Schema.optionalKey(Schema.String),
+		notIlike: Schema.optionalKey(Schema.String)
+	})
 ]);
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -413,6 +425,7 @@ const CollectionReadInput = Schema.Struct({
 	),
 	cursor: Schema.optionalKey(Schema.NonEmptyString),
 	where: Schema.optionalKey(Schema.Record(Schema.String, CollectionFilterValue)),
+	search: Schema.optionalKey(Schema.NonEmptyString),
 	columns: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
 const CollectionWriteInput = Schema.Struct({
@@ -622,20 +635,16 @@ const describeField = (
  */
 export const subjectStanding = (
 	subject: Identity.Subject,
-	/** `AccessControl.policies(subject)`: the member's own, for a capped envoy subject. */
+	/** `AccessControl.policies(subject)`. */
 	policies: ReadonlyArray<string>
 ): string => {
 	if (subject.system === true) return 'system';
-	const person = subject.member ?? subject;
 	return [
-		person.admin === true
+		subject.admin === true
 			? 'workspace administrator (reads and writes every authored collection, whatever the policies)'
 			: 'not an administrator',
-		person.teamPath[0] === undefined ? 'no team' : `team ${person.teamPath[0]}`,
-		`policies ${policies.length === 0 ? 'none' : policies.join(', ')}`,
-		...(subject.member === undefined
-			? []
-			: [`capped by envoy policies ${subject.policies.join(', ')}`])
+		subject.teamPath[0] === undefined ? 'no team' : `team ${subject.teamPath[0]}`,
+		`policies ${policies.length === 0 ? 'none' : policies.join(', ')}`
 	].join('; ');
 };
 
@@ -998,15 +1007,19 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			}
 			const limit = parsed.limit ?? 50;
 			/**
-			 * The model's filter and projection, in the collection contract's own shapes: `where` is a
-			 * field equalling a value, and `id` is always selected because the continuation cursor is
-			 * encoded from it. The read policy still applies, so narrowing never widens a read.
+			 * The model's filter and projection, in the collection contract's own shapes: `where` maps a
+			 * field to a value (equality) or to operators, and `id` is always selected because the
+			 * continuation cursor is encoded from it. The read policy still applies, so narrowing never
+			 * widens a read.
 			 */
 			const where =
 				parsed.where === undefined
 					? undefined
 					: Object.fromEntries(
-							Object.entries(parsed.where).map(([field, value]) => [field, { eq: value }])
+							Object.entries(parsed.where).map(([field, value]) => [
+								field,
+								value !== null && typeof value === 'object' ? value : { eq: value }
+							])
 						);
 			const columns =
 				parsed.columns === undefined
@@ -1017,6 +1030,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				limit: limit + 1,
 				after: parsed.cursor,
 				...(where === undefined ? {} : { where }),
+				...(parsed.search === undefined ? {} : { search: { mode: 'lexical' as const, term: parsed.search } }),
 				...(columns === undefined ? {} : { columns })
 			});
 			return boundedCollectionReadResult(rows, limit);

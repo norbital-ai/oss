@@ -32,26 +32,15 @@ export const automationPrincipalId = (automationName: string): string =>
  *
  * This is the whole of the rule, in one place, because it is the rule that must not be got wrong:
  *
- * - **The declaration is the ceiling, always.** `policies` is copied from the envoy whether or not
- *   a sender was matched, `teamPath` stays empty and `admin` is false, so the envoy's own grants,
- *   tools, apps and rate limits never exceed what it declares.
- * - **A linked member caps it with their own authority.** `member` carries the member's team path
- *   and administrator status, and access allows a collection read or write only where both the
- *   member and the envoy allow it. An administrator therefore reaches everything the envoy declares;
- *   a contractor reaches what their team's policy grants within it. `userId` becomes the member's
- *   so `subject.id` resolves to that person.
- * - **An unmatched sender carries the envoy's authority alone**, under the envoy's principal id.
+ * - **An unmatched sender carries the envoy's authority alone**: its declared `policies`, no team,
+ *   never `admin`, under the envoy's principal id.
+ * - **A linked member is not this subject.** Their turn runs as the member — their own team's
+ *   policies, or the administrator bypass — exactly as in the web app (`Envoys.subjectFor`).
  */
 export const envoySubject = (
 	envoy: { readonly name: string; readonly policies: ReadonlyArray<string> },
 	tenantId: string,
-	linked:
-		| Readonly<{
-				readonly userId: string;
-				readonly email?: string;
-				readonly member?: Readonly<{ teamPath: ReadonlyArray<string>; admin: boolean }>;
-		  }>
-		| undefined
+	linked: Readonly<{ readonly userId: string; readonly email?: string }> | undefined
 ): Identity.Subject => {
 	const subject: Identity.Subject = {
 		userId: linked?.userId ?? envoyPrincipalId(envoy.name),
@@ -59,29 +48,10 @@ export const envoySubject = (
 		teamPath: [],
 		policies: [...envoy.policies],
 		admin: false,
-		...(linked?.email === undefined ? {} : { email: linked.email }),
-		...(linked?.member === undefined
-			? {}
-			: { member: { teamPath: [...linked.member.teamPath], admin: linked.member.admin } })
+		...(linked?.email === undefined ? {} : { email: linked.email })
 	};
 	return subject;
 };
-
-/**
- * The member a capped envoy subject answers, as the subject they would be in the web app: their
- * own team and administrator status, no declared policies. `undefined` for any other subject.
- */
-export const memberSubject = (subject: Identity.Subject): Identity.Subject | undefined =>
-	subject.member === undefined
-		? undefined
-		: {
-				userId: subject.userId,
-				tenantId: subject.tenantId,
-				teamPath: subject.member.teamPath,
-				policies: [],
-				admin: subject.member.admin,
-				...(subject.email === undefined ? {} : { email: subject.email })
-			};
 
 /**
  * The subject one automation run acts under.

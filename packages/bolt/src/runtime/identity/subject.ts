@@ -55,21 +55,6 @@ export const Subject = Schema.Struct({
 	 */
 	admin: Schema.optionalKey(Schema.Boolean),
 	impersonatedBy: Schema.optionalKey(Schema.NonEmptyString),
-	/**
-	 * The workspace member an envoy turn answers, whose own authority caps the envoy's.
-	 *
-	 * Present only on a subject `envoySubject` minted for a sender linked to a member. Access then
-	 * allows a collection read or write only where **both** this member (their own team's policies,
-	 * or the administrator bypass) and the envoy's declared `policies` allow it: rows must pass both
-	 * predicates and only fields both grants return are read. The envoy never exceeds its
-	 * declaration, and the member never exceeds their own grants.
-	 */
-	member: Schema.optionalKey(
-		Schema.Struct({
-			teamPath: Schema.Array(Schema.NonEmptyString),
-			admin: Schema.Boolean
-		})
-	)
 });
 export interface Subject extends Schema.Schema.Type<typeof Subject> {}
 

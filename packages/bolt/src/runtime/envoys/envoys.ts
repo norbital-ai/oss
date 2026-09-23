@@ -527,7 +527,11 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					Effect.catch(() => Effect.succeed(false))
 				);
 
-		/** Whose authority a row's turn carries: the envoy's alone, or a linked member's capped by the envoy's. */
+		/**
+		 * Whose authority a row's turn carries. A linked member's turn runs as that member — their team's
+		 * policies, or the administrator bypass — exactly as in the web app; an unmatched sender on a
+		 * public envoy carries the envoy's declared policies alone.
+		 */
 		const subjectFor = Effect.fn('Envoys.subjectFor')(function* (
 			effectId: EffectId,
 			envoy: Envoy,
@@ -538,15 +542,11 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
 					: undefined;
 			if (linked === undefined) return envoy.audience === 'public' ? envoySubject(envoy, tenant.tenantId, undefined) : undefined;
-			const member = yield* identity.resolveUser(effectId, linked.userId).pipe(
+			// An account that no longer resolves is no member: the turn is refused like an unknown sender.
+			return yield* identity.resolveUser(effectId, linked.userId).pipe(
 				Effect.map((resolved): Identity.Subject | undefined => resolved),
 				Effect.catchTag('Bolt.Identity.AuthenticationError', () => Effect.succeed(undefined))
 			);
-			// The member caps the envoy; one whose account no longer resolves caps it with nothing.
-			return envoySubject(envoy, tenant.tenantId, {
-				...linked,
-				member: { teamPath: member?.teamPath ?? [], admin: member?.admin === true }
-			});
 		});
 
 		/**
@@ -843,7 +843,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					const account =
 						known === undefined
 							? undefined
-							: { ...known, policies: access.policies(turnSubject), ...(turnSubject.member === undefined ? {} : { cappedBy: turnSubject.policies }) };
+							: { ...known, policies: access.policies(turnSubject) };
 					const message: Agents.InboundAgentMessage = {
 						sender: {
 							...(row.sender_id === null ? {} : { id: row.sender_id }),
@@ -851,6 +851,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							...(account === undefined ? {} : { account })
 						},
 						sentAt: row.sent_at,
+						conversationId: providerConversation,
 						messageId: row.provider_message_id,
 						// Media the channel could not hand over is named, not dropped, so the model can ask.
 						text: [

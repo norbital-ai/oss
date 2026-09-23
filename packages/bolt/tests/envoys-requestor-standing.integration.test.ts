@@ -16,10 +16,8 @@ import { subject as self } from '../src/authoring/index.js';
 import { collection, envoy, field, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as AccessControl from '../src/runtime/access/access-control.js';
 import * as Agents from '../src/runtime/agents/agents.js';
-import * as Collections from '../src/runtime/collections/collections.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
 import type * as Identity from '../src/runtime/identity/identity.js';
-import { envoySubject } from '../src/runtime/identity/static-identity.js';
 import {
 	TEST_TENANT,
 	makeBoltTestRuntime,
@@ -35,7 +33,7 @@ const languageModelId = ModelId.make('test:language');
 const encodeMessage = Schema.encodeSync(Prompt.Message);
 
 /**
- * Envoys answering linked members with the member's own authority, capped by the envoy's.
+ * Envoys answering linked members with the member's own authority.
  *
  * `desk` — the envoy's declaration — reads every project and people with their team. `crew` — what
  * the `Crew` team holds — reads only the member's own projects, updates them, and reads `notes`,
@@ -166,65 +164,7 @@ const seed = async (runtime: BoltTestRuntime) => {
 	await runtime.database.query(`insert into "notes" ("id", "body") values (md5('n1')::uuid, 'x')`);
 };
 
-const deskEnvoy = { name: 'desk_whatsapp', policies: ['desk'] };
-const dionThroughEnvoy = envoySubject(deskEnvoy, TEST_TENANT, {
-	userId: fixtureUserId('dion'),
-	member: { teamPath: [], admin: true }
-});
-const samThroughEnvoy = envoySubject(deskEnvoy, TEST_TENANT, {
-	userId: fixtureUserId('sam'),
-	member: { teamPath: ['Crew'], admin: false }
-});
-const unlinkedThroughEnvoy = envoySubject(deskEnvoy, TEST_TENANT, undefined);
-
-const read = (runtime: BoltTestRuntime, subject: Identity.Subject, collection: string) =>
-	runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			return yield* (yield* Collections.Service).findMany(
-				EffectId.make(`read:${subject.userId}:${collection}`),
-				subject,
-				{ collection, limit: 10 }
-			);
-		})
-	);
-const titles = async (runtime: BoltTestRuntime, subject: Identity.Subject) =>
-	(await read(runtime, subject, 'projects'))
-		.map((row) => Reflect.get(row as object, 'title'))
-		.toSorted();
-
 describe('An envoy turn for a linked member', () => {
-	it('reaches what the member may, within what the envoy declares', async () => {
-		harness = await makeBoltTestRuntime(definition, {
-			ai,
-			communication: recordingCommunication().binding
-		});
-		await seed(harness);
-		const access = await harness.runtime.runPromise(AccessControl.Service);
-
-		// An administrator with no team reads every project the envoy declares.
-		expect(await titles(harness, dionThroughEnvoy)).toEqual(['Other valve', 'Sam pump']);
-		// A crew member reads only what their team's policy grants within it.
-		expect(await titles(harness, samThroughEnvoy)).toEqual(['Sam pump']);
-		// An unlinked sender carries the envoy's declaration alone.
-		expect(await titles(harness, unlinkedThroughEnvoy)).toEqual(['Other valve', 'Sam pump']);
-
-		// Never beyond the declaration: `crew` reads notes and updates projects; the envoy does
-		// neither, and neither does an administrator's bypass through it.
-		for (const subject of [dionThroughEnvoy, samThroughEnvoy]) {
-			expect(access.explain(subject, 'read', 'notes').allowed).toBe(false);
-			expect(access.explain(subject, 'update', 'projects').allowed).toBe(false);
-		}
-
-		// Fields are the intersection: both `desk` and `crew` return a person's team; the
-		// administrator's own `user` read is the built-in directory of names, so theirs is not.
-		const people = (subject: Identity.Subject) =>
-			read(harness!, subject, 'user').then((rows) =>
-				rows.map((row) => Object.keys(row as object).toSorted())
-			);
-		expect((await people(samThroughEnvoy))[0]).toEqual(['id', 'name', 'row_version', 'team_id']);
-		expect((await people(dionThroughEnvoy))[0]).toEqual(['id', 'name', 'row_version']);
-	});
-
 	it('knows its sender and its authority up front, and lists the system collections it reads', async () => {
 		harness = await makeBoltTestRuntime(definition, {
 			ai,
@@ -255,14 +195,14 @@ describe('An envoy turn for a linked member', () => {
 		).toMatchObject({ drained: 1, status: 'answered' });
 
 		const standing =
-			'workspace administrator (reads and writes every authored collection, whatever the policies); no team; policies none; capped by envoy policies desk';
+			'workspace administrator (reads and writes every authored collection, whatever the policies); no team; policies none';
 		const system = JSON.stringify(requests[0]?.messages[0]);
 		const prompt = JSON.stringify(requests[0]?.messages);
 		expect(system).toContain(`This turn runs under: ${standing}.`);
 		// The shared brief explains access instead of a task encoding it.
 		expect(system).toContain("Your tools run under the requester's own access policies");
 		expect(prompt).toContain(
-			'[registered account: dion · workspace administrator · no team · policies none · capped by envoy policies desk]'
+			'[registered account: dion · workspace administrator · no team · policies none]'
 		);
 
 		const results = Object.fromEntries(

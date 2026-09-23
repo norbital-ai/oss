@@ -396,10 +396,10 @@ describe('Envoy inbound queue', () => {
 		// The envelope also states each member's real standing and what their message runs under,
 		// so the turn never infers one: an administrator with no team is not a contractor.
 		expect(prompt).toContain(
-			'registered account: Sam · workspace administrator · no team · policies none · capped by envoy policies operator'
+			'registered account: Sam · workspace administrator · no team · policies none'
 		);
 		expect(prompt).toContain(
-			'registered account: Alex · not an administrator · team Contractor · policies none · capped by envoy policies operator'
+			'registered account: Alex · not an administrator · team Contractor · policies none'
 		);
 		// The channel's own brief rides on an envoy turn, not on the shared one.
 		expect(prompt).toContain('Registration is the platform');

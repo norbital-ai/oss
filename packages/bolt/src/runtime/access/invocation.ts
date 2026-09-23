@@ -109,8 +109,7 @@ const subjectValueKey = (subject: Identity.Subject): string =>
 		system: subject.system ?? false,
 		email: subject.email ?? null,
 		admin: subject.admin ?? false,
-		impersonatedBy: subject.impersonatedBy ?? null,
-		member: subject.member ?? null
+		impersonatedBy: subject.impersonatedBy ?? null
 	});
 
 const freezeSubject = (subject: Identity.Subject): Identity.Subject =>

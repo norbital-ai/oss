@@ -2525,15 +2525,8 @@ export const layerWith = (
 			) {
 				if (!visibility.allowed)
 					return yield* policyDecisionFailure(action, collection, visibility.reason);
-				// A capped envoy subject carries one authorization per side, and every one must pass.
-				const markers =
-					visibility.authorization === undefined
-						? []
-						: Array.isArray(visibility.authorization)
-							? visibility.authorization
-							: [visibility.authorization];
-				for (const marker of markers)
-					yield* authorizeOne(effectId, subject, marker, action, collection, context);
+				if (visibility.authorization !== undefined)
+					yield* authorizeOne(effectId, subject, visibility.authorization, action, collection, context);
 			});
 			const authorizeOne = Effect.fn('Collections.authorizeOne')(function* (
 				effectId: EffectId,

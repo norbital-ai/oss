@@ -393,8 +393,6 @@ export type InboundAccount = Readonly<{
 	admin: boolean;
 	/** The member's own policies, through their team, that this message's turn runs under. */
 	policies: ReadonlyArray<string>;
-	/** The envoy's declared policies capping them, when the turn is capped (`Subject.member`). */
-	cappedBy?: ReadonlyArray<string>;
 }>;
 
 /** One inbound transport message as a turn reads it; built by the envoy drain, never decoded. */
@@ -410,6 +408,8 @@ export type InboundAgentMessage = Readonly<{
 		account?: InboundAccount;
 	}>;
 	sentAt: string;
+	/** The transport's own id for the chat this message came in — what a record cites as its conversation. */
+	conversationId?: string;
 	messageId: string;
 	text: string;
 	attachments: ReadonlyArray<ImageAsset>;
@@ -419,11 +419,11 @@ export const inboundAgentInput = (message: InboundAgentMessage) =>
 	userMessageWithAttachments(
 		[
 			'INBOUND MESSAGE',
-			`[${message.sentAt}] ${message.sender.displayName ?? message.sender.id ?? 'unidentified sender'} · ${message.invocation} · ${message.messageId}`,
+			`[${message.sentAt}] ${message.sender.displayName ?? message.sender.id ?? 'unidentified sender'} · ${message.invocation} · chat ${message.conversationId ?? '—'} · message ${message.messageId}${message.sender.id === undefined ? '' : ` · sender ${message.sender.id}`}`,
 			...(message.sender.account === undefined
 				? []
 				: [
-						`[registered account: ${message.sender.account.name} · ${message.sender.account.admin ? 'workspace administrator' : 'not an administrator'} · ${message.sender.account.team === null ? 'no team' : `team ${message.sender.account.team}`} · policies ${message.sender.account.policies.length === 0 ? 'none' : message.sender.account.policies.join(', ')}${message.sender.account.cappedBy === undefined ? '' : ` · capped by envoy policies ${message.sender.account.cappedBy.join(', ')}`}]`
+						`[registered account: ${message.sender.account.name} · ${message.sender.account.admin ? 'workspace administrator' : 'not an administrator'} · ${message.sender.account.team === null ? 'no team' : `team ${message.sender.account.team}`} · policies ${message.sender.account.policies.length === 0 ? 'none' : message.sender.account.policies.join(', ')}]`
 					]),
 			...(message.text === '' ? [] : [message.text])
 		].join('\n'),
@@ -561,7 +561,7 @@ const NORBIUS_BRIEF = `You are Norbius, the workspace's assistant: author, opera
  * between them are facts only an envoy turn needs. The envelope labels its own account line, so
  * this brief says what the account means rather than how the wire writes it.
  */
-const ENVOY_BRIEF = `An envoy turn reaches a person over a chat channel, not the workspace UI — keep replies chat-sized. Messages arrive as INBOUND MESSAGE envelopes, naming the sender's registered workspace account when there is one: that account, not the transport's nickname, is the person you are serving, and the envelope states their team, whether they administer the workspace and the policies their message runs under — never claim a team or role it does not state. Registration is the platform's link between an address and an account, not a record in any collection: an authenticated envoy hears only registered senders, so a message that reached you already proves its sender is registered — never search for it.`;
+const ENVOY_BRIEF = `An envoy turn reaches a person over a chat channel, not the workspace UI — keep replies chat-sized. Messages arrive as INBOUND MESSAGE envelopes, naming the sender's registered workspace account when there is one: that account, not the transport's nickname, is the person you are serving, and the envelope states their team, whether they administer the workspace and the policies their message runs under — never claim a team or role it does not state. Registration is the platform's link between an address and an account, not a record in any collection: an authenticated envoy hears only registered senders, so a message that reached you already proves its sender is registered — never search for it. Every line you write is sent to that person as a message, and they are not technical: write only real progress in plain everyday words ("Found the 58 Kismis Avenue job — adding your photo now."), never tool, collection, field, policy or file names, ids or codes unless they ask; do not narrate lookups or checks, report what you found or did. To find and change records, follow the \`working-with-records\` skill: one filtered read, one write, one plain confirmation.`;
 
 /**
  * What a tenant workspace is, in the words Bolt uses for it — so a turn knows the shape of the
@@ -1267,13 +1267,21 @@ export const layer = Layer.effect(
 			} satisfies ResolvedAgent;
 		});
 
-		const allowedSkills = (subject: Identity.Subject) => {
+		const allowedSkills = (subject: Identity.Subject, agentId: string) => {
 			const held = workspace.definition.skills.filter(({ name }) =>
 				access.capabilities(subject).skills.has(name)
 			);
 			const names = new Set(held.map(({ name }) => name));
-			// Host skills are always available; an authored skill of the same name wins.
-			return [...held, ...PLATFORM_SKILLS.filter(({ name }) => !names.has(name))];
+			// Host skills are always available; an authored skill of the same name wins. An envoy talks
+			// to people, never authors source, so it is not handed the authoring contract.
+			return [
+				...held,
+				...PLATFORM_SKILLS.filter(
+					({ name }) =>
+						!names.has(name) &&
+						(agentId === WEB_AGENT_NAME || name !== 'authoring-tenant-workspace')
+				)
+			];
 		};
 
 		const writesForSubject = (subject: Identity.Subject): boolean =>
@@ -1365,7 +1373,7 @@ export const layer = Layer.effect(
 					kind: tool.mcp === undefined ? ('tool' as const) : ('mcp' as const),
 					digest: semanticHash(tool)
 				})),
-				...allowedSkills(subject).map((skill) => ({
+				...allowedSkills(subject, agent.id).map((skill) => ({
 					id: CapabilityId.make(`tenant/${skill.name}`),
 					kind: 'skill' as const,
 					digest: semanticHash(skill)
@@ -3279,7 +3287,7 @@ export const layer = Layer.effect(
 				agentId: agent.id,
 				conversationId: task.id,
 				workbenchId: task.workbench_id,
-				skills: allowedSkills(subject),
+				skills: allowedSkills(subject, agent.id),
 				toolNames: tools.map(({ name }) => name),
 				collectionNames: [...new Set([...readableCollectionNames, ...writableCollectionNames])],
 				readableCollectionNames,

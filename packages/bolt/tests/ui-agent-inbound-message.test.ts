@@ -5,7 +5,7 @@ it('unwraps the envoy envelope into sender, time, invocation and body', () => {
 	const envelope = parseInboundEnvelope(
 		[
 			'INBOUND MESSAGE',
-			'[2026-09-21T06:02:00.000Z] Dion · direct · 3A27EB4E6BCC6DE9F441',
+			'[2026-09-21T06:02:00.000Z] Dion · direct · chat 6591234567@s.whatsapp.net · message 3A27EB4E6BCC6DE9F441 · sender 6591234567@s.whatsapp.net',
 			'Okay can u check on what jobs we have that are still open'
 		].join('\n')
 	);
@@ -22,7 +22,7 @@ it('drops the registered-account line and keeps the words', () => {
 	const envelope = parseInboundEnvelope(
 		[
 			'INBOUND MESSAGE',
-			'[2026-09-21T06:00:45.000Z] ~ YK - BCA · direct · 3A9788E4B5CAA66028CC',
+			'[2026-09-21T06:00:45.000Z] ~ YK - BCA · direct · chat 6598765432@s.whatsapp.net · message 3A9788E4B5CAA66028CC',
 			'[registered account: Yu Kiat Tan · not an administrator · team Contractor]',
 			'Site photos attached.'
 		].join('\n')
