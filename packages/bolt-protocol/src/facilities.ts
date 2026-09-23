@@ -622,6 +622,23 @@ export const ConfigResponse = Schema.Struct({
 });
 export interface ConfigResponse extends Schema.Schema.Type<typeof ConfigResponse> {}
 
+/**
+ * Address search: free text in, up to eight places out. The host picks the provider and holds its
+ * credential; `id` is that provider's stable key for the place (`google:<place id>`, `onemap:<postal>`).
+ */
+export const GeocodingRequest = Schema.Struct({ query: Schema.NonEmptyString });
+export interface GeocodingRequest extends Schema.Schema.Type<typeof GeocodingRequest> {}
+export const GeocodingResult = Schema.Struct({
+	id: Schema.NonEmptyString,
+	formatted_address: Schema.NonEmptyString,
+	lat: Schema.Number,
+	lon: Schema.Number,
+	postal_code: Schema.optionalKey(Schema.NonEmptyString)
+});
+export interface GeocodingResult extends Schema.Schema.Type<typeof GeocodingResult> {}
+export const GeocodingResponse = Schema.Struct({ results: Schema.Array(GeocodingResult) });
+export interface GeocodingResponse extends Schema.Schema.Type<typeof GeocodingResponse> {}
+
 export type FacilityBindings = Readonly<{
 	readonly scope: InvocationScope;
 	readonly database?: FacilityBinding<DatabaseRequest, DatabaseResponse>;
@@ -637,6 +654,7 @@ export type FacilityBindings = Readonly<{
 	/** Host-internal live-query commit hook; never an authored capability or manifest requirement. */
 	readonly syncCommit?: FacilityBinding<SyncCommitRequest, SyncCommitResponse>;
 	readonly config?: FacilityBinding<ConfigRequest, ConfigResponse>;
+	readonly geocoding?: FacilityBinding<GeocodingRequest, GeocodingResponse>;
 }>;
 
 /** Owns immutable facility-call correlation metadata assembly. */

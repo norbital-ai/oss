@@ -26,7 +26,9 @@ import {
 	ModelCatalogEntry,
 	ModelId,
 	ConversationId,
-	ConversationStatus
+	ConversationStatus,
+	GeocodingRequest,
+	GeocodingResponse
 } from './facilities.js';
 
 export {
@@ -748,6 +750,14 @@ export const SystemCommandContracts = [
 		input: PushSubscription,
 		responses: [ok(Schema.Struct({ subscribed: Schema.Literal(true) }))],
 		clientPath: ['notifications', 'subscribe'],
+		clientMode: 'operation'
+	}),
+	/** Address search for a location picker, answered by the host's geocoding provider. */
+	commandContract({
+		name: 'geocoding.search',
+		input: GeocodingRequest,
+		responses: [ok(GeocodingResponse)],
+		clientPath: ['geocoding', 'search'],
 		clientMode: 'operation'
 	}),
 	commandContract({

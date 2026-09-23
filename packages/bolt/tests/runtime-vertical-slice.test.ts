@@ -519,6 +519,46 @@ describe('runnable Bolt vertical slice', () => {
 		).toMatchObject({ _tag: 'Failure', error: { code: 'unauthorized', httpStatus: 401 } });
 	});
 
+	it('answers a location search through the host geocoding facility, and says why when it cannot', async () => {
+		const invocation: Invocation = {
+			_tag: 'Command',
+			protocolVersion: PROTOCOL_VERSION,
+			id: InvocationId.make('invoke-geocoding'),
+			scope,
+			command: 'geocoding.search',
+			input: { query: '460133' },
+			headers: { authorization: ['Bearer test-session'] }
+		};
+		const place = {
+			id: 'onemap:460133',
+			formatted_address: '133 Bedok North Avenue 3, Singapore 460133',
+			lat: 1.327562572303071,
+			lon: 103.9357346269897,
+			postal_code: '460133'
+		};
+		const asked: Array<unknown> = [];
+		const geocoding: FacilityBindings['geocoding'] = {
+			call: (_metadata, request) => {
+				asked.push(request);
+				return Promise.resolve({ _tag: 'Success', value: { results: [place] } });
+			}
+		};
+		expect(
+			await bundle.dispatch(invocation, { ...facilities, geocoding }, new AbortController().signal)
+		).toMatchObject({ _tag: 'Success', response: { value: { results: [place] } } });
+		expect(asked).toEqual([{ query: '460133' }]);
+		expect(
+			await bundle.dispatch(invocation, facilities, new AbortController().signal)
+		).toMatchObject({
+			_tag: 'Failure',
+			error: {
+				code: 'facility_unavailable',
+				message: 'geocoding facility is not bound',
+				httpStatus: 502
+			}
+		});
+	});
+
 	it('normalizes Request credentials and binds authenticated identity to the invocation tenant', async () => {
 		const request: Invocation = {
 			_tag: 'Request',

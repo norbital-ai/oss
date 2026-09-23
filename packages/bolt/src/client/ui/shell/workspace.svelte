@@ -210,11 +210,21 @@
 		// the session, so generic renderers and authored representations resolve the same key through
 		// the same capability.
 		fileUrl: session.files.urlFor,
-		// These two need a provider credential the host does not hold yet — they belong to the Secrets
-		// vault. Refusing names what is missing; returning an empty result would render an address
-		// picker that silently finds nothing and a map that is silently blank.
-		autocompleteGeolocation: () =>
-			Effect.fail(new Error('Geolocation autocomplete needs a provider credential in Secrets.')),
+		// The host's geocoding provider answers; a blank query is not a search.
+		autocompleteGeolocation: (query) =>
+			query.trim() === ''
+				? Effect.succeed([])
+				: workspace.frameworkClient.system.geocoding.search({ query: query.trim() }).pipe(
+						Effect.map(({ results }) =>
+							results.map((place) => ({
+								type: 'Point' as const,
+								srid: 4326,
+								geometry: { lat: place.lat, lon: place.lon },
+								formatted_address: place.formatted_address
+							}))
+						)
+					),
+		// Refusing names what is missing; an empty image would be a map that is silently blank.
 		renderStaticMap: () =>
 			Effect.fail(new Error('Static maps need a provider credential in Secrets.')),
 		// A real client over the host's declared file store. This used to be a stub whose every member

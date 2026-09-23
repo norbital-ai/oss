@@ -37,7 +37,7 @@ import {
 	makeAuthoringOps,
 	runAuthoredHandler
 } from '#lib/runtime/collections/authored.js';
-import { AI, Connector, Files, HostTools } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, Files, Geocoding, HostTools } from '#lib/runtime/facilities/services.js';
 import { readFileAsset } from '#lib/runtime/collections/file-assets.js';
 import { inferOp } from '#lib/runtime/inference.js';
 import * as Channels from '#lib/runtime/channels/channels.js';
@@ -1378,6 +1378,11 @@ const BINDINGS = [
 					json
 				)
 			)
+	),
+	binding('geocoding.search', { Command: session('location search') }, (context, input) =>
+		Effect.gen(function* () {
+			return json(yield* (yield* Geocoding.Service).search(context.effectId, input));
+		})
 	),
 	binding('notifications.pushConfiguration', { Command: session('push configuration') }, () =>
 		Effect.gen(function* () {

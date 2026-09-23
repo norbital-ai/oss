@@ -44,7 +44,7 @@ import { Communication, Mail } from '#lib/runtime/facilities/services.js';
 import { Connector } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type { CallContext } from '#lib/runtime/facilities/database.js';
-import { Files } from '#lib/runtime/facilities/services.js';
+import { Files, Geocoding } from '#lib/runtime/facilities/services.js';
 import { HostTools } from '#lib/runtime/facilities/services.js';
 import { IdentityHooks } from '#lib/runtime/facilities/services.js';
 import { SyncCommit } from '#lib/runtime/facilities/services.js';
@@ -117,6 +117,7 @@ const InvocationLayers = {
 		const connector = Connector.layer(facilities.connector, context);
 		const tasks = Tasks.layer(facilities.tasks, context);
 		const hostTools = HostTools.layer(facilities.hostTools, context);
+		const geocoding = Geocoding.layer(facilities.geocoding, context);
 		const transport = Transport.layer(facilities.transport, context);
 		const syncCommit = SyncCommit.layer(facilities.syncCommit, context);
 		const workspaceLayer = Workspace.layer(workspace);
@@ -325,6 +326,7 @@ const InvocationLayers = {
 			tasks,
 			taskQueue,
 			hostTools,
+			geocoding,
 			transport,
 			syncCommit,
 			remotes,
@@ -757,6 +759,16 @@ const BundleDispatch = {
 						return {
 							_tag: 'Failure',
 							error: makeWireError('mutation_retry_expired', error.message, { httpStatus: 409 })
+						};
+					// A location search the host could not answer is reported in the provider's own words,
+					// so the picker can say why it found nothing instead of showing an empty list.
+					if (error instanceof Database.FacilityError && error.operation === 'geocoding')
+						return {
+							_tag: 'Failure',
+							error: makeWireError(error.code, error.message, {
+								httpStatus: 502,
+								retryable: error.retryable
+							})
 						};
 					if (error instanceof Collections.MutationInProgress)
 						return {

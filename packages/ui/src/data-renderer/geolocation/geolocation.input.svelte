@@ -367,7 +367,9 @@
 	readonlyContent={readonly ? readonlyContent : undefined}
 	serverConfig={{
 		onSearch: handleSearch,
-		isLoading: searchResource.loading
+		isLoading: searchResource.loading,
+		// A failed search (no provider, provider down) says so; "no locations" is only a real empty answer.
+		error: searchResource.error?.message ?? null
 	}}
 	searchPlaceholder={t('dataRenderer.typeToSearchLocations')}
 	{multiple}

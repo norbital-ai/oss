@@ -12,6 +12,8 @@ import type {
 	FacilityBinding,
 	FileRequest,
 	FileResponse,
+	GeocodingRequest,
+	GeocodingResponse,
 	HostToolRequest,
 	HostToolResponse,
 	IdentityHookRequest,
@@ -254,6 +256,30 @@ const HostToolsLayers = {
 		)
 };
 export const HostTools = Object.freeze({ Service: HostToolsService, layer: HostToolsLayers.make });
+
+/** Address search answered by the host's geocoding provider. */
+type GeocodingInterface = Readonly<{
+	readonly search: (
+		effectId: EffectId,
+		request: GeocodingRequest
+	) => Effect.Effect<GeocodingResponse, BoundFacilityError>;
+}>;
+const GeocodingService = Context.Service<GeocodingInterface>('@norbital-ai/bolt/Geocoding');
+export const Geocoding = Object.freeze({
+	Service: GeocodingService,
+	layer: (
+		binding: FacilityBinding<GeocodingRequest, GeocodingResponse> | undefined,
+		context: CallContext
+	) =>
+		Layer.succeed(
+			GeocodingService,
+			GeocodingService.of({
+				search: Effect.fn('Geocoding.search')((id, request) =>
+					invokeBinding('geocoding', binding, context, id, request)
+				)
+			})
+		)
+});
 
 /** Identity lifecycle observations the host may project. Optional: emit no-ops when unbound. */
 type IdentityHooksInterface = Readonly<{
