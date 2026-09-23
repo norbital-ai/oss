@@ -83,14 +83,26 @@ describe('authority bindings', () => {
 		expect(approvalRefusal(definition)).toBeUndefined();
 	});
 
-	it('checks authored policies against runtime-owned policies after merge', () => {
+	it('lets an authored grant replace a runtime-owned default on the same coordinate', () => {
+		// A built-in grant is a default: an authored one on its coordinate replaces it for that holder
+		// (the runtime answers the same way), so a workspace can grant more of `user` or `team`.
 		const definition = workspace(
 			[policy('approval_reader', [{ collection: 'approval_request', action: 'read' }])],
 			{ Operators: ['approval_reader'] }
 		);
-		expect(rules(definition)).toContain('overlapping-policy-grant');
+		expect(approvalDiagnostics(definition)).toEqual([]);
+	});
+
+	it('still refuses two authored grants on a coordinate a built-in also grants', () => {
+		const definition = workspace(
+			[
+				policy('people_a', [{ collection: 'user', action: 'read' }]),
+				policy('people_b', [{ collection: 'user', action: 'read' }])
+			],
+			{ Operators: ['people_a', 'people_b'] }
+		);
 		expect(approvalDiagnostics(definition)[0]?.message).toContain(
-			'team "Operators" composes policies "approval_reader", "bolt.system-collections"'
+			'team "Operators" composes policies "people_a", "people_b"'
 		);
 	});
 

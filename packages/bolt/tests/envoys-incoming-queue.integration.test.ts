@@ -204,9 +204,13 @@ describe('Envoy inbound queue', () => {
 		};
 		harness = await makeBoltTestRuntime(definition, { ai, communication });
 		await harness.database.query(
-			`insert into "user" ("id", "name", "email", "tenantId", "channels") values
-			 (md5('sam'::text)::uuid, 'Sam', 'sam@example.test', 'test-tenant', $1::jsonb),
-			 (md5('alex'::text)::uuid, 'Alex', 'alex@example.test', 'test-tenant', $2::jsonb)`,
+			`insert into "team" ("id", "name") values (md5('Contractor'::text)::uuid, 'Contractor')`
+		);
+		// Sam administers the workspace and belongs to no team; Alex is an ordinary contractor.
+		await harness.database.query(
+			`insert into "user" ("id", "name", "email", "tenantId", "channels", "status", "team_id") values
+			 (md5('sam'::text)::uuid, 'Sam', 'sam@example.test', 'test-tenant', $1::jsonb, 'admin', null),
+			 (md5('alex'::text)::uuid, 'Alex', 'alex@example.test', 'test-tenant', $2::jsonb, 'normal', md5('Contractor'::text)::uuid)`,
 			[
 				JSON.stringify([{ type: 'whatsapp', address: '+65 9123 4567', verified: true }]),
 				JSON.stringify([{ type: 'whatsapp', address: '+65 9876 5432', verified: true }])
@@ -258,8 +262,14 @@ describe('Envoy inbound queue', () => {
 		expect(prompt).toContain('Valve done.');
 		// Each envelope names the workspace account behind the sender's transport address, so the
 		// turn reads who it serves instead of resolving a chat nickname against staff.
-		expect(prompt).toContain('registered account: Sam');
-		expect(prompt).toContain('registered account: Alex');
+		// The envelope also states each member's real standing and what their message runs under,
+		// so the turn never infers one: an administrator with no team is not a contractor.
+		expect(prompt).toContain(
+			'registered account: Sam · workspace administrator · no team · policies none · capped by envoy policies operator'
+		);
+		expect(prompt).toContain(
+			'registered account: Alex · not an administrator · team Contractor · policies none · capped by envoy policies operator'
+		);
 		// The channel's own brief rides on an envoy turn, not on the shared one.
 		expect(prompt).toContain('Registration is the platform');
 		expect(sends).toHaveLength(1);

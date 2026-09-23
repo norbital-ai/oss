@@ -94,6 +94,8 @@ describe('Task history search scope', () => {
 						collectionNames: [],
 						readableCollectionNames: [],
 						writableCollectionNames: [],
+						readFields: {},
+						standing: 'system',
 						workspace,
 						collections,
 						hostTools
@@ -152,6 +154,8 @@ describe('Task history search scope', () => {
 						collectionNames: [],
 						readableCollectionNames: [],
 						writableCollectionNames: [],
+						readFields: {},
+						standing: 'system',
 						workspace,
 						collections,
 						hostTools

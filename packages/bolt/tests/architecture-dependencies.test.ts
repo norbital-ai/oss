@@ -335,7 +335,11 @@ describe('Bolt architecture boundaries', () => {
 		// 322 -> 324: the numeric wire guard is now a hoisted Schema predicate (GUARD2).
 		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(324);
 		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);
-		expect(accessLines).toBeLessThanOrEqual(1_705);
+		// 1,705 -> 1,765 (2026-09-23): an envoy subject answering a linked member is judged as both
+		// the envoy and the member (`bothDecisions`/`bothPredicates`), a built-in grant yields to an
+		// authored one on its coordinate, and `policies(subject)` names what a turn runs under.
+		// Measured 1,761.
+		expect(accessLines).toBeLessThanOrEqual(1_765);
 
 		// Policy introspection is deliberately outside the historical aggregate basket. Give the
 		// authoring/runtime bridge its own explicit ceiling rather than letting it grow ungoverned.

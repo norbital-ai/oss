@@ -32,37 +32,59 @@ export const automationPrincipalId = (automationName: string): string =>
  *
  * This is the whole of the rule, in one place, because it is the rule that must not be got wrong:
  *
- * - **Capability is the declaration's, always.** `policies` is copied from the envoy whether or not
- *   a sender was matched, and `teamPath` stays empty. That is what makes the declared policies the
- *   ceiling for everybody — a linked contractor who administers the web app reaches exactly what an
- *   anonymous sender reaches, no more.
- * - **Identity is the sender's, and only narrows.** `userId` becomes the matched account's, so a
- *   grant carrying `subject.id` resolves to that person and returns *their* rows where
- *   the bare principal would match none. A narrowing, never a widening.
- * - **`admin` is dropped.** Administrative status selects narrow built-in controls that do not
- *   belong to an envoy turn. Carrying it across would widen the declared envoy principal even
- *   though tenant data still requires an explicit policy.
+ * - **The declaration is the ceiling, always.** `policies` is copied from the envoy whether or not
+ *   a sender was matched, `teamPath` stays empty and `admin` is false, so the envoy's own grants,
+ *   tools, apps and rate limits never exceed what it declares.
+ * - **A linked member caps it with their own authority.** `member` carries the member's team path
+ *   and administrator status, and access allows a collection read or write only where both the
+ *   member and the envoy allow it. An administrator therefore reaches everything the envoy declares;
+ *   a contractor reaches what their team's policy grants within it. `userId` becomes the member's
+ *   so `subject.id` resolves to that person.
+ * - **An unmatched sender carries the envoy's authority alone**, under the envoy's principal id.
  *
  * A `private` envoy's direct message is the one turn that does not use this: `Envoys.drain`
  * resolves the member's own subject instead, and still bounds it by this subject's rate limits.
- *
- * Extracted rather than left inline in the drain so it can be asserted on directly. An invariant
- * that can only be tested by running an agent turn is an invariant that gets tested once.
  */
 export const envoySubject = (
 	envoy: { readonly name: string; readonly policies: ReadonlyArray<string> },
 	tenantId: string,
-	linked: Readonly<{ readonly userId: string; readonly email?: string }> | undefined
+	linked:
+		| Readonly<{
+				readonly userId: string;
+				readonly email?: string;
+				readonly member?: Readonly<{ teamPath: ReadonlyArray<string>; admin: boolean }>;
+		  }>
+		| undefined
 ): Identity.Subject => {
-	const subject = {
+	const subject: Identity.Subject = {
 		userId: linked?.userId ?? envoyPrincipalId(envoy.name),
 		tenantId,
 		teamPath: [],
 		policies: [...envoy.policies],
-		admin: false
+		admin: false,
+		...(linked?.email === undefined ? {} : { email: linked.email }),
+		...(linked?.member === undefined
+			? {}
+			: { member: { teamPath: [...linked.member.teamPath], admin: linked.member.admin } })
 	};
-	return linked?.email === undefined ? subject : { ...subject, email: linked.email };
+	return subject;
 };
+
+/**
+ * The member a capped envoy subject answers, as the subject they would be in the web app: their
+ * own team and administrator status, no declared policies. `undefined` for any other subject.
+ */
+export const memberSubject = (subject: Identity.Subject): Identity.Subject | undefined =>
+	subject.member === undefined
+		? undefined
+		: {
+				userId: subject.userId,
+				tenantId: subject.tenantId,
+				teamPath: subject.member.teamPath,
+				policies: [],
+				admin: subject.member.admin,
+				...(subject.email === undefined ? {} : { email: subject.email })
+			};
 
 /**
  * The subject one automation run acts under.

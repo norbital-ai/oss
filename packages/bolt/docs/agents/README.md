@@ -196,23 +196,35 @@ finds another turn still working defers its own claim instead of polling.
 
 A message written mid-turn is consumed before the next model step; one written while the assistant
 is idle starts the next turn on the same transcript. Because the conversation is the chat's and not
-one sender's, every member the host verifies acts under the envoy's declared policies — the first
-sender's id stays the durable owner, and admission and execution both accept any subject holding
-exactly those policies.
+one sender's, the first sender's id stays the durable owner, and admission and execution both accept
+any subject holding exactly the envoy's declared policies.
 
 Whose authority a turn carries is the envoy's `audience`, one literal so no field combination can
 hand a stranger a member's authority:
 
-| `audience`      | Who reaches it                 | Direct message runs under        | Group runs under   |
-| --------------- | ------------------------------ | -------------------------------- | ------------------ |
-| `public`        | anyone on the transport        | the envoy's `policies`           | the envoy's        |
-| `authenticated` | members who proved the address | the envoy's `policies`           | the envoy's        |
-| `private`       | members who proved the address | the member's own team policies   | the envoy's        |
+| `audience`      | Who reaches it                 | A linked sender's message runs under                              |
+| --------------- | ------------------------------ | ----------------------------------------------------------------- |
+| `public`        | anyone on the transport        | the envoy's `policies` (senders are not resolved)                 |
+| `authenticated` | members who proved the address | the member's own authority, capped by the envoy's `policies`      |
+| `private`       | members who proved the address | direct: the member's own team policies; group: as `authenticated` |
 
-A group never carries one member's authority. A `private` direct message is resolved from the
-member's current team (never `admin`), any member may run that envoy's agent, and the envoy's own
-`envoys.*` rate limits still bound every turn. The rule lives in `envoys.receive`, next to
-`envoySubject`.
+**Capped** means both must allow. `envoySubject` mints the envoy's subject — its declared `policies`,
+no team, never `admin` — and, for a linked member, `member: { teamPath, admin }`. Access then judges
+every collection read and write twice, as the envoy and as the member (their team's policies, or the
+administrator bypass), and allows only what both allow: rows must pass both predicates, only fields
+both grants return are read, every `authorize` on either side must pass, and a write both sides route
+for approval is refused. So an administrator reaches everything the envoy declares, a contractor
+reaches what their team grants within it, and nobody exceeds the declaration. The envoy's own agent,
+tools, apps and rate limits are the declaration's alone. A private direct message is resolved from
+the member's current team (never `admin`), and the envoy's own `envoys.*` rate limits still bound
+every turn. The rule lives in `envoySubject` and `AccessControl`'s invocation.
+
+Every turn states whom it serves before any message: the web agent names the signed-in person with
+their team (or "no team"), administrator status and held policies; an envoy turn states the
+authority it runs under, and each `INBOUND MESSAGE` names its sender's account with the same facts.
+The shared brief tells the model its tools apply the requester's policies to every read and write,
+so it queries normally, relays a refusal, and never pre-judges access or asserts a role. Task text
+and workspace prompts state directives only, never who may see or do what.
 
 ### The channel replica
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeWorkspace } from '../src/runtime/agents/capability-catalog.js';
+import { describeWorkspace, subjectStanding } from '../src/runtime/agents/capability-catalog.js';
 import type { WorkspaceDefinition } from '../src/authoring/workspace-schema.js';
 
 const field = (
@@ -85,9 +85,10 @@ describe('describe_workspace', () => {
 			collectionNames: ['projects', 'customers'],
 			readableCollectionNames: ['projects', 'customers'],
 			writableCollectionNames: ['projects'],
+			readFields: {},
+			standing: 'not an administrator; team R&D; policies color_matcher',
 			toolNames: ['read_collection', 'write_collection'],
-			skills: [{ name: 'intake' } as never],
-			subject: { userId: 'u1', teamPath: ['R&D'], policies: ['color_matcher'] } as never
+			skills: [{ name: 'intake' } as never]
 		});
 		expect(described.note).toMatch(/src\/collections\/<name>\/\+model\.ts/);
 		const [projects, customers] = described.collections as ReadonlyArray<Record<string, unknown>>;
@@ -121,8 +122,44 @@ describe('describe_workspace', () => {
 		expect(described.channels).toEqual(['sales_whatsapp (whatsapp)']);
 		expect(described.integrations).toEqual(['erp: customers (one-way, http)']);
 		expect(described.teams).toEqual(['R&D: color_matcher', 'Reviewers: submission_reviewer']);
-		expect(described.you).toBe('teams R&D; policies color_matcher');
+		expect(described.you).toBe('not an administrator; team R&D; policies color_matcher');
 		expect(described.tools).toEqual(['read_collection', 'write_collection']);
 		expect(described.skills).toEqual(['intake']);
+	});
+
+	it('describes only the fields a masked read returns', () => {
+		const described = describeWorkspace({
+			workspace: { definition } as never,
+			collectionNames: ['customers'],
+			readableCollectionNames: ['customers'],
+			writableCollectionNames: [],
+			readFields: { customers: ['id'] },
+			standing: 'x',
+			toolNames: [],
+			skills: []
+		});
+		// `name` is withheld by the grant, so describing it would invite a read that returns nothing.
+		expect((described.collections as ReadonlyArray<{ fields: unknown }>)[0]?.fields).toEqual([]);
+	});
+});
+
+describe('subjectStanding', () => {
+	it('states a team member by team and held policies, never as an administrator', () => {
+		// A member holds policies through their team, so `subject.policies` is empty — which the
+		// previous `you` line read as "admin (every collection, no policy scope)".
+		expect(
+			subjectStanding(
+				{ userId: 'u1', tenantId: 't', teamPath: ['Contractor'], policies: [], admin: false },
+				['field_ops_contractor']
+			)
+		).toBe('not an administrator; team Contractor; policies field_ops_contractor');
+	});
+
+	it('states an administrator with no team as exactly that', () => {
+		expect(
+			subjectStanding({ userId: 'u1', tenantId: 't', teamPath: [], policies: [], admin: true }, [])
+		).toBe(
+			'workspace administrator (reads and writes every authored collection, whatever the policies); no team; policies none'
+		);
 	});
 });

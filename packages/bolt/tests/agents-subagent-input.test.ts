@@ -86,6 +86,8 @@ const systemContext = (): ToolExecutionContext =>
 		collectionNames: [],
 		readableCollectionNames: [],
 		writableCollectionNames: [],
+		readFields: {},
+		standing: 'system',
 		collections: { findMany: untouched } as unknown as Collections.Interface
 	}) as unknown as ToolExecutionContext;
 

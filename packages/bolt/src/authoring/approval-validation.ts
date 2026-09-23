@@ -1,6 +1,9 @@
 import type { PolicyDeclaration, WorkspaceDefinition } from './workspace-schema.js';
 import { grantScopeProblems } from '../runtime/access/access-control.js';
-import { withSystemCollections } from '../runtime/schema/system-collections.js';
+import {
+	BUILT_IN_POLICY_NAMES,
+	withSystemCollections
+} from '../runtime/schema/system-collections.js';
 
 type ApprovalDiagnostic = Readonly<{
 	readonly rule:
@@ -74,9 +77,13 @@ const overlapDiagnostics = (
 		for (const [coordinate, owners] of [...byCoordinate].toSorted(([left], [right]) =>
 			left.localeCompare(right)
 		)) {
-			if (owners.length < 2) continue;
+			// A built-in default yields to an authored grant on the same coordinate (see
+			// `BUILT_IN_POLICY_NAMES`), so only authored owners can collide with one another.
+			const authored = owners.filter((owner) => !BUILT_IN_POLICY_NAMES.has(owner));
+			const contenders = authored.length > 0 ? authored : owners;
+			if (contenders.length < 2) continue;
 			const [collection, action] = coordinate.split(':');
-			const uniqueOwners = [...new Set(owners)].toSorted();
+			const uniqueOwners = [...new Set(contenders)].toSorted();
 			const source =
 				uniqueOwners.length === 1
 					? `policy "${uniqueOwners[0]}" declares it more than once`

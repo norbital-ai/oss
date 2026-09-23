@@ -521,6 +521,15 @@ const builtInPolicies = (envoys: ReadonlyArray<EnvoyReach>): ReadonlyArray<Polic
 		COLONY_SYSTEM_POLICY
 	]);
 
+/**
+ * The runtime's own policy names. A grant one of them makes is a default: an authored grant on the
+ * same collection and action replaces it for that holder instead of colliding with it, which is what
+ * lets a workspace give an envoy more of `user` than the built-in directory of names.
+ */
+export const BUILT_IN_POLICY_NAMES: ReadonlySet<string> = new Set(
+	builtInPolicies([]).map(({ name }) => name)
+);
+
 /** Definitions already augmented by `withSystemCollections`; re-entry returns the same reference. */
 const augmentedDefinitions = new WeakSet<object>();
 

@@ -57,6 +57,8 @@ type WriteAccessPlan = Readonly<{
 
 /** One request's policy cache. */
 export type Invocation = Readonly<{
+	/** The allow/deny answer alone, for callers that ask what a subject may do in the abstract. */
+	readonly decide: (subject: Identity.Subject, action: string, resource: string) => Decision;
 	readonly authorize: (
 		subject: Identity.Subject,
 		action: string,
@@ -107,7 +109,8 @@ const subjectValueKey = (subject: Identity.Subject): string =>
 		system: subject.system ?? false,
 		email: subject.email ?? null,
 		admin: subject.admin ?? false,
-		impersonatedBy: subject.impersonatedBy ?? null
+		impersonatedBy: subject.impersonatedBy ?? null,
+		member: subject.member ?? null
 	});
 
 const freezeSubject = (subject: Identity.Subject): Identity.Subject =>
@@ -265,6 +268,10 @@ export const createInvocationFactory =
 			});
 		};
 		return {
+			decide: (subject, action, resource) => {
+				const state = stateFor(subject);
+				return evaluated(state.decisions, state.evaluator.decision, action, resource);
+			},
 			authorize,
 			predicate,
 			mask,

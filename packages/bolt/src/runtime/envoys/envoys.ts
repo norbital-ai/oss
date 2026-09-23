@@ -10,7 +10,7 @@ import {
 	type ConversationId
 } from '@norbital-ai/bolt-protocol/facilities';
 import { getErrorMessage } from '@norbital-ai/std';
-import { and, asc, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { ChannelDeclaration } from '#lib/authoring/channels-schema.js';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -40,7 +40,8 @@ const {
 	channel_messages: channelMessages,
 	bolt_channel_links: boltChannelLinks,
 	conversation_message: conversationMessage,
-	user: usersTable
+	user: usersTable,
+	team: teamsTable
 } = SYSTEM_MODEL_TABLES;
 
 class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
@@ -132,7 +133,12 @@ const PendingRow = Schema.Struct({
 });
 type PendingRow = Schema.Schema.Type<typeof PendingRow>;
 const decodePendingRow = Schema.decodeUnknownOption(PendingRow);
-const NamedAccount = Schema.Struct({ id: Schema.NonEmptyString, name: Schema.NonEmptyString });
+const NamedAccount = Schema.Struct({
+	id: Schema.NonEmptyString,
+	name: Schema.NonEmptyString,
+	status: Schema.String,
+	team_name: Schema.NullOr(Schema.String)
+});
 const decodeNamedAccount = Schema.decodeUnknownOption(NamedAccount);
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
@@ -532,14 +538,17 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				envoy.audience !== 'public' && senderId !== null
 					? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
 					: undefined;
-			if (envoy.audience !== 'public' && linked === undefined) return undefined;
-			const envoyTurn = envoySubject(envoy, tenant.tenantId, linked);
-			if (envoy.audience === 'private' && kind === 'dm' && linked !== undefined)
-				return yield* identity.resolveUser(effectId, linked.userId).pipe(
-					Effect.map((member) => ({ ...member, admin: false })),
-					Effect.catchTag('Bolt.Identity.AuthenticationError', () => Effect.succeed(undefined))
-				);
-			return envoyTurn;
+			if (linked === undefined) return envoy.audience === 'public' ? envoySubject(envoy, tenant.tenantId, undefined) : undefined;
+			const member = yield* identity.resolveUser(effectId, linked.userId).pipe(
+				Effect.map((resolved): Identity.Subject | undefined => resolved),
+				Effect.catchTag('Bolt.Identity.AuthenticationError', () => Effect.succeed(undefined))
+			);
+			if (envoy.audience === 'private' && kind === 'dm') return member === undefined ? undefined : { ...member, admin: false };
+			// Otherwise the member caps the envoy; one whose account no longer resolves caps it with nothing.
+			return envoySubject(envoy, tenant.tenantId, {
+				...linked,
+				member: { teamPath: member?.teamPath ?? [], admin: member?.admin === true }
+			});
 		});
 
 		/**
@@ -792,19 +801,29 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 						? { to: [last.sender_id], subject: /^re:/i.test(last.subject ?? '') ? (last.subject ?? '') : `Re: ${last.subject ?? ''}` }
 						: undefined;
 
-				/** The workspace names behind the registered senders in this batch. */
+				/**
+				 * The workspace account behind each registered sender, with its team and administrator
+				 * status from the member row — a private direct message's subject drops `admin`, so the
+				 * row, not the subject, is what the envelope states.
+				 */
 				const accountIds = [...new Set(subjects.filter(({ userId }) => userId !== envoyPrincipalId(envoyName)).map(({ userId }) => userId))];
 				const accounts =
 					accountIds.length === 0
-						? new Map<string, string>()
+						? new Map<string, Omit<Agents.InboundAccount, 'policies'>>()
 						: new Map(
 								(yield* executeBuilt(
 									EffectId.make(`${effectId}:accounts`),
 									database,
-									composer.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, accountIds))
+									composer
+										.select({ id: usersTable.id, name: usersTable.name, status: usersTable.status, team: sql<string | null>`${teamsTable.name}`.as('team_name') })
+										.from(usersTable)
+										.leftJoin(teamsTable, eq(teamsTable.id, usersTable.team_id))
+										.where(inArray(usersTable.id, accountIds))
 								)).rows.flatMap((row) => {
 									const decoded = decodeNamedAccount(row);
-									return decoded._tag === 'Some' ? [[decoded.value.id, decoded.value.name] as const] : [];
+									return decoded._tag === 'Some'
+										? [[decoded.value.id, { name: decoded.value.name, team: decoded.value.team_name, admin: decoded.value.status === Identity.ADMIN_STATUS }] as const]
+										: [];
 								})
 							);
 
@@ -814,7 +833,12 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							? []
 							: [ImageAsset.make({ key: attachment.key, name: attachment.fileName, mimeType: attachment.mimeType, size: attachment.size })]
 					);
-					const account = accounts.get(subjects[index]!.userId);
+					const turnSubject = subjects[index]!;
+					const known = accounts.get(turnSubject.userId);
+					const account =
+						known === undefined
+							? undefined
+							: { ...known, policies: access.policies(turnSubject), ...(turnSubject.member === undefined ? {} : { cappedBy: turnSubject.policies }) };
 					const message: Agents.InboundAgentMessage = {
 						sender: {
 							...(row.sender_id === null ? {} : { id: row.sender_id }),

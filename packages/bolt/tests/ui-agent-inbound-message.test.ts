@@ -23,7 +23,7 @@ it('drops the registered-account line and keeps the words', () => {
 		[
 			'INBOUND MESSAGE',
 			'[2026-09-21T06:00:45.000Z] ~ YK - BCA · direct · 3A9788E4B5CAA66028CC',
-			'[registered account: Yu Kiat Tan]',
+			'[registered account: Yu Kiat Tan · not an administrator · team Contractor]',
 			'Site photos attached.'
 		].join('\n')
 	);

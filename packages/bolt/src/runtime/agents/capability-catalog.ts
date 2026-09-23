@@ -444,6 +444,10 @@ export type ToolExecutionContext = Readonly<{
 	readonly collectionNames: ReadonlyArray<string>;
 	readonly readableCollectionNames: ReadonlyArray<string>;
 	readonly writableCollectionNames: ReadonlyArray<string>;
+	/** The fields a read may return, for each readable collection whose grant masks it. */
+	readonly readFields: Readonly<Record<string, ReadonlyArray<string>>>;
+	/** The subject's standing as `subjectStanding` states it. */
+	readonly standing: string;
 	readonly workspace: Workspace.Interface;
 	readonly collections: Collections.Interface;
 	readonly hostTools: HostToolsInterface;
@@ -612,11 +616,36 @@ const describeField = (
 	].join('');
 };
 
+/**
+ * Who a turn runs as, stated rather than left for the model to infer: administrator or not, the
+ * subject's own team or none, and the authored policies it holds.
+ */
+export const subjectStanding = (
+	subject: Identity.Subject,
+	/** `AccessControl.policies(subject)`: the member's own, for a capped envoy subject. */
+	policies: ReadonlyArray<string>
+): string => {
+	if (subject.system === true) return 'system';
+	const person = subject.member ?? subject;
+	return [
+		person.admin === true
+			? 'workspace administrator (reads and writes every authored collection, whatever the policies)'
+			: 'not an administrator',
+		person.teamPath[0] === undefined ? 'no team' : `team ${person.teamPath[0]}`,
+		`policies ${policies.length === 0 ? 'none' : policies.join(', ')}`,
+		...(subject.member === undefined
+			? []
+			: [`capped by envoy policies ${subject.policies.join(', ')}`])
+	].join('; ');
+};
+
 const describeCollection = (
 	collection: WorkspaceDefinition['collections'][number],
 	definition: WorkspaceDefinition,
 	readable: boolean,
-	writable: boolean
+	writable: boolean,
+	/** The read mask, when the grant has one: a field it withholds is not described. */
+	readFields: ReadonlyArray<string> | undefined
 ): Schema.JsonObject => {
 	const relations = definition.relations.filter((relation) => relation.source === collection.name);
 	const write = collection.write;
@@ -654,6 +683,7 @@ const describeCollection = (
 			.filter(
 				([name]) =>
 					!SYSTEM_COLUMN_NAMES.includes(name) &&
+					(readFields === undefined || readFields.includes(name)) &&
 					name !== collection.search?.documentColumn &&
 					name !== collection.embedding?.vectorColumn &&
 					name !== collection.embedding?.embeddedAtColumn &&
@@ -673,9 +703,10 @@ export const describeWorkspace = (
 		| 'collectionNames'
 		| 'readableCollectionNames'
 		| 'writableCollectionNames'
+		| 'readFields'
+		| 'standing'
 		| 'toolNames'
 		| 'skills'
-		| 'subject'
 	>
 ): Schema.JsonObject => {
 	const definition = context.workspace.definition;
@@ -690,7 +721,8 @@ export const describeWorkspace = (
 					collection,
 					definition,
 					context.readableCollectionNames.includes(collection.name),
-					context.writableCollectionNames.includes(collection.name)
+					context.writableCollectionNames.includes(collection.name),
+					context.readFields[collection.name]
 				)
 			),
 		apps: definition.apps.map(
@@ -711,12 +743,7 @@ export const describeWorkspace = (
 		teams: Object.entries(definition.teams ?? {}).map(
 			([team, policies]) => `${team}: ${policies.join(', ')}`
 		),
-		you:
-			context.subject.system === true
-				? 'system'
-				: context.subject.policies.length === 0
-					? 'admin (every collection, no policy scope)'
-					: `teams ${context.subject.teamPath.join(' > ')}; policies ${context.subject.policies.join(', ')}`,
+		you: context.standing,
 		envoys: definition.envoys.map((envoy) => envoy.name),
 		channels: definition.channels.map((channel) => `${channel.name} (${channel.transport})`),
 		integrations: definition.integrations.map(
