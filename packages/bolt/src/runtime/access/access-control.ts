@@ -660,18 +660,11 @@ export const layer = Layer.effect(
 		 * no app and grants one collection still has to run the envoy it is declared on, or the
 		 * transport can receive a message and never answer it. Nothing else widens — the envoy's
 		 * turn still reaches only what those policies grant.
-		 *
-		 * A `private` envoy is each member's own agent on the transport: its direct messages carry the
-		 * member's own policies, which need not name the envoy's, so any member may run it. What the
-		 * turn reaches is still exactly what those policies grant.
 		 */
 		const envoyPolicies = new Map(
 			workspace.definition.envoys.map((declared) => [
 				declared.name,
-				{
-					private: declared.audience === 'private',
-					policies: declared.policies.map((name) => name.toLocaleLowerCase())
-				}
+				declared.policies.map((name) => name.toLocaleLowerCase())
 			])
 		);
 		const declaredEnvoyAgent = (
@@ -683,9 +676,7 @@ export const layer = Layer.effect(
 			if (action !== 'agent') return undefined;
 			const declared = envoyPolicies.get(resource);
 			if (declared === undefined) return undefined;
-			if (declared.private && subject.system !== true)
-				return { allowed: true, reason: 'private envoy member' };
-			return declared.policies.some((name) => subjectHeld.has(name))
+			return declared.some((name) => subjectHeld.has(name))
 				? { allowed: true, reason: 'declared envoy policy' }
 				: undefined;
 		};

@@ -527,11 +527,10 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					Effect.catch(() => Effect.succeed(false))
 				);
 
-		/** Whose authority a row's turn carries: the envoy's, or a private envoy's member in a DM. */
+		/** Whose authority a row's turn carries: the envoy's alone, or a linked member's capped by the envoy's. */
 		const subjectFor = Effect.fn('Envoys.subjectFor')(function* (
 			effectId: EffectId,
 			envoy: Envoy,
-			kind: string,
 			senderId: string | null
 		) {
 			const linked =
@@ -543,8 +542,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				Effect.map((resolved): Identity.Subject | undefined => resolved),
 				Effect.catchTag('Bolt.Identity.AuthenticationError', () => Effect.succeed(undefined))
 			);
-			if (envoy.audience === 'private' && kind === 'dm') return member === undefined ? undefined : { ...member, admin: false };
-			// Otherwise the member caps the envoy; one whose account no longer resolves caps it with nothing.
+			// The member caps the envoy; one whose account no longer resolves caps it with nothing.
 			return envoySubject(envoy, tenant.tenantId, {
 				...linked,
 				member: { teamPath: member?.teamPath ?? [], admin: member?.admin === true }
@@ -792,7 +790,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				}
 				const subjects: Array<Identity.Subject> = [];
 				for (const [index, row] of rows.entries()) {
-					const subject = yield* subjectFor(EffectId.make(`${effectId}:subject:${index}`), envoy, kind, row.sender_id);
+					const subject = yield* subjectFor(EffectId.make(`${effectId}:subject:${index}`), envoy, row.sender_id);
 					subjects.push(subject ?? envoySubject(envoy, tenant.tenantId, undefined));
 				}
 				const last = rows.at(-1)!;
@@ -803,8 +801,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 
 				/**
 				 * The workspace account behind each registered sender, with its team and administrator
-				 * status from the member row — a private direct message's subject drops `admin`, so the
-				 * row, not the subject, is what the envelope states.
+				 * status from the member row.
 				 */
 				const accountIds = [...new Set(subjects.filter(({ userId }) => userId !== envoyPrincipalId(envoyName)).map(({ userId }) => userId))];
 				const accounts =

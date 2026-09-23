@@ -41,9 +41,6 @@ export const automationPrincipalId = (automationName: string): string =>
  *   a contractor reaches what their team's policy grants within it. `userId` becomes the member's
  *   so `subject.id` resolves to that person.
  * - **An unmatched sender carries the envoy's authority alone**, under the envoy's principal id.
- *
- * A `private` envoy's direct message is the one turn that does not use this: `Envoys.drain`
- * resolves the member's own subject instead, and still bounds it by this subject's rate limits.
  */
 export const envoySubject = (
 	envoy: { readonly name: string; readonly policies: ReadonlyArray<string> },

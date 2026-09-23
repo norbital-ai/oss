@@ -70,7 +70,7 @@ const AuthoredPolicy = Schema.Struct({
 });
 const AuthoredEnvoy = Schema.Struct({
 	channel: Schema.String,
-	audience: Schema.Literals(['public', 'authenticated', 'private']),
+	audience: Schema.Literals(['public', 'authenticated']),
 	policies: Schema.Array(Schema.String),
 	task: Schema.String,
 	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
@@ -374,7 +374,7 @@ export const describeEnvoy = (
 ): {
 	readonly name: string;
 	readonly channel: string;
-	readonly audience: 'public' | 'authenticated' | 'private';
+	readonly audience: 'public' | 'authenticated';
 	readonly policies: ReadonlyArray<string>;
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';

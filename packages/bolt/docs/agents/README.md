@@ -202,11 +202,10 @@ any subject holding exactly the envoy's declared policies.
 Whose authority a turn carries is the envoy's `audience`, one literal so no field combination can
 hand a stranger a member's authority:
 
-| `audience`      | Who reaches it                 | A linked sender's message runs under                              |
-| --------------- | ------------------------------ | ----------------------------------------------------------------- |
-| `public`        | anyone on the transport        | the envoy's `policies` (senders are not resolved)                 |
-| `authenticated` | members who proved the address | the member's own authority, capped by the envoy's `policies`      |
-| `private`       | members who proved the address | direct: the member's own team policies; group: as `authenticated` |
+| `audience`      | Who reaches it                 | A linked sender's message runs under                         |
+| --------------- | ------------------------------ | ------------------------------------------------------------ |
+| `public`        | anyone on the transport        | the envoy's `policies` (senders are not resolved)            |
+| `authenticated` | members who proved the address | the member's own authority, capped by the envoy's `policies` |
 
 **Capped** means both must allow. `envoySubject` mints the envoy's subject — its declared `policies`,
 no team, never `admin` — and, for a linked member, `member: { teamPath, admin }`. Access then judges
@@ -215,9 +214,8 @@ administrator bypass), and allows only what both allow: rows must pass both pred
 both grants return are read, every `authorize` on either side must pass, and a write both sides route
 for approval is refused. So an administrator reaches everything the envoy declares, a contractor
 reaches what their team grants within it, and nobody exceeds the declaration. The envoy's own agent,
-tools, apps and rate limits are the declaration's alone. A private direct message is resolved from
-the member's current team (never `admin`), and the envoy's own `envoys.*` rate limits still bound
-every turn. The rule lives in `envoySubject` and `AccessControl`'s invocation.
+tools, apps and rate limits are the declaration's alone, and its `envoys.*` rate limits bound every
+turn. The rule lives in `envoySubject` and `AccessControl`'s invocation.
 
 Every turn states whom it serves before any message: the web agent names the signed-in person with
 their team (or "no team"), administrator status and held policies; an envoy turn states the

@@ -502,7 +502,7 @@ export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
 		);
 	}
 	if (declaration.channel.trim() === '') throw new TypeError(`Envoy ${name} requires a channel.`);
-	if (!['public', 'authenticated', 'private'].includes(declaration.audience)) {
+	if (!['public', 'authenticated'].includes(declaration.audience)) {
 		throw new TypeError(`Envoy ${name} has an unsupported audience.`);
 	}
 	if (declaration.policies.length === 0) {
