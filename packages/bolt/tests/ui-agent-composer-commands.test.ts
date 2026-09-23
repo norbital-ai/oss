@@ -32,28 +32,12 @@ describe('AGENT-UI4 the / command menu', () => {
 		expect(findCommandTrigger('/thisisnotacommandname', 22)).toBeNull();
 	});
 
-	it('lifts the selected command into a mode and leaves only the message text', () => {
-		expect(selectComposerCommand('/', { query: '' }, 'plan')).toEqual({
-			mode: 'plan',
-			message: '',
-			caret: 0
-		});
-		expect(selectComposerCommand('/pl', { query: 'pl' }, 'plan')).toEqual({
-			mode: 'plan',
-			message: '',
-			caret: 0
-		});
-		expect(selectComposerCommand('/co', { query: 'co' }, 'compact')).toEqual({
-			mode: 'compact',
-			message: '',
-			caret: 0
-		});
+	it('lifts the selected command out and leaves only the message text', () => {
+		expect(selectComposerCommand('/', { query: '' })).toBe('');
+		expect(selectComposerCommand('/pl', { query: 'pl' })).toBe('');
+		expect(selectComposerCommand('/co', { query: 'co' })).toBe('');
 		// Text after the query survives, and the leading space is not part of the message.
-		expect(selectComposerCommand('/p rollout', { query: 'p' }, 'plan')).toEqual({
-			mode: 'plan',
-			message: 'rollout',
-			caret: 0
-		});
+		expect(selectComposerCommand('/p rollout', { query: 'p' })).toBe('rollout');
 	});
 
 	it('offers the commands the send path parses, plus /export which sends nothing', () => {

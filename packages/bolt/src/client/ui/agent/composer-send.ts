@@ -1,6 +1,5 @@
 import { Duration, Effect } from 'effect';
 
-/** Wall the composer will wait for admit before painting sendFailure. */
 /**
  * How long the composer waits for a send, which is now a whole turn.
  *
@@ -14,9 +13,6 @@ import { Duration, Effect } from 'effect';
  * This bounds the browser wait only. The host runs detached from that wait and may continue
  * overnight. The panel suppresses this timeout while durable task state still reports running.
  */
-export const COMPOSER_COMMAND_DEADLINE_MILLIS = 1_800_000;
-
-/** Effect duration for the same wall. */
 export const COMPOSER_COMMAND_DEADLINE = '1800 seconds' as const satisfies Duration.Input;
 
 /** Operator-visible sentence when the send does not return before the wall. */

@@ -1425,14 +1425,23 @@ export interface EnvoyDefinition {
 	/** How it is reached: `telegram`, `whatsapp`. Not what it may do. */
 	readonly transport: string;
 	/**
-	 * Who may reach it. `public` is anyone who can message the transport; `authenticated` is a member
-	 * who has proved the address is theirs.
+	 * Who may reach it, and whose authority a turn carries. One literal, so no combination of fields
+	 * can hand a stranger a member's authority:
+	 *
+	 * - `public` — anyone who can message the transport; every turn holds `policies`.
+	 * - `authenticated` — a member who has proved the address is theirs; every turn holds `policies`,
+	 *   and the member's identity only narrows `subject.id` grants to their own rows.
+	 * - `private` — as `authenticated`, but a direct message runs under the sender's own workspace
+	 *   policies, exactly as the web app would. A group chat always holds `policies`: nobody in a
+	 *   group should act with another member's authority.
 	 *
 	 * It is reach and not conversation shape, which `groupMessages` answers more precisely.
 	 */
-	readonly audience: 'public' | 'authenticated';
+	readonly audience: 'public' | 'authenticated' | 'private';
 	/**
-	 * Everything this envoy MAY DO — tools, MCP servers, skills, apps, grants and rate limits alike.
+	 * What this envoy MAY DO wherever it speaks as itself — tools, MCP servers, skills, apps, grants
+	 * and rate limits alike. Its `envoys.*` rate limits bound every turn, a `private` envoy's direct
+	 * messages included.
 	 *
 	 * Choosing these *is* choosing what the public may do, which is why "what can a stranger do to my
 	 * database?" has a written answer: read the policies named here. That is the whole attack surface.

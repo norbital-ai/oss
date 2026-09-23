@@ -74,7 +74,8 @@ export type Interface = Readonly<{
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/EnvoyInbox');
 
-const countOf = (value: unknown): number => {
+/** A `count(*)` as the driver hands it over — a JSON-safe string or a number. */
+export const countOf = (value: unknown): number => {
 	const decoded = decodeNumber(value as string | number);
 	return Number.isFinite(decoded) ? Math.max(0, Math.floor(decoded)) : 0;
 };

@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Duration, Effect, Schema } from 'effect';
 import type { Prompt } from 'effect/unstable/ai';
 import {
 	ConversationControlRequest,
@@ -13,7 +13,7 @@ import { getErrorMessage } from '@norbital-ai/std';
 import { getContext, setContext } from 'svelte';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
-import { COMPOSER_COMMAND_DEADLINE_MILLIS } from './composer-send.js';
+import { COMPOSER_COMMAND_DEADLINE } from './composer-send.js';
 
 type TaskSubmissionInput = Readonly<{
 	readonly conversationId?: string;
@@ -114,14 +114,12 @@ function submitTask(
 			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
-				active.client.system.conversations
-					.send(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
-					.pipe(
-						Effect.map((result) => ({
-							conversationId: request.conversationId,
-							messageId: result.messageId
-						}))
-					)
+				active.client.system.conversations.send(request).pipe(
+					Effect.map((result) => ({
+						conversationId: request.conversationId,
+						messageId: result.messageId
+					}))
+				)
 			)
 		)
 	);
@@ -140,15 +138,13 @@ function editTask(
 			...(input.modelId === undefined ? {} : { modelId: input.modelId })
 		}).pipe(
 			Effect.flatMap((request) =>
-				active.client.system.conversations
-					.editMessage(request, AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS))
-					.pipe(
-						Effect.map((result) => ({
-							conversationId: request.conversationId,
-							messageId: result.messageId,
-							supersedesId: result.supersedesId
-						}))
-					)
+				active.client.system.conversations.editMessage(request).pipe(
+					Effect.map((result) => ({
+						conversationId: request.conversationId,
+						messageId: result.messageId,
+						supersedesId: result.supersedesId
+					}))
+				)
 			)
 		)
 	);
@@ -170,7 +166,7 @@ function controlConversation(
 			Effect.flatMap((request) =>
 				active.client.system.conversations.control(
 					request,
-					AbortSignal.timeout(COMPOSER_COMMAND_DEADLINE_MILLIS)
+					AbortSignal.timeout(Duration.toMillis(COMPOSER_COMMAND_DEADLINE))
 				)
 			)
 		)

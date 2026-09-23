@@ -138,7 +138,6 @@ const conjunction = (clauses: ReadonlyArray<SQL | undefined>): SQL => {
 	return sql`(${sql.join(present, sql` and `)})`;
 };
 
-const isString = Schema.is(Schema.String);
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 const normalizeSearch = (
@@ -147,7 +146,7 @@ const normalizeSearch = (
 ): Result.Result<NormalizedSearch, SearchCompileError> => {
 	if (input === undefined || input === null) return Result.succeed({ mode: 'none' });
 	if (input.mode === 'nearest') {
-		if (!isString(input.index) || input.index === '' || !isRecord(input.target)) {
+		if (typeof input.index !== 'string' || input.index === '' || !isRecord(input.target)) {
 			return failure(
 				context,
 				'search',
@@ -156,7 +155,7 @@ const normalizeSearch = (
 		}
 		return Result.succeed({ mode: 'nearest', index: input.index, target: input.target });
 	}
-	if ((input.mode !== 'lexical' && input.mode !== 'semantic') || !isString(input.term)) {
+	if ((input.mode !== 'lexical' && input.mode !== 'semantic') || typeof input.term !== 'string') {
 		return failure(
 			context,
 			'search',

@@ -14,7 +14,6 @@ const jsonObject = (
 	return value;
 };
 
-const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
 const isObjectLike = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
@@ -24,7 +23,7 @@ const property = (value: unknown, key: string): unknown =>
 	isObjectLike(value) ? Reflect.get(value, key) : undefined;
 
 const text = (value: unknown): string | undefined =>
-	isString(value) && value !== '' ? value : undefined;
+	typeof value === 'string' && value !== '' ? value : undefined;
 
 const sourcePathFor = (projection: unknown, registry: string, name: string): string | undefined =>
 	text(property(property(projection, registry), name));

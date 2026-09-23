@@ -200,6 +200,20 @@ one sender's, every member the host verifies acts under the envoy's declared pol
 sender's id stays the durable owner, and admission and execution both accept any subject holding
 exactly those policies.
 
+Whose authority a turn carries is the envoy's `audience`, one literal so no field combination can
+hand a stranger a member's authority:
+
+| `audience`      | Who reaches it                 | Direct message runs under        | Group runs under   |
+| --------------- | ------------------------------ | -------------------------------- | ------------------ |
+| `public`        | anyone on the transport        | the envoy's `policies`           | the envoy's        |
+| `authenticated` | members who proved the address | the envoy's `policies`           | the envoy's        |
+| `private`       | members who proved the address | the member's own team policies   | the envoy's        |
+
+A group never carries one member's authority. A `private` direct message is resolved from the
+member's current team (never `admin`), any member may run that envoy's agent, and the envoy's own
+`envoys.*` rate limits still bound every turn. The rule lives in `envoys.receive`, next to
+`envoySubject`.
+
 ### The channel replica
 
 `bolt_envoy_messages` is the chat as the channel showed it: every inbound message and every
@@ -293,7 +307,7 @@ whitespace-only part is not shown once it settles.
 Uploads use conversation-scoped file descriptors, with at most eight attachments totaling 20 MiB
 in the active context. Every attachment is a stored object: the message that carried it lists its
 descriptor — name, type, size and key — as text, and nothing attaches to a request because a message
-carried it. The model reads a stored file through `use_image`, the one reader tool; the host resolves
+carried it. The model reads a stored file through `read_attachment`, the one reader tool; the host resolves
 tenant storage, verifies sizes, and hands the provider an image, or a document's extracted text, and
 only the newest that fit one turn ride it. A descriptor the reader refuses, or an object the host
 cannot read — an undecodable image, an unsupported document, a stored row that changed or vanished —
@@ -460,7 +474,7 @@ while a job of its is uncollected; a job left after that is interrupted with the
 ## Capabilities and tools
 
 Platform tools, in the order the catalogue offers them: `wait`, `todo`, `compact`, `describe_workspace`,
-`list_skills`, `read_skill`, `search_task_history`, `read_messages`, `use_image`, `read_collection`,
+`list_skills`, `read_skill`, `search_task_history`, `read_messages`, `read_attachment`, `read_collection`,
 `write_collection`, and `subagent`. `read_messages` is declared only for an envoy agent, where a
 chat replica exists to read; every other agent gets it off its list. All but `compact` answer from
 within the tool call; `compact` records the intent and the turn's own loop writes the checkpoint at

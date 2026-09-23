@@ -70,7 +70,6 @@ const ReversePathRowShape = Schema.Struct({
 });
 const decodeReversePathRowShape = Schema.decodeUnknownResult(ReversePathRowShape);
 const decodeReversePathValue = Schema.decodeUnknownResult(Schema.Json);
-const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
 const isBoolean = Schema.is(Schema.Boolean);
 
@@ -172,14 +171,14 @@ const findMany = Effect.fn('Sync.findMany')(function* (
 
 const recordId = (row: StoredRecord): string => {
 	const id = row['id'];
-	if (!isString(id) || id.length === 0)
+	if (typeof id !== 'string' || id.length === 0)
 		throw reset('inconsistent-prefix', 'A keyed prefix body did not expose its id.');
 	return id;
 };
 
 const prefixKeyOf = (row: StoredRecord, plan: EffectiveQueryPlan): SyncPrefixKey => {
 	const id = row['id'];
-	if (!isString(id) || id.length === 0)
+	if (typeof id !== 'string' || id.length === 0)
 		throw reset('inconsistent-prefix', 'An admitted live row did not expose its string id.');
 	const order = plan.order.map(({ field }) => row[field]);
 	if (
@@ -330,7 +329,7 @@ const decodeGraphRows = (
 ): ReadonlyArray<GraphRow> =>
 	rows.map((row) => {
 		const decoded = decodeReversePathRowShape({ id: row['id'], value: row[field] });
-		if (Result.isFailure(decoded) || !isString(decoded.success.id))
+		if (Result.isFailure(decoded) || typeof decoded.success.id !== 'string')
 			throw reset('inconsistent-prefix', 'A reverse-path lookup returned a malformed row.');
 		const decodedValue = decodeReversePathValue(decoded.success.value);
 		if (Result.isFailure(decodedValue))
@@ -395,7 +394,7 @@ const valuesForGraphRows = Effect.fn('Sync.valuesForGraphRows')(function* (
 		);
 		const value = change === undefined ? current.get(id) : valueAt(change, graph, field);
 		if (value === undefined || value === null) continue;
-		if (!isString(value))
+		if (typeof value !== 'string')
 			return yield* Effect.fail(
 				reset('inconsistent-prefix', `Relationship route ${collection}.${field} is not a string.`)
 			);
@@ -431,7 +430,7 @@ const matchingIdsForGraph = Effect.fn('Sync.matchingIdsForGraph')(function* (
 	for (const change of batch.changes) {
 		if (change.collection !== collection) continue;
 		const value = valueAt(change, graph, field);
-		if (isString(value) && wanted.has(value)) current.add(change.id);
+		if (typeof value === 'string' && wanted.has(value)) current.add(change.id);
 		else current.delete(change.id);
 	}
 	return [...current];
@@ -536,7 +535,7 @@ const sameKeys = (
 const scalarKind = (
 	value: SyncPrefixKey['order'][number]
 ): 'string' | 'number' | 'boolean' | undefined =>
-	isString(value)
+	typeof value === 'string'
 		? 'string'
 		: isNumber(value)
 			? 'number'

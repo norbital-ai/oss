@@ -95,13 +95,14 @@ const command = (name: string, credential: string, input: unknown = null) =>
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
 
-const task = (name: string, input: unknown = null) =>
+const task = (name: string, input: unknown = null, taskId?: string) =>
 	Invocation.cases.Task.make({
 		...scopedInvocation,
 		id: InvocationId.make(`task-${name}`),
 		command: name,
 		input: input as never,
-		attempt: 0
+		attempt: 0,
+		...(taskId === undefined ? {} : { taskId })
 	});
 
 /** Any plugin but `data-browser`, which is the one surface the boundary resolves a subject for. */
@@ -237,18 +238,21 @@ describe('invocation provenance', () => {
 	it('admits a declared automation on a task and still refuses the host commands sharing its prefix', async () => {
 		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 
+		// Admitted past the gate: what refuses it now is the occurrence it names not running, which
+		// is the dispatcher's contract — never the provenance check this file is about.
 		const declared = await outcomeOf(
 			harness,
-			task('automations.nightly', {
-				args: {},
-				bolt_run_as: adminSubject,
-				bolt_task_id: 'task-nightly'
-			})
+			task(
+				'automations.nightly',
+				{ args: {}, bolt_run_as: adminSubject, bolt_task_id: 'task-nightly' },
+				'task-nightly'
+			)
 		);
-		expect(declared._tag).toBe('Success');
-		expect(declared._tag === 'Success' ? declared.success.value : undefined).toEqual({
-			completed: true
-		});
+		const refusal = declared._tag === 'Failure' ? declared.failure : undefined;
+		expect(refusal).not.toBeInstanceOf(AccessControl.AccessDenied);
+		expect((refusal as { readonly message?: string } | undefined)?.message).toContain(
+			'No running occurrence'
+		);
 
 		for (const name of [
 			'automations.start',

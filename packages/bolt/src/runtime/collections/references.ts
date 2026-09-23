@@ -3,7 +3,6 @@ import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
 import { RECORD_EMBEDDING_COLUMN } from '#lib/authoring/model-introspection.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isString = Schema.is(Schema.String);
 const isFiniteNumber = (value: unknown): boolean =>
 	Schema.is(Schema.Number)(value) && Number.isFinite(value);
 const LogicalReference = Schema.Struct({ kind: Schema.String, id: Schema.String });
@@ -16,16 +15,17 @@ const isVectorField = (field: FieldDefinition | undefined): boolean =>
 /** Restores the public `readonly number[]` contract from pgvector's text wire value. */
 const decodeVectorValue = (field: string, value: unknown): unknown => {
 	if (value == null) return value;
-	const decoded = isString(value)
-		? (() => {
-				try {
-					return JSON.parse(value) as unknown;
-				} catch {
-					/* best effort */
-					return undefined;
-				}
-			})()
-		: value;
+	const decoded =
+		typeof value === 'string'
+			? (() => {
+					try {
+						return JSON.parse(value) as unknown;
+					} catch {
+						/* best effort */
+						return undefined;
+					}
+				})()
+			: value;
 	if (
 		Array.isArray(decoded) &&
 		decoded.length > 0 &&

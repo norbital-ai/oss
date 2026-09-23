@@ -784,12 +784,13 @@ const createSystemClient = (runtime: WorkspaceClientRuntime): SystemClientApi =>
 						commandQueryOf(runtime, contract.name, input, contract.input, output, signal)
 				: (input: Schema.Json, signal?: AbortSignal) =>
 						Effect.tryPromise({
-							try: () =>
+							// Interrupting the Effect aborts the request unless the caller passed its own signal.
+							try: (interrupted) =>
 								runtime.bolt.command(
 									contract.name,
 									commandPayload(contract.input, input),
 									output,
-									signal
+									signal ?? interrupted
 								),
 							catch: toError
 						});

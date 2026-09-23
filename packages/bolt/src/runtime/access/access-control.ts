@@ -46,7 +46,6 @@ const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isObjectLike = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
 );
-const isString = Schema.is(Schema.String);
 
 type PolicyDecision = Readonly<{
 	readonly allowed: boolean;
@@ -117,7 +116,7 @@ const approvalReadExpression = (
 const isActorBoundWhere = (value: unknown): boolean => {
 	if (Array.isArray(value)) return value.some(isActorBoundWhere);
 	if (!isObject(value)) return false;
-	if (isString(Reflect.get(value, '$subject'))) return true;
+	if (typeof Reflect.get(value, '$subject') === 'string') return true;
 	return Object.values(value).some(isActorBoundWhere);
 };
 
@@ -596,21 +595,32 @@ export const layer = Layer.effect(
 		 * no app and grants one collection still has to run the envoy it is declared on, or the
 		 * transport can receive a message and never answer it. Nothing else widens — the envoy's
 		 * turn still reaches only what those policies grant.
+		 *
+		 * A `private` envoy is each member's own agent on the transport: its direct messages carry the
+		 * member's own policies, which need not name the envoy's, so any member may run it. What the
+		 * turn reaches is still exactly what those policies grant.
 		 */
 		const envoyPolicies = new Map(
 			workspace.definition.envoys.map((declared) => [
 				declared.name,
-				declared.policies.map((name) => name.toLocaleLowerCase())
+				{
+					private: declared.audience === 'private',
+					policies: declared.policies.map((name) => name.toLocaleLowerCase())
+				}
 			])
 		);
 		const declaredEnvoyAgent = (
 			action: string,
 			resource: string,
+			subject: Identity.Subject,
 			subjectHeld: ReadonlySet<string>
 		): PolicyDecision | undefined => {
 			if (action !== 'agent') return undefined;
 			const declared = envoyPolicies.get(resource);
-			return declared !== undefined && declared.some((name) => subjectHeld.has(name))
+			if (declared === undefined) return undefined;
+			if (declared.private && subject.system !== true)
+				return { allowed: true, reason: 'private envoy member' };
+			return declared.policies.some((name) => subjectHeld.has(name))
 				? { allowed: true, reason: 'declared envoy policy' }
 				: undefined;
 		};
@@ -626,7 +636,7 @@ export const layer = Layer.effect(
 				decision: (action, resource) =>
 					administratorBypasses(subject, action, resource)
 						? administratorPredicate()
-						: (declaredEnvoyAgent(action, resource, subjectHeld) ??
+						: (declaredEnvoyAgent(action, resource, subject, subjectHeld) ??
 							decidePolicies(
 								workspace.definition.policies,
 								subject,
@@ -700,7 +710,7 @@ export const layer = Layer.effect(
 			if (!isObjectLike(row)) return undefined;
 			const teamId = Reflect.get(row, 'id');
 			const teamName = Reflect.get(row, 'name');
-			if (!isString(teamId) || !isString(teamName)) return undefined;
+			if (typeof teamId !== 'string' || typeof teamName !== 'string') return undefined;
 			const path: Array<string> = [teamName];
 			const visited = new Set<string>([teamId]);
 			let parents: ReadonlyArray<string> = [teamId];
@@ -719,7 +729,7 @@ export const layer = Layer.effect(
 					if (!isObjectLike(entry)) continue;
 					const id = Reflect.get(entry, 'id');
 					const childName = Reflect.get(entry, 'name');
-					if (!isString(id) || !isNonEmptyString(childName) || visited.has(id)) continue;
+					if (typeof id !== 'string' || !isNonEmptyString(childName) || visited.has(id)) continue;
 					visited.add(id);
 					next.push(id);
 					path.push(childName);
@@ -790,7 +800,7 @@ export const layer = Layer.effect(
 			explain: (subject, action, resource) =>
 				administratorBypasses(subject, action, resource)
 					? administratorPredicate()
-					: (declaredEnvoyAgent(action, resource, held(subject)) ??
+					: (declaredEnvoyAgent(action, resource, subject, held(subject)) ??
 						decidePolicies(
 							workspace.definition.policies,
 							subject,

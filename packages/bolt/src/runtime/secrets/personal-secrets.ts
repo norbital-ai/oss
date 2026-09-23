@@ -145,12 +145,11 @@ export type Interface = Readonly<{
 
 const Service = Context.Service<Interface>('@norbital-ai/bolt/PersonalSecrets');
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-const isString = Schema.is(Schema.String);
 
 /** Reads the loosely-typed values a SQL row hands back without scattering guards through each projection. */
 const rowText = (row: unknown, field: string): string | undefined => {
 	const value = isObject(row) ? Reflect.get(row, field) : undefined;
-	return isString(value) ? value : undefined;
+	return typeof value === 'string' ? value : undefined;
 };
 
 const layer = Layer.effect(

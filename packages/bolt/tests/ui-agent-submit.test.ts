@@ -10,7 +10,7 @@ import {
 	COMPOSER_COMMAND_DEADLINE,
 	runComposerCommand
 } from '../src/client/ui/agent/composer-send.js';
-import { encodeUserMessageWithImages } from '../src/runtime/agents/image-descriptors.js';
+import { encodeUserMessageWithAttachments } from '../src/runtime/agents/image-descriptors.js';
 import { emptyAgentClient } from './ui-agent-client-fixture.js';
 
 const TASK_ID = '00000000-0000-4000-8000-000000000301';
@@ -42,7 +42,7 @@ describe('G1 Task composer submit', () => {
 
 		const exit = await Effect.runPromiseExit(
 			runComposerCommand(
-				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
+				encodeUserMessageWithAttachments(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
 							conversationId: TASK_ID,
@@ -151,7 +151,7 @@ describe('G1 Task composer submit', () => {
 
 		const exit = await Effect.runPromiseExit(
 			runComposerCommand(
-				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
+				encodeUserMessageWithAttachments(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
 							conversationId: TASK_ID,
@@ -238,7 +238,7 @@ describe('G1 Task composer submit', () => {
 			let sendFailure: string | null = null;
 			let pending = true;
 			const fiber = yield* runComposerCommand(
-				encodeUserMessageWithImages(HEADED_TEXT, []).pipe(
+				encodeUserMessageWithAttachments(HEADED_TEXT, []).pipe(
 					Effect.flatMap((message) =>
 						agent.submit({
 							conversationId: TASK_ID,
@@ -270,6 +270,7 @@ describe('G1 Task composer submit', () => {
 			expect(draft.text).toBe(HEADED_TEXT);
 			expect(command).toHaveBeenCalledTimes(1);
 			expect(signals[0]).toBeInstanceOf(AbortSignal);
+			expect(signals[0]?.aborted).toBe(true);
 		})
 	);
 });

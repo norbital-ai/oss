@@ -43,6 +43,9 @@ export const automationPrincipalId = (automationName: string): string =>
  *   belong to an envoy turn. Carrying it across would widen the declared envoy principal even
  *   though tenant data still requires an explicit policy.
  *
+ * A `private` envoy's direct message is the one turn that does not use this: `envoys.receive`
+ * resolves the member's own subject instead, and still bounds it by this subject's rate limits.
+ *
  * Extracted rather than left inline in `receive` so it can be asserted on directly. An invariant
  * that can only be tested by running an agent turn is an invariant that gets tested once.
  */

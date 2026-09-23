@@ -12,8 +12,7 @@ export function parseTaskSlashCommand(source: string):
 	  } {
 	const match = /^\s*\/(plan|compact)(?:\s+([\s\S]*))?$/i.exec(source);
 	if (!match) return { kind: 'message', message: source };
-	const command = match[1]?.toLowerCase();
-	if (command !== 'plan' && command !== 'compact') return { kind: 'message', message: source };
+	const command = match[1]?.toLowerCase() as 'plan' | 'compact';
 	const message =
 		(match[2] ?? '').trim() || (command === 'compact' ? DEFAULT_COMPACTION_MESSAGE : '');
 	return {

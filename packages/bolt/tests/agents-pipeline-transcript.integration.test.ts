@@ -8,6 +8,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { systemToolSpecs } from '../src/runtime/agents/capability-catalog.js';
 import * as Agents from '../src/runtime/agents/agents.js';
+import { conversationAssetStorageKey } from '../src/runtime/agents/image-descriptors.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -34,7 +35,7 @@ const LARGE_INSTRUCTION = `Pipeline stress ${'x'.repeat(900 * 1_024)}`;
 
 const PERSON_ID = '00000000-0000-4000-8000-000000000401';
 const TOOL_TASK_ID = ConversationId.make('00000000-0000-4000-8000-000000000401');
-const IMAGE_KEY = Agents.conversationAssetStorageKey(TOOL_TASK_ID, 'badge', 'badge.png');
+const IMAGE_KEY = conversationAssetStorageKey(TOOL_TASK_ID, 'badge', 'badge.png');
 
 const workspace = testWorkspace({
 	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }]
@@ -114,7 +115,7 @@ describe('scripted agent pipeline transcript', () => {
 			'read_skill',
 			'search_task_history',
 			'read_messages',
-			'use_image',
+			'read_attachment',
 			'read_collection',
 			'write_collection'
 		]);

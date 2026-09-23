@@ -40,7 +40,7 @@ export type PlatformUser = Readonly<{
  * An envoy as `workspace.manifest` publishes it — the authored declaration minus what only the
  * runtime needs.
  *
- * `audience` is `'public' | 'authenticated'`: who may reach the envoy. It is typed as `string`
+ * `audience` is `'public' | 'authenticated' | 'private'`: who may reach the envoy. It is typed as `string`
  * because this value crosses the wire as JSON from a workspace the client did not compile, and
  * narrowing it here would be a claim about a payload nothing validated. The consumers compare
  * against `'public'` and treat everything else as reachable only by members, which is the safe

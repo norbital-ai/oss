@@ -45,17 +45,10 @@ export function commandMenuItems(query: string): readonly MentionMenuItem[] {
 }
 
 /**
- * Lift the chosen command out of the live `/query` and return the mode plus the message text that
- * follows it. The command no longer lives in the draft: the composer renders it as a badge, and the
- * send path reads the mode directly. Text after the caret is preserved and the caret lands at the
- * start of that text.
+ * The message text that follows the live `/query`, once the chosen command is lifted out of the
+ * draft into a mode badge. Text after the caret is preserved; the caret lands at its start.
  */
-export function selectComposerCommand(
-	draft: string,
-	trigger: { readonly query: string },
-	command: SubmissionCommand
-): { readonly mode: SubmissionCommand; readonly message: string; readonly caret: number } {
+export function selectComposerCommand(draft: string, trigger: { readonly query: string }): string {
 	const after = draft.slice(1 + trigger.query.length);
-	const message = after.startsWith(' ') ? after.slice(1) : after;
-	return { mode: command, message, caret: 0 };
+	return after.startsWith(' ') ? after.slice(1) : after;
 }

@@ -7,7 +7,10 @@ import {
 	ConversationId
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../src/runtime/agents/agents.js';
-import { userMessageWithImages } from '../src/runtime/agents/image-descriptors.js';
+import {
+	conversationAssetStorageKey,
+	userMessageWithAttachments
+} from '../src/runtime/agents/image-descriptors.js';
 import {
 	scriptedTranscript,
 	assistantText,
@@ -41,12 +44,12 @@ describe('canonical Task admission vertical slice', () => {
 			const conversationId = ConversationId.make(`00000000-0000-4000-8000-00000000030${index}`);
 			const file = {
 				name: `check.${extension}`,
-				key: Agents.conversationAssetStorageKey(conversationId, 'office', `check.${extension}`),
+				key: conversationAssetStorageKey(conversationId, 'office', `check.${extension}`),
 				mimeType,
 				size: 1024
 			};
 			const { ai, requests } = scriptedTranscript([
-				assistantToolCall('use_image', file, `read-${extension}`),
+				assistantToolCall('read_attachment', file, `read-${extension}`),
 				assistantText(`Read ${extension}.`)
 			]);
 			harness = await makeBoltTestRuntime(undefined, { ai });
@@ -55,7 +58,7 @@ describe('canonical Task admission vertical slice', () => {
 				agents.submit(harness.effectId(`office-${index}`), adminSubject, {
 					conversationId,
 					agentId: AgentId.make('web'),
-					message: userMessageWithImages('Read the attached acceptance document.', [file]),
+					message: userMessageWithAttachments('Read the attached acceptance document.', [file]),
 					mode: DirectiveMode.make('agent'),
 					priority: DirectivePriority.make('normal')
 				})
@@ -80,12 +83,12 @@ describe('canonical Task admission vertical slice', () => {
 		const conversationId = ConversationId.make('00000000-0000-4000-8000-000000000309');
 		const executable = {
 			name: 'check.exe',
-			key: Agents.conversationAssetStorageKey(conversationId, 'binary', 'check.exe'),
+			key: conversationAssetStorageKey(conversationId, 'binary', 'check.exe'),
 			mimeType: 'application/x-msdownload',
 			size: 1024
 		};
 		const { ai, requests } = scriptedTranscript([
-			assistantToolCall('use_image', executable, 'read-executable'),
+			assistantToolCall('read_attachment', executable, 'read-executable'),
 			assistantText('Cannot read it.')
 		]);
 		harness = await makeBoltTestRuntime(undefined, { ai });
@@ -94,7 +97,7 @@ describe('canonical Task admission vertical slice', () => {
 			agents.submit(harness.effectId('executable'), adminSubject, {
 				conversationId,
 				agentId: AgentId.make('web'),
-				message: userMessageWithImages('Run this', [executable]),
+				message: userMessageWithAttachments('Run this', [executable]),
 				mode: DirectiveMode.make('agent'),
 				priority: DirectivePriority.make('normal')
 			})

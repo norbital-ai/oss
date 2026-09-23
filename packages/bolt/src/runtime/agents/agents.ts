@@ -45,9 +45,10 @@ import {
 	WorkbenchId
 } from '@norbital-ai/bolt-protocol/facilities';
 import {
+	MAX_IMAGE_COUNT,
+	MAX_IMAGE_SOURCE_BYTES,
 	renderAttachmentDescriptors,
-	conversationAssetStorageKey as taskScopedImageKey,
-	userMessageWithImages
+	userMessageWithAttachments
 } from './image-descriptors.js';
 import {
 	type ConversationControlRequest,
@@ -332,14 +333,6 @@ const runIdFor = (scope: string): TurnId => TurnId.make(deterministicId(`run:${s
 const providerCallIdFor = (scope: string): ProviderCallId =>
 	ProviderCallId.make(`call:${semanticHash(scope)}`);
 
-const MAX_IMAGE_COUNT = 8;
-const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
-export const conversationAssetStorageKey = (
-	conversationId: ConversationId,
-	documentId: string,
-	fileName: string
-): string => taskScopedImageKey(conversationId, documentId, fileName);
-
 const generationAssets = (assets: ReadonlyArray<ImageAsset>) => {
 	const imageAssets = assets.filter((asset) => asset.mimeType.startsWith('image/'));
 	const fileAssets = assets.filter((asset) => !asset.mimeType.startsWith('image/'));
@@ -386,32 +379,26 @@ const parentAgentInput = (
 	text: string
 ): Prompt.MessageEncoded => userAgentInput(`[Agent conversation ${parentConversationId}]\n${text}`);
 
-export const InboundAttachment = Schema.Struct({
-	provider: Schema.NonEmptyString,
-	attachmentId: Schema.NonEmptyString,
-	asset: ImageAsset
-});
-export type InboundAttachment = typeof InboundAttachment.Type;
-export const InboundAgentMessage = Schema.Struct({
-	sender: Schema.Struct({
-		id: Schema.optionalKey(Schema.NonEmptyString),
-		displayName: Schema.optionalKey(Schema.NonEmptyString),
+/** One inbound transport message as a turn reads it; built by the envoy drain, never decoded. */
+export type InboundAgentMessage = Readonly<{
+	sender: Readonly<{
+		id?: string;
+		displayName?: string;
 		/**
 		 * The workspace account the transport address is registered to. Resolved by the envoy
 		 * before admission, because the model has no other field that says whose turn this is —
 		 * a transport display name is whatever the sender typed, not a workspace identity.
 		 */
-		account: Schema.optionalKey(Schema.NonEmptyString)
-	}),
-	sentAt: Schema.NonEmptyString,
-	messageId: Schema.NonEmptyString,
-	text: Schema.String,
-	attachments: Schema.Array(InboundAttachment),
-	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient'])
-});
-export type InboundAgentMessage = typeof InboundAgentMessage.Type;
+		account?: string;
+	}>;
+	sentAt: string;
+	messageId: string;
+	text: string;
+	attachments: ReadonlyArray<ImageAsset>;
+	invocation: 'direct' | 'mention' | 'reply' | 'ambient';
+}>;
 export const inboundAgentInput = (message: InboundAgentMessage) =>
-	userMessageWithImages(
+	userMessageWithAttachments(
 		[
 			'INBOUND MESSAGE',
 			`[${message.sentAt}] ${message.sender.displayName ?? message.sender.id ?? 'unidentified sender'} · ${message.invocation} · ${message.messageId}`,
@@ -420,7 +407,7 @@ export const inboundAgentInput = (message: InboundAgentMessage) =>
 				: [`[registered account: ${message.sender.account}]`]),
 			...(message.text === '' ? [] : [message.text])
 		].join('\n'),
-		message.attachments.map(({ asset }) => asset)
+		message.attachments
 	);
 
 /**
@@ -2873,7 +2860,7 @@ export const layer = Layer.effect(
 		 *
 		 * Nothing is attached because a message carried it. Every upload is a stored object whose
 		 * descriptor — name, type, size and key — rides the transcript as text, and the model takes
-		 * the bytes through `use_image` when a step needs them. That is what keeps a chat's older
+		 * the bytes through `read_attachment` when a step needs them. That is what keeps a chat's older
 		 * media out of later requests, and what makes an object nobody can decode cost one step
 		 * rather than the conversation.
 		 */
@@ -2886,7 +2873,8 @@ export const layer = Layer.effect(
 				if (row.turn_id !== runId) continue;
 				if (isString(row.message.content)) continue;
 				for (const part of row.message.content) {
-					if (part.type !== 'tool-result' || part.name !== 'use_image' || part.isFailure) continue;
+					if (part.type !== 'tool-result' || part.name !== 'read_attachment' || part.isFailure)
+						continue;
 					const decoded = Schema.decodeUnknownOption(ImageAsset)(part.result);
 					if (decoded._tag === 'Some') assets.push(decoded.value);
 				}

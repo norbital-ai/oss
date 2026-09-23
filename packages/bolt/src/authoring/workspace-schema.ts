@@ -511,7 +511,7 @@ export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
 	}
 	if (declaration.transport.trim() === '')
 		throw new TypeError(`Envoy ${name} requires a transport.`);
-	if (!['public', 'authenticated'].includes(declaration.audience)) {
+	if (!['public', 'authenticated', 'private'].includes(declaration.audience)) {
 		throw new TypeError(`Envoy ${name} has an unsupported audience.`);
 	}
 	if (declaration.policies.length === 0) {

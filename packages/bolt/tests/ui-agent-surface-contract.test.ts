@@ -2,10 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ImageAsset } from '@norbital-ai/bolt-protocol/facilities';
 import {
-	assertGuestImageDescriptorsOnly,
-	guestImageCommandHasNoBytes,
 	IMAGE_DESCRIPTOR_SCHEME,
-	userMessageWithImages
+	userMessageWithAttachments
 } from '../src/runtime/agents/image-descriptors.js';
 import { visibleUnsettledAdmission } from '../src/client/ui/agent/admission-reconciliation.js';
 import { parseTaskSlashCommand } from '../src/client/ui/agent/intent.js';
@@ -63,7 +61,7 @@ describe('G3 Plan Compact and edit', () => {
 describe('G4 skills MCP secrets and models', () => {
 	it('exposes inbuilt system tools, MCP 2026 pin, and host-only secret reads', () => {
 		expect(systemToolSpecs.map(({ name }) => name)).toEqual(
-			expect.arrayContaining(['list_skills', 'read_skill', 'use_image', 'todo'])
+			expect.arrayContaining(['list_skills', 'read_skill', 'read_attachment', 'todo'])
 		);
 		expect(MCP_PROTOCOL_VERSION).toBe('2026-07-28');
 		const secrets = SystemCommandContracts.map(({ name }) => name).filter((name) =>
@@ -82,9 +80,7 @@ describe('G5 guest image descriptors', () => {
 			mimeType: 'image/jpeg',
 			size: 1_042_884
 		});
-		const message = userMessageWithImages('Look at this', [asset]);
-		assertGuestImageDescriptorsOnly(message);
-		expect(guestImageCommandHasNoBytes({ conversationId: 'task-1', message })).toBe(true);
+		const message = userMessageWithAttachments('Look at this', [asset]);
 		expect(JSON.stringify(message)).toContain(IMAGE_DESCRIPTOR_SCHEME);
 		expect(JSON.stringify(message)).not.toContain('base64');
 		expect(panelSource).toContain('encodeUserMessageWithAttachments');

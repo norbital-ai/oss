@@ -559,7 +559,9 @@
 						? 'Public — anyone who can reach the transport.'
 						: declared.audience === 'authenticated'
 							? 'Authenticated — known senders are matched to a workspace identity; unknown senders receive a private 15-minute registration link.'
-							: declared.audience}
+							: declared.audience === 'private'
+								? "Private — as authenticated, but a direct message runs under the sender's own policies. Group chats use the envoy's policies."
+								: declared.audience}
 				</dd>
 			</Stack>
 		</Grid>

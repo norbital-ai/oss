@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ImageAsset, ConversationId } from '@norbital-ai/bolt-protocol';
-import { boundedAttachments, conversationAssetStorageKey } from '../src/runtime/agents/agents.js';
+import { boundedAttachments } from '../src/runtime/agents/agents.js';
 import {
-	assertGuestImageDescriptorsOnly,
 	attachmentAssetsFromMessage,
-	guestImageCommandHasNoBytes,
-	imageAssetsFromMessage,
+	conversationAssetStorageKey,
 	renderAttachmentDescriptors,
-	userMessageWithImages
+	userMessageWithAttachments
 } from '../src/runtime/agents/image-descriptors.js';
 
 describe('Task image asset boundary', () => {
@@ -18,11 +16,8 @@ describe('Task image asset boundary', () => {
 			mimeType: 'application/pdf',
 			size: 1200
 		};
-		const message = userMessageWithImages('Inspect the datasheet', [file]);
+		const message = userMessageWithAttachments('Inspect the datasheet', [file]);
 		expect(attachmentAssetsFromMessage(message)).toEqual([file]);
-		expect(imageAssetsFromMessage(message)).toEqual([]);
-		expect(guestImageCommandHasNoBytes({ message })).toBe(true);
-		assertGuestImageDescriptorsOnly(message);
 	});
 	it('derives an opaque, Task-scoped storage key without a document command surface', () => {
 		const first = ConversationId.make('00000000-0000-4000-8000-000000000201');
@@ -45,10 +40,7 @@ describe('Task image asset boundary', () => {
 			mimeType: 'image/png',
 			size: 1_042_884
 		});
-		const message = userMessageWithImages('Inspect this site', [asset]);
-		assertGuestImageDescriptorsOnly(message);
-		expect(guestImageCommandHasNoBytes({ message })).toBe(true);
-		expect(imageAssetsFromMessage(message)).toEqual([asset]);
+		const message = userMessageWithAttachments('Inspect this site', [asset]);
 		const rendered = renderAttachmentDescriptors(message);
 		// No bytes and no file part: the key is what the reader tool is called with.
 		expect(JSON.stringify(rendered)).not.toContain('"type":"file"');

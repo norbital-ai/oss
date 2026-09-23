@@ -360,9 +360,17 @@ describe('approval hold, seal and restore', () => {
 		});
 		const decided = await decide(runtime, 'approve-order', requestId, 'approve');
 		expect(decided._tag).toBe('Approved');
-		expect(await runtime.database.query('select command, input from bolt_task')).toEqual([
-			{ command: 'collections.resume', input: { requestId } }
-		]);
+		// The decision's notification rides its own delivery wake beside the lifecycle task.
+		expect(
+			await runtime.database.query(
+				"select command from bolt_task where command = 'notifications.deliver'"
+			)
+		).toHaveLength(1);
+		expect(
+			await runtime.database.query(
+				"select command, input from bolt_task where command <> 'notifications.deliver'"
+			)
+		).toEqual([{ command: 'collections.resume', input: { requestId } }]);
 		await resume(runtime, 'resume-order', requestId);
 		expect(await runtime.database.query('select id, title, approval_id from orders')).toEqual([
 			{ id, title: 'Released', approval_id: null }
@@ -482,9 +490,17 @@ describe('approval hold, seal and restore', () => {
 			_tag: 'ChangesRequested',
 			reason: 'Please add the missing evidence.'
 		});
-		expect(await runtime.database.query('select command from bolt_task')).toEqual([
-			{ command: 'collections.discard' }
-		]);
+		// The decision's notification rides its own delivery wake beside the lifecycle task.
+		expect(
+			await runtime.database.query(
+				"select command from bolt_task where command = 'notifications.deliver'"
+			)
+		).toHaveLength(1);
+		expect(
+			await runtime.database.query(
+				"select command from bolt_task where command <> 'notifications.deliver'"
+			)
+		).toEqual([{ command: 'collections.discard' }]);
 		await discard(runtime, 'discard-order', requestId);
 		expect(await runtime.database.query('select id from orders')).toEqual([]);
 		expect(

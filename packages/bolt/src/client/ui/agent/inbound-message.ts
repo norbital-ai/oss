@@ -16,8 +16,6 @@ export type InboundEnvelope = Readonly<{
 }>;
 
 const ENVELOPE_META = /^\[([^\]]+)\]\s+(.*?)\s+·\s+(direct|mention|reply|ambient)\s+·\s+(\S+)\s*$/;
-/** Descriptor lines older transcripts carry: the media renders below from the message parts. */
-const ATTACHMENT_LINE = /^\[(?:image|attachment) .*\] provider=\S+ attachment=\S+ key=\S+$/;
 /** The model's attribution line, not something the sender said: the sender line already names them. */
 const ACCOUNT_LINE = /^\[registered account: .+\]$/;
 
@@ -34,7 +32,7 @@ export function parseInboundEnvelope(text: string): InboundEnvelope | null {
 		messageId,
 		body: lines
 			.slice(2)
-			.filter((line) => !ATTACHMENT_LINE.test(line) && !ACCOUNT_LINE.test(line))
+			.filter((line) => !ACCOUNT_LINE.test(line))
 			.join('\n')
 			.trim()
 	};

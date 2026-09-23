@@ -1,10 +1,7 @@
-import { Schema } from 'effect';
 import type {
 	NearestQueryInput,
 	QueryInput
 } from '#lib/runtime/collections/collections.contract.js';
-
-const isString = Schema.is(Schema.String);
 
 type AuthoredQueryInput = { readonly [field: string]: unknown };
 
@@ -23,7 +20,7 @@ export const nearestQueryInput = (
 	return {
 		collection,
 		...rest,
-		column: isString(column) ? column : '',
+		column: typeof column === 'string' ? column : '',
 		probe: Array.isArray(probe) ? (probe as ReadonlyArray<number>) : [],
 		metric: metric === 'cosine' || metric === 'ip' ? metric : 'l2'
 	};

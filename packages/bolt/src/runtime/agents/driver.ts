@@ -14,7 +14,8 @@ const conversations = SYSTEM_MODEL_TABLES.conversation;
 const tasks = SYSTEM_MODEL_TABLES.bolt_task;
 const turns = SYSTEM_MODEL_TABLES.turn;
 const authority = sql<string>`${messages.annotation}->>'executionAuthority'`;
-const taskIdFor = Agents.executionTaskId;
+/** `Agents.executionTaskId` of each row, in SQL. */
+const messageTaskId = sql<string>`'agent:' || ${messages.id}::text`;
 /**
  * The message's own turn: started at admission under the task named by the message, and now the
  * conversation's active turn. Such a message has left the queue but its task has not run yet.
@@ -22,7 +23,7 @@ const taskIdFor = Agents.executionTaskId;
 const ownsActiveTurn = and(
 	eq(messages.state, 'consumed'),
 	eq(conversations.active_turn_id, messages.turn_id),
-	eq(sql`${turns.capability_snapshot}->>'executionOwner'`, sql`'agent:' || ${messages.id}::text`)
+	eq(sql`${turns.capability_snapshot}->>'executionOwner'`, messageTaskId)
 );
 const Candidate = Schema.Struct({ id: MessageId });
 const StoredExecution = Schema.Struct({
@@ -60,7 +61,7 @@ export const schedule = Effect.fn('AgentDriver.schedule')(function* (
 	yield* (yield* TaskQueue.Service).enqueueClaimed(EffectId.make(`${effectId}:enqueue`), {
 		command,
 		input: { messageId },
-		effectId: taskIdFor(messageId),
+		effectId: Agents.executionTaskId(messageId),
 		nowEpochMs: yield* Clock.currentTimeMillis
 	});
 });
@@ -94,7 +95,7 @@ export const recover = Effect.fn('AgentDriver.recover')(function* (
 							composer
 								.select({ id: tasks.effect_id })
 								.from(tasks)
-								.where(eq(tasks.effect_id, sql`'agent:' || ${messages.id}::text`))
+								.where(eq(tasks.effect_id, messageTaskId))
 						)
 					)
 				)
@@ -124,7 +125,7 @@ export function run(
 	Database.Interface | Identity.Interface | TaskQueue.Interface | Agents.Interface
 > {
 	return Effect.gen(function* () {
-		if (claim === undefined || claim.id !== taskIdFor(messageId))
+		if (claim === undefined || claim.id !== Agents.executionTaskId(messageId))
 			return yield* Effect.fail(
 				new Error('A conversation continuation requires its exact durable task claim.')
 			);

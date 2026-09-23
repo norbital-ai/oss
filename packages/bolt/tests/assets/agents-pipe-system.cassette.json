@@ -97,8 +97,8 @@
 						{
 							"options": {},
 							"type": "tool-call",
-							"id": "use_image-8",
-							"name": "use_image",
+							"id": "read_attachment-8",
+							"name": "read_attachment",
 							"params": {
 								"key": "agent-tasks/MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwNDAx/YmFkZ2U.png",
 								"name": "badge.png",

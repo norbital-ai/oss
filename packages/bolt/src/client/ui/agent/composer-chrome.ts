@@ -1,5 +1,4 @@
 /** Composer focus channel and control typography. */
-type TaskComposerInput = { readonly message?: string; readonly planMode?: boolean };
 
 export const AGENT_COMPOSER_CONTROL_TEXT_CLASS = 'text-xs font-normal';
 
@@ -9,7 +8,7 @@ export const AGENT_COMPOSER_CONTROL_TEXT_CLASS = 'text-xs font-normal';
  */
 export const AGENT_COMPOSER_FOCUS_EVENT = 'bolt:focus-agent-composer';
 
-export type AgentComposerSeed = Partial<Pick<TaskComposerInput, 'message' | 'planMode'>>;
+export type AgentComposerSeed = { readonly message?: string; readonly planMode?: boolean };
 
 /** Asks the mounted panel to focus the composer after a shell-driven open. */
 export function requestAgentComposerFocus(seed?: AgentComposerSeed): void {

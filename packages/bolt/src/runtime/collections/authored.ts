@@ -40,7 +40,6 @@ import type {
 } from '#lib/runtime/collections/services/embeddings.js';
 
 const isNumber = Schema.is(Schema.Number);
-const isString = Schema.is(Schema.String);
 
 /**
  * The runtime carrier for a workspace's authored business logic.
@@ -416,7 +415,9 @@ const databaseApi = (
 		{},
 		{
 			get: (_target, property) =>
-				isString(property) && allowedCollections.has(property) ? collection(property) : undefined
+				typeof property === 'string' && allowedCollections.has(property)
+					? collection(property)
+					: undefined
 		}
 	);
 

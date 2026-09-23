@@ -158,7 +158,7 @@ const SystemToolNames = Schema.Literals([
 	'read_skill',
 	'search_task_history',
 	'read_messages',
-	'use_image',
+	'read_attachment',
 	'read_collection',
 	'write_collection'
 ]);
@@ -297,17 +297,17 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_messages',
 		description:
-			'Read unread group messages in this chat that did not address you, oldest first, and mark them read; as the channel last reported them, from when recording began. Attachments are descriptors; admit one with use_image.',
+			'Read unread group messages in this chat that did not address you, oldest first, and mark them read; as the channel last reported them, from when recording began. Attachments are descriptors; admit one with read_attachment.',
 		command: 'platform:read_messages',
 		inputSchema: objectInput({
 			limit: { type: 'integer', minimum: 1, maximum: 50 }
 		})
 	},
 	{
-		name: 'use_image',
+		name: 'read_attachment',
 		description:
-			'Admit one stored attachment for your next step: the host reads what it can and hands you an image, or a document as text. Descriptors ride the message that carried them and read_messages; a file the reader does not carry is read another way.',
-		command: 'platform:use_image',
+			'Read one attachment. Messages carry only a descriptor — [attachment name · type · size bytes] key=… — never the content, so you know nothing about a file until you read it; pass those four values. Images (JPEG, PNG, GIF, WebP, HEIC/HEIF and other common formats) come back as an image for your next step; documents (PDF, DOCX, XLSX, plain text, CSV, JSON, XML) as their text. Any other type is refused: read it with sandbox_bash when you have it, otherwise tell the sender you cannot open that file type and ask for a photo or PDF.',
+		command: 'platform:read_attachment',
 		inputSchema: objectInput(
 			{
 				key: { type: 'string', minLength: 1 },
@@ -957,7 +957,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				}${result.horizon.prePairing > 0 ? `, including ${result.horizon.prePairing} messages synced from before this tenant paired the account` : ''}. Earlier messages cannot be retrieved from this channel.`
 			};
 		}
-		case 'use_image': {
+		case 'read_attachment': {
 			const asset = yield* decode(name, ImageAsset, input);
 			const refusal = conversationAttachmentError(context.conversationId, asset);
 			if (refusal !== undefined)

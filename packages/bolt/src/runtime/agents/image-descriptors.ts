@@ -21,8 +21,12 @@ export const taskAssetKeyPrefix = (taskId: ConversationId | string): string =>
  * The media types the attachment boundary carries: images, text, and the documents the host
  * extracts. Anything else is still a stored file — the agent reaches it with a script.
  */
-const ATTACHMENT_MEDIA_TYPES =
+export const ATTACHMENT_MEDIA_TYPES =
 	/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)))$/;
+
+/** At most this many attachments, totaling this many bytes, ride one message. */
+export const MAX_IMAGE_COUNT = 8;
+export const MAX_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
 
 /**
  * Why this conversation cannot read a descriptor, or `undefined` when it can.
@@ -58,16 +62,7 @@ export const conversationAssetStorageKey = (
 	return `${taskAssetKeyPrefix(taskId)}${keySegment(documentId)}${extension}`;
 };
 
-const DescriptorPayload = Schema.Struct({
-	key: Schema.NonEmptyString,
-	name: Schema.NonEmptyString,
-	mimeType: Schema.NonEmptyString,
-	size: Schema.Natural,
-	detail: Schema.optionalKey(Schema.Literals(['auto', 'low', 'high']))
-});
-
 const encodePromptMessage = Schema.encodeSync(Prompt.Message);
-const isString = Schema.is(Schema.String);
 
 /** Encodes one ImageAsset as a file-part data string. Never base64 or a data URL. */
 function encodeImageDescriptorData(asset: ImageAsset): string {
@@ -84,21 +79,18 @@ function encodeImageDescriptorData(asset: ImageAsset): string {
 
 /** Reads one descriptor from a file-part data value. Bytes and data URLs are refused. */
 export function decodeAttachmentDescriptor(data: unknown): ImageAsset | undefined {
-	if (!isString(data)) return undefined;
+	if (typeof data !== 'string') return undefined;
 	const scheme = [IMAGE_DESCRIPTOR_SCHEME, FILE_DESCRIPTOR_SCHEME].find((scheme) =>
 		data.startsWith(scheme)
 	);
 	if (scheme === undefined) return undefined;
 	const raw = data.slice(scheme.length);
-	const parsed = Option.getOrUndefined(
-		Schema.decodeUnknownOption(Schema.fromJsonString(DescriptorPayload))(raw)
-	);
-	return parsed === undefined ? undefined : ImageAsset.make(parsed);
+	return Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(ImageAsset))(raw));
 }
 
 /** Collects descriptor-sized assets from one canonical Effect message. */
 export function attachmentAssetsFromMessage(message: Prompt.MessageEncoded): ImageAsset[] {
-	if (isString(message.content)) return [];
+	if (typeof message.content === 'string') return [];
 	return message.content.flatMap((part) => {
 		if (part.type !== 'file') return [];
 		const asset = decodeAttachmentDescriptor(part.data);
@@ -106,18 +98,15 @@ export function attachmentAssetsFromMessage(message: Prompt.MessageEncoded): Ima
 	});
 }
 
-export const imageAssetsFromMessage = (message: Prompt.MessageEncoded): ImageAsset[] =>
-	attachmentAssetsFromMessage(message).filter((asset) => asset.mimeType.startsWith('image/'));
-
 /**
  * Replaces file parts with the descriptor line the model reads, before the AI facility wire.
  *
  * Colony refuses file parts on generate, and nothing attaches on a message's behalf: a descriptor
- * becomes text — name, type, size and key — and `use_image` is what turns a stored object into an
+ * becomes text — name, type, size and key — and `read_attachment` is what turns a stored object into an
  * image or a document's text for the step that needs it. Bytes never reach the prompt this way.
  */
 export function renderAttachmentDescriptors(message: Prompt.MessageEncoded): Prompt.MessageEncoded {
-	if (isString(message.content)) return message;
+	if (typeof message.content === 'string') return message;
 	if (!message.content.some((part) => part.type === 'file')) return message;
 	const content = message.content.flatMap((part): Array<Prompt.PartEncoded> => {
 		if (part.type !== 'file') return [part];
@@ -162,7 +151,7 @@ export function renderAttachmentDescriptors(message: Prompt.MessageEncoded): Pro
  * `encodeSync` refuses (`Expected array at ["content"]`) — a sync throw, not a
  * typed Effect failure.
  */
-function userMessageWithAttachments(
+export function userMessageWithAttachments(
 	text: string,
 	assets: readonly ImageAsset[]
 ): Prompt.UserMessageEncoded {
@@ -182,7 +171,7 @@ function userMessageWithAttachments(
 	) as Prompt.UserMessageEncoded;
 }
 
-/** Same encoder as `userMessageWithImages`, with the sync throw on the typed channel. */
+/** Same encoder as `userMessageWithAttachments`, with the sync throw on the typed channel. */
 export function encodeUserMessageWithAttachments(
 	text: string,
 	assets: readonly ImageAsset[]
@@ -191,25 +180,4 @@ export function encodeUserMessageWithAttachments(
 		try: () => userMessageWithAttachments(text, assets),
 		catch: toError
 	});
-}
-
-/** Existing image-only callers use the same descriptor encoding. */
-export const userMessageWithImages = userMessageWithAttachments;
-export const encodeUserMessageWithImages = encodeUserMessageWithAttachments;
-
-/** True when a command payload carries no guest-expanded image bytes. */
-export function guestImageCommandHasNoBytes(payload: unknown): boolean {
-	const serialized = JSON.stringify(payload);
-	return !serialized.includes('base64') && !/data:image\/[a-zA-Z0-9.+-]+;base64,/.test(serialized);
-}
-
-/** Refuses a user message whose file parts are not descriptors. */
-export function assertGuestImageDescriptorsOnly(message: Prompt.MessageEncoded): void {
-	if (isString(message.content)) return;
-	for (const part of message.content) {
-		if (part.type !== 'file') continue;
-		if (decodeAttachmentDescriptor(part.data) === undefined) {
-			throw new Error('Guest attachment parts must be file descriptors, not bytes.');
-		}
-	}
 }

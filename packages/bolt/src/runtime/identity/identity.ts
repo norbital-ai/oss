@@ -270,9 +270,9 @@ export type Interface = Readonly<{
 	 *
 	 * Answers `userId` and `email` and deliberately not a `Subject`. A subject carries a `teamPath`
 	 * and a policy set, and this person's are exactly what an inbound envoy message must *not*
-	 * inherit: their authority on an envoy is the envoy's declared policies, whatever they hold in
-	 * the web app. Returning half an identity is what makes that impossible to get wrong by accident
-	 * downstream.
+	 * inherit by accident: their authority on an envoy is the envoy's declared policies, except in a
+	 * `private` envoy's direct message, where `envoys.receive` asks `resolveUser` for it explicitly.
+	 * Returning half an identity is what keeps that the only way in.
 	 *
 	 * Nothing, rather than a failure, when no account matches: an unrecognised sender is an ordinary
 	 * and expected state on an envoy anyone can message, not a fault.

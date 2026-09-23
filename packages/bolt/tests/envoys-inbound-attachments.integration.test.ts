@@ -172,7 +172,7 @@ describe('Envoy channel attachments', () => {
 						generations.length === 1
 							? generated(
 									request,
-									assistantToolCall('read-image', 'use_image', {
+									assistantToolCall('read-image', 'read_attachment', {
 										key: [...files.objects.keys()][0],
 										name: 'whatsapp-message-1.png',
 										mimeType: 'image/png',
@@ -298,6 +298,10 @@ describe('Envoy channel attachments', () => {
 			)
 		).toMatchObject({ drained: 1, status: 'answered' });
 		expect(generations[0]?.imageAssets ?? []).toEqual([]);
+		// The model hears about the clip it never received, so it can ask for it again.
+		expect(JSON.stringify(generations[0]?.messages)).toContain(
+			'[attachment clip.mp4 · video/mp4 · not received; ask the sender to send it again]'
+		);
 		const replicated = await harness.database.query(
 			`select attachments from bolt_envoy_messages where direction = 'inbound'`
 		);

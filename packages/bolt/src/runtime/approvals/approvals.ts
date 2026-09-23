@@ -116,7 +116,6 @@ const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isObjectLike = Schema.is(
 	Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.Array(Schema.Unknown)])
 );
-const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
 /** The requestor schema predicate, built once for reviewer-safe approval projections. */
 const isSubject = Schema.is(Identity.Subject);
@@ -564,7 +563,7 @@ export const layer = Layer.effect(
 			);
 			const row = result.rows[0];
 			const requestId = isObjectLike(row) ? Reflect.get(row, 'id') : undefined;
-			if (!isString(requestId)) return undefined;
+			if (typeof requestId !== 'string') return undefined;
 			return yield* status(effectId, requestId);
 		});
 		const timeline = Effect.fn('Approvals.timeline')(function* (
@@ -603,9 +602,10 @@ export const layer = Layer.effect(
 		) {
 			const operation = state.operation;
 			const fields = isJsonObject(operation) ? operation : {};
-			const collectionName = isString(fields['collection']) ? fields['collection'] : 'unknown';
-			const recordId = isString(fields['id']) ? fields['id'] : 'unknown';
-			const action = isString(fields['action']) ? fields['action'] : 'update';
+			const collectionName =
+				typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
+			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
+			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
 			const configuration = approvalConfigurations.resolve(state);
 			const activeStep = state._tag === 'Pending' ? configuration?.steps[state.step] : undefined;
 			const nowEpochMs = yield* Clock.currentTimeMillis;

@@ -344,7 +344,6 @@ const isPolicyApprovalMarker = Schema.is(PolicyApprovalMarker);
 const isJsonObject = Schema.is(JsonObject);
 const queryRowOf = Schema.decodeUnknownSync(JsonObject);
 const isNumber = Schema.is(Schema.Number);
-const isString = Schema.is(Schema.String);
 const isNonEmptyString = Schema.is(Schema.NonEmptyString);
 const isPlainRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const isFiniteNumber = (value: unknown): boolean => isNumber(value) && Number.isFinite(value);
@@ -4396,7 +4395,11 @@ export const layerWith = (
 			const capturedChanges = (rows: ReadonlyArray<unknown>): ReadonlyArray<SyncChange> =>
 				compactSyncChanges(
 					rows.flatMap((row): ReadonlyArray<SyncChange> => {
-						if (!isJsonObject(row) || !isString(row['collection']) || !isString(row['id']))
+						if (
+							!isJsonObject(row) ||
+							typeof row['collection'] !== 'string' ||
+							typeof row['id'] !== 'string'
+						)
 							return [];
 						const fields = captureFields.get(row['collection']) ?? new Set<string>();
 						const before = isJsonObject(row['before']) ? row['before'] : undefined;
@@ -4560,7 +4563,9 @@ export const layerWith = (
 					snapshot: Readonly<Record<string, Schema.Json>> | null;
 				}>;
 				const snapshots: Array<Hold> = holds.rows.flatMap((row) =>
-					isJsonObject(row) && isString(row['collection_name']) && isString(row['record_id'])
+					isJsonObject(row) &&
+					typeof row['collection_name'] === 'string' &&
+					typeof row['record_id'] === 'string'
 						? [
 								{
 									collection: row['collection_name'],
@@ -4978,9 +4983,10 @@ export const layerWith = (
 					return yield* persistFailure(written.failure);
 				}
 				// The engine allocates a created root's id; the wire form carried none.
-				const writtenId = isString(written.success.records[0]?.['id'])
-					? written.success.records[0]['id']
-					: rootId;
+				const writtenId =
+					typeof written.success.records[0]?.['id'] === 'string'
+						? written.success.records[0]['id']
+						: rootId;
 				if (written.success.pendingApproval !== undefined) {
 					// The rows are committed under the hold; the browser learns the request it waits on.
 					const pending: BrowserMutationOutcome = {

@@ -21,8 +21,11 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { workspaceSession } from '#lib/client/session.js';
 	import {
+		ATTACHMENT_MEDIA_TYPES,
 		encodeUserMessageWithAttachments,
-		conversationAssetStorageKey
+		conversationAssetStorageKey,
+		MAX_IMAGE_COUNT,
+		MAX_IMAGE_SOURCE_BYTES
 	} from '#lib/runtime/agents/image-descriptors.js';
 	import { useAgentClient } from './client.svelte.js';
 	import { runComposerCommand } from './composer-send.js';
@@ -438,26 +441,25 @@
 		revisedMessage = null;
 	}
 
+	/** Browsers often report no type for these, so the extension names it. */
+	const TYPE_BY_EXTENSION: Record<string, string> = {
+		heic: 'image/heic',
+		heif: 'image/heif',
+		pdf: 'application/pdf',
+		docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+		xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		...Object.fromEntries(
+			['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].map((e) => [e, 'text/plain'])
+		)
+	};
+
 	function addFiles(files: readonly File[]): void {
 		const additions: typeof pendingAttachments = [];
 		for (const file of files) {
 			const extension = file.name.split('.').at(-1)?.toLowerCase();
-			const mimeType =
-				/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml))$/.test(
-					file.type
-				)
-					? file.type
-					: extension === 'pdf'
-						? 'application/pdf'
-						: extension === 'docx'
-							? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-							: extension === 'xlsx'
-								? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-								: ['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].includes(
-											extension ?? ''
-									  )
-									? 'text/plain'
-									: null;
+			const mimeType = ATTACHMENT_MEDIA_TYPES.test(file.type)
+				? file.type
+				: (TYPE_BY_EXTENSION[extension ?? ''] ?? null);
 			if (mimeType === null || file.size === 0) {
 				sendFailure = `${file.name}: attach a nonempty image, PDF, DOCX, XLSX or text document.`;
 				return;
@@ -466,8 +468,8 @@
 		}
 		const combined = [...pendingAttachments, ...additions];
 		if (
-			combined.length > 8 ||
-			combined.reduce((sum, item) => sum + item.file.size, 0) > 20 * 1024 * 1024
+			combined.length > MAX_IMAGE_COUNT ||
+			combined.reduce((sum, item) => sum + item.file.size, 0) > MAX_IMAGE_SOURCE_BYTES
 		) {
 			sendFailure = 'Attach at most 8 files totaling 20 MiB.';
 			return;
@@ -483,15 +485,9 @@
 	}
 
 	function removePendingAttachment(id: string): void {
-		const next: Array<{ id: string; file: File; mimeType: string; previewUrl: string | null }> = [];
-		for (const image of pendingAttachments) {
-			if (image.id === id) {
-				if (image.previewUrl !== null) URL.revokeObjectURL(image.previewUrl);
-				continue;
-			}
-			next.push(image);
-		}
-		pendingAttachments = next;
+		for (const image of pendingAttachments)
+			if (image.id === id && image.previewUrl !== null) URL.revokeObjectURL(image.previewUrl);
+		pendingAttachments = pendingAttachments.filter((image) => image.id !== id);
 	}
 
 	function clearPendingAttachments(): void {
@@ -502,35 +498,35 @@
 
 	function storePendingAttachments(conversationId: string) {
 		const images = pendingAttachments;
-		return Effect.tryPromise({
-			try: () => {
-				if (images.length === 0) return Promise.resolve([]);
-				const session = workspaceSession();
-				return Effect.runPromise(
-					Effect.forEach(
-						images,
-						(image) => {
-							const key = conversationAssetStorageKey(conversationId, image.id, image.file.name);
-							return Effect.tryPromise(() => session.files.store(key, image.file)).pipe(
-								Effect.map(() =>
-									FileAsset.make({
-										key,
-										name: image.file.name,
-										mimeType: image.mimeType,
-										size: image.file.size
-									})
-								)
-							);
-						},
-						{ concurrency: 1 }
-					)
-				);
-			},
-			catch: (cause) =>
-				new Error(cause instanceof Error ? cause.message : 'The attachment could not be stored.', {
-					cause
-				})
-		});
+		if (images.length === 0) return Effect.succeed([]);
+		const stored = (cause: unknown) =>
+			new Error(cause instanceof Error ? cause.message : 'The attachment could not be stored.', {
+				cause
+			});
+		return Effect.try({ try: workspaceSession, catch: stored }).pipe(
+			Effect.flatMap((session) =>
+				Effect.forEach(
+					images,
+					(image) => {
+						const key = conversationAssetStorageKey(conversationId, image.id, image.file.name);
+						return Effect.tryPromise({
+							try: () => session.files.store(key, image.file),
+							catch: stored
+						}).pipe(
+							Effect.map(() =>
+								FileAsset.make({
+									key,
+									name: image.file.name,
+									mimeType: image.mimeType,
+									size: image.file.size
+								})
+							)
+						);
+					},
+					{ concurrency: 1 }
+				)
+			)
+		);
 	}
 
 	function onComposerPaste(event: ClipboardEvent): void {
@@ -811,14 +807,13 @@
 			exportConversation();
 			return;
 		}
-		const next = selectComposerCommand(draft, trigger, item.command);
-		commandMode = next.mode;
-		draft = next.message;
-		caret = next.caret;
+		commandMode = item.command;
+		draft = selectComposerCommand(draft, trigger);
+		caret = 0;
 		commandMenuDismissed = true;
 		queueMicrotask(() => {
 			composer?.focus();
-			composer?.setSelectionRange(next.caret, next.caret);
+			composer?.setSelectionRange(0, 0);
 		});
 	}
 
