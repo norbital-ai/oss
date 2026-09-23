@@ -13,7 +13,8 @@ import {
 import { envoy, policy, workspace } from '../src/authoring/workspace-schema.js';
 import * as Agents from '../src/runtime/agents/agents.js';
 import * as Envoys from '../src/runtime/envoys/envoys.js';
-import { envoySubject } from '../src/runtime/identity/static-identity.js';
+import { envoySubject, workspaceSubject } from '../src/runtime/identity/static-identity.js';
+import * as Collections from '../src/runtime/collections/collections.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -189,6 +190,136 @@ describe('Envoy inbound queue', () => {
 				`select priority from conversation_message where state is not null`
 			)
 		).toEqual([{ priority: 'steer' }, { priority: 'steer' }]);
+	});
+
+	it('runs one turn when two drains for the same chat overlap, and answers the next message', async () => {
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const generations: Array<string> = [];
+		const { sends, binding: communication } = recordingCommunication();
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request, _signal, onProgress) => {
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				generations.push(request.callId);
+				// Streamed like a real provider: a partial answer lands before the call finishes, and
+				// the call is still open when the next message's drain arrives.
+				const partial = encodeMessage(
+					Prompt.assistantMessage({ content: [Prompt.textPart({ text: 'Hello, how can I help?' })] })
+				);
+				await onProgress?.(
+					Schema.decodeUnknownSync(Schema.Json)({
+						callId: request.callId,
+						sequence: 0,
+						message: partial,
+						activeParts: []
+					})
+				);
+				await gate;
+				return { _tag: 'Success', value: generated(request, 'Hello, how can I help?') };
+			}
+		};
+		harness = await makeBoltTestRuntime(definition, { ai, communication });
+		await seedSender(harness);
+		const runtime = harness.runtime;
+		const envoys = await runtime.runPromise(Envoys.Service);
+		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
+		const drain = (name: string) =>
+			runtime.runPromise(
+				envoys.drain(harness!.effectId(`drain:${name}`), 'field_ops_whatsapp', conversationId, {
+					id: `envoys.drain:${name}`,
+					attempt: 1
+				})
+			);
+		const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+		// The host enqueues one drain per message, each under its own task claim; the second
+		// message arrives while the first drain's turn is still generating.
+		await runtime.runPromise(receiveChat('whatsapp', delivery('one', 'Hello'), 'receive:one'));
+		const first = drain('one');
+		await settle(300);
+		await runtime.runPromise(receiveChat('whatsapp', delivery('two', 'Hello'), 'receive:two'));
+		const second = drain('two');
+		await settle(300);
+		release();
+		const settled = await Promise.allSettled([first, second]);
+		expect(settled.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+		// One turn: the drain that did not start it left it to the one that did, and its message
+		// steered that turn at the next boundary instead of starting a second executor on it.
+		expect(await harness.database.query(`select status from turn`)).toEqual([{ status: 'succeeded' }]);
+		expect(await harness.database.query(`select status, active_turn_id from conversation`)).toEqual([
+			{ status: 'done', active_turn_id: null }
+		]);
+		expect(new Set(generations).size).toBe(generations.length);
+		expect(
+			await harness.database.query(
+				`select count(*)::int as failed from conversation_message where message::text like '%Task failed%'`
+			)
+		).toEqual([{ failed: 0 }]);
+
+		await runtime.runPromise(receiveChat('whatsapp', delivery('three', 'Still there?'), 'receive:three'));
+		expect(await drain('three')).toMatchObject({ status: 'answered' });
+		expect(sends.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it('answers the next message when a failed turn left its id on the conversation', async () => {
+		const { sends, binding: communication } = recordingCommunication();
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async (_metadata, request) => {
+				if (request._tag === 'Catalog') return { _tag: 'Success', value: catalog };
+				if (request._tag !== 'Generate') throw new Error('expected language generation');
+				return { _tag: 'Success', value: generated(request, 'Back again.') };
+			}
+		};
+		harness = await makeBoltTestRuntime(definition, { ai, communication });
+		await seedSender(harness);
+		const envoys = await harness.runtime.runPromise(Envoys.Service);
+		const conversationId = 'field_ops_whatsapp:dm:6591234567@s.whatsapp.net';
+		await harness.runtime.runPromise(receiveChat('whatsapp', delivery('one', 'Hello'), 'receive:one'));
+		await harness.runtime.runPromise(
+			envoys.drain(harness.effectId('drain:one'), 'field_ops_whatsapp', conversationId)
+		);
+		// What a failure could leave behind: the conversation settled, still naming its dead turn.
+		await harness.database.query(`update turn set status = 'failed'`);
+		await harness.database.query(
+			`update conversation set status = 'failed', active_turn_id = (select id from turn limit 1)`
+		);
+		await harness.runtime.runPromise(
+			receiveChat('whatsapp', delivery('two', 'Still there?'), 'receive:two')
+		);
+		expect(
+			await harness.runtime.runPromise(
+				envoys.drain(harness.effectId('drain:two'), 'field_ops_whatsapp', conversationId)
+			)
+		).toMatchObject({ status: 'answered' });
+		expect(sends.at(-1)).toMatchObject({ message: { text: 'Back again.' } });
+	});
+
+	it('refuses a write that restates a turn the conversation no longer holds', async () => {
+		harness = await makeBoltTestRuntime(definition, {});
+		const conversation = Agents.conversationIdFor('envoy:field_ops_whatsapp:dm:zombie');
+		await harness.database.query(
+			`insert into conversation (id, workbench_id, subject_id, agent_id, audience, title, status)
+			 values ($1, $2, 'contractor-7', 'field_ops_whatsapp', 'workbench', 'z', 'failed')`,
+			[conversation, conversation]
+		);
+		const collections = await harness.runtime.runPromise(Collections.Service);
+		// A streamed frame from an executor whose turn was failed under it names that turn and no status.
+		await expect(
+			harness.runtime.runPromise(
+				collections.write(harness.effectId('zombie'), workspaceSubject(adminSubject), [
+					{
+						collection: 'conversation',
+						action: 'update',
+						inputs: [{ id: conversation, active_turn_id: '00000000-0000-4000-8000-000000000001' }]
+					}
+				])
+			)
+		).rejects.toThrow(/no longer holds the conversation/);
+		expect(await harness.database.query(`select active_turn_id from conversation`)).toEqual([
+			{ active_turn_id: null }
+		]);
 	});
 
 	it('keeps one conversation per group channel and lets every linked member steer it', async () => {

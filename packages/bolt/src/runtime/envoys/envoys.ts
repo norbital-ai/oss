@@ -788,6 +788,14 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					const settled = yield* settleAnswered(effectId, internal);
 					return { envoy: envoyName, conversationId, drained: 0, status: settled.remaining > 0 ? ('queued' as const) : ('skipped' as const) };
 				}
+				/**
+				 * The turn this drain starts is owned by its own task claim. Every message enqueues a drain,
+				 * so two overlap whenever a sender writes twice; without an owner each read the running
+				 * turn as its own and both executed it — the same streamed ids, twice — and one failed the
+				 * turn under the other.
+				 */
+				const owned = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+					claim === undefined ? effect : Effect.provideService(effect, Agents.ExecutionOwner, claim.id);
 				const subjects: Array<Identity.Subject> = [];
 				for (const [index, row] of rows.entries()) {
 					const subject = yield* subjectFor(EffectId.make(`${effectId}:subject:${index}`), envoy, row.sender_id);
@@ -860,7 +868,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 						invocation: (row.invocation ?? 'direct') as Agents.InboundAgentMessage['invocation']
 					};
 					// Every message is a steer: it joins the turn already running at its next step.
-					yield* agents
+					yield* owned(agents
 						.submit(EffectId.make(`${effectId}:submit:${index}`), subjects[index]!, {
 							conversationId: internal,
 							submissionId: inboundMessageId(internal, row.provider_message_id),
@@ -868,7 +876,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 							message: Agents.inboundAgentInput(message),
 							mode: DirectiveMode.make('agent'),
 							priority: DirectivePriority.make('steer')
-						})
+						}))
 						.pipe(taskFailure(envoyName, 'message admission'));
 				}
 
@@ -886,8 +894,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					deliver(EffectId.make(`${effectId}:failure:${turn}`), envoy, providerConversation, `Sorry, I could not finish that: ${reason.slice(0, 500)}`, mail).pipe(Effect.asVoid);
 				for (let turn = 0; turn < MAX_DRAIN_TURNS; turn += 1) {
 					const subject = subjects[turn] ?? subjects.at(-1)!;
-					const executed = yield* agents
-						.execute(EffectId.make(`${effectId}:execute:${turn}`), subject, internal, onAssistantText)
+					const executed = yield* owned(agents.execute(EffectId.make(`${effectId}:execute:${turn}`), subject, internal, onAssistantText))
 						.pipe(
 							Effect.tapError((failure) => notifyFailure(turn, getErrorMessage(failure))),
 							taskFailure(envoyName, 'Task execution')

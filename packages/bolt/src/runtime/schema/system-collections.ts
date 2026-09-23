@@ -32,8 +32,14 @@ const collections = Object.freeze(
  * turn — a streamed part restating `active_turn_id`, a boundary write that does not restate the
  * status — must find the conversation still held, and is refused otherwise, in the same
  * statement the row it carries would have committed in: there is no read between the check and
- * the write for a stop to fall into. A write that installs a turn on an idle conversation, or
- * clears one, states what it changes and passes.
+ * the write for a stop to fall into. A write that installs a turn states the status it installs
+ * with and passes; one that clears a turn names none and passes.
+ *
+ * Only a `running` or `ready` conversation holds its turn. A settled one (failed, done, stopped,
+ * attention) holds nothing, whatever `active_turn_id` still says, so the next turn installs over it:
+ * a failure that left a stale id behind can never refuse every message after it. A write that
+ * merely restates a turn the conversation does not hold is refused, so an executor still streaming
+ * after its turn was failed cannot put the dead turn back.
  */
 const conversationFence = (
 	inputs: ReadonlyArray<Readonly<Record<string, unknown>>>,
@@ -45,10 +51,12 @@ const conversationFence = (
 		const stored = context.existing[index];
 		const claimed = input['active_turn_id'];
 		if (stored === undefined || claimed === null || claimed === undefined) return input;
-		const held = stored['active_turn_id'];
-		if (held != null && held !== claimed) refuse('This turn no longer holds the conversation.');
-		const status = input['status'] ?? stored['status'];
-		if (held === claimed && status !== 'running' && status !== 'ready')
+		const held =
+			stored['status'] === 'running' || stored['status'] === 'ready'
+				? stored['active_turn_id']
+				: null;
+		const status = input['status'] ?? (held === claimed ? stored['status'] : undefined);
+		if ((held != null && held !== claimed) || (status !== 'running' && status !== 'ready'))
 			refuse('This turn no longer holds the conversation.');
 		return input;
 	});
