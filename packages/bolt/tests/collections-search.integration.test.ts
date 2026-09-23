@@ -2,6 +2,13 @@ import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { Effect } from 'effect';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import {
+	AIResponse,
+	ModelId,
+	ProviderObservation,
+	type AIRequest,
+	type FacilityBinding
+} from '@norbital-ai/bolt-protocol';
 import { defineModel, text } from '../src/authoring/models-schema.js';
 import { compileModel } from '../src/authoring/model-introspection.js';
 import { collection, policy, workspace } from '../src/authoring/workspace-schema.js';
@@ -103,7 +110,7 @@ const search = (harness: BoltTestRuntime, term?: string) =>
 				adminSubject,
 				{
 					collection: 'people',
-					...(term === undefined ? {} : { search: { mode: 'lexical' as const, term } })
+					...(term === undefined ? {} : { search: term })
 				}
 			);
 			return rows.map((row) =>
@@ -171,7 +178,7 @@ describe('collection search', () => {
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).count(harness!.effectId('count'), adminSubject, {
 					collection: 'people',
-					search: { mode: 'lexical', term: 'Ada' }
+					search: 'Ada'
 				});
 			})
 		);
@@ -210,13 +217,24 @@ describe('lexical tokeniser', () => {
 		);
 	});
 
-	it('transliterates Han to toneless pinyin, keeping a second reading', async () => {
-		expect(await value('bolt_search_pinyin($1)', '北京厦门')).toEqual([
+	it('romanizes every script to Latin, keeping a second Han reading', async () => {
+		expect(await value('bolt_search_romanize($1)', '北京厦门')).toEqual([
 			'bei',
 			'jing',
 			'sha xia',
 			'men'
 		]);
+		const latin = async (text: string) =>
+			(await lexemes(text)).filter((lexeme) => /^[a-z0-9]+$/.test(lexeme));
+		expect(await latin('Москва')).toContain('moskva');
+		expect(await latin('دبي')).toContain('dby');
+		expect(await latin('東京')).toContain('dongjing');
+		expect(await latin('とうきょう')).toContain('toukiyou');
+		expect(await latin('トウキョウ')).toContain('toukiyou');
+		expect(await latin('서울')).toContain('seoul');
+		expect(await latin('नमस्ते')).toContain('nmste');
+		expect(await latin('Αθήνα')).toContain('athina');
+		expect(await latin('Straße')).toContain('strasse');
 	});
 
 	it('indexes CJK suffixes, pinyin syllables and joins, and Latin skeletons', async () => {
@@ -234,6 +252,9 @@ describe('lexical tokeniser', () => {
 			])
 		);
 		expect(await lexemes('厦门')).toEqual(expect.arrayContaining(['xiamen', 'shamen']));
+		// A romanized word gets its skeleton too, so a vowel-full spelling meets an abjad or abugida.
+		expect(await lexemes('नमस्ते')).toContain('#nmst');
+		expect(await lexemes('Москва')).toContain('#mskv');
 	});
 
 	it('builds a prefix query from the same terms', async () => {
@@ -287,7 +308,11 @@ const placeRows: ReadonlyArray<readonly [string, string | null]> = [
 	['Beijing Road', null],
 	['东京', null],
 	['Café Déjà Vu', null],
-	['重庆火锅', null]
+	['重庆火锅', null],
+	['Москва', null],
+	['서울', null],
+	['नमस्ते', null],
+	['Αθήνα', null]
 ];
 
 /** Ids ascending in fixture order, so an id tie-break is visible in the expected order. */
@@ -313,7 +338,7 @@ const searchPlaces = (harness: BoltTestRuntime, term: string) =>
 			const rows = yield* (yield* Collections.Service).findMany(
 				harness.effectId('find'),
 				adminSubject,
-				{ collection: 'places', search: { mode: 'lexical', term } }
+				{ collection: 'places', search: term }
 			);
 			return rows.map((row) =>
 				row !== null && typeof row === 'object' && !Array.isArray(row)
@@ -355,6 +380,16 @@ describe('ranked lexical search', () => {
 		expect(await first('chongqing')).toBe('重庆火锅');
 	});
 
+	it('finds any script by its Latin spelling, and native text by a native partial', async () => {
+		expect(await first('moskva')).toBe('Москва');
+		expect(await first('seoul')).toBe('서울');
+		// The abugida reads nmste; the consonant skeleton meets the spelling a person types.
+		expect(await first('namaste')).toBe('नमस्ते');
+		expect(await first('athina')).toBe('Αθήνα');
+		expect(await first('моск')).toBe('Москва');
+		expect(await first('Москва')).toBe('Москва');
+	});
+
 	it('finds Chinese text by a partial Chinese phrase', async () => {
 		expect(await first('朝阳')).toBe('北京市朝阳区建国路');
 		expect(await first('北京')).toBe('北京市朝阳区建国路');
@@ -371,5 +406,101 @@ describe('ranked lexical search', () => {
 	it('returns nothing for noise', async () => {
 		expect(await searchPlaces(placesHarness!, 'zzqx')).toEqual([]);
 		expect(await searchPlaces(placesHarness!, '...')).toEqual([]);
+	});
+});
+
+/**
+ * `/semantic`: one declaration (`text({ search: true })`) builds both the lexical document and the
+ * record embedding, and the fused ranking keeps an exact lexical hit first even when the vector
+ * prefers another row.
+ */
+const shopsModel = defineModel(
+	{ name: text({ search: true }).notNull() },
+	{ embedding: { dimensions: 3 } }
+);
+
+const shops = {
+	...places,
+	collections: [compileModel(collection({ name: 'shops', fields: {} }), shopsModel)]
+};
+
+/** The stub model: `kismis`, bread and the sourdough shop mean the same; everything else does not. */
+const vectorOf = (text: string | undefined): ReadonlyArray<number> =>
+	text === 'kismis' || text === 'bread' || text?.includes('Sourdough') === true
+		? [1, 0, 0]
+		: [0, 1, 0];
+
+const embeddingModel = ModelId.make('test/embedding');
+const embedder: FacilityBinding<AIRequest, AIResponse> = {
+	call: (_metadata, request) =>
+		Promise.resolve({
+			_tag: 'Success',
+			value:
+				request._tag === 'Catalog'
+					? AIResponse.cases.Catalog.make({
+							languageModels: [],
+							defaultLanguageModelId: ModelId.make('test/language'),
+							embeddingModels: [{ id: embeddingModel, contextWindowTokens: 8192 }],
+							defaultEmbeddingModelId: embeddingModel
+						})
+					: request._tag === 'Embed'
+						? AIResponse.cases.Embedded.make({
+								embeddings: request.inputs.map((input) => vectorOf(input.text)),
+								observation: ProviderObservation.make({
+									callId: request.callId,
+									provider: 'test',
+									model: request.modelId,
+									operation: 'embedding'
+								})
+							})
+						: (() => {
+								throw new Error('no generation in this test');
+							})()
+		})
+};
+
+describe('hybrid /semantic search', () => {
+	it('builds both indexes from one mark and keeps the exact hit above a vector-only neighbour', async () => {
+		harness = await makeBoltTestRuntime(shops, {
+			ai: embedder,
+			authored: {
+				...emptyAuthoredRuntime,
+				collections: { shops: { create: { input: { columns: { name: true } } } } }
+			}
+		});
+		const names = ['Kismis', 'Kasma Tailor', 'Sourdough Loaves'];
+		const found = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.write(harness!.effectId('seed'), adminSubject, [
+					{
+						collection: 'shops',
+						action: 'create',
+						inputs: names.map((name, index) => ({ id: placeId(index), name }))
+					}
+				]);
+				const summary = yield* collections.embedRecords(harness!.effectId('embed'));
+				const read = (search: string) =>
+					collections
+						.findMany(harness!.effectId(`find:${search}`), adminSubject, {
+							collection: 'shops',
+							search
+						})
+						.pipe(Effect.map((rows) => rows.map((row) => Reflect.get(row as object, 'name'))));
+				return {
+					summary,
+					lexical: yield* read('kismis'),
+					semantic: yield* read('/semantic kismis'),
+					meaning: yield* read('/semantic bread')
+				};
+			})
+		);
+		expect(found.summary).toEqual([{ collection: 'shops', selected: 3, embedded: 3, failed: 0 }]);
+		expect(found.lexical).toEqual(['Kismis']);
+		// The vector ranks the sourdough shop first; fusion still puts the exact word first.
+		expect(found.semantic.slice(0, 2)).toEqual(['Kismis', 'Sourdough Loaves']);
+		expect(found.semantic).toHaveLength(3);
+		// No word in common, found by meaning alone.
+		expect(found.meaning[0]).toBe('Sourdough Loaves');
 	});
 });

@@ -93,7 +93,7 @@ import { defineModel, enums, text, numeric, instant, boolean, file, uuid, custom
 
 export default defineModel(
   {
-    title: text().notNull(),
+    title: text({ search: true }).notNull(),
     status: enums(['open', 'closed']),
     budget: numeric(),
     due: instant(),
@@ -110,6 +110,12 @@ export default defineModel(
 - \`custom('money')\` and \`custom('instant_range')\` are platform datatypes; \`custom('<name>')\` binds a
   datatype you declare under \`src/datatypes/<name>/\`.
 - \`.notNull()\` when a value is required; nothing is required by default.
+- \`search: true\` (on \`text\`, \`phone\`, \`enums\`, \`file\`) is the one search mark. The column joins
+  deterministic search — words, prefixes, typos, CJK phrases, every script by its Latin spelling —
+  and the record embedding (a file by its image). A \`search\` string is plain text; \`/semantic <text>\`
+  fuses in meaning; \`/<index> {json}\` asks a \`similarity\` index declared in \`+collection.ts\`.
+  Metadata \`embedding: { model }\` only when the host's default model will not do (an image needs a
+  multimodal model); \`embedding: false\` keeps a collection's search lexical.
 
 ## Relations
 

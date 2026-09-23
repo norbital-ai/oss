@@ -31,7 +31,7 @@ const render = (expression: SQL) =>
 const searchedFields = describeModelColumns({ name: text({ search: true }) });
 
 describe('collection lifecycle core', () => {
-	it('keeps plain search lexical and reaches the embedder only for the typed semantic command', async () => {
+	it('keeps plain search lexical and reaches the embedder only for /semantic', async () => {
 		const context = {
 			collection: 'people',
 			fields: searchedFields,
@@ -45,29 +45,22 @@ describe('collection lifecycle core', () => {
 		});
 		expect(Result.isSuccess(empty) && empty.success.mode).toBe('none');
 		expect(embeddings).toBe(0);
-		const lexical = await prepareSearchPlan(
-			{ mode: 'lexical', term: '> literal text' },
-			context,
-			async () => {
-				embeddings += 1;
-				return [0.1, 0.2];
-			}
-		);
+		// A slash that names no command (`/2`, `a/b`) is text like any other.
+		const lexical = await prepareSearchPlan('> literal /2 text', context, async () => {
+			embeddings += 1;
+			return [0.1, 0.2];
+		});
 		expect(Result.isSuccess(lexical) && lexical.success.mode).toBe('lexical');
 		expect(embeddings).toBe(0);
-		const semantic = await prepareSearchPlan(
-			{ mode: 'semantic', term: 'similar contract' },
-			context,
-			async () => {
-				embeddings += 1;
-				return [0.1, 0.2];
-			}
-		);
+		const semantic = await prepareSearchPlan('/semantic similar contract', context, async () => {
+			embeddings += 1;
+			return [0.1, 0.2];
+		});
 		expect(Result.isSuccess(semantic) && semantic.success.mode).toBe('semantic');
 		expect(embeddings).toBe(1);
 	});
 
-	it('renders indexed lexical ranking and a bound vector distance', () => {
+	it('renders indexed lexical ranking and a fused hybrid ranking', () => {
 		const context = {
 			collection: 'people',
 			fields: searchedFields,
@@ -76,18 +69,21 @@ describe('collection lifecycle core', () => {
 		} as const;
 		const lexical = compileLexicalSearch('García', context);
 		expect(Result.isSuccess(lexical)).toBe(true);
-		if (Result.isSuccess(lexical)) {
+		if (Result.isSuccess(lexical) && lexical.success.mode !== 'none') {
 			const query = render(lexical.success.predicate);
 			expect(query.sql).toContain('"search_document" @@');
 			expect(query.sql).toContain('bolt_search_query(');
-			expect(render(lexical.success.rank).sql).toContain('ts_rank(');
+			expect(render(lexical.success.ordering).sql).toContain('ts_rank(');
 		}
 		const semantic = compileSemanticSearch('similar', [0.1, 0.2], context);
 		expect(Result.isSuccess(semantic)).toBe(true);
-		if (Result.isSuccess(semantic)) {
-			const query = render(semantic.success.distance);
-			expect(query.sql).toContain('<=>');
-			expect(query.params).toEqual(['[0.1,0.2]']);
+		if (Result.isSuccess(semantic) && semantic.success.mode !== 'none') {
+			// A candidate is a lexical match or an embedded row; the two ranks are fused.
+			expect(render(semantic.success.predicate).sql).toContain('or "record_embedding" is not null');
+			const ordering = render(semantic.success.ordering);
+			expect(ordering.sql).toContain('<=>');
+			expect(ordering.sql).toContain('1.0 / (60 + rank() over');
+			expect(ordering.params).toContain('[0.1,0.2]');
 		}
 	});
 
@@ -158,7 +154,7 @@ describe('collection lifecycle core', () => {
 });
 
 describe('declared similarity search', () => {
-	it('reaches the declared index only for the nearest command and ranks by its own column', async () => {
+	it('reaches the declared index only for its /<index> command and ranks by its own column', async () => {
 		const context = {
 			collection: 'formulations',
 			fields: searchedFields,
@@ -175,35 +171,22 @@ describe('declared similarity search', () => {
 			expect(index).toBe('colour');
 			return { column: 'lab_vector', operator: '<->' as const, probe: [Number(target['l']), 0, 0] };
 		};
-		const plan = await prepareSearchPlan(
-			{ mode: 'nearest', index: 'colour', target: { l: 62.4 } },
-			context,
-			embed,
-			nearest
-		);
+		const plan = await prepareSearchPlan('/colour {"l": 62.4}', context, embed, nearest);
 		expect(Result.isSuccess(plan) && plan.success.mode).toBe('nearest');
 		expect(targets).toBe(1);
 		expect(embedded).toBe(0);
 		if (Result.isSuccess(plan) && plan.success.mode === 'nearest') {
-			const query = render(plan.success.distance);
+			const query = render(plan.success.ordering);
 			expect(query.sql).toContain('"lab_vector" <-> ');
 			expect(query.params).toContain('[62.4,0,0]');
-			expect(plan.success.live).toBe(false);
 		}
-		const absent = await prepareSearchPlan(
-			{ mode: 'nearest', index: 'colour', target: {} },
-			context,
-			embed
-		);
+		const absent = await prepareSearchPlan('/colour {}', context, embed);
 		expect(Result.isFailure(absent)).toBe(true);
-		const rejected = await prepareSearchPlan(
-			{ mode: 'nearest', index: 'colour', target: {} },
-			context,
-			embed,
-			async () => {
-				throw new Error('L* is a lightness from 0 to 100.');
-			}
-		);
+		const malformed = await prepareSearchPlan('/colour sixty', context, embed, nearest);
+		expect(Result.isFailure(malformed) && malformed.failure.message).toContain('JSON object');
+		const rejected = await prepareSearchPlan('/colour {}', context, embed, async () => {
+			throw new Error('L* is a lightness from 0 to 100.');
+		});
 		expect(Result.isFailure(rejected) && rejected.failure.message).toBe(
 			'L* is a lightness from 0 to 100.'
 		);
@@ -216,7 +199,7 @@ describe('declared similarity search', () => {
 			searchDocumentColumn: SEARCH_DOCUMENT_COLUMN
 		} as const;
 		const plan = await prepareSearchPlan(
-			{ mode: 'nearest', index: 'colour', target: { l: 1, base: 'abs' } },
+			'/colour {"l": 1, "base": "abs"}',
 			context,
 			async () => [0.1],
 			async () => ({

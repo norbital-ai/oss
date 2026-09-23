@@ -12,6 +12,8 @@ import {
 	text,
 	vector
 } from '../src/authoring/index.js';
+import { compileModel } from '../src/authoring/model-introspection.js';
+import { collection } from '../src/authoring/workspace-schema.js';
 
 describe('Bolt authoring contracts', () => {
 	it('makes manual invocation inherent and keeps automatic-trigger authoring closed', () => {
@@ -60,20 +62,28 @@ describe('Bolt authoring contracts', () => {
 		expect(() => hexToBinaryEmbedding('xyz')).toThrow();
 	});
 
-	it('keeps embedding sources tied to declared text or file fields', () => {
+	it('embeds exactly the search: true columns, files included, under one optional model knob', () => {
 		const declaration = defineModel(
-			{ title: text(), photo: file(), amount: numeric() },
-			{ embedding: { fields: ['title', 'photo'], dimensions: 384 } }
+			{ title: text({ search: true }), photo: file({ search: true }), amount: numeric() },
+			{ embedding: { dimensions: 384 } }
 		);
-		expect(declaration.metadata?.embedding?.fields).toEqual(['title', 'photo']);
-		expect(() =>
-			defineModel({ title: text() }, { embedding: { fields: ['missing'] } } as never)
-		).toThrow(/undeclared field missing/u);
-		expect(() => defineModel({ amount: numeric() }, { embedding: { fields: ['amount'] } })).toThrow(
-			/must be text or file data/u
-		);
-		expect(() => defineModel({ title: text() }, { embedding: { fields: [] } })).toThrow(
-			/at least one source field/u
+		const compiled = compileModel(collection({ name: 'photos', fields: {} }), declaration);
+		// One mark, both indexes: the file joins the embedding, only the text joins the lexical document.
+		expect(compiled.embedding?.fields).toEqual(['photo', 'title']);
+		expect(compiled.embedding?.dimensions).toBe(384);
+		expect(compiled.search?.fields).toEqual(['title']);
+		expect(
+			compileModel(collection({ name: 'plain', fields: {} }), defineModel({ title: text() }))
+				.embedding
+		).toBeUndefined();
+		expect(
+			compileModel(
+				collection({ name: 'lexical', fields: {} }),
+				defineModel({ title: text({ search: true }) }, { embedding: false })
+			).embedding
+		).toBeUndefined();
+		expect(() => defineModel({ title: text() }, { embedding: { model: 'x' } })).toThrow(
+			/marks none/u
 		);
 	});
 

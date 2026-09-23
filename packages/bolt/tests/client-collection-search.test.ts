@@ -115,32 +115,24 @@ const proxyWith = (sync: ReturnType<typeof fakeSyncClient>) => {
 };
 
 describe('collection search handoff', () => {
-	it('carries explicit lexical and semantic commands without inferring a mode', () => {
+	it('carries the search string unchanged', () => {
 		const sync = fakeSyncClient();
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: (input?: object) => { readonly current: unknown };
 		};
-		employees.findMany({ search: { mode: 'semantic', term: 'similar contracts' } });
-		employees.findMany({ search: { mode: 'lexical', term: 'similar contracts' } });
-		employees.findMany({ search: { mode: 'lexical', term: '>' } });
-		// The browser carries the chosen arm unchanged; it does not decode string conventions.
-		expect(sync.mounted[0]?.input).toEqual({
-			kind: 'findMany',
-			collection: 'employees',
-			search: { mode: 'semantic', term: 'similar contracts' }
-		});
-		expect(sync.mounted[1]?.input).toEqual({
-			kind: 'findMany',
-			collection: 'employees',
-			search: { mode: 'lexical', term: 'similar contracts' }
-		});
-		expect(sync.mounted[2]?.input).toEqual({
-			kind: 'findMany',
-			collection: 'employees',
-			search: { mode: 'lexical', term: '>' }
-		});
+		employees.findMany({ search: '/semantic similar contracts' });
+		employees.findMany({ search: 'similar contracts' });
+		employees.findMany({ search: '>' });
+		// The browser carries the string unchanged; the server's one parser reads the grammar.
+		expect(sync.mounted.map((mounted) => mounted.input)).toEqual(
+			['/semantic similar contracts', 'similar contracts', '>'].map((search) => ({
+				kind: 'findMany',
+				collection: 'employees',
+				search
+			}))
+		);
 	});
 
 	it('carries semantic search unchanged through a one-shot count command', async () => {
@@ -156,28 +148,26 @@ describe('collection search handoff', () => {
 			count: (input?: object) => PromiseLike<number>;
 		};
 
-		await expect(
-			employees.count({ search: { mode: 'semantic', term: 'similar contracts' } })
-		).resolves.toBe(7);
+		await expect(employees.count({ search: '/semantic similar contracts' })).resolves.toBe(7);
 		expect(commands).toEqual([
 			{
 				command: 'collections.count',
 				input: {
 					collection: 'employees',
-					search: { mode: 'semantic', term: 'similar contracts' }
+					search: '/semantic similar contracts'
 				}
 			}
 		]);
 	});
 
-	it('refuses the removed plain-string search arm', () => {
+	it('refuses the retired structured search commands', () => {
 		const sync = fakeSyncClient();
 		const bolt = createBoltClient(scope, { command: async () => null });
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
 			findMany: (input?: object) => { readonly current: unknown };
 		};
-		expect(() => employees.findMany({ search: 'legacy string' })).toThrow();
+		expect(() => employees.findMany({ search: { mode: 'lexical', term: 'retired' } })).toThrow();
 		expect(sync.mounted).toHaveLength(0);
 	});
 

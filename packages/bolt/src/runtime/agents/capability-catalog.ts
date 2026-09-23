@@ -322,7 +322,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_collection',
 		description:
-			'Read one page of a collection (default 50 rows); continue with cursor. `search` is free text matched fuzzily across the collection\'s searchable fields (describe_workspace marks them (search)) — the fastest way to find a record from a person\'s words. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: \'%kismis%\' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
+			'Read one page of a collection (default 50 rows); continue with cursor. `search` finds records across the collection\'s searchable fields (describe_workspace marks them (search)), closest first — the fastest way to find a record from a person\'s words. Plain text matches words, prefixes, typos and phrases in any script, including by Latin spelling (moskva finds Москва, beijing finds 北京). `/semantic <text>` also ranks by meaning, keeping exact hits first; `/<index> {json}` asks a similarity index the collection lists under search, with its input fields as a JSON object. A ranked search is one page: no cursor. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: \'%kismis%\' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.',
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
@@ -823,7 +823,7 @@ export const workspaceSnapshot = (
 		`# Workspace snapshot — valid as of ${asOf} only. Its structure holds for this turn; records change, so read them fresh. describe_workspace refreshes it.`,
 		`workspace: ${definition.name} v${definition.version}`,
 		`you: ${line(context.standing, 200)}`,
-		'fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), (search) searchable by read_collection `search`',
+		'fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), (search) found by read_collection `search` (plain text; `/semantic <text>` adds meaning; a collection\'s `search:` line lists its commands)',
 		'collections:',
 		...collections,
 		...list(
@@ -1140,7 +1140,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 				limit: limit + 1,
 				after: parsed.cursor,
 				...(where === undefined ? {} : { where }),
-				...(parsed.search === undefined ? {} : { search: { mode: 'lexical' as const, term: parsed.search } }),
+				...(parsed.search === undefined ? {} : { search: parsed.search }),
 				...(columns === undefined ? {} : { columns })
 			});
 			// Rows are true only as of the read: stated on the result, as the snapshot states its own.

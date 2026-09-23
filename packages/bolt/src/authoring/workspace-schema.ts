@@ -92,10 +92,11 @@ export interface FieldDefinition<TType extends FieldType = FieldType> {
 	/** Picker precision for an instant or instant range; storage remains full precision. */
 	readonly precision?: 'day' | 'minute';
 	/**
-	 * Explicit search opt-in, authored as `text({ search: true })`.
+	 * Explicit search opt-in, authored as `text({ search: true })` (or on `phone`, `enums`, `file`).
 	 *
-	 * Search is opt-in because it decides what a free-text query may reach: a column nobody declared
-	 * searchable is never matched, however text-like it is.
+	 * One mark, two indexes: the column's words enter the deterministic lexical document (files
+	 * excepted) and its value enters the record embedding `/semantic` ranks by. Opt-in because it
+	 * decides what a query may reach: a column nobody marked is never matched, however text-like.
 	 */
 	readonly search?: boolean;
 	/**
@@ -194,8 +195,10 @@ interface CollectionSearchDefinition {
 	readonly documentColumn: 'search_document';
 }
 
-/** Model embedding declaration plus the platform columns settle maintains. */
+/** The record embedding: its `search: true` source columns, its model, and the columns settle maintains. */
 interface CollectionEmbeddingDefinition extends ModelEmbedding {
+	/** Every `search: true` column, files included, sorted: what the vector is computed from. */
+	readonly fields: ReadonlyArray<string>;
 	readonly vectorColumn: 'record_embedding';
 	readonly embeddedAtColumn: 'embedded_at';
 	readonly sourceFingerprintColumn: 'record_embedding_fingerprint';
@@ -225,7 +228,8 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	/** Database indexes declared by the model, including compound and partial indexes. */
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	/**
-	 * One platform-maintained record embedding, when the model declares one.
+	 * One platform-maintained record embedding, when a column is `search: true` (and the model did
+	 * not say `embedding: false`).
 	 *
 	 * Carried on the definition rather than derived at each reader, for the reason `exclusions` is:
 	 * the schema plan renders the column and its index, and the runtime write path decides what to
@@ -430,7 +434,7 @@ export interface CollectionCatalogEntry {
 	readonly recordLabel?: string;
 	/** The declared write contract, absent for a read-only collection. */
 	readonly write?: CollectionWriteContract;
-	/** The collection declares a platform embedding: `/semantic` is a real command here. */
+	/** The collection has a record embedding: `/semantic` is a real command here. */
 	readonly semantic?: true;
 	/** The declared similarity indexes: one `/<name>` command each. */
 	readonly similarity?: ReadonlyArray<CollectionSimilarityIndex>;

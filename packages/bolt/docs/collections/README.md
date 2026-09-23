@@ -124,15 +124,27 @@ apply to the projected answer rather than changing predicate meaning.
 - Live ordering is typed: a live read's `orderBy` accepts only the collection's scalar columns
   (`CollectionLiveOrderBy`); json, custom-typed and vector columns fail at authoring time and are
   refused by the planner. A read continued with `after` is one-shot and may order by any column.
-- Lexical search is opt-in per field with `search: true`. The generated `search_document` is
-  `bolt_search_document(text)` (schema-plan functions in `read/search.ts`): NFKC, case and accent
-  folding, CJK suffixes, toneless pinyin for Han, and consonant skeletons for typos. A query
-  matches through that GIN index and is ranked closest first (all words present, share of the
-  query matched, trigram closeness), ties by id.
-- Semantic search performs one embedding request, then one policy-filtered nearest-neighbour query.
-- Every collection also offers `/text` and `/semantic`; a declared `similarity` index adds
-  `/<index>`, whose target is a capture-form value the workspace embeds. Raw vectors are never
-  accepted from the browser.
+- Search is one mark on the column: `text({ search: true })` (also `phone`, `enums`, `file`). Every
+  marked column feeds both indexes — the generated lexical `search_document` (files excepted) and
+  the platform `record_embedding` (a file by its image). Model metadata keeps one knob:
+  `embedding: { model, dimensions }` when the host's default embedding model will not do (images
+  need a multimodal model), or `embedding: false` for lexical-only (the platform `user` and `team`).
+- `search` is one string, one grammar, the same in `findMany`, `read_collection` and the browser
+  finder (`parseCollectionSearch` in `@norbital-ai/std/collection`):
+  - plain text is deterministic. `bolt_search_document(text)` (schema-plan functions in
+    `read/search.ts`) folds NFKC, case and accents and indexes two forms of every word: native
+    (words, CJK suffixes) and Latin sounds — every script romanized per code point by one table
+    (`read/romanization.ts`: pinyin with a second reading for Han, any-ascii for the rest, so
+    `moskva` finds Москва and `beijing` 北京), plus consonant skeletons for typos. A query matches
+    through that GIN index and is ranked closest first (all words present, share of the query
+    matched, trigram closeness), ties by id. Romanization runs in SQL at write time, so raw-SQL
+    seed loads and bulk writes are covered.
+  - `/semantic <text>` embeds the text once and fuses the deterministic rank with the vector rank
+    by reciprocal-rank fusion (`1/(60 + rank)` per list): an exact or slipped hit stays first, and
+    rows found only by meaning follow.
+  - `/<index> <json>` asks a `similarity` index declared on `+collection.ts`, whose target is its
+    capture form's values as a JSON object; the workspace embeds it. Raw vectors are never accepted
+    from the browser.
 - `findNearest` is a server operation.
 - Grouped reads are exact, server-side, and bounded; they are not recomputed from a browser page.
 - History reconstruction happens before policy masking, so a field mask cannot change patch meaning.

@@ -6,14 +6,14 @@
 	 * `/semantic` takes a sentence to the embedding index; `/<index>` takes a target through the
 	 * capture form that index declared, because a colour, a coordinate or a fingerprint is a form,
 	 * not a phrase. The box captures the intent and shows the right control for it; what it commits
-	 * is one `CollectionSearch` command the query sends as it is.
+	 * is the one search string the query sends as it is: `text`, `/semantic text`, `/<index> {json}`.
 	 */
 	import type {
 		CollectionRecord,
 		CollectionSearch,
 		CollectionSimilarityIndex
 	} from '@norbital-ai/std/collection';
-	import { COLLECTION_SEARCH_MAX_LENGTH } from '@norbital-ai/std/collection';
+	import { COLLECTION_SEARCH_MAX_LENGTH, parseCollectionSearch } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { debounce } from 'es-toolkit/function';
@@ -82,10 +82,10 @@
 	};
 
 	/**
-	 * `/text` and `/semantic` are the platform's own, listed on every collection: the built-in
-	 * search by meaning is one command everywhere, greyed where the model declares no embedding
-	 * rather than absent, so the box reads the same on every table. Declared indexes may not take
-	 * those names (`defineCollection` refuses them).
+	 * `/semantic` is the platform's own, listed on every collection: the built-in search by meaning
+	 * is one command everywhere, greyed where no column is searchable rather than absent, so the box
+	 * reads the same on every table. A declared index may not take the name (`defineCollection`
+	 * refuses it).
 	 */
 	type Command = Readonly<{
 		name: string;
@@ -111,20 +111,29 @@
 		const command = commands.find((candidate) => candidate.name === name);
 		return command === undefined || command.unavailable !== undefined ? undefined : command.mode;
 	};
+	/** A committed `/<index>` argument back into its capture form; anything unreadable is empty. */
+	function parsedTarget(json: string): Readonly<Record<string, unknown>> {
+		try {
+			const value: unknown = JSON.parse(json);
+			return typeof value === 'object' && value !== null && !Array.isArray(value)
+				? (value as Readonly<Record<string, unknown>>)
+				: {};
+		} catch {
+			return {};
+		}
+	}
 
 	// svelte-ignore state_referenced_locally -- the box owns its draft independently of query refreshes.
+	const seed = parseCollectionSearch(initial ?? '');
+	// svelte-ignore state_referenced_locally
 	let mode = $state<Mode>(
-		initial?.mode === 'semantic'
-			? { kind: 'semantic' }
-			: initial?.mode === 'nearest'
-				? (modeOf(initial.index) ?? { kind: 'lexical' })
-				: { kind: 'lexical' }
+		seed.command === undefined ? { kind: 'lexical' } : (modeOf(seed.command) ?? { kind: 'lexical' })
 	);
 	// svelte-ignore state_referenced_locally
-	let term = $state(initial !== null && initial.mode !== 'nearest' ? initial.term : '');
+	let term = $state(mode.kind === 'nearest' ? '' : seed.term);
 	// svelte-ignore state_referenced_locally
 	let target = $state<Readonly<Record<string, unknown>>>(
-		initial?.mode === 'nearest' ? initial.target : {}
+		mode.kind === 'nearest' ? parsedTarget(seed.term) : {}
 	);
 
 	/** `/` at the start opens the command list; the rest of the text filters it. */
@@ -151,7 +160,7 @@
 			commit(null);
 			return;
 		}
-		commit({ mode: mode.kind === 'semantic' ? 'semantic' : 'lexical', term: value });
+		commit(mode.kind === 'semantic' ? `/semantic ${value}` : value);
 	};
 
 	/** A nearest command needs every required control; until then the box searches nothing. */
@@ -165,7 +174,7 @@
 				field.optional === true ||
 				(next[field.name] !== undefined && next[field.name] !== null && next[field.name] !== '')
 		);
-		commit(complete ? { mode: 'nearest', index: index.name, target: next } : null);
+		commit(complete ? `/${index.name} ${JSON.stringify(next)}` : null);
 	};
 
 	const choose = (name: string): void => {

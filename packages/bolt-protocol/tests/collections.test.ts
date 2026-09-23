@@ -113,37 +113,18 @@ describe('the collection mutation push', () => {
 	});
 });
 
-describe('collection search commands', () => {
+describe('collection search', () => {
 	const query = { collection: 'orders' } as const;
 
-	it('admits explicit lexical and semantic search commands', () => {
-		expect(
-			Schema.is(CollectionQueryRequest)({
-				...query,
-				search: { mode: 'lexical', term: 'open invoices' }
-			})
-		).toBe(true);
-		expect(
-			Schema.is(CollectionQueryRequest)({
-				...query,
-				search: { mode: 'semantic', term: 'similar contract disputes' }
-			})
-		).toBe(true);
+	it('is one string: plain text, /semantic or /<index>', () => {
+		for (const search of ['open invoices', '/semantic similar disputes', '/colour {"l":50}'])
+			expect(Schema.is(CollectionQueryRequest)({ ...query, search })).toBe(true);
 	});
 
-	it('refuses strings, unknown modes, and empty commands', () => {
-		expect(Schema.is(CollectionQueryRequest)({ ...query, search: 'open invoices' })).toBe(false);
+	it('refuses the retired structured commands and an empty string', () => {
 		expect(
-			Schema.is(CollectionQueryRequest)({
-				...query,
-				search: { mode: 'hybrid', term: 'ordinary typing' }
-			})
+			Schema.is(CollectionQueryRequest)({ ...query, search: { mode: 'lexical', term: 'x' } })
 		).toBe(false);
-		expect(
-			Schema.is(CollectionQueryRequest)({ ...query, search: { mode: 'lexical', term: '' } })
-		).toBe(false);
-		expect(
-			Schema.is(CollectionQueryRequest)({ ...query, search: { mode: 'semantic', term: '' } })
-		).toBe(false);
+		expect(Schema.is(CollectionQueryRequest)({ ...query, search: '' })).toBe(false);
 	});
 });

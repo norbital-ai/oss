@@ -52,11 +52,10 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 	history: true,
 	indexes: [],
 	exclusions: [],
-	embedding: { fields: [] }
+	embedding: {}
 };
 
 const MODEL_EMBEDDING: Required<ModelEmbedding> = {
-	fields: [],
 	model: '',
 	dimensions: 1
 };
@@ -65,7 +64,8 @@ const MODEL_EMBEDDING: Required<ModelEmbedding> = {
 const TEXT_OPTIONS: Required<NonNullable<Parameters<typeof text>[0]>> = { search: true };
 const FILE_OPTIONS: Required<NonNullable<Parameters<typeof file>[0]>> = {
 	mimeTypes: [],
-	multiple: true
+	multiple: true,
+	search: true
 };
 const VECTOR_OPTIONS: Required<Parameters<typeof vector>[0]> = { dimensions: 1 };
 
@@ -101,9 +101,8 @@ const WITNESSES: ReadonlyArray<Witness> = [
 		authoring: 'ModelEmbedding',
 		options: MODEL_EMBEDDING,
 		readBy: {
-			fields: 'recordEmbeddingInput',
-			model: 'embedRecords',
-			dimensions: 'embedRecords'
+			model: 'embeddingModel',
+			dimensions: 'embeddingModel'
 		},
 		acceptedButUnread: {}
 	},
@@ -116,7 +115,11 @@ const WITNESSES: ReadonlyArray<Witness> = [
 	{
 		authoring: 'file options',
 		options: FILE_OPTIONS,
-		readBy: { mimeTypes: 'describeModelColumns', multiple: 'describeModelColumns' },
+		readBy: {
+			mimeTypes: 'describeModelColumns',
+			multiple: 'describeModelColumns',
+			search: 'describeModelColumns'
+		},
 		acceptedButUnread: {}
 	},
 	{

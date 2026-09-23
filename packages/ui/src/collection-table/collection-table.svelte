@@ -306,7 +306,7 @@
 	 * sortable — the order it reports is the order the rows already come in.
 	 */
 	const distanceColumn = $derived.by((): TCreateColumnProps<GridRow, unknown>[] =>
-		queryState.searchCommand?.mode === 'nearest'
+		queryState.nearestSearch
 			? [
 					{
 						id: SEARCH_DISTANCE_COLUMN,
@@ -452,8 +452,7 @@
 				with: { ...automaticRelationshipWith, ...(query?.with ?? {}) },
 				search: queryState.searchCommand,
 				// A ranked search owns the order; the table's own sort would undo it.
-				orderBy:
-					queryState.searchCommand?.mode === 'nearest' ? undefined : (orderBy ?? defaultOrderBy),
+				orderBy: queryState.nearestSearch ? undefined : (orderBy ?? defaultOrderBy),
 				// The first live answer intentionally has no cursor (§2.3). Ask for a growing live
 				// window and slice the visible page rather than labelling page one as a cursor page it
 				// is not; later pages stay live and no sequential cursor walk is hidden behind a click.

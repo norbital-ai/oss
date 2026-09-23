@@ -9,6 +9,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
 import {
+	DEFAULT_RECORD_EMBEDDING_DIMENSIONS,
 	EMBEDDED_AT_COLUMN,
 	RECORD_EMBEDDING_COLUMN,
 	RECORD_EMBEDDING_FINGERPRINT_COLUMN
@@ -62,9 +63,26 @@ const encodeJsonText = (value: unknown): string => {
 
 type EmbeddingPorts = Readonly<{
 	readonly database: Pick<Database.Interface, 'execute'>;
-	readonly ai: Pick<AIInterface, 'embed'>;
+	readonly ai: Pick<AIInterface, 'catalog' | 'embed'>;
 	readonly collections: ReadonlyArray<EmbeddingCollection>;
 }>;
+
+/**
+ * The model and width a collection embeds with — its declared knob, else the host's default model —
+ * shared by the record pass and the query probe so the two vectors are always comparable. The width
+ * is always sent: the column was created with it.
+ */
+export const embeddingModel = Effect.fn('Collections.embeddingModel')(function* (
+	ai: Pick<AIInterface, 'catalog'>,
+	effectId: EffectId,
+	declared: Readonly<{ readonly model?: string; readonly dimensions?: number }>
+) {
+	const modelId =
+		declared.model === undefined
+			? (yield* ai.catalog(effectId, { _tag: 'Catalog' })).defaultEmbeddingModelId
+			: ModelId.make(declared.model);
+	return { modelId, dimensions: declared.dimensions ?? DEFAULT_RECORD_EMBEDDING_DIMENSIONS };
+});
 
 /** Builds one provider-neutral embedding input plus host-resolved image descriptors per record. */
 export const recordEmbeddingInput = Effect.fn('Collections.recordEmbeddingInput')(function* (
@@ -130,17 +148,6 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 		if (only !== undefined && !only.has(collection.name)) continue;
 		const declared = collection.embedding;
 		if (declared === undefined) continue;
-		if (declared.model === undefined || declared.model.trim() === '') {
-			summary.push({
-				collection: collection.name,
-				selected: 0,
-				embedded: 0,
-				failed: 0,
-				issues: ['A collection embedding declaration requires an explicit model id']
-			});
-			continue;
-		}
-		const modelId = ModelId.make(declared.model);
 		const targetIds = targets?.get(collection.name);
 		if (targets !== undefined && (targetIds === undefined || targetIds.length === 0)) continue;
 		const fields = declared.fields.filter((name) => collection.fields[name] !== undefined);
@@ -221,15 +228,19 @@ export const embedRecords = Effect.fn('Collections.embedRecords')(function* (
 			 * host facility splits the request to fit it; Bolt names no batch size.
 			 */
 			const requestId = `${batchId}:embedding:0`;
-			const flattened = yield* ports.ai
-				.embed(
-					EffectId.make(requestId),
-					AIRequest.cases.Embed.make({
-						callId: ProviderCallId.make(requestId),
-						modelId,
-						inputs: prepared.map((item) => item.input),
-						...(declared.dimensions === undefined ? {} : { dimensions: declared.dimensions })
-					})
+			const flattened = yield* embeddingModel(ports.ai, EffectId.make(`${batchId}:model`), declared)
+				.pipe(
+					Effect.flatMap(({ modelId, dimensions }) =>
+						ports.ai.embed(
+							EffectId.make(requestId),
+							AIRequest.cases.Embed.make({
+								callId: ProviderCallId.make(requestId),
+								modelId,
+								inputs: prepared.map((item) => item.input),
+								dimensions
+							})
+						)
+					)
 				)
 				.pipe(
 					Effect.match({

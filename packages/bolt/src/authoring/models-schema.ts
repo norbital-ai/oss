@@ -47,23 +47,17 @@ export interface ModelExclusion {
 }
 
 /**
- * One embedding of the whole record, over the attributes the author chooses.
+ * The model behind a collection's record embedding, chosen once for the whole collection.
  *
- * Record-level rather than per-attribute: what makes two job photographs the same scene is the
- * photograph together with what was written about it, and an embedding per column can only ever
- * compare halves. The platform maintains the vector as a system column, so authored code never
- * calls a model — it declares which fields mean something and searches with `findNearest`.
- *
- * `fields` names declared columns. Text-shaped columns contribute their text; `file()` columns
- * contribute their bytes as an image part, so a photograph participates directly rather than
- * through a caption about it.
+ * Which columns feed the vector is not declared here: every column marked `search: true` does —
+ * text contributes its words, a `file()` its image — beside the deterministic lexical document the
+ * same mark builds. Declare this only when the host's default embedding model will not do (an image
+ * needs a multimodal model), or `false` to keep the collection's search lexical.
  */
-export interface ModelEmbedding<Field extends string = string> {
-	/** Declared columns that feed the vector, in the order they are sent to the model. */
-	readonly fields: ReadonlyArray<Field>;
+export interface ModelEmbedding {
 	/** The embeddings model; the host's configured default when absent. */
 	readonly model?: string;
-	/** Matryoshka truncation, when the model supports it. The model's own width when absent. */
+	/** Matryoshka truncation and the vector column's width; 256 when absent. */
 	readonly dimensions?: number;
 }
 
@@ -78,7 +72,7 @@ export interface ModelEmbedding<Field extends string = string> {
  * `tests/authoring/metadata-witness.test.ts` holds this interface against the function that reads
  * each key, so a key added here has to name its reader or be listed as knowingly unread.
  */
-export interface ModelMetadata<Field extends string = string> {
+export interface ModelMetadata {
 	readonly description?: string;
 	/**
 	 * The column, or columns, that name a record on screen.
@@ -91,8 +85,8 @@ export interface ModelMetadata<Field extends string = string> {
 	readonly history?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
-	/** One platform-maintained vector over the named fields. See `ModelEmbedding`. */
-	readonly embedding?: ModelEmbedding<Field>;
+	/** The searchable columns' embedding model, or `false` for lexical-only. See `ModelEmbedding`. */
+	readonly embedding?: ModelEmbedding | false;
 }
 
 export interface ModelDeclaration<
@@ -264,27 +258,17 @@ const decodeVectorDimensions = Schema.decodeUnknownSync(
 
 const validateEmbeddingDeclaration = (
 	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
-	embedding: ModelEmbedding | undefined
+	embedding: ModelEmbedding | false | undefined
 ): void => {
-	if (embedding === undefined) return;
-	if (embedding.fields.length === 0)
-		throw new TypeError('A model embedding must name at least one source field.');
-	const seen = new Set<string>();
-	for (const field of embedding.fields) {
-		if (seen.has(field)) throw new TypeError(`A model embedding names ${field} more than once.`);
-		seen.add(field);
-		const builder = columns[field];
-		if (builder === undefined)
-			throw new TypeError(`A model embedding names undeclared field ${field}.`);
-		if (isReferenceBuilder(builder))
-			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
+	if (embedding === undefined || embedding === false) return;
+	const searchable = Object.values(columns).some((builder) => {
 		const config = Reflect.get(builder, 'config');
-		const embeddable =
-			isRecord(config) &&
-			(Reflect.get(config, 'dataType') === 'string' || Reflect.get(config, 'boltFile') === true);
-		if (!embeddable)
-			throw new TypeError(`A model embedding field ${field} must be text or file data.`);
-	}
+		return isRecord(config) && Reflect.get(config, 'boltSearch') === true;
+	});
+	if (!searchable)
+		throw new TypeError(
+			'A model embedding embeds the columns marked `search: true`, and this model marks none.'
+		);
 	if (embedding.dimensions !== undefined) decodeVectorDimensions(embedding.dimensions);
 };
 
@@ -292,7 +276,7 @@ const validateEmbeddingDeclaration = (
 const ColumnAuthoring = {
 	defineModel: <const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>>(
 		columns: TColumns,
-		metadata?: ModelMetadata<keyof TColumns & string>
+		metadata?: ModelMetadata
 	): ModelDeclaration<TColumns> => {
 		validateEmbeddingDeclaration(columns, metadata?.embedding);
 		return {
@@ -447,18 +431,25 @@ const manyFilesColumn = () => jsonb().$type<ReadonlyArray<FileRef>>();
 function fileColumn(options?: {
 	readonly mimeTypes?: ReadonlyArray<string>;
 	readonly multiple?: false;
+	readonly search?: boolean;
 }): ReturnType<typeof oneFileColumn>;
 function fileColumn(options: {
 	readonly mimeTypes?: ReadonlyArray<string>;
 	readonly multiple: true;
+	readonly search?: boolean;
 }): ReturnType<typeof manyFilesColumn>;
 function fileColumn(
 	options: {
 		readonly mimeTypes?: ReadonlyArray<string>;
 		readonly multiple?: boolean;
+		readonly search?: boolean;
 	} = {}
 ) {
-	const builder = options.multiple === true ? manyFilesColumn() : oneFileColumn();
+	// `search: true` on a file feeds its image to the record embedding; files have no lexical form.
+	const builder = ColumnAuthoring.searchable(
+		options.multiple === true ? manyFilesColumn() : oneFileColumn(),
+		options
+	);
 	const config = Reflect.get(builder, 'config');
 	if (isRecord(config)) {
 		Reflect.set(config, 'boltPresentationKind', 'file');

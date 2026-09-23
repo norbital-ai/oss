@@ -14,7 +14,7 @@ describe('collection query boundary', () => {
 			where: { repayment_agreement_id: { isNull: true } },
 			orderBy: { event_date: 'desc' },
 			with: { entry_pay_component: { columns: { code: true } } },
-			search: { mode: 'lexical', term: 'loan' },
+			search: 'loan',
 			after: 'cursor-token',
 			limit: 25
 		});
@@ -24,7 +24,7 @@ describe('collection query boundary', () => {
 			where: { repayment_agreement_id: { isNull: true } },
 			orderBy: { event_date: 'desc' },
 			with: { entry_pay_component: { columns: { code: true } } },
-			search: { mode: 'lexical', term: 'loan' },
+			search: 'loan',
 			after: 'cursor-token'
 		});
 	});

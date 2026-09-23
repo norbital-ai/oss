@@ -9,6 +9,7 @@
 		CollectionRow,
 		CollectionType
 	} from '@norbital-ai/std/collection';
+	import { parseCollectionSearch } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { getCollectionClientForSurface } from '#lib/collection-runtime';
@@ -132,8 +133,8 @@
 				onSearchChange={(search) =>
 					search === null
 						? query.setSearch('')
-						: search.mode === 'lexical'
-							? query.setSearch(search.term)
+						: parseCollectionSearch(search).command === undefined
+							? query.setSearch(search)
 							: query.setSearchCommand(search)}
 				onFilterChange={applyFilters}
 			/>

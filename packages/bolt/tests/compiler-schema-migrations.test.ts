@@ -377,8 +377,8 @@ describe('Bolt Drizzle-driven schema migration', () => {
 			planWorkspaceMigration({
 				models: {
 					articles: defineModel(
-						{ title: text(), body: text() },
-						{ embedding: { fields: ['title', 'body'], dimensions: 384 } }
+						{ title: text({ search: true }), body: text({ search: true }) },
+						{ embedding: { dimensions: 384 } }
 					)
 				},
 				relationships: () => ({}),

@@ -336,31 +336,45 @@ export const describeModelColumns = (
 };
 
 /**
- * The columns a collection opted into free-text search, sorted.
+ * The columns the lexical document covers, sorted: every `search: true` column except files.
  *
- * One reader, because the generated tsvector and the ranking have to cover exactly
- * the same columns: an index over a field search never reads is dead weight, and a searched field
- * absent from the document is a sequential scan or a false negative. The opt-in is decided once —
- * `boltSearch` is written only by `text()`, `phone()` and `enums()`, and `describeModelColumns` is the only
- * thing that reads it — so every consumer here is agreeing with that decision rather than restating
- * it. `isSearchableCollectionField` in `@norbital-ai/std/collection` is the same rule stated over the
- * *client catalog* field, where a `kind` exists to weigh; `tests/authoring/searchable-fields.test.ts`
- * pins the two to the same answer so the DDL and the search UI cannot drift apart.
+ * One reader, because the generated tsvector and the ranking have to cover exactly the same
+ * columns: an index over a field search never reads is dead weight, and a searched field absent
+ * from the document is a false negative. A searchable `file()` has no words; it feeds only the
+ * record embedding (`recordEmbedding`). `isSearchableCollectionField` in `@norbital-ai/std/collection`
+ * is the same rule over the *client catalog* field; `tests/authoring-searchable-fields.test.ts` pins
+ * the two to the same answer so the DDL and the search UI cannot drift apart.
  */
 export const searchableColumns = (
 	fields: Readonly<Record<string, FieldDefinition>>
 ): ReadonlyArray<string> =>
 	Object.entries(fields)
+		.filter(([, field]) => field.search === true && field.file !== true)
+		.map(([name]) => name)
+		.toSorted();
+
+/**
+ * The record embedding a model gets from its `search: true` columns, text and files alike, sorted —
+ * the same mark that builds the lexical document — unless the model says `embedding: false`.
+ */
+const recordEmbedding = (
+	metadata: ModelDeclaration['metadata'],
+	fields: Readonly<Record<string, FieldDefinition>>
+) => {
+	if (metadata?.embedding === false) return undefined;
+	const names = Object.entries(fields)
 		.filter(([, field]) => field.search === true)
 		.map(([name]) => name)
 		.toSorted();
+	return names.length === 0 ? undefined : { ...metadata?.embedding, fields: names };
+};
 
 /** Platform column containing the immutable, generated lexical document. */
 export const SEARCH_DOCUMENT_COLUMN = 'search_document';
 
 /**
  * The stored document expression: the searchable text handed to `bolt_search_document`, the
- * schema plan's lexical tokeniser (folding, CJK n-grams, pinyin, consonant skeletons).
+ * schema plan's lexical tokeniser (folding, CJK n-grams, romanization, consonant skeletons).
  *
  * PostgreSQL does not allow one generated column to reference another. A searchable authored field
  * may itself be generated, so the document has to inline that field's owning expression rather than
@@ -456,6 +470,7 @@ export const compileModel = (
 	const structuredIndexes = indexes.filter((index) => simpleIndexColumn(index) === undefined);
 	const exclusions = metadata?.exclusions ?? [];
 	const lexicalFields = searchableColumns(described);
+	const embedding = recordEmbedding(metadata, described);
 	const authoredLabel = metadata?.recordLabel;
 	const recordLabel = isString(authoredLabel) ? authoredLabel : authoredLabel?.join(" + ' · ' + ");
 	return {
@@ -475,11 +490,11 @@ export const compileModel = (
 						documentColumn: SEARCH_DOCUMENT_COLUMN
 					}
 				}),
-		...(metadata?.embedding === undefined
+		...(embedding === undefined
 			? {}
 			: {
 					embedding: {
-						...metadata.embedding,
+						...embedding,
 						vectorColumn: RECORD_EMBEDDING_COLUMN,
 						embeddedAtColumn: EMBEDDED_AT_COLUMN,
 						sourceFingerprintColumn: RECORD_EMBEDDING_FINGERPRINT_COLUMN
@@ -937,11 +952,11 @@ const searchDocumentColumn = (
 	};
 };
 
-/** The physical fields maintained by embedding settle, or nothing when none is declared. */
+/** The physical fields maintained by embedding settle, or nothing when no column is searchable. */
 const recordEmbeddingColumns = (
 	declaration: ModelDeclaration | undefined
 ): Readonly<Record<string, AnyPgColumnBuilder>> => {
-	const embedding = declaration?.metadata?.embedding;
+	const embedding = recordEmbedding(declaration?.metadata, describeModel(declaration));
 	if (embedding === undefined) return {};
 	return {
 		[RECORD_EMBEDDING_COLUMN]: vector({

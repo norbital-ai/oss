@@ -13,15 +13,17 @@ interface TestSchema {
 
 declare const articles: Api<TestSchema>['db']['articles'];
 
-const searchModesAreExplicit: string extends NonNullable<
+const searchIsOneString: NonNullable<
 	SchemaQueryConfig<TestSchema, 'articles'>['search']
->
-	? false
-	: true = true;
+> extends string
+	? true
+	: false = true;
 
 const admitted = () => {
-	articles.findMany({ search: { mode: 'lexical', term: 'ordinary lexical typing' } });
-	articles.findMany({ search: { mode: 'semantic', term: 'similar disputes' } });
+	articles.findMany({ search: 'ordinary lexical typing' });
+	articles.findMany({ search: '/semantic similar disputes' });
+	// @ts-expect-error the structured search modes are retired: one string, one grammar
+	articles.findMany({ search: { mode: 'lexical', term: 'x' } });
 };
 
 const refused = () => {
@@ -49,8 +51,8 @@ const refused = () => {
 };
 
 describe('collection query search types', () => {
-	it('keeps lexical and semantic modes distinct and removes ignored query members', () => {
-		expect(searchModesAreExplicit).toBe(true);
+	it('takes search as one string and removes ignored query members', () => {
+		expect(searchIsOneString).toBe(true);
 		expect(typeof admitted).toBe('function');
 		expect(typeof refused).toBe('function');
 	});

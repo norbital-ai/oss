@@ -63,7 +63,7 @@ it('starts a typed record search when its delayed catalogue arrives', async () =
 		flushSync();
 		await vi.waitFor(() =>
 			expect(findRecords).toHaveBeenCalledWith('sites', {
-				search: { mode: 'lexical', term: 'Sunnyview' },
+				search: 'Sunnyview',
 				limit: 8
 			})
 		);

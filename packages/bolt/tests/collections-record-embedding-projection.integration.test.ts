@@ -20,9 +20,9 @@ import {
  * every assignment clear.
  */
 const base = testWorkspace({
-	collections: [{ name: 'photos', fields: { caption: field.string() } }]
+	collections: [{ name: 'photos', fields: { caption: { ...field.string(), search: true } } }]
 });
-/** The compiler attaches `embedding` from the model's declaration; `collection()` never takes it. */
+/** The compiler attaches `embedding` from the searchable columns; `collection()` never takes it. */
 const definition: WorkspaceDefinition = {
 	...base,
 	collections: base.collections.map((photos) => ({

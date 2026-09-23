@@ -18,6 +18,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import {
 	isSystemCollectionField,
+	parseCollectionSearch,
 	type CollectionFilter,
 	type CollectionFilterOptions,
 	type CollectionHistoryAnchor,
@@ -172,17 +173,19 @@ type ClientCommandName = FixedCommandName | `invoke.${string}`;
 type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
 
 /**
- * A cursor page is one-shot, and so is a nearest search: it is planned against the server's index
- * and read once, the way the engine admits it (`vector-nearest ordering is one-shot`), rather than
- * mounted as a live prefix the sync lane would refuse. A semantic search stays live; the lane
- * carries that arm.
+ * A cursor page is one-shot, and so is a declared-index search (`/<index>`): it is planned against
+ * the server's index and read once, the way the engine admits it (`vector-nearest ordering is
+ * one-shot`), rather than mounted as a live prefix the sync lane would refuse. Plain text and
+ * `/semantic` stay live; the lane carries them.
  */
 const collectionReadMode = (
 	after: Schema.Json | undefined,
 	search: Schema.Json | undefined
 ): CollectionReadMode => {
-	const mode = isRecord(search) ? search['mode'] : undefined;
-	return after === undefined && mode !== 'nearest' ? { kind: 'live' } : { kind: 'anchored' };
+	const command = typeof search === 'string' ? parseCollectionSearch(search).command : undefined;
+	return after === undefined && (command === undefined || command === 'semantic')
+		? { kind: 'live' }
+		: { kind: 'anchored' };
 };
 
 const decodedCommandEffect = <Name extends FixedCommandName, Output extends Schema.Top>(

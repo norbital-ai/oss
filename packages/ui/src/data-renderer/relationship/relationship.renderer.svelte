@@ -72,9 +72,7 @@
 					: declaredWhere,
 				...(relationOptions?.with ? { with: relationOptions.with } : {}),
 				...(relationOptions?.orderBy ? { orderBy: relationOptions.orderBy } : {}),
-				...(searchQuery.trim()
-					? { search: { mode: 'lexical' as const, term: searchQuery.trim() } }
-					: {}),
+				...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
 				limit: relationOptions?.limit ?? 100
 			}
 		};

@@ -125,27 +125,24 @@ export interface CollectionField<TName extends string = string> {
 export const COLLECTION_SEARCH_MAX_LENGTH = 200;
 
 /**
- * One collection search command.
+ * One collection search, as a person or an agent types it.
  *
- * Every branch is explicit so callers cannot accidentally route ordinary type-ahead through the
- * embedding path. `nearest` names one of the collection's declared similarity indexes and hands
- * it the target as the index's own capture form states it; the workspace's embedder turns that
- * into the probe, never the browser.
+ * Plain text is deterministic search: native words, typo skeletons, CJK phrases and the Latin
+ * reading of every script, ranked closest first. `/semantic <text>` fuses that ranking with the
+ * record embedding's (reciprocal-rank fusion), so an exact hit is never lost to a vector. `/<index>
+ * <json>` asks a declared similarity index, the JSON object being its capture form's values.
  */
-export type CollectionSearch =
-	| Readonly<{
-			readonly mode: 'lexical';
-			readonly term: string;
-	  }>
-	| Readonly<{
-			readonly mode: 'semantic';
-			readonly term: string;
-	  }>
-	| Readonly<{
-			readonly mode: 'nearest';
-			readonly index: string;
-			readonly target: Readonly<Record<string, unknown>>;
-	  }>;
+export type CollectionSearch = string;
+
+/** A leading `/<name>` is a command and the rest its argument; anything else is plain text. */
+export const parseCollectionSearch = (
+	search: CollectionSearch
+): Readonly<{ readonly command?: string; readonly term: string }> => {
+	const match = /^\/([a-z][a-z0-9_]*)(?:\s+([\s\S]*))?$/.exec(search.trim());
+	return match === null
+		? { term: search.trim() }
+		: { command: match[1] ?? '', term: (match[2] ?? '').trim() };
+};
 
 /**
  * The column a nearest search attaches beside each row: the distance the row was ranked by. Named
@@ -250,7 +247,7 @@ export type CollectionWhere<_TRow extends object> = { readonly [field: string]: 
 export interface CollectionBaseQuery<TRow extends object> {
 	readonly with?: Record<string, unknown>;
 	readonly where?: CollectionWhere<TRow>;
-	/** Explicit lexical or semantic collection search. */
+	/** Plain text, `/semantic <text>` or `/<index> <json>`. See `CollectionSearch`. */
 	readonly search?: CollectionSearch;
 	readonly columns?: Record<string, boolean>;
 	readonly orderBy?: Partial<Record<Extract<keyof TRow, string>, 'asc' | 'desc'>>;

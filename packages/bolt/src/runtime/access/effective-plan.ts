@@ -1,5 +1,6 @@
 import { Result, Schema } from 'effect';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
+import { parseCollectionSearch } from '@norbital-ai/std/collection';
 import { asc, desc, getColumns, type SQL } from 'drizzle-orm';
 import {
 	MAX_COLLECTION_PREDICATE_DEPTH,
@@ -179,7 +180,7 @@ type EffectiveQueryExecution = Readonly<{
 	readonly columns?: unknown;
 	readonly limit: number;
 	readonly after?: string;
-	readonly search?: Readonly<{ readonly mode?: unknown }>;
+	readonly search?: string;
 }>;
 type EffectiveAuthorityPlan = Readonly<{
 	readonly collections: ReadonlyArray<string>;
@@ -1647,7 +1648,7 @@ type EffectiveQueryPlanInput = Readonly<{
 	readonly columns?: unknown;
 	readonly limit?: number;
 	readonly after?: string;
-	readonly search?: Readonly<{ readonly mode?: unknown }>;
+	readonly search?: string;
 	readonly kind: 'findMany' | 'findFirst' | 'count' | 'findGrouped';
 	readonly subject: Subject;
 	readonly policyFor: (collection: string) => RowPredicate;
@@ -1684,12 +1685,14 @@ export const compileEffectiveQueryPlan = (
 		node: 'query.userFilter'
 	});
 	if (Result.isFailure(userFilter)) return failed(userFilter);
+	// A `/command` ranks by a vector measured once against its probe; plain text stays live.
+	const vectorSearch =
+		input.search !== undefined && parseCollectionSearch(input.search).command !== undefined;
 	const mode: EffectivePlanMode =
 		input.kind === 'count' ||
 		input.kind === 'findGrouped' ||
 		input.after !== undefined ||
-		input.search?.mode === 'semantic' ||
-		input.search?.mode === 'nearest'
+		vectorSearch
 			? 'one-shot'
 			: 'live-prefix';
 	const requestedLimit = input.kind === 'findFirst' ? 1 : (input.limit ?? DEFAULT_LIVE_PREFIX);
@@ -1725,7 +1728,7 @@ export const compileEffectiveQueryPlan = (
 			? `${input.kind} is an aggregate one-shot read`
 			: input.after !== undefined
 				? 'an anchored cursor page is one-shot'
-				: input.search?.mode === 'semantic' || input.search?.mode === 'nearest'
+				: vectorSearch
 					? 'vector-nearest ordering is one-shot'
 					: undefined;
 	const semantics = mergePredicateSemantics([

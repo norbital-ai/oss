@@ -126,9 +126,9 @@ export type SystemRow = {
  * The platform's record embedding, offered to every row shape and optional on all of them.
  *
  * Not part of `SystemRow`: that type is derived from `defineSystemRowModel`, and adding it there
- * would give every table the physical column, when only a collection that declares
- * `embedding` gets one. Optional rather than required because it is absent in exactly two ordinary
- * situations — a collection that declares no embedding, and a row whose vector has not been written
+ * would give every table the physical column, when only a collection with a `search: true` column
+ * gets one. Optional rather than required because it is absent in exactly two ordinary
+ * situations — a collection that marks no column searchable, and a row whose vector has not been written
  * yet — so authored code has to narrow before using it, which is the truth about the value.
  */
 type RecordEmbeddingRow = {
@@ -949,7 +949,7 @@ export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
 	 * Fills missing platform record embeddings for one collection, host-side.
 	 *
 	 * A record embedding is a platform column, so no authored write can set it: the host reads the
-	 * collection's declared embedding fields, resolves a file field into its image, embeds, and
+	 * collection's `search: true` columns, resolves a file column into its image, embeds, and
 	 * writes the vector. One call is bounded and re-runnable — it selects only rows that have none —
 	 * so a scheduled pass loops until `selected` is zero. `ids` narrows the pass to named rows.
 	 */

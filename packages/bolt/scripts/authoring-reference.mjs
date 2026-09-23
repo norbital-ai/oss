@@ -96,6 +96,7 @@ export const SECTIONS = [
 			[`${AUTHORING}models-schema.d.ts`]: [
 				'defineModel',
 				'ModelMetadata',
+				'ModelEmbedding',
 				'text',
 				'numeric',
 				'instant',

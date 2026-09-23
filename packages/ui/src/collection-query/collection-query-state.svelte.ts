@@ -1,8 +1,9 @@
-import type {
-	CollectionFilter,
-	CollectionFilterOptions,
-	CollectionRecord,
-	CollectionSearch
+import {
+	parseCollectionSearch,
+	type CollectionFilter,
+	type CollectionFilterOptions,
+	type CollectionRecord,
+	type CollectionSearch
 } from '@norbital-ai/std/collection';
 import { PersistedState } from 'runed';
 import { Number as Number_ } from 'effect';
@@ -58,9 +59,9 @@ const MAX_COLLECTION_PAGE_SIZE = 500;
 export class CollectionQueryState<TRow extends object = CollectionRecord> {
 	#search = $state('');
 	/**
-	 * The search as a command, when the box captured one that is not plain text: `/semantic` with
-	 * a term, or `/<index>` with a target from the index's own form. Plain text is `#search` and
-	 * reaches the query as the lexical command; this wins over it whenever set.
+	 * The search as a command, when the box captured one that is not plain text: `/semantic <text>`,
+	 * or `/<index> <json>` with a target from the index's own form. Plain text is `#search`; this
+	 * wins over it whenever set.
 	 */
 	#searchCommand = $state<CollectionSearch | null>(null);
 	#filters = $state<readonly CollectionFilter[]>([]);
@@ -87,10 +88,16 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 		return this.#search;
 	}
 
-	/** The search command the query sends: the captured command, else the lexical text, else none. */
+	/** The search the query sends: the captured command, else the plain text, else none. */
 	get searchCommand(): CollectionSearch | undefined {
-		if (this.#searchCommand !== null) return this.#searchCommand;
-		return this.#search === '' ? undefined : { mode: 'lexical', term: this.#search };
+		return this.#searchCommand ?? (this.#search === '' ? undefined : this.#search);
+	}
+
+	/** A declared-index search: ranked by its own distance, which the rows carry. */
+	get nearestSearch(): boolean {
+		const command =
+			this.#searchCommand === null ? undefined : parseCollectionSearch(this.#searchCommand).command;
+		return command !== undefined && command !== 'semantic';
 	}
 
 	get filters(): readonly CollectionFilter[] {

@@ -185,10 +185,7 @@
 			{
 				...collectionQuery,
 				with: { ...automaticRelationshipWith, ...(collectionQuery?.with ?? {}) },
-				search:
-					queryState.search === ''
-						? collectionQuery?.search
-						: { mode: 'lexical' as const, term: queryState.search },
+				search: queryState.search === '' ? collectionQuery?.search : queryState.search,
 				orderBy: collectionQuery?.orderBy,
 				limit: BOARD_ROW_LIMIT
 			},

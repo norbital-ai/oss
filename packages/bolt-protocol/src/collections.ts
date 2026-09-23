@@ -75,37 +75,8 @@ export const StoredRecord = Schema.Record(Schema.String, Schema.Json).annotate({
 });
 export type StoredRecord = typeof StoredRecord.Type;
 
-export const CollectionLexicalSearch = Schema.Struct({
-	mode: Schema.Literal('lexical'),
-	term: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltCollectionLexicalSearch' });
-export interface CollectionLexicalSearch extends Schema.Schema.Type<
-	typeof CollectionLexicalSearch
-> {}
-
-export const CollectionSemanticSearch = Schema.Struct({
-	mode: Schema.Literal('semantic'),
-	term: Schema.NonEmptyString
-}).annotate({ identifier: 'BoltCollectionSemanticSearch' });
-export interface CollectionSemanticSearch extends Schema.Schema.Type<
-	typeof CollectionSemanticSearch
-> {}
-
-/** A declared similarity index and a target in its capture form's shape; the workspace embeds it. */
-export const CollectionNearestSearch = Schema.Struct({
-	mode: Schema.Literal('nearest'),
-	index: Schema.NonEmptyString,
-	target: Schema.Record(Schema.String, Schema.Json)
-}).annotate({ identifier: 'BoltCollectionNearestSearch' });
-export interface CollectionNearestSearch extends Schema.Schema.Type<
-	typeof CollectionNearestSearch
-> {}
-
-export const CollectionSearch = Schema.Union([
-	CollectionLexicalSearch,
-	CollectionSemanticSearch,
-	CollectionNearestSearch
-]).annotate({
+/** Plain text, `/semantic <text>` or `/<index> <json>`; `parseCollectionSearch` in std reads it. */
+export const CollectionSearch = Schema.NonEmptyString.annotate({
 	identifier: 'BoltCollectionSearch'
 });
 export type CollectionSearch = typeof CollectionSearch.Type;

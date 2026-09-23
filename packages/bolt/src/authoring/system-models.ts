@@ -175,7 +175,10 @@ const authUserModel = defineModel(
 		// administers, who belongs where — so they keep history like a tenant collection does. The
 		// rest of the platform (conversations, turns, runs, audit) is bookkeeping and keeps none.
 		history: true,
-		indexes: [systemIndex('tenantId'), systemIndex('team_id')]
+		indexes: [systemIndex('tenantId'), systemIndex('team_id')],
+		// Platform tables the schema plan owns: people and teams are found by name, never by meaning,
+		// and no record of who someone is goes to an embedding provider.
+		embedding: false
 	}
 );
 
@@ -263,7 +266,7 @@ const teamModel = defineModel(
 		/** The parent in the hierarchy, or null at the root. See `resolveTeamPolicies`. */
 		parent_id: uuid()
 	},
-	{ history: true }
+	{ history: true, embedding: false }
 );
 
 /** A compiled cron declaration; the task runner is its only reader and writer. */

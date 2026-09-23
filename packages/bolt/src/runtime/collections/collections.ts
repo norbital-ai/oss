@@ -10,12 +10,13 @@ import { emitChangeEventsMany as emitChangeEventsManyService } from '#lib/runtim
 import { automationChannels, notifyStatements, outboundRows } from '#lib/runtime/channels/channels.js';
 import type { NotifyInput } from '#lib/authoring/channels-schema.js';
 import { syncOwnershipRefusal } from '#lib/runtime/integrations/integrations.js';
-import { embedRecords as embedRecordsService } from '#lib/runtime/collections/services/embeddings.js';
+import {
+	embedRecords as embedRecordsService,
+	embeddingModel
+} from '#lib/runtime/collections/services/embeddings.js';
 import {
 	and,
-	asc,
 	count as countRows,
-	desc,
 	eq,
 	getColumns,
 	isNotNull,
@@ -42,7 +43,6 @@ import {
 	COLLECTION_MUTATION_QUARANTINE_RETENTION_MILLIS,
 	compactSyncChanges,
 	EffectId,
-	ModelId,
 	ProviderCallId,
 	type CollectionMutationPush,
 	type CollectionMutationSettlement,
@@ -1830,9 +1830,8 @@ export const layerWith = (
 			/**
 			 * Runtime branch point for search — the one implementation, wired to the read path.
 			 *
-			 * `read/search.ts` owns the whole decision (lexical for any string, including one that
-			 * begins with `>`; the embedder reached only by the structurally distinct semantic command),
-			 * and this boundary owns only what the guest runtime must add: the context from the live
+			 * `read/search.ts` owns the whole decision (plain text is deterministic; the embedder is
+			 * reached only by `/semantic`, a declared index only by its own `/<index>`), and this boundary owns only what the guest runtime must add: the context from the live
 			 * definition, the Embed call as the callback `prepareSearchPlan` awaits, and the mapping of
 			 * a search-compile failure onto the read path's `WhereCompileError` refusal. An inline copy
 			 * of that decision used to live here and drift was only a matter of time.
@@ -1861,29 +1860,32 @@ export const layerWith = (
 						message: failure.message
 					});
 				// The guest's one Embed capability, handed to the pure planner as the async callback it
-				// asks for; exactly one model call per explicit semantic request, none for any string.
+				// asks for; exactly one model call per `/semantic` request, none for plain text.
 				const embed = (term: string): Promise<ReadonlyArray<number>> =>
 					Effect.runPromise(
 						Effect.gen(function* () {
 							const embedding = definition.embedding;
-							if (embedding?.model === undefined) {
+							if (embedding === undefined) {
 								return yield* Effect.fail(
 									refusal({
 										field: 'search',
-										message: `Collection '${definition.name}' requires an explicit embedding model for semantic search.`
+										message: `Collection '${definition.name}' has no searchable column to embed.`
 									})
 								);
 							}
 							const callScope = `${effectId}:semantic-query`;
+							const { modelId, dimensions } = yield* embeddingModel(
+								ai,
+								EffectId.make(`${callScope}:model`),
+								embedding
+							);
 							const response = yield* ai.embed(
 								EffectId.make(callScope),
 								AIRequest.cases.Embed.make({
 									callId: ProviderCallId.make(callScope),
-									modelId: ModelId.make(embedding.model),
+									modelId,
 									inputs: [{ text: term }],
-									...(embedding.dimensions === undefined
-										? {}
-										: { dimensions: embedding.dimensions })
+									dimensions
 								})
 							);
 							const vector = response.embeddings[0];
@@ -2073,12 +2075,7 @@ export const layerWith = (
 							seek
 						) ?? always(),
 					ordering,
-					searchOrdering:
-						searched.mode === 'lexical'
-							? desc(searched.rank)
-							: searched.mode === 'semantic' || searched.mode === 'nearest'
-								? asc(searched.distance)
-								: undefined,
+					searchOrdering: searched.mode === 'none' ? undefined : searched.ordering,
 					limit: Math.max(1, input.limit ?? 100),
 					with: input.with,
 					// The ranked column must come back with the row: the distance beside it is measured from it.
@@ -4312,12 +4309,7 @@ export const layerWith = (
 								AccessControl.predicateExpression(visibility, { qualifier: ROOT_ALIAS })
 							) ?? always(),
 						ordering: compileOrderTerms(workspace.definition, input.collection, input.orderBy),
-						searchOrdering:
-							searched.mode === 'lexical'
-								? desc(searched.rank)
-								: searched.mode === 'semantic' || searched.mode === 'nearest'
-									? asc(searched.distance)
-									: undefined,
+						searchOrdering: searched.mode === 'none' ? undefined : searched.ordering,
 						limit: GROUPED_RESULT_LIMIT + 1,
 						with: input.with,
 						columns: input.columns

@@ -29,10 +29,7 @@ export {
 	CollectionAnchoredPage,
 	CollectionQueryRequest,
 	CollectionQueryRequestFields,
-	CollectionLexicalSearch,
 	CollectionSearch,
-	CollectionSemanticSearch,
-	CollectionNearestSearch,
 	CollectionWriteValues,
 	StoredRecord
 } from './collections.js';

@@ -1,6 +1,7 @@
 import {
 	AIResponse,
 	EffectId,
+	ModelId,
 	ProviderObservation,
 	type AIRequest,
 	type DatabaseRequest,
@@ -47,6 +48,16 @@ describe('record embedding backfill', () => {
 						}
 					},
 					ai: {
+						// No model declared: the host's default embedding model answers.
+						catalog: () =>
+							Effect.succeed(
+								AIResponse.cases.Catalog.make({
+									languageModels: [],
+									defaultLanguageModelId: ModelId.make('test/language'),
+									embeddingModels: [],
+									defaultEmbeddingModelId: ModelId.make('test/embedding')
+								})
+							),
 						embed: (effectId, request) => {
 							aiCalls.push({ id: effectId, request });
 							return Effect.promise(async () => {
@@ -70,7 +81,7 @@ describe('record embedding backfill', () => {
 						{
 							name: 'photo_evidence',
 							fields: { photo: { type: 'json' } },
-							embedding: { fields: ['photo'], model: 'test/embedding' }
+							embedding: { fields: ['photo'] }
 						}
 					]
 				},
@@ -94,7 +105,11 @@ describe('record embedding backfill', () => {
 		).toEqual([512]);
 		expect(
 			aiCalls.every(
-				({ request }) => request._tag === 'Embed' && request.modelId === 'test/embedding'
+				({ request }) =>
+					request._tag === 'Embed' &&
+					request.modelId === 'test/embedding' &&
+					// The width is always sent: the column was created with it.
+					request.dimensions === 256
 			)
 		).toBe(true);
 		expect(peakAI).toBe(1);
@@ -127,6 +142,7 @@ describe('record embedding backfill', () => {
 							)
 					},
 					ai: {
+						catalog: () => Effect.die('a declared model needs no catalog'),
 						embed: () =>
 							Effect.fail(
 								new FacilityError({
@@ -175,7 +191,10 @@ describe('record embedding backfill', () => {
 							return Effect.succeed({ rows: [], affectedRows: 0 });
 						}
 					},
-					ai: { embed: () => Effect.die('no provider call expected') },
+					ai: {
+						catalog: () => Effect.die('no provider call expected'),
+						embed: () => Effect.die('no provider call expected')
+					},
 					collections: [
 						{
 							name: 'photo_evidence',

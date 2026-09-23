@@ -305,9 +305,6 @@ type SimilarityInputField = Readonly<{
 	readonly optional?: boolean;
 }>;
 
-/** The search commands every collection offers itself; no declared index may take their names. */
-const RESERVED_SEARCH_COMMANDS: ReadonlyArray<string> = ['text', 'semantic'];
-
 const SIMILARITY_METRICS = ['l2', 'cosine', 'ip'] as const;
 type SimilarityMetric = (typeof SIMILARITY_METRICS)[number];
 
@@ -507,7 +504,8 @@ export const defineCollection = <
 				throw new TypeError(
 					`similarity.${name}: an index name is lower-case letters, digits and underscores; it becomes the /${name} search command.`
 				);
-			if (RESERVED_SEARCH_COMMANDS.includes(name))
+			// `/semantic` is the one command every collection offers itself.
+			if (name === 'semantic')
 				throw new TypeError(
 					`similarity.${name}: /${name} is the platform's own search command and cannot be declared.`
 				);
