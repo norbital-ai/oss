@@ -33,7 +33,11 @@ import type { CollectionInputSelection } from '#lib/authoring/collection-schema.
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
-import type { ConnectorInterface, HostToolsInterface } from '#lib/runtime/facilities/services.js';
+import type {
+	ConnectorInterface,
+	GeocodingInterface,
+	HostToolsInterface
+} from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as EnvoyInbox from '#lib/runtime/envoys/inbox.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -155,14 +159,15 @@ const SystemToolNames = Schema.Literals([
 	'todo',
 	'compact',
 	'describe_workspace',
-	'describe_type',
+	'workspace_type',
 	'list_skills',
 	'read_skill',
 	'search_task_history',
 	'read_messages',
 	'read_attachment',
 	'read_collection',
-	'write_collection'
+	'write_collection',
+	'geocode'
 ]);
 type SystemToolName = Schema.Schema.Type<typeof SystemToolNames>;
 
@@ -226,7 +231,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'todo',
 		description:
-			"Read or replace this conversation's ordered checklist — the person watches it, so any work of three or more steps sets it first and keeps it current. `set` replaces the whole list: stable ids, at most one item doing, a done item stays done and unchanged.",
+			"Read or replace this conversation's ordered checklist, which the person watches. Use it for work that spans turns or that they should track, not for a find-and-change. `set` replaces the whole list: stable ids, at most one item doing, a done item stays done with its text unchanged.",
 		command: 'platform:todo',
 		inputSchema: objectInput(
 			{
@@ -270,17 +275,27 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 		command: 'platform:describe_workspace'
 	},
 	{
-		name: 'describe_type',
+		name: 'workspace_type',
 		description:
-			"The exact TypeScript type of one collection's row, create input or update input, as the compiler resolved it at the last sync — every field's accepted value, which relation writes nest, which keys are optional. Ask this instead of reading source when a write's shape is unclear.",
-		command: 'platform:describe_type',
-		inputSchema: objectInput(
-			{
-				collection: { type: 'string', minLength: 1 },
-				surface: { type: 'string', enum: ['row', 'create', 'update'] }
+			'What something in this workspace is, as the compiler resolved it, with the comment its author wrote and the file:line it is declared at. By name: collections.<name> (the row), collections.<name>.create / .update (the write input, plus what a write does on its own — stamps, derivations, refusals), collections.<name>.<field>; in authoring sessions also automations.<name>, functions.<name>, apps.<name>, or <path>#<export>. By position (authoring sessions): path, line, column in a .ts or .svelte file. Ask this before sampling rows or reading source to learn how something behaves.',
+		command: 'platform:workspace_type',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', minLength: 1 },
+				path: { type: 'string', minLength: 1 },
+				line: { type: 'integer', minimum: 1 },
+				column: { type: 'integer', minimum: 1 }
 			},
-			['collection']
-		)
+			additionalProperties: false
+		}
+	},
+	{
+		name: 'geocode',
+		description:
+			"Resolve an address or place a person names to real places: up to eight, best first, each with its formatted address, coordinates and postal code. Each comes back as `location`, the value a geolocation field (a site's or a job's location) takes as it is. Ask which one when several fit.",
+		command: 'platform:geocode',
+		inputSchema: objectInput({ query: { type: 'string', minLength: 1 } }, ['query'])
 	},
 	{
 		name: 'list_skills',
@@ -354,7 +369,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'write_collection',
 		description:
-			'Create, update or delete one record through its declared contract; update and delete name the id. The answer is the stored row — no read-back needed.',
+			"Create, update or delete one record through its declared contract; update and delete name the id. Child rows nest under their relation (`{ job_photos: { create: [{ photo }] } }`), and a file value is an attachment descriptor `{ storage_key, file_name, file_size, mime_type }`. The workspace may stamp, derive or refuse on its own (the snapshot's `on write:` line); a refusal names what is missing. The answer is the stored row — no read-back needed.",
 		command: 'platform:write_collection',
 		inputSchema: objectInput(
 			{
@@ -377,10 +392,17 @@ export interface TodoItem extends Schema.Schema.Type<typeof TodoItem> {}
 export const TodoList = Schema.Struct({ items: Schema.Array(TodoItem) });
 export interface TodoList extends Schema.Schema.Type<typeof TodoList> {}
 
-const DescribeTypeInput = Schema.Struct({
-	collection: Schema.NonEmptyString,
-	surface: Schema.optionalKey(Schema.Literals(['row', 'create', 'update']))
+const GeocodeInput = Schema.Struct({ query: Schema.NonEmptyString });
+
+const WorkspaceTypeInput = Schema.Struct({
+	name: Schema.optionalKey(Schema.NonEmptyString),
+	path: Schema.optionalKey(Schema.NonEmptyString),
+	line: Schema.optionalKey(Schema.Int),
+	column: Schema.optionalKey(Schema.Int)
 });
+
+/** `collections.<name>`, `.row`, `.create`, `.update` or `.<field>`: answered from the sync-time index. */
+const COLLECTION_TYPE_NAME = /^collections\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?$/;
 
 const SkillNameInput = Schema.Struct({
 	name: Schema.NonEmptyString,
@@ -484,6 +506,8 @@ export type ToolExecutionContext = Readonly<{
 	readonly workspace: Workspace.Interface;
 	readonly collections: Collections.Interface;
 	readonly hostTools: HostToolsInterface;
+	/** The host's address search, when it has one: `geocode`. */
+	readonly geocoding?: GeocodingInterface;
 	readonly previousTodo?: TodoList;
 }>;
 
@@ -653,7 +677,7 @@ export const readSkillBody = Effect.fn('CapabilityCatalog.readSkillBody')(functi
  * `note` says where the source lives for anyone with a file-reading tool.
  */
 const WORKSPACE_NOTE =
-	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when authoring the workspace, never to plan a record change. write_collection takes the listed create/update columns and answers with the stored row; a JSON field shows the value it takes, `rel{create,link}` names a relation's nested actions, `nested:` names a parent that files this collection (use it when a column is accepted only there), and describe_type gives the full input type. A refusal names exactly what is missing, so write rather than research a write. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's. personalSkills are what this person taught you earlier — read one with read_skill when a request uses its words.";
+	"Fields read name:type, then ! required, [] array, =a|b enum values, ->collection reference, (file) (files) (generated) (search). Source: src/collections/<name>/+model.ts and +collection.ts, src/collections/+relationship.ts, src/access/policies/+<name>.ts, src/access/+teams.ts, src/apps/+<name>.svelte, src/automations/+<name>.ts — read them with a file tool when authoring the workspace, never to plan a record change. write_collection takes the listed create/update columns and answers with the stored row; a JSON field shows the value it takes, `rel{create,link}` names a relation's nested actions, `nested:` names a parent that files this collection (use it when a column is accepted only there), and workspace_type gives the full input type with its authored comments. A refusal names exactly what is missing, so write rather than research a write. read_collection answers within your policy scope and is complete: a short answer is the whole answer, not a hidden subset. id, created_at, updated_at, row_version are the platform's. personalSkills are what this person taught you earlier — read one with read_skill when a request uses its words.";
 
 /** A checker-rendered type on one line: the snapshot is a list of tokens, not a declaration file. */
 const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, ' ').replace(/;\s*}/g, ' }');
@@ -679,7 +703,7 @@ const describeField = (
 				: [edge.target]
 			: field.reference.targets.map((target) => target.collection);
 	return [
-		`${name}:${field.type === 'json' && typeText !== undefined ? oneLine(typeText) : field.type}`,
+		`${name}:${field.type === 'json' && typeText !== undefined ? oneLine(typeText) : field.type}${field.precision === 'day' ? '(day)' : ''}`,
 		field.required ? '!' : '',
 		(field as { readonly array?: true }).array === true ? '[]' : '',
 		field.values === undefined ? '' : `=${field.values.join('|')}`,
@@ -859,6 +883,13 @@ const line = (text: string, max = 140): string => {
  * structure is stable within the turn (and the prompt prefix stays cacheable), while the rows it
  * describes are not — they are always read fresh. Every concept names the file it is authored in.
  */
+/** A doc's first sentence, for a one-line summary; the whole paragraph is `workspace_type`'s. */
+const firstSentence = (text: string | undefined): string | undefined => {
+	if (text === undefined || text === '') return undefined;
+	const end = text.search(/[.!?](\s|$)/);
+	return line(end < 0 ? text : text.slice(0, end + 1), 240);
+};
+
 export const workspaceSnapshot = (
 	context: Parameters<typeof describeWorkspace>[0],
 	asOf: string
@@ -874,6 +905,10 @@ export const workspaceSnapshot = (
 				definition.collections.find((declared) => declared.name === name)?.sourcePath ??
 				`src/collections/${name}/+model.ts`;
 			const write = collection['write'] as Schema.JsonObject | null;
+			const onWrite = firstSentence(
+				definition.collections.find((declared) => declared.name === name)?.types?.docs?.transform
+					?.text
+			);
 			return [
 				`  ${name}:`,
 				...(collection['description'] === undefined
@@ -888,6 +923,7 @@ export const workspaceSnapshot = (
 							...(write['update'] === undefined ? [] : [`    update: ${String(write['update'])}`]),
 							...(write['delete'] === true ? ['    delete: yes'] : [])
 						]),
+				...(onWrite === undefined ? [] : [`    on write: ${onWrite}`]),
 				...(collection['filedVia'] === undefined
 					? []
 					: [`    nested: ${(collection['filedVia'] as ReadonlyArray<string>).join('; ')}`]),
@@ -901,7 +937,7 @@ export const workspaceSnapshot = (
 		`# Workspace snapshot — valid as of ${asOf} only. Its structure holds for this turn; records change, so read them fresh. describe_workspace refreshes it.`,
 		`workspace: ${definition.name} v${definition.version}`,
 		`you: ${line(context.standing, 200)}`,
-		"fields: name:type ! required, [] array, =enum values, ->reference, (file), (generated), a JSON field prints its value type, (search) found by read_collection `search` (plain text; `/semantic <text>` adds meaning; a collection's `search:` line lists its commands)",
+		"fields: name:type ! required, [] array, =enum values, ->reference, (day) one calendar day, written as that date at 00:00Z (2026-09-25T00:00:00.000Z is 25 September wherever the person is), (file), (generated), a JSON field prints its value type, (search) found by read_collection `search` (plain text; `/semantic <text>` adds meaning; a collection's `search:` line lists its commands). `on write:` is what the workspace does to a write on its own; workspace_type collections.<name>.create has the rest.",
 		'collections:',
 		...collections,
 		...list(
@@ -921,7 +957,7 @@ export const workspaceSnapshot = (
 							: automation.trigger._tag === 'Change'
 								? `on ${automation.trigger.collection} ${automation.trigger.event}`
 								: 'manual'
-					} ${authoredPath('automations', automation.name, 'ts')}`
+					} ${authoredPath('automations', automation.name, 'ts')}${automation.description === undefined || automation.description === '' ? '' : ` — ${line(automation.description, 240)}`}`
 			)
 		),
 		...list(
@@ -977,23 +1013,42 @@ const validatedTodo = Effect.fn('CapabilityCatalog.validatedTodo')(function* (
 	if (request.operation === 'read') return previous ?? { items: [] };
 	const next: TodoList = { items: request.items };
 	if (next.items.length > 100) {
-		return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:item-limit' });
+		return yield* new InvalidToolInput({
+			tool: 'todo',
+			path: 'items',
+			message: 'A checklist holds at most 100 items.'
+		});
 	}
 	const ids = new Set<string>();
 	let doing = 0;
 	for (const item of next.items) {
 		if (item.text.trim() === '' || ids.has(item.id)) {
-			return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:invalid-item' });
+			return yield* new InvalidToolInput({
+				tool: 'todo',
+				path: 'items',
+				message:
+					item.text.trim() === ''
+						? `Item ${item.id} has no text.`
+						: `Item id ${item.id} appears twice; ids are stable and unique.`
+			});
 		}
 		ids.add(item.id);
 		if (item.status === 'doing') doing += 1;
 		const prior = previous?.items.find(({ id }) => id === item.id);
 		if (prior?.status === 'done' && (item.status !== 'done' || prior.text !== item.text)) {
-			return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:done-is-terminal' });
+			return yield* new InvalidToolInput({
+				tool: 'todo',
+				path: 'items',
+				message: `Item ${item.id} is done, and a done item stays done with its text unchanged: "${prior.text}".`
+			});
 		}
 	}
 	if (doing > 1) {
-		return yield* new ToolNotAllowed({ agent: 'platform', tool: 'todo:multiple-doing' });
+		return yield* new InvalidToolInput({
+			tool: 'todo',
+			path: 'items',
+			message: 'At most one item is doing at a time.'
+		});
 	}
 	return next;
 });
@@ -1040,26 +1095,115 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			const parsed = yield* decode(name, CompactInput, input);
 			return { checkpoint: 'scheduled', reason: parsed.reason };
 		}
-		case 'describe_type': {
-			const parsed = yield* decode(name, DescribeTypeInput, input);
-			if (!context.collectionNames.includes(parsed.collection))
+		case 'geocode': {
+			const parsed = yield* decode(name, GeocodeInput, input);
+			if (context.geocoding === undefined)
+				return yield* new InvalidToolInput({
+					tool: name,
+					path: 'query',
+					message: 'This host has no address search; ask the person for the location instead.'
+				});
+			const answer = yield* context.geocoding
+				.search(EffectId.make(`${context.effectId}:geocode`), { query: parsed.query })
+				.pipe(
+					Effect.mapError(
+						(error) =>
+							new InvalidToolInput({ tool: name, path: 'query', message: getErrorMessage(error) })
+					)
+				);
+			return {
+				places: answer.results.map((place) => ({
+					formatted_address: place.formatted_address,
+					...(place.postal_code === undefined ? {} : { postal_code: place.postal_code }),
+					location: {
+						type: 'Point',
+						srid: 4326,
+						geometry: { lat: place.lat, lon: place.lon },
+						formatted_address: place.formatted_address
+					}
+				}))
+			};
+		}
+		case 'workspace_type': {
+			const parsed = yield* decode(name, WorkspaceTypeInput, input);
+			const collectionName =
+				parsed.name === undefined ? undefined : COLLECTION_TYPE_NAME.exec(parsed.name);
+			if (collectionName === null || collectionName === undefined) {
+				// Positions and other names need the live type service, which only an authoring host mounts.
+				const query: Record<string, string | number> = {};
+				if (parsed.name !== undefined) query['name'] = parsed.name;
+				if (parsed.path !== undefined) query['path'] = parsed.path;
+				if (parsed.line !== undefined) query['line'] = parsed.line;
+				if (parsed.column !== undefined) query['column'] = parsed.column;
+				return yield* executeHostTool('workspace_type', query, context).pipe(
+					Effect.mapError(
+						(error) =>
+							new InvalidToolInput({
+								tool: name,
+								path: parsed.name === undefined ? 'path' : 'name',
+								message: `Here only collections.<name>[.create|.update|.<field>] is answered; other names and file positions need an authoring session (${getErrorMessage(error)}).`
+							})
+					)
+				);
+			}
+			const [, collection = '', member = 'row'] = collectionName;
+			if (!context.collectionNames.includes(collection))
 				return yield* new ToolNotAllowed({
 					agent: context.agentId,
-					tool: `describe_type:${parsed.collection}`
+					tool: `workspace_type:collections.${collection}`
 				});
 			const types = context.workspace.definition.collections.find(
-				(collection) => collection.name === parsed.collection
+				(entry) => entry.name === collection
 			)?.types;
-			const surface = parsed.surface ?? 'create';
-			const text = types === undefined ? undefined : types[surface];
+			if (types === undefined)
+				return {
+					name: parsed.name,
+					type: 'No compiled types for this collection (the workspace was synced without a tsconfig).'
+				};
+			const docs = types.docs;
+			const modelSource = `src/collections/${collection}/+model.ts`;
+			const collectionSource = `src/collections/${collection}/+collection.ts`;
+			const said = (text: string | undefined) =>
+				text === undefined || text === '' ? {} : { docs: text };
+			if (member === 'row')
+				return {
+					name: parsed.name,
+					type: types.row,
+					...said(docs?.collection?.text),
+					source: docs?.collection?.source ?? modelSource
+				};
+			if (member === 'create' || member === 'update') {
+				const text = types[member];
+				if (text === undefined)
+					return { name: parsed.name, type: `${collection} declares no ${member}.` };
+				return {
+					name: parsed.name,
+					type: text,
+					...said(docs?.[member]?.text),
+					...(docs?.transform?.text === undefined || docs.transform.text === ''
+						? {}
+						: { onWrite: docs.transform.text, onWriteSource: docs.transform.source }),
+					source: docs?.[member]?.source ?? collectionSource
+				};
+			}
+			const field = types.fields[member];
+			if (field === undefined)
+				return yield* new InvalidToolInput({
+					tool: name,
+					path: 'name',
+					message: `${collection} has no field ${member}. Fields: ${Object.keys(types.fields).join(', ')}.`
+				});
 			return {
-				collection: parsed.collection,
-				surface,
-				type:
-					text ??
-					(types === undefined
-						? 'No compiled types for this collection (the workspace was synced without a tsconfig).'
-						: `${parsed.collection} declares no ${surface}.`)
+				name: parsed.name,
+				type: field,
+				...(types.createFields?.[member] === undefined
+					? {}
+					: { create: types.createFields[member] }),
+				...(types.updateFields?.[member] === undefined
+					? {}
+					: { update: types.updateFields[member] }),
+				...said(docs?.fields[member]?.text),
+				source: docs?.fields[member]?.source ?? modelSource
 			};
 		}
 		case 'describe_workspace': {
@@ -1201,7 +1345,14 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			const refusal = conversationAttachmentError(context.conversationId, asset);
 			if (refusal !== undefined)
 				return yield* new InvalidToolInput({ tool: name, path: 'key', message: refusal });
-			return asset;
+			// The bytes ride on the next step as media; saying so keeps a model from reading this
+			// descriptor-shaped answer as "nothing came back".
+			return {
+				...asset,
+				content: asset.mimeType.startsWith('image/')
+					? 'The image is attached to your next step. Look at it before you describe it or file it on a record.'
+					: 'The document text is attached to your next step.'
+			};
 		}
 		case 'read_collection': {
 			const parsed = yield* decode(name, CollectionReadInput, input);

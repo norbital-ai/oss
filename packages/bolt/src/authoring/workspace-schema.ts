@@ -246,6 +246,24 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly types?: CollectionTypes;
 }
 
+/** A doc comment's first paragraph and the `path:line` it is written at. */
+export interface SourceDoc {
+	readonly text: string;
+	readonly source: string;
+}
+
+/** The authored comments of one collection, read at `bolt sync` (`compiler/authored-docs.ts`). */
+export interface CollectionDocs {
+	/** The comment on `defineCollection` (or, without one, on `defineModel`). */
+	readonly collection?: SourceDoc;
+	readonly create?: SourceDoc;
+	readonly update?: SourceDoc;
+	/** What a write does beyond the input: stamps, derivations, refusals. */
+	readonly transform?: SourceDoc;
+	/** Every declared column, documented or not, so each can be traced to its line. */
+	readonly fields: Readonly<Record<string, SourceDoc>>;
+}
+
 /**
  * What the type checker says a collection's surfaces are, as TypeScript text.
  *
@@ -254,6 +272,8 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
  * models, and it is the checker's own rendering of the generated `$types` — never a second description.
  */
 export interface CollectionTypes {
+	/** What the authored files say about this collection and each column, with where each is written. */
+	readonly docs?: CollectionDocs;
 	readonly row: string;
 	readonly fields: Readonly<Record<string, string>>;
 	readonly create?: string;

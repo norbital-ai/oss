@@ -176,7 +176,10 @@ describe('Bolt architecture boundaries', () => {
 		// 9,440 -> 9,520 (2026-09-24): the sync type index and `any` gate (compiler/type-index.ts),
 		// collection inputs generated from the executed selection instead of `typeof` the module
 		// (which was a TS7022 cycle), and the datatype import computed from its output directory.
-		expect(total).toBeLessThanOrEqual(9_520);
+		// 9,520 -> 9,540 (2026-09-25): the type index carries each collection's authored comments
+		// and the lines they are written at (`CollectionDocs`); the reader itself lives outside the
+		// basket in `tooling/authored-docs.ts`. Measured 9,523.
+		expect(total).toBeLessThanOrEqual(9_540);
 		expect(tracked.some((path) => path.endsWith('/compiler/model-fields.ts'))).toBe(false);
 	});
 

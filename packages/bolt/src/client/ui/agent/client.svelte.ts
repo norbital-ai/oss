@@ -111,7 +111,8 @@ function submitTask(
 			mode: input.mode,
 			...(input.planAction === undefined ? {} : { planAction: input.planAction }),
 			priority: input.priority ?? 'normal',
-			...(input.modelId === undefined ? {} : { modelId: input.modelId })
+			...(input.modelId === undefined ? {} : { modelId: input.modelId }),
+			timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.conversations.send(request).pipe(
@@ -135,7 +136,8 @@ function editTask(
 			conversationId: input.conversationId,
 			messageId: input.messageId,
 			message: input.message,
-			...(input.modelId === undefined ? {} : { modelId: input.modelId })
+			...(input.modelId === undefined ? {} : { modelId: input.modelId }),
+			timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
 		}).pipe(
 			Effect.flatMap((request) =>
 				active.client.system.conversations.editMessage(request).pipe(

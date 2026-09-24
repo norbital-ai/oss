@@ -71,4 +71,71 @@ describe('type index', () => {
 		roots.push(root);
 		expect(buildTypeIndex(root, [{ name: 'jobs', create: true, update: true }])).toBeUndefined();
 	});
+	it(
+		'carries the authored comments, and the line each is written at',
+		{ timeout: 60_000 },
+		async () => {
+			const root = await workspace(
+				[
+					'export type Row = { readonly id: string; readonly status: string | null };',
+					'export type CreateInput = { readonly status?: string | null };',
+					'export type UpdateInput = never;'
+				].join('\n')
+			);
+			await writeFile(
+				join(root, 'src', 'collections', 'jobs', '+model.ts'),
+				[
+					"import { defineModel, text } from '@norbital-ai/bolt/authoring';",
+					'export default defineModel(',
+					'\t{',
+					'\t\t/**',
+					'\t\t * Where the work has got to.',
+					'\t\t *',
+					'\t\t * A second paragraph of history the agent does not need.',
+					'\t\t */',
+					'\t\tstatus: text(),',
+					'\t\tnature: text()',
+					'\t},',
+					"\t{ name: 'jobs' }",
+					');'
+				].join('\n')
+			);
+			await writeFile(
+				join(root, 'src', 'collections', 'jobs', '+collection.ts'),
+				[
+					"import model from './+model.js';",
+					'/** A work order for one day. */',
+					'export default defineCollection({',
+					'\tmodel,',
+					'\tcreate: { input: { columns: { status: true } } },',
+					'\t/** Files it unassigned until a contractor holds it. Stamps the dispatch. */',
+					'\ttransform: (inputs) => inputs',
+					'});'
+				].join('\n')
+			);
+			const index = buildTypeIndex(root, [{ name: 'jobs', create: true, update: false }]);
+			const jobs = index?.collections['jobs'];
+			expect(jobs?.docs?.fields['status']).toEqual({
+				text: 'Where the work has got to.',
+				source: 'src/collections/jobs/+model.ts:9'
+			});
+			expect(jobs?.docs?.fields['nature']).toEqual({
+				text: '',
+				source: 'src/collections/jobs/+model.ts:10'
+			});
+			expect(jobs?.docs?.collection).toEqual({
+				text: 'A work order for one day.',
+				source: 'src/collections/jobs/+collection.ts:3'
+			});
+			expect(jobs?.docs?.transform).toEqual({
+				text: 'Files it unassigned until a contractor holds it. Stamps the dispatch.',
+				source: 'src/collections/jobs/+collection.ts:7'
+			});
+			// The expanded type reads with the author's comment above the field.
+			expect(jobs?.row).toContain('  /** Where the work has got to. */\n  status: string | null;');
+			expect(jobs?.create).toContain(
+				'  /** Where the work has got to. */\n  status?: string | null;'
+			);
+		}
+	);
 });

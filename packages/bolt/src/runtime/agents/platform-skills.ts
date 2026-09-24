@@ -17,14 +17,15 @@ never hand-edit generated output. To compile and lint a draft, call the
 \`workspace_validate\` host tool (it runs install + sync + lint + audit in the workspace sandbox and
 returns diagnostics). Read its findings and fix them; do not claim success without it.
 
-When advertised, \`sandbox_bash\` executes arbitrary Node or shell scripts and project tests in a
-disposable copy of the exact draft commit. It has no network, Git repository, credentials or tenant
-database. Check its exit code. Every call is a fresh guest — nothing an earlier call installed or
-wrote survives. Run the project's tests with \`/opt/norbital/bin/norbital-authoring-test [files]\`:
-it installs the pinned toolchain, lets the guest's own lineage take any migration the draft's
-models still owe (the host writes the real one at publish; never write migrations yourself), and
-runs \`pnpm test\`. Guest file changes are discarded; save source through \`workspace_edit\` /
-\`workspace_apply\`. Never attempt Git operations. Planning cannot execute code.
+When advertised, \`sandbox_run\` executes arbitrary Node or shell scripts and project tests in a
+disposable copy of the exact draft commit, with the workspace's own dependencies already in
+\`/workspace/node_modules\`. It has no network, Git repository, credentials or tenant database.
+Check its exit code. Every call is a fresh guest. Attachments you name are in \`/inputs\`; files you
+write to \`/outputs\` come back as attachment descriptors a record can take. Run the project's
+tests with \`/opt/norbital/bin/norbital-authoring-test [files]\`: it lets the guest's own lineage
+take any migration the draft's models still owe (the host writes the real one at publish; never
+write migrations yourself), and runs \`pnpm test\`. Other guest file changes are discarded; save
+source through \`workspace_write\`. Never attempt Git operations. Planning cannot execute code.
 
 Discover workflows with \`list_skills\` — the workspace's, the platform's and the person's own
 (\`scope: personal\`) in one list — and read a body with \`read_skill\` by its exact name, only when
@@ -315,12 +316,14 @@ Do not validate an unchanged draft to discover more files. Author a small step, 
    behind them are in the reference sections; nothing else about the platform is in the tree.
    Child agents have the same source access; delegating a dependency-signature lookup does not
    expose node_modules. Use this contract and compiler diagnostics instead of recursive lookups.
-2. State the collections and app surfaces you will add; then author a small batch. Use
-   \`workspace_edit\` for existing files and \`workspace_apply\` for new files. Every successful edit
+2. State the collections and app surfaces you will add; then author a small batch with
+   \`workspace_write\`: \`edits\` for existing files, \`files\` for new ones. Every successful write
    returns the next \`expectedCommit\`; reuse it without an extra listing. On a stale commit, reread
    only the affected source and reconcile. Never rewrite a large file to change a few lines.
-3. Call \`workspace_format\` with the latest commit, then \`workspace_validate\`. Formatting is
-   deterministic tool work, never a model-generated indentation rewrite. Fix compiler errors with
+3. Call \`workspace_validate\`: it formats the draft first, then compiles. Formatting is
+   deterministic tool work, never a model-generated indentation rewrite. Between validations,
+   \`workspace_check\` type-checks files in under a second, \`workspace_type\` answers what a name or
+   position is with its authored comment, and \`workspace_search\` finds code by structure. Fix compiler errors with
    precise edits. If the same error repeats without new evidence, inspect the diagnostic and change
    approach. Continue unblocked work; report a blocker when it actually requires outside input.
    Do not repeat unchanged validation or search task history for unavailable dependencies.

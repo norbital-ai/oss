@@ -50,7 +50,9 @@ export const ConversationSendRequest = Schema.Struct({
 	mode: DirectiveMode,
 	planAction: Schema.optionalKey(PlanAction),
 	priority: DirectivePriority,
-	modelId: Schema.optionalKey(ModelId)
+	modelId: Schema.optionalKey(ModelId),
+	/** The sender's IANA timezone (the browser's), so "today" is their day, not the server's. */
+	timeZone: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(64)))
 });
 export interface ConversationSendRequest extends Schema.Schema.Type<
 	typeof ConversationSendRequest

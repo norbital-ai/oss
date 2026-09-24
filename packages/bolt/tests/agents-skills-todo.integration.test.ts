@@ -307,10 +307,14 @@ describe('distributed skills and the Todo surface in the loop', () => {
 			]
 		});
 		// done-is-terminal: the completed item cannot go back to pending.
-		expect(todos[1]).toMatchObject({ code: 'Bolt.CapabilityCatalog.ToolNotAllowed' });
-		expect(String((todos[1] as { message: string }).message)).toContain('todo:done-is-terminal');
+		expect(todos[1]).toMatchObject({ code: 'Bolt.CapabilityCatalog.InvalidToolInput' });
+		expect(String((todos[1] as { message: string }).message)).toContain(
+			'is done, and a done item stays done'
+		);
 		// single-doing: two doing items in one list are refused.
-		expect(String((todos[2] as { message: string }).message)).toContain('todo:multiple-doing');
+		expect(String((todos[2] as { message: string }).message)).toContain(
+			'At most one item is doing'
+		);
 		// The valid progression is echoed back with the terminal item preserved.
 		expect(todos[3]).toEqual({
 			items: [

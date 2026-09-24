@@ -1,6 +1,8 @@
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 import {
 	describeWorkspace,
+	executeSystemTool,
 	subjectStanding,
 	workspaceSnapshot
 } from '../src/runtime/agents/capability-catalog.js';
@@ -247,5 +249,176 @@ describe('subjectStanding', () => {
 		expect(lines).toContain('  nightly: schedule 0 2 * * * src/automations/+nightly.ts');
 		expect(lines).toContain('  sales_whatsapp: whatsapp src/channels/+sales_whatsapp.ts');
 		expect(lines).toContain('skills: intake (read_skill by name)');
+	});
+});
+
+describe('workspace_type', () => {
+	const typed = {
+		...definition,
+		collections: [
+			{
+				name: 'jobs',
+				fields: {
+					id: field('uuid', { required: true, primaryKey: true }),
+					scheduled_for: field('instant', { required: true, precision: 'day' }),
+					status: field('string')
+				},
+				write: { create: { columns: { status: true } }, hasTransform: true },
+				types: {
+					row: '{\n  /** Where the work has got to. */\n  status: string | null;\n}',
+					fields: { status: 'string | null', scheduled_for: 'string' },
+					create: '{\n  status?: string | null;\n}',
+					createFields: { status: '?string | null' },
+					docs: {
+						collection: {
+							text: 'One dispatched day job.',
+							source: 'src/collections/jobs/+collection.ts:3'
+						},
+						create: { text: '', source: 'src/collections/jobs/+collection.ts:5' },
+						transform: {
+							text: 'Files it unassigned until a contractor holds it. Stamps the dispatch.',
+							source: 'src/collections/jobs/+collection.ts:9'
+						},
+						fields: {
+							status: {
+								text: 'Where the work has got to.',
+								source: 'src/collections/jobs/+model.ts:12'
+							},
+							scheduled_for: { text: '', source: 'src/collections/jobs/+model.ts:8' }
+						}
+					}
+				}
+			}
+		],
+		automations: [
+			{
+				name: 'review',
+				trigger: { _tag: 'Schedule', cron: '*/15 * * * *' },
+				description: 'Reads each new photo and fills its checksum and flags.',
+				command: 'x'
+			}
+		]
+	} as unknown as WorkspaceDefinition;
+	const hosted: Array<unknown> = [];
+	const context = {
+		collectionNames: ['jobs'],
+		agentId: 'web',
+		effectId: 'e1',
+		conversationId: 'c1',
+		subject: { system: true, policies: [] },
+		workspace: { definition: typed },
+		hostTools: {
+			execute: (_id: unknown, request: { tool: string; input: unknown }) => {
+				hosted.push(request);
+				return Effect.succeed({
+					output: {
+						found: true,
+						type: 'default: Automation',
+						source: 'src/automations/+review.ts:4'
+					}
+				});
+			}
+		}
+	} as never;
+	const ask = (input: unknown) =>
+		Effect.runPromise(executeSystemTool('workspace_type', input, context));
+
+	it('answers collections from the index with the authored comment and where it is written', async () => {
+		expect(await ask({ name: 'collections.jobs' })).toEqual({
+			name: 'collections.jobs',
+			type: '{\n  /** Where the work has got to. */\n  status: string | null;\n}',
+			docs: 'One dispatched day job.',
+			source: 'src/collections/jobs/+collection.ts:3'
+		});
+		// A write input carries what the workspace does on its own, so no one samples rows to learn it.
+		expect(await ask({ name: 'collections.jobs.create' })).toEqual({
+			name: 'collections.jobs.create',
+			type: '{\n  status?: string | null;\n}',
+			onWrite: 'Files it unassigned until a contractor holds it. Stamps the dispatch.',
+			onWriteSource: 'src/collections/jobs/+collection.ts:9',
+			source: 'src/collections/jobs/+collection.ts:5'
+		});
+		expect(await ask({ name: 'collections.jobs.status' })).toEqual({
+			name: 'collections.jobs.status',
+			type: 'string | null',
+			create: '?string | null',
+			docs: 'Where the work has got to.',
+			source: 'src/collections/jobs/+model.ts:12'
+		});
+		expect(hosted).toEqual([]);
+	});
+
+	it('hands every other name and any position to the host type service', async () => {
+		expect(await ask({ name: 'automations.review' })).toEqual({
+			found: true,
+			type: 'default: Automation',
+			source: 'src/automations/+review.ts:4'
+		});
+		expect(hosted).toEqual([
+			{ tool: 'workspace_type', input: { name: 'automations.review' }, sessionId: 'c1' }
+		]);
+	});
+
+	it("prints what a write does, a day column, and an automation's lifecycle in the snapshot", () => {
+		const snapshot = workspaceSnapshot(
+			{
+				workspace: { definition: typed } as never,
+				collectionNames: ['jobs'],
+				readableCollectionNames: ['jobs'],
+				writableCollectionNames: ['jobs'],
+				readFields: {},
+				standing: 'workspace administrator',
+				toolNames: [],
+				skills: []
+			},
+			'2026-09-24T19:04:00.000Z'
+		);
+		expect(snapshot).toContain('scheduled_for:instant(day)!');
+		expect(snapshot).toContain('    on write: "Files it unassigned until a contractor holds it."');
+		expect(snapshot).toContain(
+			'review: schedule */15 * * * * src/automations/+review.ts — "Reads each new photo and fills its checksum and flags."'
+		);
+	});
+});
+
+describe('geocode', () => {
+	it('answers places as the value a geolocation field takes', async () => {
+		const context = {
+			effectId: 'e1',
+			geocoding: {
+				search: () =>
+					Effect.succeed({
+						results: [
+							{
+								id: 'onemap:289000',
+								formatted_address: '40 WILKINSON ROAD SINGAPORE 436674',
+								lat: 1.3121,
+								lon: 103.9051,
+								postal_code: '436674'
+							}
+						]
+					})
+			}
+		} as never;
+		expect(
+			await Effect.runPromise(executeSystemTool('geocode', { query: '40 Wilkinson Road' }, context))
+		).toEqual({
+			places: [
+				{
+					formatted_address: '40 WILKINSON ROAD SINGAPORE 436674',
+					postal_code: '436674',
+					location: {
+						type: 'Point',
+						srid: 4326,
+						geometry: { lat: 1.3121, lon: 103.9051 },
+						formatted_address: '40 WILKINSON ROAD SINGAPORE 436674'
+					}
+				}
+			]
+		});
+		const failed = await Effect.runPromise(
+			Effect.flip(executeSystemTool('geocode', { query: 'x' }, { effectId: 'e1' } as never))
+		);
+		expect(String((failed as { detail: string }).detail)).toContain('no address search');
 	});
 });

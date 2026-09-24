@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.111",
+	"version": "0.0.112",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [
@@ -67,6 +67,10 @@
 		"./runtime": {
 			"types": "./build/runtime/app.d.ts",
 			"default": "./build/runtime/app.js"
+		},
+		"./search": {
+			"types": "./build/tooling/workspace-search.d.ts",
+			"default": "./build/tooling/workspace-search.js"
 		},
 		"./type-service": {
 			"types": "./build/tooling/type-service.d.ts",

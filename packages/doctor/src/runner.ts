@@ -201,6 +201,19 @@ export type RunOptions = Readonly<{
 	readonly rules: ReadonlyArray<Rule>;
 	/** Restrict the run to these repository-relative files. Defaults to the whole repository. */
 	readonly files?: ReadonlyArray<string> | undefined;
+	/**
+	 * Reads a repository-relative file; the disk when absent. A search over a draft passes the draft
+	 * here, so it sees edits nobody has saved.
+	 */
+	readonly read?: ((file: string) => string | undefined) | undefined;
+}>;
+
+/** Where one rule matched: the line a person opens, its text, and what the metavariables bound. */
+export type Match = Readonly<{
+	readonly file: string;
+	readonly line: number;
+	readonly text: string;
+	readonly evidence: string;
 }>;
 
 /**
@@ -214,7 +227,7 @@ export type RunOptions = Readonly<{
  */
 function applyDominance(
 	findings: ReadonlyArray<Finding>,
-	site: ReadonlyMap<Finding, string>,
+	site: ReadonlyMap<Finding, Match>,
 	rules: ReadonlyArray<Rule>
 ): Array<Finding> {
 	const dominated = new Map<string, ReadonlyArray<string>>();
@@ -226,17 +239,18 @@ function applyDominance(
 	// Which rules won a site, so a dominated finding there can be recognised.
 	const winners = new Map<string, Set<string>>();
 	for (const finding of findings) {
-		const at = site.get(finding);
-		if (at === undefined || !dominated.has(finding.rule)) continue;
+		const matched = site.get(finding);
+		if (matched === undefined || !dominated.has(finding.rule)) continue;
+		const at = `${matched.file}:${matched.line}`;
 		const held = winners.get(at) ?? new Set<string>();
 		held.add(finding.rule);
 		winners.set(at, held);
 	}
 
 	return findings.filter((finding) => {
-		const at = site.get(finding);
-		if (at === undefined) return true;
-		const held = winners.get(at);
+		const matched = site.get(finding);
+		if (matched === undefined) return true;
+		const held = winners.get(`${matched.file}:${matched.line}`);
 		if (held === undefined) return true;
 		for (const winner of held) {
 			if (winner === finding.rule) continue;
@@ -249,7 +263,39 @@ function applyDominance(
 /** Execute every rule over every selected file and return the findings in catalogue order. */
 export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 	if (options.rules.length === 0) return [];
+	const { findings, site } = execute(options);
+	const order = { error: 0, warning: 1, hint: 2 } as const;
+	return applyDominance(findings, site, options.rules).sort(
+		(a, b) =>
+			order[a.severity] - order[b.severity] ||
+			a.rule.localeCompare(b.rule) ||
+			a.location.localeCompare(b.location)
+	);
+}
 
+/**
+ * Where rules match, as data: the audit engine run as a search. Same files, same parsers (a
+ * `.svelte` file's markup and script both), same rule language — so a search that finds something
+ * is already the body of a rule that would flag it.
+ */
+export function searchRules(
+	options: RunOptions & Readonly<{ limit?: number | undefined }>
+): Readonly<{ matches: ReadonlyArray<Match>; total: number }> {
+	if (options.rules.length === 0) return { matches: [], total: 0 };
+	const { findings, site } = execute(options);
+	const matches = findings
+		.flatMap((finding) => {
+			const matched = site.get(finding);
+			return matched === undefined ? [] : [matched];
+		})
+		.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+	return { matches: matches.slice(0, options.limit ?? matches.length), total: matches.length };
+}
+
+function execute(options: RunOptions): Readonly<{
+	findings: Array<Finding>;
+	site: Map<Finding, Match>;
+}> {
 	const byKind = new Map<ts.SyntaxKind, Array<Rule>>();
 	for (const rule of options.rules)
 		for (const kind of rule.when) {
@@ -260,14 +306,19 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 		}
 
 	const findings: Array<Finding> = [];
-	/** Where each finding was reported, for the dominance pass below. */
-	const site = new Map<Finding, string>();
+	/** Where each finding was reported, for the dominance pass and for a search's answer. */
+	const site = new Map<Finding, Match>();
+	const read =
+		options.read ??
+		((file: string) => {
+			const absolute = join(options.root, file);
+			return existsSync(absolute) ? readFileSync(absolute, 'utf8') : undefined;
+		});
 	const files = options.files ?? sourceFiles(options.root);
 
 	for (const file of files) {
-		const absolute = join(options.root, file);
-		if (!existsSync(absolute)) continue;
-		const raw = readFileSync(absolute, 'utf8');
+		const raw = read(file);
+		if (raw === undefined) continue;
 		// A component with no `<script>` is still a component: its markup is what the layout rules
 		// read. Passing `undefined` here made `ts.createSourceFile` throw, the file was skipped
 		// whole, and a markup-only rule could never fire on a script-less component.
@@ -336,7 +387,12 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 				};
 				// Remember the site rather than re-parsing `location`: the dominance pass needs the
 				// exact file and line, and a formatted string is not a data structure.
-				site.set(reported, `${file}:${position.line + 1}`);
+				site.set(reported, {
+					file,
+					line: position.line + 1,
+					text: line.trim(),
+					evidence: evidence ?? ''
+				});
 				findings.push(reported);
 			},
 			reportAt: (line, evidence) => {
@@ -351,7 +407,12 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 					location: `${file}:${index + 1}: ${(lines[index] ?? '').trim()}${evidence ? ` [${evidence}]` : ''}`,
 					principles: PRINCIPLE_ORDER.filter((principle) => active!.principles.includes(principle))
 				};
-				site.set(reported, `${file}:${index + 1}`);
+				site.set(reported, {
+					file,
+					line: index + 1,
+					text: (lines[index] ?? '').trim(),
+					evidence: evidence ?? ''
+				});
 				findings.push(reported);
 			}
 		};
@@ -394,12 +455,5 @@ export function runRules(options: RunOptions): ReadonlyArray<Finding> {
 		visit(sourceFile);
 		void current;
 	}
-
-	const order = { error: 0, warning: 1, hint: 2 } as const;
-	return applyDominance(findings, site, options.rules).sort(
-		(a, b) =>
-			order[a.severity] - order[b.severity] ||
-			a.rule.localeCompare(b.rule) ||
-			a.location.localeCompare(b.location)
-	);
+	return { findings, site };
 }

@@ -147,7 +147,12 @@ function parseAnB(described: number | string): (position: number) => boolean {
 export function parsePattern(pattern: string): ts.Node {
 	const source = ts.createSourceFile(
 		'pattern.ts',
-		pattern.replace(/\$\.\.\.([A-Z][A-Z0-9_]*)/g, '...$1'),
+		// ast-grep spells "any number of nodes" `$$$NAME` (or a bare `$$$`); this engine's own spelling
+		// is `$...NAME`. Both become a spread, which `variadicName` reads.
+		pattern
+			.replace(/\$\$\$([A-Z][A-Z0-9_]*)/g, '...$1')
+			.replace(/\$\$\$/g, '...ANONYMOUS_REST')
+			.replace(/\$\.\.\.([A-Z][A-Z0-9_]*)/g, '...$1'),
 		ts.ScriptTarget.Latest,
 		true
 	);

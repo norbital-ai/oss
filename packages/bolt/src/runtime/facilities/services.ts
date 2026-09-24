@@ -258,7 +258,7 @@ const HostToolsLayers = {
 export const HostTools = Object.freeze({ Service: HostToolsService, layer: HostToolsLayers.make });
 
 /** Address search answered by the host's geocoding provider. */
-type GeocodingInterface = Readonly<{
+export type GeocodingInterface = Readonly<{
 	readonly search: (
 		effectId: EffectId,
 		request: GeocodingRequest

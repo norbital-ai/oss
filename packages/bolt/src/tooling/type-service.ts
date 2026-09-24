@@ -24,6 +24,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { TraceMap, eachMapping } from '@jridgewell/trace-mapping';
 import { svelte2tsx } from 'svelte2tsx';
 import ts from 'typescript';
+import { authoredFileOf, collectionDocs, declarationLine, docAtLine } from './authored-docs.js';
 
 /** One workspace as the host sees it. */
 export interface TypeServiceWorkspace {
@@ -71,6 +72,11 @@ export interface WorkspaceTypeService {
 		workspace: TypeServiceWorkspace,
 		position: Readonly<{ path: string; line: number; column: number }>
 	): TypeHover | undefined;
+	/**
+	 * A workspace name: `automations.<name>`, `functions.<name>`, `apps.<name>`, `channels.<name>`, or
+	 * `<path>#<export>` (`<path>` alone is its default export). Collections are the index's to answer.
+	 */
+	named(workspace: TypeServiceWorkspace, name: string): TypeHover;
 	check(
 		workspace: TypeServiceWorkspace,
 		paths: ReadonlyArray<string>
@@ -80,7 +86,15 @@ export interface WorkspaceTypeService {
 }
 
 const DEFAULT_BUDGET = 1024 * 1024 * 1024;
+/** Where `bolt sync` writes a collection's types; nobody authors a field there. */
+const GENERATED_COLLECTION = /^\.norbital\/types\/collections\/([^/]+)\//;
+
+const sourceLocation = (source: string): Readonly<{ path: string; line: number }> => {
+	const colon = source.lastIndexOf(':');
+	return { path: source.slice(0, colon), line: Number(source.slice(colon + 1)) };
+};
 const DEFAULT_IDLE = 10 * 60 * 1000;
+const PROGRAM_BYTES_PER_SOURCE_BYTE = 35;
 /** Diagnostics answered per check; past this the list stops helping a reader. */
 const MAX_DIAGNOSTICS = 200;
 
@@ -310,7 +324,13 @@ export const createWorkspaceTypeService = (
 		};
 		const before = process.memoryUsage().heapUsed;
 		const service = ts.createLanguageService(host, registry);
-		service.getProgram();
+		const program = service.getProgram();
+		// A collection landing mid-build reads as no growth at all, and a 0-cost program is never
+		// evicted. The program's source size is the floor: a parsed and bound program holds about 35×
+		// its text (17 MB of declarations → 620 MB, field-operations, 2026-09-25).
+		const floor =
+			(program?.getSourceFiles().reduce((bytes, source) => bytes + source.text.length, 0) ?? 0) *
+			PROGRAM_BYTES_PER_SOURCE_BYTE;
 		const entry: Entry = {
 			root,
 			service,
@@ -318,7 +338,7 @@ export const createWorkspaceTypeService = (
 			components,
 			converted,
 			overlay,
-			cost: Math.max(0, process.memoryUsage().heapUsed - before),
+			cost: Math.max(floor, process.memoryUsage().heapUsed - before),
 			used: now()
 		};
 		entryRef.current = entry;
@@ -326,6 +346,15 @@ export const createWorkspaceTypeService = (
 		reclaim(workspace.key);
 		return entry;
 	};
+
+	const readOf =
+		(entry: Entry) =>
+		(path: string): string | undefined => {
+			const drafted = entry.overlay[path];
+			if (drafted !== undefined) return drafted;
+			const file = join(entry.root, path);
+			return existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+		};
 
 	const inside = (root: string, file: string): string => {
 		const path = relative(root, file);
@@ -384,12 +413,77 @@ export const createWorkspaceTypeService = (
 				definition === undefined || declared === undefined
 					? undefined
 					: authored(entry, declared, definition.textSpan.start);
+			const documentation = ts.displayPartsToString(info.documentation);
+			const declaredPath =
+				definition === undefined ? undefined : inside(entry.root, definition.fileName);
+			// A collection's generated `$types.d.ts` is not where anyone wrote the field: point at the
+			// model column and carry the comment its author put there.
+			const generated =
+				declaredPath === undefined || definition === undefined
+					? undefined
+					: GENERATED_COLLECTION.exec(declaredPath);
+			const authoredField =
+				generated === null || generated === undefined || definition === undefined
+					? undefined
+					: collectionDocs(readOf(entry), generated[1]!)?.fields[definition.name];
 			return {
 				text: ts.displayPartsToString(info.displayParts),
-				documentation: ts.displayPartsToString(info.documentation),
-				...(where === undefined || definition === undefined
-					? {}
-					: { definition: { path: inside(entry.root, definition.fileName), line: where.line + 1 } })
+				documentation: documentation === '' ? (authoredField?.text ?? '') : documentation,
+				...(authoredField !== undefined
+					? { definition: sourceLocation(authoredField.source) }
+					: where === undefined || declaredPath === undefined
+						? {}
+						: { definition: { path: declaredPath, line: where.line + 1 } })
+			};
+		},
+		named: (workspace, name) => {
+			const entry = open(workspace);
+			const read = readOf(entry);
+			const hash = name.indexOf('#');
+			const dotted = /^(automations|functions|apps|channels)\.([A-Za-z0-9_-]+)$/.exec(name);
+			const candidates =
+				hash >= 0
+					? [name.slice(0, hash)]
+					: dotted !== null
+						? authoredFileOf(dotted[1]!, dotted[2]!)
+						: /\.(?:[cm]?ts|svelte)$/.test(name)
+							? [name]
+							: [];
+			if (candidates.length === 0)
+				throw new Error(
+					`${name} is not a workspace name: use automations.<name>, functions.<name>, apps.<name>, channels.<name>, <path>#<export> or a file path; collections.<name> is answered from the index.`
+				);
+			const path = candidates.find((candidate) => read(candidate) !== undefined);
+			if (path === undefined)
+				throw new Error(`${name}: no ${candidates.join(' or ')} in this workspace.`);
+			const symbol = hash >= 0 ? name.slice(hash + 1) || undefined : undefined;
+			const exportName = symbol ?? 'default';
+			const source = sourceOf(entry, path);
+			const checker = entry.service.getProgram()?.getTypeChecker();
+			const module = checker?.getSymbolAtLocation(source);
+			const exported =
+				checker === undefined || module === undefined
+					? undefined
+					: checker.getExportsOfModule(module).find((entry) => entry.name === exportName);
+			if (checker === undefined || exported === undefined)
+				throw new Error(`${path} has no export ${exportName}.`);
+			const target =
+				(exported.flags & ts.SymbolFlags.Alias) !== 0
+					? checker.getAliasedSymbol(exported)
+					: exported;
+			const declaration = target.valueDeclaration ?? target.declarations?.[0];
+			const type =
+				declaration === undefined
+					? checker.getDeclaredTypeOfSymbol(target)
+					: checker.getTypeOfSymbolAtLocation(target, declaration);
+			const text = read(path) ?? '';
+			const line = declarationLine(path, text, symbol);
+			const written = docAtLine(path, text, line);
+			const documentation = ts.displayPartsToString(target.getDocumentationComment(checker));
+			return {
+				text: `${exportName}: ${checker.typeToString(type, source, ts.TypeFormatFlags.NoTruncation).slice(0, 6_000)}`,
+				documentation: documentation === '' ? written : documentation,
+				definition: { path, line }
 			};
 		},
 		check: (workspace, paths) => {
@@ -436,19 +530,55 @@ export const createWorkspaceTypeService = (
  * The two tools a host mounts for its authoring agent, specified once here so every host offers the
  * same contract. The host maps its own session to a `TypeServiceWorkspace` and forwards the input.
  */
+/** What a collection's authored files say, read the way `bolt sync` reads them into the index. */
+export { collectionDocs, readFromDisk } from './authored-docs.js';
+
+/**
+ * The answer `workspace_type` gives from the live service, in the shape the sync-time index answers
+ * collections with: the type, the author's comment, and the `path:line` to read.
+ */
+export const answerTypeQuery = (
+	service: WorkspaceTypeService,
+	workspace: TypeServiceWorkspace,
+	query: Readonly<{ name?: string; path?: string; line?: number; column?: number }>
+): Readonly<{ found: boolean; type?: string; docs?: string; source?: string }> => {
+	const hover =
+		query.name !== undefined
+			? service.named(workspace, query.name)
+			: query.path !== undefined && query.line !== undefined && query.column !== undefined
+				? service.hover(workspace, { path: query.path, line: query.line, column: query.column })
+				: (() => {
+						throw new Error('workspace_type takes a name, or a path with line and column.');
+					})();
+	if (hover === undefined) return { found: false };
+	return {
+		found: true,
+		type: hover.text,
+		...(hover.documentation === '' ? {} : { docs: hover.documentation }),
+		...(hover.definition === undefined
+			? {}
+			: { source: `${hover.definition.path}:${hover.definition.line}` })
+	};
+};
+
+/**
+ * The tools a host mounts for its authoring agent, specified once here so every host offers the
+ * same contract. `workspace_type` shares its name with Bolt's platform tool, which answers
+ * collection names from the index and hands everything else here; the model sees one tool.
+ */
 export const typeServiceTools = [
 	{
-		name: 'workspace_hover',
+		name: 'workspace_type',
 		description:
-			'The type of the symbol at a line and column of a workspace file, as the compiler resolves it — a variable, a call signature, a component prop, a platform API — with where it is declared. Line and column are 1-based, as workspace_read numbers them. Faster and more exact than reading the declaration.',
+			'The live half of workspace_type: names other than collections, and file positions, resolved by the compiler against your current draft.',
 		inputSchema: {
 			type: 'object',
 			properties: {
+				name: { type: 'string', minLength: 1 },
 				path: { type: 'string', minLength: 1 },
 				line: { type: 'integer', minimum: 1 },
 				column: { type: 'integer', minimum: 1 }
 			},
-			required: ['path', 'line', 'column'],
 			additionalProperties: false
 		},
 		readOnly: true

@@ -65,7 +65,9 @@ describe('Task client commands', () => {
 					agentId: 'payroll',
 					message: { role: 'user', content: 'Export payroll' },
 					mode: 'agent',
-					priority: 'steer'
+					priority: 'steer',
+					// The sender's clock rides with every send, so "today" is their day.
+					timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
 				}
 			},
 			{ command: 'conversations.control', input: { conversationId, action: 'stop' } }

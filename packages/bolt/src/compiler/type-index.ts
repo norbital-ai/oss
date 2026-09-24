@@ -15,7 +15,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
-import type { CollectionTypes } from '../authoring/workspace-schema.js';
+import type { CollectionDocs, CollectionTypes } from '../authoring/workspace-schema.js';
+import { collectionDocs, readFromDisk } from '../tooling/authored-docs.js';
 
 /** Longest single expanded type kept; past this the text stops helping a reader and costs tokens. */
 const MAX_TYPE_TEXT = 6_000;
@@ -64,6 +65,7 @@ export const buildTypeIndex = (
 	);
 	if (config === undefined) return undefined;
 
+	const read = readFromDisk(root);
 	const probePath = join(root, 'src', '__bolt_type_index.ts');
 	const aliases = collections.map((collection, index) => ({ ...collection, index }));
 	const probe = aliases
@@ -171,9 +173,13 @@ export const buildTypeIndex = (
 		return `{ ${members.join('; ')} }`;
 	};
 
-	/** One property per line, so a field's accepted value reads at a glance. */
+	/**
+	 * One property per line, so a field's accepted value reads at a glance, each under the comment
+	 * its author wrote on the column.
+	 */
 	const expand = (
-		node: ts.Identifier
+		node: ts.Identifier,
+		docs: CollectionDocs | undefined
 	): { readonly text: string; readonly fields: Record<string, string> } => {
 		const type = checker.getTypeAtLocation(node);
 		if ((type.flags & ts.TypeFlags.Never) !== 0) return { text: 'never', fields: {} };
@@ -184,7 +190,8 @@ export const buildTypeIndex = (
 				render(checker.getTypeOfSymbolAtLocation(property, node), node, 0, optional)
 			);
 			fields[property.name] = `${optional ? '?' : ''}${value}`;
-			return `  ${property.name}${optional ? '?' : ''}: ${value};`;
+			const doc = docs?.fields[property.name]?.text;
+			return `${doc === undefined || doc === '' ? '' : `  /** ${doc} */\n`}  ${property.name}${optional ? '?' : ''}: ${value};`;
 		});
 		return { text: clip(`{\n${lines.join('\n')}\n}`), fields };
 	};
@@ -202,10 +209,12 @@ export const buildTypeIndex = (
 		] as const)
 			if (declaredHere)
 				findAny(checker.getTypeAtLocation(node), `${name}.${surface}`, 0, new Set());
-		const expandedRow = expand(row);
-		const expandedCreate = create ? expand(creating) : undefined;
-		const expandedUpdate = update ? expand(updating) : undefined;
+		const docs = collectionDocs(read, name);
+		const expandedRow = expand(row, docs);
+		const expandedCreate = create ? expand(creating, docs) : undefined;
+		const expandedUpdate = update ? expand(updating, docs) : undefined;
 		indexed[name] = {
+			...(docs === undefined ? {} : { docs }),
 			row: expandedRow.text,
 			fields: expandedRow.fields,
 			...(expandedCreate === undefined

@@ -50,8 +50,8 @@ export {
 	matchesAny
 } from './health-profile.js';
 export type { CompiledHealthProfile, HealthProfile } from './health-profile.js';
-export { runRules, sourceFiles, svelteScript } from './runner.js';
-export { defineRule, verifyExamples, matchSource } from './pattern.js';
+export { runRules, searchRules, sourceFiles, svelteScript } from './runner.js';
+export { defineRule, searchRule, verifyExamples, matchSource } from './pattern.js';
 export { loadPackDirectory, loadPatternFiles } from './patterns-yaml.js';
 export { bindingTexts, compile, match, matcherKinds, parsePattern, withUtils } from './matcher.js';
 export { nameOf } from './model.js';
@@ -71,7 +71,7 @@ export type {
 	Utils
 } from './matcher.js';
 export type { ShapeRule, VisitorRule, RuleDefinition, Examples } from './pattern.js';
-export type { RunOptions, SourceFileOptions } from './runner.js';
+export type { Match, RunOptions, SourceFileOptions } from './runner.js';
 
 const SHIPPED_PACKS = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
 

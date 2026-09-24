@@ -7,6 +7,8 @@ import {
 } from './llm_provider.js';
 
 export { compileHostModelSchema } from './compiler/schema-migrations.js';
+/** Where a conversation's attachments live; a host checks a sandbox's inputs and files its outputs here. */
+export { taskAssetKeyPrefix } from './runtime/agents/image-descriptors.js';
 
 /** Computes the host-side HMAC without pulling Node's crypto module into runtime/browser bundles. */
 export const systemSignature = (secret: string, payload: string): string =>

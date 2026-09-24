@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWorkspaceTypeService } from '../src/tooling/type-service.js';
+import { answerTypeQuery, createWorkspaceTypeService } from '../src/tooling/type-service.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -226,4 +226,61 @@ describe('workspace type service', () => {
 		expect(problem?.message).toContain('"loud"');
 		service.dispose();
 	});
+	it(
+		'answers a workspace name, and sends a generated field back to its model line',
+		{ timeout: 60_000 },
+		async () => {
+			const root = await workspace();
+			await mkdir(join(root, 'src', 'automations'), { recursive: true });
+			await writeFile(
+				join(root, 'src', 'automations', '+review.ts'),
+				"/** Reads each new photo and fills its checksum. */\nexport default { schedule: '*/15 * * * *' } as const;\n"
+			);
+			await mkdir(join(root, 'src', 'collections', 'jobs'), { recursive: true });
+			await writeFile(
+				join(root, 'src', 'collections', 'jobs', '+model.ts'),
+				[
+					'declare const defineModel: (fields: object) => object;',
+					'export default defineModel({',
+					'\t/** Where the work has got to. */',
+					'\tstatus: 1',
+					'});',
+					''
+				].join('\n')
+			);
+			await mkdir(join(root, '.norbital', 'types', 'collections', 'jobs'), { recursive: true });
+			await writeFile(
+				join(root, '.norbital', 'types', 'collections', 'jobs', '$types.d.ts'),
+				'export type Row = { readonly status: string | null };\n'
+			);
+			await writeFile(
+				join(root, 'src', 'use.ts'),
+				"import type { Row } from '../.norbital/types/collections/jobs/$types.js';\ndeclare const row: Row;\nexport const s = row.status;\n"
+			);
+			const service = createWorkspaceTypeService();
+			const key = { key: 'w', root };
+			expect(answerTypeQuery(service, key, { name: 'automations.review' })).toEqual({
+				found: true,
+				type: 'default: { readonly schedule: "*/15 * * * *"; }',
+				docs: 'Reads each new photo and fills its checksum.',
+				source: 'src/automations/+review.ts:2'
+			});
+			expect(answerTypeQuery(service, key, { name: 'src/job.ts#charge' })).toMatchObject({
+				found: true,
+				type: 'charge: Money',
+				source: 'src/job.ts:2'
+			});
+			// The field is declared in generated `$types.d.ts`; the answer is where it was authored.
+			expect(answerTypeQuery(service, key, { path: 'src/use.ts', line: 3, column: 22 })).toEqual({
+				found: true,
+				type: '(property) status: string | null',
+				docs: 'Where the work has got to.',
+				source: 'src/collections/jobs/+model.ts:4'
+			});
+			expect(() => answerTypeQuery(service, key, { name: 'widgets.x' })).toThrow(
+				'is not a workspace name'
+			);
+			service.dispose();
+		}
+	);
 });

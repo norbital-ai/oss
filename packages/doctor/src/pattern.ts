@@ -162,8 +162,19 @@ export function defineRule(definition: RuleDefinition): Rule {
 		return defineVisitorRule(rest);
 	}
 
-	const { rule, utils, constraints, examples: _examples, ...rest } = definition;
+	const { examples: _examples, ...shape } = definition;
 	assertExamples(definition, true);
+	return compileShape(shape);
+}
+
+type Shape = Omit<ShapeRule, 'examples'>;
+
+/**
+ * A shape compiled to the visitor the runner executes. The one compiler behind both `defineRule`
+ * (an audit rule, which must prove itself with examples) and `searchRule` (a question asked once).
+ */
+function compileShape(definition: Shape): Rule {
+	const { rule, utils, constraints, ...rest } = definition;
 
 	const kinds = withUtils(utils ?? {}, () => matcherKinds(rule));
 	if (kinds === undefined || kinds.size === 0)
@@ -225,6 +236,27 @@ export function defineRule(definition: RuleDefinition): Rule {
 			}
 			context.report(node, evidence(bindingTexts(bindings, context.sourceFile)) || 'matched');
 		}
+	});
+}
+
+/**
+ * A shape asked once, not an audit rule: no examples, no id to register. It is the `rule` body a
+ * pack's YAML carries (`pattern`, `kind`, `has`, `inside`, `utils`, `constraints`), so a search that
+ * finds something is already the body of a rule that would flag it. Run it with `searchRules`.
+ */
+export function searchRule(
+	rule: Matcher,
+	options: Readonly<{ utils?: Utils | undefined; constraints?: Constraints | undefined }> = {}
+): Rule {
+	return compileShape({
+		id: 'search',
+		severity: 'hint',
+		summary: 'search match',
+		// A search judges nothing; a principle is only the registry's price of admission.
+		principles: ['straightforwardness'],
+		rule,
+		...(options.utils === undefined ? {} : { utils: options.utils }),
+		...(options.constraints === undefined ? {} : { constraints: options.constraints })
 	});
 }
 
