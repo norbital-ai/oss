@@ -13,9 +13,16 @@
  * because a warm checker is ~300 MB: services live in an LRU under a byte budget, measured by heap
  * growth at build, and an idle one is dropped on the next call. Safe because the compiler executes
  * nothing, and no tsconfig `plugins` are loaded.
+ *
+ * A `.svelte` file is read through `svelte2tsx`, as svelte-check reads it: hover and check take and
+ * answer positions in the `.svelte` source, and a relative `./x.svelte` import resolves to the
+ * component itself rather than the blanket `*.svelte` module declaration.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { TraceMap, eachMapping } from '@jridgewell/trace-mapping';
+import { svelte2tsx } from 'svelte2tsx';
 import ts from 'typescript';
 
 /** One workspace as the host sees it. */
@@ -64,7 +71,10 @@ export interface WorkspaceTypeService {
 		workspace: TypeServiceWorkspace,
 		position: Readonly<{ path: string; line: number; column: number }>
 	): TypeHover | undefined;
-	check(workspace: TypeServiceWorkspace, paths: ReadonlyArray<string>): ReadonlyArray<TypeDiagnostic>;
+	check(
+		workspace: TypeServiceWorkspace,
+		paths: ReadonlyArray<string>
+	): ReadonlyArray<TypeDiagnostic>;
 	stats(): TypeServiceStats;
 	dispose(): void;
 }
@@ -77,14 +87,86 @@ const MAX_DIAGNOSTICS = 200;
 type Entry = {
 	readonly root: string;
 	readonly service: ts.LanguageService;
-	readonly versions: Map<string, string>;
+	readonly versions: Map<string, number>;
+	/** Components asked about directly; imported ones join the program through resolution. */
+	readonly components: Set<string>;
+	readonly converted: Map<string, Component>;
 	overlay: Readonly<Record<string, string>>;
 	cost: number;
 	used: number;
 };
 
+/** One point per mapping segment, sorted by column within each line; lines and columns 0-based. */
+type LineIndex = Map<number, Array<readonly [column: number, line: number, toColumn: number]>>;
+
+type Component = {
+	readonly source: string;
+	readonly code: string;
+	readonly toGenerated: LineIndex;
+	readonly toOriginal: LineIndex;
+};
+
 const flatten = (message: string | ts.DiagnosticMessageChain): string =>
 	ts.flattenDiagnosticMessageText(message, '\n');
+
+const isComponent = (file: string): boolean => file.endsWith('.svelte');
+
+// svelte2tsx output calls its shims; svelte-check adds the same two files to every program.
+const require = createRequire(import.meta.url);
+const shims = ['svelte2tsx/svelte-shims-v4.d.ts', 'svelte2tsx/svelte-jsx-v4.d.ts'].map((path) =>
+	require.resolve(path)
+);
+
+const push = (index: LineIndex, line: number, point: readonly [number, number, number]): void => {
+	const points = index.get(line);
+	if (points === undefined) index.set(line, [point]);
+	else points.push(point);
+};
+
+const convert = (file: string, source: string): Component => {
+	const { code, map } = svelte2tsx(source, {
+		filename: file,
+		isTsFile: /<script[^>]*\blang=["']ts["']/.test(source),
+		mode: 'ts',
+		emitOnTemplateError: true
+	});
+	const toGenerated: LineIndex = new Map();
+	const toOriginal: LineIndex = new Map();
+	const trace = new TraceMap({
+		version: 3,
+		file,
+		names: map.names,
+		sources: map.sources,
+		mappings: map.mappings
+	});
+	eachMapping(trace, (mapping) => {
+		if (mapping.originalLine === null) return;
+		const [line, column] = [mapping.originalLine - 1, mapping.originalColumn];
+		const [generatedLine, generatedColumn] = [mapping.generatedLine - 1, mapping.generatedColumn];
+		push(toGenerated, line, [column, generatedLine, generatedColumn]);
+		push(toOriginal, generatedLine, [generatedColumn, line, column]);
+	});
+	for (const points of [...toGenerated.values(), ...toOriginal.values()])
+		points.sort((a, b) => a[0] - b[0]);
+	return { source, code, toGenerated, toOriginal };
+};
+
+/** The nearest mapped point at or before `column` on `line`, carried forward by the remaining distance. */
+const translate = (
+	index: LineIndex,
+	line: number,
+	column: number
+): { line: number; character: number } | undefined => {
+	const points = index.get(line);
+	if (points === undefined) return undefined;
+	let found: readonly [number, number, number] | undefined;
+	for (const point of points) {
+		if (point[0] > column) break;
+		found = point;
+	}
+	const [from, toLine, toColumn] = found ?? points[0]!;
+	return { line: toLine, character: toColumn + Math.max(0, column - from) };
+};
 
 export const createWorkspaceTypeService = (
 	options: TypeServiceOptions = {}
@@ -119,31 +201,45 @@ export const createWorkspaceTypeService = (
 	const open = (workspace: TypeServiceWorkspace): Entry => {
 		const overlay = workspace.overlay ?? {};
 		const held = entries.get(workspace.key);
-		if (held !== undefined && held.root === workspace.root) {
+		if (held !== undefined && held.root === resolve(workspace.root)) {
 			// A changed draft bumps only its own version: the next query re-checks that file alone.
+			const bump = (path: string): void => {
+				const file = join(held.root, path);
+				held.versions.set(file, (held.versions.get(file) ?? 0) + 1);
+			};
 			for (const [path, text] of Object.entries(overlay))
-				if (held.overlay[path] !== text) held.versions.set(join(held.root, path), String(now()));
-			for (const path of Object.keys(held.overlay))
-				if (!(path in overlay)) held.versions.set(join(held.root, path), String(now()));
+				if (held.overlay[path] !== text) bump(path);
+			for (const path of Object.keys(held.overlay)) if (!(path in overlay)) bump(path);
 			held.overlay = overlay;
 			held.used = now();
 			return held;
 		}
 		if (held !== undefined) drop(workspace.key);
-		const root = workspace.root;
+		const root = resolve(workspace.root);
 		const configPath = join(root, 'tsconfig.json');
 		if (!existsSync(configPath))
 			throw new Error(`No tsconfig.json at ${root}: the workspace cannot be type-checked.`);
-		const config = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
-			...ts.sys,
-			onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-				throw new Error(flatten(diagnostic.messageText));
+		const config = ts.getParsedCommandLineOfConfigFile(
+			configPath,
+			{},
+			{
+				...ts.sys,
+				onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+					throw new Error(flatten(diagnostic.messageText));
+				}
 			}
-		});
+		);
 		if (config === undefined) throw new Error(`${configPath} could not be parsed.`);
-		const compilerOptions: ts.CompilerOptions = { ...config.options, noEmit: true };
+		// `allowNonTsExtensions` admits a `.svelte` root file, as the Svelte language server does.
+		const compilerOptions: ts.CompilerOptions = {
+			...config.options,
+			noEmit: true,
+			allowNonTsExtensions: true
+		};
 		delete compilerOptions['plugins'];
-		const versions = new Map<string, string>();
+		const versions = new Map<string, number>();
+		const components = new Set<string>();
+		const converted = new Map<string, Component>();
 		const entryRef: { current?: Entry } = {};
 		const draft = (file: string): string | undefined => {
 			const path = relative(root, file);
@@ -151,20 +247,56 @@ export const createWorkspaceTypeService = (
 				? undefined
 				: entryRef.current?.overlay[path];
 		};
+		const text = (file: string): string | undefined =>
+			draft(file) ?? (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
+		const moduleHost: ts.ModuleResolutionHost = {
+			fileExists: (file) => draft(file) !== undefined || ts.sys.fileExists(file),
+			readFile: (file) => draft(file) ?? ts.sys.readFile(file),
+			directoryExists: ts.sys.directoryExists,
+			getDirectories: ts.sys.getDirectories,
+			...(ts.sys.realpath === undefined ? {} : { realpath: ts.sys.realpath })
+		};
+		const cache = ts.createModuleResolutionCache(
+			root,
+			(file) => (ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase()),
+			compilerOptions
+		);
 		const host: ts.LanguageServiceHost = {
 			getScriptFileNames: () => [
 				...new Set([
 					...config.fileNames,
+					...shims,
+					...components,
 					...Object.keys(entryRef.current?.overlay ?? overlay)
 						.filter((path) => /\.[cm]?tsx?$/.test(path))
 						.map((path) => join(root, path))
 				])
 			],
-			getScriptVersion: (file) => versions.get(file) ?? '0',
+			getScriptVersion: (file) => String(versions.get(file) ?? 0),
+			getScriptKind: (file) => (isComponent(file) ? ts.ScriptKind.TS : ts.ScriptKind.Unknown),
 			getScriptSnapshot: (file) => {
-				const text = draft(file) ?? (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
-				return text === undefined ? undefined : ts.ScriptSnapshot.fromString(text);
+				const source = text(file);
+				if (source === undefined) return undefined;
+				if (!isComponent(file)) return ts.ScriptSnapshot.fromString(source);
+				let component = converted.get(file);
+				if (component?.source !== source) {
+					component = convert(file, source);
+					converted.set(file, component);
+				}
+				return ts.ScriptSnapshot.fromString(component.code);
 			},
+			resolveModuleNameLiterals: (literals, containingFile, redirected, options) =>
+				literals.map((literal) => {
+					const name = literal.text;
+					if (isComponent(name) && name.startsWith('.')) {
+						const file = resolve(dirname(containingFile), name);
+						if (moduleHost.fileExists(file))
+							return {
+								resolvedModule: { resolvedFileName: file, extension: ts.Extension.Ts }
+							};
+					}
+					return ts.resolveModuleName(name, containingFile, options, moduleHost, cache, redirected);
+				}),
 			getCurrentDirectory: () => root,
 			getCompilationSettings: () => compilerOptions,
 			getDefaultLibFileName: ts.getDefaultLibFilePath,
@@ -183,6 +315,8 @@ export const createWorkspaceTypeService = (
 			root,
 			service,
 			versions,
+			components,
+			converted,
 			overlay,
 			cost: Math.max(0, process.memoryUsage().heapUsed - before),
 			used: now()
@@ -198,54 +332,90 @@ export const createWorkspaceTypeService = (
 		return path.startsWith('..') || isAbsolute(path) ? file : path;
 	};
 
+	/** The program's copy of a workspace file; a component joins the program when first asked about. */
+	const sourceOf = (entry: Entry, path: string): ts.SourceFile => {
+		const file = join(entry.root, path);
+		if (isComponent(file) && (existsSync(file) || path in entry.overlay))
+			entry.components.add(file);
+		const source = entry.service.getProgram()?.getSourceFile(file);
+		if (source === undefined)
+			throw new Error(
+				`${path} is not a file of this workspace's program: it does not exist, or tsconfig.json does not include it.`
+			);
+		return source;
+	};
+
+	/** A position in a program file as its author reads it: a component's, in its `.svelte` source. */
+	const authored = (
+		entry: Entry,
+		source: ts.SourceFile,
+		start: number
+	): { line: number; character: number } | undefined => {
+		const at = source.getLineAndCharacterOfPosition(start);
+		const component = entry.converted.get(source.fileName);
+		return component === undefined ? at : translate(component.toOriginal, at.line, at.character);
+	};
+
 	return {
 		hover: (workspace, position) => {
 			const entry = open(workspace);
-			const file = join(entry.root, position.path);
-			const source = entry.service.getProgram()?.getSourceFile(file);
-			if (source === undefined) return undefined;
-			const offset = source.getPositionOfLineAndCharacter(
-				Math.max(0, position.line - 1),
-				Math.max(0, position.column - 1)
+			const source = sourceOf(entry, position.path);
+			const [line, column] = [Math.max(0, position.line - 1), Math.max(0, position.column - 1)];
+			const component = entry.converted.get(source.fileName);
+			const at =
+				component === undefined
+					? { line, character: column }
+					: translate(component.toGenerated, line, column);
+			const starts = source.getLineStarts();
+			if (at === undefined || at.line >= starts.length) return undefined;
+			// A column past the line's end is the line's end: the compiler asserts on anything further.
+			const offset = Math.min(
+				starts[at.line]! + at.character,
+				(starts[at.line + 1] ?? source.text.length + 1) - 1
 			);
-			const info = entry.service.getQuickInfoAtPosition(file, offset);
+			const info = entry.service.getQuickInfoAtPosition(source.fileName, offset);
 			if (info === undefined) return undefined;
-			const [definition] = entry.service.getDefinitionAtPosition(file, offset) ?? [];
-			const defined =
+			const [definition] = entry.service.getDefinitionAtPosition(source.fileName, offset) ?? [];
+			const declared =
 				definition === undefined
 					? undefined
-					: {
-							path: inside(entry.root, definition.fileName),
-							line:
-								(entry.service.getProgram()?.getSourceFile(definition.fileName)
-									?.getLineAndCharacterOfPosition(definition.textSpan.start).line ?? 0) + 1
-						};
+					: entry.service.getProgram()?.getSourceFile(definition.fileName);
+			const where =
+				definition === undefined || declared === undefined
+					? undefined
+					: authored(entry, declared, definition.textSpan.start);
 			return {
 				text: ts.displayPartsToString(info.displayParts),
 				documentation: ts.displayPartsToString(info.documentation),
-				...(defined === undefined ? {} : { definition: defined })
+				...(where === undefined || definition === undefined
+					? {}
+					: { definition: { path: inside(entry.root, definition.fileName), line: where.line + 1 } })
 			};
 		},
 		check: (workspace, paths) => {
 			const entry = open(workspace);
 			return paths
 				.flatMap((path) => {
-					const file = join(entry.root, path);
+					const source = sourceOf(entry, path);
 					return [
-						...entry.service.getSyntacticDiagnostics(file),
-						...entry.service.getSemanticDiagnostics(file)
-					].map((diagnostic) => {
+						...entry.service.getSyntacticDiagnostics(source.fileName),
+						...entry.service.getSemanticDiagnostics(source.fileName)
+					].flatMap((diagnostic) => {
 						const at =
 							diagnostic.file === undefined || diagnostic.start === undefined
 								? { line: 0, character: 0 }
-								: diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-						return {
-							path,
-							line: at.line + 1,
-							column: at.character + 1,
-							code: diagnostic.code,
-							message: flatten(diagnostic.messageText)
-						};
+								: authored(entry, diagnostic.file, diagnostic.start);
+						// A component diagnostic with no source position is in svelte2tsx's scaffolding.
+						if (at === undefined) return [];
+						return [
+							{
+								path,
+								line: at.line + 1,
+								column: at.character + 1,
+								code: diagnostic.code,
+								message: flatten(diagnostic.messageText)
+							}
+						];
 					});
 				})
 				.slice(0, MAX_DIAGNOSTICS);
