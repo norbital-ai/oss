@@ -1136,14 +1136,22 @@ const compileNode = (
 		const resolved = resolveCompiledRelationship(definition.relations, collection, name, childNode);
 		if (Result.isFailure(resolved)) return failed(resolved);
 		const quantifiers = Object.keys(condition).filter(
-			(key) => key === 'some' || key === 'none' || key === 'every'
+			(key) => key === 'some' || key === 'none' || key === 'every' || key === 'count'
 		);
 		const implicitSome = quantifiers.length === 0;
 		if (!implicitSome && (quantifiers.length !== 1 || Object.keys(condition).length !== 1))
 			return diagnostic(
 				'invalid-node',
 				childNode,
-				`Query node ${childNode} requires exactly one of some, none, or every.`,
+				`Query node ${childNode} requires exactly one of some, none, every, or count.`,
+				`${collection}.${name}`
+			);
+		const counted = quantifiers[0] === 'count' ? relationCount(condition['count']) : undefined;
+		if (quantifiers[0] === 'count' && counted === undefined)
+			return diagnostic(
+				'invalid-node',
+				`${childNode}.count`,
+				`Query node ${childNode}.count takes { where?, eq|gt|gte|lt|lte: a non-negative whole number }.`,
 				`${collection}.${name}`
 			);
 		const relation = resolved.success;
@@ -1162,12 +1170,12 @@ const compileNode = (
 		};
 		const nextChain = [...chain, segment];
 		addReversePath(state, relation.definition.target, nextChain);
-		const quantifier = (quantifiers[0] ?? 'some') as 'some' | 'none' | 'every';
+		const quantifier = (quantifiers[0] ?? 'some') as 'some' | 'none' | 'every' | 'count';
 		const alias = `pr${state.alias++}`;
 		const nested = compileNode(
 			definition,
 			relation.definition.target,
-			implicitSome ? condition : condition[quantifier],
+			counted !== undefined ? counted.where : implicitSome ? condition : condition[quantifier],
 			subject,
 			state,
 			policyFor,
@@ -1189,11 +1197,44 @@ const compileNode = (
 			targetField: relation.targetField,
 			alias,
 			quantifier,
+			...(counted === undefined
+				? {}
+				: { count: { comparison: counted.comparison, value: counted.value } }),
 			...(relatedPolicy === undefined ? {} : { visibility: relatedPolicy.expression }),
 			expression: nested.success
 		});
 	}
 	return Result.succeed(joinExpression('and', clauses));
+};
+
+/**
+ * A `count` quantifier's parts: `{ where?, <comparison>: n }`, read once so the planner and the SQL
+ * agree. Counting is over the related rows the viewer may read that match `where` — the same
+ * visibility an `exists` applies — so a count never reveals rows a policy hides.
+ */
+const relationCount = (
+	value: unknown
+):
+	| Readonly<{
+			where: unknown;
+			comparison: 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
+			value: number;
+	  }>
+	| undefined => {
+	if (!isObject(value)) return undefined;
+	const comparisons = (['eq', 'gt', 'gte', 'lt', 'lte'] as const).filter((key) => key in value);
+	const [comparison] = comparisons;
+	const bound = comparison === undefined ? undefined : value[comparison];
+	if (
+		comparisons.length !== 1 ||
+		comparison === undefined ||
+		typeof bound !== 'number' ||
+		!Number.isInteger(bound) ||
+		bound < 0 ||
+		Object.keys(value).some((key) => key !== 'where' && key !== comparison)
+	)
+		return undefined;
+	return { where: value['where'] ?? {}, comparison, value: bound };
 };
 
 const semanticsOf = (

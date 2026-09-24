@@ -34,7 +34,16 @@
 		field: string | null;
 		operator: CollectionFilterOperator | null;
 		value: unknown;
+		/** The related group this condition belongs to; absent for a condition on the row itself. */
+		group?: number;
 	};
+	type RelatedMatch = 'some' | 'none' | 'every' | 'gte' | 'lte' | 'eq';
+	/**
+	 * A condition on related records: which relationship, how many of its rows must match, and —
+	 * as ordinary condition rows carrying this group's id — what each such row must satisfy. The
+	 * conditions hold on one related row together, so "open" and "invoice" mean the same message.
+	 */
+	type RelatedGroup = { id: number; relation: string | null; match: RelatedMatch; count: number };
 	let {
 		definition,
 		collections,
@@ -58,10 +67,36 @@
 	const isString = Schema.is(Schema.String);
 
 	let filters = $state<Filter[]>([]);
+	let groups = $state<RelatedGroup[]>([]);
 	let nextId = $state(0);
 	const filterFields = $derived(collectionFilterFields(definition, collections));
 	const fieldTree = $derived(collectionFilterFieldTree(filterFields, t));
-	const activeCount = $derived(filters.filter(filterIsActive).length);
+	const relationships = $derived(definition.relationships ?? []);
+	const activeCount = $derived(
+		filters.filter((filter) => filter.group === undefined && filterIsActive(filter)).length +
+			groups.filter((group) => group.relation !== null).length
+	);
+	const RELATED_MATCHES: ReadonlyArray<{ value: RelatedMatch; label: string }> = [
+		{ value: 'some', label: 'has any' },
+		{ value: 'none', label: 'has none' },
+		{ value: 'every', label: 'all match' },
+		{ value: 'gte', label: 'at least' },
+		{ value: 'lte', label: 'at most' },
+		{ value: 'eq', label: 'exactly' }
+	];
+
+	/** The related collection's own fields, for the conditions inside a group. */
+	function groupFields(groupId: number): readonly CollectionFilterField[] {
+		const relation = relationships.find(
+			(candidate) => candidate.name === groups.find((group) => group.id === groupId)?.relation
+		);
+		const target = relation === undefined ? undefined : collections[relation.target];
+		return target === undefined ? [] : collectionFilterFields(target, collections);
+	}
+
+	function fieldsFor(filter: Filter): readonly CollectionFilterField[] {
+		return filter.group === undefined ? filterFields : groupFields(filter.group);
+	}
 
 	/**
 	 * The seed, and whether this operator has already thrown it away.
@@ -134,7 +169,7 @@
 	}
 
 	function selectedField(filter: Filter): CollectionFilterField | undefined {
-		return filterFields.find((field) => field.value === filter.field);
+		return fieldsFor(filter).find((field) => field.value === filter.field);
 	}
 
 	function filterIsActive(filter: Filter): boolean {
@@ -146,19 +181,61 @@
 		return true;
 	}
 
-	function publish(): void {
-		const clauses = filters.flatMap((filter) => {
-			if (!filterIsActive(filter)) return [];
-			const field = selectedField(filter);
-			if (!field || !filter.operator || !filter.field) return [];
-			const operator = collectionFilterQueryOperator(field.field, filter.operator);
-			if (!collectionFilterOperatorNeedsValue(filter.operator)) {
-				return [collectionFilterClause(field, operator, true)];
+	function clauseOf(filter: Filter): CollectionFilter[] {
+		if (!filterIsActive(filter)) return [];
+		const field = selectedField(filter);
+		if (!field || !filter.operator || !filter.field) return [];
+		const operator = collectionFilterQueryOperator(field.field, filter.operator);
+		if (!collectionFilterOperatorNeedsValue(filter.operator)) {
+			return [collectionFilterClause(field, operator, true)];
+		}
+		const operand = operator === 'ilike' ? `%${String(filter.value).trim()}%` : filter.value;
+		return [collectionFilterClause(field, operator, operand)];
+	}
+
+	function groupClause(group: RelatedGroup): CollectionFilter[] {
+		if (group.relation === null) return [];
+		const counted = group.match === 'gte' || group.match === 'lte' || group.match === 'eq';
+		if (counted && (!Number.isInteger(group.count) || group.count < 0)) return [];
+		return [
+			{
+				path: [group.relation],
+				operator: 'related',
+				related: counted
+					? { count: group.match as 'gte' | 'lte' | 'eq', value: group.count }
+					: { quantifier: group.match as 'some' | 'none' | 'every' },
+				where: filters.filter((filter) => filter.group === group.id).flatMap(clauseOf)
 			}
-			const operand = operator === 'ilike' ? `%${String(filter.value).trim()}%` : filter.value;
-			return [collectionFilterClause(field, operator, operand)];
-		});
-		onChange(clauses);
+		];
+	}
+
+	function publish(): void {
+		onChange([
+			...filters.filter((filter) => filter.group === undefined).flatMap(clauseOf),
+			...groups.flatMap(groupClause)
+		]);
+	}
+
+	function addGroup(): void {
+		groups = [...groups, { id: nextId++, relation: null, match: 'some', count: 1 }];
+	}
+
+	function updateGroup(id: number, change: Partial<RelatedGroup>): void {
+		groups = groups.map((group) => (group.id === id ? { ...group, ...change } : group));
+		publish();
+	}
+
+	function removeGroup(id: number): void {
+		groups = groups.filter((group) => group.id !== id);
+		filters = filters.filter((filter) => filter.group !== id);
+		publish();
+	}
+
+	function addGroupCondition(groupId: number): void {
+		filters = [
+			...filters,
+			{ id: nextId++, field: null, operator: null, value: undefined, group: groupId }
+		];
 	}
 
 	/**
@@ -178,8 +255,8 @@
 	let askTimer: ReturnType<typeof setTimeout> | undefined;
 	let askController: AbortController | undefined;
 
-	function inferenceFields() {
-		return filterFields.slice(0, 300).map((filterField) => ({
+	function describeFields(fields: readonly CollectionFilterField[]) {
+		return fields.slice(0, 200).map((filterField) => ({
 			value: filterField.value,
 			label: filterField.path.map((segment) => humanize(segment)).join(' › '),
 			kind: filterField.field.kind,
@@ -189,6 +266,73 @@
 			...(filterField.lookupTarget === undefined ? {} : { target: filterField.lookupTarget }),
 			operators: collectionFilterOperatorOptions(filterField.field).map(({ value }) => value)
 		}));
+	}
+
+	/** The row's own fields, then each relationship with the related collection's fields. */
+	function inferenceFields() {
+		return [
+			...describeFields(filterFields),
+			...relationships.flatMap((relation) => {
+				const target = collections[relation.target];
+				return target === undefined
+					? []
+					: [
+							{
+								value: `@${relation.name}`,
+								label: humanize(relation.name),
+								kind: 'relation',
+								nullable: false,
+								target: relation.target,
+								operators: ['related'],
+								fields: describeFields(collectionFilterFields(target, collections))
+							}
+						];
+			})
+		].slice(0, 300);
+	}
+
+	/** A `related` answer becomes a group and its conditions, exactly as if built by hand. */
+	function adoptRelated(condition: { field: string; value?: unknown }):
+		| {
+				group: RelatedGroup;
+				rows: Filter[];
+		  }
+		| undefined {
+		const relation = relationships.find((candidate) => `@${candidate.name}` === condition.field);
+		const value = condition.value;
+		if (relation === undefined || typeof value !== 'object' || value === null) return undefined;
+		const match = Reflect.get(value, 'match');
+		if (!RELATED_MATCHES.some((option) => option.value === match)) return undefined;
+		const group: RelatedGroup = {
+			id: nextId++,
+			relation: relation.name,
+			match: match as RelatedMatch,
+			count: Number(Reflect.get(value, 'count') ?? 1)
+		};
+		const target = collections[relation.target];
+		const fields = target === undefined ? [] : collectionFilterFields(target, collections);
+		const where: unknown = Reflect.get(value, 'where') ?? [];
+		const rows = (Array.isArray(where) ? where : []).flatMap((nested: unknown) => {
+			if (typeof nested !== 'object' || nested === null) return [];
+			const field = fields.find((candidate) => candidate.value === Reflect.get(nested, 'field'));
+			const operator = field
+				? collectionFilterOperatorOptions(field.field).find(
+						(option) => option.value === Reflect.get(nested, 'operator')
+					)?.value
+				: undefined;
+			return field === undefined || operator === undefined
+				? []
+				: [
+						{
+							id: nextId++,
+							field: field.value,
+							operator,
+							value: Reflect.get(nested, 'value'),
+							group: group.id
+						}
+					];
+		});
+		return { group, rows };
 	}
 
 	function ask(text: string): void {
@@ -203,17 +347,42 @@
 			collection: definition.name,
 			text: text.trim().slice(0, 500),
 			fields: inferenceFields(),
-			current: filters.filter(filterIsActive).map((filter) => ({
-				field: filter.field ?? '',
-				operator: filter.operator ?? '',
-				...(filter.value === undefined ? {} : { value: filter.value })
-			}))
+			current: [
+				...filters
+					.filter((filter) => filter.group === undefined && filterIsActive(filter))
+					.map((filter) => ({
+						field: filter.field ?? '',
+						operator: filter.operator ?? '',
+						...(filter.value === undefined ? {} : { value: filter.value })
+					})),
+				...groups
+					.filter((group) => group.relation !== null)
+					.map((group) => ({
+						field: `@${group.relation}`,
+						operator: 'related',
+						value: {
+							match: group.match,
+							count: group.count,
+							where: filters
+								.filter((filter) => filter.group === group.id && filterIsActive(filter))
+								.map((filter) => ({
+									field: filter.field ?? '',
+									operator: filter.operator ?? '',
+									...(filter.value === undefined ? {} : { value: filter.value })
+								}))
+						}
+					}))
+			]
 		};
 		Effect.runPromise(infer(request, controller.signal), { signal: controller.signal }).then(
 			(answer) => {
 				if (controller.signal.aborted) return;
 				askPending = false;
 				const offered = new Map(filterFields.map((field) => [field.value, field]));
+				const related = answer.conditions.flatMap((condition) => {
+					const adopted = condition.operator === 'related' ? adoptRelated(condition) : undefined;
+					return adopted === undefined ? [] : [adopted];
+				});
 				const rows = answer.conditions.flatMap((condition) => {
 					const field = offered.get(condition.field);
 					const operator = collectionFilterOperatorOptions(
@@ -224,7 +393,9 @@
 						: [{ id: nextId++, field: condition.field, operator, value: condition.value }];
 				});
 				if (filters.some((filter) => seededIds.has(filter.id))) markSeedCleared();
-				filters = rows;
+				// The answer is the whole filter, related groups included.
+				filters = [...rows, ...related.flatMap((adopted) => adopted.rows)];
+				groups = related.map((adopted) => adopted.group);
 				askUnresolved = answer.unresolved;
 				publish();
 			},
@@ -247,7 +418,10 @@
 	}
 
 	function setField(id: number, fieldName: string): void {
-		const field = filterFields.find((candidate) => candidate.value === fieldName);
+		const row = filters.find((filter) => filter.id === id);
+		const field = (row === undefined ? filterFields : fieldsFor(row)).find(
+			(candidate) => candidate.value === fieldName
+		);
 		if (!field) return;
 		const operator = collectionFilterOperatorOptions(field.field)[0]?.value ?? null;
 		filters = filters.map((filter) =>
@@ -277,9 +451,73 @@
 	function clear(): void {
 		if (filters.some((filter) => seededIds.has(filter.id))) markSeedCleared();
 		filters = [];
+		groups = [];
 		publish();
 	}
 </script>
+
+{#snippet conditionRow(filter: Filter, tree: typeof fieldTree)}
+	{@const field = selectedField(filter)}
+	{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
+	<!-- One field column on a phone, three from `sm` up. The template is carried in a
+				     custom property so the breakpoint stays a class while `Grid` owns the track
+				     declaration. -->
+	<Grid
+		gap="sm"
+		tracks="var(--filter-row-columns)"
+		class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
+	>
+		<div class="col-start-1 min-w-0 w-full sm:col-auto">
+			<TreeCombobox
+				rootItems={tree}
+				value={filter.field ?? undefined}
+				placeholder={t('table.chooseField')}
+				searchPlaceholder={t('table.searchFields')}
+				ariaLabel={t('table.chooseFilterField')}
+				allowCleared={false}
+				{disabled}
+				onValueChange={(nextField) => nextField && setField(filter.id, nextField)}
+			/>
+		</div>
+		{#if field}
+			<Combobox
+				options={[...operatorOptions]}
+				value={filter.operator}
+				searchable={false}
+				class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+				onValueChange={(operator) => operator && setOperator(filter.id, operator)}
+			/>
+		{:else}
+			<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">{t('table.chooseField')}</span>
+		{/if}
+		{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
+			{#key `${field.value}:${filter.operator}`}
+				<DataRenderer
+					field={collectionFilterOperandField(field.field, filter.operator, {
+						target: field.lookupTarget,
+						relationName: `__filter_${field.path.join('_')}`
+					})}
+					value={filter.value}
+					mode="edit"
+					class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+					onValueChange={(value) => setValue(filter.id, value)}
+				/>
+			{/key}
+		{:else}
+			<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">
+				{field && filter.operator ? t('table.noValueNeeded') : t('table.chooseOperator')}
+			</span>
+		{/if}
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon"
+			class="col-start-2 row-start-1 size-8 sm:col-start-4"
+			aria-label={t('table.filterRemove')}
+			onclick={() => removeFilter(filter.id)}><Icon icon="lucide:x" class="size-3.5" /></Button
+		>
+	</Grid>
+{/snippet}
 
 <Popover.Root>
 	<Popover.Trigger>
@@ -306,7 +544,7 @@
 				<p class="text-xs font-medium">{t('table.filters')}</p>
 				<p class="text-micro text-muted-foreground">{t('table.filtersAllMatch')}</p>
 			</Stack>
-			{#if filters.length > 0}<Button
+			{#if filters.length > 0 || groups.length > 0}<Button
 					type="button"
 					variant="ghost"
 					size="sm"
@@ -359,75 +597,88 @@
 		{/if}
 		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
-				{#if filters.length === 0}
+				{#if filters.length === 0 && groups.length === 0}
 					<p class="py-2 text-center text-meta">
 						{t('table.noFiltersApplied')}
 					</p>
 				{/if}
-				{#each filters as filter (filter.id)}
-					{@const field = selectedField(filter)}
-					{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
-					<!-- One field column on a phone, three from `sm` up. The template is carried in a
-					     custom property so the breakpoint stays a class while `Grid` owns the track
-					     declaration. -->
-					<Grid
-						gap="sm"
-						tracks="var(--filter-row-columns)"
-						class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
-					>
-						<div class="col-start-1 min-w-0 w-full sm:col-auto">
-							<TreeCombobox
-								rootItems={fieldTree}
-								value={filter.field ?? undefined}
-								placeholder={t('table.chooseField')}
-								searchPlaceholder={t('table.searchFields')}
-								ariaLabel={t('table.chooseFilterField')}
-								allowCleared={false}
-								{disabled}
-								onValueChange={(nextField) => nextField && setField(filter.id, nextField)}
-							/>
-						</div>
-						{#if field}
+				{#each filters.filter((filter) => filter.group === undefined) as filter (filter.id)}
+					{@render conditionRow(filter, fieldTree)}
+				{/each}
+				{#each groups as group (group.id)}
+					{@const counted = group.match === 'gte' || group.match === 'lte' || group.match === 'eq'}
+					<Stack gap="xs" class="rounded-md border p-2">
+						<Grid
+							gap="sm"
+							tracks="var(--filter-row-columns)"
+							class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
+						>
 							<Combobox
-								options={[...operatorOptions]}
-								value={filter.operator}
+								options={relationships.map((relation) => ({
+									value: relation.name,
+									label: humanize(relation.name)
+								}))}
+								value={group.relation}
+								emptyPlaceholder={t('table.filterRelatedChoose')}
+								class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+								onValueChange={(relation) => {
+									if (!relation) return;
+									filters = filters.filter((filter) => filter.group !== group.id);
+									updateGroup(group.id, { relation });
+								}}
+							/>
+							<Combobox
+								options={[...RELATED_MATCHES]}
+								value={group.match}
 								searchable={false}
 								class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
-								onValueChange={(operator) => operator && setOperator(filter.id, operator)}
+								onValueChange={(match) => match && updateGroup(group.id, { match })}
 							/>
-						{:else}
-							<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto"
-								>{t('table.chooseField')}</span
-							>
-						{/if}
-						{#if field && filter.operator && collectionFilterOperatorNeedsValue(filter.operator)}
-							{#key `${field.value}:${filter.operator}`}
-								<DataRenderer
-									field={collectionFilterOperandField(field.field, filter.operator, {
-										target: field.lookupTarget,
-										relationName: `__filter_${field.path.join('_')}`
-									})}
-									value={filter.value}
-									mode="edit"
-									class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
-									onValueChange={(value) => setValue(filter.id, value)}
+							{#if counted}
+								<input
+									type="number"
+									min="0"
+									step="1"
+									class="col-start-1 h-8 min-w-0 w-full rounded-md border bg-transparent px-2 text-xs sm:col-auto"
+									aria-label={t('table.filterRelatedCount')}
+									value={group.count}
+									{disabled}
+									oninput={(event) =>
+										updateGroup(group.id, { count: Number(event.currentTarget.value) })}
 								/>
-							{/key}
-						{:else}
-							<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">
-								{field && filter.operator ? t('table.noValueNeeded') : t('table.chooseOperator')}
-							</span>
+							{:else}
+								<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">
+									{t('table.filterRelatedRows')}
+								</span>
+							{/if}
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								class="col-start-2 row-start-1 size-8 sm:col-start-4"
+								aria-label={t('table.filterRemove')}
+								onclick={() => removeGroup(group.id)}
+								><Icon icon="lucide:x" class="size-3.5" /></Button
+							>
+						</Grid>
+						{#if group.relation !== null}
+							{@const tree = collectionFilterFieldTree(groupFields(group.id), t)}
+							<Stack gap="xs" class="border-l pl-3">
+								<p class="text-micro text-muted-foreground">{t('table.filterRelatedWhere')}</p>
+								{#each filters.filter((filter) => filter.group === group.id) as filter (filter.id)}
+									{@render conditionRow(filter, tree)}
+								{/each}
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									class="h-7 w-fit gap-1.5 text-xs"
+									onclick={() => addGroupCondition(group.id)}
+									><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
+								>
+							</Stack>
 						{/if}
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							class="col-start-2 row-start-1 size-8 sm:col-start-4"
-							aria-label={t('table.filterRemove')}
-							onclick={() => removeFilter(filter.id)}
-							><Icon icon="lucide:x" class="size-3.5" /></Button
-						>
-					</Grid>
+					</Stack>
 				{/each}
 			</Stack>
 		</Scroll>
@@ -441,6 +692,16 @@
 				onclick={addFilter}
 				><Icon icon="lucide:plus" class="size-3.5" /> {t('table.filterAdd')}</Button
 			>
+			{#if relationships.length > 0}
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					class="h-7 gap-1.5 text-xs"
+					onclick={addGroup}
+					><Icon icon="lucide:git-fork" class="size-3.5" /> {t('table.filterRelatedAdd')}</Button
+				>
+			{/if}
 		</footer>
 	</Popover.Content>
 </Popover.Root>

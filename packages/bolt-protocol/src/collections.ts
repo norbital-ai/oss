@@ -131,7 +131,17 @@ export const COLLECTION_PREDICATE_FIELD_OPERATORS = [
 	'kind',
 	'approvalParty'
 ] as const;
-export const COLLECTION_PREDICATE_RELATION_QUANTIFIERS = ['some', 'none', 'every'] as const;
+export const COLLECTION_PREDICATE_RELATION_QUANTIFIERS = [
+	'some',
+	'none',
+	'every',
+	'count'
+] as const;
+/**
+ * How a `count` quantifier compares the number of related rows that match its `where`:
+ * `{ invoices: { count: { where: { status: 'open' }, gte: 2 } } }` is "at least two open invoices".
+ */
+export const COLLECTION_PREDICATE_COUNT_COMPARISONS = ['eq', 'gt', 'gte', 'lt', 'lte'] as const;
 export const MAX_COLLECTION_PREDICATE_DEPTH = 4;
 
 const FIELD_OPERATORS = new Set<string>(COLLECTION_PREDICATE_FIELD_OPERATORS);
@@ -319,6 +329,11 @@ const predicateProblem = (value: unknown, depth = 0): string | undefined => {
 			if (quantifiers.length > 0) {
 				if (quantifiers.length !== 1 || Object.keys(relation).length !== 1)
 					return `${node} relation requires exactly one quantifier`;
+				if (quantifiers[0] === 'count') {
+					const problem = countProblem(relation['count'], depth);
+					if (problem !== undefined) return `${node}.count ${problem}`;
+					continue;
+				}
 				const problem = predicateProblem(relation[quantifiers[0] ?? ''], depth + 1);
 				if (problem !== undefined) return `${node}.${quantifiers[0]} ${problem}`;
 				continue;
@@ -329,6 +344,27 @@ const predicateProblem = (value: unknown, depth = 0): string | undefined => {
 	}
 	return undefined;
 };
+
+/** `{ where?, <comparison>: n }`: one comparison, a non-negative whole number, an optional filter. */
+function countProblem(value: unknown, depth: number): string | undefined {
+	const count = jsonObject(value);
+	if (count === undefined) return 'must be an object';
+	const comparisons = Object.keys(count).filter((key) =>
+		(COLLECTION_PREDICATE_COUNT_COMPARISONS as ReadonlyArray<string>).includes(key)
+	);
+	const unexpected = Object.keys(count).find(
+		(key) => key !== 'where' && !comparisons.includes(key)
+	);
+	if (unexpected !== undefined) return `has unexpected key ${unexpected}`;
+	if (comparisons.length !== 1)
+		return `requires exactly one of ${COLLECTION_PREDICATE_COUNT_COMPARISONS.join(', ')}`;
+	const bound = count[comparisons[0] ?? ''];
+	if (typeof bound !== 'number' || !Number.isInteger(bound) || bound < 0)
+		return 'compares with a non-negative whole number';
+	if (count['where'] === undefined) return undefined;
+	const problem = predicateProblem(count['where'], depth + 1);
+	return problem === undefined ? undefined : `.where ${problem}`;
+}
 
 export const CollectionPredicate = Schema.Json.check(
 	Schema.makeFilter((value) => predicateProblem(value))
@@ -382,7 +418,7 @@ export const CollectionQueryRequestFields = {
  * about exactly the fields and operators the person can see and edit, and its answer is checked
  * against that same list. It grants nothing: reads still run under the caller's policies.
  */
-export const CollectionFilterInferenceField = Schema.Struct({
+const CollectionFilterInferenceLeafFields = {
 	value: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 	label: Schema.String.check(Schema.isMaxLength(256)),
 	kind: Schema.String.check(Schema.isMaxLength(64)),
@@ -392,6 +428,16 @@ export const CollectionFilterInferenceField = Schema.Struct({
 	/** A reference field's target collection: its operand is a record id `find_records` resolves. */
 	target: Schema.optionalKey(Schema.String),
 	operators: Schema.Array(Schema.String).check(Schema.isMaxLength(20))
+};
+export const CollectionFilterInferenceField = Schema.Struct({
+	...CollectionFilterInferenceLeafFields,
+	/**
+	 * A relationship (`operators: ['related']`): the related collection's own fields, which the
+	 * conditions inside a `related` answer name. One level; a condition cannot nest further.
+	 */
+	fields: Schema.optionalKey(
+		Schema.Array(Schema.Struct(CollectionFilterInferenceLeafFields)).check(Schema.isMaxLength(200))
+	)
 });
 
 /** One filter row as the builder holds it: a picker field, an operator, and its operand. */

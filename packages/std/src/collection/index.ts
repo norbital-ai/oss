@@ -354,10 +354,22 @@ export interface CollectionFilter {
 		| 'arrayContains'
 		| 'arrayOverlaps'
 		| 'contains_date'
-		| 'overlaps';
-	/** Omitted for the operators that take none (`isNull`, `isNotNull`). */
+		| 'overlaps'
+		| 'related';
+	/** Omitted for the operators that take none (`isNull`, `isNotNull`, `related`). */
 	readonly operand?: unknown;
+	/**
+	 * With `related`, the path ends on a relationship and this says how many of its rows must match
+	 * `where`: any, none, all, or a count ("customers with at least 1 open invoice message").
+	 */
+	readonly related?: CollectionRelatedMatch;
+	/** With `related`: conditions on the related rows, all on the same row, relative to its collection. */
+	readonly where?: readonly CollectionFilter[];
 }
+
+export type CollectionRelatedMatch =
+	| Readonly<{ readonly quantifier: 'some' | 'none' | 'every' }>
+	| Readonly<{ readonly count: 'eq' | 'gt' | 'gte' | 'lt' | 'lte'; readonly value: number }>;
 
 export interface CollectionFilterOptions {
 	readonly filters?: readonly CollectionFilter[];

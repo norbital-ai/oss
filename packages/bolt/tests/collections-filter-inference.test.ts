@@ -125,4 +125,93 @@ describe('collection filter inference', () => {
 		const first = requests[0];
 		expect(first?._tag === 'Generate' ? first.modelId : undefined).toBe('provider/fast');
 	});
+
+	it('keeps a related answer whose conditions the related collection offers, and reports one that does not', async () => {
+		const messages = {
+			value: '@messages',
+			label: 'Messages',
+			kind: 'relation',
+			nullable: false,
+			target: 'messages',
+			operators: ['related'],
+			fields: [
+				{
+					value: 'status',
+					label: 'Status',
+					kind: 'enum',
+					nullable: false,
+					values: ['open', 'closed'],
+					operators: ['eq', 'ne']
+				},
+				{
+					value: 'kind',
+					label: 'Kind',
+					kind: 'enum',
+					nullable: false,
+					values: ['invoice', 'quote'],
+					operators: ['eq', 'ne']
+				}
+			]
+		};
+		const invoiceCount = {
+			field: '@messages',
+			operator: 'related',
+			value: {
+				match: 'gte',
+				count: 1,
+				where: [
+					{ field: 'status', operator: 'eq', value: 'open' },
+					{ field: 'kind', operator: 'eq', value: 'invoice' }
+				]
+			}
+		};
+		const guessed = {
+			field: '@messages',
+			operator: 'related',
+			value: { match: 'some', where: [{ field: 'amount', operator: 'gt', value: 10 }] }
+		};
+		const reply = call('result', 'return_result', {
+			conditions: [invoiceCount, guessed],
+			unresolved: []
+		});
+		const answer = await Effect.runPromise(
+			inferCollectionFilter(
+				EffectId.make('filter-2'),
+				subject,
+				{
+					collection: 'customers',
+					text: 'customers with at least 1 open invoice message',
+					fields: [messages],
+					current: []
+				},
+				'2026-09-24'
+			).pipe(
+				Effect.provideService(AccessControl.Service, {
+					invocation: () => ({ authorize: () => Effect.void })
+				} as never),
+				Effect.provideService(Collections.Service, { findMany: () => Effect.succeed([]) } as never),
+				Effect.provideService(AI.Service, {
+					catalog: () =>
+						Effect.succeed({ languageModels: [], defaultLanguageModelId: 'provider/fast' }),
+					generate: (_effectId: unknown, request: AIRequest) =>
+						request._tag !== 'Generate'
+							? Effect.die('expected a generate request')
+							: Effect.succeed(
+									AIResponse.cases.Generated.make({
+										result: AIGenerationResult.cases.Message.make({ message: reply }),
+										observation: ProviderObservation.make({
+											callId: request.callId,
+											provider: 'test',
+											model: request.modelId,
+											operation: 'language'
+										})
+									})
+								),
+					embed: () => Effect.die('unexpected embedding request')
+				} as never)
+			)
+		);
+		expect(answer.conditions).toEqual([invoiceCount]);
+		expect(answer.unresolved).toEqual(['@messages related']);
+	});
 });

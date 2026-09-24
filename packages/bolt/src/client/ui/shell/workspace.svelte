@@ -206,15 +206,23 @@
 
 	// A filter described in words is read by the workspace's own command, as the viewer: the model
 	// can only look records up through the viewer's policies, and its answer lands as editable rows.
+	const copyField = <
+		F extends { readonly values?: readonly string[]; readonly operators: readonly string[] }
+	>(
+		field: F
+	) => ({
+		...field,
+		...(field.values === undefined ? {} : { values: [...field.values] }),
+		operators: [...field.operators]
+	});
 	setCollectionFilterInference((request, signal) =>
 		workspace.frameworkClient.system.collections.inferFilter(
 			{
 				collection: request.collection,
 				text: request.text,
-				fields: request.fields.map((field) => ({
-					...field,
-					...(field.values === undefined ? {} : { values: [...field.values] }),
-					operators: [...field.operators]
+				fields: request.fields.map(({ fields: nested, ...field }) => ({
+					...copyField(field),
+					...(nested === undefined ? {} : { fields: nested.map(copyField) })
 				})),
 				current: request.current.map((condition) => ({
 					field: condition.field,

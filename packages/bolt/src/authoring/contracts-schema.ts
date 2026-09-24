@@ -460,8 +460,25 @@ type RelationWhere<
 					AllowSubject,
 					PreviousDepth[Depth]
 				>;
+				/** How many related rows match `where`: `{ where: { status: 'open' }, gte: 1 }`. */
+				readonly count?: RelationCount<
+					SchemaWhereFor<
+						S,
+						RelationTarget<S, SchemaRelations<S, N>[K]>,
+						AllowSubject,
+						PreviousDepth[Depth]
+					>
+				>;
 			}>;
 		};
+/** Exactly one comparison against the number of matching related rows. */
+type RelationCount<Where> = { readonly where?: Where } & (
+	| { readonly eq: number }
+	| { readonly gt: number }
+	| { readonly gte: number }
+	| { readonly lt: number }
+	| { readonly lte: number }
+);
 
 type SchemaWhereFor<
 	S extends AnySchema,

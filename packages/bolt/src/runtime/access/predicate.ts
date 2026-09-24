@@ -122,7 +122,12 @@ export type RowPredicateExpression =
 			readonly targetCollection: string;
 			readonly targetField: string;
 			readonly alias: string;
-			readonly quantifier: 'some' | 'none' | 'every';
+			readonly quantifier: 'some' | 'none' | 'every' | 'count';
+			/** Present with `count`: how many matching related rows the root row needs. */
+			readonly count?: Readonly<{
+				readonly comparison: 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
+				readonly value: number;
+			}>;
 			readonly visibility?: RowPredicateExpression;
 			readonly expression: RowPredicateExpression;
 	  }>
@@ -290,6 +295,10 @@ const compileExpression = (expression: RowPredicateExpression, qualifier?: strin
 				expression.visibility === undefined
 					? sql`true`
 					: compileExpression(expression.visibility, expression.alias);
+			if (expression.quantifier === 'count' && expression.count !== undefined) {
+				const operator = sql.raw(comparisonSql[expression.count.comparison]);
+				return sql`(select count(*) from ${target} as ${alias} where ${joined} and (${visibility}) and (${nested})) ${operator} ${expression.count.value}`;
+			}
 			const tested =
 				expression.quantifier === 'every' ? sql`(${nested}) is not true` : sql`(${nested})`;
 			const exists = sql`exists (select 1 from ${target} as ${alias} where ${joined} and (${visibility}) and ${tested})`;

@@ -181,6 +181,39 @@ describe('Collections query owner', () => {
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
 
+	it('compiles a relation count as a bounded count of the related rows that match', () => {
+		// "Employees with at least two pending employments": the conditions share one related row,
+		// and the count reads only rows the viewer may read, the same visibility `some` applies.
+		const compiled = whereSql(
+			{
+				employment_employee: {
+					count: { where: { approval_id: { isNull: true } }, gte: 2 }
+				}
+			},
+			context('employees')
+		);
+		expect(compiled.sql).toBe(
+			'(select count(*) from "employments" as "pr0" where "pr0"."employee_id" = "employees"."id" and (true) and ("pr0"."approval_id" is null)) >= $1'
+		);
+		expect(compiled.parameters).toEqual([2]);
+		// No where counts every related row.
+		expect(whereSql({ employment_employee: { count: { eq: 0 } } }, context('employees')).sql).toBe(
+			'(select count(*) from "employments" as "pr0" where "pr0"."employee_id" = "employees"."id" and (true) and (true)) = $1'
+		);
+		for (const invalid of [
+			{ gte: -1 },
+			{ gte: 1.5 },
+			{ gte: 1, lt: 3 },
+			{ where: {} },
+			{ gte: 1, extra: 1 }
+		])
+			expect(
+				Result.isFailure(
+					compilePredicate({ employment_employee: { count: invalid } }, context('employees'))
+				)
+			).toBe(true);
+	});
+
 	it('refuses a relation filter when the compiled relation is not emitted', () => {
 		const result = compilePredicate(
 			{ employment_employee: { some: { company_id: { eq: 'seed-company' } } } },

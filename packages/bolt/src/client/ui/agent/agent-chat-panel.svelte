@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatFileSize } from '@norbital-ai/ui/utils';
 	import { Effect, Option, Schema } from 'effect';
 	import { AgentId, FileAsset } from '@norbital-ai/bolt-protocol/facilities';
 	import { ConversationQueueRequest } from '@norbital-ai/bolt-protocol';
@@ -511,7 +512,17 @@
 						const key = conversationAssetStorageKey(conversationId, image.id, image.file.name);
 						return Effect.tryPromise({
 							try: () => session.files.store(key, image.file),
-							catch: stored
+							// Name the file and its size: the transport's own message ("NetworkError when
+							// attempting to fetch resource") says neither which attachment failed nor why.
+							catch: (cause) =>
+								stored(
+									new Error(
+										`${image.file.name} (${formatFileSize(image.file.size)}) could not be uploaded: ${
+											cause instanceof Error ? cause.message : String(cause)
+										}`,
+										{ cause }
+									)
+								)
 						}).pipe(
 							Effect.map(() =>
 								FileAsset.make({

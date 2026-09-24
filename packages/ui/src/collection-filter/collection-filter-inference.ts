@@ -11,6 +11,8 @@ export interface CollectionFilterInferenceField {
 	readonly values?: readonly string[];
 	readonly target?: string;
 	readonly operators: readonly string[];
+	/** A relationship's own fields, for the conditions of a `related` answer. */
+	readonly fields?: readonly CollectionFilterInferenceField[];
 }
 
 /** One builder row, in or out of an inference. */

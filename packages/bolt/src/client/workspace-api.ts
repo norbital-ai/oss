@@ -94,6 +94,26 @@ export type WorkspaceApiVisibility = Readonly<{
 }>;
 
 /**
+ * A `related` filter's relation node: its nested rows all hold on one related row, so they join
+ * under a single quantifier — two separate `some`s would let "open" and "invoice" match different
+ * messages. A count compares how many such rows exist.
+ */
+const relatedToWhere = (filter: CollectionFilter): Schema.Json => {
+	const nested = (filter.where ?? []).map(filterToWhere);
+	const where: Schema.Json =
+		nested.length === 0 ? {} : nested.length === 1 ? (nested[0] ?? {}) : { AND: nested };
+	const match = filter.related ?? { quantifier: 'some' as const };
+	return 'quantifier' in match
+		? { [match.quantifier]: where }
+		: {
+				count:
+					nested.length === 0
+						? { [match.count]: match.value }
+						: { where, [match.count]: match.value }
+			};
+};
+
+/**
  * Nests a CollectionTable filter path into the declarative predicate grammar.
  *
  * Every segment before the leaf is a relationship, and a relationship condition is quantified:
@@ -107,9 +127,11 @@ export const filterToWhere = (filter: CollectionFilter): Schema.Json => {
 	if (leaf === undefined) return {};
 	let node: Record<string, Schema.Json> = {
 		[leaf]:
-			filter.operand === undefined
-				? { [filter.operator]: true }
-				: { [filter.operator]: filter.operand as Schema.Json }
+			filter.operator === 'related'
+				? relatedToWhere(filter)
+				: filter.operand === undefined
+					? { [filter.operator]: true }
+					: { [filter.operator]: filter.operand as Schema.Json }
 	};
 	for (let index = filter.path.length - 2; index >= 0; index -= 1) {
 		const key = filter.path[index];

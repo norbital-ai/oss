@@ -31,15 +31,49 @@ const lookupRow = (row: Readonly<Record<string, unknown>>): Record<string, unkno
 	);
 
 const fieldLine = (field: CollectionFilterInferenceInput['fields'][number]): string =>
-	[
-		`- ${field.value} (${field.label}): ${field.kind}${field.array === true ? '[]' : ''}`,
-		field.nullable ? ' nullable' : '',
-		field.values === undefined ? '' : `; values ${field.values.join(' | ')}`,
-		field.target === undefined
-			? ''
-			: `; a ${field.target} record id — resolve names with find_records`,
-		`; operators ${field.operators.join(', ')}`
-	].join('');
+	field.operators.includes('related')
+		? [
+				`- ${field.value} (${field.label}): related ${field.target ?? 'records'} — operator related, `,
+				'value { match: some|none|every|gte|lte|eq, count?: n, where: [conditions on its fields] }; its fields:',
+				...(field.fields ?? []).map((nested) => `\n  ${fieldLine(nested)}`)
+			].join('')
+		: [
+				`- ${field.value} (${field.label}): ${field.kind}${field.array === true ? '[]' : ''}`,
+				field.nullable ? ' nullable' : '',
+				field.values === undefined ? '' : `; values ${field.values.join(' | ')}`,
+				field.target === undefined
+					? ''
+					: `; a ${field.target} record id — resolve names with find_records`,
+				`; operators ${field.operators.join(', ')}`
+			].join('');
+
+const RELATED_MATCHES = ['some', 'none', 'every', 'gte', 'lte', 'eq'];
+
+/** A `related` answer's value: a match, a count when counting, and conditions on offered fields. */
+const relatedProblem = (
+	value: unknown,
+	field: CollectionFilterInferenceInput['fields'][number]
+): string | undefined => {
+	if (typeof value !== 'object' || value === null) return 'not an object';
+	const match = Reflect.get(value, 'match');
+	if (typeof match !== 'string' || !RELATED_MATCHES.includes(match)) return 'unknown match';
+	const count = Reflect.get(value, 'count');
+	if (['gte', 'lte', 'eq'].includes(match) && (!Number.isInteger(count) || Number(count) < 0))
+		return 'count is not a whole number';
+	const where = Reflect.get(value, 'where') ?? [];
+	if (!Array.isArray(where)) return 'where is not a list';
+	const nested = new Map((field.fields ?? []).map((candidate) => [candidate.value, candidate]));
+	return where.every(
+		(condition: unknown) =>
+			typeof condition === 'object' &&
+			condition !== null &&
+			nested
+				.get(String(Reflect.get(condition, 'field')))
+				?.operators.includes(String(Reflect.get(condition, 'operator'))) === true
+	)
+		? undefined
+		: 'a condition names a field or operator the related collection does not offer';
+};
 
 /**
  * Turns a person's description of what to show into the filter rows their builder holds.
@@ -73,6 +107,7 @@ export const inferCollectionFilter = Effect.fn('Collections.inferFilter')(functi
 			'Answer with the complete filter: keep current conditions the request does not change, change or drop the ones it does, add what it asks for.',
 			'Use only the fields and operators listed. Operands: a date or instant as an ISO string; a relative period ("this week") as gte/lte bounds; `contains` takes the bare text; isNull/isNotNull take no value; array operators take an array.',
 			'A person, site or other record named in words is a record id: call find_records to resolve it, and if several match or none do, leave that phrase unresolved.',
+			'A condition on related records ("customers with at least 1 open invoice message") is one related condition on the relationship: its where conditions all hold on the same related record, and gte/lte/eq with count compare how many there are.',
 			'Put every phrase you could not map faithfully in unresolved, verbatim. Never widen or guess a condition to cover it.',
 			'Fields:',
 			...input.fields.map(fieldLine)
@@ -101,9 +136,11 @@ export const inferCollectionFilter = Effect.fn('Collections.inferFilter')(functi
 	});
 	const decoded = yield* Schema.decodeUnknownEffect(CollectionFilterInference)(answer);
 	// The builder can only render what it offered; anything else is reported, never applied.
-	const refused = decoded.conditions.filter(
-		(condition) => !offered.get(condition.field)?.operators.includes(condition.operator)
-	);
+	const refused = decoded.conditions.filter((condition) => {
+		const field = offered.get(condition.field);
+		if (!field?.operators.includes(condition.operator)) return true;
+		return condition.operator === 'related' && relatedProblem(condition.value, field) !== undefined;
+	});
 	return {
 		conditions: decoded.conditions.filter((condition) => !refused.includes(condition)),
 		unresolved: [

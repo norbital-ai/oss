@@ -33,4 +33,38 @@ describe('filterToWhere', () => {
 			filterToWhere({ path: ['approval_id'], operator: 'isNull', operand: undefined })
 		).toEqual({ approval_id: { isNull: true } });
 	});
+
+	it("puts a related filter's conditions on one related row, quantified or counted", () => {
+		const open = { path: ['status'], operator: 'eq' as const, operand: 'open' };
+		const invoice = { path: ['kind'], operator: 'eq' as const, operand: 'invoice' };
+		// "Customers with at least 1 open invoice message".
+		expect(
+			filterToWhere({
+				path: ['messages'],
+				operator: 'related',
+				related: { count: 'gte', value: 1 },
+				where: [open, invoice]
+			})
+		).toEqual({
+			messages: {
+				count: { where: { AND: [{ status: { eq: 'open' } }, { kind: { eq: 'invoice' } }] }, gte: 1 }
+			}
+		});
+		expect(
+			filterToWhere({
+				path: ['messages'],
+				operator: 'related',
+				related: { quantifier: 'none' },
+				where: [open]
+			})
+		).toEqual({ messages: { none: { status: { eq: 'open' } } } });
+		// Through a one relation first: the outer segment is quantified as always.
+		expect(
+			filterToWhere({
+				path: ['account', 'invoices'],
+				operator: 'related',
+				related: { count: 'eq', value: 0 }
+			})
+		).toEqual({ account: { some: { invoices: { count: { eq: 0 } } } } });
+	});
 });
