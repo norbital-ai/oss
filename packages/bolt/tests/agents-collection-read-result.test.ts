@@ -89,14 +89,23 @@ describe('agent collection read result', () => {
 
 	it('does not skip a first row that cannot fit as a complete JSON value, and names its heaviest columns', () => {
 		const result = boundedCollectionReadResult(
-			[{ id: 'oversized', note: 'x'.repeat(READ_COLLECTION_RESULT_BYTE_LIMIT * 2), reason: 'short' }],
+			[
+				{
+					id: 'oversized',
+					note: 'x'.repeat(READ_COLLECTION_RESULT_BYTE_LIMIT * 2),
+					reason: 'short'
+				}
+			],
 			1
 		) as {
 			readonly rows: ReadonlyArray<unknown>;
 			readonly cursor: { readonly hasMore: boolean; readonly next: string | null };
 			readonly diagnostic: {
 				readonly reason: string;
-				readonly heaviestColumns: ReadonlyArray<{ readonly column: string; readonly bytes: number }>;
+				readonly heaviestColumns: ReadonlyArray<{
+					readonly column: string;
+					readonly bytes: number;
+				}>;
 			};
 		};
 		expect(encodedBytes(result)).toBeLessThanOrEqual(READ_COLLECTION_RESULT_BYTE_LIMIT);
@@ -108,5 +117,23 @@ describe('agent collection read result', () => {
 			// The serialized string adds its two quotes to the repeated character's own bytes.
 			bytes: READ_COLLECTION_RESULT_BYTE_LIMIT * 2 + 2
 		});
+	});
+
+	it('clips a long value the read did not ask for, and says how to read it whole', () => {
+		const basis = { assignment: { title: 'Installation', photos: 'x'.repeat(5_000) } };
+		const row = { id: 'r1', reason: 'reuse', basis };
+		const clipped = boundedCollectionReadResult([row], 10, { clipUnrequested: true }) as {
+			readonly rows: ReadonlyArray<Record<string, unknown>>;
+		};
+		expect(clipped.rows[0]?.['reason']).toBe('reuse');
+		expect(clipped.rows[0]?.['basis']).toMatch(
+			/^\{"assignment".*… \[clipped: \d+ bytes; name "basis" in columns to read it whole\]$/
+		);
+		expect(encodedBytes(clipped)).toBeLessThan(1_000);
+		// Naming the column is how it is read whole.
+		const whole = boundedCollectionReadResult([row], 10) as {
+			readonly rows: ReadonlyArray<Record<string, unknown>>;
+		};
+		expect(whole.rows[0]?.['basis']).toEqual(basis);
 	});
 });

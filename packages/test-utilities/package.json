@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/test-utilities",
-	"version": "0.0.107",
+	"version": "0.0.108",
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
@@ -39,8 +39,8 @@
 		"typescript": "catalog:"
 	},
 	"peerDependencies": {
-		"@norbital-ai/bolt-protocol": "0.0.107",
-		"@norbital-ai/bolt-server": "0.0.107",
+		"@norbital-ai/bolt-protocol": "0.0.108",
+		"@norbital-ai/bolt-server": "0.0.108",
 		"effect": "4.0.0-rc.111 || 4.0.0-rc.112"
 	},
 	"devDependencies": {

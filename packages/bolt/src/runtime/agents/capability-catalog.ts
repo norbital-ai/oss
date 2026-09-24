@@ -337,7 +337,7 @@ export const systemToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'read_collection',
 		description:
-			"Read one page of a collection (default 50 rows); continue with cursor. `search` finds records across the collection's searchable fields (describe_workspace marks them (search)), closest first — the fastest way to find a record from a person's words. Plain text matches words, prefixes, typos and phrases in any script, including by Latin spelling (moskva finds Москва, beijing finds 北京). `/semantic <text>` also ranks by meaning, keeping exact hits first; `/<index> {json}` asks a similarity index the collection lists under search, with its input fields as a JSON object. A ranked search is one page: no cursor. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: '%kismis%' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. An array field (`[]`) takes `{ arrayOverlaps: [values] }` (has any) or `{ arrayContains: [values] }` (has all); a JSON field takes `{ jsonPath: { path: [key], type: 'string', eq: value } }`. Read only the columns you need with `columns` — a row that is too large to return names its heaviest columns, and selecting the others reads it.",
+			"Read one page of a collection (default 50 rows); continue with cursor. `search` finds records across the collection's searchable fields (describe_workspace marks them (search)), closest first — the fastest way to find a record from a person's words. Plain text matches words, prefixes, typos and phrases in any script, including by Latin spelling (moskva finds Москва, beijing finds 北京). `/semantic <text>` also ranks by meaning, keeping exact hits first; `/<index> {json}` asks a similarity index the collection lists under search, with its input fields as a JSON object. A ranked search is one page: no cursor. Narrow further with `where`: a field to a value for an exact match, or to an operator — `{ ilike: '%kismis%' }` for a case-insensitive text match, `in`, `ne`, `gt`/`gte`/`lt`/`lte` — all conditions must hold. An array field (`[]`) takes `{ arrayOverlaps: [values] }` (has any) or `{ arrayContains: [values] }` (has all); a JSON field takes `{ jsonPath: { path: [key], type: 'string', eq: value } }`. Read only the columns you need with `columns` — without it a long value comes back clipped with its size, and naming that column reads it whole; a row that is too large to return names its heaviest columns.",
 		command: 'platform:read_collection',
 		inputSchema: objectInput(
 			{
@@ -541,11 +541,41 @@ const heaviestColumns = (
 		.slice(0, limit);
 };
 
+/** A cell larger than this, in a read that did not name its columns, comes back clipped. */
+export const READ_COLLECTION_CELL_CLIP_BYTES = 1_200;
+
+/**
+ * A long value the agent did not ask for, shortened to a preview that says how to read it whole.
+ *
+ * A read without `columns` returns every column, and one fat JSON or text column (a review's
+ * `basis`) made each of two suspicion reads ~15 KB: under the result limit, so nothing was dropped,
+ * and together they doubled the prompt for columns the agent never looked at. Naming the column in
+ * `columns` returns it untouched.
+ */
+const clipCells = (row: Schema.Json): Schema.Json => {
+	if (row === null || typeof row !== 'object' || Array.isArray(row)) return row;
+	return Object.fromEntries(
+		Object.entries(row).map(([column, value]) => {
+			const encoded = JSON.stringify(value) ?? '';
+			if (column === 'id' || encoded.length <= READ_COLLECTION_CELL_CLIP_BYTES)
+				return [column, value];
+			const preview = typeof value === 'string' ? value.slice(0, 400) : encoded.slice(0, 400);
+			return [
+				column,
+				`${preview}… [clipped: ${encoded.length} bytes; name "${column}" in columns to read it whole]`
+			];
+		})
+	);
+};
+
 export const boundedCollectionReadResult = (
 	fetchedRows: ReadonlyArray<Schema.Json>,
-	requestedRows: number
+	requestedRows: number,
+	options: Readonly<{ clipUnrequested?: boolean }> = {}
 ): Schema.JsonObject => {
-	const pageRows = fetchedRows.slice(0, requestedRows);
+	const pageRows = fetchedRows
+		.slice(0, requestedRows)
+		.map((row) => (options.clipUnrequested === true ? clipCells(row) : row));
 	const providerHasMore = fetchedRows.length > requestedRows;
 	const fullResult: Schema.JsonObject = {
 		rows: pageRows,
@@ -1211,7 +1241,7 @@ export const executeSystemTool = Effect.fn('CapabilityCatalog.executeSystemTool'
 			});
 			// Rows are true only as of the read: stated on the result, as the snapshot states its own.
 			return {
-				...boundedCollectionReadResult(rows, limit),
+				...boundedCollectionReadResult(rows, limit, { clipUnrequested: columns === undefined }),
 				asOf: new Date(yield* Clock.currentTimeMillis).toISOString()
 			};
 		}

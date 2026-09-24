@@ -8,7 +8,10 @@
 	import { Effect, Schema } from 'effect';
 	import { PersistedState } from 'runed';
 	import { humanize } from '@norbital-ai/std/string';
-	import { getCollectionFilterInference } from './collection-filter-inference.js';
+	import {
+		getCollectionFilterInference,
+		type CollectionFilterInferenceAnswer
+	} from './collection-filter-inference.js';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '#lib/data-renderer';
@@ -433,10 +436,24 @@
 					}))
 			]
 		};
-		Effect.runPromise(infer(request, controller.signal), { signal: controller.signal }).then(
+		// The same request against the same filter asks the model nothing twice.
+		const cacheKey = JSON.stringify([request.collection, request.text, request.current]);
+		const cached = askCache.get(cacheKey);
+		Effect.runPromise(
+			cached === undefined ? infer(request, controller.signal) : Effect.succeed(cached),
+			{
+				signal: controller.signal
+			}
+		).then(
 			(answer) => {
 				if (controller.signal.aborted) return;
 				askPending = false;
+				askCache.set(cacheKey, answer);
+				askHistory = [request.text, ...askHistory.filter((entry) => entry !== request.text)].slice(
+					0,
+					20
+				);
+				historyIndex = -1;
 				const offered = new Map(filterFields.map((field) => [field.value, field]));
 				const related = answer.conditions.flatMap((condition) => {
 					const adopted = condition.operator === 'related' ? adoptRelated(condition) : undefined;
@@ -464,6 +481,17 @@
 				askError = cause instanceof Error ? cause.message : String(cause);
 			}
 		);
+	}
+
+	/** Earlier requests, newest first, recalled with ↑ and ↓ like a shell. */
+	let askHistory = $state<readonly string[]>([]);
+	let historyIndex = -1;
+	const askCache = new Map<string, CollectionFilterInferenceAnswer>();
+
+	function recall(step: 1 | -1): void {
+		const next = Math.min(askHistory.length - 1, Math.max(-1, historyIndex + step));
+		historyIndex = next;
+		askText = next === -1 ? '' : (askHistory[next] ?? '');
 	}
 
 	function onAskInput(value: string): void {
@@ -632,6 +660,12 @@
 							if (event.key === 'Enter') {
 								event.preventDefault();
 								ask(askText);
+							} else if (event.key === 'ArrowUp' && askHistory.length > 0) {
+								event.preventDefault();
+								recall(1);
+							} else if (event.key === 'ArrowDown' && historyIndex >= 0) {
+								event.preventDefault();
+								recall(-1);
 							}
 						}}
 					/>
