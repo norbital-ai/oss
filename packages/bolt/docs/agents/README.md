@@ -507,15 +507,26 @@ schemas to their model API and return complete Effect tool-call messages without
 Bolt executes each call through the same authorization boundary and appends its durable result
 before the next generation. Tests must inspect the provider request as well as scripted results.
 
-Colony supplies `workspace_read`, `workspace_edit`, `workspace_apply`, `workspace_format`,
-`workspace_validate`, `workspace_review`, `sandbox_bash` and `agent_output_read` against the same private
-source store used by Studio. The trusted tenant/environment/person selects the draft; model input
-cannot select another owner. Apply requires the commit observed while reading, accepts at most 32
-text files / 1 MiB, and atomically refuses stale commits or excluded paths. Each search must match exactly once unless `replaceAll` is set; edit accepts at most 32
-precise replacements / 1 MiB of replacement input; each search must match exactly once. It preserves
-the rest of a large file and rejects the whole batch if any edit is ambiguous or stale. Edits remain drafts for
-Studio diagnosis, preview and review. They do not publish or alter Live. Standalone hosts may supply
-their own source capability implementation through the same protocol.
+Colony supplies `workspace_read`, `workspace_write`, `workspace_validate`, `workspace_check`,
+`workspace_review`, `sandbox_run`, `sandbox_packages` and `agent_output_read` against the same
+private source store used by Studio, and mounts two of Bolt's tooling entries: the type service
+(`@norbital-ai/bolt/type-service`, the live half of `workspace_type`) and structural search
+(`@norbital-ai/bolt/search`, `workspace_search` on the doctor's engine). The trusted
+tenant/environment/person selects the draft; model input cannot select another owner.
+`workspace_write` takes whole `files` and exact `edits` (each must match once unless `replaceAll`),
+at most 32 paths and 1 MiB, and commits them atomically against the commit observed while reading;
+a stale commit, an ambiguous edit or an excluded path refuses the whole batch. `workspace_validate`
+formats authored source first, then compiles. Writes remain drafts for Studio diagnosis, preview
+and review; they do not publish or alter Live. Standalone hosts may supply their own source
+capability implementation through the same protocol.
+
+Bolt's own platform tools cover what every host shares. `workspace_type` answers collection names
+(`collections.<name>`, `.create`, `.update`, `.<field>`) from the sync-time type index, with each
+field's authored comment, what a write does on its own (the transform's comment) and the `path:line`
+to read; any other name or file position goes to the host's `workspace_type`. `geocode` resolves an
+address to the value a geolocation field takes. The brief (`NORBIUS_BRIEF`) holds only how to work;
+each tool's description holds its mechanics, and the requester line states the person's own clock
+(their browser's timezone rides on every send).
 
 ---
 
