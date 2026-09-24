@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Redacted, Result, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Option, Redacted, Result, Schedule, Schema } from 'effect';
 import {
 	ChannelEvent,
 	EffectId,
@@ -495,9 +495,21 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				Effect.catch((cause) => Effect.logWarning(`[bolt] channel ${channel.name} ${kind} handler threw: ${describeCause(cause)}`).pipe(Effect.as(undefined)))
 			);
 			if (patch === undefined || patch === null || typeof patch !== 'object' || Object.keys(patch).length === 0) return;
-			yield* collections
-				.write(effectId, channelSubject(channel, tenant.tenantId), [{ collection, action: 'update', inputs: [{ ...(patch as Values), id: recordId }] }])
-				.pipe(Effect.catch((error) => Effect.logWarning(`[bolt] channel ${channel.name} ${kind} patch on ${collection} refused: ${describeCause(error)}`)));
+			// A provider reports several events for one message within the same second (delivered and
+			// opened arrive together), and each patches the same row: the one that commits second finds
+			// the row moved and its commit fails. A patch only sets values, so it is written again on a
+			// fresh id; dropping it lost the open while the webhook still answered ok.
+			let attempt = 0;
+			yield* Effect.suspend(() =>
+				collections.write(EffectId.make(`${effectId}:${attempt++}`), channelSubject(channel, tenant.tenantId), [{ collection, action: 'update', inputs: [{ ...(patch as Values), id: recordId }] }])
+			).pipe(
+				Effect.retry({
+					while: (error) => error instanceof Collections.MutationPhaseFailure && error.phase === 'commit',
+					schedule: Schedule.spaced('150 millis'),
+					times: 5
+				}),
+				Effect.catch((error) => Effect.logWarning(`[bolt] channel ${channel.name} ${kind} patch on ${collection} refused: ${describeCause(error)}`))
+			);
 		});
 
 		const event = Effect.fn('Channels.event')(function* (
