@@ -483,10 +483,8 @@
 					aria-label={t('bolt.studio.openNavigator')}
 					onclick={() => (navigatorSheetOpen = true)}
 				>
-					<Inline as="span" gap="sm">
-						<Icon icon="lucide:panel-bottom" class="size-4" />
-						{t('bolt.studio.browse')}
-					</Inline>
+					<Icon icon="lucide:panel-bottom" class="size-4" />
+					{t('bolt.studio.browse')}
 				</Button>
 			</Cluster>
 		</Stack>

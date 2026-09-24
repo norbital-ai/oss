@@ -789,10 +789,8 @@
 									class="h-7 w-fit text-xs"
 									onclick={() => addGroupCondition(group.id)}
 								>
-									<Inline as="span" gap="xs">
-										<Icon icon="lucide:plus" class="size-3.5" />
-										{t('table.filterAdd')}
-									</Inline>
+									<Icon icon="lucide:plus" class="size-3.5" />
+									{t('table.filterAdd')}
 								</Button>
 							</Stack>
 						{/if}
@@ -809,17 +807,13 @@
 				disabled={filterFields.length === 0}
 				onclick={addFilter}
 			>
-				<Inline as="span" gap="xs">
-					<Icon icon="lucide:plus" class="size-3.5" />
-					{t('table.filterAdd')}
-				</Inline>
+				<Icon icon="lucide:plus" class="size-3.5" />
+				{t('table.filterAdd')}
 			</Button>
 			{#if relationships.length > 0}
 				<Button type="button" variant="ghost" size="sm" class="h-7 text-xs" onclick={addGroup}>
-					<Inline as="span" gap="xs">
-						<Icon icon="lucide:git-fork" class="size-3.5" />
-						{t('table.filterRelatedAdd')}
-					</Inline>
+					<Icon icon="lucide:git-fork" class="size-3.5" />
+					{t('table.filterRelatedAdd')}
 				</Button>
 			{/if}
 		</footer>

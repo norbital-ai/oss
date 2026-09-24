@@ -374,10 +374,8 @@
 							{t('misc.addFirstProgressHint')}
 						</p>
 						<Button variant="outline" onclick={addProgress} class="border-dashed" {disabled}>
-							<Inline as="span" gap="sm">
-								<Icon icon="lucide:plus" class="h-4 w-4" />
-								{t('misc.addFirstProgress')}
-							</Inline>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
+							{t('misc.addFirstProgress')}
 						</Button>
 					</Stack>
 				{:else}
@@ -453,10 +451,8 @@
 							class="w-full border-dashed text-muted-foreground hover:text-foreground"
 							{disabled}
 						>
-							<Inline as="span" gap="sm">
-								<Icon icon="lucide:plus" class="h-4 w-4" />
-								{t('misc.addProgress')}
-							</Inline>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
+							{t('misc.addProgress')}
 						</Button>
 					</Stack>
 				{/if}

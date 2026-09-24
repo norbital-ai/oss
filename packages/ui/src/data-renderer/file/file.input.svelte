@@ -395,14 +395,12 @@
 				class="border-dashed"
 				disabled={disabled || clientUploadBusy}
 			>
-				<Inline as="span" gap="sm">
-					<Icon icon="lucide:plus" class="h-4 w-4" />
-					{#if clientUploadBusy}
-						{UPLOAD_STAGE_MESSAGES.uploading}
-					{:else}
-						{t('dataRenderer.addFirstFile')}
-					{/if}
-				</Inline>
+				<Icon icon="lucide:plus" class="h-4 w-4" />
+				{#if clientUploadBusy}
+					{UPLOAD_STAGE_MESSAGES.uploading}
+				{:else}
+					{t('dataRenderer.addFirstFile')}
+				{/if}
 			</Button>
 		</Stack>
 	{:else}
@@ -489,14 +487,12 @@
 					class="w-min border-dashed text-muted-foreground hover:text-foreground"
 					disabled={disabled || clientUploadBusy}
 				>
-					<Inline as="span" gap="sm">
-						<Icon icon="lucide:plus" class="h-4 w-4" />
-						{#if clientUploadBusy}
-							{UPLOAD_STAGE_MESSAGES.uploading}
-						{:else}
-							{t('dataRenderer.addFile')}
-						{/if}
-					</Inline>
+					<Icon icon="lucide:plus" class="h-4 w-4" />
+					{#if clientUploadBusy}
+						{UPLOAD_STAGE_MESSAGES.uploading}
+					{:else}
+						{t('dataRenderer.addFile')}
+					{/if}
 				</Button>
 			{/if}
 

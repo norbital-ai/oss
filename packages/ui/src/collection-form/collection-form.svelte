@@ -15,7 +15,7 @@
 	import { Button } from '#lib/button';
 	import { FormState, type FormSchema } from '#lib/form';
 	import { useI18n } from '#lib/i18n';
-	import { Cluster, Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cluster, Cover, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -470,14 +470,12 @@
 						pendingFields.size > 0 ||
 						Boolean(recordId && !form.isDirty)}
 				>
-					<Inline as="span" gap="sm">
-						{#if submissionPending}
-							<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
-						{/if}
-						{submissionPending
-							? t('form.saving')
-							: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
-					</Inline>
+					{#if submissionPending}
+						<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
+					{/if}
+					{submissionPending
+						? t('form.saving')
+						: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
 				</Button>
 				<Button
 					type="button"

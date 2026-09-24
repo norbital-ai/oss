@@ -78,20 +78,16 @@
 					}}
 					disabled={stepFormState.currentStep === 0}
 				>
-					<Inline as="span" gap="sm">
-						<Icon icon="lucide:chevron-left" class="h-4 w-4" />
-						{t('common.previous')}
-					</Inline>
+					<Icon icon="lucide:chevron-left" class="h-4 w-4" />
+					{t('common.previous')}
 				</Button>
 				{#if stepFormState.currentStep === stepFormState.steps.length - 1}
 					<Button
 						type="submit"
 						disabled={disableSubmit || hasErrors || stepFormState.submission.isSubmitting}
 					>
-						<Inline as="span" gap="sm">
-							<span>{t('common.submit')}</span>
-							<Icon icon="lucide:circle-arrow-right" class="h-4 w-4" />
-						</Inline>
+						<span>{t('common.submit')}</span>
+						<Icon icon="lucide:circle-arrow-right" class="h-4 w-4" />
 					</Button>
 				{:else}
 					<Button
@@ -100,10 +96,8 @@
 							stepFormState.next();
 						}}
 					>
-						<Inline as="span" gap="sm">
-							{t('common.next')}
-							<Icon icon="lucide:chevron-right" class="h-4 w-4" />
-						</Inline>
+						{t('common.next')}
+						<Icon icon="lucide:chevron-right" class="h-4 w-4" />
 					</Button>
 				{/if}
 			</Inline>

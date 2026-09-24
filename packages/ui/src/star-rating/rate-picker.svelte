@@ -277,10 +277,8 @@
 						<h4 class="font-medium text-foreground">{t('misc.noRatingsConfigured')}</h4>
 						<p class="text-sm text-muted-foreground">{t('misc.addFirstRatingHint')}</p>
 						<Button variant="outline" onclick={addRating} class="border-dashed" {disabled}>
-							<Inline as="span" gap="sm">
-								<Icon icon="lucide:plus" class="h-4 w-4" />
-								{t('misc.addFirstRating')}
-							</Inline>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
+							{t('misc.addFirstRating')}
 						</Button>
 					</Stack>
 				{:else}
@@ -348,10 +346,8 @@
 							class="w-full border-dashed text-muted-foreground hover:text-foreground"
 							{disabled}
 						>
-							<Inline as="span" gap="sm">
-								<Icon icon="lucide:plus" class="h-4 w-4" />
-								{t('dataRenderer.addRating')}
-							</Inline>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
+							{t('dataRenderer.addRating')}
 						</Button>
 					</Stack>
 				{/if}

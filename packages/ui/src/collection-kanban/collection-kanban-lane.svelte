@@ -211,7 +211,8 @@
 		element={sortableElement}
 	>
 		{#snippet child({ draggedItemId })}
-			<Scroll axis="y" name={laneLabel} class="pr-1 pb-1">
+			<Scroll axis="y" name={laneLabel} class="relative pr-1 pb-1">
+				<!-- The list is the drop target: empty, it keeps the empty card's height so a card can land in it. -->
 				<VirtualList
 					items={recordIds}
 					key={(recordId) => recordId}
@@ -219,6 +220,7 @@
 					gap={8}
 					bind:ref={sortableElement}
 					data-kanban-lane={lane}
+					class={cn(recordIds.length === 0 && 'min-h-28')}
 					itemProps={(recordId) => {
 						const locked = mutationPending || updateRestrictionReasonById.has(recordId);
 						return {
@@ -237,18 +239,20 @@
 					{/snippet}
 				</VirtualList>
 				{#if recordIds.length === 0}
-					<Stack
-						gap="xs"
-						align="center"
-						justify="center"
-						class="min-h-28 rounded-sm border border-dashed border-border bg-background/50 p-4 text-center"
-					>
-						<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
-						<p class="text-sm font-medium">
-							{t('kanban.noLaneJobs', { lane: laneLabel.toLowerCase() })}
-						</p>
-						<p class="text-meta">{t('kanban.laneClear')}</p>
-					</Stack>
+					<Imposter placement="top" class="pointer-events-none">
+						<Stack
+							gap="xs"
+							align="center"
+							justify="center"
+							class="min-h-28 rounded-sm border border-dashed border-border bg-background/50 p-4 text-center"
+						>
+							<Icon icon="lucide:inbox" class="size-5 text-muted-foreground" />
+							<p class="text-sm font-medium">
+								{t('kanban.noLaneJobs', { lane: laneLabel.toLowerCase() })}
+							</p>
+							<p class="text-meta">{t('kanban.laneClear')}</p>
+						</Stack>
+					</Imposter>
 				{/if}
 			</Scroll>
 		{/snippet}

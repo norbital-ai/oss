@@ -137,15 +137,13 @@
 				aria-controls={draftBodyId}
 				onclick={() => (draftExpanded = !draftExpanded)}
 			>
-				<Inline as="span" gap="xs">
-					<Icon
-						icon="lucide:chevron-down"
-						class="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none {draftExpanded
-							? 'rotate-180'
-							: ''}"
-					/>
-					Draft plan
-				</Inline>
+				<Icon
+					icon="lucide:chevron-down"
+					class="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none {draftExpanded
+						? 'rotate-180'
+						: ''}"
+				/>
+				Draft plan
 			</Button>
 			<span
 				class="ml-auto text-xs tabular-nums text-muted-foreground"
@@ -169,15 +167,11 @@
 					disabled={executeDisabled || executePending}
 					onclick={onexecute}
 				>
-					<Inline as="span" gap="xs">
-						<Icon
-							icon={executePending ? 'lucide:loader-circle' : 'lucide:play'}
-							class={executePending
-								? 'size-3.5 animate-spin motion-reduce:animate-none'
-								: 'size-3.5'}
-						/>
-						<span aria-live="polite">{executePending ? 'Starting…' : 'Execute'}</span>
-					</Inline>
+					<Icon
+						icon={executePending ? 'lucide:loader-circle' : 'lucide:play'}
+						class={executePending ? 'size-3.5 animate-spin motion-reduce:animate-none' : 'size-3.5'}
+					/>
+					<span aria-live="polite">{executePending ? 'Starting…' : 'Execute'}</span>
 				</Button>{/if}
 		</Inline>
 		{#if draftExpanded}

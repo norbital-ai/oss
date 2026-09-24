@@ -172,10 +172,8 @@
 			data-testid="studio-diagnose"
 			onclick={() => ondiagnose?.()}
 		>
-			<Inline as="span" gap="xs">
-				<Icon icon="lucide:stethoscope" class="size-3.5" />
-				{t('bolt.studio.diagnose')}
-			</Inline>
+			<Icon icon="lucide:stethoscope" class="size-3.5" />
+			{t('bolt.studio.diagnose')}
 		</Button>
 		{#if updateRequired || newCommits > 0}
 			<Button
@@ -188,10 +186,8 @@
 				data-testid="studio-update"
 				onclick={() => onupdate?.()}
 			>
-				<Inline as="span" gap="xs">
-					<Icon icon="lucide:arrow-up-from-line" class="size-3.5" />
-					{t(updateRequired ? 'bolt.studio.updateFromLive' : 'bolt.studio.update')}
-				</Inline>
+				<Icon icon="lucide:arrow-up-from-line" class="size-3.5" />
+				{t(updateRequired ? 'bolt.studio.updateFromLive' : 'bolt.studio.update')}
 			</Button>
 		{:else}
 			<Button
@@ -204,10 +200,8 @@
 				data-testid="studio-publish"
 				onclick={() => onpublish?.()}
 			>
-				<Inline as="span" gap="xs">
-					<Icon icon="lucide:upload" class="size-3.5" />
-					{t('bolt.studio.publish')}
-				</Inline>
+				<Icon icon="lucide:upload" class="size-3.5" />
+				{t('bolt.studio.publish')}
 			</Button>
 		{/if}
 	</Inline>
