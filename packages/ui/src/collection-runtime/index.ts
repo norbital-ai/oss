@@ -148,7 +148,7 @@ const COLLECTION_RECORD_NOTICE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-
 /**
  * The slots a record detail's header offers its descendants. The form hands up its record-state
  * notice (the read-only lock, a pending approval) and a `RecordShell` hands up its state icon and
- * pill, which lead the record label; the header owns placement, so record state sits in the
+ * pill, which lead the record label, and its actions, which sit with the header's controls; the header owns placement, so record state sits in the
  * chrome instead of scrolling away with the body.
  */
 export interface CollectionRecordNoticeRegistry {
@@ -156,6 +156,8 @@ export interface CollectionRecordNoticeRegistry {
 	registerTrailing(trailing: Snippet | null): void;
 	/** What the record is, in the reader's words; the header names it instead of the collection. */
 	registerKind(kind: string | null): void;
+	/** The record's own actions (a `RecordShell`'s `actions`), placed beside the header's controls. */
+	registerActions(actions: Snippet | null): void;
 }
 
 export function setCollectionRecordNoticeContext(registry: CollectionRecordNoticeRegistry): void {

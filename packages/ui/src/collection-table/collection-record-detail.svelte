@@ -73,6 +73,7 @@
 	let headerNotice = $state<Snippet | null>(null);
 	let headerTrailing = $state<Snippet | null>(null);
 	let headerKind = $state<string | null>(null);
+	let headerActions = $state<Snippet | null>(null);
 	setCollectionRecordNoticeContext({
 		registerNotice: (notice) => {
 			headerNotice = notice;
@@ -82,6 +83,9 @@
 		},
 		registerKind: (kind) => {
 			headerKind = kind;
+		},
+		registerActions: (recordActions) => {
+			headerActions = recordActions;
 		}
 	});
 	const definition = $derived(
@@ -429,6 +433,7 @@
 		banner={collectionSurface?.banner ?? null}
 		notice={headerNotice}
 		trailing={headerTrailing}
+		recordActions={headerActions}
 		ui={uiDetails}
 		approval={approvalDetails}
 	/>

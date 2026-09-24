@@ -29,7 +29,11 @@
 		badge?: string;
 		/** One sentence behind the pill, shown on hover: what the state means and what to do instead. */
 		hint?: string;
-		/** Right-aligned header actions (for example a Process button). */
+		/**
+		 * The record's actions (for example a Process button). Inside the record sheet they sit in the
+		 * sheet's header beside its controls, so every record's actions are in the same place;
+		 * elsewhere they trail the shell's own heading.
+		 */
 		actions?: Snippet;
 		/**
 		 * Tab strip rendered under the header. Records keep their tab configs; the shell
@@ -79,6 +83,12 @@
 		sheetHeader.registerTrailing(recordState);
 		return () => sheetHeader.registerTrailing(null);
 	});
+	const actionsInHeader = $derived(sheetHeader != null && actions != null);
+	$effect(() => {
+		if (!actionsInHeader || sheetHeader == null || actions == null) return;
+		sheetHeader.registerActions(actions);
+		return () => sheetHeader.registerActions(null);
+	});
 	$effect(() => {
 		if (sheetHeader == null || kind == null) return;
 		sheetHeader.registerKind(kind);
@@ -112,7 +122,7 @@
 	that chrome. Spacing belongs to the parent Stack, never margins on content.
 -->
 <Stack gap="md" class={className}>
-	{#if title != null || subtitle != null || actions || (hasState && !stateInHeader)}
+	{#if title != null || subtitle != null || (actions && !actionsInHeader) || (hasState && !stateInHeader)}
 		<Inline align="start" justify="between" gap="md">
 			<Inline align="center" gap="sm" class="min-w-0">
 				{#if title != null || (subtitle != null && subtitle !== '')}
@@ -129,8 +139,8 @@
 					{@render recordState()}
 				{/if}
 			</Inline>
-			{#if actions}
-				{@render actions()}
+			{#if actions && !actionsInHeader}
+				<Inline gap="sm" shrink={false}>{@render actions()}</Inline>
 			{/if}
 		</Inline>
 	{/if}

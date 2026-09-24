@@ -20,7 +20,8 @@
 		approval,
 		banner = null,
 		notice = null,
-		trailing = null
+		trailing = null,
+		recordActions = null
 	}: {
 		title: string;
 		description: string;
@@ -36,6 +37,8 @@
 		notice?: Snippet | null;
 		/** Record-state pill published by the mounted `RecordShell`, trailing the title block. */
 		trailing?: Snippet | null;
+		/** The mounted `RecordShell`'s actions, leading the header's own controls. */
+		recordActions?: Snippet | null;
 	} = $props();
 
 	const config = $derived([
@@ -93,6 +96,9 @@
 				{@render notice()}
 			{/if}
 			<Inline gap="sm" shrink={false}>
+				{#if recordActions && found}
+					{@render recordActions()}
+				{/if}
 				{@render list()}
 				{#if actions}
 					{@render actions()}
