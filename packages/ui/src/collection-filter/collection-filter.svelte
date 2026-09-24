@@ -1,5 +1,9 @@
 <script lang="ts">
-	import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collection';
+	import type {
+		CollectionField,
+		CollectionFilter,
+		CollectionRelatedMatch
+	} from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
 	import { Effect, Schema } from 'effect';
 	import { PersistedState } from 'runed';
@@ -37,13 +41,27 @@
 		/** The related group this condition belongs to; absent for a condition on the row itself. */
 		group?: number;
 	};
-	type RelatedMatch = 'some' | 'none' | 'every' | 'gte' | 'lte' | 'eq';
+	type RelatedMatch = 'some' | 'none' | 'every' | 'count' | 'sum' | 'min' | 'max' | 'avg';
+	type Comparison = 'gte' | 'gt' | 'lte' | 'lt' | 'eq';
 	/**
 	 * A condition on related records: which relationship, how many of its rows must match, and —
 	 * as ordinary condition rows carrying this group's id — what each such row must satisfy. The
 	 * conditions hold on one related row together, so "open" and "invoice" mean the same message.
 	 */
-	type RelatedGroup = { id: number; relation: string | null; match: RelatedMatch; count: number };
+	type RelatedGroup = {
+		id: number;
+		relation: string | null;
+		match: RelatedMatch;
+		/** With count or an aggregate: how the measure compares with `value`. */
+		comparison: Comparison;
+		value: number;
+		/** With an aggregate: the related numeric column it measures. */
+		of: string | null;
+	};
+	const measures = (match: RelatedMatch): boolean =>
+		match === 'count' || match === 'sum' || match === 'min' || match === 'max' || match === 'avg';
+	const aggregates = (match: RelatedMatch): match is 'sum' | 'min' | 'max' | 'avg' =>
+		measures(match) && match !== 'count';
 	let {
 		definition,
 		collections,
@@ -80,10 +98,34 @@
 		{ value: 'some', label: 'has any' },
 		{ value: 'none', label: 'has none' },
 		{ value: 'every', label: 'all match' },
+		{ value: 'count', label: 'count' },
+		{ value: 'sum', label: 'sum of' },
+		{ value: 'min', label: 'min of' },
+		{ value: 'max', label: 'max of' },
+		{ value: 'avg', label: 'average of' }
+	];
+	const COMPARISONS: ReadonlyArray<{ value: Comparison; label: string }> = [
 		{ value: 'gte', label: 'at least' },
+		{ value: 'gt', label: 'more than' },
 		{ value: 'lte', label: 'at most' },
+		{ value: 'lt', label: 'less than' },
 		{ value: 'eq', label: 'exactly' }
 	];
+
+	/** The related collection's numeric columns, which an aggregate may measure. */
+	function numericFields(groupId: number): ReadonlyArray<{ value: string; label: string }> {
+		return groupFields(groupId)
+			.filter(
+				(field) =>
+					field.path.length === 1 &&
+					['number', 'numeric', 'integer'].includes(field.field.kind) &&
+					field.field.array !== true
+			)
+			.map((field) => ({
+				value: field.value,
+				label: field.field.label ?? humanize(field.field.name)
+			}));
+	}
 
 	/** The related collection's own fields, for the conditions inside a group. */
 	function groupFields(groupId: number): readonly CollectionFilterField[] {
@@ -195,15 +237,20 @@
 
 	function groupClause(group: RelatedGroup): CollectionFilter[] {
 		if (group.relation === null) return [];
-		const counted = group.match === 'gte' || group.match === 'lte' || group.match === 'eq';
-		if (counted && (!Number.isInteger(group.count) || group.count < 0)) return [];
+		const match = group.match;
+		if (measures(match) && !Number.isFinite(group.value)) return [];
+		if (match === 'count' && (!Number.isInteger(group.value) || group.value < 0)) return [];
+		if (aggregates(match) && group.of === null) return [];
+		const related: CollectionRelatedMatch = aggregates(match)
+			? { aggregate: match, of: group.of ?? '', comparison: group.comparison, value: group.value }
+			: match === 'count'
+				? { count: group.comparison, value: group.value }
+				: { quantifier: match as 'some' | 'none' | 'every' };
 		return [
 			{
 				path: [group.relation],
 				operator: 'related',
-				related: counted
-					? { count: group.match as 'gte' | 'lte' | 'eq', value: group.count }
-					: { quantifier: group.match as 'some' | 'none' | 'every' },
+				related,
 				where: filters.filter((filter) => filter.group === group.id).flatMap(clauseOf)
 			}
 		];
@@ -217,7 +264,10 @@
 	}
 
 	function addGroup(): void {
-		groups = [...groups, { id: nextId++, relation: null, match: 'some', count: 1 }];
+		groups = [
+			...groups,
+			{ id: nextId++, relation: null, match: 'some', comparison: 'gte', value: 1, of: null }
+		];
 	}
 
 	function updateGroup(id: number, change: Partial<RelatedGroup>): void {
@@ -303,11 +353,17 @@
 		if (relation === undefined || typeof value !== 'object' || value === null) return undefined;
 		const match = Reflect.get(value, 'match');
 		if (!RELATED_MATCHES.some((option) => option.value === match)) return undefined;
+		const comparison = Reflect.get(value, 'comparison');
+		const of = Reflect.get(value, 'of');
 		const group: RelatedGroup = {
 			id: nextId++,
 			relation: relation.name,
 			match: match as RelatedMatch,
-			count: Number(Reflect.get(value, 'count') ?? 1)
+			comparison: COMPARISONS.some((option) => option.value === comparison)
+				? (comparison as Comparison)
+				: 'gte',
+			value: Number(Reflect.get(value, 'value') ?? 1),
+			of: typeof of === 'string' ? of : null
 		};
 		const target = collections[relation.target];
 		const fields = target === undefined ? [] : collectionFilterFields(target, collections);
@@ -362,7 +418,10 @@
 						operator: 'related',
 						value: {
 							match: group.match,
-							count: group.count,
+							...(measures(group.match)
+								? { comparison: group.comparison, value: group.value }
+								: {}),
+							...(group.of === null ? {} : { of: group.of }),
 							where: filters
 								.filter((filter) => filter.group === group.id && filterIsActive(filter))
 								.map((filter) => ({
@@ -606,7 +665,7 @@
 					{@render conditionRow(filter, fieldTree)}
 				{/each}
 				{#each groups as group (group.id)}
-					{@const counted = group.match === 'gte' || group.match === 'lte' || group.match === 'eq'}
+					{@const measured = measures(group.match)}
 					<Stack gap="xs" class="rounded-md border p-2">
 						<Grid
 							gap="sm"
@@ -624,7 +683,7 @@
 								onValueChange={(relation) => {
 									if (!relation) return;
 									filters = filters.filter((filter) => filter.group !== group.id);
-									updateGroup(group.id, { relation });
+									updateGroup(group.id, { relation, of: null });
 								}}
 							/>
 							<Combobox
@@ -634,17 +693,13 @@
 								class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
 								onValueChange={(match) => match && updateGroup(group.id, { match })}
 							/>
-							{#if counted}
-								<input
-									type="number"
-									min="0"
-									step="1"
-									class="col-start-1 h-8 min-w-0 w-full rounded-md border bg-transparent px-2 text-xs sm:col-auto"
-									aria-label={t('table.filterRelatedCount')}
-									value={group.count}
-									{disabled}
-									oninput={(event) =>
-										updateGroup(group.id, { count: Number(event.currentTarget.value) })}
+							{#if aggregates(group.match) && group.relation !== null}
+								<Combobox
+									options={[...numericFields(group.id)]}
+									value={group.of}
+									emptyPlaceholder={t('table.filterRelatedColumn')}
+									class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
+									onValueChange={(of) => of && updateGroup(group.id, { of })}
 								/>
 							{:else}
 								<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">
@@ -661,6 +716,29 @@
 								><Icon icon="lucide:x" class="size-3.5" /></Button
 							>
 						</Grid>
+						{#if measured}
+							<Inline gap="sm" class="min-w-0">
+								<Combobox
+									options={[...COMPARISONS]}
+									value={group.comparison}
+									searchable={false}
+									class="h-8 min-w-0 w-40 text-xs"
+									onValueChange={(comparison) =>
+										comparison && updateGroup(group.id, { comparison })}
+								/>
+								<input
+									type="number"
+									min={group.match === 'count' ? 0 : undefined}
+									step={group.match === 'count' ? 1 : 'any'}
+									class="h-8 min-w-0 w-32 rounded-md border bg-transparent px-2 text-xs"
+									aria-label={t('table.filterRelatedCount')}
+									value={group.value}
+									{disabled}
+									oninput={(event) =>
+										updateGroup(group.id, { value: Number(event.currentTarget.value) })}
+								/>
+							</Inline>
+						{/if}
 						{#if group.relation !== null}
 							{@const tree = collectionFilterFieldTree(groupFields(group.id), t)}
 							<Stack gap="xs" class="border-l pl-3">

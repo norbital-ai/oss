@@ -13,6 +13,7 @@
  * places that legitimately carry one are named per package below rather than tolerated globally.
  */
 import { globSync, readFileSync } from 'node:fs';
+import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import ts from 'typescript';
 
@@ -64,8 +65,82 @@ function findDegradedDeclarations(declarationRoot, allowances = []) {
  * same failure reads correctly whether it came from a staging directory mid-build or from an
  * unpacked tarball at publication time.
  */
-export function assertDeclarationEmit({ declarationRoot, packageDirectory, label }) {
+/**
+ * Every non-relative module a declaration names that a consumer could not resolve.
+ *
+ * An unresolved import in a `.d.ts` is `any` to every consumer and invisible to them under
+ * `skipLibCheck` — `import("effect/StandardSchema")` in a release built against one Effect and
+ * installed beside another typed every custom column `any`. `#lib/*` is the package's own imports
+ * map, checked against the emitted tree; everything else resolves the way a consumer resolves it,
+ * from inside the package, through `exports`.
+ */
+function unresolvedDeclarationImports(declarationRoot) {
+	const options = {
+		module: ts.ModuleKind.ESNext,
+		moduleResolution: ts.ModuleResolutionKind.Bundler,
+		customConditions: ['svelte'],
+		allowArbitraryExtensions: true
+	};
+	/** Module names from import/export declarations and `import("…")` types — never from comments. */
+	const specifiers = (file) => {
+		const names = [];
+		const visit = (node) => {
+			// A bare `import 'x.css'` binds nothing, so nothing of it can degrade to `any`.
+			const binds = !ts.isImportDeclaration(node) || node.importClause !== undefined;
+			const literal =
+				(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+				node.moduleSpecifier &&
+				binds
+					? node.moduleSpecifier
+					: ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)
+						? node.argument.literal
+						: undefined;
+			if (literal !== undefined && ts.isStringLiteral(literal)) names.push(literal.text);
+			ts.forEachChild(node, visit);
+		};
+		visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true));
+		// Node's own modules are ambient declarations (`@types/node`), not packages to resolve.
+		return names.filter(
+			(name) => !name.startsWith('.') && !name.startsWith('/') && !isBuiltin(name)
+		);
+	};
+	const findings = [];
+	const seen = new Set();
+	for (const relativePath of globSync('**/*.d.ts', { cwd: declarationRoot }).sort()) {
+		const file = path.join(declarationRoot, relativePath);
+		for (const name of specifiers(file)) {
+			if (seen.has(name)) continue;
+			seen.add(name);
+			const resolved = name.startsWith('#lib/')
+				? ['.d.ts', '.svelte.d.ts', '/index.d.ts'].some((suffix) =>
+						ts.sys.fileExists(
+							path.join(declarationRoot, name.slice('#lib/'.length).replace(/\.js$/, '') + suffix)
+						)
+					)
+				: ts.resolveModuleName(name, file, options, { ...ts.sys, realpath: ts.sys.realpath })
+						.resolvedModule !== undefined;
+			if (!resolved)
+				findings.push({ file: relativePath.split(path.sep).join('/'), specifier: name });
+		}
+	}
+	return findings;
+}
+
+export function assertDeclarationEmit({
+	declarationRoot,
+	packageDirectory,
+	label,
+	resolveImports = false
+}) {
 	const allowances = declarationAnyAllowances[packageDirectory] ?? [];
+	const unresolved = resolveImports ? unresolvedDeclarationImports(declarationRoot) : [];
+	if (unresolved.length > 0)
+		throw new Error(
+			[
+				`${label} names ${unresolved.length} module(s) a consumer cannot resolve; each is \`any\` to them.`,
+				...unresolved.slice(0, 20).map(({ file, specifier }) => `  ${file}: ${specifier}`)
+			].join('\n')
+		);
 	const findings = findDegradedDeclarations(declarationRoot, allowances);
 	if (findings.length === 0) return;
 	const shown = findings.slice(0, 20);

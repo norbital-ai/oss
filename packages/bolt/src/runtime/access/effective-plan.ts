@@ -1136,22 +1136,35 @@ const compileNode = (
 		const resolved = resolveCompiledRelationship(definition.relations, collection, name, childNode);
 		if (Result.isFailure(resolved)) return failed(resolved);
 		const quantifiers = Object.keys(condition).filter(
-			(key) => key === 'some' || key === 'none' || key === 'every' || key === 'count'
+			(key) =>
+				key === 'some' ||
+				key === 'none' ||
+				key === 'every' ||
+				key === 'count' ||
+				(RELATION_AGGREGATES as ReadonlyArray<string>).includes(key)
 		);
 		const implicitSome = quantifiers.length === 0;
 		if (!implicitSome && (quantifiers.length !== 1 || Object.keys(condition).length !== 1))
 			return diagnostic(
 				'invalid-node',
 				childNode,
-				`Query node ${childNode} requires exactly one of some, none, every, or count.`,
+				`Query node ${childNode} requires exactly one of some, none, every, count, sum, min, max or avg.`,
 				`${collection}.${name}`
 			);
-		const counted = quantifiers[0] === 'count' ? relationCount(condition['count']) : undefined;
-		if (quantifiers[0] === 'count' && counted === undefined)
+		const aggregateOf = RELATION_AGGREGATES.find((key) => key === quantifiers[0]);
+		const counted =
+			quantifiers[0] === 'count'
+				? relationCount(condition['count'])
+				: aggregateOf !== undefined
+					? relationCount(condition[aggregateOf], aggregateOf)
+					: undefined;
+		if ((quantifiers[0] === 'count' || aggregateOf !== undefined) && counted === undefined)
 			return diagnostic(
 				'invalid-node',
-				`${childNode}.count`,
-				`Query node ${childNode}.count takes { where?, eq|gt|gte|lt|lte: a non-negative whole number }.`,
+				`${childNode}.${quantifiers[0]}`,
+				aggregateOf === undefined
+					? `Query node ${childNode}.count takes { where?, eq|gt|gte|lt|lte: a non-negative whole number }.`
+					: `Query node ${childNode}.${aggregateOf} takes { of: a numeric column, where?, eq|gt|gte|lt|lte: a number }.`,
 				`${collection}.${name}`
 			);
 		const relation = resolved.success;
@@ -1170,7 +1183,23 @@ const compileNode = (
 		};
 		const nextChain = [...chain, segment];
 		addReversePath(state, relation.definition.target, nextChain);
-		const quantifier = (quantifiers[0] ?? 'some') as 'some' | 'none' | 'every' | 'count';
+		if (counted?.aggregate !== undefined) {
+			const column = fieldDefinition(
+				definition,
+				resolved.success.definition.target,
+				counted.aggregate.of
+			);
+			if (column === undefined || column.type !== 'number' || column.values !== undefined)
+				return diagnostic(
+					'invalid-node',
+					`${childNode}.${counted.aggregate.fn}.of`,
+					`${counted.aggregate.of} is not a numeric column of ${resolved.success.definition.target}; ${counted.aggregate.fn} aggregates a number.`,
+					`${collection}.${name}`
+				);
+			addField(state, resolved.success.definition.target, counted.aggregate.of, 'filter');
+		}
+		const quantifier = (counted !== undefined ? 'count' : (quantifiers[0] ?? 'some')) as
+			'some' | 'none' | 'every' | 'count';
 		const alias = `pr${state.alias++}`;
 		const nested = compileNode(
 			definition,
@@ -1199,7 +1228,13 @@ const compileNode = (
 			quantifier,
 			...(counted === undefined
 				? {}
-				: { count: { comparison: counted.comparison, value: counted.value } }),
+				: {
+						count: {
+							comparison: counted.comparison,
+							value: counted.value,
+							...(counted.aggregate === undefined ? {} : { aggregate: counted.aggregate })
+						}
+					}),
 			...(relatedPolicy === undefined ? {} : { visibility: relatedPolicy.expression }),
 			expression: nested.success
 		});
@@ -1207,34 +1242,53 @@ const compileNode = (
 	return Result.succeed(joinExpression('and', clauses));
 };
 
+const RELATION_AGGREGATES: ReadonlyArray<'sum' | 'min' | 'max' | 'avg'> = [
+	'sum',
+	'min',
+	'max',
+	'avg'
+];
+
 /**
- * A `count` quantifier's parts: `{ where?, <comparison>: n }`, read once so the planner and the SQL
- * agree. Counting is over the related rows the viewer may read that match `where` — the same
- * visibility an `exists` applies — so a count never reveals rows a policy hides.
+ * A `count` or aggregate quantifier's parts — `{ where?, <comparison>: n }`, and `of` for an
+ * aggregate — read once so the planner and the SQL agree. It ranges over the related rows the viewer
+ * may read that match `where`, the same visibility an `exists` applies, so neither a count nor a sum
+ * reveals rows a policy hides.
  */
 const relationCount = (
-	value: unknown
+	value: unknown,
+	aggregate?: 'sum' | 'min' | 'max' | 'avg'
 ):
 	| Readonly<{
 			where: unknown;
 			comparison: 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
 			value: number;
+			aggregate?: Readonly<{ fn: 'sum' | 'min' | 'max' | 'avg'; of: string }>;
 	  }>
 	| undefined => {
 	if (!isObject(value)) return undefined;
 	const comparisons = (['eq', 'gt', 'gte', 'lt', 'lte'] as const).filter((key) => key in value);
 	const [comparison] = comparisons;
 	const bound = comparison === undefined ? undefined : value[comparison];
+	const of = value['of'];
 	if (
 		comparisons.length !== 1 ||
 		comparison === undefined ||
 		typeof bound !== 'number' ||
-		!Number.isInteger(bound) ||
-		bound < 0 ||
-		Object.keys(value).some((key) => key !== 'where' && key !== comparison)
+		!Number.isFinite(bound) ||
+		(aggregate === undefined && (!Number.isInteger(bound) || bound < 0)) ||
+		(aggregate !== undefined && (typeof of !== 'string' || of.length === 0)) ||
+		Object.keys(value).some(
+			(key) => key !== 'where' && key !== comparison && !(aggregate !== undefined && key === 'of')
+		)
 	)
 		return undefined;
-	return { where: value['where'] ?? {}, comparison, value: bound };
+	return {
+		where: value['where'] ?? {},
+		comparison,
+		value: bound,
+		...(aggregate === undefined ? {} : { aggregate: { fn: aggregate, of: String(of) } })
+	};
 };
 
 const semanticsOf = (

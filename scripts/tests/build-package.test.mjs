@@ -117,6 +117,30 @@ test('discards a build whose declarations degraded to `any`', () => {
 	assert.equal(existsSync(path.join(packageRoot, 'build.staging')), false);
 });
 
+test('discards a build whose declarations name a module a consumer cannot resolve', () => {
+	// The shape that typed every custom column `any`: a deep import of a module the installed
+	// dependency does not ship. Comments, side-effect imports and node builtins are not modules.
+	const { packageRoot, emitter } = scaffoldPackage(
+		{ name: 'probe' },
+		{
+			'index.d.ts': [
+				"import type { Missing } from 'no-such-package/Missing';",
+				"import 'no-such-package/style.css';",
+				"import type { Resolver } from 'node:dns';",
+				"/** Rejects anything from 'unreadable' input. */",
+				'export declare const value: Missing;',
+				'export declare const resolver: Resolver;'
+			].join('\n')
+		}
+	);
+	const failed = runBuild(packageRoot, [process.execPath, emitter, '{}']);
+	assert.equal(failed.status, 1);
+	assert.match(failed.output, /cannot resolve/);
+	assert.match(failed.output, /index\.d\.ts: no-such-package\/Missing/);
+	assert.doesNotMatch(failed.output, /style\.css|node:dns|unreadable/);
+	assert.equal(existsSync(path.join(packageRoot, 'build')), false);
+});
+
 test('reads `any` in a doc comment as prose rather than a degraded type', () => {
 	const { packageRoot, emitter } = scaffoldPackage(
 		{ name: 'probe' },

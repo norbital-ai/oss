@@ -67,4 +67,17 @@ describe('filterToWhere', () => {
 			})
 		).toEqual({ account: { some: { invoices: { count: { eq: 0 } } } } });
 	});
+
+	it('spells a related aggregate over a column of the matching rows', () => {
+		expect(
+			filterToWhere({
+				path: ['customer_orders'],
+				operator: 'related',
+				related: { aggregate: 'sum', of: 'total', comparison: 'gte', value: 10000 },
+				where: [{ path: ['status'], operator: 'eq', operand: 'open' }]
+			})
+		).toEqual({
+			customer_orders: { sum: { of: 'total', where: { status: { eq: 'open' } }, gte: 10000 } }
+		});
+	});
 });

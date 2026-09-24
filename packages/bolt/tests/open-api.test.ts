@@ -50,3 +50,40 @@ it('describes every writable collection and every function', () => {
 		'patch'
 	]);
 });
+
+it('describes a custom field by the schema its writes are validated with, not {}', async () => {
+	const { platformCustomTypes } = await import('../src/authoring/models-schema.js');
+	const definition = {
+		name: 'jobs',
+		customTypes: { money: platformCustomTypes.money },
+		collections: [
+			{
+				...collection({
+					name: 'jobs',
+					fields: {
+						amount_charged: { ...field.json(), customType: 'money' }
+					}
+				}),
+				write: { create: { columns: { amount_charged: true } }, hasTransform: false }
+			}
+		]
+	} as unknown as Parameters<typeof openApiDocument>[0];
+	const document = openApiDocument(definition, [], '/api/openapi.json') as {
+		paths: Record<
+			string,
+			{ post: { requestBody: { content: Record<string, { schema: unknown }> } } }
+		>;
+	};
+	const create = document.paths['/collections/jobs']?.post.requestBody.content['application/json']
+		?.schema as { properties: Record<string, unknown> };
+	expect(create.properties['amount_charged']).toMatchObject({
+		anyOf: [
+			{
+				type: 'object',
+				properties: { value: { type: 'number' }, currency: { type: 'string' } },
+				required: ['value', 'currency']
+			},
+			{ type: 'null' }
+		]
+	});
+});

@@ -369,7 +369,14 @@ export interface CollectionFilter {
 
 export type CollectionRelatedMatch =
 	| Readonly<{ readonly quantifier: 'some' | 'none' | 'every' }>
-	| Readonly<{ readonly count: 'eq' | 'gt' | 'gte' | 'lt' | 'lte'; readonly value: number }>;
+	| Readonly<{ readonly count: 'eq' | 'gt' | 'gte' | 'lt' | 'lte'; readonly value: number }>
+	| Readonly<{
+			/** Aggregates the related column `of` over the rows that match `where`. */
+			readonly aggregate: 'sum' | 'min' | 'max' | 'avg';
+			readonly of: string;
+			readonly comparison: 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
+			readonly value: number;
+	  }>;
 
 export interface CollectionFilterOptions {
 	readonly filters?: readonly CollectionFilter[];

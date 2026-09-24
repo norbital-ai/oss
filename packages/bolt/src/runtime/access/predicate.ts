@@ -127,6 +127,8 @@ export type RowPredicateExpression =
 			readonly count?: Readonly<{
 				readonly comparison: 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
 				readonly value: number;
+				/** Present for sum/min/max/avg over a related numeric column; absent counts rows. */
+				readonly aggregate?: Readonly<{ fn: 'sum' | 'min' | 'max' | 'avg'; of: string }>;
 			}>;
 			readonly visibility?: RowPredicateExpression;
 			readonly expression: RowPredicateExpression;
@@ -297,7 +299,15 @@ const compileExpression = (expression: RowPredicateExpression, qualifier?: strin
 					: compileExpression(expression.visibility, expression.alias);
 			if (expression.quantifier === 'count' && expression.count !== undefined) {
 				const operator = sql.raw(comparisonSql[expression.count.comparison]);
-				return sql`(select count(*) from ${target} as ${alias} where ${joined} and (${visibility}) and (${nested})) ${operator} ${expression.count.value}`;
+				const aggregate = expression.count.aggregate;
+				// A sum over no rows is 0; a min, max or avg over none is unknown, so the row does not match.
+				const measured =
+					aggregate === undefined
+						? sql`count(*)`
+						: aggregate.fn === 'sum'
+							? sql`coalesce(sum(${alias}.${sql.identifier(aggregate.of)}), 0)`
+							: sql`${sql.raw(aggregate.fn)}(${alias}.${sql.identifier(aggregate.of)})`;
+				return sql`(select ${measured} from ${target} as ${alias} where ${joined} and (${visibility}) and (${nested})) ${operator} ${expression.count.value}`;
 			}
 			const tested =
 				expression.quantifier === 'every' ? sql`(${nested}) is not true` : sql`(${nested})`;

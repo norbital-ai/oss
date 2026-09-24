@@ -109,6 +109,7 @@ const context = (collection: string, extras: Partial<WhereContext> = {}): WhereC
 			employments: {
 				company_id: field.string({ required: true }),
 				employee_id: field.string({ required: true }),
+				hours: field.number(),
 				effective_range: field.json({ required: true })
 			}
 		}
@@ -210,6 +211,34 @@ describe('Collections query owner', () => {
 			expect(
 				Result.isFailure(
 					compilePredicate({ employment_employee: { count: invalid } }, context('employees'))
+				)
+			).toBe(true);
+	});
+
+	it('compiles a relation aggregate over a numeric related column', () => {
+		// "Employees whose pending employments total at least 40 hours": a sum over none is 0.
+		const summed = whereSql(
+			{
+				employment_employee: {
+					sum: { of: 'hours', where: { approval_id: { isNull: true } }, gte: 40 }
+				}
+			},
+			context('employees')
+		);
+		expect(summed.sql).toBe(
+			'(select coalesce(sum("pr0"."hours"), 0) from "employments" as "pr0" where "pr0"."employee_id" = "employees"."id" and (true) and ("pr0"."approval_id" is null)) >= $1'
+		);
+		expect(summed.parameters).toEqual([40]);
+		expect(
+			whereSql({ employment_employee: { max: { of: 'hours', lt: 7.5 } } }, context('employees')).sql
+		).toBe(
+			'(select max("pr0"."hours") from "employments" as "pr0" where "pr0"."employee_id" = "employees"."id" and (true) and (true)) < $1'
+		);
+		// Only a numeric column aggregates, and `of` is required.
+		for (const invalid of [{ of: 'company_id', gte: 1 }, { gte: 1 }, { of: 'missing', gte: 1 }])
+			expect(
+				Result.isFailure(
+					compilePredicate({ employment_employee: { sum: invalid } }, context('employees'))
 				)
 			).toBe(true);
 	});

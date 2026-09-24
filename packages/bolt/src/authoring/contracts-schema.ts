@@ -469,8 +469,47 @@ type RelationWhere<
 						PreviousDepth[Depth]
 					>
 				>;
+				/** A numeric column of the matching related rows, aggregated: `{ of: 'total', gte: 10000 }`. */
+				readonly sum?: RelationAggregate<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					Depth
+				>;
+				readonly min?: RelationAggregate<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					Depth
+				>;
+				readonly max?: RelationAggregate<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					Depth
+				>;
+				readonly avg?: RelationAggregate<
+					S,
+					RelationTarget<S, SchemaRelations<S, N>[K]>,
+					AllowSubject,
+					Depth
+				>;
 			}>;
 		};
+type RelationAggregate<
+	S extends AnySchema,
+	Target extends TableName<S>,
+	AllowSubject extends boolean,
+	Depth extends PredicateDepth
+> = RelationCount<SchemaWhereFor<S, Target, AllowSubject, PreviousDepth[Depth]>> & {
+	readonly of: {
+		[Column in Extract<keyof SchemaRow<S, Target>, string>]: NonNullable<
+			SchemaRow<S, Target>[Column]
+		> extends number
+			? Column
+			: never;
+	}[Extract<keyof SchemaRow<S, Target>, string>];
+};
 /** Exactly one comparison against the number of matching related rows. */
 type RelationCount<Where> = { readonly where?: Where } & (
 	| { readonly eq: number }

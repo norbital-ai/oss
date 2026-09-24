@@ -150,6 +150,13 @@ describe('collection filter inference', () => {
 					nullable: false,
 					values: ['invoice', 'quote'],
 					operators: ['eq', 'ne']
+				},
+				{
+					value: 'total',
+					label: 'Total',
+					kind: 'number',
+					nullable: true,
+					operators: ['gt', 'gte', 'lt', 'lte']
 				}
 			]
 		};
@@ -157,8 +164,9 @@ describe('collection filter inference', () => {
 			field: '@messages',
 			operator: 'related',
 			value: {
-				match: 'gte',
-				count: 1,
+				match: 'count',
+				comparison: 'gte',
+				value: 1,
 				where: [
 					{ field: 'status', operator: 'eq', value: 'open' },
 					{ field: 'kind', operator: 'eq', value: 'invoice' }
@@ -170,8 +178,18 @@ describe('collection filter inference', () => {
 			operator: 'related',
 			value: { match: 'some', where: [{ field: 'amount', operator: 'gt', value: 10 }] }
 		};
+		const bigSpenders = {
+			field: '@messages',
+			operator: 'related',
+			value: { match: 'sum', of: 'total', comparison: 'gt', value: 10000, where: [] }
+		};
+		const sumOfText = {
+			field: '@messages',
+			operator: 'related',
+			value: { match: 'sum', of: 'kind', comparison: 'gt', value: 1, where: [] }
+		};
 		const reply = call('result', 'return_result', {
-			conditions: [invoiceCount, guessed],
+			conditions: [invoiceCount, guessed, bigSpenders, sumOfText],
 			unresolved: []
 		});
 		const answer = await Effect.runPromise(
@@ -211,7 +229,7 @@ describe('collection filter inference', () => {
 				} as never)
 			)
 		);
-		expect(answer.conditions).toEqual([invoiceCount]);
-		expect(answer.unresolved).toEqual(['@messages related']);
+		expect(answer.conditions).toEqual([invoiceCount, bigSpenders]);
+		expect(answer.unresolved).toEqual(['@messages related', '@messages related']);
 	});
 });

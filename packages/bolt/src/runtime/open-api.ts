@@ -8,6 +8,7 @@ import { RemoteRegistry } from '#lib/runtime/collections/authored.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError } from '#lib/runtime/workspace.js';
+import { customValueJsonSchema } from '#lib/runtime/collections/custom-values.js';
 
 /**
  * Every workspace's collections and functions, as one plain HTTP API with an OpenAPI document.
@@ -236,33 +237,44 @@ export const answerApiRequest = Effect.fn('Bolt.api.answer')(function* (
 });
 
 /** One column as JSON Schema: what a reader gets back. */
-const fieldSchema = (field: FieldDefinition): Record<string, Schema.Json> => {
+const fieldSchema = (
+	field: FieldDefinition,
+	customTypes?: Readonly<Record<string, unknown>>
+): Record<string, Schema.Json> => {
+	// A custom value's schema is the one its writes are validated by, never `{}`.
+	const custom =
+		field.customType === undefined
+			? undefined
+			: customValueJsonSchema(customTypes?.[field.customType], field.customTypeOptions);
 	const base: Record<string, Schema.Json> =
-		field.values !== undefined
-			? { type: 'string', enum: [...field.values] }
-			: field.type === 'number'
-				? { type: 'number' }
-				: field.type === 'boolean'
-					? { type: 'boolean' }
-					: field.type === 'instant'
-						? { type: 'string', format: field.precision === 'day' ? 'date' : 'date-time' }
-						: field.type === 'uuid' || field.type === 'reference'
-							? { type: 'string', format: 'uuid' }
-							: field.type === 'json'
-								? {}
-								: { type: 'string' };
+		custom !== null && typeof custom === 'object' && !Array.isArray(custom)
+			? (custom as Record<string, Schema.Json>)
+			: field.values !== undefined
+				? { type: 'string', enum: [...field.values] }
+				: field.type === 'number'
+					? { type: 'number' }
+					: field.type === 'boolean'
+						? { type: 'boolean' }
+						: field.type === 'instant'
+							? { type: 'string', format: field.precision === 'day' ? 'date' : 'date-time' }
+							: field.type === 'uuid' || field.type === 'reference'
+								? { type: 'string', format: 'uuid' }
+								: field.type === 'json'
+									? {}
+									: { type: 'string' };
 	return field.required ? base : { anyOf: [base, { type: 'null' }] };
 };
 
 const writeSchema = (
 	fields: Readonly<Record<string, FieldDefinition>>,
-	columns: Readonly<Record<string, true>> | undefined
+	columns: Readonly<Record<string, true>> | undefined,
+	customTypes?: Readonly<Record<string, unknown>>
 ): Schema.Json => ({
 	type: 'object',
 	properties: Object.fromEntries(
 		Object.keys(columns ?? {})
 			.filter((name) => fields[name] !== undefined)
-			.map((name) => [name, fieldSchema(fields[name] as FieldDefinition)])
+			.map((name) => [name, fieldSchema(fields[name] as FieldDefinition, customTypes)])
 	)
 });
 
@@ -303,7 +315,10 @@ export const openApiDocument = (
 				...Object.fromEntries(
 					Object.entries(fields)
 						.filter(([field]) => !field.startsWith('bolt_') && field !== 'search_document')
-						.map(([field, definitionOf]) => [field, fieldSchema(definitionOf)])
+						.map(([field, definitionOf]) => [
+							field,
+							fieldSchema(definitionOf, definition.customTypes)
+						])
 				),
 				id: { type: 'string', format: 'uuid' },
 				created_at: { type: 'string', format: 'date-time' },
@@ -362,7 +377,7 @@ export const openApiDocument = (
 							tags: [name],
 							requestBody: {
 								required: true,
-								content: content(writeSchema(fields, write.create.columns))
+								content: content(writeSchema(fields, write.create.columns, definition.customTypes))
 							},
 							responses: {
 								'201': { description: 'Created.', content: content(ref(name)) },
@@ -386,7 +401,7 @@ export const openApiDocument = (
 							tags: [name],
 							requestBody: {
 								required: true,
-								content: content(writeSchema(fields, write.update.columns))
+								content: content(writeSchema(fields, write.update.columns, definition.customTypes))
 							},
 							responses: {
 								'200': { description: 'Updated.', content: content(ref(name)) },

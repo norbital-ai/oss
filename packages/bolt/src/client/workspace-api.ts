@@ -103,14 +103,11 @@ const relatedToWhere = (filter: CollectionFilter): Schema.Json => {
 	const where: Schema.Json =
 		nested.length === 0 ? {} : nested.length === 1 ? (nested[0] ?? {}) : { AND: nested };
 	const match = filter.related ?? { quantifier: 'some' as const };
-	return 'quantifier' in match
-		? { [match.quantifier]: where }
-		: {
-				count:
-					nested.length === 0
-						? { [match.count]: match.value }
-						: { where, [match.count]: match.value }
-			};
+	const filtered = nested.length === 0 ? {} : { where };
+	if ('quantifier' in match) return { [match.quantifier]: where };
+	if ('aggregate' in match)
+		return { [match.aggregate]: { of: match.of, ...filtered, [match.comparison]: match.value } };
+	return { count: { ...filtered, [match.count]: match.value } };
 };
 
 /**

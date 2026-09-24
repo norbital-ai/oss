@@ -25,22 +25,24 @@ type StandardIssue = Readonly<{
 }>;
 type StandardResult = Readonly<{ readonly issues?: ReadonlyArray<StandardIssue> }>;
 
-const validatorOf = (
+/**
+ * The schema a custom type declares, with a factory applied to the column's options.
+ *
+ * A factory is told apart by the *absence of `~standard`*, not by being callable: an Effect
+ * `Schema` is itself callable, so testing `typeof schema === 'object'` read every Effect-declared
+ * custom type as a factory and skipped its validation in silence — a value of the wrong shape was
+ * stored and nothing reported anything, which is the exact failure this module exists to stop.
+ */
+const resolvedSchemaOf = (
 	definition: unknown,
 	options: Readonly<Record<string, Schema.Json>> | undefined
-	// repository-health:allow EFF2 -- Standard Schema validators may return a Promise by specification; this boundary detects that result and never composes it as native concurrency.
-): ((value: unknown) => StandardResult | Promise<StandardResult>) | undefined => {
+): object | undefined => {
 	if (!isRecord(definition)) return undefined;
 	let schema = Reflect.get(definition, 'schema');
-	// A factory is told apart by the *absence of `~standard`*, not by being callable: an Effect
-	// `Schema` is itself callable, so testing
-	// `typeof schema === 'object'` read every Effect-declared custom type as a factory and skipped its
-	// validation in silence — a value of the wrong shape was stored and nothing reported anything,
-	// which is the exact failure this module exists to stop.
 	// repository-health:allow GUARD2 -- The schema value comes from an author-chosen Standard Schema library and may be either its object or its factory function; no schema expresses that union.
 	if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
 		return undefined;
-	let standard = Reflect.get(schema, '~standard');
+	const standard = Reflect.get(schema, '~standard');
 	// repository-health:allow GUARD2 -- Distinguishing a Standard Schema factory requires testing it callable; no Effect schema accepts functions.
 	if ((standard === null || typeof standard !== 'object') && typeof schema === 'function') {
 		const factory = schema;
@@ -53,13 +55,49 @@ const validatorOf = (
 		// repository-health:allow GUARD2 -- The factory's product is an external Standard Schema object or function; no schema expresses that union.
 		if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
 			return undefined;
-		standard = Reflect.get(schema, '~standard');
 	}
+	return schema;
+};
+
+const validatorOf = (
+	definition: unknown,
+	options: Readonly<Record<string, Schema.Json>> | undefined
+	// repository-health:allow EFF2 -- Standard Schema validators may return a Promise by specification; this boundary detects that result and never composes it as native concurrency.
+): ((value: unknown) => StandardResult | Promise<StandardResult>) | undefined => {
+	const schema = resolvedSchemaOf(definition, options);
+	if (schema === undefined) return undefined;
+	const standard = Reflect.get(schema, '~standard');
 	if (!isRecord(standard)) return undefined;
 	const validate = Reflect.get(standard, 'validate');
 	// repository-health:allow GUARD2 -- Standard Schema's `validate` is a callable on a third-party object; no Effect schema accepts functions.
 	return typeof validate === 'function'
 		? (value: unknown) => validate.call(standard, value)
+		: undefined;
+};
+
+/**
+ * The JSON Schema of the value a custom column accepts, from the same schema its writes are
+ * validated by — so an OpenAPI document or an agent is told exactly what the write will accept.
+ * An Effect schema renders itself; any other library through Standard JSON Schema when it offers it.
+ */
+export const customValueJsonSchema = (
+	definition: unknown,
+	options: Readonly<Record<string, Schema.Json>> | undefined
+): Schema.Json | undefined => {
+	const schema = resolvedSchemaOf(definition, options);
+	if (schema === undefined) return undefined;
+	if (Schema.isSchema(schema))
+		return Result.getOrUndefined(
+			Result.try(() => Schema.toJsonSchemaDocument(schema).schema as Schema.Json)
+		);
+	const standard = Reflect.get(schema, '~standard');
+	const jsonSchema = isRecord(standard) ? Reflect.get(standard, 'jsonSchema') : undefined;
+	const input = isRecord(jsonSchema) ? Reflect.get(jsonSchema, 'input') : undefined;
+	// repository-health:allow GUARD2 -- Standard JSON Schema's `input` is a callable on a third-party object; no Effect schema accepts functions.
+	return typeof input === 'function'
+		? Result.getOrUndefined(
+				Result.try(() => input.call(jsonSchema, { target: 'draft-2020-12' }) as Schema.Json)
+			)
 		: undefined;
 };
 

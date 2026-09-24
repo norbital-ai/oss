@@ -126,7 +126,8 @@ const declarationResult = Effect.runSync(
 				assertDeclarationEmit({
 					declarationRoot: staging,
 					packageDirectory: path.basename(packageRoot),
-					label: `${manifest.name} build output`
+					label: `${manifest.name} build output`,
+					resolveImports: true
 				}),
 			catch: (cause) => cause
 		})

@@ -135,8 +135,14 @@ export const COLLECTION_PREDICATE_RELATION_QUANTIFIERS = [
 	'some',
 	'none',
 	'every',
-	'count'
+	'count',
+	'sum',
+	'min',
+	'max',
+	'avg'
 ] as const;
+/** Aggregates over one numeric column of the related rows: `{ orders: { sum: { of: 'total', gte: 10000 } } }`. */
+export const COLLECTION_PREDICATE_RELATION_AGGREGATES = ['sum', 'min', 'max', 'avg'] as const;
 /**
  * How a `count` quantifier compares the number of related rows that match its `where`:
  * `{ invoices: { count: { where: { status: 'open' }, gte: 2 } } }` is "at least two open invoices".
@@ -329,9 +335,10 @@ const predicateProblem = (value: unknown, depth = 0): string | undefined => {
 			if (quantifiers.length > 0) {
 				if (quantifiers.length !== 1 || Object.keys(relation).length !== 1)
 					return `${node} relation requires exactly one quantifier`;
-				if (quantifiers[0] === 'count') {
-					const problem = countProblem(relation['count'], depth);
-					if (problem !== undefined) return `${node}.count ${problem}`;
+				const quantifier = quantifiers[0] ?? '';
+				if (quantifier === 'count' || AGGREGATES.has(quantifier)) {
+					const problem = countProblem(relation[quantifier], depth, quantifier !== 'count');
+					if (problem !== undefined) return `${node}.${quantifier} ${problem}`;
 					continue;
 				}
 				const problem = predicateProblem(relation[quantifiers[0] ?? ''], depth + 1);
@@ -345,22 +352,35 @@ const predicateProblem = (value: unknown, depth = 0): string | undefined => {
 	return undefined;
 };
 
-/** `{ where?, <comparison>: n }`: one comparison, a non-negative whole number, an optional filter. */
-function countProblem(value: unknown, depth: number): string | undefined {
+const AGGREGATES = new Set<string>(COLLECTION_PREDICATE_RELATION_AGGREGATES);
+
+/**
+ * `{ where?, <comparison>: n }` for a count — a non-negative whole number — and
+ * `{ of, where?, <comparison>: n }` for an aggregate over the related column `of`, any finite number.
+ */
+function countProblem(value: unknown, depth: number, aggregate = false): string | undefined {
 	const count = jsonObject(value);
 	if (count === undefined) return 'must be an object';
 	const comparisons = Object.keys(count).filter((key) =>
 		(COLLECTION_PREDICATE_COUNT_COMPARISONS as ReadonlyArray<string>).includes(key)
 	);
 	const unexpected = Object.keys(count).find(
-		(key) => key !== 'where' && !comparisons.includes(key)
+		(key) => key !== 'where' && !(aggregate && key === 'of') && !comparisons.includes(key)
 	);
 	if (unexpected !== undefined) return `has unexpected key ${unexpected}`;
+	if (aggregate && (typeof count['of'] !== 'string' || count['of'].length === 0))
+		return 'names the related column it aggregates in `of`';
 	if (comparisons.length !== 1)
 		return `requires exactly one of ${COLLECTION_PREDICATE_COUNT_COMPARISONS.join(', ')}`;
 	const bound = count[comparisons[0] ?? ''];
-	if (typeof bound !== 'number' || !Number.isInteger(bound) || bound < 0)
-		return 'compares with a non-negative whole number';
+	if (
+		typeof bound !== 'number' ||
+		!Number.isFinite(bound) ||
+		(!aggregate && (!Number.isInteger(bound) || bound < 0))
+	)
+		return aggregate
+			? 'compares with a finite number'
+			: 'compares with a non-negative whole number';
 	if (count['where'] === undefined) return undefined;
 	const problem = predicateProblem(count['where'], depth + 1);
 	return problem === undefined ? undefined : `.where ${problem}`;

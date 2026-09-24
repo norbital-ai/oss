@@ -34,7 +34,7 @@ const fieldLine = (field: CollectionFilterInferenceInput['fields'][number]): str
 	field.operators.includes('related')
 		? [
 				`- ${field.value} (${field.label}): related ${field.target ?? 'records'} — operator related, `,
-				'value { match: some|none|every|gte|lte|eq, count?: n, where: [conditions on its fields] }; its fields:',
+				'value { match: some|none|every|count|sum|min|max|avg, comparison?: gte|gt|lte|lt|eq, value?: n, of?: a number field (sum/min/max/avg), where: [conditions on its fields] }; its fields:',
 				...(field.fields ?? []).map((nested) => `\n  ${fieldLine(nested)}`)
 			].join('')
 		: [
@@ -47,7 +47,9 @@ const fieldLine = (field: CollectionFilterInferenceInput['fields'][number]): str
 				`; operators ${field.operators.join(', ')}`
 			].join('');
 
-const RELATED_MATCHES = ['some', 'none', 'every', 'gte', 'lte', 'eq'];
+const RELATED_MATCHES = ['some', 'none', 'every', 'count', 'sum', 'min', 'max', 'avg'];
+const MEASURES = ['count', 'sum', 'min', 'max', 'avg'];
+const COMPARISONS = ['gte', 'gt', 'lte', 'lt', 'eq'];
 
 /** A `related` answer's value: a match, a count when counting, and conditions on offered fields. */
 const relatedProblem = (
@@ -57,9 +59,22 @@ const relatedProblem = (
 	if (typeof value !== 'object' || value === null) return 'not an object';
 	const match = Reflect.get(value, 'match');
 	if (typeof match !== 'string' || !RELATED_MATCHES.includes(match)) return 'unknown match';
-	const count = Reflect.get(value, 'count');
-	if (['gte', 'lte', 'eq'].includes(match) && (!Number.isInteger(count) || Number(count) < 0))
-		return 'count is not a whole number';
+	if (MEASURES.includes(match)) {
+		const comparison = Reflect.get(value, 'comparison');
+		const bound = Reflect.get(value, 'value');
+		if (typeof comparison !== 'string' || !COMPARISONS.includes(comparison))
+			return 'a measure needs a comparison';
+		if (typeof bound !== 'number' || !Number.isFinite(bound)) return 'a measure needs a number';
+		if (match === 'count' && (!Number.isInteger(bound) || bound < 0))
+			return 'a count compares with a whole number';
+		if (match !== 'count') {
+			const of = (field.fields ?? []).find(
+				(candidate) => candidate.value === Reflect.get(value, 'of')
+			);
+			if (of === undefined || !['number', 'numeric', 'integer'].includes(of.kind))
+				return `${match} names no number field of the related records`;
+		}
+	}
 	const where = Reflect.get(value, 'where') ?? [];
 	if (!Array.isArray(where)) return 'where is not a list';
 	const nested = new Map((field.fields ?? []).map((candidate) => [candidate.value, candidate]));
@@ -107,7 +122,7 @@ export const inferCollectionFilter = Effect.fn('Collections.inferFilter')(functi
 			'Answer with the complete filter: keep current conditions the request does not change, change or drop the ones it does, add what it asks for.',
 			'Use only the fields and operators listed. Operands: a date or instant as an ISO string; a relative period ("this week") as gte/lte bounds; `contains` takes the bare text; isNull/isNotNull take no value; array operators take an array.',
 			'A person, site or other record named in words is a record id: call find_records to resolve it, and if several match or none do, leave that phrase unresolved.',
-			'A condition on related records ("customers with at least 1 open invoice message") is one related condition on the relationship: its where conditions all hold on the same related record, and gte/lte/eq with count compare how many there are.',
+			'A condition on related records ("customers with at least 1 open invoice message") is one related condition on the relationship: its where conditions all hold on the same related record. count compares how many there are; sum/min/max/avg compare a number field of them ("whose open orders total over 10000": match sum, of total, comparison gt, value 10000).',
 			'Put every phrase you could not map faithfully in unresolved, verbatim. Never widen or guess a condition to cover it.',
 			'Fields:',
 			...input.fields.map(fieldLine)
