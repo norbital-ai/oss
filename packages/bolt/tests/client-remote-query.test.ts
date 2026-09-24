@@ -174,6 +174,14 @@ describe('machine-backed query read semantics', () => {
 		machine.publish(fresh([{ id: 'newest' }], 'fresh'));
 		expect(query.current).toEqual(['newest']);
 		expect(query.loading).toBe(false);
+
+		// A re-registration drops the prefix for a round trip; the reader keeps the last answer.
+		machine.publish({
+			...initialClientState(),
+			queries: new Map([['jobs', queryState({ phase: 'pending', validating: true })]])
+		});
+		expect(query.current).toEqual(['newest']);
+		expect(query.loading).toBe(true);
 		expect(detached).toBe(0);
 	});
 

@@ -181,7 +181,15 @@ class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
 			query !== undefined && query.phase === 'failed' && query.error !== undefined
 				? new Error(query.error)
 				: undefined;
-		const value = this.#project(state);
+		// A query the Machine re-registers (a refused link, a reset prefix) goes pending with no rows
+		// for a round trip. The answer it last held is still the best one to show, and dropping it
+		// unmounted every record sheet for a frame after each write — a representation's open tab
+		// and its unsaved input went with it. Only a failure or a new answer replaces it.
+		const projected = this.#project(state);
+		const value =
+			projected === undefined && this.#loading && this.#error === undefined
+				? this.#current
+				: projected;
 		if (value !== undefined) {
 			this.#resolve(value);
 		} else if (this.#error !== undefined) {
