@@ -145,6 +145,16 @@ export const parseCollectionSearch = (
 };
 
 /**
+ * Whether a search is read once rather than mounted live: every `/command` is. `/semantic` and
+ * `/<index>` both rank by a vector measured once against the probe, and re-measuring it on every
+ * change would be a model call per delta. The planner refuses such a query as a live prefix and the
+ * browser routes it as a one-shot read — both through this one rule, because the two drifting
+ * apart is exactly how `/semantic` came back from `sync.connect` as a 400.
+ */
+export const isOneShotSearch = (search: CollectionSearch): boolean =>
+	parseCollectionSearch(search).command !== undefined;
+
+/**
  * The column a nearest search attaches beside each row: the distance the row was ranked by. Named
  * so that no authored column can collide with it, and read by the table's distance column.
  */

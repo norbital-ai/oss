@@ -14,7 +14,10 @@ import {
 	type TenantRelease
 } from '@norbital-ai/bolt-protocol';
 import { toError } from '@norbital-ai/std';
-import type { CollectionWriteContract, CollectionWriteSelection } from '@norbital-ai/std/collection';
+import type {
+	CollectionWriteContract,
+	CollectionWriteSelection
+} from '@norbital-ai/std/collection';
 import type { SyncDeclaration } from '../authoring/integrations-schema.js';
 import ts from 'typescript';
 import {
@@ -325,12 +328,19 @@ export const browserWrite = (
 			sync.identity,
 			...(sync.direction === 'one_way'
 				? sync.fields.map(({ column }) => column)
-				: [...sync.owns.remote, ...sync.fields.filter(({ pushed }) => !pushed).map(({ column }) => column)])
+				: [
+						...sync.owns.remote,
+						...sync.fields.filter(({ pushed }) => !pushed).map(({ column }) => column)
+					])
 		])
 	);
-	const narrow = (selection: CollectionWriteSelection | undefined): CollectionWriteSelection | undefined => {
+	const narrow = (
+		selection: CollectionWriteSelection | undefined
+	): CollectionWriteSelection | undefined => {
 		if (selection === undefined) return undefined;
-		const columns = Object.fromEntries(Object.entries(selection.columns ?? {}).filter(([column]) => !owned.has(column)));
+		const columns = Object.fromEntries(
+			Object.entries(selection.columns ?? {}).filter(([column]) => !owned.has(column))
+		);
 		if (Object.keys(columns).length === 0 && selection.with === undefined) return undefined;
 		return { ...selection, columns };
 	};
@@ -583,11 +593,6 @@ class WorkspaceCompiler {
 
 	static readonly renderHandlerTypes = (): string =>
 		`import type { AutomationContext, AutomationTrigger } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from '../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AutomationName, CollectionName, FunctionName, PolicyName, ToolName } from '../../generated/authoring-types.js';\nexport type Trigger = AutomationTrigger<WorkspaceSchema>;\nexport type Scope<T extends Trigger> = AutomationContext<T, WorkspaceSchema>['scope'];\n`;
-
-	static readonly renderCustomTypeRenderer = (definition: string, root: string): string => {
-		const definitionImport = `../../../${WorkspaceCompiler.posix(relative(root, definition)).replace(/\.ts$/, '.js')}`;
-		return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\nimport type definition from ${JSON.stringify(definitionImport)};\nexport type CollectionField = { readonly name: string; readonly type: string };\nexport type Value = CustomTypeOutput<typeof definition>;\nexport type RendererProps =\n\t| { readonly mode: 'display'; readonly field: CollectionField; readonly value: Value | null }\n\t| { readonly mode: 'edit'; readonly field: CollectionField; readonly value: Value | null; readonly disabled: boolean; onValueChange(value: Value | null): void };\n`;
-	};
 
 	static readonly renderClientRuntimeDeclaration = (): string =>
 		`declare module 'virtual:bolt/client-runtime' {\n\timport type { BrowserWorkspaceRuntimeOptions, CollectionCatalog, DeviceClient, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(options?: BrowserWorkspaceRuntimeOptions): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog, visibility?: { readonly allowedCollections?: ReadonlyArray<string>; readonly readOnlyCollections?: ReadonlyArray<string>; readonly system?: boolean }): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly device: DeviceClient; readonly system?: SystemClientApi };\n\t\t\t}\n`;
@@ -889,6 +894,15 @@ export const renderAuthoringTypes = (input: RenderAuthoringTypesInput): string =
 export const renderWorkspaceTypes = (relations: ReadonlyArray<RelationDefinition> = []): string =>
 	`import type { Api as AuthoringApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations };\nexport type Api = AuthoringApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n`;
 
+/** `directory` is where the rendered file is written; the import is relative to it, not guessed. */
+export const renderCustomTypeRenderer = (definition: string, directory: string): string => {
+	const definitionImport = WorkspaceCompiler.posix(relative(directory, definition)).replace(
+		/\.ts$/,
+		'.js'
+	);
+	return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\nimport type definition from ${JSON.stringify(definitionImport)};\nexport type CollectionField = { readonly name: string; readonly type: string };\nexport type Value = CustomTypeOutput<typeof definition>;\nexport type RendererProps =\n\t| { readonly mode: 'display'; readonly field: CollectionField; readonly value: Value | null }\n\t| { readonly mode: 'edit'; readonly field: CollectionField; readonly value: Value | null; readonly disabled: boolean; onValueChange(value: Value | null): void };\n`;
+};
+
 export const renderCollectionTypes = (name: string): string =>
 	`import type { CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { CollectionClientInput } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = CollectionClientInput<${JSON.stringify(name)}, 'create'>;\nexport type UpdateInput = CollectionClientInput<${JSON.stringify(name)}, 'update'>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
@@ -910,7 +924,10 @@ const renderCollectionsDeclaration = (
 };
 
 /** One `typeof import` per `src/channels/+<name>.ts`: the transports every channel surface is typed by. */
-export const renderChannelsDeclaration = (channelFiles: ReadonlyArray<string>, root: string): string =>
+export const renderChannelsDeclaration = (
+	channelFiles: ReadonlyArray<string>,
+	root: string
+): string =>
 	`export type DeclaredChannels = {\n${channelFiles
 		.map(
 			(path) =>
@@ -1027,7 +1044,8 @@ export const renderArtifact = (input: RenderArtifactInput): string => {
 	const tools = toolFiles.map((path) => basename(path).slice(1, -3));
 	const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
 	const hasMcp = compiledAuthoring.capabilities.mcp.length > 0;
-	const hasConnector = hasMcp || automations.length > 0 || integrationFiles.length > 0 || channelFiles.length > 0;
+	const hasConnector =
+		hasMcp || automations.length > 0 || integrationFiles.length > 0 || channelFiles.length > 0;
 	const authoredTools = tools.map((name) => ({
 		name,
 		description: `Workspace tool ${name}`,
@@ -2000,7 +2018,7 @@ const WorkspaceSynchronization = {
 					...definitions.map((path) =>
 						compiler.write(
 							join(types, 'datatypes', basename(dirname(path)), '$types.d.ts'),
-							compiler.renderCustomTypeRenderer(path, root)
+							renderCustomTypeRenderer(path, join(types, 'datatypes', basename(dirname(path))))
 						)
 					)
 				],

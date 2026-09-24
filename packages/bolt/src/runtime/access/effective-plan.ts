@@ -1,6 +1,6 @@
 import { Result, Schema } from 'effect';
 import { sha256Text } from '@norbital-ai/std/reckon/hash';
-import { parseCollectionSearch } from '@norbital-ai/std/collection';
+import { isOneShotSearch } from '@norbital-ai/std/collection';
 import { asc, desc, getColumns, type SQL } from 'drizzle-orm';
 import {
 	MAX_COLLECTION_PREDICATE_DEPTH,
@@ -1685,9 +1685,7 @@ export const compileEffectiveQueryPlan = (
 		node: 'query.userFilter'
 	});
 	if (Result.isFailure(userFilter)) return failed(userFilter);
-	// A `/command` ranks by a vector measured once against its probe; plain text stays live.
-	const vectorSearch =
-		input.search !== undefined && parseCollectionSearch(input.search).command !== undefined;
+	const vectorSearch = input.search !== undefined && isOneShotSearch(input.search);
 	const mode: EffectivePlanMode =
 		input.kind === 'count' ||
 		input.kind === 'findGrouped' ||

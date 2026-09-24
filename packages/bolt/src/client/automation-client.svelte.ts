@@ -67,7 +67,7 @@ type RunAutomation<Definition extends AutomationModule> = Definition['spec'] ext
 		(input?: InputOf<Definition>) => Promise<AutomationRun<OutputOf<Definition>>>;
 
 /** Exact generated automation registry projected into the browser client. */
-type AutomationClientApi<Registry extends Readonly<Record<string, AutomationModule>>> = {
+export type AutomationClientApi<Registry extends Readonly<Record<string, AutomationModule>>> = {
 	readonly [Name in keyof Registry]: Readonly<{
 		readonly run: RunAutomation<Registry[Name]>;
 		/** Stops the same durable run, retaining its input, progress and idempotency key. */

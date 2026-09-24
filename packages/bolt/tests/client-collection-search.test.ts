@@ -115,22 +115,37 @@ const proxyWith = (sync: ReturnType<typeof fakeSyncClient>) => {
 };
 
 describe('collection search handoff', () => {
-	it('carries the search string unchanged', () => {
+	it('mounts plain text live and reads every /command once, unchanged', async () => {
 		const sync = fakeSyncClient();
-		const bolt = createBoltClient(scope, { command: async () => null });
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve({ rows: [], nextCursor: null });
+			}
+		});
 		const proxy = createWorkspaceApiProxy(runtimeOf(bolt, sync.client));
 		const employees = Reflect.get(proxy.db, 'employees') as {
-			findMany: (input?: object) => { readonly current: unknown };
+			findMany: (input?: object) => PromiseLike<unknown>;
 		};
-		employees.findMany({ search: '/semantic similar contracts' });
 		employees.findMany({ search: 'similar contracts' });
 		employees.findMany({ search: '>' });
+		await employees.findMany({ search: '/semantic similar contracts' });
+		await employees.findMany({ search: '/nearby {"lat":1}' });
 		// The browser carries the string unchanged; the server's one parser reads the grammar.
 		expect(sync.mounted.map((mounted) => mounted.input)).toEqual(
-			['/semantic similar contracts', 'similar contracts', '>'].map((search) => ({
+			['similar contracts', '>'].map((search) => ({
 				kind: 'findMany',
 				collection: 'employees',
 				search
+			}))
+		);
+		// A live mount of `/semantic` is what `sync.connect` refused with a 400
+		// ("vector-nearest ordering is one-shot"): the browser and the planner must agree.
+		expect(commands).toEqual(
+			['/semantic similar contracts', '/nearby {"lat":1}'].map((search) => ({
+				command: 'collections.findMany',
+				input: { collection: 'employees', search }
 			}))
 		);
 	});

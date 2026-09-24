@@ -18,7 +18,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import {
 	isSystemCollectionField,
-	parseCollectionSearch,
+	isOneShotSearch,
 	type CollectionFilter,
 	type CollectionFilterOptions,
 	type CollectionHistoryAnchor,
@@ -172,21 +172,14 @@ type ClientCommandName = FixedCommandName | `invoke.${string}`;
 /** Live contiguous prefix, or one answered-only keyset page. See docs/pillars/04-sync-engine/README.md. */
 type CollectionReadMode = { readonly kind: 'live' } | { readonly kind: 'anchored' };
 
-/**
- * A cursor page is one-shot, and so is a declared-index search (`/<index>`): it is planned against
- * the server's index and read once, the way the engine admits it (`vector-nearest ordering is
- * one-shot`), rather than mounted as a live prefix the sync lane would refuse. Plain text and
- * `/semantic` stay live; the lane carries them.
- */
+/** A cursor page and a `/command` search are read once; see `isOneShotSearch`. Plain text stays live. */
 const collectionReadMode = (
 	after: Schema.Json | undefined,
 	search: Schema.Json | undefined
-): CollectionReadMode => {
-	const command = typeof search === 'string' ? parseCollectionSearch(search).command : undefined;
-	return after === undefined && (command === undefined || command === 'semantic')
+): CollectionReadMode =>
+	after === undefined && !(typeof search === 'string' && isOneShotSearch(search))
 		? { kind: 'live' }
 		: { kind: 'anchored' };
-};
 
 const decodedCommandEffect = <Name extends FixedCommandName, Output extends Schema.Top>(
 	runtime: WorkspaceClientRuntime,

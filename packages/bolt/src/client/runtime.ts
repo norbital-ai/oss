@@ -31,7 +31,11 @@ import { createSyncStatusView } from './sync-status.svelte.js';
 
 export type { SystemClientApi } from './workspace-api.js';
 export type { DeviceClient, DeviceLocation, DeviceRefusal, HapticKind } from './device.js';
-export type { BrowserWorkspaceRuntimeOptions } from '#lib/client/contracts.js';
+export type {
+	BrowserWorkspaceRuntimeOptions,
+	WorkspaceClientRuntime
+} from '#lib/client/contracts.js';
+export type { AutomationClientApi, ErasedAutomationClientApi } from './automation-client.svelte.js';
 export type { RemoteQuery } from '#lib/client/contracts.js';
 export {
 	createWorkspaceApiProxy,

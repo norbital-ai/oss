@@ -434,6 +434,24 @@ describe('sync engine effective-plan compilation', () => {
 		if (Result.isFailure(unresolved)) expect(unresolved.failure.code).toBe('unresolved-segment');
 	});
 
+	it('plans plain-text search live and every /command search one-shot', () => {
+		const modeOf = (search: string) =>
+			succeed(
+				compileEffectiveQueryPlan({
+					definition,
+					rootCollection: 'projects',
+					search,
+					kind: 'findMany',
+					subject,
+					policyFor: unrestricted
+				})
+			).mode;
+		// The browser routes by the same `isOneShotSearch`; see client-collection-search.test.ts.
+		expect(modeOf('harbour')).toBe('live-prefix');
+		expect(modeOf('/semantic harbour')).toBe('one-shot');
+		expect(modeOf('/nearby {"lat":1}')).toBe('one-shot');
+	});
+
 	it('keeps aggregates one-shot and rejects unsupported live windows', () => {
 		for (const kind of ['count', 'findGrouped'] as const) {
 			const plan = succeed(

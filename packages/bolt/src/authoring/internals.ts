@@ -3,6 +3,7 @@ import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
 import type { RemoteQuery as ClientRemoteQuery } from '@norbital-ai/std/collection';
 import type { TableName, TablesForModels } from './contracts-schema.js';
 export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
+export type { CollectionClientInput } from './contracts-schema.js';
 export { compileModel } from './model-introspection.js';
 export { describeEnvoy, describePolicy } from './policy-introspection.js';
 export { describeChannel } from './channels-schema.js';
