@@ -373,11 +373,12 @@ describe('collection declaration in a synced workspace', () => {
 			join(root, '.norbital', 'types', 'collections', 'tickets', '$types.d.ts'),
 			'utf8'
 		);
+		// The executed selection, as a literal: see renderCollectionTypes.
 		expect(collectionTypes).toContain(
-			'export type CreateInput = CollectionClientInput<"tickets", \'create\'>;'
+			'export type CreateInput = CollectionInputOf<Models["tickets"], { readonly input: {"columns":{"subject":true}} }, \'create\'>;'
 		);
 		expect(collectionTypes).toContain(
-			'export type UpdateInput = CollectionClientInput<"tickets", \'update\'>;'
+			'export type UpdateInput = CollectionInputOf<Models["tickets"], { readonly input: {"columns":{"subject":true}} }, \'update\'>;'
 		);
 		expect(collectionTypes).not.toContain('Hooks');
 		const authoring = await readFile(

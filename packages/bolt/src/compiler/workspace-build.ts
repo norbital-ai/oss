@@ -30,6 +30,7 @@ import {
 	type RelationDefinition,
 	type WorkspaceMigrationEntry
 } from '../authoring/workspace-schema.js';
+import type { CollectionInputSelection } from '../authoring/collection-schema.js';
 import { platformCustomTypes } from '../authoring/models-schema.js';
 import { SYSTEM_COLLECTION_MODELS } from '../authoring/system-models.js';
 import { SYSTEM_COLLECTION_WRITES } from '../runtime/schema/system-collections.js';
@@ -903,8 +904,22 @@ export const renderCustomTypeRenderer = (definition: string, directory: string):
 	return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\nimport type definition from ${JSON.stringify(definitionImport)};\nexport type CollectionField = { readonly name: string; readonly type: string };\nexport type Value = CustomTypeOutput<typeof definition>;\nexport type RendererProps =\n\t| { readonly mode: 'display'; readonly field: CollectionField; readonly value: Value | null }\n\t| { readonly mode: 'edit'; readonly field: CollectionField; readonly value: Value | null; readonly disabled: boolean; onValueChange(value: Value | null): void };\n`;
 };
 
-export const renderCollectionTypes = (name: string): string =>
-	`import type { CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { CollectionClientInput } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = CollectionClientInput<${JSON.stringify(name)}, 'create'>;\nexport type UpdateInput = CollectionClientInput<${JSON.stringify(name)}, 'update'>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+/**
+ * A collection's `$types`. `CreateInput`/`UpdateInput` are computed from the *executed* selection,
+ * emitted as a literal type, never from `typeof` the `+collection.ts` default export: that module's
+ * own transform names these types, so deriving them from its type is a cycle the compiler resolves
+ * to `any` (TS7022) — which is how every collection's inputs were silently untyped.
+ */
+export const renderCollectionTypes = (
+	name: string,
+	write?: Pick<CompiledCollectionWrite, 'create' | 'update'>
+): string => {
+	const input = (selection: CollectionInputSelection | undefined, mode: 'create' | 'update') =>
+		selection === undefined
+			? 'never'
+			: `CollectionInputOf<Models[${JSON.stringify(name)}], { readonly input: ${JSON.stringify(selection)} }, '${mode}'>`;
+	return `import type { CollectionInputOf, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { Models } from '../../../generated/models.js';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type CreateInput = ${input(write?.create, 'create')};\nexport type UpdateInput = ${input(write?.update, 'update')};\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+};
 
 export const renderWorkspaceAuthoring = (): string =>
 	`import type { DeclaredChannels } from '../generated/declared-channels.js';\nimport type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, IntegrationName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\nimport type { WorkspaceCollections } from '../generated/declared-collections.js';\nimport type { Models } from '../generated/models.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly models: Models; readonly collections: WorkspaceCollections; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } interface WorkspaceChannelAuthoringTypes { readonly channels: DeclaredChannels; readonly integrationName: IntegrationName } }\nexport {};\n`;
@@ -2012,7 +2027,10 @@ const WorkspaceSynchronization = {
 					...collectionNames.map((name) =>
 						compiler.write(
 							join(types, 'collections', name, '$types.d.ts'),
-							renderCollectionTypes(name)
+							renderCollectionTypes(
+								name,
+								compiledAuthoring.collections.find((entry) => entry.name === name)?.write
+							)
 						)
 					),
 					...definitions.map((path) =>

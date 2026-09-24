@@ -125,17 +125,23 @@ describe('generated declared write types', () => {
 	});
 
 	it('renders the representation contract and the declared inputs, and no hooks', () => {
-		const rendered = renderCollectionTypes('accounts');
+		const rendered = renderCollectionTypes('accounts', {
+			create: {
+				columns: { name: true },
+				with: { contacts: { create: { columns: { email: true } } } }
+			}
+		});
 
 		expect(rendered).toContain(
 			'export type RepresentationProps = { readonly record: Row | null; close(): void }'
 		);
+		// The executed selection as a literal, never `typeof` the +collection.ts default export: that
+		// module's own transform names these types, and deriving them from it is a TS7022 cycle.
 		expect(rendered).toContain(
-			'export type CreateInput = CollectionClientInput<"accounts", \'create\'>'
+			'export type CreateInput = CollectionInputOf<Models["accounts"], { readonly input: {"columns":{"name":true},"with":{"contacts":{"create":{"columns":{"email":true}}}}} }, \'create\'>'
 		);
-		expect(rendered).toContain(
-			'export type UpdateInput = CollectionClientInput<"accounts", \'update\'>'
-		);
+		expect(rendered).toContain('export type UpdateInput = never');
+		expect(rendered).not.toContain('+collection');
 		expect(rendered).toContain(
 			'export type Pipelines = CollectionPipelines<WorkspaceSchema, "accounts">'
 		);
